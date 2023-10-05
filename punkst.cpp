@@ -1,0 +1,31 @@
+#include "punkst.h"
+
+int32_t test(int32_t argc, char** argv);
+
+int32_t main(int32_t argc, char** argv) {
+
+  commandList cl;
+  BEGIN_LONG_COMMANDS(longCommandlines)
+    LONG_COMMAND_GROUP("Random Functions for Spatial Transcriptomics", NULL)
+    LONG_COMMAND("test", &test, "Test")
+  END_LONG_COMMANDS();
+
+  cl.Add(new longCommands("Available Commands", longCommandlines));
+
+  if ( argc < 2 ) {
+    fprintf(stderr, " Licensed under the Apache License v2.0 http://www.apache.org/licenses/\n\n");
+    fprintf(stderr, "To run a specific command      : %s [command] [options]\n",argv[0]);
+    fprintf(stderr, "For detailed instructions, run : %s --help\n",argv[0]);
+    cl.Status();
+    return 1;
+  }
+  else {
+    if ( strcmp(argv[1],"--help") == 0 ) {
+      cl.HelpMessage();
+    }
+    else {
+      return cl.Read(argc, argv);
+    }
+  }
+  return 0;
+}

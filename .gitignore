@@ -30,3 +30,27 @@
 *.exe
 *.out
 *.app
+<<<<<<< HEAD
+=======
+
+autom4te.cache/
+autom4te.cache/*
+*~
+
+.deps/
+.deps/*
+*.Po
+
+test/
+test/*
+
+.idea
+cmake-build-debug/
+build
+htslib
+bin
+
+.DS_Store
+.vscode
+.vscode/*
+>>>>>>> a61fbfb (init)
