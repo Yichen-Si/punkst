@@ -1,6 +1,8 @@
 #include "punkst.h"
 
 int32_t test(int32_t argc, char** argv);
+int32_t cmdFASTQscribble(int32_t argc, char** argv);
+int32_t cmdTsvDrawByColumn(int32_t argc, char** argv);
 
 int32_t main(int32_t argc, char** argv) {
 
@@ -8,6 +10,8 @@ int32_t main(int32_t argc, char** argv) {
   BEGIN_LONG_COMMANDS(longCommandlines)
     LONG_COMMAND_GROUP("Random Functions for Spatial Transcriptomics", NULL)
     LONG_COMMAND("test", &test, "Test")
+    LONG_COMMAND("scribble-parse", &cmdFASTQscribble, "Parse SCRIBBLE reads")
+    LONG_COMMAND("draw-by-column", &cmdTsvDrawByColumn, "Given a TSV file and RGB assigned to columns, draw a PNG file.")
   END_LONG_COMMANDS();
 
   cl.Add(new longCommands("Available Commands", longCommandlines));

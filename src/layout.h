@@ -33,9 +33,9 @@ class SpatialLayout {
     std::map<std::string, TileInfo<int32_t> > layout;
     int32_t width = 0, height = 0;
     uint32_t ntiles = 0, nrows = 0, ncols = 0;
-    uint32_t l_id = 0, l_row = 1, l_col = 2;
-    uint32_t m_id = 0, m_xmin = 5, m_xmax = 6, m_ymin = 7, m_ymax = 8;
-    bool flipx = false, flipy = false, xyswitch = false;
+    uint32_t l_id, l_row, l_col;
+    uint32_t m_id, m_xmin, m_xmax, m_ymin, m_ymax;
+    bool flipx, flipy, xyswitch;
     /**
      * Default: X is associated with width & col, Y is associated with height & row; (0, 0) is lower left corner
      * If xyswitch: X is associated with height & row, Y is associated with width & col
@@ -55,7 +55,7 @@ class SpatialLayout {
 
         flipx = !_x0left;
         flipy = !_y0lower;
-        xyswitch = !_xrow;
+        xyswitch = _xrow;
         // read layout from file. columns: section, tile, row, col
         // input row and col are 1-based, store as 0-based
         tsv_reader tr(layout_file);
@@ -74,9 +74,11 @@ class SpatialLayout {
             uint32_t row = tr.int_field_at(l_row) - 1;
             uint32_t col = tr.int_field_at(l_col) - 1;
             layout.emplace(tile, TileInfo<int32_t>(row, col));
-            nrows = std::max(nrows, row) + 1;
-            ncols = std::max(ncols, col) + 1;
+            nrows = std::max(nrows, row);
+            ncols = std::max(ncols, col);
         }
+        nrows += 1;
+        ncols += 1;
         ntiles = layout.size();
         // flip row/col if necessary
         if (!_row0lower || _col0left) {
@@ -113,8 +115,8 @@ class SpatialLayout {
             int32_t ymin = tr.int_field_at(m_ymin);
             int32_t ymax = tr.int_field_at(m_ymax);
             if (xyswitch) {
-                height = std::max(width, xmax - xmin + 1);
-                width = std::max(height, ymax - ymin + 1);
+                width = std::max(width, ymax - ymin + 1);
+                height = std::max(height, xmax - xmin + 1);
             } else {
                 width = std::max(width, xmax - xmin + 1);
                 height = std::max(height, ymax - ymin + 1);
@@ -150,12 +152,12 @@ class SpatialLayout {
             ly = height - ly;
         }
         auto& tile = layout[id];
-        y = tile.row * height + ly - tile.ymin;
-        x = tile.col * width + lx - tile.xmin;
         if (xyswitch) {
-            x = x - y;
-            y = x + y;
-            x = - x + y;
+            x = tile.row * height + lx - tile.xmin;
+            y = tile.col * width +  ly - tile.ymin;
+        } else {
+            x = tile.col * width  + lx - tile.xmin;
+            y = tile.row * height + ly - tile.ymin;
         }
         return 1;
     }
@@ -169,28 +171,11 @@ class SpatialLayout {
         assert (lx.size() == ly.size());
         auto& tile = layout[id];
         uint32_t n = lx.size();
+        int32_t ret = 0;
         x.resize(n);
         y.resize(n);
-        if (flipx) {
-            for (uint32_t i = 0; i < n; i++) {
-                lx[i] = width - lx[i];
-            }
-        }
-        if (flipy) {
-            for (uint32_t i = 0; i < n; i++) {
-                ly[i] = height - ly[i];
-            }
-        }
-        if (xyswitch) {
-            for (uint32_t i = 0; i < n; i++) {
-                x[i] = tile.row * height + ly[i] - tile.ymin;
-                y[i] = tile.col * width + lx[i] - tile.xmin;
-            }
-        } else {
-            for (uint32_t i = 0; i < n; i++) {
-                y[i] = tile.row * height + ly[i] - tile.ymin;
-                x[i] = tile.col * width + lx[i] - tile.xmin;
-            }
+        for (uint32_t i = 0; i < n; i++) {
+            ret = lc2gc(id, lx[i], ly[i], x[i], y[i]);
         }
         return 1;
     }
@@ -203,34 +188,9 @@ class SpatialLayout {
         uint32_t n = id.size();
         x.resize(n);
         y.resize(n);
-        if (flipx) {
-            for (uint32_t i = 0; i < n; i++) {
-                lx[i] = width - lx[i];
-            }
-        }
-        if (flipy) {
-            for (uint32_t i = 0; i < n; i++) {
-                ly[i] = height - ly[i];
-            }
-        }
-        if (xyswitch) {
-            for (uint32_t i = 0; i < n; i++) {
-                if (layout.find(id[i]) == layout.end()) {
-                    return 0;
-                }
-                auto& tile = layout[id[i]];
-                x[i] = tile.row * height + ly[i] - tile.ymin;
-                y[i] = tile.col * width + lx[i] - tile.xmin;
-            }
-        } else {
-            for (uint32_t i = 0; i < n; i++) {
-                if (layout.find(id[i]) == layout.end()) {
-                    return 0;
-                }
-                auto& tile = layout[id[i]];
-                y[i] = tile.row * height + ly[i] - tile.ymin;
-                x[i] = tile.col * width + lx[i] - tile.xmin;
-            }
+        uint32_t i = 0;
+        while (lc2gc(id[i], lx[i], ly[i], x[i], y[i]) && i < n) {
+            i++;
         }
     }
 };

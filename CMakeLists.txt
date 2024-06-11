@@ -3,47 +3,53 @@ project(punkst)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -pthread -std=c++17")
-
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
-find_path(HTS_INCLUDE_DIRS htslib/bgzf.h ../htslib/bgzf.h HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib)
+find_path(HTS_INCLUDE_DIRS htslib/bgzf.h HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib)
 if(NOT HTS_INCLUDE_DIRS )
     message(FATAL_ERROR "libhts HTS_INCLUDE_DIRS not found")
 endif()
-
 message(STATUS ${HTS_INCLUDE_DIRS})
 
 find_library(HTS_LIBRARIES libhts.a HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib/)
 if(NOT HTS_LIBRARIES)
     message(FATAL_ERROR "libhts HTS_LIBRARIES not found")
 endif()
-
 message(STATUS ${HTS_LIBRARIES})
 
 find_path(QGEN_INCLUDE_DIRS qgenlib/qgen_error.h  HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../qgenlib)
 if(NOT QGEN_INCLUDE_DIRS )
     message(FATAL_ERROR "libqgen QGEN_INCLUDE_DIRS not found")
 endif()
-
 message(STATUS ${QGEN_INCLUDE_DIRS})
 
 find_library(QGEN_LIBRARIES libqgen.a  HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../qgenlib/lib/)
 if(NOT QGEN_LIBRARIES)
     message(FATAL_ERROR "libqgen QGEN_LIBRARIES not found")
 endif()
-
 message(STATUS ${QGEN_LIBRARIES})
 
-include_directories(${HTS_INCLUDE_DIRS} ${QGEN_INCLUDE_DIRS})
+include_directories(${HTS_INCLUDE_DIRS} ${QGEN_INCLUDE_DIRS}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/script
+                    ${CMAKE_CURRENT_SOURCE_DIR}/cimg
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 set(SOURCE_FILES
-    test.cpp
-    layout.h
-    punkst.h punkst.cpp
+    src/punkst.h
+    src/punkst.cpp
+    src/seq_utils.h
+    src/seq_utils.cpp
+    src/utils.h
+    src/utils.cpp
+    src/layout.h
+    cimg/CImg.h
+    src/scribble.h
+    script/scribble_parse.cpp
+    script/draw_tsv_by_col.cpp
+    script/test.cpp
     )
 
 SET(APP_EXE punkst)
-
 #find_package(OpenMP REQUIRED)
 ADD_EXECUTABLE(${APP_EXE} ${SOURCE_FILES})
 
