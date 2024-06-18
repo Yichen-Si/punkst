@@ -51,18 +51,22 @@ int32_t KMPSearch(const std::string& pattern, const std::string& text, std::vect
 }
 
 
-int LocalAlignmentEditDistance(const std::string& str1, const std::string& str2, int32_t& st1, int32_t& ed1) {
+int LocalAlignmentEditDistance(const std::string& str1, const std::string& str2, int32_t& st1, int32_t& ed1, int32_t& st1_match) {
     int m = str1.length();
     int n = str2.length();
-    return LocalAlignmentEditDistance(str1.c_str(), str2.c_str(), m, n, st1, ed1);
+    return LocalAlignmentEditDistance(str1.c_str(), str2.c_str(), m, n, st1, ed1, st1_match);
 }
 
-int LocalAlignmentEditDistance(const char* str1, const char* str2, int32_t m, int32_t n, int32_t& st1, int32_t& ed1) {
+/**
+ * Simple local alignment of str1 to (the full) reference str2
+*/
+int LocalAlignmentEditDistance(const char* str1, const char* str2, int32_t m, int32_t n, int32_t& st1, int32_t& ed1, int32_t& st1_match) {
     std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1, 0));
     std::vector<std::vector<int>> bt(m + 1, std::vector<int>(n + 1, 0));
-    int minEditDistance = n + m;
+    int minEditDistance = n + m; // min of the last column in dp
     st1 = m; ed1 = 0;
     // Keep the first column zero to allow "free" start in str1
+    // Populate the first row with deletion cost
     for (int j = 0; j <= n; j++) dp[0][j] = j;
 
     for (int i = 1; i <= m; i++) {
@@ -75,7 +79,7 @@ int LocalAlignmentEditDistance(const char* str1, const char* str2, int32_t m, in
                 int del = dp[i][j-1] + 1; // deletion in str1, right
                 int sub = dp[i-1][j-1] + 1;
                 dp[i][j] = std::min({del, ins, sub});
-                if (dp[i][j] == sub) {
+                if (dp[i][j] == sub) { // prefer substitution?
                     bt[i][j] = 1;
                 } else if (dp[i][j] == ins) {
                     bt[i][j] = 2; // insertion in str1
@@ -87,19 +91,16 @@ int LocalAlignmentEditDistance(const char* str1, const char* str2, int32_t m, in
         if (dp[i][n] < minEditDistance) {
             minEditDistance = dp[i][n];
             ed1 = i; // 0-based exclusion
-// std::cout << "align " << i << ": " << bt[i][n] << std::endl;
         }
-    }
-    // In the case of last base mismatch, prefer substitution over deletion
-    // Avoid unnecessary shift
-    if (ed1 < n && ed1 < m && dp[ed1][n] == dp[ed1+1][n]) {
-        ed1++;
     }
 
     // backtrack to find the start position
     st1 = ed1; // 0-based inclusion
     int j = n;
-    while(j > 0) {
+    std::vector<int32_t> path;
+    path.reserve(m + n);
+    while(j > 0 & st1 > 0) {
+        path.push_back(bt[st1][j]);
         if (bt[st1][j] == 0 || bt[st1][j] == 1) {
             st1--;
             j--;
@@ -108,7 +109,13 @@ int LocalAlignmentEditDistance(const char* str1, const char* str2, int32_t m, in
         } else if (bt[st1][j] == 3) {
             j--; // left
         }
-        if (st1 == 0) {
+    }
+    st1_match = st1;
+    std::reverse(path.begin(), path.end());
+    for (int i = 0; i < path.size(); i++) {
+        if (path[i] == 1) {
+            st1_match++;
+        } else {
             break;
         }
     }

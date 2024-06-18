@@ -1,187 +1,182 @@
 #include "punkst.h"
-// #include "qgenlib/dataframe.h"
-// #include "qgenlib/tsv_reader.h"
-// #define cimg_display 0 // remove the need for X11 library
-// #include "CImg.h"
-// #include <array>
-// #include <stdlib.h>
-// #include <unordered_map>
-// #include "utils.h"
+#include "seqmatch.h"
+#include "qgenlib/tsv_reader.h"
+#include "qgenlib/qgen_utils.h"
+#include "htslib/hfile.h"
 
+// int32_t tsv_next(htsFile* rf, kstring_t& str, std::vector<std::string>& fields) {
+//     int32_t lstr = hts_getline(rf, KS_SEP_LINE, &str);
+//     if (lstr <= 0) {return 0;}
+//     split(fields, "\t", str.s, str.l + 1, true, false, true);
+//     return lstr;
+// }
 
 int32_t test(int32_t argc, char** argv) {
 
-    // std::string inTsv, manifestf, outf;
-    // int32_t debug = 0, verbose = 5000000;
-    // double coord_per_pixel = 1.; // 1 pixel = X coordinate unit
-    // double intensity_adj = 0.9; // normalize the intensity of the channel by qt
-    // int32_t icol_x = 0, icol_y = 1;
-    // std::vector<std::string> color_lists;
+	// std::string intsv, output;
+	// std::vector<std::string> sbcd_list;
+	// int32_t bcd_len = -1, kmer_size = 16, max_mismatch = 1;
+    // int32_t icol_q = -1, icol_s = 0, icol_x = 3, icol_y = 4;
+	// int32_t verbose = 500000, debug = 0;
+	// bool exact_only = false, allow_1N_ref = false, allow_1N_query = false;
+	// std::string outmode("wz");
+    // bool check_consecutive = false;
+    // bool query_unique = false;
+    // bool reverse_complement = false;
 
-    // // Parse input parameters
-    // paramList pl;
-    // BEGIN_LONG_PARAMS(longParameters)
-    //     LONG_PARAM_GROUP("Input options", NULL)
-    //     LONG_STRING_PARAM("input", &inTsv, "")
-    //     LONG_STRING_PARAM("manifest", &manifestf, "Bounding box information. Expects xmin,xmax,ymin,ymax for a manifest file (tall or wide format)")
-    //     LONG_MULTI_STRING_PARAM("color-list", &color_lists, "[color_code]:[column index]")
-    //     LONG_INT_PARAM("icol-x", &icol_x, "Column index for x")
-    //     LONG_INT_PARAM("icol-y", &icol_y, "Column index for y")
-    //     LONG_DOUBLE_PARAM("coord-per-pixel", &coord_per_pixel, "Number of coordinate units per pixel")
-    //     LONG_DOUBLE_PARAM("intensity-adj", &intensity_adj, "Adjust the intensity of each channel by qt")
-    //     LONG_PARAM_GROUP("Output Options", NULL)
-    //     LONG_STRING_PARAM("output", &outf, "")
-    //     LONG_INT_PARAM("verbose", &verbose, "Verbose")
-    //     LONG_INT_PARAM("debug", &debug, "Debug")
-    // END_LONG_PARAMS();
-    // pl.Add(new longParams("Available Options", longParameters));
-    // pl.Read(argc, argv);
-    // pl.Status();
+	// // Parse input parameters
+	// paramList pl;
 
-    // // read the manifest file and determine the xmin/xmax/ymin/ymax
-    // uint32_t xmin = 0, xmax = 0, ymin = 0, ymax = 0;
-    // uint8_t  flag = 0;
-    // tsv_reader manifest(manifestf.c_str());
-    // int32_t ncols = manifest.read_line();
-    // std::vector<std::string> colnames;
-    // for (int32_t i = 0; i < ncols; ++i) {
-    //     colnames.push_back(manifest.str_field_at(i));
-    // }
-    // if (ncols < 4 || manifest.read_line() != ncols) {
-    //     error("The manifest file is ill-formated %s", manifestf.c_str());
-    // }
-    // for (int32_t i = 0; i < ncols; ++i) {
-    //     if (colnames[i] == "xmin") {
-    //         xmin = manifest.uint64_field_at(i);
-    //         flag |= 1;
-    //     } else if (colnames[i] == "xmax") {
-    //         xmax = manifest.uint64_field_at(i);
-    //         flag |= 2;
-    //     } else if (colnames[i] == "ymin") {
-    //         ymin = manifest.uint64_field_at(i);
-    //         flag |= 4;
-    //     } else if (colnames[i] == "ymax") {
-    //         ymax = manifest.uint64_field_at(i);
-    //         flag |= 8;
-    //     }
-    // }
-    // if (flag != 15) {
-    //     error("The manifest file is missing one of the following columns: xmin, xmax, ymin, ymax");
+	// BEGIN_LONG_PARAMS(longParameters)
+	// 	LONG_PARAM_GROUP("Input options", NULL)
+	// 	LONG_STRING_PARAM("input", &intsv, "Input TSV file")
+	// 	LONG_MULTI_STRING_PARAM("sbcd", &sbcd_list, "Input TSV file with spatial barcode info")
+	// 	LONG_INT_PARAM("bcd-len", &bcd_len, "Spatial barcode length")
+	// 	LONG_INT_PARAM("kmer", &kmer_size, "K-mer size")
+    //     LONG_INT_PARAM("col-query", &icol_q, "Column index for barcode sequence in the query tsv")
+	// 	LONG_INT_PARAM("col-seq", &icol_s, "Column index for barcode sequence in the reference tsv")
+	// 	LONG_INT_PARAM("col-x", &icol_x, "Column index for x")
+	// 	LONG_INT_PARAM("col-y", &icol_y, "Column index for y")
+	// 	LONG_PARAM("exact-only", &exact_only, "Only exact matches")
+	// 	LONG_PARAM("allow-1N-ref", &allow_1N_ref, "Allow one N in reference")
+	// 	LONG_PARAM("allow-1N-query", &allow_1N_query, "Allow one N in query")
+    //     LONG_PARAM("check-consecutive", &check_consecutive, "Query TSV is sorted by barcode")
+    //     LONG_PARAM("reverse-complement", &reverse_complement, "Query and reference barcodes are reverse complements")
+    //     LONG_PARAM("query-unique", &query_unique, "Query TSV has unique barcode")
+	// 	LONG_PARAM_GROUP("Output Options", NULL)
+	// 	LONG_STRING_PARAM("output", &output, "Output file")
+	// 	LONG_STRING_PARAM("output-mode", &outmode, "Output mode")
+	// 	LONG_INT_PARAM("verbose", &verbose, "Verbose")
+	// 	LONG_INT_PARAM("debug", &debug, "Debug")
+	// END_LONG_PARAMS();
+
+	// pl.Add(new longParams("Available Options", longParameters));
+	// pl.Read(argc, argv);
+	// pl.Status();
+
+	// if (intsv.empty() || output.empty() || sbcd_list.size() < 1 || bcd_len < 0 || icol_q < 0) {
+	// 	error("--intput, --output, --sbcd, --bcd-len, --col-query are required but at least one is missing");
+	// }
+    // if (query_unique) {
+    //     check_consecutive = false;
     // }
 
-    // // Parse the color list
-    // std::map<uint32_t, std::array<int32_t, 3>> colors;
-    // uint32_t max_icol = (uint32_t) std::max(icol_x, icol_y);
-    // for (uint32_t i = 0; i < color_lists.size(); ++i) {
-    //     std::vector<std::string> tokens;
-    //     split(tokens, ":", color_lists[i]);
-    //     if (tokens.size() != 2)
-    //         error("Invalid color list %s", color_lists[i].c_str());
-    //     uint32_t icol;
-    //     std::array<int32_t, 3> rgb;
-    //     if (!set_rgb(tokens[1].c_str(), rgb) || !str2uint32(tokens[0], icol))
-    //         error("Invalid color code %s", color_lists[i].c_str());
-    //     colors.emplace(icol, std::move(rgb));
-    //     if (icol > max_icol) {
-    //         max_icol = icol;
-    //     }
+    // htsFormat fmt={unknown_category,text_format,{-1,-1},no_compression,-1,NULL};
+    // htsFile* rf = hts_open_format(intsv.c_str(), "r", &fmt);
+    // if (rf == NULL) {
+    //     error("Failed to open input file %s", intsv.c_str());
     // }
-    // uint32_t n_color = colors.size();
-    // for (const auto& kv : colors) {
-    //     printf("Column index %lu: RGB %d %d %d\n", kv.first, kv.second[0], kv.second[1], kv.second[2]);
+    // kstring_t str;
+    // str.l = str.m = 0; str.s = NULL;
+    // int32_t lstr = hts_getline(rf, KS_SEP_LINE, &str);
+    // std::vector<std::string> fields;
+    // split(fields, "\t", str.s, lstr+1, true, false, true);
+    // int32_t nfields = fields.size();
+    // if (icol_q >= nfields) {
+    //     error("Column index is out of range in file %s (%d, %d)", intsv.c_str(), icol_q, nfields);
+    // }
+    // int32_t bcd_len_query =  fields[icol_q].length();
+    // if (bcd_len > bcd_len_query) {
+    //     error("--bcd-len larger longer than the length of barcode sequence in the input TSV file %s", intsv.c_str());
     // }
 
-    // // Read the input TSV file
-    // tsv_reader tr(inTsv.c_str());
-    // ncols = tr.read_line();
-    // if (ncols <= max_icol) {
-    //     error("The input TSV file does not have enough columns");
-    // }
-    // while (tr.str_field_at(0)[0] == '#') {
-    //     tr.read_line();
-    // }
-    // // Need a histogram per color to normalize/adjust the intensity
-    // // Column (color) -> (x, y) -> intensity
-    // std::map<uint32_t, std::unordered_map<uint64_t, int32_t> > hist;
-    // for (auto& kv : colors) {
-    //     hist[kv.first] = std::unordered_map<uint64_t, int32_t>();
-    // }
-    // uint32_t px, py;
-    // uint64_t xy, nline = 0;
-    // notice("Start reading from input");
-    // while (true) {
-    //     nline++;
-    //     if (nline % verbose == 0) {
-    //         notice("Reading line %lu", nline);
+	// BcdMatch<uint64_t> bcd_match(bcd_len, kmer_size, exact_only, allow_1N_ref, allow_1N_query, max_mismatch);
+
+	// uint64_t ref_tot = 0, ref_ambig = 0, ref_skip = 0;
+	// for (auto& intsv : sbcd_list) {
+	// 	tsv_reader sbcd_tsv(intsv.c_str());
+	// 	sbcd_tsv.read_line();
+	// 	if (icol_s >= sbcd_tsv.nfields || icol_x >= sbcd_tsv.nfields || icol_y >= sbcd_tsv.nfields) {
+	// 		error("Column index is out of range in file %s", intsv.c_str());
+	// 	}
+	// 	const char* seq = sbcd_tsv.str_field_at(icol_s);
+	// 	if (bcd_len > strlen(seq)) {
+	// 		error("--bcd-len larger longer than the length of barcode sequence in the input TSV file %s", intsv.c_str());
+	// 	}
+	// 	while (true) {
+	// 		ref_tot++;
+	// 		if (ref_tot % verbose == 0) {
+	// 			notice("Processed %lu reference barcodes, %lu contain 1 ambiguous base, %lu are skipped", ref_tot, ref_ambig, ref_skip);
+	// 		}
+	// 		uint64_t val = (uint64_t) sbcd_tsv.int_field_at(icol_x) << 32 | sbcd_tsv.int_field_at(icol_y);
+	// 		int32_t ret = bcd_match.add_ref(sbcd_tsv.str_field_at(icol_s), val);
+	// 		if (ret < 0) {
+	// 			ref_skip++;
+	// 		} else if (ret > 0) {
+	// 			ref_ambig++;
+	// 		}
+	// 		if (!sbcd_tsv.read_line()) {
+	// 			break;
+	// 		}
+	// 		if (debug % 3 == 1 && ref_tot > debug) {
+	// 			break;
+	// 		}
+	// 	}
+	// }
+	// bcd_match.process_ambig_ref();
+    // notice("Processed %lu reference barcodes, %lu contain 1 ambiguous base, %lu are skipped", ref_tot, ref_ambig, ref_skip);
+
+    // uint64_t n_rec = 0, n_match = 0, n_exact = 0, n_missing = 0, n_lazy = 0, n_query = 0;
+	// uint64_t prev_cb, prev_xy;
+	// int32_t prev_n_mismatch = -1;
+	// char prev_bcd_org_str[bcd_len+1] = {'.'};
+    // htsFile* wf = hts_open(output.c_str(), outmode.c_str());
+    // while (lstr > 0) {
+    //     n_rec++;
+    //     if (n_rec % verbose == 0) {
+    //         notice("Processed %lu records, queried %lu times, %lu matched, %lu exact, %lu missing, %lu skipped, %lu lazy", n_rec, n_query, n_match, n_exact, n_missing, n_lazy);
     //     }
-    //     bool nonzero = false;
-    //     for (auto& kv : colors) {
-    //         int32_t val = tr.int_field_at(kv.first);
-    //         if (val > 0) {
-    //             nonzero = true;
-    //             break;
-    //         }
-    //     }
-    //     if (!nonzero) {
-    //         if (tr.read_line() != ncols) {
-    //             break;
-    //         }
-    //         continue;
-    //     }
-    //     px = (uint32_t) ((tr.uint64_field_at(icol_x) - xmin) / coord_per_pixel);
-    //     py = (uint32_t) ((tr.uint64_field_at(icol_y) - ymin) / coord_per_pixel);
-    //     xy = (uint64_t) px << 32 | py;
-    //     for (auto& kv : colors) {
-    //         int32_t val = tr.int_field_at(kv.first);
-    //         if (val > 0) {
-    //             hist[kv.first][xy] += val;
-    //         }
-    //     }
-    //     if (tr.read_line() != ncols) {
+    //     if (debug && n_rec > debug) {
     //         break;
     //     }
-    //     if (debug && nline > debug) {
-    //         break;
+    //     char* seq = (char*) fields[icol_q].c_str();
+    //     if (reverse_complement) {
+    //         seq_revcomp(seq, bcd_len_query);
     //     }
-    // }
-    // // get normalization factor per channel
-    // notice("Finding normalizing factors");
-    // std::map<uint32_t, int32_t> norm_factors;
-    // for (auto& c : colors) {
-    //     std::vector<int32_t> intensities;
-    //     for (auto& kv : hist[c.first]) {
-    //         intensities.push_back(kv.second);
-    //     }
-    //     std::sort(intensities.begin(), intensities.end());
-    //     uint32_t idx = (uint32_t) (intensities.size() * intensity_adj);
-    //     norm_factors[c.first] = intensities[idx];
-    // }
-    // for (auto& kv : norm_factors) {
-    //     printf("Column %lu: cap intensity %d\n", kv.first, kv.second);
-    // }
-    // // Initialize the image
-    // int32_t height = (int32_t) (ceil((double)(ymax - ymin + 1) / coord_per_pixel));
-    // int32_t width  = (int32_t) (ceil((double)(xmax - xmin + 1) / coord_per_pixel));
-    // cimg_library::CImg<unsigned char> image(width, height, 1, 3, 0);
-    // // Draw the image
-    // notice("Start drawing the image %d x %d", width, height);
-    // for (const auto& kv : hist) {
-    //     const auto& rgb = colors[kv.first];
-    //     int32_t norm_factor = norm_factors[kv.first];
-    //     for (const auto& entry : kv.second) {
-    //         uint64_t pos = entry.first;
-    //         int32_t intensity = entry.second;
-    //         int32_t x = (int32_t) (pos >> 32);
-    //         int32_t y = (int32_t) (pos & 0xFFFFFFFF);
-    //         double norm_intensity = std::min(1.0, (double)intensity / norm_factor);
-    //         for (int c = 0; c < 3; ++c) {
-    //             image(x, y, c) = (uint8_t) std::min(255, image(x, y, c) + (int32_t)(norm_intensity * rgb[c]));
+    //     uint64_t cb, xy;
+    //     int32_t n_mismatch;
+    //     if (check_consecutive) {
+    //         if (strncmp(seq, prev_bcd_org_str, bcd_len) == 0) {
+    //             n_lazy++;
+    //             if (prev_n_mismatch < 0) {
+    //                 lstr = tsv_next(rf, str, fields);
+    //                 continue;
+    //             }
+    //             n_mismatch = prev_n_mismatch;
+    //             cb = prev_cb;
+    //             xy = prev_xy;
+    //         } else {
+    //             n_query++;
+    //             strncpy(prev_bcd_org_str, seq, bcd_len);
+    //             n_mismatch = bcd_match.query(seq, cb, xy);
+    //             prev_n_mismatch = n_mismatch;
+    //             if (n_mismatch < 0) {
+    //                 lstr = tsv_next(rf, str, fields);
+    //                 continue;
+    //             }
+    //             prev_cb = cb;
+    //             prev_xy = xy;
+    //         }
+    //     } else {
+    //         n_query++;
+    //         n_mismatch = bcd_match.query(seq, cb, xy);
+    //         if (n_mismatch < 0) {
+    //             lstr = tsv_next(rf, str, fields);
+    //             continue;
     //         }
     //     }
-    // }
+    //     n_match++;
+    //     if (n_mismatch == 0) {
+    //         n_exact++;
+    //     }
+    //     std::stringstream ss;
+    //     ss << n_mismatch << "\t" << (xy >> 32) << "\t" << (xy & 0xFFFFFFFF);
+    //     hprintf(wf, "%.*s\t%s\n", lstr, str.s, ss.str().c_str());
 
-    // notice("Writing the image to %s", outf.c_str());
-    // image.save_png(outf.c_str());
+    //     lstr = tsv_next(rf, str, fields);
+    // }
+    // hts_close(rf);
+    // hts_close(wf);
 
     return 0;
 }

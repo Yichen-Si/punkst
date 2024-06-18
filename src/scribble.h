@@ -2,8 +2,8 @@
 #define SCRIBBLE_H
 
 #include "utils.h"
-#include "seq_utils.h"
-#include "qgenlib/qgen_error.h"
+#include "qgenlib/seq_utils.h"
+#include "qgenlib/qgen_utils.h"
 #include <regex>
 #include <sstream>
 #include <iostream>
@@ -20,14 +20,11 @@ class ScribbleConfig {
     int32_t npair;
     int32_t ntEditDelete = 3;
     int32_t ntSpacer, ntBarcode;
-    int32_t upPrimLen, statBcLen, downFixLen, nickFixLen, capSeqLen;
+    uint32_t variableSpacer_min = 0, variableSpacer_max = 4;
+    int32_t upPrimLen, statBcLen;
+    int32_t downFixLen, nickFixLen, capSeqLen, minTail;
     ScribbleConfig(std::string& config) {
         ParseConfig(config);
-        upPrimLen = upstreamPrimer.size();
-        statBcLen = staticBarcode.size();
-        downFixLen = downstreamFixed.size();
-        nickFixLen = nickingFixed.size();
-        capSeqLen = captureSequence.size();
     }
 
     void ParseConfig(std::string& config) {
@@ -38,6 +35,7 @@ class ScribbleConfig {
             error("Unable to open config file %s", config.c_str());
         }
         while (std::getline(ifs, line)) {
+            line = stripstr(line);
             if (line[0] == '@') {
                 currentCategory = line;
             } else if (line[0] == '>') {
@@ -65,7 +63,27 @@ class ScribbleConfig {
                 } else if (currentCategory == "@CaptureSequence") {
                     captureSequence = line;
                 } else if (currentCategory == "@EditDeletion") {
-                    str2int32(line, ntEditDelete);
+                    if (!str2int32(line, ntEditDelete)) {
+                        error("Invalid @EditDeletion %s", line.c_str());
+                    }
+                } else if (currentCategory == "@VariableSpacer") {
+                    std::vector<std::string> tokens;
+                    split(tokens, ",", line, 2, true, true, true);
+                    bool flag = true;
+                    if (tokens.size() == 2) {
+                        if (str2uint32(tokens[0], variableSpacer_min) &&
+                            str2uint32(tokens[1], variableSpacer_max)) {
+                            if (variableSpacer_max < variableSpacer_min) {
+                                variableSpacer_max += variableSpacer_min;
+                                variableSpacer_min = variableSpacer_max - variableSpacer_min;
+                                variableSpacer_max -= variableSpacer_min;
+                            }
+                            flag = false;
+                        }
+                    }
+                    if (flag) {
+                        error("Invalid @VariableSpacer %s", line.c_str());
+                    }
                 }
             }
         }
@@ -130,11 +148,17 @@ class ScribbleConfig {
         if (nickingFixed.empty()) {
             notice("@NickingFixed is not defined in the config file");
         }
+        upPrimLen = upstreamPrimer.size();
+        statBcLen = staticBarcode.size();
+        downFixLen = downstreamFixed.size();
+        nickFixLen = nickingFixed.size();
+        capSeqLen = captureSequence.size();
+        minTail = std::min({downFixLen, nickFixLen, capSeqLen});
     }
 
     /** find the substring in seq that matches the iupac pattern stored in staticBarcode
     Try start positions within min_offset to max_offset in seq (0-based)
-    return the numebr of mismatches
+    return the minimum numebr of mismatches
     */
     int32_t FindStatisBarcodeFromFront(char* seq, int32_t l, int32_t& offset, int32_t min_offset=0, int32_t max_offset=0) {
         if (min_offset + statBcLen > l) {
@@ -145,23 +169,20 @@ class ScribbleConfig {
             notice("Offset range is too large or input sequence is too short");
             max_offset = l - statBcLen;
         }
-        std::vector<int32_t> scores(max_offset - min_offset + 1, 0);
         int32_t min_score = statBcLen + 1;
         offset = min_offset;
         for (int32_t i = min_offset; i <= max_offset; ++i) {
-            scores[i-min_offset] = seq_iupac_mismatch(seq+i, staticBarcode.c_str(), statBcLen);
-            if (scores[i-min_offset] == 0) {
+            int32_t score = seq_iupac_mismatch(seq+i, staticBarcode.c_str(), statBcLen);
+            if (score < min_score) {
+                min_score = score;
                 offset = i;
-                return 0;
-            }
-            if (scores[i-min_offset] < min_score) {
-                min_score = scores[i-min_offset];
-                offset = i;
+                if (min_score == 0) {
+                    return 0;
+                }
             }
         }
         return min_score;
     }
-
 };
 
 #endif

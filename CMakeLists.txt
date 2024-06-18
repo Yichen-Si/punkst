@@ -37,8 +37,6 @@ include_directories(${HTS_INCLUDE_DIRS} ${QGEN_INCLUDE_DIRS}
 set(SOURCE_FILES
     src/punkst.h
     src/punkst.cpp
-    src/seq_utils.h
-    src/seq_utils.cpp
     src/utils.h
     src/utils.cpp
     src/layout.h
@@ -46,6 +44,9 @@ set(SOURCE_FILES
     src/scribble.h
     script/scribble_parse.cpp
     script/draw_tsv_by_col.cpp
+    src/seqmatch.h
+    src/seqmatch.hpp
+    script/annotate_sb_tsv.cpp
     script/test.cpp
     )
 

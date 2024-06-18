@@ -1,6 +1,7 @@
 #include "punkst.h"
 #include "qgenlib/dataframe.h"
 #include "qgenlib/tsv_reader.h"
+#include "qgenlib/qgen_utils.h"
 #define cimg_display 0 // remove the need for X11 library
 #include "CImg.h"
 #include <array>
