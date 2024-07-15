@@ -21,7 +21,6 @@ int32_t cmdTsvAnnoSb(int32_t argc, char** argv) {
 	bool exact_only = false, allow_1N_ref = false, allow_1N_query = false;
 	std::string outmode("wz");
     bool check_consecutive = false;
-    bool query_unique = false;
     bool reverse_complement = false;
 
 	// Parse input parameters
@@ -42,7 +41,6 @@ int32_t cmdTsvAnnoSb(int32_t argc, char** argv) {
 		LONG_PARAM("allow-1N-query", &allow_1N_query, "Allow one N in query")
         LONG_PARAM("check-consecutive", &check_consecutive, "Query TSV is sorted by barcode")
         LONG_PARAM("reverse-complement", &reverse_complement, "Query and reference barcodes are reverse complements")
-        LONG_PARAM("query-unique", &query_unique, "Query TSV has unique barcode")
 		LONG_PARAM_GROUP("Output Options", NULL)
 		LONG_STRING_PARAM("output", &output, "Output file")
 		LONG_STRING_PARAM("output-mode", &outmode, "Output mode")
@@ -57,9 +55,6 @@ int32_t cmdTsvAnnoSb(int32_t argc, char** argv) {
 	if (intsv.empty() || output.empty() || sbcd_list.size() < 1 || bcd_len < 0 || icol_q < 0) {
 		error("--intput, --output, --sbcd, --bcd-len, --col-query are required but at least one is missing");
 	}
-    if (query_unique) {
-        check_consecutive = false;
-    }
 
     htsFormat fmt={unknown_category,text_format,{-1,-1},no_compression,-1,NULL};
     htsFile* rf = hts_open_format(intsv.c_str(), "r", &fmt);

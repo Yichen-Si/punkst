@@ -19,7 +19,7 @@ std::vector<int> computeLPSArray(const std::string& pattern) {
             }
         }
     }
-    return lps;
+    return std::move(lps);
 }
 
 int32_t KMPSearch(const std::string& pattern, const std::string& text, std::vector<int>& idx, std::vector<int>& lps, int32_t n) {
@@ -173,4 +173,19 @@ bool set_rgb(const char *s_color, std::array<int32_t, 3>& rgb) {
         }
         return true;
     }
+}
+
+// Helper function to compute percentile of non-zero values in a cv::Mat
+void percentile(std::vector<uchar>& results, const cv::Mat& mat, std::vector<double>& percentiles) {
+    std::vector<uchar> values;
+    values.reserve(mat.rows * mat.cols);
+    for (int i = 0; i < mat.rows; ++i) {
+        for (int j = 0; j < mat.cols; ++j) {
+            uchar val = mat.at<uchar>(i, j);
+            if (val > 0) {
+                values.push_back(val);
+            }
+        }
+    }
+    compute_percentile<uchar>(results, values, percentiles);
 }

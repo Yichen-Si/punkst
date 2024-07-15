@@ -2,13 +2,13 @@
 #include "qgenlib/dataframe.h"
 #include "qgenlib/tsv_reader.h"
 #include "qgenlib/qgen_utils.h"
-#define cimg_display 0 // remove the need for X11 library
-#include "CImg.h"
 #include <array>
 #include <stdlib.h>
 #include <unordered_map>
 #include "utils.h"
-
+// #define cimg_display 0
+// #include "CImg.h"
+#include <opencv2/opencv.hpp>
 
 int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
 
@@ -18,6 +18,7 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
     double intensity_adj = 0.9; // normalize the intensity of the channel by qt
     int32_t icol_x = 0, icol_y = 1;
     std::vector<std::string> color_lists;
+    int32_t gray_channel = -1;
 
     // Parse input parameters
     paramList pl;
@@ -26,6 +27,7 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
         LONG_STRING_PARAM("input", &inTsv, "")
         LONG_STRING_PARAM("manifest", &manifestf, "Bounding box information. Expects xmin,xmax,ymin,ymax for a manifest file (tall or wide format)")
         LONG_MULTI_STRING_PARAM("color-list", &color_lists, "[color_code]:[column index]")
+        LONG_INT_PARAM("gray-scale", &gray_channel, "Column index to read values to create a gray scale image (--color-list will be ignored and output image will be in gray scale)")
         LONG_INT_PARAM("icol-x", &icol_x, "Column index for x")
         LONG_INT_PARAM("icol-y", &icol_y, "Column index for y")
         LONG_DOUBLE_PARAM("coord-per-pixel", &coord_per_pixel, "Number of coordinate units per pixel")
@@ -73,20 +75,30 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
     // Parse the color list
     std::map<uint32_t, std::array<int32_t, 3>> colors;
     uint32_t max_icol = (uint32_t) std::max(icol_x, icol_y);
-    for (uint32_t i = 0; i < color_lists.size(); ++i) {
-        std::vector<std::string> tokens;
-        split(tokens, ":", color_lists[i]);
-        if (tokens.size() != 2)
-            error("Invalid color list %s", color_lists[i].c_str());
-        uint32_t icol;
-        std::array<int32_t, 3> rgb;
-        if (!set_rgb(tokens[1].c_str(), rgb) || !str2uint32(tokens[0], icol))
-            error("Invalid color code %s", color_lists[i].c_str());
-        colors.emplace(icol, std::move(rgb));
-        if (icol > max_icol) {
-            max_icol = icol;
+    int32_t n_channel = 3;
+    if (gray_channel >= 0) {
+        n_channel = 1;
+        if ((uint32_t) gray_channel > max_icol) {
+            max_icol = gray_channel;
+        }
+        colors[gray_channel] = std::array<int32_t, 3>{255, 255, 255};
+    } else {
+        for (uint32_t i = 0; i < color_lists.size(); ++i) {
+            std::vector<std::string> tokens;
+            split(tokens, ":", color_lists[i]);
+            if (tokens.size() != 2)
+                error("Invalid color list %s", color_lists[i].c_str());
+            uint32_t icol;
+            std::array<int32_t, 3> rgb;
+            if (!set_rgb(tokens[1].c_str(), rgb) || !str2uint32(tokens[0], icol))
+                error("Invalid color code %s", color_lists[i].c_str());
+            colors.emplace(icol, std::move(rgb));
+            if (icol > max_icol) {
+                max_icol = icol;
+            }
         }
     }
+
     uint32_t n_color = colors.size();
     for (const auto& kv : colors) {
         printf("Column index %lu: RGB %d %d %d\n", kv.first, kv.second[0], kv.second[1], kv.second[2]);
@@ -163,26 +175,34 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
     // Initialize the image
     int32_t height = (int32_t) (ceil((double)(ymax - ymin + 1) / coord_per_pixel));
     int32_t width  = (int32_t) (ceil((double)(xmax - xmin + 1) / coord_per_pixel));
-    cimg_library::CImg<unsigned char> image(width, height, 1, 3, 0);
+    // cimg_library::CImg<unsigned char> image(width, height, 1, n_channel, 0);
+    int32_t cv_type = n_channel == 1 ? CV_8UC1 : CV_8UC3;
+    cv::Mat image = cv::Mat::zeros(height, width, cv_type);
     // Draw the image
-    notice("Start drawing the image %d x %d", width, height);
+    notice("Start drawing the image %d x %d", height, width);
     for (const auto& kv : hist) {
         const auto& rgb = colors[kv.first];
         int32_t norm_factor = norm_factors[kv.first];
         for (const auto& entry : kv.second) {
-            uint64_t pos = entry.first;
-            int32_t intensity = entry.second;
-            int32_t x = (int32_t) (pos >> 32);
-            int32_t y = (int32_t) (pos & 0xFFFFFFFF);
-            double norm_intensity = std::min(1.0, (double)intensity / norm_factor);
-            for (int c = 0; c < 3; ++c) {
-                image(x, y, c) = (uint8_t) std::min(255, image(x, y, c) + (int32_t)(norm_intensity * rgb[c]));
+            int32_t x = (int32_t) (entry.first >> 32);
+            int32_t y = (int32_t) (entry.first & 0xFFFFFFFF);
+            double norm_intensity = std::min(1.0, (double)entry.second / norm_factor);
+            if (cv_type == CV_8UC1) {
+                image.at<uint8_t>(y, x) = (uint8_t) std::min(255, (int32_t)(norm_intensity * 255));
+            } else {
+                for (int c = 0; c < n_channel; ++c) { // opencv use BGR
+                    image.at<cv::Vec3b>(y, x)[c] = (uint8_t) std::min(255, (int32_t)(norm_intensity * rgb[2-c]));
+                }
             }
+            // for (int c = 0; c < n_channel; ++c) {
+                // image(x, y, c) = (uint8_t) std::min(255, (int32_t)(norm_intensity * rgb[c]));
+            // }
         }
     }
 
     notice("Writing the image to %s", outf.c_str());
-    image.save_png(outf.c_str());
+    // image.save_png(outf.c_str());
+    cv::imwrite(outf, image);
 
     return 0;
 }

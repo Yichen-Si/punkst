@@ -23,13 +23,16 @@ void skip_fq(htsFile* fq, kstring_t* str, int32_t nl = 4) {
 
 int32_t cmdFASTQscribble(int32_t argc, char** argv) {
 
-    std::string fq1f, fq2f, out, outf, configf;
+    // std::string fq1f, fq2f;
+    std::string out, outf, configf;
+    std::vector<std::string> fq1vec, fq2vec;
     int32_t primer_mismatch = 1, primer_minmatch = -1, primer_gap = 0;
     int32_t statbc_mismatch = 1;
     int32_t spacer_editdist = 4;
     int32_t barcode_indelnt = 1;
     int32_t debug = 0, verbose = 500000;
     int32_t last_proto_minmatch = 10;
+    int32_t signature_trim_read_end = 5;
     bool allow_missing_static_barcode = false;
     bool write_r1 = false;
     bool write_r1_hash = false;
@@ -38,8 +41,8 @@ int32_t cmdFASTQscribble(int32_t argc, char** argv) {
     paramList pl;
     BEGIN_LONG_PARAMS(longParameters)
         LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("fq1", &fq1f, "")
-        LONG_STRING_PARAM("fq2", &fq2f, "")
+        LONG_MULTI_STRING_PARAM("fq1", &fq1vec, "")
+        LONG_MULTI_STRING_PARAM("fq2", &fq2vec, "")
         LONG_STRING_PARAM("config", &configf, "Config file")
         LONG_INT_PARAM("primer_mismatch", &primer_mismatch, "Mismatch allowed in primer (before reaching --primer_minmatc)")
         LONG_INT_PARAM("primer_minmatch", &primer_minmatch, "Minimum match in primer")
@@ -47,6 +50,7 @@ int32_t cmdFASTQscribble(int32_t argc, char** argv) {
         LONG_INT_PARAM("statbc_mismatch", &statbc_mismatch, "Mismatch allowed in static barcode")
         LONG_INT_PARAM("spacer_editdist", &spacer_editdist, "Edit distance allowed in spacer")
         LONG_INT_PARAM("barcode_indelnt", &barcode_indelnt, "Indel length allowed in the mutable barcode")
+        LONG_INT_PARAM("signature_trim_read_end", &signature_trim_read_end, "When recording subsequence as identifier, ignore the last N bases")
         LONG_PARAM("allow_missing_static_barcode", &allow_missing_static_barcode, "Allow missing static barcode")
         LONG_PARAM_GROUP("Output Options", NULL)
         LONG_STRING_PARAM("out", &out, "")
@@ -63,20 +67,18 @@ int32_t cmdFASTQscribble(int32_t argc, char** argv) {
     if (primer_minmatch < 0) {
         primer_minmatch = config.upPrimLen;
     }
-std::cout << "Read config file\n";
-std::cout << "upstreamPrimer: " << config.upstreamPrimer << " " << config.upstreamPrimer.size() << std::endl;
-std::cout << "staticBarcode: " << config.staticBarcode << " " << config.staticBarcode.size() << std::endl;
-std::cout << "variableSpacer " << config.variableSpacer_min << ", " << config.variableSpacer_max << std::endl;
-std::cout << "validPair\n";
-for (auto& it : config.validPair) {
-    std::cout << it.first << " " << config.protospacer[it.first] << std::endl;
-    for (auto v : it.second) {
-        std::cout << v << ": " << config.mutableBarcode[v] << std::endl;
+    std::cout << "Read config file\n";
+    std::cout << "upstreamPrimer: " << config.upstreamPrimer << " " << config.upstreamPrimer.size() << std::endl;
+    std::cout << "staticBarcode: " << config.staticBarcode << " " << config.staticBarcode.size() << std::endl;
+    std::cout << "variableSpacer " << config.variableSpacer_min << ", " << config.variableSpacer_max << std::endl;
+    std::cout << "validPair\n";
+    for (auto& it : config.validPair) {
+        std::cout << it.first << " " << config.protospacer[it.first] << std::endl;
+        for (auto v : it.second) {
+            std::cout << v << ": " << config.mutableBarcode[v] << std::endl;
+        }
     }
-}
 
-    htsFile* fq1 = hts_open(fq1f.c_str(), "r");
-    htsFile* fq2 = hts_open(fq2f.c_str(), "r");
     kstring_t str1; str1.l = str1.m = 0; str1.s = NULL;
     kstring_t str2; str2.l = str2.m = 0; str2.s = NULL;
     int32_t lstr1, lstr2;
@@ -105,6 +107,10 @@ for (auto& it : config.validPair) {
     }
     notice("Distance between the protospacer and the prefix of downstream sequence: %s", ss.str().c_str());
 
+    for (size_t fqi = 0; fqi < fq1vec.size(); ++fqi) {
+
+    htsFile* fq1 = hts_open(fq1vec[fqi].c_str(), "r");
+    htsFile* fq2 = hts_open(fq2vec[fqi].c_str(), "r");
     // Read the pair of fastq files, currently only use the 4N+1 lines
     while((lstr2 = hts_getline(fq2, KS_SEP_LINE, &str2)) > 0) {
         lstr1 = hts_getline(fq1, KS_SEP_LINE, &str1);
@@ -196,8 +202,8 @@ for (auto& it : config.validPair) {
         std::stringstream spacer_score;
         spacer_score << min_score << ";";
 if (debug % 3 == 1) {
-    std::cout << "SCRIBBLE " << spacer_st[0] << "," << spacer_mst[0] << std::endl;
-    std::cout << "\tProtospacer " << config.protospacerIds[spacer_id[0]] << ": " << min_score << " " << spacer_st[0] << "," << spacer_mst[0] << " " << spacer_ed[0]-spacer_st[0] << std::endl;
+std::cout << "SCRIBBLE " << spacer_st[0] << "," << spacer_mst[0] << std::endl;
+std::cout << "\tProtospacer " << config.protospacerIds[spacer_id[0]] << ": " << min_score << " " << spacer_st[0] << "," << spacer_mst[0] << " " << spacer_ed[0]-spacer_st[0] << std::endl;
 }
 
         // Go back to check stable barcode
@@ -211,7 +217,7 @@ if (debug % 3 == 1) {
                 primer_offset + primer_len, // min offset
                 primer_offset + config.upPrimLen + primer_gap);
 if (debug % 3 == 1) {
-    std::cout << "\tsBC " << statbar_miss << " " << statbar_offset << " (" << primer_offset + primer_len << ", " << primer_offset + config.upPrimLen + primer_gap << ")" << std::endl;
+std::cout << "\tsBC " << statbar_miss << " " << statbar_offset << " (" << primer_offset + primer_len << ", " << primer_offset + config.upPrimLen + primer_gap << ")" << std::endl;
 }
             if (statbar_miss < statbc_mismatch) {
                 statbar = std::string(str2.s + statbar_offset, config.statBcLen);
@@ -283,7 +289,7 @@ if (debug % 3 == 1) {
             spacer_score << min_score << ";";
 
 if (debug % 3 == 1) {
-    std::cout << "\tProtospacer " << config.protospacerIds[spacer_id[k]] << ": " << min_score << " " << spacer_st[k] << "," << spacer_mst[k] << " " << spacer_ed[k]-spacer_st[k] << std::endl;
+std::cout << "\tProtospacer " << config.protospacerIds[spacer_id[k]] << ": " << min_score << " " << spacer_st[k] << "," << spacer_mst[k] << " " << spacer_ed[k]-spacer_st[k] << std::endl;
 }
             // Identify the mutable barcode
             std::string bc;
@@ -330,6 +336,7 @@ if (debug % 3 == 1) {
         }
 
         // match with downstream sequence
+        int32_t last_fixed_base = spacer_ed.back(); // find the first variable 3'utr
         int32_t score_nick, score_cs;
         ptr = spacer_ed[k];
         if (lstr2 - ptr < std::min(config.minTail, 10)) {
@@ -339,42 +346,78 @@ if (debug % 3 == 1) {
         } else {
             wsize = std::min(lstr2 - ptr, config.downFixLen);
             score = LocalAlignmentEditDistance(str2.s + ptr, config.downstreamFixed.c_str(), lstr2 - ptr, wsize, st1, ed1, st1_match);
+            if (score < config.downFixLen * 0.2 && ed1 > last_fixed_base) {
+                last_fixed_base = ed1;
+            }
 
             wsize = std::min(lstr2 - ptr, config.downFixLen);
             score_nick = LocalAlignmentEditDistance(str2.s + ptr, config.nickingFixed.c_str(), lstr2 - ptr, wsize, st1, ed1, st1_match);
+            if (score_nick < config.nickFixLen * 0.2 && ed1 > last_fixed_base) {
+                last_fixed_base = ed1;
+            }
 
             wsize = std::min(lstr2 - ptr, config.capSeqLen);
             score_cs = LocalAlignmentEditDistance(str2.s + ptr, config.captureSequence.c_str(), lstr2 - ptr, wsize, st1, ed1, st1_match);
+            if (score_cs < config.capSeqLen * 0.2 && ed1 > last_fixed_base) {
+                last_fixed_base = ed1;
+            }
         }
 
 if (debug % 3 == 1) {
     std::cout << "\nDownstream " << score << "," << score_nick << "," << score_cs << " " << ptr << std::endl;
 }
 
+// temporary - in case there is no static barcode,
+// write the first few bases after the last fixed downstream sequences and
+// the last few bases of the read, hope they can be surrogate identifier
+// this is arbitrary, but as long as it is deterministic
+uint64_t sig_seq = 0;
+if (last_fixed_base < lstr2 - signature_trim_read_end) {
+    int32_t l = std::min(32, lstr2 - signature_trim_read_end - last_fixed_base);
+    sig_seq = seq2bits(str2.s + last_fixed_base, l, 0) << 32 | seq2bits(str2.s + lstr2 - l, l, 0);
+}
+
 std::stringstream landmark;
 landmark << primer_offset << "," << statbar_offset;
-for (auto & v : spacer_st) {
+for (auto & v : spacer_mst) {
     landmark << "," << v;
 }
+landmark << "\t" << last_fixed_base << "\t" << sig_seq;
 
         // output: variable sapcer, static barcode, match length in primer,
         // number of scribble pairs, spacer list, spacer edits,
-        // barcode list, barcode mutations counts,
-        // barcode seq, distance to downstream sequence
+        // barcode list, barcode mutations counts, barcode seq,
+        // edit distance to downstream sequences
+        // (Optional): read 1 sequence or hash of (part of) it
+        // landmark positions (positions of the first matches to protospacers)
+        // position of the last base (+1) after the fixed downstream seqs
+        // hash of some pieces of the reamining sequences
         std::string variable_spacer = std::string(str2.s, primer_offset);
+        if (primer_offset == 0) {
+            variable_spacer = ".";
+        }
         hprintf(wf, "%s\t%s\t%d\t%d\t", variable_spacer.c_str(), statbar.c_str(), primer_len, k);
         for (auto& v : spacer_id) {
             hprintf(wf, "%s;", config.protospacerIds[v].c_str());
         }
         hprintf(wf, "\t%s\t", spacer_score.str().c_str());
-        for (auto& v : barcode_id) {
-            hprintf(wf, "%s;", v.c_str());
+        if (barcode_id.size() == 0) {
+            hprintf(wf, ".");
+            bc_seq = ".";
+        } else {
+            for (auto& v : barcode_id) {
+                hprintf(wf, "%s;", v.c_str());
+            }
         }
         hprintf(wf, "\t");
-        for (auto& v : snv) {
-            hprintf(wf, "%d;", v);
+        if (snv.size() == 0) {
+            hprintf(wf, ".");
+        } else {
+            for (auto& v : snv) {
+                hprintf(wf, "%d;", v);
+            }
         }
-        hprintf(wf, "\t%s\t%d\t%d\t%d", bc_seq.c_str(), score, score_nick, score_cs);
+        hprintf(wf, "\t%s\t%d\t%d\t%d\t%s", bc_seq.c_str(), score, score_nick, score_cs, landmark.str().c_str());
         if (write_r1_hash) {
             uint64_t r1_hash = seq2nt5(str1.s, std::min(lstr1, MAX_NT5_UNIT_64));
             hprintf(wf, "\t%lu", r1_hash);
@@ -382,7 +425,7 @@ for (auto & v : spacer_st) {
         if (write_r1) {
             hprintf(wf, "\t%s", str1.s);
         }
-        hprintf(wf, "\t%s\n", landmark.str().c_str() );
+        hprintf(wf, "\n");
 
         nrec++;
 
@@ -395,6 +438,9 @@ if (debug && nrec > debug) {
 
     hts_close(fq1);
     hts_close(fq2);
+    }
+
+
     free(str1.s);
     free(str2.s);
     hts_close(wf);

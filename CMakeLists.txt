@@ -11,6 +11,12 @@ if(NOT HTS_INCLUDE_DIRS )
 endif()
 message(STATUS ${HTS_INCLUDE_DIRS})
 
+find_path(EIGEN_INCLUDE_DIR Eigen/Dense HINTS ../eigen)
+if(NOT EIGEN_INCLUDE_DIR)
+    message(FATAL_ERROR "EIGEN_INCLUDE_DIR not found")
+endif()
+message(STATUS ${EIGEN_INCLUDE_DIR})
+
 find_library(HTS_LIBRARIES libhts.a HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib/)
 if(NOT HTS_LIBRARIES)
     message(FATAL_ERROR "libhts HTS_LIBRARIES not found")
@@ -29,9 +35,15 @@ if(NOT QGEN_LIBRARIES)
 endif()
 message(STATUS ${QGEN_LIBRARIES})
 
+set(OpenCV_DIR ../opencv/build)
+find_package(OpenCV REQUIRED)
+
 include_directories(${HTS_INCLUDE_DIRS} ${QGEN_INCLUDE_DIRS}
+                    ${OpenCV_INCLUDE_DIR}
+                    ${EIGEN_INCLUDE_DIR}
                     ${CMAKE_CURRENT_SOURCE_DIR}/script
                     ${CMAKE_CURRENT_SOURCE_DIR}/cimg
+                    ${CMAKE_CURRENT_SOURCE_DIR}/nanoflann
                     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 set(SOURCE_FILES
@@ -41,12 +53,17 @@ set(SOURCE_FILES
     src/utils.cpp
     src/layout.h
     cimg/CImg.h
+    nanoflann/nanoflann.hpp
+    nanoflann/nanoflann_utils.h
     src/scribble.h
-    script/scribble_parse.cpp
-    script/draw_tsv_by_col.cpp
     src/seqmatch.h
     src/seqmatch.hpp
+    src/hexgrid.h
     script/annotate_sb_tsv.cpp
+    script/scribble_parse.cpp
+    script/draw_tsv_by_col.cpp
+    script/nuclei_mask.cpp
+    script/nuclei_center.cpp
     script/test.cpp
     )
 
@@ -90,7 +107,7 @@ if(NOT CRYPTOLIB)
     message(FATAL_ERROR "libcrypto library not found")
 endif()
 
-TARGET_LINK_LIBRARIES(${APP_EXE} PRIVATE ${QGEN_LIBRARIES} ${HTS_LIBRARIES} ${ZLIB} ${LZMA} ${BZIP2} ${CURLLIB} ${DEFLATELIB} ${CRYPTOLIB} "${OpenMP_CXX_FLAGS}")
+TARGET_LINK_LIBRARIES(${APP_EXE} PRIVATE ${QGEN_LIBRARIES} ${HTS_LIBRARIES} ${OpenCV_LIBRARIES} ${ZLIB} ${LZMA} ${BZIP2} ${CURLLIB} ${DEFLATELIB} ${CRYPTOLIB} "${OpenMP_CXX_FLAGS}")
 target_compile_options(${APP_EXE} PRIVATE "${OpenMP_CXX_FLAGS}")
 
 
