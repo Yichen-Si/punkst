@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package pointcloud;
+
+message PointCloudDiscrete {
+
+    message CoordinateSystem {
+        string name = 1;
+        string units = 2;
+        fixed32 flags = 3; // bitmask of flags: 0x1=origin at bottom, 0x2=origin at right. 0 means top-left origin
+        repeated double transform_matrix = 4 [packed = true];
+        repeated double shift_vector = 5 [packed = true];
+    }
+
+    message Attribute {
+        string name = 1;
+        oneof definition {
+            ScalarType scalar = 2;
+            CategoryType category = 3;
+        }
+    }
+
+    message ScalarType {
+        enum Type {
+            INT32 = 0; // fixed32
+            INT64 = 1; // fixed64
+            FLOAT = 2;
+            DOUBLE = 3;
+            BOOL = 4;
+        }
+        Type type = 1;
+    }
+
+    message CategoryType { // Dictionary of all possible values
+        repeated string values = 1;
+    }
+
+    message AttributeArray {
+        string name = 1;
+        // intended use is to have exactly one present
+        repeated fixed32 int32_values = 2 [packed = true];
+        repeated fixed64 int64_values = 3 [packed = true];
+        repeated float float_values = 4 [packed = true];
+        repeated double double_values = 5 [packed = true];
+        repeated bool bool_values = 6 [packed = true];
+        repeated fixed32 category_indices = 7 [packed = true]; // indices in the corresponding attribute's definition of type CategoryType
+    }
+
+    message AttributeValue {
+        oneof value {
+            fixed32 int32_value = 1;
+            fixed64 int64_value = 2;
+            float float_value = 3;
+            double double_value = 4;
+            bool bool_value = 5;
+            fixed32 category_index = 6; // index in the corresponding attribute's definition of type CategoryType
+        }
+    }
+
+    message Pixel {
+        fixed32 x = 1; // pixel coordinates
+        fixed32 y = 2;
+        repeated AttributeValue attrs = 4; // one for each attribute (corresponds to attributes in the point cloud)
+    }
+
+    message TileIndex {
+        fixed64 tile_id = 1;
+        fixed64 offset = 2; // offset in bytes
+        fixed64 size = 3; // size in bytes
+    }
+
+    message Tile { // block of points
+        fixed64 tile_id = 1;
+        repeated fixed32 coordinates = 2 [packed = true];
+        repeated AttributeArray attrs = 3; // one for each attribute
+    }
+
+    CoordinateSystem coordinate_system = 1;
+    repeated Attribute attributes = 2;
+    repeated TileIndex tile_indices = 3; // to support random access
+    repeated Tile tiles = 4; // tiles in the point cloud
+}

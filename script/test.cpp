@@ -1,3 +1,4 @@
+#include <iostream>
 #include "punkst.h"
 #include "utils.h"
 #include "qgenlib/tsv_reader.h"
@@ -6,8 +7,11 @@
 #include <opencv2/imgproc.hpp>
 #include "nanoflann.hpp"
 #include "nanoflann_utils.h"
+#include "json.hpp"
+#include "variant.hpp"
+#include "vector_tile_config.hpp"
 #include "Eigen/Dense"
-#include <iostream>
+
 
 template <typename num_t>
 void kdtree_demo(const size_t N)

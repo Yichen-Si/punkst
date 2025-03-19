@@ -101,7 +101,7 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
 
     uint32_t n_color = colors.size();
     for (const auto& kv : colors) {
-        printf("Column index %lu: RGB %d %d %d\n", kv.first, kv.second[0], kv.second[1], kv.second[2]);
+        printf("Column index %u: RGB %d %d %d\n", kv.first, kv.second[0], kv.second[1], kv.second[2]);
     }
 
     // Read the input TSV file
@@ -170,7 +170,7 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
         norm_factors[c.first] = intensities[idx];
     }
     for (auto& kv : norm_factors) {
-        printf("Column %lu: cap intensity %d\n", kv.first, kv.second);
+        printf("Column %u: cap intensity %d\n", kv.first, kv.second);
     }
     // Initialize the image
     int32_t height = (int32_t) (ceil((double)(ymax - ymin + 1) / coord_per_pixel));

@@ -47,8 +47,6 @@ int32_t local_max(std::vector<cv::Point>& centers, cv::Mat img, int kernel_size 
     return centers.size();
 }
 
-// using KDTreeI = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<float, PointCloud<int32_t> >, PointCloud<int32_t>, 2>;
-
 using KDTreeI = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<int32_t, PointCloudCV<int32_t> >, PointCloudCV<int32_t>, 2>;
 using KDTreeF = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<float, PointCloudCV<float> >, PointCloudCV<float>, 2>;
 

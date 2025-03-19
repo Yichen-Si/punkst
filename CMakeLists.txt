@@ -5,17 +5,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -pthread -std=c++17")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
-find_path(HTS_INCLUDE_DIRS htslib/bgzf.h HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib)
-if(NOT HTS_INCLUDE_DIRS )
-    message(FATAL_ERROR "libhts HTS_INCLUDE_DIRS not found")
-endif()
-message(STATUS ${HTS_INCLUDE_DIRS})
-
 find_path(EIGEN_INCLUDE_DIR Eigen/Dense HINTS ../eigen)
 if(NOT EIGEN_INCLUDE_DIR)
     message(FATAL_ERROR "EIGEN_INCLUDE_DIR not found")
 endif()
 message(STATUS ${EIGEN_INCLUDE_DIR})
+
+find_path(HTS_INCLUDE_DIRS htslib/bgzf.h HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib)
+if(NOT HTS_INCLUDE_DIRS )
+    message(FATAL_ERROR "libhts HTS_INCLUDE_DIRS not found")
+endif()
+message(STATUS ${HTS_INCLUDE_DIRS})
 
 find_library(HTS_LIBRARIES libhts.a HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib/)
 if(NOT HTS_LIBRARIES)
@@ -37,39 +37,60 @@ message(STATUS ${QGEN_LIBRARIES})
 
 set(OpenCV_DIR ../opencv/build)
 find_package(OpenCV REQUIRED)
+message(STATUS "OpenCV_INCLUDE_DIRS: ${OpenCV_INCLUDE_DIRS}")
+
+# find_package(Protobuf REQUIRED )
+# message(STATUS "Protobuf_INCLUDE_DIRS: ${Protobuf_INCLUDE_DIRS}")
+# protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${CMAKE_CURRENT_SOURCE_DIR}/pointcloud.proto)
 
 include_directories(${HTS_INCLUDE_DIRS} ${QGEN_INCLUDE_DIRS}
-                    ${OpenCV_INCLUDE_DIR}
-                    ${EIGEN_INCLUDE_DIR}
                     ${CMAKE_CURRENT_SOURCE_DIR}/script
-                    ${CMAKE_CURRENT_SOURCE_DIR}/cimg
-                    ${CMAKE_CURRENT_SOURCE_DIR}/nanoflann
                     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 set(SOURCE_FILES
+    script/test.cpp
     src/punkst.h
     src/punkst.cpp
     src/utils.h
     src/utils.cpp
     src/layout.h
-    cimg/CImg.h
-    nanoflann/nanoflann.hpp
-    nanoflann/nanoflann_utils.h
     src/scribble.h
     src/seqmatch.h
     src/seqmatch.hpp
     src/hexgrid.h
+    src/threads.hpp
+    src/mbtiles.h
+    src/tilereader.hpp
+    # src/pointcloud.pb.h
+    # src/pointcloud.pb.cc
+    script/pts2tiles.cpp
+    script/pts2tiles_binary.cpp
+    script/tiles2hex.cpp
     script/annotate_sb_tsv.cpp
     script/scribble_parse.cpp
     script/draw_tsv_by_col.cpp
     script/nuclei_mask.cpp
     script/nuclei_center.cpp
-    script/test.cpp
     )
 
 SET(APP_EXE punkst)
 #find_package(OpenMP REQUIRED)
 ADD_EXECUTABLE(${APP_EXE} ${SOURCE_FILES})
+
+target_include_directories(${APP_EXE} PRIVATE
+    ${OpenCV_INCLUDE_DIR}
+    # ${Protobuf_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/cimg
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanoflann
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/nlohmann
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/PMTiles
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/protozero
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/mapbox
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/mapbox/geometry
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/mapbox/vector_tile
+    ${EIGEN_INCLUDE_DIR}
+)
 
 find_library(ZLIB z HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/)
 if(NOT ZLIB)
@@ -107,7 +128,18 @@ if(NOT CRYPTOLIB)
     message(FATAL_ERROR "libcrypto library not found")
 endif()
 
-TARGET_LINK_LIBRARIES(${APP_EXE} PRIVATE ${QGEN_LIBRARIES} ${HTS_LIBRARIES} ${OpenCV_LIBRARIES} ${ZLIB} ${LZMA} ${BZIP2} ${CURLLIB} ${DEFLATELIB} ${CRYPTOLIB} "${OpenMP_CXX_FLAGS}")
+find_package(SQLite3)
+if (NOT SQLite3_FOUND)
+    message(FATAL_ERROR "libsqlite3 library not found")
+endif()
+
+TARGET_LINK_LIBRARIES(${APP_EXE} PRIVATE
+    SQLite::SQLite3
+    ${QGEN_LIBRARIES} ${HTS_LIBRARIES} ${OpenCV_LIBRARIES}
+    # ${Protobuf_LIBRARIES}
+    ${ZLIB} ${LZMA} ${BZIP2} ${CURLLIB} ${DEFLATELIB} ${CRYPTOLIB}
+    "${OpenMP_CXX_FLAGS}"
+)
 target_compile_options(${APP_EXE} PRIVATE "${OpenMP_CXX_FLAGS}")
 
 

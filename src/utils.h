@@ -10,6 +10,7 @@
 #include <map>
 #include <iostream>
 #include <algorithm>
+#include <filesystem>
 #include "qgenlib/qgen_error.h"
 #include "qgenlib/qgen_utils.h"
 #include <opencv2/opencv.hpp>
@@ -25,6 +26,12 @@ int LocalAlignmentEditDistance(const char* str1, const char* str2, int32_t m, in
 // Hex color code to integer RGB
 bool set_rgb(const char *s_color, std::vector<int32_t>& rgb);
 bool set_rgb(const char *s_color, std::array<int32_t, 3>& rgb);
+
+// base16 encoding
+std::string uint32toHex(uint32_t num);
+uint32_t hexToUint32(const std::string& hex);
+
+bool createDirectory(const std::string& dir);
 
 // Results are sorted
 template <typename T>
@@ -73,5 +80,33 @@ void compute_percentile(std::vector<T>& results, std::vector<T>& values, std::ve
 
 // Helper function to compute percentile of non-zero values in a cv::Mat
 void percentile(std::vector<uchar>& results, const cv::Mat& mat, std::vector<double>& percentiles);
+
+// Shape related
+template <typename T>
+struct Rectangle {
+    T xmin, ymin, xmax, ymax;
+    Rectangle(T x1, T y1, T x2, T y2) : xmin(x1), ymin(y1), xmax(x2), ymax(y2) {}
+    Rectangle() : xmin(0), ymin(0), xmax(0), ymax(0) {}
+    bool proper() const {
+        return (xmin < xmax && ymin < ymax);
+    }
+    bool contains(T x, T y) const {
+        return (x >= xmin && x <= xmax && y >= ymin && y <= ymax);
+    }
+    bool cutInside(Rectangle<T>& rec, T r) {
+        rec.xmin = xmin + r;
+        rec.ymin = ymin + r;
+        rec.xmax = xmax - r;
+        rec.ymax = ymax - r;
+        return rec.proper();
+    }
+    bool padOutside(Rectangle<T>& rec, T r) {
+        rec.xmin = xmin - r;
+        rec.ymin = ymin - r;
+        rec.xmax = xmax + r;
+        rec.ymax = ymax + r;
+        return rec.proper();
+    }
+};
 
 #endif

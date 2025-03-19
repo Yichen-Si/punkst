@@ -1,5 +1,29 @@
 #include "utils.h"
 
+std::string uint32toHex(uint32_t num) {
+    std::stringstream ss;
+    ss << std::hex << std::setw(8) << std::setfill('0') << num;
+    return ss.str();
+}
+uint32_t hexToUint32(const std::string& hex) {
+    uint32_t num;
+    std::stringstream ss;
+    ss << std::hex << hex;
+    ss >> num;
+    return num;
+}
+
+bool createDirectory(const std::string& dir) {
+    if (std::filesystem::exists(dir)) {
+        if (std::filesystem::is_directory(dir) && std::filesystem::is_empty(dir)) {
+            return true;
+        }
+        return false;
+    }
+    std::filesystem::create_directories(dir);
+    return true;
+}
+
 std::vector<int> computeLPSArray(const std::string& pattern) {
     int M = pattern.size();
     std::vector<int> lps(M, 0);
