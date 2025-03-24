@@ -1,3 +1,5 @@
+#pragma once
+
 #include <iostream>
 #include <cstdint>
 #include <vector>
@@ -20,8 +22,14 @@ public:
     double mtx_p2a[2][2];
     double mtx_a2p[2][2];
 
-    HexGrid(double s, bool _pointy = true) : size(s), pointy(_pointy) {
-        assert(size > 0);
+    HexGrid() {}
+    HexGrid(double s, bool _pointy = true) {
+        init(s, _pointy);
+    }
+    void init(double s, bool _pointy = true) {
+        assert(s > 0);
+        size = s;
+        pointy = _pointy;
 
         if (pointy) {
             mtx_p2a[0][0] = std::sqrt(3)/3/size;

@@ -1,16 +1,18 @@
 cmake_minimum_required(VERSION 3.1...3.23)
 project(punkst)
 
+set(APP_EXE punkst)
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -pthread -std=c++17")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
+# Eigen
 find_path(EIGEN_INCLUDE_DIR Eigen/Dense HINTS ../eigen)
 if(NOT EIGEN_INCLUDE_DIR)
     message(FATAL_ERROR "EIGEN_INCLUDE_DIR not found")
 endif()
 message(STATUS ${EIGEN_INCLUDE_DIR})
 
+# htslib
 find_path(HTS_INCLUDE_DIRS htslib/bgzf.h HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../htslib)
 if(NOT HTS_INCLUDE_DIRS )
     message(FATAL_ERROR "libhts HTS_INCLUDE_DIRS not found")
@@ -23,6 +25,7 @@ if(NOT HTS_LIBRARIES)
 endif()
 message(STATUS ${HTS_LIBRARIES})
 
+# qgenlib
 find_path(QGEN_INCLUDE_DIRS qgenlib/qgen_error.h  HINTS /usr/lib/x86_64-linux-gnu/ /usr/lib/ /usr/lib64/ ../qgenlib)
 if(NOT QGEN_INCLUDE_DIRS )
     message(FATAL_ERROR "libqgen QGEN_INCLUDE_DIRS not found")
@@ -35,17 +38,18 @@ if(NOT QGEN_LIBRARIES)
 endif()
 message(STATUS ${QGEN_LIBRARIES})
 
+# OpenCV
 set(OpenCV_DIR ../opencv/build)
 find_package(OpenCV REQUIRED)
 message(STATUS "OpenCV_INCLUDE_DIRS: ${OpenCV_INCLUDE_DIRS}")
+
+# OpenMP
+find_package(OpenMP REQUIRED)
 
 # find_package(Protobuf REQUIRED )
 # message(STATUS "Protobuf_INCLUDE_DIRS: ${Protobuf_INCLUDE_DIRS}")
 # protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${CMAKE_CURRENT_SOURCE_DIR}/pointcloud.proto)
 
-include_directories(${HTS_INCLUDE_DIRS} ${QGEN_INCLUDE_DIRS}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/script
-                    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 set(SOURCE_FILES
     script/test.cpp
@@ -61,11 +65,15 @@ set(SOURCE_FILES
     src/threads.hpp
     src/mbtiles.h
     src/tilereader.hpp
+    src/dataunits.hpp
+    src/lda.hpp
+    src/numerical_utils.hpp
     # src/pointcloud.pb.h
     # src/pointcloud.pb.cc
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
+    script/lda_training.cpp
     script/annotate_sb_tsv.cpp
     script/scribble_parse.cpp
     script/draw_tsv_by_col.cpp
@@ -73,11 +81,12 @@ set(SOURCE_FILES
     script/nuclei_center.cpp
     )
 
-SET(APP_EXE punkst)
-#find_package(OpenMP REQUIRED)
-ADD_EXECUTABLE(${APP_EXE} ${SOURCE_FILES})
+add_executable(${APP_EXE} ${SOURCE_FILES})
 
 target_include_directories(${APP_EXE} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/script
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${HTS_INCLUDE_DIRS} ${QGEN_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIR}
     # ${Protobuf_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/ext
@@ -133,14 +142,16 @@ if (NOT SQLite3_FOUND)
     message(FATAL_ERROR "libsqlite3 library not found")
 endif()
 
-TARGET_LINK_LIBRARIES(${APP_EXE} PRIVATE
+target_compile_options(${APP_EXE} PRIVATE -O3 -pthread)
+
+target_link_libraries(${APP_EXE} PRIVATE
     SQLite::SQLite3
-    ${QGEN_LIBRARIES} ${HTS_LIBRARIES} ${OpenCV_LIBRARIES}
+    ${QGEN_LIBRARIES} ${HTS_LIBRARIES}
+    ${OpenCV_LIBRARIES}
     # ${Protobuf_LIBRARIES}
+    OpenMP::OpenMP_CXX
     ${ZLIB} ${LZMA} ${BZIP2} ${CURLLIB} ${DEFLATELIB} ${CRYPTOLIB}
-    "${OpenMP_CXX_FLAGS}"
 )
-target_compile_options(${APP_EXE} PRIVATE "${OpenMP_CXX_FLAGS}")
 
 
 install(TARGETS ${APP_EXE} RUNTIME DESTINATION bin)

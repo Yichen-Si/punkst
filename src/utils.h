@@ -9,6 +9,7 @@
 #include <set>
 #include <map>
 #include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <filesystem>
 #include "qgenlib/qgen_error.h"
@@ -31,9 +32,10 @@ bool set_rgb(const char *s_color, std::array<int32_t, 3>& rgb);
 std::string uint32toHex(uint32_t num);
 uint32_t hexToUint32(const std::string& hex);
 
-bool createDirectory(const std::string& dir);
+// compute block boundaries for processing a plain text file in parallel
+void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& blocks, const std::string& inFile, int32_t nThreads, int32_t nskip = 0);
 
-// Results are sorted
+// compute percentiles (results are sorted)
 template <typename T>
 void compute_percentile(std::vector<T>& results, std::vector<T>& values, std::vector<double>& percentiles) {
     size_t n = values.size();
@@ -78,7 +80,7 @@ void compute_percentile(std::vector<T>& results, std::vector<T>& values, std::ve
 
 // Image related
 
-// Helper function to compute percentile of non-zero values in a cv::Mat
+// compute percentiles of non-zero values in a cv::Mat
 void percentile(std::vector<uchar>& results, const cv::Mat& mat, std::vector<double>& percentiles);
 
 // Shape related
@@ -107,6 +109,40 @@ struct Rectangle {
         rec.ymax = ymax + r;
         return rec.proper();
     }
+};
+
+// File handling related
+bool createDirectory(const std::string& dir);
+// Iterator for lines
+class BoundedReadline {
+public:
+    BoundedReadline(const std::string &filename, std::streampos start, std::streampos end)
+        : startOffset(start), endOffset(end)
+    {
+        file = std::make_unique<std::ifstream>(filename, std::ios::binary);
+        if (!file || !file->is_open()) {
+            throw std::runtime_error("Failed to open file: " + filename);
+        }
+        file->seekg(startOffset);
+    }
+
+    // Returns true and sets 'line' if a line is successfully read and within the tile's range.
+    bool next(std::string &line) {
+        // Check that we haven't passed the tile's end.
+        if (!file || file->tellg() >= endOffset) {
+            return false;
+        }
+        std::streampos before = file->tellg();
+        if (!std::getline(*file, line)) {
+            return false;
+        }
+        return true;
+    }
+
+private:
+    std::unique_ptr<std::ifstream> file;
+    std::streampos startOffset;
+    std::streampos endOffset;
 };
 
 #endif

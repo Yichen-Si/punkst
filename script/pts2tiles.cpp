@@ -9,7 +9,7 @@
 
 class Pts2Tiles {
 public:
-    Pts2Tiles(int32_t nthreads, const std::string& inFile, std::string& tmpdir, const std::string& outPref, int32_t buff = 1000, int32_t nskip = 0) : numThreads(nthreads), inFile(inFile), tmpDir(tmpdir), outPref(outPref), tileBuffer(buff), nskip(nskip) {
+    Pts2Tiles(int32_t nthreads, const std::string& inFile, std::string& tmpdir, const std::string& outPref, int32_t buff = 1000, int32_t nskip = 0) : nThreads(nthreads), inFile(inFile), tmpDir(tmpdir), outPref(outPref), tileBuffer(buff), nskip(nskip) {
         if (!createDirectory(tmpDir)) {
             throw std::runtime_error("Error creating temporary directory (or the existing directory is not empty): " + tmpDir);
         }
@@ -26,10 +26,8 @@ public:
         return globalTiles;
     }
 
-
-
     bool run() {
-        notice("Launching %d worker threads", numThreads);
+        notice("Launching %d worker threads", nThreads);
         if (!launchWorkerThreads()) {
             error("Error launching worker threads");
             return false;
@@ -81,7 +79,7 @@ public:
 
 
 private:
-    int32_t numThreads;
+    int32_t nThreads;
     std::string tmpDir, inFile, outPref;
     int32_t tileBuffer, nskip;
 
@@ -91,45 +89,6 @@ private:
     std::vector<std::thread> threads;
 
     lineParser parser;
-
-    // Compute block boundaries for parallelization
-    void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& blocks) {
-        std::ifstream infile(inFile, std::ios::binary);
-        if (!infile) {
-            error("Error opening input file: %s", inFile.c_str());
-        }
-        std::string line;
-        for (int i = 0; i < nskip; ++i) {
-            std::getline(infile, line);
-        }
-        std::streampos start_offset = infile.tellg();
-        infile.seekg(0, std::ios::end);
-        std::streampos fileSize = infile.tellg();
-        size_t blockSize = fileSize / numThreads;
-
-        std::streampos current = start_offset;
-        blocks.clear();
-        for (int i = 0; i < numThreads; ++i) {
-            std::streampos end = current + static_cast<std::streamoff>(blockSize);
-            if (end > fileSize || i == numThreads - 1) {
-                end = fileSize;
-            } else {
-                infile.seekg(end);
-                std::getline(infile, line);
-                end = infile.tellg();
-                if (end == -1) {
-                    end = fileSize;
-                }
-            }
-            blocks.emplace_back(current, end);
-            current = end;
-            if (current >= fileSize) {
-                break;
-            }
-        }
-        infile.close();
-        notice("Partitioned input file into %zu blocks of size ~ %zu", blocks.size(), blockSize);
-    }
 
     // Worker thread function
     void worker(int threadId, std::streampos start, std::streampos end) {
@@ -190,7 +149,7 @@ private:
 
     bool launchWorkerThreads() {
         std::vector<std::pair<std::streampos, std::streampos>> blocks;
-        computeBlocks(blocks);
+        computeBlocks(blocks, inFile, nThreads, nskip);
         for (size_t i = 0; i < blocks.size(); i++) {
             threads.emplace_back(&Pts2Tiles::worker, this, static_cast<int>(i), blocks[i].first, blocks[i].second);
         }
@@ -205,7 +164,7 @@ private:
     }
 
     void mergeTmpFileToOutput(int64_t tileId, std::ofstream& outfile) {
-        for (uint32_t threadId = 0; threadId < numThreads; ++threadId) {
+        for (uint32_t threadId = 0; threadId < nThreads; ++threadId) {
             std::string tmpFilename = tmpDir + std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv";
             std::ifstream tmpFile(tmpFilename, std::ios::binary);
             if (tmpFile) {
@@ -256,7 +215,7 @@ private:
 int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
 
     std::string inTsv, outPref, tmpDir;
-    int nThreads = 1, tileSize = 500000;
+    int nThreads0 = 1, tileSize = 500000;
     int debug = 0, tileBuffer = 1000, verbose = 1000000;
     int icol_x, icol_y, nskip = 0;
 
@@ -270,7 +229,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
         LONG_STRING_PARAM("temp-dir", &tmpDir, "Directory to store temporary files")
         LONG_INT_PARAM("tile-size", &tileSize, "Tile size in units (default: 300 um)")
         LONG_INT_PARAM("tile-buffer", &tileBuffer, "Buffer size per tile per thread (default: 1000 lines)")
-        LONG_INT_PARAM("threads", &nThreads, "Number of threads to use (default: 1)")
+        LONG_INT_PARAM("threads", &nThreads0, "Number of threads to use (default: 1)")
 		LONG_PARAM_GROUP("Output Options", NULL)
         LONG_STRING_PARAM("out-prefix", &outPref, "Output TSV file")
         LONG_INT_PARAM("verbose", &verbose, "Verbose")
@@ -281,13 +240,13 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     pl.Status();
 
     // Determine the number of threads to use.
-    unsigned int numThreads = std::thread::hardware_concurrency();
-    if (numThreads == 0 || numThreads > nThreads) {
-        numThreads = nThreads;
+    unsigned int nThreads = std::thread::hardware_concurrency();
+    if (nThreads == 0 || nThreads >= nThreads0) {
+        nThreads = nThreads0;
     }
-    notice("Using %u threads for processing", numThreads);
+    notice("Using %u threads for processing", nThreads);
 
-    Pts2Tiles pts2Tiles(numThreads, inTsv, tmpDir, outPref, tileBuffer, nskip);
+    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileBuffer, nskip);
     pts2Tiles.initLineParser(tileSize, icol_x, icol_y);
     if (!pts2Tiles.run()) {
         return 1;

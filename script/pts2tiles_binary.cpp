@@ -30,7 +30,8 @@ class Pts2TilesBinary {
         // Load categorical dictionaries from file(s) and record the corresponding column indecies.
         // Each dictionary file is expected to have one category per line.
         // The order of catDictionaryFiles corresponds to the order of columns in icol_cat.
-        void initCategoryDictionaries(const std::vector<std::string>& catDictionaryFiles, const std::vector<int32_t>& icol_cat) {
+        void initCategoryDictionaries(const std::vector<std::string>& catDictionaryFiles, const std::vector<int32_t>& icol_cat, bool cat_str = false) {
+            catInString = cat_str;
             catColumns = icol_cat;
             catDicts.resize(catDictionaryFiles.size());
             std::vector<int32_t> dictSizes(catDictionaryFiles.size(), 0);
@@ -105,6 +106,7 @@ class Pts2TilesBinary {
         int32_t tileBuffer; // Number of records to buffer per tile per thread before flushing
         int32_t nskip;
         int32_t col_x, col_y; // Column indecies for x and y coordinates.
+        bool catInString;
 
         // Column indecies for additional features.
         std::vector<int32_t> catColumns;
@@ -250,16 +252,23 @@ class Pts2TilesBinary {
         // Create a binary record from the given tokens.
         // The record is built in the following order:
         //   x (double), y (double), [categorical fields (uint32_t)], [integer fields (int32_t)], [float fields (float)]
-        bool createRecord(std::vector<char>& record, double &x, double &y, const std::vector<std::string>& tokens) {
+        bool createRecord(std::vector<char>& record, double &x, double &y, std::vector<std::string>& tokens) {
             // Categorical features: convert string to integer index using the appropriate dictionary.
             std::vector<uint32_t> catIndices(catColumns.size(), 0);
-            for (size_t i = 0; i < catColumns.size(); ++i) {
-                std::string catValue = tokens[catColumns[i]];
-                auto it = catDicts[i].find(catValue);
-                if (it == catDicts[i].end()) {
-                    return false;
+            if (catInString) {
+                for (size_t i = 0; i < catColumns.size(); ++i) {
+                    auto it = catDicts[i].find(tokens[catColumns[i]]);
+                    if (it == catDicts[i].end()) {
+                        return false;
+                    }
+                    catIndices[i] = it->second;
                 }
-                catIndices[i] = it->second;
+            } else {
+                for (size_t i = 0; i < catColumns.size(); ++i) {
+                    if (!str2uint32(tokens[catColumns[i]], catIndices[i])) {
+                        return false;
+                    }
+                }
             }
             record.resize(recordSize);
             size_t offset = 0;
@@ -397,6 +406,7 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv) {
     int icol_x, icol_y, nskip = 0;
     std::vector<int32_t> icol_cat, icol_int, icol_float;
     std::vector<std::string> catDictionaries;
+    bool catInString = false;
 
 	paramList pl;
 	BEGIN_LONG_PARAMS(longParameters)
@@ -406,6 +416,7 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv) {
         LONG_INT_PARAM("icol-x", &icol_x, "Column index for x coordinate (0-based)")
         LONG_INT_PARAM("icol-y", &icol_y, "Column index for y coordinate (0-based)")
         LONG_MULTI_INT_PARAM("icol-cat", &icol_cat, "Column indecies for categorical data (0-based)")
+        LONG_PARAM("cat-in-string", &catInString, "The categorical column contains strings in the provided dictionary (default: false, assuming the categorical column contains non-negative integers as indices)")
         LONG_MULTI_INT_PARAM("icol-int", &icol_int, "Column indecies for integer data (0-based)")
         LONG_MULTI_INT_PARAM("icol-float", &icol_float, "Column indecies for float data (0-based)")
         LONG_INT_PARAM("skip", &nskip, "Number of lines to skip in the input file (default: 0)")
@@ -435,7 +446,7 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv) {
     notice("Will use %u threads for processing", numThreads);
 
     Pts2TilesBinary pts2Tiles(numThreads, inTsv, tmpDir, output);
-    pts2Tiles.initCategoryDictionaries(catDictionaries, icol_cat);
+    pts2Tiles.initCategoryDictionaries(catDictionaries, icol_cat, catInString);
     pts2Tiles.initLineParser(tileSize, icol_x, icol_y);
     pts2Tiles.addIntColumns(icol_int);
     pts2Tiles.addFloatColumns(icol_float);

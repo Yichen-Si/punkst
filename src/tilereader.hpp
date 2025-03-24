@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <memory>
+#include "utils.h"
 
 // Identify a tile by (row, col)
 struct TileKey {
@@ -85,38 +86,6 @@ public:
         }
         return adjacent.size();
     }
-};
-
-// Iterator for lines
-class BoundedReadline {
-public:
-    BoundedReadline(const std::string &filename, std::streampos start, std::streampos end)
-        : startOffset(start), endOffset(end)
-    {
-        file = std::make_unique<std::ifstream>(filename, std::ios::binary);
-        if (!file || !file->is_open()) {
-            throw std::runtime_error("Failed to open file: " + filename);
-        }
-        file->seekg(startOffset);
-    }
-
-    // Returns true and sets 'line' if a line is successfully read and within the tile's range.
-    bool next(std::string &line) {
-        // Check that we haven't passed the tile's end.
-        if (!file || file->tellg() >= endOffset) {
-            return false;
-        }
-        std::streampos before = file->tellg();
-        if (!std::getline(*file, line)) {
-            return false;
-        }
-        return true;
-    }
-
-private:
-    std::unique_ptr<std::ifstream> file;
-    std::streampos startOffset;
-    std::streampos endOffset;
 };
 
 /**
@@ -312,7 +281,6 @@ public:
 protected:
     // Reads the index file. Expected index file format:
     //   # tilesize    <tileSize>
-    //   # npixels     <nPoints>
     //   # recordsize  <recordSize>
     //   # nvalues     <nCategorical>\t<nInteger>\t<nFloat>
     //   # dictionaries    <startDictOffset>    <endDictOffset>

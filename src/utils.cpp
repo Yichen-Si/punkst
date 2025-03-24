@@ -213,3 +213,41 @@ void percentile(std::vector<uchar>& results, const cv::Mat& mat, std::vector<dou
     }
     compute_percentile<uchar>(results, values, percentiles);
 }
+
+void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& blocks, const std::string& inFile, int32_t nThreads, int32_t nskip) {
+    std::ifstream infile(inFile, std::ios::binary);
+    if (!infile) {
+        error("Error opening input file: %s", inFile.c_str());
+    }
+    std::string line;
+    for (int i = 0; i < nskip; ++i) {
+        std::getline(infile, line);
+    }
+    std::streampos start_offset = infile.tellg();
+    infile.seekg(0, std::ios::end);
+    std::streampos fileSize = infile.tellg();
+    size_t blockSize = fileSize / nThreads;
+
+    std::streampos current = start_offset;
+    blocks.clear();
+    for (int i = 0; i < nThreads; ++i) {
+        std::streampos end = current + static_cast<std::streamoff>(blockSize);
+        if (end > fileSize || i == nThreads - 1) {
+            end = fileSize;
+        } else {
+            infile.seekg(end);
+            std::getline(infile, line);
+            end = infile.tellg();
+            if (end == -1) {
+                end = fileSize;
+            }
+        }
+        blocks.emplace_back(current, end);
+        current = end;
+        if (current >= fileSize) {
+            break;
+        }
+    }
+    infile.close();
+    notice("Partitioned input file into %zu blocks of size ~ %zu", blocks.size(), blockSize);
+}

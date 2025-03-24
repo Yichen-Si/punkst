@@ -9,6 +9,7 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv);
 int32_t cmdTsvAnnoSb(int32_t argc, char** argv);
 int32_t cmdImgNucleiMask(int32_t argc, char** argv);
 int32_t cmdImgNucleiCenter(int32_t argc, char** argv);
+int32_t cmdLDA4Hex(int argc, char** argv);
 
 int32_t main(int32_t argc, char** argv) {
 
@@ -19,6 +20,7 @@ int32_t main(int32_t argc, char** argv) {
     LONG_COMMAND("pts2tiles", &cmdPts2TilesTsv, "Assign points to tiles")
     LONG_COMMAND("pts2tiles-binary", &cmdPts2TilesBinary, "Assign points to tiles in binary format")
     LONG_COMMAND("tiles2hex", &cmdTiles2HexTxt, "Convert points in tiles to hexagons")
+    LONG_COMMAND("lda4hex", &cmdLDA4Hex, "Train LDA model")
     LONG_COMMAND("scribble-parse", &cmdFASTQscribble, "Parse SCRIBBLE reads")
     LONG_COMMAND("draw-by-column", &cmdTsvDrawByColumn, "Given a TSV file and RGB assigned to columns, draw a PNG file")
     LONG_COMMAND("annotate-sb-tsv", &cmdTsvAnnoSb, "Annotate spatial locations by matching barcodes with 1 mismatch correction")
