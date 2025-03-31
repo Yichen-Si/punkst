@@ -27,10 +27,10 @@ void kdtree_demo(const size_t N)
     // construct a kd-tree index:
     using my_kd_tree_t = nanoflann::KDTreeSingleIndexAdaptor<
         nanoflann::L2_Simple_Adaptor<num_t, PointCloud<num_t>>,
-        PointCloud<num_t>, 3 /* dim */
+        PointCloud<num_t>, 2 /* dim */
         >;
 
-    my_kd_tree_t index(3 /*dim*/, cloud, {10 /* max leaf */});
+    my_kd_tree_t index(2 /*dim*/, cloud, {10 /* max leaf */});
 
 #if 0
 	// Test resize of dataset and rebuild of index:
@@ -38,7 +38,7 @@ void kdtree_demo(const size_t N)
 	index.buildIndex();
 #endif
 
-    const num_t query_pt[3] = {0.5, 0.5, 0.5};
+    const num_t query_pt[2] = {0.5, 0.5};
 
     // ----------------------------------------------------------------
     // knnSearch():  Perform a search for the N closest points
@@ -106,15 +106,7 @@ int32_t test(int32_t argc, char** argv) {
     // Test nanoflann
     srand(static_cast<unsigned int>(time(nullptr)));
     kdtree_demo<float>(4);
-    kdtree_demo<double>(100000);
-
-    // Test Eigen
-    Eigen::MatrixXd m(2,2);
-    m(0,0) = 3;
-    m(1,0) = 2.5;
-    m(0,1) = -1;
-    m(1,1) = m(1,0) + m(0,1);
-    std::cout << m << std::endl;
+    // kdtree_demo<double>(100000);
 
     return 0;
 }

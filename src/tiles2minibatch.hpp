@@ -1,321 +1,403 @@
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <atomic>
-#include <cstdlib>
+#pragma once
+
+#include <cmath>
 #include <random>
-#include "utils.h"
+#include <cassert>
+#include <stdexcept>
+#include "qgenlib/qgen_error.h"
+#include "nanoflann.hpp"
+#include "nanoflann_utils.h"
+#include "dataunits.hpp"
 #include "tilereader.hpp"
+#include "hexgrid.h"
+#include "utils.h"
 #include "threads.hpp"
-#include "qgenlib/qgen_utils.h"
+#include "lda.hpp"
+#include "slda.hpp"
 
-//------------------------------------------------------------------------------
-// Processes tiled point data in minibatches
-//------------------------------------------------------------------------------
-class Tiles2Minibatch {
+#include "Eigen/Dense"
+#include "Eigen/Sparse"
+using Eigen::MatrixXd;
+using Eigen::VectorXd;
+using Eigen::SparseMatrix;
+
+// to serialize to temporary files
+#pragma pack(push, 1)
+struct Record {
+    int32_t x;
+    int32_t y;
+    uint32_t idx;
+    uint32_t ct;
+};
+#pragma pack(pop)
+
+struct lineParserLocal : public lineParser {
+    size_t icol_val;
+    lineParserLocal() {}
+    lineParserLocal(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile) {
+        icol_val = _ival;
+        std::vector<int32_t> _ivals = { (int32_t) _ival};
+        init(_ix, _iy, _iz, _ivals, _dfile);
+    }
+    void init2(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile) {
+        icol_val = _ival;
+        std::vector<int32_t> _ivals = { (int32_t) _ival};
+        init(_ix, _iy, _iz, _ivals, _dfile);
+    }
+
+    int32_t parse(Record& rec, std::string& line) {
+        std::vector<std::string> tokens;
+        split(tokens, "\t", line);
+        if (tokens.size() < n_tokens) {
+            return -1;
+        }
+        if (isFeatureDict) {
+            auto it = featureDict.find(tokens[icol_feature]);
+            if (it == featureDict.end()) {
+                return -1;
+            }
+            rec.idx = it->second;
+        } else {
+            rec.idx = std::stoul(tokens[icol_feature]);
+        }
+        rec.x = std::stoi(tokens[icol_x]);
+        rec.y = std::stoi(tokens[icol_y]);
+        rec.ct = std::stoi(tokens[icol_val]);
+        return rec.idx;
+    }
+};
+
+struct TileData {
+    std::unordered_map<uint32_t, std::vector<Record>> buffers; // local buffer to accumulate records to be written to temporary files
+    std::vector<Record> pts; // original data points
+    std::vector<int32_t> idxinternal; // indices for internal data points to output
+    // Only set if collapsed
+    std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
+    std::vector<std::pair<double, double>> coords; // collapsed coordinates
+    void clear() {
+        buffers.clear();
+        pts.clear();
+        idxinternal.clear();
+        orgpts2pixel.clear();
+        coords.clear();
+    }
+    ~TileData() {
+        clear();
+    }
+};
+
+// manage one temporary buffer
+struct BoundaryBuffer {
+    uint32_t key;
+    std::string tmpFile;
+    uint8_t nTiles;
+    std::shared_ptr<std::mutex> mutex;
+    BoundaryBuffer(uint32_t _key, const std::string& _tmpFile) : key(_key), tmpFile(_tmpFile), nTiles(0) {
+        mutex = std::make_shared<std::mutex>();
+        std::ofstream ofs(tmpFile, std::ios::binary);
+        if (!ofs) {
+            throw std::runtime_error("Error creating temporary file: " + tmpFile);
+        }
+        ofs.close();
+    }
+    bool finished() {
+        if ((key & 0x1) && nTiles == 2) { // Vertical buffer
+            return true;
+        }
+        if ((key & 0x1) == 0 && nTiles == 6) { // Horizontal buffer
+            return true;
+        }
+    }
+    void writeToFile(const std::vector<Record>& records) {
+        std::lock_guard<std::mutex> lock(*mutex);
+        std::ofstream ofs(tmpFile, std::ios::binary | std::ios::app);
+        if (!ofs) {
+            throw std::runtime_error("Error creating temporary file: " + tmpFile);
+        }
+        ofs.write(reinterpret_cast<const char*>(records.data()), records.size() * sizeof(Record));
+        ofs.close();
+        nTiles++;
+    }
+};
+
+class Tiles2MinibatchBase {
+
 public:
-    // Structure representing one point.
-    struct Pixel {
-        double x, y;
-        std::vector<std::pair<uint32_t, int32_t>> vals;
-    };
 
-    // Constructor.
-    //   nThreads: number of worker threads
-    //   tmpDir: directory to store temporary boundary files
-    //   tileReader: object to read a tile from the input
-    //   b: number of minibatch subdivisions per tile side (b>=2)
-    //   r: padding radius (in the same units as tile coordinates)
-    Tiles2Minibatch(int nThreads, const std::string &_tmpDir, const std::string &outFile, TileReader &tileReader, int b, double r)
-        : numThreads(nThreads), outFile(outFile),
-          tileReader(tileReader), b(b), r(r) {
-        tmpDir = std::filesystem::path(_tmpDir) / "boundaries";
+    Tiles2MinibatchBase(int nThreads, double r, const std::string& outputFile, const std::string& _tmpDir, TileReader& tileReader)
+    : nThreads(nThreads), r(r), outputFile(outputFile), tmpDir(_tmpDir), tileReader(tileReader) {
         if (!createDirectory(tmpDir)) {
             throw std::runtime_error("Error creating temporary directory (or the existing directory is not empty): " + tmpDir);
         }
-        // Open main output file.
-        mainOut.open(outFile, std::ios::out);
-        if (!mainOut) {
-            throw std::runtime_error("Unable to open output file: " + outFile);
+        if (tmpDir.back() != '/') {
+            tmpDir.push_back('/');
         }
-        // Get tile size T and the list of tiles
+        mainOut.open(this->outputFile, std::ios::out);
+        if (!mainOut) {
+            error("Error opening main output file: %s", outputFile.c_str());
+        } // Assume tileSize is provided by the TileReader.
         tileSize = tileReader.getTileSize();
-        tileReader.getTileList(tileList);
     }
 
-    ~Tiles2Minibatch() {
+    ~Tiles2MinibatchBase() {
         if (mainOut.is_open()) {
             mainOut.close();
         }
     }
 
-private:
-    int numThreads;
-    std::string tmpDir, outFile;
-    TileReader &tileReader;
-    int b;              // number of minibatch subdivisions per side
-    double r;           // padding radius
-    int tileSize;       // tile side length (T)
+    virtual void run() = 0;
+
+protected:
+
+    int nThreads; // Number of worker threads
+    int tileSize; // Tile size (square)
+    double r;     // Processing radius (padding width)
+    std::string outputFile, tmpDir;
+    TileReader& tileReader;
+
     std::ofstream mainOut;
-    std::vector<TileKey> tileList;
-
-    // A thread-safe queue for tiles
+    std::mutex mainOutMutex;  // Protects writing to mainOut
+    std::unordered_map<uint32_t, std::shared_ptr<BoundaryBuffer>> boundaryBuffers;
+    std::mutex boundaryBuffersMapMutex; // Protects modifying boundaryBuffers
     ThreadSafeQueue<TileKey> tileQueue;
-    std::vector<std::thread> threads;
-    std::mutex mainOutMutex;
+    ThreadSafeQueue<std::shared_ptr<BoundaryBuffer>> bufferQueue;
+    std::vector<std::thread> workThreads;
 
-    // Stub processing function.
-    // Given a padded set of points and the coordinates of the internal region,
-    // return updated points for the internal region.
-    std::vector<Pixel> processMinibatch(const std::vector<Pixel> &paddedData,
-                                        Rectangle<double> &internalBox) {
-        // Placeholder
-        std::vector<Pixel> updated;
-        for (const auto &pt : paddedData) {
-            if (internalBox.contains(pt.x, pt.y)) {
-                updated.push_back(pt);
-            }
+    std::shared_ptr<BoundaryBuffer> getBoundaryBuffer(uint32_t key) {
+        std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
+        auto it = boundaryBuffers.find(key);
+        if (it == boundaryBuffers.end()) {
+            std::string tmpFile = tmpDir + std::to_string(key);
+            auto buffer = std::make_shared<BoundaryBuffer>(key, tmpFile);
+            boundaryBuffers[key] = buffer;
+            return buffer;
         }
-        return updated;
+        return it->second;
     }
 
-    // Helper to write a set of points (raw data) to a temporary file.
-    void writeBoundaryPoints(const std::string &filename, const std::vector<Pixel> &points) {
-        std::ofstream ofs(filename, std::ios::app);
-        if (!ofs) {
-            std::cerr << "Error opening temporary file: " << filename << "\n";
-            return;
-        }
-        for (const auto &pt : points) {
-            ofs << pt.x << "\t" << pt.y << "\t" << pt.feature;
-            for (const auto &v : pt.intvals) {
-                ofs << "\t" << v;
-            }
-            ofs << "\n";
-        }
-        ofs.close();
+    bool decodeTempFileKey(uint32_t key, int32_t& R, int32_t& C) {
+        R = static_cast<int32_t>(key >> 16);
+        C = static_cast<int32_t>((key >> 1) & 0x7FFF);
+        return (key & 1) != 0;
     }
 
-    // Worker function: process one tile at a time.
-    void worker(int threadId) {
-        // Each thread uses its own random engine if needed.
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        TileKey tile;
-        // Process tiles until none remain.
-        while (tileQueue.pop(tile)) {
-            // Compute tile global boundaries.
-            double tile_xmin = tile.col * tileSize;
-            double tile_ymin = tile.row * tileSize;
-            double tile_xmax = tile_xmin + tileSize;
-            double tile_ymax = tile_ymin + tileSize;
-
-            // Read all points from the tile into a vector.
-            std::vector<Pixel> tilePoints;
-            {
-                std::unique_ptr<BoundedReadline> iter;
-                try {
-                    iter = tileReader.get_tile_iterator(tile.row, tile.col);
-                } catch (const std::exception &e) {
-                    std::cerr << "Tile (" << tile.row << "," << tile.col
-                              << ") iterator error: " << e.what() << "\n";
-                    continue;
-                }
-                std::string line;
-                while (iter->next(line)) {
-                    // Assume a helper function parsePoint(line, pt) exists.
-                    Pixel pt;
-                    if (!parsePoint(line, pt))
-                        continue;
-                    tilePoints.push_back(pt);
-                }
-            }
-            if (tilePoints.empty())
-                continue;
-
-            // For processing, subdivide the tile into b x b minibatches.
-            double minibatchSize = tileSize / double(b);
-            // Vectors to collect updated (internal) points and boundary points.
-            std::vector<Pixel> updatedInternal;
-            // For boundary points, we organize them by temporary file name.
-            std::unordered_map<std::string, std::vector<Pixel>> boundaryPoints;
-
-            // Iterate over minibatch positions (i=0..b-1, j=0..b-1).
-            for (int i = 0; i < b; ++i) {
-                for (int j = 0; j < b; ++j) {
-                    // Internal (target) region of this minibatch.
-                    double ixmin = tile_xmin + j * minibatchSize + r;
-                    double iymin = tile_ymin + i * minibatchSize + r;
-                    double ixmax = tile_xmin + (j+1) * minibatchSize - r;
-                    double iymax = tile_ymin + (i+1) * minibatchSize - r;
-                    // Padded region: depends on the minibatch's location.
-                    double pad_left = (j == 0) ? 0 : r;
-                    double pad_right = (j == b-1) ? 0 : r;
-                    double pad_top = (i == 0) ? 0 : r;
-                    double pad_bottom = (i == b-1) ? 0 : r;
-                    // Thus padded region is:
-                    double pxmin = tile_xmin + j * minibatchSize - pad_left;
-                    double pymin = tile_ymin + i * minibatchSize - pad_top;
-                    double pxmax = tile_xmin + (j+1) * minibatchSize + pad_right;
-                    double pymax = tile_ymin + (i+1) * minibatchSize + pad_bottom;
-                    // Clamp padded region to tile boundaries.
-                    pxmin = std::max(pxmin, tile_xmin);
-                    pymin = std::max(pymin, tile_ymin);
-                    pxmax = std::min(pxmax, tile_xmax);
-                    pymax = std::min(pymax, tile_ymax);
-
-                    // Collect all points in tilePoints that fall into the padded region.
-                    std::vector<Pixel> paddedData;
-                    for (const auto &pt : tilePoints) {
-                        if (pt.x >= pxmin && pt.x <= pxmax &&
-                            pt.y >= pymin && pt.y <= pymax) {
-                            paddedData.push_back(pt);
-                        }
-                    }
-                    // Process the minibatch (update only the internal region).
-                    std::vector<Pixel> updated = processMinibatch(paddedData, ixmin, iymin, ixmax, iymax);
-                    // Append results.
-                    updatedInternal.insert(updatedInternal.end(), updated.begin(), updated.end());
-                }
-            } // end for minibatches
-
-            // Now, separate tilePoints into those that are safely internal and those that
-            // are near a tile boundary (within r of the tile edge). We define internal points
-            // as those with x in [tile_xmin+r, tile_xmax-r] and y in [tile_ymin+r, tile_ymax-r].
-            std::vector<Pixel> tileInternal, tileBoundary;
-            for (const auto &pt : tilePoints) {
-                if (pt.x >= tile_xmin + r && pt.x <= tile_xmax - r &&
-                    pt.y >= tile_ymin + r && pt.y <= tile_ymax - r) {
-                    tileInternal.push_back(pt);
-                } else {
-                    tileBoundary.push_back(pt);
-                }
-            }
-            // We assume that the update function for the internal points has been run above.
-            // Write updatedInternal points directly to mainOut.
-            {
-                std::lock_guard<std::mutex> lock(mainOutMutex);
-                for (const auto &pt : updatedInternal) {
-                    // For each updated point, write: x, y, feature, intvals (tab-delimited)
-                    mainOut << pt.x << "\t" << pt.y << "\t" << pt.feature;
-                    for (const auto &val : pt.intvals) {
-                        mainOut << "\t" << val;
-                    }
-                    mainOut << "\n";
-                }
-                mainOut.flush();
-            }
-            // Now, assign boundary points to temporary files according to the scheme.
-            // Compute local coordinates in the tile.
-            for (const auto &pt : tileBoundary) {
-                double lx = pt.x - tile_xmin;
-                double ly = pt.y - tile_ymin;
-                // We use tile size t = tileSize.
-                std::string fname;
-                // Horizontal boundaries.
-                if (ly < 2*r) {
-                    // Top strip.
-                    // For corners, also adjust column.
-                    if (lx < r) {
-                        fname = "H_" + std::to_string(tile.row - 1) + "_" + std::to_string(tile.col - 1) + ".txt";
-                    } else if (lx > tileSize - r) {
-                        fname = "H_" + std::to_string(tile.row - 1) + "_" + std::to_string(tile.col + 1) + ".txt";
-                    } else {
-                        fname = "H_" + std::to_string(tile.row - 1) + "_" + std::to_string(tile.col) + ".txt";
-                    }
-                } else if (ly > tileSize - 2*r) {
-                    // Bottom strip.
-                    if (lx < r) {
-                        fname = "H_" + std::to_string(tile.row) + "_" + std::to_string(tile.col - 1) + ".txt";
-                    } else if (lx > tileSize - r) {
-                        fname = "H_" + std::to_string(tile.row) + "_" + std::to_string(tile.col + 1) + ".txt";
-                    } else {
-                        fname = "H_" + std::to_string(tile.row) + "_" + std::to_string(tile.col) + ".txt";
-                    }
-                }
-                // Vertical boundaries.
-                if (fname.empty()) {
-                    if (lx < 2*r) {
-                        fname = "V_" + std::to_string(tile.row) + "_" + std::to_string(tile.col - 1) + ".txt";
-                    } else if (lx > tileSize - 2*r) {
-                        fname = "V_" + std::to_string(tile.row) + "_" + std::to_string(tile.col) + ".txt";
-                    }
-                }
-                // If none of the above, default to a generic boundary file for this tile.
-                if (fname.empty()) {
-                    fname = "B_" + std::to_string(tile.row) + "_" + std::to_string(tile.col) + ".txt";
-                }
-                // Prepend tmpDir.
-                fname = tmpDir + fname;
-                boundaryPoints[fname].push_back(pt);
-            }
-            // Write each set of boundary points to its corresponding temporary file.
-            for (const auto &pair : boundaryPoints) {
-                writeBoundaryPoints(pair.first, pair.second);
-            }
-        } // end while tileQueue.pop
+    uint32_t encodeTempFileKey(bool isVertical, int32_t R, int32_t C) {
+        return (static_cast<uint32_t>(R) << 16) | ((static_cast<uint32_t>(C) & 0x7FFF) << 1) | static_cast<uint32_t>(isVertical);
     }
 
-    // Helper function to parse a point from a line.
-    // Assumes the input line is tab-delimited with columns: x, y, feature, intvals...
-    bool parsePoint(std::string &line, Pixel &pt) {
-        std::vector<std::string> tokens;
-        split(tokens, "\t", line);
-        if (tokens.size() < 3)
-            return false;
-        try {
-            pt.x = std::stod(tokens[0]);
-            pt.y = std::stod(tokens[1]);
-        } catch (...) {
-            return false;
+    int32_t pts2buffer(std::vector<uint32_t>& bufferidx, int32_t x0, int32_t y0, TileKey tile) {
+        // convert to local coordinates
+        int32_t x = x0 - tile.col * tileSize;
+        int32_t y = y0 - tile.row * tileSize;
+        bufferidx.clear();
+        if (x > tileSize - 2 * r && tile.col < tileReader.maxcol) {
+            bufferidx.push_back(encodeTempFileKey(true, tile.row, tile.col));
         }
-        pt.feature = tokens[2];
-        pt.intvals.clear();
-        for (size_t i = 3; i < tokens.size(); ++i) {
-            int32_t val;
-            if (!str2int32(tokens[i], val))
-                return false;
-            pt.intvals.push_back(val);
+        if (x < 2 * r && tile.col > 0) {
+            bufferidx.push_back(encodeTempFileKey(true, tile.row, tile.col - 1));
         }
-        return true;
+        if (y < 2 * r && tile.row > 0) {
+            bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col));
+        }
+        if (y > tileSize - 2 * r) {
+            bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col));
+        }
+        if (x < r && tile.col > 0) {
+            if (y < 2 * r && tile.row > 0) {
+                bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col - 1));
+            }
+            if (y > tileSize - 2 * r) {
+                bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col - 1));
+            }
+        }
+        if (x > tileSize - r) {
+            if (y < 2 * r && tile.row > 0) {
+                bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col));
+            }
+            if (y > tileSize - 2 * r) {
+                bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col));
+            }
+        }
+        if (x >= r && x <= tileSize - r && y >= r && y <= tileSize - r) {
+            return 1; // internal
+        }
+        if (tile.row == 0 && y <= tileSize - r) {
+            return 1;
+        }
+        if (tile.col == 0 && x <= tileSize - r) {
+            return 1;
+        }
+        if (tile.row == tileReader.maxrow && y >= r) {
+            return 1;
+        }
+        if (tile.col == tileReader.maxcol && x >= r) {
+            return 1;
+        }
+        return 0;
     }
 
-    // Launch worker threads.
-    bool launchWorkerThreads() {
-        for (int i = 0; i < numThreads; ++i) {
-            threads.emplace_back(&Tiles2Minibatch::worker, this, i);
+    bool isInternalToBuffer(int32_t global_x, int32_t global_y, uint32_t bufferId) {
+        int32_t bufRow, bufCol;
+        bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
+        if (isVertical) {
+            double x_min = (bufCol + 1.) * tileSize - 2 * r;
+            double x_max = (bufCol + 1.) * tileSize + 2 * r;
+            double y_min = bufRow * tileSize;
+            double y_max = bufRow * tileSize + tileSize;
+            double xrange = 4 * r;
+            double yrange = tileSize;
+            double x = global_x - x_min;
+            double y = global_y - y_min;
+            if (bufRow == 0) {
+                return (x > r && x < xrange - r && y < yrange - r);
+            }
+            return (x > r && x < xrange - r && y > r && y < yrange - r);
+        } else {
+            double x_min = std::max(bufCol * tileSize - r, 0.0);
+            double x_max = bufCol * tileSize + tileSize + r;
+            double y_min = (bufRow + 1) * tileSize - 2 * r;
+            double y_max = (bufRow + 1) * tileSize + 2 * r;
+            double x = global_x - x_min;
+            double y = global_y - y_min;
+            double xrange = x_max - x_min;
+            double yrange = 4 * r;
+            if (bufCol == 0) {
+                return (x < xrange - r && y > r && y < yrange - r);
+            }
+            return (x > r && x < xrange - r && y > r && y < yrange - r);
         }
-        // Push all tiles into the tile queue.
+    }
+
+    virtual void tileWorker(int threadId) = 0;
+    virtual void boundaryWorker(int threadId) = 0;
+};
+
+class Tiles2Minibatch : public Tiles2MinibatchBase {
+
+public:
+    Tiles2Minibatch(int nThreads, double r,
+        const std::string& outputFile, const std::string& _tmpDir,
+        LatentDirichletAllocation& _lda,
+        TileReader& tileReader, lineParserLocal& lineParser,
+        HexGrid& hexGrid, int32_t nMoves,
+        unsigned int seed = std::random_device{}(),
+        double c = 20, double h = 0.7, double res = -1, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0) :
+        Tiles2MinibatchBase(nThreads, r, outputFile, _tmpDir, tileReader), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k) {
+        weighted = lineParser.weighted;
+        M_ = lda.get_n_features();
+        if (lineParser.isFeatureDict) {
+            assert((M_ == lineParser.featureDict.size()) && "Feature number does not match");
+            featureNames.resize(M_);
+            for (const auto& entry : lineParser.featureDict) {
+                featureNames[entry.second] = entry.first;
+            }
+        } else if (lineParser.weighted) {
+            assert(M_ == lineParser.weights.size() && "Feature number does not match");
+        }
+        lda.set_nthreads(1); // because we parallelize by tile
+        K_ = lda.get_n_topics();
+        distNu = std::log(0.5) / std::log(h);
+        if (N <= 0) {
+            N = lda.get_N_global() * 100;
+        }
+        slda.init(K_, M_, N, seed);
+        slda.init_global_parameter(lda.get_model());
+        slda.verbose_ = verbose;
+        collapsed = pixelResolution > 0;
+        if (featureNames.size() == 0) {
+            featureNames.resize(M_);
+            for (int32_t i = 0; i < M_; ++i) {
+                featureNames[i] = std::to_string(i);
+            }
+        }
+        notice("Initialized Tiles2Minibatch");
+    }
+
+    void run() override {
+        // Phase 1: Process tiles
+        notice("Phase 1 Launching %d worker threads", nThreads);
+        for (int i = 0; i < nThreads; ++i) {
+            workThreads.push_back(std::thread(&Tiles2Minibatch::tileWorker, this, i));
+        }
         std::vector<TileKey> tileList;
         tileReader.getTileList(tileList);
         for (const auto &tile : tileList) {
             tileQueue.push(tile);
         }
         tileQueue.set_done();
-        return true;
-    }
-
-    // Wait for worker threads to finish.
-    bool joinWorkerThreads() {
-        for (auto &t : threads) {
+        for (auto &t : workThreads) {
             t.join();
         }
-        return true;
-    }
-
-    // Merge all boundary temporary files and append their results to mainOut.
-    bool mergeBoundaryMinibatches() {
-        std::vector<std::string> tmpFiles;
-        for (const auto &entry : std::filesystem::directory_iterator(tmpDir)) {
-            if (entry.is_regular_file()) {
-                std::string fname = entry.path().filename().string();
-                // Assume files starting with "H_" or "V_" are boundary files.
-                if (fname.rfind("H_", 0) == 0 || fname.rfind("V_", 0) == 0) {
-                    tmpFiles.push_back(entry.path().string());
-                }
+        workThreads.clear();
+        // Phase 2: Process boundary buffers
+        notice("Phase 2 Launching %d worker threads", nThreads);
+        { // Enqueue all boundary buffers from the global map.
+            std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
+            for (const auto &entry : boundaryBuffers) {
+                bufferQueue.push(entry.second);
             }
+            bufferQueue.set_done();
+        }
+        for (int i = 0; i < nThreads; ++i) {
+            workThreads.push_back(std::thread(&Tiles2Minibatch::boundaryWorker, this, i));
+        }
+        for (auto &t : workThreads) {
+            t.join();
         }
     }
 
+    void setFeatureNames(const std::vector<std::string>& names) {
+        assert(names.size() == M_);
+        featureNames = names;
+    }
+
+private:
+    int32_t M_, K_, topk_;
+    bool weighted, collapsed;
+    LatentDirichletAllocation& lda;
+    OnlineSLDA slda;
+    lineParserLocal& lineParser;
+    HexGrid hexGrid;
+    int32_t nMoves;
+    double anchorMinCount, distNu;
+    float pixelResolution;
+    std::vector<std::string> featureNames;
+
+    // Parse pixels from one tile
+    int32_t parseOneTile(TileData& tileData, TileKey tile);
+    // Parse a binary temporary file (written by BoundaryBuffer)
+    int32_t parseBoundaryFile(TileData& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+
+    int32_t initAnchors(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch);
+    int32_t makeMinibatch(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch);
+
+    // Write the results of internal points
+    void outputOriginalDataWithPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
+    void outputPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
+
+    void processTile(TileData &tileData, int threadId=0);
+
+    void tileWorker(int threadId) override {
+        TileKey tile;
+        while (tileQueue.pop(tile)) {
+            TileData tileData;
+            int32_t ret = parseOneTile(tileData, tile);
+            notice("Thread %d read tile (%d, %d) with %d internal pixels", threadId, tile.row, tile.col, ret);
+            if (ret <= 10) continue;
+            processTile(tileData, threadId);
+        }
+    }
+
+    void boundaryWorker(int threadId) override {
+        std::shared_ptr<BoundaryBuffer> bufferPtr;
+        while (bufferQueue.pop(bufferPtr)) {
+            TileData tileData;
+            int32_t ret = parseBoundaryFile(tileData, bufferPtr);
+            notice("Thread %d read boundary buffer (%d, %d) with %d internal pixels", threadId, bufferPtr->key >> 16, (bufferPtr->key >> 1) & 0x7FFF, ret);
+            if (ret <= 10) continue;
+            processTile(tileData, threadId);
+            std::remove(bufferPtr->tmpFile.c_str());
+        }
+    }
 
 };

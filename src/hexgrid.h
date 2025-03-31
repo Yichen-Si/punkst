@@ -32,25 +32,25 @@ public:
         pointy = _pointy;
 
         if (pointy) {
-            mtx_p2a[0][0] = std::sqrt(3)/3/size;
+            mtx_p2a[0][0] = std::sqrt(3.)/3/size;
             mtx_p2a[0][1] = -1./3./size;
-            mtx_p2a[1][0] = 0;
+            mtx_p2a[1][0] = 0.;
             mtx_p2a[1][1] = 2./3./size;
 
-            mtx_a2p[0][0] = size * std::sqrt(3);
-            mtx_a2p[0][1] = size * std::sqrt(3)/2;
-            mtx_a2p[1][0] = 0;
+            mtx_a2p[0][0] = size * std::sqrt(3.);
+            mtx_a2p[0][1] = size * std::sqrt(3.)/2;
+            mtx_a2p[1][0] = 0.;
             mtx_a2p[1][1] = size * 3./2;
         } else {
             mtx_p2a[0][0] = 2./3/size;
-            mtx_p2a[0][1] = 0;
+            mtx_p2a[0][1] = 0.;
             mtx_p2a[1][0] = -1./3/size;
-            mtx_p2a[1][1] = std::sqrt(3)/3/size;
+            mtx_p2a[1][1] = std::sqrt(3.)/3/size;
 
-            mtx_a2p[0][0] = size * 3/2;
-            mtx_a2p[0][1] = 0;
-            mtx_a2p[1][0] = size * std::sqrt(3)/2;
-            mtx_a2p[1][1] = size * std::sqrt(3);
+            mtx_a2p[0][0] = size * 3./2;
+            mtx_a2p[0][1] = 0.;
+            mtx_a2p[1][0] = size * std::sqrt(3.)/2;
+            mtx_a2p[1][1] = size * std::sqrt(3.);
         }
     }
 
@@ -69,17 +69,17 @@ public:
         }
 
         for (size_t i = 0; i < n; ++i) {
-            hx[i] = std::round(hex_frac[0][i]);
-            hy[i] = std::round(hex_frac[1][i]);
+            hx[i] = std::lround(hex_frac[0][i]);
+            hy[i] = std::lround(hex_frac[1][i]);
             hex_frac[0][i] -= hx[i];
             hex_frac[1][i] -= hy[i];
         }
 
         for (size_t i = 0; i < n; ++i) {
             if(std::abs(hex_frac[0][i]) < std::abs(hex_frac[1][i])) {
-                hy[i] += std::round(hex_frac[1][i] + 0.5 * hex_frac[0][i]);
+                hy[i] += std::lround(hex_frac[1][i] + 0.5 * hex_frac[0][i]);
             } else {
-                hx[i] += std::round(hex_frac[0][i] + 0.5 * hex_frac[1][i]);
+                hx[i] += std::lround(hex_frac[0][i] + 0.5 * hex_frac[1][i]);
             }
         }
 
@@ -89,15 +89,15 @@ public:
                       double offset_x = 0, double offset_y = 0) const {
         double hx_f = mtx_p2a[0][0] * x + mtx_p2a[0][1] * y + offset_x;
         double hy_f = mtx_p2a[1][1] * y + offset_y;
-            hx = std::round(hx_f);
-            hy = std::round(hy_f);
+            hx = std::lround(hx_f);
+            hy = std::lround(hy_f);
             hx_f -= hx;
             hy_f -= hy;
 
             if(std::abs(hx_f) < std::abs(hy_f)) {
-                hy += std::round(hy_f + 0.5 * hx_f);
+                hy += std::lround(hy_f + 0.5 * hx_f);
             } else {
-                hx += std::round(hx_f + 0.5 * hy_f);
+                hx += std::lround(hx_f + 0.5 * hy_f);
             }
     }
 
@@ -114,7 +114,7 @@ public:
     }
 
     void axial_to_cart(double& x, double& y, int32_t hx, int32_t hy, double offset_x = 0, double offset_y = 0) const {
-        x = (mtx_a2p[0][0] * (hx - offset_x) + mtx_a2p[0][1] * (hy - offset_y));
+        x = mtx_a2p[0][0] * (hx - offset_x) + mtx_a2p[0][1] * (hy - offset_y);
         y = mtx_a2p[1][1] * (hy - offset_y);
     }
 

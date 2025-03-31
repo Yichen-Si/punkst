@@ -10,94 +10,13 @@
 #include <iomanip>
 #include <filesystem>
 #include "json.hpp"
-#include "qgenlib/qgen_utils.h"
 
 class Tiles2Hex {
 
 public:
 
-    struct lineParser {
-        size_t icol_x, icol_y, icol_feature;
-        std::vector<size_t> icol_ints;
-        std::unordered_map<std::string, uint32_t> featureDict;
-        size_t n_ints;
-        size_t n_tokens;
-        bool isFeatureDict;
-
-        lineParser() {}
-        lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile) {
-            init(_ix, _iy, _iz, _ivals, _dfile);
-        }
-        void init(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile) {
-            icol_x = _ix;
-            icol_y = _iy;
-            icol_feature = _iz;
-            n_ints = _ivals.size();
-            icol_ints.resize(n_ints);
-            n_tokens = icol_feature;
-            for (size_t i = 0; i < n_ints; ++i) {
-                icol_ints[i] = (size_t) _ivals[i];
-                n_tokens = std::max(n_tokens, icol_ints[i]);
-            }
-            n_tokens += 1;
-            if (_dfile.empty()) {
-                isFeatureDict = false;
-            } else {
-                isFeatureDict = true;
-                std::ifstream dictFile(_dfile);
-                if (!dictFile) {
-                    error("Error opening feature dictionary file: %s", _dfile.c_str());
-                }
-                std::string line;
-                uint32_t nfeature = 0;
-                while (std::getline(dictFile, line)) {
-                    size_t pos = line.find_first_of(" \t");
-                    if (pos != std::string::npos) {
-                        line = line.substr(0, pos);
-                    }
-                    if (line.empty()) continue;
-                    featureDict[line] = nfeature++;
-                }
-                if (featureDict.empty()) {
-                    error("Error reading feature dictionary file: %s", _dfile.c_str());
-                }
-                notice("Read %zu features from dictionary file", featureDict.size());
-            }
-        }
-
-        int32_t parse(PixelValues& pixel, std::string& line) {
-            std::vector<std::string> tokens;
-            split(tokens, "\t", line);
-            if (tokens.size() < n_tokens) {
-                return -1;
-            }
-            pixel.x = std::stod(tokens[icol_x]);
-            pixel.y = std::stod(tokens[icol_y]);
-            if (isFeatureDict) {
-                auto it = featureDict.find(tokens[icol_feature]);
-                if (it == featureDict.end()) {
-                    return -1;
-                }
-                pixel.feature = it->second;
-            } else {
-                if (!str2uint32(tokens[icol_feature], pixel.feature)) {
-                    return -1;
-                }
-            }
-            pixel.intvals.resize(n_ints);
-            int32_t totVal = 0;
-            for (size_t i = 0; i < n_ints; ++i) {
-                if (!str2int32(tokens[icol_ints[i]], pixel.intvals[i])) {
-                    return -1;
-                }
-                totVal += pixel.intvals[i];
-            }
-            return totVal;
-        }
-    };
-
-    Tiles2Hex(int32_t nThreads, std::string& tmpDir, std::string& outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser)
-        : nThreads(nThreads), tmpDir(tmpDir), outFile(outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), nUnits(0) {
+    Tiles2Hex(int32_t nThreads, std::string& tmpDir, std::string& outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> minCounts = {})
+        : nThreads(nThreads), tmpDir(tmpDir), outFile(outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(minCounts), nUnits(0), nFeatures(0) {
         if (!createDirectory(tmpDir)) {
             error("Error creating temporary directory (or the existing directory is not empty): %s", tmpDir.c_str());
         }
@@ -106,6 +25,14 @@ public:
         }
         nLayer = parser.n_ints;
         mainOut.open(outFile, std::ios::out);
+        if (!mainOut) {
+            error("Error opening output file %s for writing", outFile.c_str());
+            return;
+        }
+        if (minCounts.size() != nLayer) {
+            minCounts.resize(nLayer);
+            std::fill(minCounts.begin(), minCounts.end(), 1);
+        }
     }
     ~Tiles2Hex() {
         if (mainOut.is_open()) {
@@ -114,17 +41,31 @@ public:
     }
 
     bool run() {
-        // Launch worker threads to process tiles.
-        if (!launchWorkerThreads()) {
-            error("Error launching worker threads");
-            return false;
-        }
-        // Wait for all worker threads to finish.
-        if (!joinWorkerThreads()) {
-            error("Error joining worker threads");
-            return false;
+        if (nThreads <= 1) {
+            std::vector<TileKey> tileList;
+            tileReader.getTileList(tileList);
+            for (const auto& tile : tileList) {
+                tileQueue.push(tile);
+            }
+            tileQueue.set_done();
+            // Call worker directly instead of spawning a new thread.
+            worker(0);
+        } else {
+            // Launch worker threads to process tiles.
+            notice("Launching %d worker threads...", nThreads);
+            if (!launchWorkerThreads()) {
+                error("Error launching worker threads");
+                return false;
+            }
+            // Wait for all worker threads to finish.
+            if (!joinWorkerThreads()) {
+                error("Error joining worker threads");
+                return false;
+            }
+            notice("All worker threads finished");
         }
         // Merge boundary hexagons from temporary files and append to main output.
+        notice("Merging boundary hexagons...");
         if (!mergeBoundaryHexagons()) {
             error("Error merging boundary hexagons");
             return false;
@@ -165,6 +106,7 @@ private:
     int32_t nThreads;
     std::string outFile, tmpDir;
     int32_t nLayer, nUnits, nFeatures;
+    std::vector<int32_t> minCounts;
     nlohmann::json meta;
 
     lineParser parser;
@@ -254,17 +196,27 @@ private:
                         hex_xmin >= tile_xmin && hex_xmax < tile_xmax &&
                         hex_ymin >= tile_ymin && hex_ymax < tile_ymax);
                     if (isInternal) {
+                        bool flag = false;
+                        for (size_t i = 0; i < nLayer; ++i) {
+                            if (entry.second.valsums[i] >= minCounts[i]) {
+                                flag = true;
+                                break;
+                            }
+                        }
+                        if (!flag) {
+                            continue;
+                        }
                         uint32_t iden = rdUnif(gen);
                         entry.second.writeToFile(mainOut, iden);
                         nUnits++;
                     } else {
                         entry.second.writeToFile(outFile, 0);
                     }
-                    if (!parser.isFeatureDict && nFeatures < maxFeatureIdxLocal) {
-                        nFeatures = maxFeatureIdxLocal;
-                    }
                 }
                 mainOut.flush();
+                if (!parser.isFeatureDict && nFeatures < maxFeatureIdxLocal) {
+                    nFeatures = maxFeatureIdxLocal;
+                }
             }
         } // end while tiles
         outFile.close();
@@ -300,6 +252,7 @@ private:
                 continue; // unlikely?
             }
             std::string line;
+            int32_t nunits = 0, nnew = 0;
             while (std::getline(ifs, line)) {
                 if (line.empty()) continue;
                 UnitValues unit(0, 0); // temporary initialization
@@ -307,16 +260,19 @@ private:
                     std::cerr << "Error parsing boundary line: " << line << "\n";
                     continue;
                 }
+                nunits++;
                 int64_t key = (static_cast<int64_t>(unit.x) << 32) | unit.y;
                 auto it = mergedUnits.find(key);
                 if (it == mergedUnits.end()) {
                     mergedUnits.insert({key, unit});
+                    nnew++;
                 } else {
                     it->second.mergeUnits(unit);
                 }
             }
             ifs.close();
             std::filesystem::remove(fname);
+            notice("Merging temporary file from thread %d... %d units, %d new", i, nunits, nnew);
         }
         // Append merged boundary units to main output.
         {
@@ -324,12 +280,24 @@ private:
             std::random_device rd;
             std::mt19937 gen(rd());
             std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
+            int32_t nUnits0 = nUnits;
             for (const auto &entry : mergedUnits) {
+                bool flag = false;
+                for (size_t i = 0; i < nLayer; ++i) {
+                    if (entry.second.valsums[i] >= minCounts[i]) {
+                        flag = true;
+                        break;
+                    }
+                }
+                if (!flag) {
+                    continue;
+                }
                 uint32_t rnd = rdUnif(gen);
                 entry.second.writeToFile(mainOut, rnd);
                 nUnits++;
             }
             mainOut.flush();
+            notice("Wrote %d/%zu boundary hexagons to main output", nUnits-nUnits0, mergedUnits.size());
         }
         mainOut.close();
         return true;
@@ -344,6 +312,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     int icol_x, icol_y, icol_feature;
     double hexSize;
     std::vector<int32_t> icol_ints;
+    std::vector<int32_t> min_counts;
 
 	paramList pl;
 	BEGIN_LONG_PARAMS(longParameters)
@@ -360,6 +329,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         LONG_INT_PARAM("threads", &nThreads, "Number of threads to use (default: 1)")
 		LONG_PARAM_GROUP("Output Options", NULL)
         LONG_STRING_PARAM("out", &outFile, "Output TSV file")
+        LONG_MULTI_INT_PARAM("min-count", &min_counts, "Minimum count for each integer column, applied with OR")
         LONG_INT_PARAM("verbose", &verbose, "Verbose")
         LONG_INT_PARAM("debug", &debug, "Debug")
     END_LONG_PARAMS();
@@ -373,14 +343,15 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         error("Error opening input file: %s", inTsv.c_str());
         return 1;
     }
-    Tiles2Hex::lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile);
+    lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile);
     if (parser.n_ints == 0) {
         error("No integer columns specified");
     }
-    Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser);
+    Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, min_counts);
     if (!tiles2Hex.run()) {
         return 1;
     }
+    tiles2Hex.writeMetadata();
     notice("Processing completed. Output is written to %s", outFile.c_str());
 
     return 0;

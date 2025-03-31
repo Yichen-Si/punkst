@@ -4,7 +4,7 @@
 #include "qgenlib/qgen_utils.h"
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
-#include <nanoflann.hpp>
+#include "nanoflann.hpp"
 #include "nanoflann_utils.h"
 
 /** Identify nuclei centers

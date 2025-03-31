@@ -68,12 +68,17 @@ set(SOURCE_FILES
     src/dataunits.hpp
     src/lda.hpp
     src/numerical_utils.hpp
+    src/numerical_utils.cpp
     # src/pointcloud.pb.h
     # src/pointcloud.pb.cc
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
     script/lda_training.cpp
+    src/slda.hpp
+    src/tiles2minibatch.hpp
+    src/tiles2minibatch.cpp
+    script/pixels_decode.cpp
     script/annotate_sb_tsv.cpp
     script/scribble_parse.cpp
     script/draw_tsv_by_col.cpp

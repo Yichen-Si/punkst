@@ -79,6 +79,9 @@ struct PointCloud
     struct Point
     {
         T x, y, z;
+        Point() : x(0), y(0), z(0) {}
+        Point(T x, T y) : x(x), y(y), z(0) {}
+        Point(T x, T y, T z) : x(x), y(y), z(z) {}
     };
 
     using coord_t = T;  //!< The type of each coordinate
@@ -107,6 +110,34 @@ struct PointCloud
     //   Return true if the BBOX was already computed by the class and returned
     //   in "bb" so it can be avoided to redo it again. Look at bb.size() to
     //   find out the expected dimensionality (e.g. 2 or 3 for point clouds)
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX& /* bb */) const
+    {
+        return false;
+    }
+};
+
+template <typename T>
+struct PointCloud2D
+{
+    struct Point {
+        T x, y;
+        Point() : x(0), y(0) {}
+        Point(T x, T y) : x(x), y(y) {}
+    };
+    using coord_t = T;  //!< The type of each coordinate
+    std::vector<Point> pts;
+
+    inline size_t kdtree_get_point_count() const { return pts.size(); }
+
+    inline T kdtree_get_pt(const size_t idx, const size_t dim) const
+    {
+        if (dim == 0)
+            return pts[idx].x;
+        else
+            return pts[idx].y;
+    }
+
     template <class BBOX>
     bool kdtree_get_bbox(BBOX& /* bb */) const
     {

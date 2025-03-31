@@ -1,81 +1,91 @@
+#pragma once
+
 #include <vector>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
+#include <utility>
 
 #include "Eigen/Dense"
+#include "Eigen/Sparse"
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+using Eigen::SparseMatrix;
 
 // Calculate the mean absolute difference between two arrays.
-double mean_change(const std::vector<double>& arr1, const std::vector<double>& arr2) {
-    double total = 0.0;
-    size_t size = arr1.size();
-    for (size_t i = 0; i < size; i++) {
-        total += std::fabs(arr1[i] - arr2[i]);
-    }
-    return total / size;
-}
+double mean_change(const std::vector<double>& arr1, const std::vector<double>& arr2);
 
-// Psi (digamma) function optimized for speed (not maximum accuracy).
-double psi(double x) {
-    const double EULER = 0.577215664901532860606512090082402431;
-    if (x <= 1e-6) {
-        // psi(x) ~ -EULER - 1/x when x is very small
-        return -EULER - 1.0 / x;
-    }
-    double result = 0.0;
-    // Increment x until it is large enough
-    while (x < 6) {
-        result -= 1.0 / x;
-        x += 1;
-    }
-    double r = 1.0 / x;
-    result += std::log(x) - 0.5 * r;
-    r = r * r;
-    result -= r * ((1.0/12.0) - r * ((1.0/120.0) - r * (1.0/252.0)));
-    return result;
-}
+double mean_max_row_change(const MatrixXd& arr1, const MatrixXd& arr2);
 
-// Dirichlet expectation for a single document.
-// Given doc_topic vector and a prior, updates doc_topic in-place and writes
-// exp(psi(doc_topic[i]) - psi(total)) into out vector.
-void dirichlet_expectation_1d(std::vector<double>& doc_topic,
-                              double doc_topic_prior,
-                              std::vector<double>& out) {
-    size_t size = doc_topic.size();
-    double total = 0.0;
-    // Add the prior and compute total
-    for (size_t i = 0; i < size; i++) {
-        doc_topic[i] += doc_topic_prior;
-        total += doc_topic[i];
-    }
-    double psi_total = psi(total);
-    // Compute the exponentiated psi differences.
-    for (size_t i = 0; i < size; i++) {
-        out[i] = std::exp(psi(doc_topic[i]) - psi_total);
-    }
-}
+// Psi (digamma) function (not optimized for maximum accuracy)
+double psi(double x);
+
+// exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
+// = exp(psi(\alpha_k) - psi(\alpha_0))
+void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset = 0);
 
 // Vector version
-VectorXd dirichlet_expectation_1d(VectorXd& doc_topic, double doc_topic_prior) {
-    size_t size = doc_topic.size();
-    VectorXd out(size);
-    doc_topic.array() += doc_topic_prior;
-    double total = doc_topic.sum();
-    double psi_total = psi(total);
-    for (size_t i = 0; i < size; i++) {
-        out[i] = std::exp(psi(doc_topic[i]) - psi_total);
-    }
-    return out;
+VectorXd dirichlet_expectation_1d(VectorXd& alpha, double offset = 0);
+
+// row-wise exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
+MatrixXd dirichlet_expectation_2d(const MatrixXd& alpha);
+
+// row-wise E[log X] for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
+MatrixXd dirichlet_entropy_2d(const MatrixXd& alpha);
+
+// If b is provided, it must be of the same size as a.
+std::pair<double, double> logsumexp(const VectorXd &a, const VectorXd* b = nullptr);
+
+inline double expit(double x) {
+    return 1.0 / (1.0 + std::exp(-x));
 }
 
-MatrixXd dirichlet_expectation_2d(const MatrixXd& comp) {
-    MatrixXd result(comp.rows(), comp.cols());
-    for (int i = 0; i < comp.rows(); i++) {
-        double row_sum = comp.row(i).sum();
-        double psi_row_sum = psi(row_sum);
-        for (int j = 0; j < comp.cols(); j++) {
-            result(i, j) = std::exp(psi(comp(i, j)) - psi_row_sum);
+inline double logit(double x) {
+    if (x <= 0.0 || x >= 1.0) {
+        throw std::out_of_range("Input to logit must be in (0, 1)");
+    }
+    return std::log(x / (1.0 - x));
+}
+
+// Element-wise expit then row-normalize
+template<typename SparseMatrixType>
+void expitAndRowNormalize(SparseMatrixType& mat) {
+    static_assert(SparseMatrixType::IsRowMajor, "normalizeRows requires a row-major sparse matrix.");
+    using Scalar = typename SparseMatrixType::Scalar;
+    for (int i = 0; i < mat.rows(); ++i) {
+        Scalar rowSums = Scalar(0);
+        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
+            double transformed = expit(it.value());
+            it.valueRef() = Scalar(transformed);
+            rowSums += transformed;
+        }
+        if (rowSums == Scalar(0)) {
+            continue;
+        }
+        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
+            it.valueRef() /= rowSums;
         }
     }
-    return result;
 }
+
+// row-normalize
+template<typename SparseMatrixType>
+void rowNormalize(SparseMatrixType& mat) {
+    static_assert(SparseMatrixType::IsRowMajor, "normalizeRows requires a row-major sparse matrix.");
+    using Scalar = typename SparseMatrixType::Scalar;
+    for (int i = 0; i < mat.rows(); ++i) {
+        Scalar rowSum = Scalar(0);
+        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
+            rowSum += it.value();
+        }
+        if (rowSum == Scalar(0)) {
+            continue;
+        }
+        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
+            it.valueRef() /= rowSum;
+        }
+    }
+}
+
+// find largest values and indices
+void findTopK(MatrixXd& topVals, Eigen::MatrixXi& topIds, const MatrixXd& mtx, int32_t k);

@@ -93,7 +93,7 @@ struct Rectangle {
         return (xmin < xmax && ymin < ymax);
     }
     bool contains(T x, T y) const {
-        return (x >= xmin && x <= xmax && y >= ymin && y <= ymax);
+        return (x >= xmin && x < xmax && y >= ymin && y < ymax);
     }
     bool cutInside(Rectangle<T>& rec, T r) {
         rec.xmin = xmin + r;

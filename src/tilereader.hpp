@@ -10,6 +10,11 @@
 #include <stdexcept>
 #include <memory>
 #include "utils.h"
+#include "dataunits.hpp"
+#include "qgenlib/qgen_error.h"
+
+#include "Eigen/Sparse"
+using Eigen::SparseMatrix;
 
 // Identify a tile by (row, col)
 struct TileKey {
@@ -36,21 +41,176 @@ struct TileInfo {
     std::streampos endOffset;
 };
 
+// Parse a line in the tsv tiled pixel file
+struct lineParser {
+    size_t icol_x, icol_y, icol_feature;
+    std::vector<int32_t> icol_ints;
+    std::unordered_map<std::string, uint32_t> featureDict;
+    int32_t n_ints, n_tokens;
+    bool isFeatureDict, weighted;
+    std::vector<double> weights;
+
+    lineParser() {isFeatureDict = false; weighted = false;}
+    lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile) {
+        weighted = false;
+        init(_ix, _iy, _iz, _ivals, _dfile);
+    }
+    void init(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile) {
+        icol_x = _ix;
+        icol_y = _iy;
+        icol_feature = _iz;
+        n_ints = _ivals.size();
+        icol_ints.resize(n_ints);
+        n_tokens = icol_feature;
+        for (int32_t i = 0; i < n_ints; ++i) {
+            icol_ints[i] = _ivals[i];
+            n_tokens = std::max(n_tokens, icol_ints[i]);
+        }
+        n_tokens += 1;
+        if (_dfile.empty()) {
+            isFeatureDict = false;
+        } else {
+            isFeatureDict = true;
+            std::ifstream dictFile(_dfile);
+            if (!dictFile) {
+                error("Error opening feature dictionary file: %s", _dfile.c_str());
+            }
+            std::string line;
+            uint32_t nfeature = 0;
+            while (std::getline(dictFile, line)) {
+                size_t pos = line.find_first_of(" \t");
+                if (pos != std::string::npos) {
+                    line = line.substr(0, pos);
+                }
+                if (line.empty()) continue;
+                featureDict[line] = nfeature++;
+            }
+            if (featureDict.empty()) {
+                error("Error reading feature dictionary file: %s", _dfile.c_str());
+            }
+            notice("Read %zu features from dictionary file", featureDict.size());
+        }
+    }
+
+    int32_t parse(PixelValues& pixel, std::string& line) {
+        std::vector<std::string> tokens;
+        split(tokens, "\t", line);
+        if (tokens.size() < n_tokens) {
+            return -1;
+        }
+        pixel.x = std::stod(tokens[icol_x]);
+        pixel.y = std::stod(tokens[icol_y]);
+        if (isFeatureDict) {
+            auto it = featureDict.find(tokens[icol_feature]);
+            if (it == featureDict.end()) {
+                return -1;
+            }
+            pixel.feature = it->second;
+        } else {
+            if (!str2uint32(tokens[icol_feature], pixel.feature)) {
+                return -1;
+            }
+        }
+        pixel.intvals.resize(n_ints);
+        int32_t totVal = 0;
+        for (size_t i = 0; i < n_ints; ++i) {
+            if (!str2int32(tokens[icol_ints[i]], pixel.intvals[i])) {
+                return -1;
+            }
+            totVal += pixel.intvals[i];
+        }
+        return totVal;
+    }
+
+    int32_t readWeights(const std::string& weightFile, double defaultWeight = 1.0, int32_t nFeatures = -1) {
+        std::ifstream inWeight(weightFile);
+        if (!inWeight) {
+            error("Error opening weights file: %s", weightFile.c_str());
+        }
+        weighted = true;
+        int32_t novlp = 0;
+        std::string line;
+        if (isFeatureDict) {
+            weights.resize(featureDict.size());
+            std::fill(weights.begin(), weights.end(), defaultWeight);
+
+            while (std::getline(inWeight, line)) {
+                std::istringstream iss(line);
+                std::string feature;
+                double weight;
+                if (!(iss >> feature >> weight)) {
+                    error("Error reading weights file st line: %s", line.c_str());
+                }
+                auto it = featureDict.find(feature);
+                if (it != featureDict.end()) {
+                    weights[it->second] = weight;
+                    novlp++;
+                } else {
+                    continue;
+                }
+            }
+            return novlp;
+        }
+        if (nFeatures > 0) {
+            weights.resize(nFeatures);
+            std::fill(weights.begin(), weights.end(), defaultWeight);
+            while (std::getline(inWeight, line)) {
+                std::istringstream iss(line);
+                uint32_t idx;
+                double weight;
+                if (!(iss >> idx >> weight)) {
+                    error("Error reading weights file st line: %s", line.c_str());
+                }
+                if (idx >= nFeatures) {
+                    warning("Weight file feature out of range: %s", line.c_str());
+                    continue;
+                }
+                weights[idx] = weight;
+                novlp++;
+            }
+            return novlp;
+        }
+
+        int32_t max_idx = 0;
+        std::unordered_map<uint32_t, double> weights_map;
+        while (std::getline(inWeight, line)) {
+            std::istringstream iss(line);
+            uint32_t idx;
+            double weight;
+            if (!(iss >> idx >> weight)) {
+                error("Error reading weights file st line: %s", line.c_str());
+            }
+            if (idx >= max_idx) {
+                max_idx = idx;
+            }
+            weights_map[idx] = weight;
+        }
+        novlp = weights_map.size();
+        weights.resize(max_idx + 1);
+        std::fill(weights.begin(), weights.end(), defaultWeight);
+        for (const auto& pair : weights_map) {
+            weights[pair.first] = pair.second;
+        }
+        return novlp;
+    }
+
+};
+
 class TileReaderBase {
 protected:
     std::string tsvFilename;
     int tileSize;
     size_t nTiles;
-    int32_t minrow = INT32_MAX;
-    int32_t mincol = INT32_MAX;
-    int32_t maxrow = INT32_MIN;
-    int32_t maxcol = INT32_MIN;
     // Map from TileKey to TileInfo.
     std::unordered_map<TileKey, TileInfo, TileKeyHash> index;
     // Helper function to load the index file.
     virtual void loadIndex(const std::string &indexFilename) = 0;
 
 public:
+    int32_t minrow = INT32_MAX;
+    int32_t mincol = INT32_MAX;
+    int32_t maxrow = INT32_MIN;
+    int32_t maxcol = INT32_MIN;
     TileReaderBase(const std::string &tsvFilename, const std::string &indexFilename, int32_t tileSize = -1)
         : tsvFilename(tsvFilename), tileSize(tileSize) {
     }
@@ -168,24 +328,6 @@ private:
     }
 };
 
-struct Record {
-    double x;
-    double y;
-    std::vector<int32_t> catFields;
-    std::vector<int32_t> intFields;
-    std::vector<float> floatFields;
-    Record() {}
-    Record(size_t numCat, size_t numInt, size_t numFloat)
-        : catFields(numCat), intFields(numInt), floatFields(numFloat) {}
-    Record(double x, double y, size_t numCat, size_t numInt, size_t numFloat)
-        : x(x), y(y), catFields(numCat), intFields(numInt), floatFields(numFloat) {}
-    void resize(size_t numCat, size_t numInt, size_t numFloat) {
-        catFields.resize(numCat);
-        intFields.resize(numInt);
-        floatFields.resize(numFloat);
-    }
-};
-
 class BoundedBinaryTileIterator {
 public:
     //   filename: the binary file name,
@@ -205,8 +347,26 @@ public:
         file->seekg(startOffset);
     }
 
+    struct Record {
+        double x;
+        double y;
+        std::vector<int32_t> catFields;
+        std::vector<int32_t> intFields;
+        std::vector<float> floatFields;
+        Record() {}
+        Record(size_t numCat, size_t numInt, size_t numFloat)
+            : catFields(numCat), intFields(numInt), floatFields(numFloat) {}
+        Record(double x, double y, size_t numCat, size_t numInt, size_t numFloat)
+            : x(x), y(y), catFields(numCat), intFields(numInt), floatFields(numFloat) {}
+        void resize(size_t numCat, size_t numInt, size_t numFloat) {
+            catFields.resize(numCat);
+            intFields.resize(numInt);
+            floatFields.resize(numFloat);
+        }
+    };
+
     // next() decodes the next fixed-size record into a tab-delimited string.
-    bool next(Record &record) {
+    bool next(BoundedBinaryTileIterator::Record &record) {
         if (!file || file->tellg() >= endOffset) {
             return false;
         }

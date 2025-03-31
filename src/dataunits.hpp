@@ -15,39 +15,58 @@ struct PixelValues {
     uint32_t feature;
     std::vector<int32_t> intvals;
     PixelValues() {}
+    bool writeToFileText(std::ostream& os) const {
+        os << x << "\t" << y << "\t" << feature;
+        for (const auto& val : intvals) {
+            os << "\t" << val;
+        }
+        os << "\n";
+        return os.good();
+    }
 };
 
 struct UnitValues {
     int32_t nPixel;
-    uint32_t totVal;
     int32_t x, y;
     std::vector<std::unordered_map<uint32_t, uint32_t>> vals;
-    UnitValues(int32_t hx, int32_t hy) : nPixel(0), totVal(0), x(hx), y(hy) {}
-    UnitValues(int32_t hx, int32_t hy, const PixelValues& pixel) : nPixel(1), totVal(0), x(hx), y(hy) {
+    std::vector<uint32_t> valsums;
+    UnitValues(int32_t hx, int32_t hy) : nPixel(0), x(hx), y(hy) {}
+    UnitValues(int32_t hx, int32_t hy, const PixelValues& pixel) : nPixel(1), x(hx), y(hy) {
         vals.resize(pixel.intvals.size());
+        valsums.resize(pixel.intvals.size());
+        std::fill(valsums.begin(), valsums.end(), 0);
         for (size_t i = 0; i < pixel.intvals.size(); ++i) {
             if (pixel.intvals[i] > 0) {
                 vals[i][pixel.feature] = pixel.intvals[i];
-                totVal += pixel.intvals[i];
+                valsums[i] += pixel.intvals[i];
             }
         }
     }
     void clear() {
         nPixel = 0;
-        totVal = 0;
-        for (auto& val : vals) {
-            val.clear();
-        }
+        vals.clear();
+        valsums.clear();
     }
     void addPixel(const PixelValues& pixel) {
         ++nPixel;
+        if (vals.size() == 0) {
+            vals.resize(pixel.intvals.size());
+            valsums.resize(pixel.intvals.size());
+            std::fill(valsums.begin(), valsums.end(), 0);
+        }
+        assert(vals.size() == pixel.intvals.size() && "pixel and unit have different number of layers");
         for (size_t i = 0; i < pixel.intvals.size(); ++i) {
-            if (pixel.intvals[i] > 0)
+            if (pixel.intvals[i] > 0) {
                 vals[i][pixel.feature] += pixel.intvals[i];
+                valsums[i] += pixel.intvals[i];
+            }
         }
     }
     bool mergeUnits(const UnitValues& other) {
         if (x != other.x || y != other.y) {
+            return false;
+        }
+        if ((vals.size() != other.vals.size()) || (valsums.size() != other.valsums.size())) {
             return false;
         }
         nPixel += other.nPixel;
@@ -56,13 +75,14 @@ struct UnitValues {
                 if (entry.second > 0)
                     vals[i][entry.first] += entry.second;
             }
+            valsums[i] += other.valsums[i];
         }
         return true;
     }
     bool writeToFile(std::ostream& os, uint32_t key) const {
         os << uint32toHex(key) << "\t" << x << "\t" << y;
-        for (const auto& val : vals) {
-            os << "\t" << val.size();
+        for (size_t i = 0; i < vals.size(); ++i) {
+            os << "\t" << vals[i].size() << "\t" << valsums[i];
         }
         for (const auto& val : vals) {
             for (const auto& entry : val) {
@@ -81,9 +101,11 @@ struct UnitValues {
         }
         clear();
         vals.resize(nLayer);
+        valsums.resize(nLayer);
         std::vector<int32_t> nfeatures(nLayer, 0);
+        std::vector<uint32_t> counts(nLayer, 0);
         for (int i = 0; i < nLayer; ++i) {
-            if (!(iss >> nfeatures[i])) {
+            if (!(iss >> nfeatures[i] >> counts[i])) {
                 return false;
             }
         }
@@ -95,11 +117,11 @@ struct UnitValues {
                     return false;
                 }
                 vals[i][feature] = value;
+                valsums[i] += value;
             }
         }
         return true;
     }
-
 };
 
 
@@ -127,25 +149,57 @@ public:
     int32_t getNLayer() const {
         return nLayer;
     }
+    void setFeatureNames(const std::vector<std::string>& featureNames) {
+        assert (featureNames.size() == nFeatures && "Feature names size does not match the number of features");
+        features = featureNames;
+    }
+    void setFeatureNames(const std::string& nameFile) {
+        std::ifstream inFile(nameFile);
+        if (!inFile) {
+            error("Error opening feature names file: %s", nameFile.c_str());
+        }
+        std::string line;
+        features.clear();
+        while (std::getline(inFile, line)) {
+            std::istringstream iss(line);
+            std::string feature;
+            if (!(iss >> feature)) {
+                error("Error reading feature names on line %s", line.c_str());
+            }
+            features.push_back(feature);
+        }
+        inFile.close();
+        assert (features.size() == nFeatures && "Feature names size does not match the number of features");
+    }
 
     bool parseLine(UnitValues &unit, const std::string &line) {
         return unit.readFromLine(line, nLayer);
     }
-    bool parseLine(Document& doc, const std::string &line, int32_t layer = 0) {
+    int32_t parseLine(Document& doc, const std::string &line, int32_t layer = 0) {
         int32_t x, y;
         return parseLine(doc, x, y, line, layer);
     }
-    bool parseLine(Document& doc, int32_t& x, int32_t& y, const std::string &line, int32_t layer = 0) {
+    int32_t parseLine(Document& doc, int32_t& x, int32_t& y, const std::string &line, int32_t layer = 0) {
         assert(layer < nLayer && "Layer out of range");
         std::istringstream iss(line);
         std::string hexKey;
         std::vector<int32_t> nfeatures(nLayer, 0);
+        std::vector<uint32_t> counts(nLayer, 0);
         if (!(iss >> hexKey >> x >> y)) {
-            return false;
+            return -1;
         }
         for (int i = 0; i < nLayer; ++i) {
-            if (!(iss >> nfeatures[i])) {
-                return false;
+            if (!(iss >> nfeatures[i] >> counts[i])) {
+                return -1;
+            }
+        }
+        for (int i = 0; i < layer; ++i) {
+            for (int j = 0; j < nfeatures[i]; ++j) {
+                uint32_t feature;
+                int32_t value;
+                if (!(iss >> feature >> value)) {
+                    return -1;
+                }
             }
         }
         int l = 0;
@@ -154,7 +208,7 @@ public:
                 uint32_t feature;
                 int32_t value;
                 if (!(iss >> feature >> value)) {
-                    return false;
+                    return -1;
                 }
             }
             ++l;
@@ -163,10 +217,10 @@ public:
         doc.cnts.resize(nfeatures[layer]);
         for (int i = 0; i < nfeatures[layer]; ++i) {
             if (!(iss >> doc.ids[i] >> doc.cnts[i])) {
-                return false;
+                return -1;
             }
         }
-        return true;
+        return counts[layer];
     }
 
 
