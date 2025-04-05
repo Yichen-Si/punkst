@@ -9,7 +9,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double hexSize = -1, hexGridDist = -1;
     double radius = -1, anchorDist = -1;
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
-    double pixelResolution = -1, defaultWeight = 0.;
+    double pixelResolution = 1, defaultWeight = 0.;
+    bool outputOritinalData = false;
 
 	paramList pl;
 	BEGIN_LONG_PARAMS(longParameters)
@@ -24,7 +25,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         LONG_STRING_PARAM("feature-dict", &dictFile, "If feature column is not integer, provide a dictionary/list of all possible values")
         LONG_DOUBLE_PARAM("default-weight", &defaultWeight, "Default weight for features not in the weight file")
         LONG_STRING_PARAM("feature-weights", &weightFile, "Input weights file")
-        LONG_DOUBLE_PARAM("pixel-res", &pixelResolution, "Pixel resolution")
+        LONG_DOUBLE_PARAM("pixel-res", &pixelResolution, "Resolution of pixel level inference")
         LONG_DOUBLE_PARAM("hex-size", &hexSize, "Hexagon size (side length)")
         LONG_DOUBLE_PARAM("hex-grid-dist", &hexGridDist, "Hexagon grid distance (center-to-center distance)")
         LONG_DOUBLE_PARAM("anchor-dist", &anchorDist, "Distance between adjacent anchors")
@@ -34,6 +35,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         LONG_INT_PARAM("seed", &seed, "Random seed")
 		LONG_PARAM_GROUP("Output Options", NULL)
         LONG_STRING_PARAM("out", &outFile, "Output TSV file")
+        LONG_PARAM("output-original", &outputOritinalData, "Output original data points (pixels with feature values) together with the pixel level factor results")
         LONG_STRING_PARAM("temp-dir", &tmpDir, "Directory to store temporary files")
         LONG_INT_PARAM("min-init-count", &minInitCount, "Minimum")
         LONG_INT_PARAM("verbose", &verbose, "Verbose")
@@ -117,10 +119,10 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
     notice("Initialized tile reader");
 
-    LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model);
-    notice("Initialized anchor model");
+    LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model, 100, 0.005/K);
+    notice("Initialized anchor model with %d features and %d factors", nFeatures, K);
 
-    Tiles2Minibatch tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, 20, 0.7, pixelResolution, nFeatures, 0, topK, verbose);
+    Tiles2Minibatch tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, 20, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
     tiles2minibatch.setFeatureNames(featureNames);
     tiles2minibatch.run();
 

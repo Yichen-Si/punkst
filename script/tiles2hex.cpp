@@ -79,9 +79,8 @@ public:
         meta["n_layers"] = nLayer;
         if (parser.isFeatureDict) {
             meta["n_features"] = parser.featureDict.size();
-            for (const auto& entry : parser.featureDict) {
-                meta["dictionary"][entry.second] = entry.first;
-            }
+            nlohmann::json dict(parser.featureDict);
+            meta["dictionary"] = dict;
         } else {
             meta["n_features"] = nFeatures;
         }
@@ -324,7 +323,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         LONG_INT_PARAM("icol-feature", &icol_feature, "Column index for feature (0-based)")
         LONG_STRING_PARAM("feature-dict", &dictFile, "If feature column is not integer, provide a dictionary/list of all possible values")
         LONG_MULTI_INT_PARAM("icol-int", &icol_ints, "Column index for integer values (0-based)")
-        LONG_DOUBLE_PARAM("hex-size", &hexSize, "Hexagon size (size length) in microns")
+        LONG_DOUBLE_PARAM("hex-size", &hexSize, "Hexagon size (size length)")
         LONG_STRING_PARAM("temp-dir", &tmpDir, "Directory to store temporary files")
         LONG_INT_PARAM("threads", &nThreads, "Number of threads to use (default: 1)")
 		LONG_PARAM_GROUP("Output Options", NULL)

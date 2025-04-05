@@ -103,6 +103,9 @@ private:
         std::unordered_map<int64_t, std::vector<std::string>> buffers;
         while (file.tellg() < end && std::getline(file, line)) {
             int64_t tileId = parser.parse(line);
+            if (tileId == -1) {
+                continue;
+            }
             buffers[tileId].push_back(line);
             // Flush if the buffer is large enough.
             if (buffers[tileId].size() >= tileBuffer) {
@@ -215,19 +218,19 @@ private:
 int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
 
     std::string inTsv, outPref, tmpDir;
-    int nThreads0 = 1, tileSize = 500000;
+    int nThreads0 = 1, tileSize = -1;
     int debug = 0, tileBuffer = 1000, verbose = 1000000;
     int icol_x, icol_y, nskip = 0;
 
 	paramList pl;
 	BEGIN_LONG_PARAMS(longParameters)
 		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("in-tsv", &inTsv, "Input TSV file. Header must begin with #")
+        LONG_STRING_PARAM("in-tsv", &inTsv, "Input TSV file.")
         LONG_INT_PARAM("icol-x", &icol_x, "Column index for x coordinate (0-based)")
         LONG_INT_PARAM("icol-y", &icol_y, "Column index for y coordinate (0-based)")
         LONG_INT_PARAM("skip", &nskip, "Number of lines to skip in the input file (default: 0)")
         LONG_STRING_PARAM("temp-dir", &tmpDir, "Directory to store temporary files")
-        LONG_INT_PARAM("tile-size", &tileSize, "Tile size in units (default: 300 um)")
+        LONG_INT_PARAM("tile-size", &tileSize, "Tile size (in the same unit as the input coordinates)")
         LONG_INT_PARAM("tile-buffer", &tileBuffer, "Buffer size per tile per thread (default: 1000 lines)")
         LONG_INT_PARAM("threads", &nThreads0, "Number of threads to use (default: 1)")
 		LONG_PARAM_GROUP("Output Options", NULL)
@@ -238,6 +241,11 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     pl.Add(new longParams("Available Options", longParameters));
     pl.Read(argc, argv);
     pl.Status();
+
+    if (tileSize <= 0) {
+        error("Tile size must be provided");
+        return 1;
+    }
 
     // Determine the number of threads to use.
     unsigned int nThreads = std::thread::hardware_concurrency();

@@ -43,11 +43,13 @@ public:
     }
     LatentDirichletAllocation(int n_topics, int n_features,
         int seed = std::random_device{}(),
-        int nThreads = 0, int verbose = 0, const std::optional<MatrixXd>& topic_word_distr = std::nullopt) : n_topics_(n_topics), n_features_(n_features), seed_(seed), nThreads_(nThreads), verbose_(verbose), update_count_(0) {
+        int nThreads = 0, int verbose = 0,
+        const std::optional<MatrixXd>& topic_word_distr = std::nullopt,
+        int max_doc_update_iter = 100,
+        double mean_change_tol = -1.) : n_topics_(n_topics), n_features_(n_features), seed_(seed), nThreads_(nThreads), verbose_(verbose), max_doc_update_iter_(max_doc_update_iter),
+        mean_change_tol_(mean_change_tol), update_count_(0) {
             doc_topic_prior_ = -1.;
             topic_word_prior_ = -1.;
-            max_doc_update_iter_ = 100;
-            mean_change_tol_ = -1.;
             learning_decay_ = 0.7;
             learning_offset_ = 10.0;
             total_doc_count_ = 1000000;
@@ -326,7 +328,8 @@ private:
     // doc: sparse representation of the document.
     // doc_topic: current/prior document-topic vector (K x 1).
     // Returns the updated document-topic vectors (K x 1).
-    int32_t fit_one_document(VectorXd& doc_topic, VectorXd& exp_doc, const Document &doc,
+    int32_t fit_one_document(VectorXd& doc_topic, VectorXd& exp_doc,
+        const Document &doc,
         const std::optional<VectorXd>& doc_topic_ = std::nullopt)
     {
 
@@ -406,7 +409,7 @@ private:
             nThreads_ = omp_get_max_threads();
         }
         if (mean_change_tol_ < 0) {
-            mean_change_tol_ = 0.01 / n_topics_;
+            mean_change_tol_ = 0.001 / n_topics_;
         }
         if (seed_ <= 0) {
             seed_ = std::random_device{}();

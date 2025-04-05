@@ -49,7 +49,7 @@ struct lineParserLocal : public lineParser {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < n_tokens) {
-            return -1;
+            return -2;
         }
         if (isFeatureDict) {
             auto it = featureDict.find(tokens[icol_feature]);
@@ -71,18 +71,14 @@ struct TileData {
     std::unordered_map<uint32_t, std::vector<Record>> buffers; // local buffer to accumulate records to be written to temporary files
     std::vector<Record> pts; // original data points
     std::vector<int32_t> idxinternal; // indices for internal data points to output
-    // Only set if collapsed
     std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
-    std::vector<std::pair<double, double>> coords; // collapsed coordinates
+    std::vector<std::pair<double, double>> coords; // unique coordinates
     void clear() {
         buffers.clear();
         pts.clear();
         idxinternal.clear();
         orgpts2pixel.clear();
         coords.clear();
-    }
-    ~TileData() {
-        clear();
     }
 };
 
@@ -178,7 +174,7 @@ protected:
     bool decodeTempFileKey(uint32_t key, int32_t& R, int32_t& C) {
         R = static_cast<int32_t>(key >> 16);
         C = static_cast<int32_t>((key >> 1) & 0x7FFF);
-        return (key & 1) != 0;
+        return (key & 0x1) != 0;
     }
 
     uint32_t encodeTempFileKey(bool isVertical, int32_t R, int32_t C) {
@@ -193,17 +189,17 @@ protected:
         if (x > tileSize - 2 * r && tile.col < tileReader.maxcol) {
             bufferidx.push_back(encodeTempFileKey(true, tile.row, tile.col));
         }
-        if (x < 2 * r && tile.col > 0) {
+        if (x < 2 * r && tile.col > tileReader.mincol) {
             bufferidx.push_back(encodeTempFileKey(true, tile.row, tile.col - 1));
         }
-        if (y < 2 * r && tile.row > 0) {
+        if (y < 2 * r && tile.row > tileReader.minrow) {
             bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col));
         }
         if (y > tileSize - 2 * r) {
             bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col));
         }
-        if (x < r && tile.col > 0) {
-            if (y < 2 * r && tile.row > 0) {
+        if (x < r && tile.col > tileReader.mincol) {
+            if (y < 2 * r && tile.row > tileReader.minrow) {
                 bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col - 1));
             }
             if (y > tileSize - 2 * r) {
@@ -211,60 +207,65 @@ protected:
             }
         }
         if (x > tileSize - r) {
-            if (y < 2 * r && tile.row > 0) {
-                bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col));
+            if (y < 2 * r && tile.row > tileReader.minrow && tile.col < tileReader.maxcol) {
+                bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col + 1));
             }
-            if (y > tileSize - 2 * r) {
-                bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col));
+            if (y > tileSize - 2 * r && tile.col < tileReader.maxcol) {
+                bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col + 1));
             }
         }
-        if (x >= r && x <= tileSize - r && y >= r && y <= tileSize - r) {
+        bool xTrue = x >= r && x < tileSize - r;
+        bool yTrue = y >= r && y < tileSize - r;
+        if (xTrue && yTrue) {
             return 1; // internal
         }
-        if (tile.row == 0 && y <= tileSize - r) {
-            return 1;
+        // corners
+        if (tile.row == tileReader.minrow && tile.col == tileReader.mincol) {
+            return x < tileSize - r && y < tileSize - r;
         }
-        if (tile.col == 0 && x <= tileSize - r) {
-            return 1;
+        if (tile.row == tileReader.minrow && tile.col == tileReader.maxcol) {
+            return x >= r && y < tileSize - r;
         }
-        if (tile.row == tileReader.maxrow && y >= r) {
-            return 1;
+        if (tile.row == tileReader.maxrow && tile.col == tileReader.mincol) {
+            return x < tileSize - r && y >= r;
         }
-        if (tile.col == tileReader.maxcol && x >= r) {
-            return 1;
+        if (tile.row == tileReader.maxrow && tile.col == tileReader.maxcol) {
+            return x >= r && y >= r;
+        }
+        // non-corner edges
+        if (tile.row == tileReader.minrow) {
+            return xTrue && y < tileSize - r;
+        }
+        if (tile.col == tileReader.mincol) {
+            return yTrue && x < tileSize - r;
+        }
+        if (tile.row == tileReader.maxrow) {
+            return xTrue && y >= r;
+        }
+        if (tile.col == tileReader.maxcol) {
+            return yTrue && x >= r;
         }
         return 0;
     }
 
-    bool isInternalToBuffer(int32_t global_x, int32_t global_y, uint32_t bufferId) {
+    bool isInternalToBuffer(int32_t x, int32_t y, uint32_t bufferId) {
         int32_t bufRow, bufCol;
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
         if (isVertical) {
-            double x_min = (bufCol + 1.) * tileSize - 2 * r;
-            double x_max = (bufCol + 1.) * tileSize + 2 * r;
-            double y_min = bufRow * tileSize;
-            double y_max = bufRow * tileSize + tileSize;
-            double xrange = 4 * r;
-            double yrange = tileSize;
-            double x = global_x - x_min;
-            double y = global_y - y_min;
-            if (bufRow == 0) {
-                return (x > r && x < xrange - r && y < yrange - r);
+            double x_min = (bufCol + 1.) * tileSize - r;
+            double x_max = (bufCol + 1.) * tileSize + r;
+            double y_min = bufRow * tileSize + r;
+            double y_max = bufRow * tileSize + tileSize - r;
+            if (bufRow == tileReader.minrow) {
+                return (x > x_min && x < x_max && y < y_max);
             }
-            return (x > r && x < xrange - r && y > r && y < yrange - r);
+            return (x > x_min && x < x_max && y > y_min && y < y_max);
         } else {
-            double x_min = std::max(bufCol * tileSize - r, 0.0);
-            double x_max = bufCol * tileSize + tileSize + r;
-            double y_min = (bufRow + 1) * tileSize - 2 * r;
-            double y_max = (bufRow + 1) * tileSize + 2 * r;
-            double x = global_x - x_min;
-            double y = global_y - y_min;
-            double xrange = x_max - x_min;
-            double yrange = 4 * r;
-            if (bufCol == 0) {
-                return (x < xrange - r && y > r && y < yrange - r);
-            }
-            return (x > r && x < xrange - r && y > r && y < yrange - r);
+            double x_min = bufCol * tileSize;
+            double x_max = bufCol * tileSize + tileSize;
+            double y_min = (bufRow + 1) * tileSize - r;
+            double y_max = (bufRow + 1) * tileSize + r;
+            return (x >= x_min && x < x_max && y > y_min && y < y_max);
         }
     }
 
@@ -281,8 +282,11 @@ public:
         TileReader& tileReader, lineParserLocal& lineParser,
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
-        double c = 20, double h = 0.7, double res = -1, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0) :
-        Tiles2MinibatchBase(nThreads, r, outputFile, _tmpDir, tileReader), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k) {
+        double c = 20, double h = 0.7, double res = 1, bool outorg = true, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
+        Tiles2MinibatchBase(nThreads, r + hexGrid.size, outputFile, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), outpurOriginalData(outorg), M_(M), topk_(k), debug_(debug) {
+        if (pixelResolution <= 0) {
+            pixelResolution = 1;
+        }
         weighted = lineParser.weighted;
         M_ = lda.get_n_features();
         if (lineParser.isFeatureDict) {
@@ -303,7 +307,6 @@ public:
         slda.init(K_, M_, N, seed);
         slda.init_global_parameter(lda.get_model());
         slda.verbose_ = verbose;
-        collapsed = pixelResolution > 0;
         if (featureNames.size() == 0) {
             featureNames.resize(M_);
             for (int32_t i = 0; i < M_; ++i) {
@@ -352,14 +355,15 @@ public:
     }
 
 private:
+    int32_t debug_;
     int32_t M_, K_, topk_;
-    bool weighted, collapsed;
+    bool weighted, outpurOriginalData;
     LatentDirichletAllocation& lda;
     OnlineSLDA slda;
     lineParserLocal& lineParser;
     HexGrid hexGrid;
     int32_t nMoves;
-    double anchorMinCount, distNu;
+    double anchorMinCount, distNu, distR;
     float pixelResolution;
     std::vector<std::string> featureNames;
 
@@ -372,8 +376,8 @@ private:
     int32_t makeMinibatch(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch);
 
     // Write the results of internal points
-    void outputOriginalDataWithPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
-    void outputPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
+    int32_t outputOriginalDataWithPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
+    int32_t outputPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
 
     void processTile(TileData &tileData, int threadId=0);
 
@@ -393,9 +397,10 @@ private:
         while (bufferQueue.pop(bufferPtr)) {
             TileData tileData;
             int32_t ret = parseBoundaryFile(tileData, bufferPtr);
-            notice("Thread %d read boundary buffer (%d, %d) with %d internal pixels", threadId, bufferPtr->key >> 16, (bufferPtr->key >> 1) & 0x7FFF, ret);
-            if (ret <= 10) continue;
-            processTile(tileData, threadId);
+            notice("Thread %d read boundary buffer (%d, %d, %d) with %d internal pixels", threadId, (bufferPtr->key & 0x1), bufferPtr->key >> 16, (bufferPtr->key >> 1) & 0x7FFF, ret);
+            if (ret >10) {
+                processTile(tileData, threadId);
+            }
             std::remove(bufferPtr->tmpFile.c_str());
         }
     }

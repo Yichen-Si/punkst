@@ -39,9 +39,8 @@ endif()
 message(STATUS ${QGEN_LIBRARIES})
 
 # OpenCV
-set(OpenCV_DIR ../opencv/build)
-find_package(OpenCV REQUIRED)
-message(STATUS "OpenCV_INCLUDE_DIRS: ${OpenCV_INCLUDE_DIRS}")
+find_package(OpenCV REQUIRED HINTS ../opencv/build /usr/lib /usr/local)
+message(STATUS "Found OpenCV version ${OpenCV_VERSION} with include dirs: ${OpenCV_INCLUDE_DIRS}")
 
 # OpenMP
 find_package(OpenMP REQUIRED)
