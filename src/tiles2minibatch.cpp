@@ -285,10 +285,41 @@ void Tiles2Minibatch::processTile(TileData &tileData, int threadId) {
         std::cout << "Thread " << threadId << " start writing to output" << std::endl << std::flush;
     }
     int32_t npts;
-    if (outpurOriginalData) {
+    if (outputOriginalData) {
         npts = outputOriginalDataWithPixelResult(tileData, topVals, topIds);
     } else {
         npts = outputPixelResult(tileData, topVals, topIds);
     }
     notice("Thread %d fit minibatch with %d anchors and output %d internal pixels", threadId, nAnchors, npts);
+}
+
+void Tiles2Minibatch::writeHeaderToJson() {
+    size_t pos = outputFile.find_last_of(".");
+    std::string jsonFile;
+    if (pos != std::string::npos) {
+        jsonFile = outputFile.substr(0, pos) + ".json";
+    } else {
+        jsonFile = outputFile + ".json";
+    }
+    std::ofstream jsonOut(jsonFile);
+    if (!jsonOut) {
+        error("Error opening json output file: %s", jsonFile.c_str());
+    }
+    nlohmann::json header;
+    header["x"] = 0;
+    header["y"] = 1;
+    int32_t idx = 2;
+    if (outputOriginalData) {
+        header["feature"] = 2;
+        header["ct"] = 3;
+        idx = 4;
+    }
+    for (int32_t i = 0; i < topk_; ++i) {
+        header["K" + std::to_string(i+1)] = idx++;
+    }
+    for (int32_t i = 0; i < topk_; ++i) {
+        header["P" + std::to_string(i+1)] = idx++;
+    }
+    jsonOut << std::setw(4) << header << std::endl;
+    jsonOut.close();
 }

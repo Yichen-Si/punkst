@@ -30,8 +30,6 @@
 *.exe
 *.out
 *.app
-<<<<<<< HEAD
-=======
 
 autom4te.cache/
 autom4te.cache/*
@@ -53,4 +51,9 @@ bin
 .DS_Store
 .vscode
 .vscode/*
->>>>>>> a61fbfb (init)
+
+site/
+
+venv
+
+zz/

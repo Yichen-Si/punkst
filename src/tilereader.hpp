@@ -103,7 +103,7 @@ struct lineParser {
         if (isFeatureDict) {
             auto it = featureDict.find(tokens[icol_feature]);
             if (it == featureDict.end()) {
-                return -1;
+                return 0;
             }
             pixel.feature = it->second;
         } else {

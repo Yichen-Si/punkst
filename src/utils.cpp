@@ -251,3 +251,40 @@ void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& block
     infile.close();
     notice("Partitioned input file into %zu blocks of size ~ %zu", blocks.size(), blockSize);
 }
+
+bool checkOutputWritable(const std::string& outFile, bool newFile) {
+    std::filesystem::path outPath(outFile);
+    if (!newFile && std::filesystem::exists(outPath)) {
+        if (!std::filesystem::is_regular_file(outPath)) {
+            std::cerr << "Error: " << outFile << " is not a regular file." << std::endl;
+            return false;
+        }
+        std::ofstream ofs(outFile, std::ios::app);
+        if (!ofs) {
+            std::cerr << "Error: Cannot open " << outFile << " for appending." << std::endl;
+            return false;
+        }
+        ofs.close();
+        return true;
+    }
+    if (outPath.has_parent_path()) {
+        std::filesystem::path parent = outPath.parent_path();
+        if (!std::filesystem::exists(parent)) {
+            std::cerr << "Error: Output directory " << parent.string() << " does not exist." << std::endl;
+            return false;
+        }
+        if (!std::filesystem::is_directory(parent)) {
+            std::cerr << "Error: " << parent.string() << " is not a directory." << std::endl;
+            return false;
+        }
+    }
+    // Try opening the file for writing.
+    std::ofstream ofs(outFile, std::ios::binary | std::ios::out);
+    if (!ofs) {
+        std::cerr << "Error: Cannot open " << outFile << " for writing." << std::endl;
+        return false;
+    }
+    ofs.close();
+    std::remove(outFile.c_str());
+    return true;
+}

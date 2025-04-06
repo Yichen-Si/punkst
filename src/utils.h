@@ -113,6 +113,8 @@ struct Rectangle {
 
 // File handling related
 bool createDirectory(const std::string& dir);
+bool checkOutputWritable(const std::string& outFile, bool newFile = true);
+
 // Iterator for lines
 class BoundedReadline {
 public:

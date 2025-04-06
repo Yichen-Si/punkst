@@ -14,7 +14,6 @@
 #include <cassert>
 
 #include "qgenlib/params.h"
-#include "qgenlib/commands.h"
 #include "qgenlib/qgen_error.h"
 #include "qgenlib/hts_utils.h"
 

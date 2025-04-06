@@ -52,6 +52,7 @@ find_package(OpenMP REQUIRED)
 
 set(SOURCE_FILES
     script/test.cpp
+    src/commands.hpp
     src/punkst.h
     src/punkst.cpp
     src/utils.h
@@ -78,7 +79,7 @@ set(SOURCE_FILES
     src/tiles2minibatch.hpp
     src/tiles2minibatch.cpp
     script/pixels_decode.cpp
-    script/annotate_sb_tsv.cpp
+    script/draw_pixel_factors.cpp
     script/scribble_parse.cpp
     script/draw_tsv_by_col.cpp
     script/nuclei_mask.cpp

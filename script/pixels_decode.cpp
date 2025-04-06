@@ -11,6 +11,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
     double pixelResolution = 1, defaultWeight = 0.;
     bool outputOritinalData = false;
+    bool featureIsIndex = false;
 
 	paramList pl;
 	BEGIN_LONG_PARAMS(longParameters)
@@ -22,7 +23,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         LONG_INT_PARAM("icol-y", &icol_y, "Column index for y coordinate (0-based)")
         LONG_INT_PARAM("icol-feature", &icol_feature, "Column index for feature (0-based)")
         LONG_INT_PARAM("icol-val", &icol_val, "Column index for count/value (0-based)")
-        LONG_STRING_PARAM("feature-dict", &dictFile, "If feature column is not integer, provide a dictionary/list of all possible values")
+        LONG_PARAM("feature-is-index", &featureIsIndex, "If the feature column contains integer indices, otherwise assume it contains feature names")
         LONG_DOUBLE_PARAM("default-weight", &defaultWeight, "Default weight for features not in the weight file")
         LONG_STRING_PARAM("feature-weights", &weightFile, "Input weights file")
         LONG_DOUBLE_PARAM("pixel-res", &pixelResolution, "Resolution of pixel level inference")
@@ -37,6 +38,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         LONG_STRING_PARAM("out", &outFile, "Output TSV file")
         LONG_PARAM("output-original", &outputOritinalData, "Output original data points (pixels with feature values) together with the pixel level factor results")
         LONG_STRING_PARAM("temp-dir", &tmpDir, "Directory to store temporary files")
+        LONG_INT_PARAM("top-k", &topK, "Top K factors to output")
         LONG_INT_PARAM("min-init-count", &minInitCount, "Minimum")
         LONG_INT_PARAM("verbose", &verbose, "Verbose")
         LONG_INT_PARAM("debug", &debug, "Debug")
@@ -105,7 +107,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             model(j, i) = modelValues[i][j];
         }
     }
-
     notice("Read %zu features and %d factors from model file", nFeatures, K);
 
     HexGrid hexGrid(hexSize);
@@ -114,6 +115,12 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         error("Error in input tiles: %s", inTsv.c_str());
     }
     lineParserLocal parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    if (!featureIsIndex) {
+        for (size_t i = 0; i < featureNames.size(); ++i) {
+            parser.featureDict[featureNames[i]] = i;
+        }
+        parser.isFeatureDict = true;
+    }
     if (!weightFile.empty()) {
         parser.readWeights(weightFile, defaultWeight, nFeatures);
     }

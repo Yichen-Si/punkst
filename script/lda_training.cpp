@@ -314,7 +314,7 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
         seed = std::random_device{}();
     }
     if (mDelta <= 0) {
-        mDelta = 0.01 / nTopics;
+        mDelta = 0.002 / nTopics;
     }
 
     if (batchSize <= 0) {

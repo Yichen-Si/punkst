@@ -5,6 +5,7 @@
 #include <cassert>
 #include <stdexcept>
 #include "qgenlib/qgen_error.h"
+#include "json.hpp"
 #include "nanoflann.hpp"
 #include "nanoflann_utils.h"
 #include "dataunits.hpp"
@@ -35,11 +36,6 @@ struct lineParserLocal : public lineParser {
     size_t icol_val;
     lineParserLocal() {}
     lineParserLocal(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile) {
-        icol_val = _ival;
-        std::vector<int32_t> _ivals = { (int32_t) _ival};
-        init(_ix, _iy, _iz, _ivals, _dfile);
-    }
-    void init2(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile) {
         icol_val = _ival;
         std::vector<int32_t> _ivals = { (int32_t) _ival};
         init(_ix, _iy, _iz, _ivals, _dfile);
@@ -283,7 +279,7 @@ public:
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
         double c = 20, double h = 0.7, double res = 1, bool outorg = true, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
-        Tiles2MinibatchBase(nThreads, r + hexGrid.size, outputFile, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), outpurOriginalData(outorg), M_(M), topk_(k), debug_(debug) {
+        Tiles2MinibatchBase(nThreads, r + hexGrid.size, outputFile, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), outputOriginalData(outorg), M_(M), topk_(k), debug_(debug) {
         if (pixelResolution <= 0) {
             pixelResolution = 1;
         }
@@ -317,6 +313,19 @@ public:
     }
 
     void run() override {
+        // write header
+        if (outputOriginalData) {
+            mainOut << "#x\ty\tfeature\tct";
+        } else {
+            mainOut << "#x\ty";
+        }
+        for (int32_t i = 0; i < topk_; ++i) {
+            mainOut << "\tK" << i+1;
+        }
+        for (int32_t i = 0; i < topk_; ++i) {
+            mainOut << "\tP" << i+1;
+        }
+        mainOut << "\n";
         // Phase 1: Process tiles
         notice("Phase 1 Launching %d worker threads", nThreads);
         for (int i = 0; i < nThreads; ++i) {
@@ -347,6 +356,7 @@ public:
         for (auto &t : workThreads) {
             t.join();
         }
+        writeHeaderToJson();
     }
 
     void setFeatureNames(const std::vector<std::string>& names) {
@@ -357,7 +367,7 @@ public:
 private:
     int32_t debug_;
     int32_t M_, K_, topk_;
-    bool weighted, outpurOriginalData;
+    bool weighted, outputOriginalData;
     LatentDirichletAllocation& lda;
     OnlineSLDA slda;
     lineParserLocal& lineParser;
@@ -379,7 +389,11 @@ private:
     int32_t outputOriginalDataWithPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
     int32_t outputPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
 
+    // Process one tile or one boundary buffer
     void processTile(TileData &tileData, int threadId=0);
+
+    // write output column info to a json file
+    void writeHeaderToJson();
 
     void tileWorker(int threadId) override {
         TileKey tile;
