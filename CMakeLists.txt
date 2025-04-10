@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.1...3.23)
 project(punkst)
 
 set(APP_EXE punkst)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
 # Eigen
@@ -65,6 +65,8 @@ set(SOURCE_FILES
     src/threads.hpp
     src/mbtiles.h
     src/tilereader.hpp
+    src/tiles2bins.hpp
+    src/tiles2bins.cpp
     src/dataunits.hpp
     src/lda.hpp
     src/numerical_utils.hpp

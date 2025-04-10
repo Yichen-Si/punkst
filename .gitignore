@@ -57,3 +57,5 @@ site/
 venv
 
 zz/
+
+claude_log/

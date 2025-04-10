@@ -10,7 +10,7 @@
 #include <omp.h>
 #include "numerical_utils.hpp"
 #include "dataunits.hpp"
-#include "qgenlib/qgen_error.h"
+#include "error.hpp"
 
 #include "Eigen/Dense"
 using Eigen::MatrixXd;

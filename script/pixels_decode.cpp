@@ -13,39 +13,43 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool outputOritinalData = false;
     bool featureIsIndex = false;
 
-	paramList pl;
-	BEGIN_LONG_PARAMS(longParameters)
-		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("in-tsv", &inTsv, "Input TSV file. Header must begin with #")
-        LONG_STRING_PARAM("in-index", &inIndex, "Input index file")
-        LONG_STRING_PARAM("model", &modelFile, "Model file")
-        LONG_INT_PARAM("icol-x", &icol_x, "Column index for x coordinate (0-based)")
-        LONG_INT_PARAM("icol-y", &icol_y, "Column index for y coordinate (0-based)")
-        LONG_INT_PARAM("icol-feature", &icol_feature, "Column index for feature (0-based)")
-        LONG_INT_PARAM("icol-val", &icol_val, "Column index for count/value (0-based)")
-        LONG_PARAM("feature-is-index", &featureIsIndex, "If the feature column contains integer indices, otherwise assume it contains feature names")
-        LONG_DOUBLE_PARAM("default-weight", &defaultWeight, "Default weight for features not in the weight file")
-        LONG_STRING_PARAM("feature-weights", &weightFile, "Input weights file")
-        LONG_DOUBLE_PARAM("pixel-res", &pixelResolution, "Resolution of pixel level inference")
-        LONG_DOUBLE_PARAM("hex-size", &hexSize, "Hexagon size (side length)")
-        LONG_DOUBLE_PARAM("hex-grid-dist", &hexGridDist, "Hexagon grid distance (center-to-center distance)")
-        LONG_DOUBLE_PARAM("anchor-dist", &anchorDist, "Distance between adjacent anchors")
-        LONG_DOUBLE_PARAM("radius", &radius, "Radius")
-        LONG_INT_PARAM("n-moves", &nMoves, "Number of steps to slide on each axis to create anchors")
-        LONG_INT_PARAM("threads", &nThreads, "Number of threads to use (default: 1)")
-        LONG_INT_PARAM("seed", &seed, "Random seed")
-		LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out", &outFile, "Output TSV file")
-        LONG_PARAM("output-original", &outputOritinalData, "Output original data points (pixels with feature values) together with the pixel level factor results")
-        LONG_STRING_PARAM("temp-dir", &tmpDir, "Directory to store temporary files")
-        LONG_INT_PARAM("top-k", &topK, "Top K factors to output")
-        LONG_INT_PARAM("min-init-count", &minInitCount, "Minimum")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-        LONG_INT_PARAM("debug", &debug, "Debug")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    ParamList pl;
+    // Input Options
+    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
+      .add_option("in-index", "Input index file", inIndex)
+      .add_option("model", "Model file", modelFile)
+      .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
+      .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
+      .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
+      .add_option("icol-val", "Column index for count/value (0-based)", icol_val)
+      .add_option("feature-is-index", "If the feature column contains integer indices, otherwise assume it contains feature names", featureIsIndex)
+      .add_option("default-weight", "Default weight for features not in the weight file", defaultWeight)
+      .add_option("feature-weights", "Input weights file", weightFile)
+      .add_option("pixel-res", "Resolution of pixel level inference", pixelResolution)
+      .add_option("hex-size", "Hexagon size (side length)", hexSize)
+      .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
+      .add_option("anchor-dist", "Distance between adjacent anchors", anchorDist)
+      .add_option("radius", "Radius", radius)
+      .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
+      .add_option("threads", "Number of threads to use (default: 1)", nThreads)
+      .add_option("seed", "Random seed", seed);
+    // Output Options
+    pl.add_option("out", "Output TSV file", outFile)
+      .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
+      .add_option("temp-dir", "Directory to store temporary files", tmpDir)
+      .add_option("top-k", "Top K factors to output", topK)
+      .add_option("min-init-count", "Minimum", minInitCount)
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("debug", "Debug", debug);
+
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     if (hexSize <= 0) {
         if (hexGridDist <= 0) {
@@ -114,7 +118,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (!tileReader.isValid()) {
         error("Error in input tiles: %s", inTsv.c_str());
     }
-    lineParserLocal parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
     if (!featureIsIndex) {
         for (size_t i = 0; i < featureNames.size(); ++i) {
             parser.featureDict[featureNames[i]] = i;

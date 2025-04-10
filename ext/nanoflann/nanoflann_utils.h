@@ -26,6 +26,8 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *************************************************************************/
 
+ #pragma once
+
 #include <cstdlib>
 #include <iostream>
 #include <vector>
@@ -296,3 +298,22 @@ inline void dump_mem_usage()
     printf("MEM: %s\n", str);
     fclose(f);
 }
+
+using kd_tree_i2_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<int32_t, PointCloud<int32_t>>,
+        PointCloud<int32_t>, 2>;
+using kd_tree_f2_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<float, PointCloud<float>>,
+        PointCloud<float>, 2>;
+using kd_tree_d2_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<double, PointCloud<double>>,
+        PointCloud<double>, 2>;
+using kd_tree_i3_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<int32_t, PointCloud<int32_t>>,
+        PointCloud<int32_t>, 3>;
+using kd_tree_f3_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<float, PointCloud<float>>,
+        PointCloud<float>, 3>;
+using kd_tree_d3_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<double, PointCloud<double>>,
+        PointCloud<double>, 3>;

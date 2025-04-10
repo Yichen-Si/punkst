@@ -28,10 +28,17 @@ struct PixelValues {
 struct UnitValues {
     int32_t nPixel;
     int32_t x, y;
+    int32_t label;
     std::vector<std::unordered_map<uint32_t, uint32_t>> vals;
     std::vector<uint32_t> valsums;
-    UnitValues(int32_t hx, int32_t hy) : nPixel(0), x(hx), y(hy) {}
-    UnitValues(int32_t hx, int32_t hy, const PixelValues& pixel) : nPixel(1), x(hx), y(hy) {
+    UnitValues(int32_t hx, int32_t hy, int32_t n = 0, int32_t l = -1) : nPixel(0), x(hx), y(hy), label(l) {
+        if (n > 0) {
+            vals.resize(n);
+            valsums.resize(n);
+            std::fill(valsums.begin(), valsums.end(), 0);
+        }
+    }
+    UnitValues(int32_t hx, int32_t hy, const PixelValues& pixel, int32_t l = -1) : nPixel(1), x(hx), y(hy), label(l) {
         vals.resize(pixel.intvals.size());
         valsums.resize(pixel.intvals.size());
         std::fill(valsums.begin(), valsums.end(), 0);
@@ -80,7 +87,10 @@ struct UnitValues {
         return true;
     }
     bool writeToFile(std::ostream& os, uint32_t key) const {
-        os << uint32toHex(key) << "\t" << x << "\t" << y;
+        os << uint32toHex(key) << "\t";
+        if (label >= 0)
+            os << label << "\t";
+        os << x << "\t" << y;
         for (size_t i = 0; i < vals.size(); ++i) {
             os << "\t" << vals[i].size() << "\t" << valsums[i];
         }
@@ -92,24 +102,32 @@ struct UnitValues {
         os << "\n";
         return os.good();
     }
-    bool readFromLine(const std::string& line, int32_t nLayer) {
+    bool readFromLine(const std::string& line, int32_t nModal, bool labeled = false) {
         std::istringstream iss(line);
         std::string hexKey;
-        int32_t hx, hy;
-        if (!(iss >> hexKey >> x >> y)) {
+        try {
+            if (labeled) {
+                iss >> hexKey >> label >> x >> y;
+                if (label < 0) {
+                    return false;
+                }
+            } else {
+                iss >> hexKey >> x >> y;
+            }
+        } catch (const std::exception& e) {
             return false;
         }
         clear();
-        vals.resize(nLayer);
-        valsums.resize(nLayer);
-        std::vector<int32_t> nfeatures(nLayer, 0);
-        std::vector<uint32_t> counts(nLayer, 0);
-        for (int i = 0; i < nLayer; ++i) {
+        vals.resize(nModal);
+        valsums.resize(nModal);
+        std::vector<int32_t> nfeatures(nModal, 0);
+        std::vector<uint32_t> counts(nModal, 0);
+        for (int i = 0; i < nModal; ++i) {
             if (!(iss >> nfeatures[i] >> counts[i])) {
                 return false;
             }
         }
-        for (size_t i = 0; i < nLayer; ++i) {
+        for (size_t i = 0; i < nModal; ++i) {
             for (int j = 0; j < nfeatures[i]; ++j) {
                 uint32_t feature;
                 int32_t value;
@@ -146,8 +164,8 @@ public:
         }
         return true;
     }
-    int32_t getNLayer() const {
-        return nLayer;
+    int32_t getNmodal() const {
+        return nModal;
     }
     void setFeatureNames(const std::vector<std::string>& featureNames) {
         assert (featureNames.size() == nFeatures && "Feature names size does not match the number of features");
@@ -173,22 +191,22 @@ public:
     }
 
     bool parseLine(UnitValues &unit, const std::string &line) {
-        return unit.readFromLine(line, nLayer);
+        return unit.readFromLine(line, nModal);
     }
     int32_t parseLine(Document& doc, const std::string &line, int32_t layer = 0) {
         int32_t x, y;
         return parseLine(doc, x, y, line, layer);
     }
     int32_t parseLine(Document& doc, int32_t& x, int32_t& y, const std::string &line, int32_t layer = 0) {
-        assert(layer < nLayer && "Layer out of range");
+        assert(layer < nModal && "Layer out of range");
         std::istringstream iss(line);
         std::string hexKey;
-        std::vector<int32_t> nfeatures(nLayer, 0);
-        std::vector<uint32_t> counts(nLayer, 0);
+        std::vector<int32_t> nfeatures(nModal, 0);
+        std::vector<uint32_t> counts(nModal, 0);
         if (!(iss >> hexKey >> x >> y)) {
             return -1;
         }
-        for (int i = 0; i < nLayer; ++i) {
+        for (int i = 0; i < nModal; ++i) {
             if (!(iss >> nfeatures[i] >> counts[i])) {
                 return -1;
             }
@@ -226,7 +244,7 @@ public:
 
 private:
 
-    int32_t nLayer;
+    int32_t nModal;
 
     void readMetadata(const std::string &metaFile) {
         std::ifstream metaIn(metaFile);
@@ -241,7 +259,7 @@ private:
         hexSize = meta.value("hex_size", -0.0);
         hexGrid.init(hexSize);
         nUnits = meta.value("n_units", 0);
-        nLayer = meta.value("n_layers", 0);
+        nModal = meta.value("n_modalities", 0);
         nFeatures = meta.value("n_features", 0);
         features.resize(nFeatures);
         if (meta.contains("dictionary")) {

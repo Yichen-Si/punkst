@@ -11,10 +11,20 @@
 #include <memory>
 #include "utils.h"
 #include "dataunits.hpp"
-#include "qgenlib/qgen_error.h"
+#include "error.hpp"
 
 #include "Eigen/Sparse"
 using Eigen::SparseMatrix;
+
+// for serializing to temporary files
+#pragma pack(push, 1)
+struct Record {
+    int32_t x;
+    int32_t y;
+    uint32_t idx;
+    uint32_t ct;
+};
+#pragma pack(pop)
 
 // Identify a tile by (row, col)
 struct TileKey {
@@ -194,6 +204,37 @@ struct lineParser {
         return novlp;
     }
 
+};
+
+struct lineParserUnival : public lineParser {
+    size_t icol_val;
+    lineParserUnival() {}
+    lineParserUnival(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile) {
+        icol_val = _ival;
+        std::vector<int32_t> _ivals = { (int32_t) _ival};
+        init(_ix, _iy, _iz, _ivals, _dfile);
+    }
+
+    int32_t parse(Record& rec, std::string& line) {
+        std::vector<std::string> tokens;
+        split(tokens, "\t", line);
+        if (tokens.size() < n_tokens) {
+            return -2;
+        }
+        if (isFeatureDict) {
+            auto it = featureDict.find(tokens[icol_feature]);
+            if (it == featureDict.end()) {
+                return -1;
+            }
+            rec.idx = it->second;
+        } else {
+            rec.idx = std::stoul(tokens[icol_feature]);
+        }
+        rec.x = std::stoi(tokens[icol_x]);
+        rec.y = std::stoi(tokens[icol_y]);
+        rec.ct = std::stoi(tokens[icol_val]);
+        return rec.idx;
+    }
 };
 
 class TileReaderBase {

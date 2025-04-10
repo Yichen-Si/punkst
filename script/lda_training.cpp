@@ -6,9 +6,9 @@ class LDA4Hex {
 
 public:
 
-    LDA4Hex(const std::string& metaFile, int32_t layer = 0) : reader(metaFile), layer(layer) {
-        if (layer >= reader.getNLayer()) {
-            error("layer %d is out of range", layer);
+    LDA4Hex(const std::string& metaFile, int32_t modal = 0) : reader(metaFile), modal(modal) {
+        if (modal >= reader.getNmodal()) {
+            error("modal %d is out of range", modal);
         }
         if (reader.nFeatures <= 0) {
             error("n_features is missing in the metadata");
@@ -180,7 +180,7 @@ private:
 
     HexReader reader;
 
-    int32_t layer;
+    int32_t modal;
     int32_t ntot;
     int32_t minCountTrain;
     bool weightFeatures;
@@ -199,7 +199,7 @@ private:
                 return false;
             }
             Document doc;
-            int32_t ct = reader.parseLine(doc, line, layer);
+            int32_t ct = reader.parseLine(doc, line, modal);
             if (ct < 0) {
                 error("Error parsing line %s", line.c_str());
             }
@@ -228,7 +228,7 @@ private:
             }
             Document doc;
             int32_t x, y;
-            int32_t ct = reader.parseLine(doc, x, y, line, layer);
+            int32_t ct = reader.parseLine(doc, x, y, line, modal);
             if (ct < 0) {
                 error("Error parsing the %d-th line", ntot);
             }
@@ -263,7 +263,7 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     int32_t verbose = 0;
     int32_t maxIter = 100;
     int32_t nThreads = 0;
-    int32_t layer = 0;
+    int32_t modal = 0;
     int32_t minCountTrain = 20;
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1., eta = -1.;
@@ -271,31 +271,34 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     double defaultWeight = 1.;
     bool transform = false;
 
-    paramList pl;
-	BEGIN_LONG_PARAMS(longParameters)
-		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("in-data", &inFile, "Input hex file")
-        LONG_STRING_PARAM("in-meta", &metaFile, "Metadata file")
-        LONG_STRING_PARAM("feature-weights", &weightFile, "Input weights file")
-        LONG_STRING_PARAM("feature-names", &nameFile, "Feature names")
-        LONG_INT_PARAM("n-topics", &nTopics, "Number of topics")
-        LONG_INT_PARAM("layer", &layer, "Layer to use (0-based)")
-        LONG_INT_PARAM("seed", &seed, "Random seed")
-        LONG_INT_PARAM("threads", &nThreads, "Number of threads to use (default: 1)")
-        LONG_INT_PARAM("minibatch-size", &batchSize, "Minibatch size (default: 128)")
-        LONG_INT_PARAM("min-count-train", &minCountTrain, "Minimum total count for training (default: 20)")
-        LONG_DOUBLE_PARAM("mean-change-tol", &mDelta, "Mean change of document-topic probability tolerance for convergence (default: 1e-3)")
-        LONG_INT_PARAM("n-epochs", &nEpochs, "Number of epochs (default: 1)")
-        LONG_DOUBLE_PARAM("default-weight", &defaultWeight, "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)")
-        LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out-prefix", &outPrefix, "Output hex file")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-        LONG_PARAM("transform", &transform, "Transform the input data to the LDA space after training")
+    ParamList pl;
+    // Input Options
+    pl.add_option("in-data", "Input hex file", inFile)
+      .add_option("in-meta", "Metadata file", metaFile)
+      .add_option("feature-weights", "Input weights file", weightFile)
+      .add_option("feature-names", "Feature names", nameFile)
+      .add_option("n-topics", "Number of topics", nTopics)
+      .add_option("modal", "Modality to use (0-based)", modal)
+      .add_option("seed", "Random seed", seed)
+      .add_option("threads", "Number of threads to use (default: 1)", nThreads)
+      .add_option("minibatch-size", "Minibatch size (default: 128)", batchSize)
+      .add_option("min-count-train", "Minimum total count for training (default: 20)", minCountTrain)
+      .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
+      .add_option("n-epochs", "Number of epochs (default: 1)", nEpochs)
+      .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight);
+    // Output Options
+    pl.add_option("out-prefix", "Output hex file", outPrefix)
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("transform", "Transform the input data to the LDA space after training", transform);
 
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     if (inFile.empty() || metaFile.empty() || outPrefix.empty()) {
         error("--in-data --in-meta and --out are required");
@@ -325,7 +328,7 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
         nEpochs = 1;
     }
 
-    LDA4Hex lda4hex(metaFile, layer);
+    LDA4Hex lda4hex(metaFile, modal);
     if (!nameFile.empty()) {
         lda4hex.setFeatureNames(nameFile);
     }
