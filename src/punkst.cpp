@@ -1,5 +1,4 @@
 #include "punkst.h"
-#include "commands.hpp"
 
 int32_t test(int32_t argc, char** argv);
 int32_t cmdPts2TilesTsv(int32_t argc, char** argv);
@@ -15,39 +14,30 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv);
 
 int32_t main(int32_t argc, char** argv) {
 
-  commandList cl;
-  BEGIN_LONG_COMMANDS(longCommandlines)
-    LONG_COMMAND_GROUP("Random Functions for Spatial Transcriptomics", NULL)
-    LONG_COMMAND("test", &test, "Test")
-    LONG_COMMAND("pts2tiles", &cmdPts2TilesTsv, "Assign points to tiles")
-    LONG_COMMAND("pts2tiles-binary", &cmdPts2TilesBinary, "Assign points to tiles in binary format")
-    LONG_COMMAND("tiles2hex", &cmdTiles2HexTxt, "Convert points in tiles to hexagons")
-    LONG_COMMAND("lda4hex", &cmdLDA4Hex, "Train LDA model")
-    LONG_COMMAND("pixel-decode", &cmdPixelDecode, "FICTURE pixel level decoding")
-    LONG_COMMAND("draw-pixel-factors", &cmdDrawPixelFactors, "Draw pixel level factors")
-    LONG_COMMAND("scribble-parse", &cmdFASTQscribble, "Parse SCRIBBLE reads")
-    LONG_COMMAND("draw-by-column", &cmdTsvDrawByColumn, "Given a TSV file and RGB assigned to columns, draw a PNG file")
-    LONG_COMMAND("nuclei-mask", &cmdImgNucleiMask, "Generate nuclei mask from unspliced and spliced read images")
-    LONG_COMMAND("nuclei-center", &cmdImgNucleiCenter, "Find nuclei centers and annotate transcripts with distance to the nearest nuclei")
+    CommandList cl;
+    cl.add_command("test", "Test command", "Test", test)
+        .add_command("pts2tiles", "Assign points to tiles", "Assign points to tiles", cmdPts2TilesTsv)
+        .add_command("pts2tiles-binary", "Assign points to tiles (binary)", "Assign points to tiles in binary format", cmdPts2TilesBinary)
+        .add_command("tiles2hex", "Convert tiles to hexagons", "Convert points in tiles to hexagons", cmdTiles2HexTxt)
+        .add_command("lda4hex", "Train LDA model", "Train LDA model", cmdLDA4Hex)
+        .add_command("pixel-decode", "Decode pixel-level data", "Decoding pixel-level data", cmdPixelDecode)
+        .add_command("draw-pixel-factors", "Draw pixel factors", "Draw pixel level factors", cmdDrawPixelFactors)
+        .add_command("scribble-parse", "Parse SCRIBBLE reads", "Parse SCRIBBLE reads", cmdFASTQscribble)
+        .add_command("draw-by-column", "Draw image from TSV", "Given a TSV file and column RGB, draw a PNG file", cmdTsvDrawByColumn)
+        .add_command("nuclei-mask", "Generate nuclei mask", "Generate nuclei mask from image data", cmdImgNucleiMask)
+        .add_command("nuclei-center", "Annotate nuclei centers", "Find nuclei centers and annotate transcripts", cmdImgNucleiCenter);
 
-  END_LONG_COMMANDS();
-
-  cl.Add(new longCommands("Available Commands", longCommandlines));
-
-  if ( argc < 2 ) {
-    fprintf(stderr, " Licensed under the Apache License v2.0 http://www.apache.org/licenses/\n\n");
-    fprintf(stderr, "To run a specific command      : %s [command] [options]\n",argv[0]);
-    fprintf(stderr, "For detailed instructions, run : %s --help\n",argv[0]);
-    cl.Status();
-    return 1;
-  }
-  else {
-    if ( strcmp(argv[1],"--help") == 0 ) {
-      cl.HelpMessage();
+    if (argc < 2) {
+        std::cerr << "Licensed under the Apache License v2.0 http://www.apache.org/licenses/\n\n";
+        std::cerr << "To run a specific command      : " << argv[0] << " [command] [options]\n";
+        std::cerr << "For detailed instructions, run : " << argv[0] << " --help\n";
+        cl.print_help();
+        return 1;
+    } else if (std::strcmp(argv[1], "--help") == 0) {
+        cl.print_help();
+        return 0;
+    } else {
+        return cl.parse(argc, argv);
     }
-    else {
-      return cl.Read(argc, argv);
-    }
-  }
-  return 0;
+
 }

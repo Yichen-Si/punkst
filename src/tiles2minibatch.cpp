@@ -120,9 +120,7 @@ int32_t Tiles2Minibatch::initAnchors(TileData& tileData, PointCloud<double>& anc
 
 int32_t Tiles2Minibatch::makeMinibatch(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch) {
 
-    nanoflann::KDTreeSingleIndexAdaptor<
-        nanoflann::L2_Simple_Adaptor<double, PointCloud<double>>,
-        PointCloud<double>, 2> kdtree(2, anchors, {10});
+    kd_tree_d2_t kdtree(2, anchors, {10});
     std::vector<nanoflann::ResultItem<uint32_t, double>> indices_dists;
 
     double l2radius = distR * distR;

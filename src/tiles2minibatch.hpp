@@ -4,7 +4,7 @@
 #include <random>
 #include <cassert>
 #include <stdexcept>
-#include "qgenlib/qgen_error.h"
+#include "error.hpp"
 #include "json.hpp"
 #include "nanoflann.hpp"
 #include "nanoflann_utils.h"
@@ -21,47 +21,6 @@
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using Eigen::SparseMatrix;
-
-// to serialize to temporary files
-#pragma pack(push, 1)
-struct Record {
-    int32_t x;
-    int32_t y;
-    uint32_t idx;
-    uint32_t ct;
-};
-#pragma pack(pop)
-
-struct lineParserLocal : public lineParser {
-    size_t icol_val;
-    lineParserLocal() {}
-    lineParserLocal(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile) {
-        icol_val = _ival;
-        std::vector<int32_t> _ivals = { (int32_t) _ival};
-        init(_ix, _iy, _iz, _ivals, _dfile);
-    }
-
-    int32_t parse(Record& rec, std::string& line) {
-        std::vector<std::string> tokens;
-        split(tokens, "\t", line);
-        if (tokens.size() < n_tokens) {
-            return -2;
-        }
-        if (isFeatureDict) {
-            auto it = featureDict.find(tokens[icol_feature]);
-            if (it == featureDict.end()) {
-                return -1;
-            }
-            rec.idx = it->second;
-        } else {
-            rec.idx = std::stoul(tokens[icol_feature]);
-        }
-        rec.x = std::stoi(tokens[icol_x]);
-        rec.y = std::stoi(tokens[icol_y]);
-        rec.ct = std::stoi(tokens[icol_val]);
-        return rec.idx;
-    }
-};
 
 struct TileData {
     std::unordered_map<uint32_t, std::vector<Record>> buffers; // local buffer to accumulate records to be written to temporary files
@@ -112,6 +71,7 @@ struct BoundaryBuffer {
     }
 };
 
+/* Implement the logic of processing tiles while resolving boundary issues */
 class Tiles2MinibatchBase {
 
 public:
@@ -275,7 +235,7 @@ public:
     Tiles2Minibatch(int nThreads, double r,
         const std::string& outputFile, const std::string& _tmpDir,
         LatentDirichletAllocation& _lda,
-        TileReader& tileReader, lineParserLocal& lineParser,
+        TileReader& tileReader, lineParserUnival& lineParser,
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
         double c = 20, double h = 0.7, double res = 1, bool outorg = true, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
@@ -370,7 +330,7 @@ private:
     bool weighted, outputOriginalData;
     LatentDirichletAllocation& lda;
     OnlineSLDA slda;
-    lineParserLocal& lineParser;
+    lineParserUnival& lineParser;
     HexGrid hexGrid;
     int32_t nMoves;
     double anchorMinCount, distNu, distR;

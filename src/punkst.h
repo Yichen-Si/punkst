@@ -1,5 +1,4 @@
-#ifndef __PUNKST_H
-#define __PUNKST_H
+#pragma once
 
 #include <getopt.h>
 #include <cstdio>
@@ -13,8 +12,11 @@
 #include <cmath>
 #include <cassert>
 
-#include "qgenlib/params.h"
-#include "qgenlib/qgen_error.h"
-#include "qgenlib/hts_utils.h"
-
-#endif
+#include "commands.hpp"
+#include "error.hpp"
+extern "C" {
+    #include "htslib/kseq.h"
+    #include "htslib/kstring.h"
+    #include "htslib/khash.h"
+    #include "htslib/hts.h"
+}

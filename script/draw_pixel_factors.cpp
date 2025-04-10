@@ -12,24 +12,28 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     double scale, xmin, xmax, ymin, ymax;
     int32_t verbose = 1000000;
 
-    paramList pl;
-	BEGIN_LONG_PARAMS(longParameters)
-		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("in-tsv", &dataFile, "Input TSV file. Header must begin with #")
-        LONG_STRING_PARAM("header-json", &headerFile, "Header file")
-        LONG_STRING_PARAM("in-color", &colorFile, "Input color file")
-        LONG_DOUBLE_PARAM("scale", &scale, "Scale factor to translate coordinates to pixel in the output image ((x-xmin)/scale = pixel_x)")
-        LONG_DOUBLE_PARAM("xmin", &xmin, "Minimum x coordinate")
-        LONG_DOUBLE_PARAM("xmax", &xmax, "Maximum x coordinate")
-        LONG_DOUBLE_PARAM("ymin", &ymin, "Minimum y coordinate")
-        LONG_DOUBLE_PARAM("ymax", &ymax, "Maximum y coordinate")
-        LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out", &outFile, "Output image file")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    ParamList pl;
+    // Input Options
+    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", dataFile)
+      .add_option("header-json", "Header file", headerFile)
+      .add_option("in-color", "Input color file", colorFile)
+      .add_option("scale", "Scale factor to translate coordinates to pixel in the output image ((x-xmin)/scale = pixel_x)", scale)
+      .add_option("xmin", "Minimum x coordinate", xmin)
+      .add_option("xmax", "Maximum x coordinate", xmax)
+      .add_option("ymin", "Minimum y coordinate", ymin)
+      .add_option("ymax", "Maximum y coordinate", ymax);
+    // Output Options
+    pl.add_option("out", "Output image file", outFile)
+      .add_option("verbose", "Verbose", verbose);
+
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     if (dataFile.empty() || headerFile.empty() || colorFile.empty() || outFile.empty()) {
         error("--in-tsv, --header-json, --in-color, and --out are required");
@@ -78,9 +82,15 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         maxIdx = std::max(maxIdx, std::max(icol_ks[i], icol_ps[i]));
     }
 
+    if (scale <= 0) {
+        error("--scale must be greater than 0");
+    }
     // Image size
     int width = static_cast<int>(std::floor((xmax - xmin) / scale)) + 1;
     int height = static_cast<int>(std::floor((ymax - ymin) / scale)) + 1;
+    if (width <=1 || height <= 1) {
+        error("Image dimensions are 0. Please check the input parameters.");
+    }
 
     // RGB color table
     std::vector<std::vector<int>> cmtx;
@@ -100,7 +110,12 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     // sumImg will store the cumulative RGB contributions
     // countImg will store the number of records that contribute to each pixel
     std::vector<std::vector<cv::Vec3f>> sumImg(height, std::vector<cv::Vec3f>(width, cv::Vec3f(0, 0, 0)));
-    std::vector<std::vector<uint8_t>> countImg(height, std::vector<uint8_t>(width, 0));
+    std::vector<std::vector<uint8_t>> countImg;
+    countImg.resize(height);
+    for (int i = 0; i < height; ++i) {
+        countImg[i].resize(width);
+        std::fill(countImg[i].begin(), countImg[i].end(), 0);
+    }
 
     int32_t nline = 0;
     while (std::getline(dataStream, line)) {

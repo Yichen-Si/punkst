@@ -3,7 +3,6 @@
 
 #include "utils.h"
 #include "qgenlib/seq_utils.h"
-#include "qgenlib/qgen_utils.h"
 #include <regex>
 #include <sstream>
 #include <iostream>
@@ -35,7 +34,7 @@ class ScribbleConfig {
             error("Unable to open config file %s", config.c_str());
         }
         while (std::getline(ifs, line)) {
-            line = stripstr(line);
+            line = strip_str(line);
             if (line[0] == '@') {
                 currentCategory = line;
             } else if (line[0] == '>') {

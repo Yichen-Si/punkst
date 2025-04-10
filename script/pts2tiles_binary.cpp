@@ -6,7 +6,6 @@
 #include <unordered_map>
 #include <thread>
 #include <mutex>
-#include "qgenlib/qgen_utils.h"
 
 class Pts2TilesBinary {
     public:
@@ -408,30 +407,34 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv) {
     std::vector<std::string> catDictionaries;
     bool catInString = false;
 
-	paramList pl;
-	BEGIN_LONG_PARAMS(longParameters)
-		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("in-tsv", &inTsv, "Input TSV file. Header must begin with #")
-        LONG_MULTI_STRING_PARAM("cat-dict", &catDictionaries, "Dictionary for categorical data")
-        LONG_INT_PARAM("icol-x", &icol_x, "Column index for x coordinate (0-based)")
-        LONG_INT_PARAM("icol-y", &icol_y, "Column index for y coordinate (0-based)")
-        LONG_MULTI_INT_PARAM("icol-cat", &icol_cat, "Column indecies for categorical data (0-based)")
-        LONG_PARAM("cat-in-string", &catInString, "The categorical column contains strings in the provided dictionary (default: false, assuming the categorical column contains non-negative integers as indices)")
-        LONG_MULTI_INT_PARAM("icol-int", &icol_int, "Column indecies for integer data (0-based)")
-        LONG_MULTI_INT_PARAM("icol-float", &icol_float, "Column indecies for float data (0-based)")
-        LONG_INT_PARAM("skip", &nskip, "Number of lines to skip in the input file (default: 0)")
-        LONG_STRING_PARAM("temp-dir", &tmpDir, "Directory to store temporary files")
-        LONG_INT_PARAM("tile-size", &tileSize, "Tile size in units (default: 300 um)")
-        LONG_INT_PARAM("tile-buffer", &tileBuffer, "Buffer size per tile per thread (default: 1000 lines)")
-        LONG_INT_PARAM("threads", &nThreads, "Number of threads to use (default: 1)")
-		LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out", &output, "Output TSV file")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-        LONG_INT_PARAM("debug", &debug, "Debug")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    ParamList pl;
+    // Input Options
+    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
+      .add_option("cat-dict", "Dictionary for categorical data", catDictionaries)
+      .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
+      .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
+      .add_option("icol-cat", "Column indecies for categorical data (0-based)", icol_cat)
+      .add_option("cat-in-string", "The categorical column contains strings in the provided dictionary (default: false, assuming the categorical column contains non-negative integers as indices)", catInString)
+      .add_option("icol-int", "Column indecies for integer data (0-based)", icol_int)
+      .add_option("icol-float", "Column indecies for float data (0-based)", icol_float)
+      .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
+      .add_option("temp-dir", "Directory to store temporary files", tmpDir)
+      .add_option("tile-size", "Tile size in units (default: 300 um)", tileSize)
+      .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
+      .add_option("threads", "Number of threads to use (default: 1)", nThreads);
+    // Output Options
+    pl.add_option("out", "Output TSV file", output)
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("debug", "Debug", debug);
+
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     if (catDictionaries.size() != icol_cat.size()) {
         error("Number of categorical dictionaries must match the number of categorical columns");

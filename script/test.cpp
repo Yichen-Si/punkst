@@ -2,7 +2,6 @@
 #include "punkst.h"
 #include "utils.h"
 #include "qgenlib/tsv_reader.h"
-#include "qgenlib/qgen_utils.h"
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
 #include "nanoflann.hpp"
@@ -89,19 +88,22 @@ int32_t test(int32_t argc, char** argv) {
 	std::string intsv, outtsv;
     int32_t debug = 0, verbose = 500000;
 
-	// Parse input parameters
-	paramList pl;
-	BEGIN_LONG_PARAMS(longParameters)
-		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("in-tsv", &intsv, "Input TSV file. Header must begin with #")
-		LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out-tsv", &outtsv, "Output TSV file")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-        LONG_INT_PARAM("debug", &debug, "Debug")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    ParamList pl;
+    // Input Options
+    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", intsv);
+    // Output Options
+    pl.add_option("out-tsv", "Output TSV file", outtsv)
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("debug", "Debug", debug);
+
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     // Test nanoflann
     srand(static_cast<unsigned int>(time(nullptr)));

@@ -1,7 +1,6 @@
 #include "punkst.h"
 #include "utils.h"
 #include "qgenlib/tsv_reader.h"
-#include "qgenlib/qgen_utils.h"
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
 #include "nanoflann.hpp"
@@ -73,39 +72,41 @@ int32_t cmdImgNucleiCenter(int32_t argc, char** argv) {
     double report_dist = 5;
     bool write_intensity_qt = false;
 
-	// Parse input parameters
-	paramList pl;
+    ParamList pl;
+    // Input Options
+    pl.add_option("unspl-png", "Unspliced read PNG", unsplpng)
+      .add_option("in-tsv", "Input TSV file. Header must begin with #", intsv)
+      // Image processing parameters
+      .add_option("unspl-gf-sig", "Unspliced Gaussian filter sigma", unspl_gf_sig)
+      .add_option("max-flt-kernel-size", "Kernel size for local maxima detection", max_flt_kernel_size)
+      .add_option("max-flt-rel-thres", "Relexation factor for local maxima detection", max_flt_rel_thres)
+      .add_option("local-max-mrg-size", "Merge local maximum points within this distance", local_max_mrg_size)
+      .add_option("intensity-qt", "Quantile for filtering nuclei centers by local intensity", intensity_flt_qt)
+      .add_option("intensity-flt-size", "Square size (side length) to calculate local intensities for filtering", intensity_flt_size)
+      // If annotating tsv file - coordinate conversion parameters
+      .add_option("icol-x", "Column index for x coordinates (corresponding to the width of the image)", icol_x)
+      .add_option("icol-y", "Column index for y coordinates (corresponding to the height of the image)", icol_y)
+      .add_option("icol-unspl", "Column index for unspliced read counts", icol_unspl)
+      .add_option("coord-per-pixel", "Number of coordinate units per pixel (translate between tsv and image)", coord_per_pixel)
+      .add_option("offset-x", "Offset for x coordinates", offset_x)
+      .add_option("offset-y", "Offset for y coordinates", offset_y);
+    // Output Options
+    pl.add_option("out-png", "Output PNG that highlights nuclei centers", outpng)
+      .add_option("center-color", "Color code (hex) for drawing nuclei centers", draw_nuclei_color)
+      .add_option("out-tsv", "Output TSV file", outtsv)
+      .add_option("runtime-report-dist", "Periodic report pixels counts within distance to the nearest nuclei at runtime", report_dist)
+      .add_option("write-intensity-qt", "Write intensity quantile values for reference", write_intensity_qt)
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("debug", "Debug", debug);
 
-	BEGIN_LONG_PARAMS(longParameters)
-		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("unspl-png", &unsplpng, "Unspliced read PNG")
-        LONG_STRING_PARAM("in-tsv", &intsv, "Input TSV file. Header must begin with #")
-        // Image processing parameters
-        LONG_DOUBLE_PARAM("unspl-gf-sig", &unspl_gf_sig, "Unspliced Gaussian filter sigma")
-        LONG_INT_PARAM("max-flt-kernel-size", &max_flt_kernel_size, "Kernel size for local maxima detection")
-        LONG_DOUBLE_PARAM("max-flt-rel-thres", &max_flt_rel_thres, "Relexation factor for local maxima detection")
-        LONG_INT_PARAM("local-max-mrg-size", &local_max_mrg_size, "Merge local maximum points within this distance")
-        LONG_DOUBLE_PARAM("intensity-qt", &intensity_flt_qt, "Quantile for filtering nuclei centers by local intensity")
-        LONG_INT_PARAM("intensity-flt-size", &intensity_flt_size, "Square size (side length) to calculate local intensities for filtering")
-        // If annotating tsv file - coordinate conversion parameters
-        LONG_INT_PARAM("icol-x", &icol_x, "Column index for x coordinates (corresponding to the width of the image)")
-        LONG_INT_PARAM("icol-y", &icol_y, "Column index for y coordinates (corresponding to the height of the image)")
-        LONG_INT_PARAM("icol-unspl", &icol_unspl, "Column index for unspliced read counts")
-        LONG_DOUBLE_PARAM("coord-per-pixel", &coord_per_pixel, "Number of coordinate units per pixel (translate between tsv and image)")
-        LONG_INT_PARAM("offset-x", &offset_x, "Offset for x coordinates")
-        LONG_INT_PARAM("offset-y", &offset_y, "Offset for y coordinates")
-		LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out-png", &outpng, "Output PNG that highlights nuclei centers")
-        LONG_STRING_PARAM("center-color", &draw_nuclei_color, "Color code (hex) for drawing nuclei centers")
-        LONG_STRING_PARAM("out-tsv", &outtsv, "Output TSV file")
-        LONG_DOUBLE_PARAM("runtime-report-dist", &report_dist, "Periodic report pixels counts within distance to the nearest nuclei at runtime")
-        LONG_PARAM("write-intensity-qt", &write_intensity_qt, "Write intensity quantile values for reference")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-        LONG_INT_PARAM("debug", &debug, "Debug")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     if (unsplpng.empty() || intsv.empty() || outtsv.empty()) {
         error("--unspl-png, --in-tsv, and --out-tsv must be specified");

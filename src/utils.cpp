@@ -1,10 +1,183 @@
 #include "utils.h"
 
+// String manipulation functions
+
+// Splits a line into a vector - PERL style
+void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str,
+    uint32_t limit, bool clear, bool collapse, bool strip) {
+    if (clear)
+        vec.clear();
+
+    uint32_t tokenCount = 0;
+    size_t start = 0;
+    while (start < str.size() && tokenCount < limit - 1) {
+        size_t pos = str.find_first_of(delims, start);
+        if (pos == std::string_view::npos)
+            pos = str.size();
+
+        // Get the current token as a view
+        std::string_view token = str.substr(start, pos - start);
+        if (strip)
+            token = strip_str(token);
+
+        // Only add token if not collapsing empty tokens
+        if (!collapse || !token.empty()) {
+            vec.emplace_back(token);
+            ++tokenCount;
+        }
+
+        start = pos;
+        // Skip delimiter if found
+        if (start < str.size() && delims.find(str[start]) != std::string_view::npos)
+            ++start;
+    }
+
+    // Add the remaining part if any.
+    if (start <= str.size()) {
+        std::string_view token = str.substr(start);
+        if (strip)
+            token = strip_str(token);
+        if (!collapse || !token.empty())
+            vec.emplace_back(token);
+    }
+}
+
+std::string_view strip_str(std::string_view token) {
+    // Implement trimming logic if needed.
+    // For example, remove whitespace from both ends.
+    size_t start = token.find_first_not_of(" \t\n\r");
+    size_t end = token.find_last_not_of(" \t\n\r");
+    if (start == std::string_view::npos)
+        return {};
+    return token.substr(start, end - start + 1);
+}
+
+std::string trim(const std::string& str) {
+    auto start = std::find_if_not(str.begin(), str.end(), [](unsigned char c) {
+        return std::isspace(c);
+    });
+
+    auto end = std::find_if_not(str.rbegin(), str.rend(), [](unsigned char c) {
+        return std::isspace(c);
+    }).base();
+
+    return (start < end) ? std::string(start, end) : std::string();
+}
+
+std::string to_lower(const std::string& str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    return result;
+}
+
+std::string to_upper(const std::string& str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c){ return std::toupper(c); });
+    return result;
+}
+
+std::string join(const std::vector<std::string>& tokens, const std::string& delim) {
+    if (tokens.empty()) return "";
+
+    std::ostringstream result;
+    result << tokens[0];
+
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        result << delim << tokens[i];
+    }
+
+    return result.str();
+}
+
+void hprintf(htsFile* fp, const char * msg, ...) {
+    va_list ap;
+    va_start(ap, msg);
+
+    // Use RAII to manage kstring_t memory.
+    KStringRAII tmp;
+    kvsprintf(&tmp.ks, msg, ap);
+    va_end(ap);
+
+    int ret;
+    if (auto comp = fp->format.compression; comp != no_compression)
+        ret = bgzf_write(fp->fp.bgzf, tmp.ks.s, tmp.ks.l);
+    else
+        ret = hwrite(fp->fp.hfile, tmp.ks.s, tmp.ks.l);
+
+    if (ret < 0) {
+        error("[E:%s:%d %s] [E:%s:%d %s] hprintf failed. Aborting..",
+              __FILE__, __LINE__, __FUNCTION__,
+              __FILE__, __LINE__, __FUNCTION__);
+    }
+}
+
+// String to number conversion functions
+template<typename T>
+bool str2num(const std::string& str, T& value) {
+    if (str.empty()) return false;
+
+    auto result = std::from_chars(str.data(), str.data() + str.size(), value);
+    return result.ec == std::errc{};
+}
+
+bool str2int32(const std::string& str, int32_t& value) {
+    return str2num<int32_t>(str, value);
+}
+
+bool str2int64(const std::string& str, int64_t& value) {
+    return str2num<int64_t>(str, value);
+}
+
+bool str2uint32(const std::string& str, uint32_t& value) {
+    return str2num<uint32_t>(str, value);
+}
+
+bool str2uint64(const std::string& str, uint64_t& value) {
+    return str2num<uint64_t>(str, value);
+}
+
+bool str2double(const std::string& str, double& value) {
+    try {
+        value = std::stod(str);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool str2float(const std::string& str, float& value) {
+    try {
+        value = std::stof(str);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool str2bool(const std::string& str, bool& value) {
+    std::string lower = str;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+    if (lower == "true" || lower == "yes" || lower == "1" || lower == "y" || lower == "t") {
+        value = true;
+        return true;
+    } else if (lower == "false" || lower == "no" || lower == "0" || lower == "n" || lower == "f") {
+        value = false;
+        return true;
+    }
+
+    return false;
+}
+
 std::string uint32toHex(uint32_t num) {
     std::stringstream ss;
     ss << std::hex << std::setw(8) << std::setfill('0') << num;
     return ss.str();
 }
+
 uint32_t hexToUint32(const std::string& hex) {
     uint32_t num;
     std::stringstream ss;

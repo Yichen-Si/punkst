@@ -1,7 +1,6 @@
 #include "punkst.h"
 #include "qgenlib/dataframe.h"
 #include "qgenlib/tsv_reader.h"
-#include "qgenlib/qgen_utils.h"
 #include <array>
 #include <stdlib.h>
 #include <unordered_map>
@@ -20,26 +19,29 @@ int32_t cmdTsvDrawByColumn(int32_t argc, char** argv) {
     std::vector<std::string> color_lists;
     int32_t gray_channel = -1;
 
-    // Parse input parameters
-    paramList pl;
-    BEGIN_LONG_PARAMS(longParameters)
-        LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("input", &inTsv, "")
-        LONG_STRING_PARAM("manifest", &manifestf, "Bounding box information. Expects xmin,xmax,ymin,ymax for a manifest file (tall or wide format)")
-        LONG_MULTI_STRING_PARAM("color-list", &color_lists, "[color_code]:[column index]")
-        LONG_INT_PARAM("gray-scale", &gray_channel, "Column index to read values to create a gray scale image (--color-list will be ignored and output image will be in gray scale)")
-        LONG_INT_PARAM("icol-x", &icol_x, "Column index for x")
-        LONG_INT_PARAM("icol-y", &icol_y, "Column index for y")
-        LONG_DOUBLE_PARAM("coord-per-pixel", &coord_per_pixel, "Number of coordinate units per pixel")
-        LONG_DOUBLE_PARAM("intensity-adj", &intensity_adj, "Adjust the intensity of each channel by qt")
-        LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("output", &outf, "")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-        LONG_INT_PARAM("debug", &debug, "Debug")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    ParamList pl;
+    // Input Options
+    pl.add_option("input", "", inTsv)
+      .add_option("manifest", "Bounding box information. Expects xmin,xmax,ymin,ymax for a manifest file (tall or wide format)", manifestf)
+      .add_option("color-list", "[color_code]:[column index]", color_lists)
+      .add_option("gray-scale", "Column index to read values to create a gray scale image (--color-list will be ignored and output image will be in gray scale)", gray_channel)
+      .add_option("icol-x", "Column index for x", icol_x)
+      .add_option("icol-y", "Column index for y", icol_y)
+      .add_option("coord-per-pixel", "Number of coordinate units per pixel", coord_per_pixel)
+      .add_option("intensity-adj", "Adjust the intensity of each channel by qt", intensity_adj);
+    // Output Options
+    pl.add_option("output", "", outf)
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("debug", "Debug", debug);
+
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     // read the manifest file and determine the xmin/xmax/ymin/ymax
     uint32_t xmin = 0, xmax = 0, ymin = 0, ymax = 0;

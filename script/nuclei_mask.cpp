@@ -1,7 +1,6 @@
 #include "punkst.h"
 #include "utils.h"
 #include "qgenlib/tsv_reader.h"
-#include "qgenlib/qgen_utils.h"
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -20,36 +19,38 @@ int32_t cmdImgNucleiMask(int32_t argc, char** argv) {
     double coord_per_pixel = -1;
     int32_t debug = 0, verbose = 500000;
 
-	// Parse input parameters
-	paramList pl;
+    ParamList pl;
+    // Input Options
+    pl.add_option("unspl-png", "Unspliced read PNG", unsplpng)
+      .add_option("spl-png", "Spliced read PNG", splpng)
+      .add_option("in-tsv", "Input TSV file. Header must begin with #", intsv)
+      // Image processing parameters
+      .add_option("unspl-gf-sig", "Unspliced Gaussian filter sigma", unspl_gf_sig)
+      .add_option("spl-bf-size", "Spliced box filter size", spl_bf_size)
+      .add_option("clip-qt-lb", "Quantile for setting small intensity values to zero", clip_qt_lb)
+      .add_option("clip-qt-ub", "Quantile for capping and normalizing intensities", clip_qt_ub)
+      .add_option("erode-kernel-size", "Erosion kernel size", erode_kernel_size)
+      .add_option("dilate-kernel-size", "Dilation kernel size", dilate_kernel_size)
+      // If annotating tsv file - coordinate conversion parameters
+      .add_option("icol-x", "Column index for x coordinates (corresponding to the width of the image)", icol_x)
+      .add_option("icol-y", "Column index for y coordinates (corresponding to the height of the image)", icol_y)
+      .add_option("coord-per-pixel", "Number of coordinate units per pixel (translate between tsv and image)", coord_per_pixel)
+      .add_option("offset-x", "Offset for x coordinates", offset_x)
+      .add_option("offset-y", "Offset for y coordinates", offset_y);
+    // Output Options
+    pl.add_option("out-png", "Output PNG file that shows the nuclei mask", outpng)
+      .add_option("out-tsv", "Output TSV file", outtsv)
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("debug", "Debug", debug);
 
-	BEGIN_LONG_PARAMS(longParameters)
-		LONG_PARAM_GROUP("Input options", NULL)
-        LONG_STRING_PARAM("unspl-png", &unsplpng, "Unspliced read PNG")
-        LONG_STRING_PARAM("spl-png", &splpng, "Spliced read PNG")
-        LONG_STRING_PARAM("in-tsv", &intsv, "Input TSV file. Header must begin with #")
-        // Image processing parameters
-        LONG_DOUBLE_PARAM("unspl-gf-sig", &unspl_gf_sig, "Unspliced Gaussian filter sigma")
-        LONG_DOUBLE_PARAM("spl-bf-size", &spl_bf_size, "Spliced box filter size")
-        LONG_DOUBLE_PARAM("clip-qt-lb", &clip_qt_lb, "Quantile for setting small intensity values to zero")
-        LONG_DOUBLE_PARAM("clip-qt-ub", &clip_qt_ub, "Quantile for capping and normalizing intensities")
-        LONG_INT_PARAM("erode-kernel-size", &erode_kernel_size, "Erosion kernel size")
-        LONG_INT_PARAM("dilate-kernel-size", &dilate_kernel_size, "Dilation kernel size")
-        // If annotating tsv file - coordinate conversion parameters
-        LONG_INT_PARAM("icol-x", &icol_x, "Column index for x coordinates (corresponding to the width of the image)")
-        LONG_INT_PARAM("icol-y", &icol_y, "Column index for y coordinates (corresponding to the height of the image)")
-        LONG_DOUBLE_PARAM("coord-per-pixel", &coord_per_pixel, "Number of coordinate units per pixel (translate between tsv and image)")
-        LONG_INT_PARAM("offset-x", &offset_x, "Offset for x coordinates")
-        LONG_INT_PARAM("offset-y", &offset_y, "Offset for y coordinates")
-		LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out-png", &outpng, "Output PNG file that shows the nuclei mask")
-        LONG_STRING_PARAM("out-tsv", &outtsv, "Output TSV file")
-        LONG_INT_PARAM("verbose", &verbose, "Verbose")
-        LONG_INT_PARAM("debug", &debug, "Debug")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     cv::Mat unspl_img = cv::imread(unsplpng, cv::IMREAD_GRAYSCALE);
     cv::Mat spl_img = cv::imread(splpng, cv::IMREAD_GRAYSCALE);

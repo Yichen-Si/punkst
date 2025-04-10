@@ -37,31 +37,34 @@ int32_t cmdFASTQscribble(int32_t argc, char** argv) {
     bool write_r1 = false;
     bool write_r1_hash = false;
 
-    // Parse input parameters
-    paramList pl;
-    BEGIN_LONG_PARAMS(longParameters)
-        LONG_PARAM_GROUP("Input options", NULL)
-        LONG_MULTI_STRING_PARAM("fq1", &fq1vec, "")
-        LONG_MULTI_STRING_PARAM("fq2", &fq2vec, "")
-        LONG_STRING_PARAM("config", &configf, "Config file")
-        LONG_INT_PARAM("primer_mismatch", &primer_mismatch, "Mismatch allowed in primer (before reaching --primer_minmatc)")
-        LONG_INT_PARAM("primer_minmatch", &primer_minmatch, "Minimum match in primer")
-        LONG_INT_PARAM("primer_gap", &primer_gap, "Maximum allowed gap between upstream primer and static barcode")
-        LONG_INT_PARAM("statbc_mismatch", &statbc_mismatch, "Mismatch allowed in static barcode")
-        LONG_INT_PARAM("spacer_editdist", &spacer_editdist, "Edit distance allowed in spacer")
-        LONG_INT_PARAM("barcode_indelnt", &barcode_indelnt, "Indel length allowed in the mutable barcode")
-        LONG_INT_PARAM("signature_trim_read_end", &signature_trim_read_end, "When recording subsequence as identifier, ignore the last N bases")
-        LONG_PARAM("allow_missing_static_barcode", &allow_missing_static_barcode, "Allow missing static barcode")
-        LONG_PARAM_GROUP("Output Options", NULL)
-        LONG_STRING_PARAM("out", &out, "")
-        LONG_PARAM("write_r1", &write_r1, "Write R1")
-        LONG_PARAM("write_r1_hash", &write_r1_hash, "Write R1 hash")
-        LONG_INT_PARAM("debug", &debug, "Debug")
-        LONG_STRING_PARAM("output", &out, "Output file")
-    END_LONG_PARAMS();
-    pl.Add(new longParams("Available Options", longParameters));
-    pl.Read(argc, argv);
-    pl.Status();
+    ParamList pl;
+    // Input Options
+    pl.add_option("fq1", "", fq1vec)
+      .add_option("fq2", "", fq2vec)
+      .add_option("config", "Config file", configf)
+      .add_option("primer_mismatch", "Mismatch allowed in primer (before reaching --primer_minmatc)", primer_mismatch)
+      .add_option("primer_minmatch", "Minimum match in primer", primer_minmatch)
+      .add_option("primer_gap", "Maximum allowed gap between upstream primer and static barcode", primer_gap)
+      .add_option("statbc_mismatch", "Mismatch allowed in static barcode", statbc_mismatch)
+      .add_option("spacer_editdist", "Edit distance allowed in spacer", spacer_editdist)
+      .add_option("barcode_indelnt", "Indel length allowed in the mutable barcode", barcode_indelnt)
+      .add_option("signature_trim_read_end", "When recording subsequence as identifier, ignore the last N bases", signature_trim_read_end)
+      .add_option("allow_missing_static_barcode", "Allow missing static barcode", allow_missing_static_barcode);
+    // Output Options
+    pl.add_option("out", "", out)
+      .add_option("write_r1", "Write R1", write_r1)
+      .add_option("write_r1_hash", "Write R1 hash", write_r1_hash)
+      .add_option("debug", "Debug", debug)
+      .add_option("output", "Output file", out);
+
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
 
     ScribbleConfig config(configf);
     if (primer_minmatch < 0) {

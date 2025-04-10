@@ -1,20 +1,53 @@
-#ifndef UTILS_H_
-#define UTILS_H_
+#pragma once
 
-#include <cstdio>
-#include <climits>
-#include <cstddef>
-#include <vector>
-#include <string>
-#include <set>
-#include <map>
+#include "punkst.h"
+#include <tuple>
+#include <functional>
 #include <iostream>
 #include <fstream>
-#include <algorithm>
+#include <iomanip>
+#include <format>
+#include <sstream>
+#include <string_view>
 #include <filesystem>
-#include "qgenlib/qgen_error.h"
-#include "qgenlib/qgen_utils.h"
+#include <optional>
+#include <charconv>
+#include <locale>
+#include <stdexcept>
 #include <opencv2/opencv.hpp>
+extern "C" {
+    #include "htslib/hts.h"
+    #include "htslib/bgzf.h"
+    #include "htslib/hfile.h"
+}
+
+// String manipulation functions
+void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str, uint32_t limit=UINT_MAX, bool clear=true, bool collapse=true, bool strip=false);
+std::string_view strip_str(std::string_view token);
+std::string trim(const std::string& str);
+std::string to_lower(const std::string& str);
+std::string to_upper(const std::string& str);
+std::string join(const std::vector<std::string>& tokens, const std::string& delim);
+
+// RAII wrapper for kstring_t: it ensures that the allocated buffer is freed automatically.
+struct KStringRAII {
+    kstring_t ks;
+    KStringRAII() : ks{0, 0, nullptr} {}
+    ~KStringRAII() { free(ks.s); }
+};
+
+void hprintf(htsFile* fp, const char * msg, ...);
+
+// String to number conversion functions
+template<typename T>
+bool str2num(const std::string& str, T& value);
+bool str2int32(const std::string& str, int32_t& value);
+bool str2int64(const std::string& str, int64_t& value);
+bool str2uint32(const std::string& str, uint32_t& value);
+bool str2uint64(const std::string& str, uint64_t& value);
+bool str2double(const std::string& str, double& value);
+bool str2float(const std::string& str, float& value);
+bool str2bool(const std::string& str, bool& value);
 
 // String search
 std::vector<int> computeLPSArray(const std::string& pattern);
@@ -147,4 +180,17 @@ private:
     std::streampos endOffset;
 };
 
-#endif
+struct Tuple3Hash {
+    std::size_t operator()(const std::tuple<int32_t, int32_t, int32_t>& key) const {
+        // Get individual hash values for each element.
+        auto h1 = std::hash<int32_t>{}(std::get<0>(key));
+        auto h2 = std::hash<int32_t>{}(std::get<1>(key));
+        auto h3 = std::hash<int32_t>{}(std::get<2>(key));
+
+        // Combine them using a hash combining formula.
+        std::size_t seed = h1;
+        seed ^= h2 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        seed ^= h3 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};

@@ -1,8 +1,3 @@
-/**
- * Simplified command handling with the same behavior as that from
- * https://github.com/hyunminkang/qgenlib
- */
-
 #pragma once
 
 #include <cstdio>
@@ -10,191 +5,265 @@
 #include <vector>
 #include <map>
 #include <string>
+#include <functional>
+#include <stdexcept>
+#include <iostream>
+#include <sstream>
 
-// Structure representing a long command.
-struct longCommandList {
-    const char * desc;
-    int (*func)(int, char**);
-    const char * help;
-};
+/**
+ * CommandList: command handling for the entry of the program
+ * ParamList: parameter parser
+ */
 
-// Macros to define long commands.
-#define BEGIN_LONG_COMMANDS(array)   longCommandList array[] = {
-#define LONG_COMMAND_GROUP(label, help)    { label, nullptr, help },
-#define LONG_COMMAND(label, funcptr, help)   { label, funcptr, help },
-#define END_LONG_COMMANDS()                { nullptr, nullptr, nullptr } };
-
-// Helper class for common messages.
-class commandHelper {
+class CommandList {
 public:
-    std::string copyright_str;
-    std::string license_str;
+    using CommandFunc = std::function<int(int, char**)>;
 
-    commandHelper() {
-        // copyright_str = "Copyright (c)";
-        // license_str = "Licensed under";
-    }
-};
-
-// Global instance.
-extern commandHelper commandHelp;
-
-// Base command class.
-class command {
-protected:
-    std::string description;
-    int (*func)(int, char**);
-    std::string helpstring;
-
-    // Buffers for error and message output.
-    std::string *errors;
-    std::string *messages;
-
-public:
-    command(const char * desc, int (*f)(int, char**), const char * help)
-        : description(desc ? desc : ""), func(f), helpstring(help ? help : "") {
-        errors = nullptr;
-        messages = nullptr;
-    }
-    virtual ~command() {}
-
-    // Translate a given command string to its command entry.
-    virtual longCommandList* Translate(const char* value) { return nullptr; }
-
-    virtual void Status() = 0;
-    virtual void HelpMessage() = 0;
-
-    void SetErrorBuffer(std::string & buffer) {
-        errors = &buffer;
-    }
-    void SetMessageBuffer(std::string & buffer) {
-        messages = &buffer;
-    }
-};
-
-// Derived class that implements long command handling.
-class longCommands : public command {
-private:
-    longCommandList *list; // Pointer to the array of long commands.
-    std::map<std::string, longCommandList*> index;
-    int name_len;  // Used for formatting help messages.
-
-public:
-    longCommands(const char * desc, longCommandList * lst)
-        : command(desc, nullptr, nullptr), list(lst), name_len(0) {
-        // Build the index: assume that list[0] is a placeholder.
-        for (longCommandList * ptr = list + 1; ptr->desc != nullptr; ++ptr) {
-            if (ptr->func != nullptr) { // actual command entry
-                index[ptr->desc] = ptr;
-                int len = std::strlen(ptr->desc);
-                if (len > name_len) {
-                    name_len = len;
-                }
-            }
-        }
-    }
-    virtual ~longCommands() {}
-
-    virtual longCommandList* Translate(const char* value) override {
-        if (value == nullptr) return nullptr;
-        auto it = index.find(value);
-        if (it != index.end()) {
-            return it->second;
-        }
-        return nullptr;
+    // Adds a new command
+    CommandList& add_command(const std::string &name,
+                                const std::string &description,
+                                const std::string &help,
+                                const CommandFunc &func)
+    {
+        commands_[name] = { description, help, func };
+        order_.push_back(name);
+        return *this;
     }
 
-    virtual void Status() override {
-        // Print a simple list of available commands.
-        std::fprintf(stderr, "\n%s:\n\n", description.c_str());
-        std::fprintf(stderr, "Available commands:\n");
-        for (longCommandList * ptr = list + 1; ptr->desc != nullptr; ++ptr) {
-            if (ptr->func != nullptr) { // actual command
-                std::fprintf(stderr, "   - %-*s : %s\n", name_len, ptr->desc, (ptr->help ? ptr->help : ""));
-            }
-        }
-    }
-    virtual void HelpMessage() override {
-        // Print detailed help for each command.
-        std::fprintf(stderr, "\n%s:\n", description.c_str());
-        for (longCommandList * ptr = list + 1; ptr->desc != nullptr; ++ptr) {
-            if (ptr->func != nullptr) {
-                std::fprintf(stderr, "   - %-*s : %s\n", name_len, ptr->desc, (ptr->help ? ptr->help : ""));
-            } else {
-                // For group headers (if any), print a separator.
-                std::fprintf(stderr, "\n== %s %s==\n", ptr->desc, (ptr->help ? ptr->help : ""));
-            }
-        }
-        std::fprintf(stderr, "\n");
-    }
-};
-
-// Command list that holds commands.
-class commandList {
-private:
-    std::vector<command*> commands;
-public:
-    std::string errors;
-    std::string messages;
-
-    commandList() {}
-    ~commandList() {
-        for (command* cmd : commands) {
-            delete cmd;
-        }
-    }
-
-    void Add(command * p) {
-        p->SetErrorBuffer(errors);
-        p->SetMessageBuffer(messages);
-        commands.push_back(p);
-    }
-
-    int Read(int argc, char ** argv, int start = 1) {
-        if (argc - start < 1) {
-            HelpMessage();
+    // Parses the command-line arguments.
+    // The first argument is taken as the command.
+    int parse(int argc, char** argv) {
+        if (argc < 2) {
+            print_help();
             return 1;
         }
-        std::string cmdStr(argv[start]);
+        std::string cmd = argv[1];
+        auto it = commands_.find(cmd);
+        if (it == commands_.end()) {
+            std::cerr << "Unknown command: " << cmd << "\n";
+            print_help();
+            return 1;
+        }
+        // Print header info similar to the legacy version.
+        std::cout << "[" << argv[0] << " " << cmd << "] -- "
+                    << it->second.help << "\n\n";
+        // Call the command's function with the rest of the arguments.
+        return it->second.func(argc - 1, argv + 1);
+    }
 
-        // Look for the command in each registered command handler.
-        for (command* cmd : commands) {
-            longCommandList* entry = cmd->Translate(argv[start]);
-            if (entry != nullptr && entry->func != nullptr && cmdStr == entry->desc) {
-                // Print header information before dispatching.
-                std::fprintf(stderr, "[%s %s] -- %s\n\n", argv[0], entry->desc, (entry->help ? entry->help : ""));
-                // std::fprintf(stderr, " %s\n", commandHelp.copyright_str.c_str());
-                // std::fprintf(stderr, " %s\n", commandHelp.license_str.c_str());
-                // Call the command function with adjusted arguments.
-                return entry->func(argc - start, argv + start);
+    // Prints all available commands.
+    void print_help() const {
+        std::cout << "\nAvailable Commands\n\n";
+        std::cout << "The following commands are available:\n";
+        const std::string indent = "   ";
+        for (const std::string &name : order_) {
+            const auto &cmd = commands_.at(name);
+            std::cout << indent << "--" << name;
+            if (!cmd.help.empty()) {
+                std::cout << " [" << cmd.help << "]";
+            }
+            std::cout << "\n";
+        }
+        std::cout << "\nFor detailed instructions, run: <program> --help\n\n";
+    }
+
+private:
+    struct Command {
+        std::string description;
+        std::string help;
+        CommandFunc func;
+    };
+    std::map<std::string, Command> commands_;
+    std::vector<std::string> order_;
+};
+
+
+class ParamList {
+public:
+    // General callback: receives the current index, argc, and argv.
+    // Returns the number of arguments consumed (not counting the flag itself).
+    using Callback = std::function<int(int, int, char**)>;
+
+    // Base add_option which now accepts an additional "required" parameter.
+    ParamList& add_option(const std::string &name,
+                            const std::string &description,
+                            const Callback &callback,
+                            const std::function<std::string()>& getter,
+                            bool required = false)
+    {
+        options_[name] = { callback, description, getter, required, false };
+        order_.push_back(name);
+        return *this;
+    }
+
+    // Overload for scalar types.
+    template <typename T>
+    ParamList& add_option(const std::string &name,
+                          const std::string &description,
+                          T &variable, bool required = false) {
+        // Special handling for bool: flag that sets the variable to true.
+        if constexpr (std::is_same_v<T, bool>) {
+            Callback callback = [&variable, name](int /*i*/, int /*argc*/, char** /*argv*/) -> int {
+                variable = true;
+                return 0; // No extra argument consumed.
+            };
+            auto getter = [&variable]() -> std::string {
+                return variable ? "true" : "false";
+            };
+            return add_option(name, description, callback, getter, required);
+        } else {
+            Callback callback = [&variable, name](int i, int argc, char** argv) -> int {
+                if (i + 1 >= argc) {
+                    throw std::runtime_error("Missing value for option --" + name);
+                }
+                if constexpr (std::is_same_v<T, std::string>) {
+                    variable = argv[i + 1];
+                } else {
+                    std::istringstream iss(argv[i + 1]);
+                    iss >> variable;
+                    if (iss.fail()) {
+                        throw std::runtime_error("Invalid value for option --" + name + ": " + argv[i + 1]);
+                    }
+                }
+                return 1; // Consumed one argument.
+            };
+            auto getter = [&variable]() -> std::string {
+                std::ostringstream oss;
+                oss << variable;
+                return oss.str();
+            };
+            return add_option(name, description, callback, getter, required);
+        }
+    }
+
+    // Overload for vector types to support multi-value options such as "--key 1 2 3"
+    // Added parameter "required" (default false)
+    template <typename T>
+    ParamList& add_option(const std::string &name,
+                            const std::string &description, std::vector<T> &variable, bool required = false) {
+        Callback callback = [&variable, name](int i, int argc, char** argv) -> int {
+            int count = 0;
+            // Consume all arguments that do not start with "--"
+            for (int j = i + 1; j < argc; ++j) {
+                std::string arg = argv[j];
+                if (arg.rfind("--", 0) == 0)
+                    break;
+                if constexpr (std::is_same_v<T, std::string>) {
+                    variable.push_back(arg);
+                } else {
+                    std::istringstream iss(arg);
+                    T val;
+                    iss >> val;
+                    if (iss.fail()) {
+                        throw std::runtime_error("Invalid value for option --" + name + ": " + arg);
+                    }
+                    variable.push_back(val);
+                }
+                ++count;
+            }
+            if (count == 0) {
+                throw std::runtime_error("No value provided for multi-value option --" + name);
+            }
+            return count;
+        };
+        // Getter lambda for vector: join elements into a comma-separated list.
+        auto getter = [&variable]() -> std::string {
+            if (variable.empty())
+                return "";
+            std::ostringstream oss;
+            oss << "[";
+            for (size_t i = 0; i < variable.size(); ++i) {
+                if (i > 0)
+                    oss << ", ";
+                oss << variable[i];
+            }
+            oss << "]";
+            return oss.str();
+        };
+        return add_option(name, description, callback, getter, required);
+    }
+
+    // Parses command-line arguments.
+    // Also performs required-option validation after processing the arguments.
+    void readArgs(int argc, char** argv) {
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg.rfind("--", 0) == 0) {
+                std::string name = arg.substr(2);
+                if (name == "help") {
+                    print_help();
+                    return;
+                }
+                auto it = options_.find(name);
+                if (it == options_.end()) {
+                    throw std::runtime_error("Unknown option: --" + name);
+                }
+                // Mark the option as provided.
+                it->second.provided = true;
+                // Call the registered callback and advance the index by the number of consumed arguments.
+                int consumed = it->second.callback(i, argc, argv);
+                i += consumed;
+            } else {
+                throw std::runtime_error("Unexpected argument: " + arg);
             }
         }
-        // If no matching command is found, print help.
-        HelpMessage();
-        std::fprintf(stderr, "Cannot recognize the command %s. Run %s --help for detailed instructions\n", cmdStr.c_str(), argv[0]);
-        return 1;
-    }
-
-    void Status() {
-        for (command* cmd : commands) {
-            cmd->Status();
+        // After processing, check for any required options that were not provided.
+        for (const auto& kv : options_) {
+            if (kv.second.required && !kv.second.provided) {
+                throw std::runtime_error("Missing required option: --" + kv.first);
+            }
         }
     }
 
-    void HelpMessage() {
-        std::fprintf(stderr, "\nDetailed instructions for available commands:\n");
-        for (command* cmd : commands) {
-            cmd->HelpMessage();
-        }
-        std::fprintf(stderr, "\n");
-        if (!errors.empty()) {
-            std::fprintf(stderr, "Errors encountered:\n%s\n", errors.c_str());
-            errors.clear();
-        }
-        if (!messages.empty()) {
-            std::printf("Notes:\n%s\n", messages.c_str());
-            messages.clear();
+    void print_help() const {
+        std::cout << "Options:\n";
+        for (const auto& kv : options_) {
+            std::cout << "  --" << kv.first << " : " << kv.second.description;
+            if (kv.second.required)
+                std::cout << " (required)";
+            std::cout << "\n";
         }
     }
 
+    void print_options() const {
+        const int max_line_length = 80;
+        const std::string indent = "    ";
+        std::cout << "Available Options\n";
+        std::cout << "The following parameters are available. Ones with \"[]\" are in effect:\n";
+        std::cout << indent;
+        int current_length = static_cast<int>(indent.size());
+        bool firstFlag = true;
+        for (const std::string &name : order_) {
+            auto it = options_.find(name);
+            if (it == options_.end())
+                continue;
+            std::string value = it->second.getter();
+            std::string optionText = "--" + name;
+            if (!value.empty())
+                optionText += " [" + value + "]";
+            // Check if adding this option would exceed the max line length.
+            if (current_length + static_cast<int>(optionText.size()) > max_line_length) {
+                // Wrap: output newline and indentation.
+                std::cout << ",\n" << indent;
+                current_length = static_cast<int>(indent.size());
+            } else if (!firstFlag) {
+                optionText = ", " + optionText;
+            }
+            std::cout << optionText;
+            current_length += static_cast<int>(optionText.size());
+            firstFlag = false;
+        }
+        std::cout << "\n\n";
+    }
+
+private:
+    struct Option {
+        Callback callback;
+        std::string description;
+        std::function<std::string()> getter;
+        bool required;
+        bool provided;
+    };
+    std::map<std::string, Option> options_;
+    std::vector<std::string> order_;
 };
