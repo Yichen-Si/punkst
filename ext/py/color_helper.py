@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
 
-def assign_color_mds_line(mtx, cmap_name, weight=None, top_color=None, seed=None):
+def assign_color_mds_line(mtx, cmap_name, weight=None, top_color=None, seed=None, n_jobs=1):
     # mtx is a K by K similarity/proximity matrix
     assert mtx.shape[0] == mtx.shape[1], "mtx must be square"
     K = mtx.shape[0]
@@ -109,6 +109,7 @@ def choose_color(_args):
     parser.add_argument('--top_color', type=str, default="#fcd217", help="HEX color code for the top factor")
     parser.add_argument('--even_space', action='store_true', help="Evenly space the factors on the circle")
     parser.add_argument('--annotation', type=str, default = '', help='')
+    parser.add_argument('--thread', type=int, default=-1, help='')
     parser.add_argument('--seed', type=int, default=-1, help='')
     args = parser.parse_args(_args)
 
@@ -170,7 +171,7 @@ def choose_color(_args):
     mtx /= mtx.sum(axis = 1)
     mtx = mtx + mtx.T
 
-    c_pos = assign_color_mds_line(mtx, cmap_name, weight=weight, top_color=args.top_color, seed=seed)
+    c_pos = assign_color_mds_line(mtx, cmap_name, weight=weight, top_color=args.top_color, seed=seed, n_jobs=args.thread)
 
     spectral_offset = .05 # avoid extremely dark colors
     c_pos = (c_pos - c_pos.min()) / (c_pos.max() - c_pos.min()) * (1 - spectral_offset) + spectral_offset

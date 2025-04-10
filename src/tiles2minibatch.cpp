@@ -238,9 +238,11 @@ int32_t Tiles2Minibatch::outputPixelResult(const TileData& tileData, const Matri
             continue;
         }
         std::stringstream ss;
-        // set precision to 4 decimal for double/float
+        // set precision to %.2f for coordinates
+        ss.precision(2);
+        ss << std::fixed << tileData.coords[j].first << "\t" << tileData.coords[j].second;
+        // set precision to 4 decimal for probabilities
         ss.precision(4);
-        ss << tileData.coords[j].first << "\t" << tileData.coords[j].second;
         for (int32_t k = 0; k < topk_; ++k) {
             ss << "\t" << topIds(j, k);
         }

@@ -129,7 +129,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model, 100, 0.005/K);
     notice("Initialized anchor model with %d features and %d factors", nFeatures, K);
 
-    Tiles2Minibatch tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, 20, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
+    Tiles2Minibatch tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
     tiles2minibatch.setFeatureNames(featureNames);
     tiles2minibatch.run();
 
