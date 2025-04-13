@@ -261,8 +261,15 @@ public:
     size_t getNumTiles() const {
         return nTiles;
     }
-    int32_t tile2Int(int32_t row, int32_t col) const {
+    int32_t tile2int(int32_t row, int32_t col) const {
         return (maxcol - mincol) * (row - minrow) + (col - mincol);
+    }
+    // given (x, y) compute the tile key and whether the tile is in the data
+    template<typename T>
+    bool pt2tile(T x, T y, TileKey &tile) const {
+        tile.row = static_cast<int32_t>(std::floor(y / tileSize));
+        tile.col = static_cast<int32_t>(std::floor(x / tileSize));
+        return index.find(tile) != index.end();
     }
     void getTileList(std::vector<TileKey> &tileList) const {
         tileList.reserve(nTiles);

@@ -167,6 +167,9 @@ public:
     int32_t getNmodal() const {
         return nModal;
     }
+    int32_t getNlayer() const {
+        return nLayer;
+    }
     void setFeatureNames(const std::vector<std::string>& featureNames) {
         assert (featureNames.size() == nFeatures && "Feature names size does not match the number of features");
         features = featureNames;
@@ -190,28 +193,33 @@ public:
         assert (features.size() == nFeatures && "Feature names size does not match the number of features");
     }
 
-    bool parseLine(UnitValues &unit, const std::string &line) {
-        return unit.readFromLine(line, nModal);
+    bool parseLine(UnitValues &unit, const std::string &line, bool labeled = false) {
+        return unit.readFromLine(line, nModal, labeled);
     }
-    int32_t parseLine(Document& doc, const std::string &line, int32_t layer = 0) {
-        int32_t x, y;
-        return parseLine(doc, x, y, line, layer);
+    int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0) {
+        int32_t x, y, layer;
+        return parseLine(doc, x, y, layer, line, modal);
     }
-    int32_t parseLine(Document& doc, int32_t& x, int32_t& y, const std::string &line, int32_t layer = 0) {
-        assert(layer < nModal && "Layer out of range");
+    int32_t parseLine(Document& doc, int32_t& x, int32_t& y, int32_t& layer, const std::string &line, int32_t modal = 0) {
+        assert(modal < nModal && "Modal out of range");
         std::istringstream iss(line);
         std::string hexKey;
         std::vector<int32_t> nfeatures(nModal, 0);
         std::vector<uint32_t> counts(nModal, 0);
-        if (!(iss >> hexKey >> x >> y)) {
+        layer = 0;
+        try {
+            if (nLayer > 1) {
+                iss >> hexKey >> layer >> x >> y;
+            } else {
+                iss >> hexKey >> x >> y;
+            }
+            for (int i = 0; i < nModal; ++i) {
+                iss >> nfeatures[i] >> counts[i];
+            }
+        } catch (const std::exception& e) {
             return -1;
         }
-        for (int i = 0; i < nModal; ++i) {
-            if (!(iss >> nfeatures[i] >> counts[i])) {
-                return -1;
-            }
-        }
-        for (int i = 0; i < layer; ++i) {
+        for (int i = 0; i < modal; ++i) {
             for (int j = 0; j < nfeatures[i]; ++j) {
                 uint32_t feature;
                 int32_t value;
@@ -221,7 +229,7 @@ public:
             }
         }
         int l = 0;
-        while (l < layer) {
+        while (l < modal) {
             for (int i = 0; i < nfeatures[l]; ++i) {
                 uint32_t feature;
                 int32_t value;
@@ -231,20 +239,21 @@ public:
             }
             ++l;
         }
-        doc.ids.resize(nfeatures[layer]);
-        doc.cnts.resize(nfeatures[layer]);
-        for (int i = 0; i < nfeatures[layer]; ++i) {
+        doc.ids.resize(nfeatures[modal]);
+        doc.cnts.resize(nfeatures[modal]);
+        for (int i = 0; i < nfeatures[modal]; ++i) {
             if (!(iss >> doc.ids[i] >> doc.cnts[i])) {
                 return -1;
             }
         }
-        return counts[layer];
+        return counts[modal];
     }
 
 
 private:
 
     int32_t nModal;
+    int32_t nLayer;
 
     void readMetadata(const std::string &metaFile) {
         std::ifstream metaIn(metaFile);
@@ -260,6 +269,10 @@ private:
         hexGrid.init(hexSize);
         nUnits = meta.value("n_units", 0);
         nModal = meta.value("n_modalities", 0);
+        nLayer = 1;
+        if (meta.find("n_layers") != meta.end()) {
+            nLayer = meta["n_layers"];
+        }
         nFeatures = meta.value("n_features", 0);
         features.resize(nFeatures);
         if (meta.contains("dictionary")) {

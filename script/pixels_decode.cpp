@@ -3,7 +3,7 @@
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
-    std::string inTsv, inIndex, modelFile, outFile, tmpDir, dictFile, weightFile;
+    std::string inTsv, inIndex, modelFile, anchorFile, outFile, tmpDir, dictFile, weightFile;
     int nThreads = 1, seed = -1, debug = 0, verbose = 0;
     int icol_x, icol_y, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
@@ -18,6 +18,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
       .add_option("in-index", "Input index file", inIndex)
       .add_option("model", "Model file", modelFile)
+      .add_option("anchor", "Anchor file", anchorFile)
       .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
       .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
       .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
@@ -135,6 +136,10 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     Tiles2Minibatch tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
     tiles2minibatch.setFeatureNames(featureNames);
+    if (!anchorFile.empty()) {
+        int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
+        notice("Loaded %d valid anchors", nAnchors);
+    }
     tiles2minibatch.run();
 
     return 0;

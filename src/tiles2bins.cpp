@@ -1,7 +1,7 @@
 #include "tiles2bins.hpp"
 
-Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& tmpDir, std::string& outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> minCounts)
-: nThreads(nThreads), tmpDir(tmpDir), outFile(outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(minCounts), nUnits(0), nFeatures(0) {
+Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> minCounts)
+: nThreads(nThreads), tmpDir(_tmpDir), outFile(outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(minCounts), nUnits(0), nFeatures(0) {
     if (!createDirectory(tmpDir)) {
         error("Error creating temporary directory (or the existing directory is not empty): %s", tmpDir.c_str());
     }
@@ -232,6 +232,24 @@ bool Tiles2Hex::mergeBoundaryHexagons() {
 }
 
 
+void Tiles2UnitsByAnchor::readAnchors(std::string& anchorFile) {
+    PointCloud<float> cloud;
+    std::ifstream ifs(anchorFile);
+    if (!ifs) {
+        error("Error opening anchor file: %s", anchorFile.c_str());
+    }
+    std::string line;
+    while (std::getline(ifs, line)) {
+        std::istringstream iss(line);
+        float x, y;
+        iss >> x >> y;
+        cloud.pts.emplace_back(x, y);
+    }
+    ifs.close();
+    anchorPoints.push_back(std::move(cloud));
+    trees.push_back(std::make_unique<kd_tree_f2_t>(2, anchorPoints.back(), nanoflann::KDTreeSingleIndexAdaptorParams(10)));
+}
+
 void Tiles2UnitsByAnchor::worker(int threadId) {
     // Set up a per-thread random engine.
     std::random_device rd;
@@ -248,6 +266,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
     TileKey tile;
     int tileSize = tileReader.getTileSize();
     while (tileQueue.pop(tile)) {
+std::cout << "Thread " << threadId << " processing tile (" << tile.row << ", " << tile.col << ")" << std::endl;
 
         // Compute tile’s cartesian bounding box.
         double tile_xmin = tile.col * tileSize;
@@ -268,8 +287,8 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
         std::vector<std::unordered_map<int64_t, UnitValues>> unitBuffersInternal, unitBuffers;
         unitBuffersInternal.resize(nLayer);
         unitBuffers.resize(nLayer);
-
         std::string line;
+        int32_t nbg = 0, nfront = 0;
         while (iter->next(line)) {
             PixelValues pixel;
             int32_t ret = parser.parse(pixel, line);
@@ -309,6 +328,11 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
                     addPixelToUnitMaps(pixel, hx, hy, unitBuffers[i], i);
                 }
             }
+            if (isBackground) {
+                nbg++;
+            } else {
+                nfront++;
+            }
             if (isBackground && !noBackground) {
                 if (isInternal) {
                     addPixelToUnitMaps(pixel, hx, hy, unitBuffersInternal[nAnchorSets], nAnchorSets);
@@ -317,7 +341,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
                 }
             }
         } // end while reading lines in tile
-
+std::cout << "Thread " << threadId << " finished scanning tile (" << tile.row << ", " << tile.col << ") npts: " << nbg << "," << nfront << std::endl;
         { // Lock the global output file.
             std::lock_guard<std::mutex> lock(mainOutMutex);
             for (const auto &unitBuffer : unitBuffersInternal) {
@@ -354,9 +378,8 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
     outFile.close();
 }
 
-
 bool Tiles2UnitsByAnchor::mergeBoundaryHexagons() {
-    std::vector<std::unordered_map<int64_t, UnitValues>> mergedUnitsList;
+    std::vector<std::unordered_map<int64_t, UnitValues>> mergedUnitsList(nLayer);
     for (int i = 0; i < nThreads; ++i) {
         std::string fname = tmpDir + std::to_string(i) + ".txt";
         std::ifstream ifs(fname);

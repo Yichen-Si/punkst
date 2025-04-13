@@ -1,5 +1,43 @@
 #include "tiles2minibatch.hpp"
 
+int32_t Tiles2Minibatch::loadAnchors(const std::string& anchorFile) {
+    std::ifstream inFile(anchorFile);
+    if (!inFile) {
+        error("Error opening anchors file: %s", anchorFile.c_str());
+    }
+    std::string line;
+    std::vector<std::string> tokens;
+    int32_t nAnchors = 0;
+    while (std::getline(inFile, line)) {
+        if (line.empty()) continue;
+        split(tokens, "\t", line);
+        if (tokens.size() < 2) {
+            error("Error reading anchors file at line: %s", line.c_str());
+        }
+        float x, y;
+        bool valid = str2float(tokens[0], x) && str2float(tokens[1], y);
+        if (!valid) {
+            error("Error reading anchors file at line: %s", line.c_str());
+        }
+        TileKey tile;
+        if (!tileReader.pt2tile(x, y, tile)) {
+            continue;
+        }
+        fixedAnchorForTile[tile].emplace_back(std::vector<float>{x, y});
+        std::vector<uint32_t> bufferidx;
+        int32_t ret = pt2buffer(bufferidx, x, y, tile);
+        for (const auto& key : bufferidx) {
+            fixedAnchorForBoundary[key].emplace_back(std::vector<float>{x, y});
+        }
+        nAnchors++;
+    }
+    inFile.close();
+    if (fixedAnchorForTile.empty()) {
+        error("No anchors fall in the region of the input pixel data, please make sure the anchors are in the same coordinate system as the input data");
+    }
+    return nAnchors;
+}
+
 int32_t Tiles2Minibatch::parseOneTile(TileData& tileData, TileKey tile) {
     std::unique_ptr<BoundedReadline> iter;
     try {
@@ -9,6 +47,8 @@ int32_t Tiles2Minibatch::parseOneTile(TileData& tileData, TileKey tile) {
         return -1;
     }
     tileData.clear();
+    tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+
     std::string line;
     int32_t npt = 0;
     while (iter->next(line)) {
@@ -22,7 +62,7 @@ int32_t Tiles2Minibatch::parseOneTile(TileData& tileData, TileKey tile) {
         }
         tileData.pts.push_back(rec);
         std::vector<uint32_t> bufferidx;
-        if (pts2buffer(bufferidx, rec.x, rec.y, tile) == 1) {
+        if (pt2buffer(bufferidx, rec.x, rec.y, tile) == 1) {
             tileData.idxinternal.push_back(npt);
         }
         for (const auto& key : bufferidx) {
@@ -50,6 +90,7 @@ int32_t Tiles2Minibatch::parseBoundaryFile(TileData& tileData, std::shared_ptr<B
     }
     int npt = 0;
     tileData.clear();
+    bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     while (true) {
         Record rec;
         ifs.read(reinterpret_cast<char*>(&rec), sizeof(Record));
@@ -63,29 +104,29 @@ int32_t Tiles2Minibatch::parseBoundaryFile(TileData& tileData, std::shared_ptr<B
     return tileData.idxinternal.size();
 }
 
-int32_t Tiles2Minibatch::initAnchors(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch) {
+int32_t Tiles2Minibatch::initAnchors(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
 
-    anchors.pts.clear();
+    anchors.clear();
     std::vector<Document> documents;
     for (int32_t ir = 0; ir < nMoves; ++ir) {
         for (int32_t ic = 0; ic < nMoves; ++ic) {
-            std::unordered_map<int64_t, std::unordered_map<uint32_t, double>> hexAggregation;
+            std::unordered_map<int64_t, std::unordered_map<uint32_t, float>> hexAggregation;
             for (const auto& pt : tileData.pts) {
                 int32_t hx, hy;
-                hexGrid.cart_to_axial(hx, hy, (double) pt.x, (double) pt.y, ic*1./nMoves, ir*1./nMoves);
+                hexGrid.cart_to_axial(hx, hy, pt.x, pt.y, ic*1./nMoves, ir*1./nMoves);
                 int64_t key = (static_cast<int64_t>(hx) << 32) | (static_cast<uint32_t>(hy));
                 hexAggregation[key][pt.idx] += pt.ct;
             }
             // Create the vector of Document from the aggregated data.
             for (auto& hexEntry : hexAggregation) {
+                double sum = std::accumulate(hexEntry.second.begin(), hexEntry.second.end(), 0.0, [](double acc, const auto& p) { return acc + p.second; });
+                if (sum < anchorMinCount) {
+                    continue;
+                }
                 Document doc;
                 for (auto& featurePair : hexEntry.second) {
                     doc.ids.push_back(featurePair.first);
                     doc.cnts.push_back(featurePair.second);
-                }
-                double sum = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
-                if (sum < anchorMinCount) {
-                    continue;
                 }
                 if (weighted) {
                     for (size_t i = 0; i < doc.ids.size(); ++i) {
@@ -93,11 +134,11 @@ int32_t Tiles2Minibatch::initAnchors(TileData& tileData, PointCloud<double>& anc
                     }
                 }
                 documents.push_back(std::move(doc));
-                double x, y;
+                float x, y;
                 int32_t hx = static_cast<int32_t>(hexEntry.first >> 32);
                 int32_t hy = static_cast<int32_t>(hexEntry.first & 0xFFFFFFFF);
                 hexGrid.axial_to_cart(x, y, hx, hy, ic*1./nMoves, ir*1./nMoves);
-                anchors.pts.emplace_back(x, y);
+                anchors.emplace_back(x, y);
             }
         }
     }
@@ -115,13 +156,15 @@ int32_t Tiles2Minibatch::initAnchors(TileData& tileData, PointCloud<double>& anc
     }
     minibatch.n = documents.size();
     minibatch.M = M_;
-    return anchors.pts.size();
+    return anchors.size();
 }
 
-int32_t Tiles2Minibatch::makeMinibatch(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch) {
+int32_t Tiles2Minibatch::makeMinibatch(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
 
-    kd_tree_d2_t kdtree(2, anchors, {10});
-    std::vector<nanoflann::ResultItem<uint32_t, double>> indices_dists;
+    PointCloudCV<float> pc;
+    pc.pts = std::move(anchors);
+    kd_tree_cv2f_t kdtree(2, pc, {10});
+    std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
 
     double l2radius = distR * distR;
     std::vector<Eigen::Triplet<double>> triplets4mtx;
@@ -144,7 +187,7 @@ int32_t Tiles2Minibatch::makeMinibatch(TileData& tileData, PointCloud<double>& a
     for (auto & kv : pixAgg) {
         int32_t x = static_cast<int32_t>(kv.first >> 32);
         int32_t y = static_cast<int32_t>(kv.first & 0xFFFFFFFF);
-        double xy[2] = {x * pixelResolution, y * pixelResolution};
+        float xy[2] = {x * pixelResolution, y * pixelResolution};
         size_t n = kdtree.radiusSearch(xy, l2radius, indices_dists);
         if (n == 0) {
             continue;
@@ -176,7 +219,7 @@ int32_t Tiles2Minibatch::makeMinibatch(TileData& tileData, PointCloud<double>& a
             triplets4psi.emplace_back(npt, indices_dists[i].first, dvec[i] / rowsum);
         }
         npt++;
-        }
+    }
     minibatch.N = npt;
     minibatch.mtx.resize(npt, M_);
     minibatch.mtx.setFromTriplets(triplets4mtx.begin(), triplets4mtx.end());
@@ -254,13 +297,14 @@ int32_t Tiles2Minibatch::outputPixelResult(const TileData& tileData, const Matri
     return npts;
 }
 
-void Tiles2Minibatch::processTile(TileData &tileData, int threadId) {
+void Tiles2Minibatch::processTile(TileData &tileData, int threadId, vec2f_t* anchorPtr) {
     if (tileData.pts.empty()) {
         return;
     }
-    PointCloud<double> anchors;
+    std::vector<cv::Point2f> anchors;
     Minibatch minibatch;
-    int32_t nAnchors = initAnchors(tileData, anchors, minibatch);
+    int32_t nAnchors = initAnchorsHybrid(tileData, anchors, minibatch, anchorPtr);
+
     if (debug_) {
         std::cout << "Thread " << threadId << " initialized " << nAnchors << " anchors" << std::endl << std::flush;
     }
@@ -322,4 +366,121 @@ void Tiles2Minibatch::writeHeaderToJson() {
     }
     jsonOut << std::setw(4) << header << std::endl;
     jsonOut.close();
+}
+
+int32_t Tiles2Minibatch::initAnchorsHybrid(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors) {
+    if ((fixedAnchors == nullptr) || fixedAnchors->empty()) {
+        return initAnchors(tileData, anchors, minibatch);
+    }
+    anchors.clear();
+    for (const auto& pt : *fixedAnchors) {
+        anchors.emplace_back(pt[0], pt[1]);
+    }
+    size_t nFixed = anchors.size();
+    if (nFixed == 0) {
+        return initAnchors(tileData, anchors, minibatch);
+    }
+
+    // 1 Initialize hexagonal lattice
+    vec2f_t lattice;
+    double gridDist = hexGrid.size/nMoves;
+    double buff = gridDist / 4.;
+    hex_grid_cart<float>(lattice, tileData.xmin + buff, tileData.xmax - buff, tileData.ymin + buff, tileData.ymax - buff, gridDist);
+    // 2 Remove lattice points too close to any fixed anchors
+    KDTreeVectorOfVectorsAdaptor<vec2f_t, float> reftree(2, *fixedAnchors, {10});
+    float l2radius = gridDist * gridDist / 4.;
+    int32_t nRemoved = 0;
+    for (const auto& pt : lattice) {
+        std::vector<size_t> ret_indexes(1);
+        std::vector<float> out_dists_sqr(1);
+        nanoflann::KNNResultSet<float> resultSet(1);
+        resultSet.init(&ret_indexes[0], &out_dists_sqr[0]);
+        reftree.index->findNeighbors(resultSet, pt.data());
+        if (out_dists_sqr[0] < l2radius) {
+            nRemoved++;
+            continue;
+        }
+        anchors.emplace_back(pt[0], pt[1]);
+    }
+    size_t nAnchors = anchors.size();
+    notice("Initialized %zu fixed anchors and %zu-%d lattice points", nFixed, nAnchors, nRemoved);
+    // 3 Lloyd iteration
+    float eps = 1.;
+    float xmin = tileData.xmin - eps;
+    float ymin = tileData.ymin - eps;
+    float xrange = tileData.xmax - tileData.xmin + eps * 2;
+    float yrange = tileData.ymax - tileData.ymin + eps * 2;
+    cv::Rect2f rect(xmin, ymin, xrange, yrange);
+    std::vector<int32_t> indices;
+    for (int32_t t = 0; t < nLloydIter; ++t) {
+        cv::Subdiv2D subdiv(rect);
+        std::vector<std::vector<cv::Point2f>> facets;
+        std::vector<cv::Point2f> facetCenters;
+        subdiv.insert(anchors);
+        subdiv.getVoronoiFacetList(indices, facets, facetCenters);
+        for (size_t i = nFixed; i < nAnchors; ++i) {
+            if (i >= facets.size() || facets[i].empty())
+                continue;
+            std::vector<cv::Point2f> poly = clipPolygonToRect(facets[i], rect);
+            cv::Point2f centroid = centroidOfPolygon(poly);
+// if (centroid.x < xmin || centroid.x > xmin + xrange || centroid.y < ymin || centroid.y > ymin + yrange) {
+// warning("Anchor out of bounds: (%.2f, %.2f) -> (%.2f, %.2f)", anchors[i].x, anchors[i].y, centroid.x, centroid.y);
+// continue;
+// }
+            anchors[i] = centroid;
+        }
+    }
+    // 4 Aggregate pixels and initialize anchors
+    PointCloudCV<float> pc;
+    pc.pts = std::move(anchors);
+    kd_tree_cv2f_t kdtree(2, pc, {10});
+    l2radius = hexGrid.size * hexGrid.size * 0.827;
+    std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
+    std::vector<std::unordered_map<uint32_t, float>> docAgg(nAnchors);
+    for (const auto& pt : tileData.pts) {
+        float xy[2] = {(float) pt.x, (float) pt.y};
+        size_t n = kdtree.radiusSearch(xy, l2radius, indices_dists);
+        if (n == 0) {
+            continue;
+        }
+        for (size_t i = 0; i < n; ++i) {
+            docAgg[indices_dists[i].first][pt.idx] += pt.ct;
+        }
+    }
+    std::vector<Document> docs;
+    anchors.clear();
+    for (int32_t j = 0; j < nAnchors; ++j) {
+        auto& kv = docAgg[j];
+        if (kv.empty()) {
+            continue;
+        }
+        double sum = std::accumulate(kv.begin(), kv.end(), 0.0, [](double a, const auto& b) { return a + b.second; });
+        if (sum < anchorMinCount) {
+            continue;
+        }
+        anchors.push_back(pc.pts[j]);
+        Document doc;
+        if (weighted) {
+            for (const auto& item : kv) {
+                doc.ids.push_back(item.first);
+                doc.cnts.push_back(item.second * lineParser.weights[item.first]);
+            }
+        } else {
+            for (const auto& item : kv) {
+                doc.ids.push_back(item.first);
+                doc.cnts.push_back(item.second);
+            }
+        }
+        docs.push_back(std::move(doc));
+    }
+    minibatch.gamma = lda.transform(docs);
+    for (int i = 0; i < minibatch.gamma.rows(); ++i) {
+        double sum = minibatch.gamma.row(i).sum();
+        if (sum > 0) {
+            minibatch.gamma.row(i) /= sum / K_;
+        }
+    }
+    minibatch.n = docs.size();
+    minibatch.M = M_;
+    return anchors.size();
 }

@@ -54,8 +54,9 @@ public:
         }
     }
 
+    template <typename T>
     void cart_to_axial(std::vector<int32_t>& hx, std::vector<int32_t>& hy,
-                      const std::vector<double>& x, const std::vector<double>& y,
+                      const std::vector<T>& x, const std::vector<T>& y,
                       double offset_x = 0, double offset_y = 0) const {
         size_t n = x.size();
         assert(x.size() == y.size());
@@ -85,7 +86,8 @@ public:
 
     }
 
-    void cart_to_axial(int32_t& hx, int32_t& hy, double x, double y,
+    template <typename T>
+    void cart_to_axial(int32_t& hx, int32_t& hy, T x, T y,
                       double offset_x = 0, double offset_y = 0) const {
         double hx_f = mtx_p2a[0][0] * x + mtx_p2a[0][1] * y + offset_x;
         double hy_f = mtx_p2a[1][1] * y + offset_y;
@@ -101,7 +103,8 @@ public:
             }
     }
 
-    void axial_to_cart(std::vector<double>& x, std::vector<double>& y,
+    template <typename T>
+    void axial_to_cart(std::vector<T>& x, std::vector<T>& y,
                       const std::vector<int32_t>& hx, const std::vector<int32_t>& hy, double offset_x = 0, double offset_y = 0) const {
         size_t n = hx.size();
         assert(hy.size() == n);
@@ -113,7 +116,8 @@ public:
         }
     }
 
-    void axial_to_cart(double& x, double& y, int32_t hx, int32_t hy, double offset_x = 0, double offset_y = 0) const {
+    template <typename T>
+    void axial_to_cart(T& x, T& y, int32_t hx, int32_t hy, double offset_x = 0, double offset_y = 0) const {
         x = mtx_a2p[0][0] * (hx - offset_x) + mtx_a2p[0][1] * (hy - offset_y);
         y = mtx_a2p[1][1] * (hy - offset_y);
     }
@@ -148,3 +152,31 @@ public:
     }
 
 };
+
+
+// generatelattice points within a bounding box
+template <typename T>
+void hex_grid_cart(std::vector<std::vector<T> >& lattice, T xmin, T xmax, T ymin, T ymax, double size) {
+    double spacing_x = size * std::sqrt(3.);
+    double spacing_y = size * 1.5;
+    int nRows = static_cast<int>(std::ceil((ymax - ymin) / spacing_y)) + 1;
+    int nCols = static_cast<int>(std::floor((xmax - xmin) / spacing_x)) + 1;
+    lattice.reserve(nRows * nCols);
+    // generate by row
+    for (int row = 0; row < nRows; ++row) {
+        T y_coord = ymin + row * spacing_y;
+        if (y_coord > ymax)
+            break;
+        // For pointy hexagons, odd-numbered rows get an x offset.
+        double row_offset = (row % 2) ? (spacing_x * 0.5) : 0.0;
+        // Add points along the row.
+        int col = 0;
+        while (true) {
+            T x_coord = xmin + row_offset + col * spacing_x;
+            if (x_coord > xmax)
+                break;
+            lattice.push_back({ x_coord, y_coord });
+            ++col;
+        }
+    }
+}

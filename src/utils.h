@@ -144,6 +144,37 @@ struct Rectangle {
     }
 };
 
+// Centroid of a polygon by triangulation and weighted average
+cv::Point2d centroidOfPolygonTriangulation(const std::vector<cv::Point2d>& poly);
+cv::Point2f centroidOfPolygonRobust(const std::vector<cv::Point2f>& polyf);
+
+// Centroid of a polygon using the shoelace formula
+template <typename T>
+cv::Point_<T> centroidOfPolygon(const std::vector<cv::Point_<T>>& poly) {
+    assert(!poly.empty());
+    double area = 0.0, cx = 0.0, cy = 0.0;
+    uint32_t n = poly.size();
+    // Compute the polygon centroid using the shoelace formula.
+    for (size_t j = 0; j < poly.size(); j++) {
+        const cv::Point_<T>& p0 = poly[j];
+        const cv::Point_<T>& p1 = poly[(j + 1) % n];
+        double cross = (double) p0.x * p1.y - (double) p1.x * p0.y;
+        area += cross;
+        cx += (p0.x + p1.x) * cross;
+        cy += (p0.y + p1.y) * cross;
+    }
+    area *= 0.5;
+    if (std::fabs(area) > 1e-6) {
+        cx /= (6 * area);
+        cy /= (6 * area);
+        return cv::Point_<T>(static_cast<T>(cx), static_cast<T>(cy));
+    }
+    return poly[0];
+}
+
+// Sutherland–Hodgman polygon clipping algorithm
+std::vector<cv::Point2f> clipPolygonToRect(const std::vector<cv::Point2f>& poly, const cv::Rect2f& rect);
+
 // File handling related
 bool createDirectory(const std::string& dir);
 bool checkOutputWritable(const std::string& outFile, bool newFile = true);

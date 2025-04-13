@@ -136,8 +136,12 @@ public:
         if (!outFileStream) {
             error("Error opening output file: %s for writing", outFile.c_str());
         }
-        int32_t nTopics = lda.get_n_topics();
+        bool labeled = reader.getNlayer() > 1;
+        if (labeled) {
+            outFileStream << "layer\t";
+        }
         outFileStream << "x\ty";
+        int32_t nTopics = lda.get_n_topics();
         for (int i = 0; i < nTopics; ++i) {
             outFileStream << "\t" << i;
         }
@@ -146,7 +150,7 @@ public:
         bool fileopen = true;
         while (fileopen) {
             std::vector<std::string> idens;
-            fileopen = readMinibatch(inFileStream, idens);
+            fileopen = readMinibatch(inFileStream, idens, labeled);
             if (minibatch.empty()) {
                 break;
             }
@@ -217,7 +221,7 @@ private:
         return true;
     }
 
-    bool readMinibatch(std::ifstream& inFileStream, std::vector<std::string>& idens) {
+    bool readMinibatch(std::ifstream& inFileStream, std::vector<std::string>& idens, bool labeled = false) {
         minibatch.clear();
         minibatch.reserve(batchSize);
         std::string line;
@@ -227,12 +231,15 @@ private:
                 return false;
             }
             Document doc;
-            int32_t x, y;
-            int32_t ct = reader.parseLine(doc, x, y, line, modal);
+            int32_t x, y, layer;
+            int32_t ct = reader.parseLine(doc, x, y, layer, line, modal);
             if (ct < 0) {
                 error("Error parsing the %d-th line", ntot);
             }
             std::stringstream ss;
+            if (labeled) {
+                ss << layer << "\t";
+            }
             if (reader.hexSize <= 0) {
                 ss << x << "\t" << y;
             } else {

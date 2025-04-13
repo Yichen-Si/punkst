@@ -8,6 +8,7 @@
 #include "json.hpp"
 #include "nanoflann.hpp"
 #include "nanoflann_utils.h"
+#include <opencv2/imgproc.hpp>
 #include "dataunits.hpp"
 #include "tilereader.hpp"
 #include "hexgrid.h"
@@ -23,6 +24,7 @@ using Eigen::VectorXd;
 using Eigen::SparseMatrix;
 
 struct TileData {
+    float xmin, xmax, ymin, ymax;
     std::unordered_map<uint32_t, std::vector<Record>> buffers; // local buffer to accumulate records to be written to temporary files
     std::vector<Record> pts; // original data points
     std::vector<int32_t> idxinternal; // indices for internal data points to output
@@ -34,6 +36,12 @@ struct TileData {
         idxinternal.clear();
         orgpts2pixel.clear();
         coords.clear();
+    }
+    void setBounds(float _xmin, float _xmax, float _ymin, float _ymax) {
+        xmin = _xmin;
+        xmax = _xmax;
+        ymin = _ymin;
+        ymax = _ymax;
     }
 };
 
@@ -137,10 +145,13 @@ protected:
         return (static_cast<uint32_t>(R) << 16) | ((static_cast<uint32_t>(C) & 0x7FFF) << 1) | static_cast<uint32_t>(isVertical);
     }
 
-    int32_t pts2buffer(std::vector<uint32_t>& bufferidx, int32_t x0, int32_t y0, TileKey tile) {
+    // given (x, y) and its tile, compute all buffers it walls into
+    // and whether it is "internal" to the tile
+    template<typename T>
+    int32_t pt2buffer(std::vector<uint32_t>& bufferidx, T x0, T y0, TileKey tile) {
         // convert to local coordinates
-        int32_t x = x0 - tile.col * tileSize;
-        int32_t y = y0 - tile.row * tileSize;
+        T x = x0 - tile.col * tileSize;
+        T y = y0 - tile.row * tileSize;
         bufferidx.clear();
         if (x > tileSize - 2 * r && tile.col < tileReader.maxcol) {
             bufferidx.push_back(encodeTempFileKey(true, tile.row, tile.col));
@@ -204,23 +215,58 @@ protected:
         return 0;
     }
 
+    template<typename T>
+    void pt2tile(T x, T y, TileKey &tile) const {
+        tile.row = static_cast<int32_t>(std::floor(y / tileSize));
+        tile.col = static_cast<int32_t>(std::floor(x / tileSize));
+    }
+    template<typename T>
+    void tile2bound(TileKey &tile, T& xmin, T& xmax, T& ymin, T& ymax) const {
+        xmin = static_cast<T>(tile.col * tileSize);
+        xmax = static_cast<T>((tile.col + 1) * tileSize);
+        ymin = static_cast<T>(tile.row * tileSize);
+        ymax = static_cast<T>((tile.row + 1) * tileSize);
+    }
+
+    template<typename T>
+    void buffer2bound(bool isVertical, int32_t& bufRow, int32_t& bufCol, T& xmin, T& xmax, T& ymin, T& ymax) {
+        if (isVertical) {
+            xmin = (bufCol + 1.) * tileSize - 2 * r;
+            xmax = (bufCol + 1.) * tileSize + 2 * r;
+            ymin = bufRow * tileSize;
+            ymax = bufRow * tileSize + tileSize;
+        } else {
+            xmin = bufCol * tileSize - r;
+            xmax = bufCol * tileSize + tileSize + r;
+            ymin = (bufRow + 1) * tileSize - 2 * r;
+            ymax = (bufRow + 1) * tileSize + 2 * r;
+        }
+    }
+
+    template<typename T>
+    void bufferId2bound(uint32_t bufferId, T& xmin, T& xmax, T& ymin, T& ymax) {
+        int32_t bufRow, bufCol;
+        bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
+        buffer2bound(isVertical, bufRow, bufCol, xmin, xmax, ymin, ymax);
+    }
+
     bool isInternalToBuffer(int32_t x, int32_t y, uint32_t bufferId) {
         int32_t bufRow, bufCol;
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
         if (isVertical) {
-            double x_min = (bufCol + 1.) * tileSize - r;
-            double x_max = (bufCol + 1.) * tileSize + r;
-            double y_min = bufRow * tileSize + r;
-            double y_max = bufRow * tileSize + tileSize - r;
+            float x_min = (bufCol + 1.) * tileSize - r;
+            float x_max = (bufCol + 1.) * tileSize + r;
+            float y_min = bufRow * tileSize + r;
+            float y_max = bufRow * tileSize + tileSize - r;
             if (bufRow == tileReader.minrow) {
                 return (x > x_min && x < x_max && y < y_max);
             }
             return (x > x_min && x < x_max && y > y_min && y < y_max);
         } else {
-            double x_min = bufCol * tileSize;
-            double x_max = bufCol * tileSize + tileSize;
-            double y_min = (bufRow + 1) * tileSize - r;
-            double y_max = (bufRow + 1) * tileSize + r;
+            float x_min = bufCol * tileSize;
+            float x_max = bufCol * tileSize + tileSize;
+            float y_min = (bufRow + 1) * tileSize - r;
+            float y_max = (bufRow + 1) * tileSize + r;
             return (x >= x_min && x < x_max && y > y_min && y < y_max);
         }
     }
@@ -272,6 +318,16 @@ public:
         notice("Initialized Tiles2Minibatch");
     }
 
+    void setFeatureNames(const std::vector<std::string>& names) {
+        assert(names.size() == M_);
+        featureNames = names;
+    }
+    void setLloydIter(int32_t nIter) {
+        nLloydIter = nIter;
+    }
+
+    int32_t loadAnchors(const std::string& anchorFile);
+
     void run() override {
         // write header
         if (outputOriginalData) {
@@ -319,12 +375,7 @@ public:
         writeHeaderToJson();
     }
 
-    void setFeatureNames(const std::vector<std::string>& names) {
-        assert(names.size() == M_);
-        featureNames = names;
-    }
-
-private:
+protected:
     int32_t debug_;
     int32_t M_, K_, topk_;
     bool weighted, outputOriginalData;
@@ -336,21 +387,26 @@ private:
     double anchorMinCount, distNu, distR;
     float pixelResolution;
     std::vector<std::string> featureNames;
+    using vec2f_t = std::vector<std::vector<float>>;
+    std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile; // we may need more than one set of pre-defined anchors in the future
+    std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
+    int32_t nLloydIter = 2;
 
     // Parse pixels from one tile
     int32_t parseOneTile(TileData& tileData, TileKey tile);
     // Parse a binary temporary file (written by BoundaryBuffer)
     int32_t parseBoundaryFile(TileData& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
 
-    int32_t initAnchors(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch);
-    int32_t makeMinibatch(TileData& tileData, PointCloud<double>& anchors, Minibatch& minibatch);
+    int32_t initAnchorsHybrid(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
+    int32_t initAnchors(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
+    int32_t makeMinibatch(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
 
     // Write the results of internal points
     int32_t outputOriginalDataWithPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
     int32_t outputPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
 
     // Process one tile or one boundary buffer
-    void processTile(TileData &tileData, int threadId=0);
+    void processTile(TileData &tileData, int threadId=0, vec2f_t* anchorPtr = nullptr);
 
     // write output column info to a json file
     void writeHeaderToJson();
@@ -362,7 +418,11 @@ private:
             int32_t ret = parseOneTile(tileData, tile);
             notice("Thread %d read tile (%d, %d) with %d internal pixels", threadId, tile.row, tile.col, ret);
             if (ret <= 10) continue;
-            processTile(tileData, threadId);
+            vec2f_t* anchorPtr = nullptr;
+            if (fixedAnchorForTile.find(tile) != fixedAnchorForTile.end()) {
+                anchorPtr = &fixedAnchorForTile[tile];
+            }
+            processTile(tileData, threadId, anchorPtr);
         }
     }
 
@@ -372,9 +432,12 @@ private:
             TileData tileData;
             int32_t ret = parseBoundaryFile(tileData, bufferPtr);
             notice("Thread %d read boundary buffer (%d, %d, %d) with %d internal pixels", threadId, (bufferPtr->key & 0x1), bufferPtr->key >> 16, (bufferPtr->key >> 1) & 0x7FFF, ret);
-            if (ret >10) {
-                processTile(tileData, threadId);
+            if (ret <= 10) continue;
+            vec2f_t* anchorPtr = nullptr;
+            if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
+                anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];
             }
+            processTile(tileData, threadId, anchorPtr);
             std::remove(bufferPtr->tmpFile.c_str());
         }
     }

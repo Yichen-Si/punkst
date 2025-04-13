@@ -10,6 +10,7 @@ from sklearn.manifold import MDS
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
+matplotlib.use('Agg')
 
 def assign_color_mds_line(mtx, cmap_name, weight=None, top_color=None, seed=None, n_jobs=1):
     # mtx is a K by K similarity/proximity matrix
@@ -105,9 +106,10 @@ def choose_color(_args):
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=str, help='')
     parser.add_argument('--output', type=str, help='')
-    parser.add_argument('--cmap_name', type=str, default="turbo", help="Name of Matplotlib colormap to use (better close to a circular colormap)")
-    parser.add_argument('--top_color', type=str, default="#fcd217", help="HEX color code for the top factor")
-    parser.add_argument('--even_space', action='store_true', help="Evenly space the factors on the circle")
+    parser.add_argument('--cmap-name', type=str, default="turbo", help="Name of Matplotlib colormap to use (better close to a circular colormap)")
+    parser.add_argument('--top-color', type=str, default="#fcd217", help="HEX color code for the top factor")
+    parser.add_argument('--even-space', action='store_true', help="Evenly space the factors on the circle")
+    parser.add_argument("--skip-columns", type=str, action="append", default=[], help="Columns that are neither coordiante nor factor in the input file")
     parser.add_argument('--annotation', type=str, default = '', help='')
     parser.add_argument('--thread', type=int, default=-1, help='')
     parser.add_argument('--seed', type=int, default=-1, help='')
@@ -137,7 +139,7 @@ def choose_color(_args):
     df = pd.read_csv(args.input, sep='\t', header=0)
     df.rename(columns = {"X":"x","Y":"y"},inplace=True)
     header = df.columns
-    factor_header = [x for x in header if x not in ["x", "y"]]
+    factor_header = [x for x in header if x not in ["x", "y"] + args.skip_columns]
     K = len(factor_header)
     N = df.shape[0]
 
@@ -197,7 +199,6 @@ def choose_color(_args):
     fig = plot_colortable(cdict, "Factor label", sort_colors=False, ncols=4)
     f = args.output + ".cbar.png"
     fig.savefig(f, format="png", transparent=True)
-
 
 if __name__ == "__main__":
     choose_color(sys.argv[1:])
