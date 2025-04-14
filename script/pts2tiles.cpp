@@ -22,7 +22,7 @@ public:
     }
     virtual ~Pts2Tiles() {}
 
-    const std::unordered_map<int64_t, int64_t>& getGlobalTiles() const {
+    const std::unordered_map<uint64_t, uint64_t>& getGlobalTiles() const {
         return globalTiles;
     }
 
@@ -52,11 +52,11 @@ protected:
     int32_t icol_x, icol_y;
 
     std::mutex globalTilesMutex;
-    std::unordered_map<int64_t, int64_t> globalTiles;
+    std::unordered_map<uint64_t, uint64_t> globalTiles;
 
     std::vector<std::thread> threads;
 
-    virtual int64_t parse(std::string& line) {
+    virtual uint64_t parse(std::string& line) {
         std::istringstream iss(line);
         std::string token;
         double x, y;
@@ -83,9 +83,9 @@ protected:
         file.seekg(start);
         std::string line;
         // Map: tile id -> vector of lines (buffer)
-        std::unordered_map<int64_t, std::vector<std::string>> buffers;
+        std::unordered_map<uint64_t, std::vector<std::string>> buffers;
         while (file.tellg() < end && std::getline(file, line)) {
-            int64_t tileId = parse(line);
+            uint64_t tileId = parse(line);
             if (tileId == -1) {
                 continue;
             }
@@ -94,7 +94,7 @@ protected:
             if (buffers[tileId].size() >= tileBuffer) {
                 { // update globalTiles
                     std::lock_guard<std::mutex> lock(globalTilesMutex);
-                    int64_t npt = buffers[tileId].size();
+                    uint64_t npt = buffers[tileId].size();
                     if (globalTiles.find(tileId) == globalTiles.end()) {
                         globalTiles[tileId] = npt;
                     } else {
@@ -116,7 +116,7 @@ protected:
             if (!pair.second.empty()) {
                 { // update globalTiles
                     std::lock_guard<std::mutex> lock(globalTilesMutex);
-                    int64_t npt = pair.second.size();
+                    uint64_t npt = pair.second.size();
                     if (globalTiles.find(pair.first) == globalTiles.end()) {
                         globalTiles[pair.first] = npt;
                     } else {
@@ -149,7 +149,7 @@ protected:
         return true;
     }
 
-    void mergeTmpFileToOutput(int64_t tileId, std::ofstream& outfile) {
+    void mergeTmpFileToOutput(uint64_t tileId, std::ofstream& outfile) {
         for (uint32_t threadId = 0; threadId < nThreads; ++threadId) {
             std::string tmpFilename = tmpDir + std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv";
             std::ifstream tmpFile(tmpFilename, std::ios::binary);
@@ -176,8 +176,8 @@ protected:
         }
         indexfile << "# tilesize\t" << tileSize << "\n";
 
-        int64_t nPoints = 0;
-        std::vector<int64_t> sortedTiles;
+        uint64_t nPoints = 0;
+        std::vector<uint64_t> sortedTiles;
         for (const auto& pair : globalTiles) {
             sortedTiles.push_back(pair.first);
             nPoints += pair.second;
@@ -229,7 +229,7 @@ public:
     ~Pts2TilesAnno2D() {}
 
 protected:
-    int64_t parse(std::string& line, float& x, float& y) {
+    uint64_t parse(std::string& line, float& x, float& y) {
         std::istringstream iss(line);
         std::string token;
         int32_t i = 0;
@@ -255,10 +255,10 @@ protected:
         file.seekg(start);
         std::string line;
         // Map: tile id -> vector of lines (buffer)
-        std::unordered_map<int64_t, std::vector<std::string>> buffers;
+        std::unordered_map<uint64_t, std::vector<std::string>> buffers;
         while (file.tellg() < end && std::getline(file, line)) {
             float pt[2];
-            int64_t tileId = parse(line, pt[0], pt[1]);
+            uint64_t tileId = parse(line, pt[0], pt[1]);
             if (tileId == -1) {
                 continue;
             }
@@ -277,7 +277,7 @@ protected:
             if (buffers[tileId].size() >= tileBuffer) {
                 { // update globalTiles
                     std::lock_guard<std::mutex> lock(globalTilesMutex);
-                    int64_t npt = buffers[tileId].size();
+                    uint64_t npt = buffers[tileId].size();
                     if (globalTiles.find(tileId) == globalTiles.end()) {
                         globalTiles[tileId] = npt;
                     } else {
@@ -298,7 +298,7 @@ protected:
             if (!pair.second.empty()) {
                 { // update globalTiles
                     std::lock_guard<std::mutex> lock(globalTilesMutex);
-                    int64_t npt = pair.second.size();
+                    uint64_t npt = pair.second.size();
                     if (globalTiles.find(pair.first) == globalTiles.end()) {
                         globalTiles[pair.first] = npt;
                     } else {

@@ -294,7 +294,8 @@ public:
         } else if constexpr (std::is_same_v<T, int32_t>) {
             assert(tileReader.getCoordType() == CoordType::INTEGER && "Template type does not match with TileReader coordinate type");
         } else {
-            static_assert(false, "Unsupported coordinate type");
+            // static_assert(false, "Unsupported coordinate type"); // need newer gcc
+            error("Unsupported coordinate type");
         }
         if (pixelResolution <= 0) {
             pixelResolution = 1;

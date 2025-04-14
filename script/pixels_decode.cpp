@@ -61,9 +61,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         if (hexGridDist <= 0) {
             error("Hexagon size or hexagon grid distance must be provided");
         }
-        hexSize = hexGridDist / sqrt(3) * 2;
+        hexSize = hexGridDist / sqrt(3);
     } else {
-        hexGridDist = hexSize * sqrt(3) / 2;
+        hexGridDist = hexSize * sqrt(3);
     }
     if (nMoves <= 0) {
         if (anchorDist <= 0) {

@@ -6,7 +6,6 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
-#include <format>
 #include <sstream>
 #include <string_view>
 #include <filesystem>
@@ -38,13 +37,40 @@ struct KStringRAII {
 
 void hprintf(htsFile* fp, const char * msg, ...);
 
-// String to number conversion functions
+// String to number conversion functions // need newer gcc
+// template<typename T>
+// bool str2num(const std::string& str, T& value) {
+//     if (str.empty()) return false;
+//     auto result = std::from_chars(str.data(), str.data() + str.size(), value);
+//     return result.ec == std::errc{};
+// }
+// Generic template for integral types
 template<typename T>
-bool str2num(const std::string& str, T& value) {
+std::enable_if_t<std::is_integral_v<T>, bool>
+str2num(const std::string &str, T &value) {
     if (str.empty()) return false;
     auto result = std::from_chars(str.data(), str.data() + str.size(), value);
     return result.ec == std::errc{};
 }
+
+// Overload for floating point types
+template<typename T>
+std::enable_if_t<std::is_floating_point_v<T>, bool>
+str2num(const std::string &str, T &value) {
+    if (str.empty()) return false;
+    char* endPtr = nullptr;
+    errno = 0;
+    if constexpr (std::is_same_v<T, float>) {
+        value = std::strtof(str.c_str(), &endPtr);
+    } else if constexpr (std::is_same_v<T, double>) {
+        value = std::strtod(str.c_str(), &endPtr);
+    } else if constexpr (std::is_same_v<T, long double>) {
+        value = std::strtold(str.c_str(), &endPtr);
+    }
+    // Check if conversion succeeded: endPtr should point to a non-empty part and errno must be 0.
+    return endPtr != str.c_str() && errno == 0;
+}
+
 bool str2int32(const std::string& str, int32_t& value);
 bool str2int64(const std::string& str, int64_t& value);
 bool str2uint32(const std::string& str, uint32_t& value);

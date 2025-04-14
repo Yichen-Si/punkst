@@ -7,6 +7,7 @@ from scipy.sparse import coo_array
 from datetime import datetime
 from sklearn.manifold import MDS
 
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
