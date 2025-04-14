@@ -266,8 +266,6 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
     TileKey tile;
     int tileSize = tileReader.getTileSize();
     while (tileQueue.pop(tile)) {
-std::cout << "Thread " << threadId << " processing tile (" << tile.row << ", " << tile.col << ")" << std::endl;
-
         // Compute tile’s cartesian bounding box.
         double tile_xmin = tile.col * tileSize;
         double tile_xmax = (tile.col + 1) * tileSize;
@@ -341,7 +339,6 @@ std::cout << "Thread " << threadId << " processing tile (" << tile.row << ", " <
                 }
             }
         } // end while reading lines in tile
-std::cout << "Thread " << threadId << " finished scanning tile (" << tile.row << ", " << tile.col << ") npts: " << nbg << "," << nfront << std::endl;
         { // Lock the global output file.
             std::lock_guard<std::mutex> lock(mainOutMutex);
             for (const auto &unitBuffer : unitBuffersInternal) {

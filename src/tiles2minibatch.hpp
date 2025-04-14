@@ -23,10 +23,11 @@ using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using Eigen::SparseMatrix;
 
+template<typename T>
 struct TileData {
     float xmin, xmax, ymin, ymax;
-    std::unordered_map<uint32_t, std::vector<Record>> buffers; // local buffer to accumulate records to be written to temporary files
-    std::vector<Record> pts; // original data points
+    std::unordered_map<uint32_t, std::vector<RecordT<T>>> buffers; // local buffer to accumulate records to be written to temporary files
+    std::vector<RecordT<T>> pts; // original data points
     std::vector<int32_t> idxinternal; // indices for internal data points to output
     std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
     std::vector<std::pair<double, double>> coords; // unique coordinates
@@ -67,13 +68,14 @@ struct BoundaryBuffer {
             return true;
         }
     }
-    void writeToFile(const std::vector<Record>& records) {
+    template<typename T>
+    void writeToFile(const std::vector<RecordT<T>>& records) {
         std::lock_guard<std::mutex> lock(*mutex);
         std::ofstream ofs(tmpFile, std::ios::binary | std::ios::app);
         if (!ofs) {
             throw std::runtime_error("Error creating temporary file: " + tmpFile);
         }
-        ofs.write(reinterpret_cast<const char*>(records.data()), records.size() * sizeof(Record));
+        ofs.write(reinterpret_cast<const char*>(records.data()), records.size() * sizeof(RecordT<T>));
         ofs.close();
         nTiles++;
     }
@@ -242,15 +244,14 @@ protected:
             ymax = (bufRow + 1) * tileSize + 2 * r;
         }
     }
-
     template<typename T>
     void bufferId2bound(uint32_t bufferId, T& xmin, T& xmax, T& ymin, T& ymax) {
         int32_t bufRow, bufCol;
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
         buffer2bound(isVertical, bufRow, bufCol, xmin, xmax, ymin, ymax);
     }
-
-    bool isInternalToBuffer(int32_t x, int32_t y, uint32_t bufferId) {
+    template<typename T>
+    bool isInternalToBuffer(T x, T y, uint32_t bufferId) {
         int32_t bufRow, bufCol;
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
         if (isVertical) {
@@ -275,6 +276,7 @@ protected:
     virtual void boundaryWorker(int threadId) = 0;
 };
 
+template<typename T>
 class Tiles2Minibatch : public Tiles2MinibatchBase {
 
 public:
@@ -286,6 +288,14 @@ public:
         unsigned int seed = std::random_device{}(),
         double c = 20, double h = 0.7, double res = 1, bool outorg = true, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
         Tiles2MinibatchBase(nThreads, r + hexGrid.size, outputFile, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), outputOriginalData(outorg), M_(M), topk_(k), debug_(debug) {
+        // check type consistency
+        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+            assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
+        } else if constexpr (std::is_same_v<T, int32_t>) {
+            assert(tileReader.getCoordType() == CoordType::INTEGER && "Template type does not match with TileReader coordinate type");
+        } else {
+            static_assert(false, "Unsupported coordinate type");
+        }
         if (pixelResolution <= 0) {
             pixelResolution = 1;
         }
@@ -324,6 +334,12 @@ public:
     }
     void setLloydIter(int32_t nIter) {
         nLloydIter = nIter;
+    }
+    void setOutputCoordDigits(int32_t digits) {
+        floatCoordDigits = digits;
+    }
+    void setOutputProbDigits(int32_t digits) {
+        probDigits = digits;
     }
 
     int32_t loadAnchors(const std::string& anchorFile);
@@ -391,22 +407,23 @@ protected:
     std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile; // we may need more than one set of pre-defined anchors in the future
     std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
     int32_t nLloydIter = 2;
+    int32_t floatCoordDigits = 4, probDigits = 4;
 
     // Parse pixels from one tile
-    int32_t parseOneTile(TileData& tileData, TileKey tile);
+    int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
     // Parse a binary temporary file (written by BoundaryBuffer)
-    int32_t parseBoundaryFile(TileData& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
 
-    int32_t initAnchorsHybrid(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
-    int32_t initAnchors(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
-    int32_t makeMinibatch(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
+    int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
+    int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
+    int32_t makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
 
     // Write the results of internal points
-    int32_t outputOriginalDataWithPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
-    int32_t outputPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
+    int32_t outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
+    int32_t outputPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
 
     // Process one tile or one boundary buffer
-    void processTile(TileData &tileData, int threadId=0, vec2f_t* anchorPtr = nullptr);
+    void processTile(TileData<T> &tileData, int threadId=0, vec2f_t* anchorPtr = nullptr);
 
     // write output column info to a json file
     void writeHeaderToJson();
@@ -414,7 +431,7 @@ protected:
     void tileWorker(int threadId) override {
         TileKey tile;
         while (tileQueue.pop(tile)) {
-            TileData tileData;
+            TileData<T> tileData;
             int32_t ret = parseOneTile(tileData, tile);
             notice("Thread %d read tile (%d, %d) with %d internal pixels", threadId, tile.row, tile.col, ret);
             if (ret <= 10) continue;
@@ -429,7 +446,7 @@ protected:
     void boundaryWorker(int threadId) override {
         std::shared_ptr<BoundaryBuffer> bufferPtr;
         while (bufferQueue.pop(bufferPtr)) {
-            TileData tileData;
+            TileData<T> tileData;
             int32_t ret = parseBoundaryFile(tileData, bufferPtr);
             notice("Thread %d read boundary buffer (%d, %d, %d) with %d internal pixels", threadId, (bufferPtr->key & 0x1), bufferPtr->key >> 16, (bufferPtr->key >> 1) & 0x7FFF, ret);
             if (ret <= 10) continue;

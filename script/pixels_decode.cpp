@@ -12,6 +12,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double pixelResolution = 1, defaultWeight = 0.;
     bool outputOritinalData = false;
     bool featureIsIndex = false;
+    bool coordsAreInt = false;
+    int32_t floatCoordDigits = 4, probDigits = 4;
 
     ParamList pl;
     // Input Options
@@ -21,6 +23,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("anchor", "Anchor file", anchorFile)
       .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
       .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
+      .add_option("coords-are-int", "If the coordinates are integers, otherwise assume they are floats", coordsAreInt)
       .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
       .add_option("icol-val", "Column index for count/value (0-based)", icol_val)
       .add_option("feature-is-index", "If the feature column contains integer indices, otherwise assume it contains feature names", featureIsIndex)
@@ -40,6 +43,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("temp-dir", "Directory to store temporary files", tmpDir)
       .add_option("top-k", "Top K factors to output", topK)
       .add_option("min-init-count", "Minimum", minInitCount)
+      .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used if input coordinates are float or --output-original is not set)", floatCoordDigits)
+      .add_option("output-prob-digits", "Number of decimal digits to output for probabilities", probDigits)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug);
 
@@ -115,7 +120,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     notice("Read %zu features and %d factors from model file", nFeatures, K);
 
     HexGrid hexGrid(hexSize);
-    TileReader tileReader(inTsv, inIndex);
+    TileReader tileReader(inTsv, inIndex, -1, coordsAreInt);
     if (!tileReader.isValid()) {
         error("Error in input tiles: %s", inTsv.c_str());
     }
@@ -134,13 +139,27 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model, 100, 0.005/K);
     notice("Initialized anchor model with %d features and %d factors", nFeatures, K);
 
-    Tiles2Minibatch tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
-    tiles2minibatch.setFeatureNames(featureNames);
-    if (!anchorFile.empty()) {
-        int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
-        notice("Loaded %d valid anchors", nAnchors);
+    if (coordsAreInt) {
+        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
+        tiles2minibatch.setFeatureNames(featureNames);
+        tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
+        tiles2minibatch.setOutputProbDigits(probDigits);
+        if (!anchorFile.empty()) {
+            int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
+            notice("Loaded %d valid anchors", nAnchors);
+        }
+        tiles2minibatch.run();
+    } else {
+        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
+        tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
+        tiles2minibatch.setOutputProbDigits(probDigits);
+        tiles2minibatch.setFeatureNames(featureNames);
+        if (!anchorFile.empty()) {
+            int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
+            notice("Loaded %d valid anchors", nAnchors);
+        }
+        tiles2minibatch.run();
     }
-    tiles2minibatch.run();
 
     return 0;
 }

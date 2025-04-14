@@ -69,9 +69,9 @@ protected:
             }
             ++i;
         }
-        int32_t row = static_cast<int32_t>(std::floor(y / tileSize));
-        int32_t col = static_cast<int32_t>(std::floor(x / tileSize));
-        return static_cast<int64_t>(row) << 32 | col ;
+        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));
+        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize));
+        return ((static_cast<uint64_t>(row) << 32) | col);
     }
 
     // Worker thread function
@@ -189,7 +189,7 @@ protected:
             std::streampos startOffset = outfile.tellp();
             mergeTmpFileToOutput(tileId, outfile);
             std::streampos endOffset = outfile.tellp();
-            indexfile << (int32_t)(tileId >> 32) << "\t" << (int32_t)(tileId & 0xFFFFFFFF) << "\t" << startOffset << "\t" << endOffset << "\t" << globalTiles[tileId] << "\n";
+            indexfile << static_cast<int32_t>(tileId >> 32) << "\t" << static_cast<int32_t>(tileId & 0xFFFFFFFFULL) << "\t" << startOffset << "\t" << endOffset << "\t" << globalTiles[tileId] << "\n";
         }
 
         outfile.close();
@@ -241,9 +241,9 @@ protected:
             }
             ++i;
         }
-        int32_t row = static_cast<int32_t>(std::floor(y / tileSize));
-        int32_t col = static_cast<int32_t>(std::floor(x / tileSize));
-        return static_cast<int64_t>(row) << 32 | col ;
+        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));
+        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize));
+        return ((static_cast<uint64_t>(row) << 32) | col);
     }
 
     // Worker thread function

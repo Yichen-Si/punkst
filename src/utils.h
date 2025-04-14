@@ -40,7 +40,11 @@ void hprintf(htsFile* fp, const char * msg, ...);
 
 // String to number conversion functions
 template<typename T>
-bool str2num(const std::string& str, T& value);
+bool str2num(const std::string& str, T& value) {
+    if (str.empty()) return false;
+    auto result = std::from_chars(str.data(), str.data() + str.size(), value);
+    return result.ec == std::errc{};
+}
 bool str2int32(const std::string& str, int32_t& value);
 bool str2int64(const std::string& str, int64_t& value);
 bool str2uint32(const std::string& str, uint32_t& value);

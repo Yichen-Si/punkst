@@ -115,7 +115,9 @@ struct UnitValues {
                 iss >> hexKey >> x >> y;
             }
         } catch (const std::exception& e) {
-            return false;
+            error("Error reading line: %s\n %s", line.c_str(), e.what());
+        } catch (...) {
+            error("Unknown error reading line: %s", line.c_str());
         }
         clear();
         vals.resize(nModal);
@@ -217,19 +219,11 @@ public:
                 iss >> nfeatures[i] >> counts[i];
             }
         } catch (const std::exception& e) {
-            return -1;
+            error("Error reading line: %s\n %s", line.c_str(), e.what());
+        } catch (...) {
+            error("Unknown error reading line: %s", line.c_str());
         }
-        for (int i = 0; i < modal; ++i) {
-            for (int j = 0; j < nfeatures[i]; ++j) {
-                uint32_t feature;
-                int32_t value;
-                if (!(iss >> feature >> value)) {
-                    return -1;
-                }
-            }
-        }
-        int l = 0;
-        while (l < modal) {
+        for (int l = 0; l < modal; ++l) { // skip
             for (int i = 0; i < nfeatures[l]; ++i) {
                 uint32_t feature;
                 int32_t value;
@@ -237,7 +231,6 @@ public:
                     return -1;
                 }
             }
-            ++l;
         }
         doc.ids.resize(nfeatures[modal]);
         doc.cnts.resize(nfeatures[modal]);
@@ -268,11 +261,8 @@ private:
         hexSize = meta.value("hex_size", -0.0);
         hexGrid.init(hexSize);
         nUnits = meta.value("n_units", 0);
+        nLayer = meta.value("n_layers", 1);
         nModal = meta.value("n_modalities", 0);
-        nLayer = 1;
-        if (meta.find("n_layers") != meta.end()) {
-            nLayer = meta["n_layers"];
-        }
         nFeatures = meta.value("n_features", 0);
         features.resize(nFeatures);
         if (meta.contains("dictionary")) {

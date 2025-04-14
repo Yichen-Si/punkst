@@ -1,6 +1,7 @@
 #include "tiles2minibatch.hpp"
 
-int32_t Tiles2Minibatch::loadAnchors(const std::string& anchorFile) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::loadAnchors(const std::string& anchorFile) {
     std::ifstream inFile(anchorFile);
     if (!inFile) {
         error("Error opening anchors file: %s", anchorFile.c_str());
@@ -38,7 +39,8 @@ int32_t Tiles2Minibatch::loadAnchors(const std::string& anchorFile) {
     return nAnchors;
 }
 
-int32_t Tiles2Minibatch::parseOneTile(TileData& tileData, TileKey tile) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::parseOneTile(TileData<T>& tileData, TileKey tile) {
     std::unique_ptr<BoundedReadline> iter;
     try {
         iter = tileReader.get_tile_iterator(tile.row, tile.col);
@@ -52,8 +54,8 @@ int32_t Tiles2Minibatch::parseOneTile(TileData& tileData, TileKey tile) {
     std::string line;
     int32_t npt = 0;
     while (iter->next(line)) {
-        Record rec;
-        int32_t idx = lineParser.parse(rec, line);
+        RecordT<T> rec;
+        int32_t idx = lineParser.parse<T>(rec, line);
         if (idx < -1) {
             error("Error parsing line: %s", line.c_str());
         }
@@ -79,7 +81,8 @@ int32_t Tiles2Minibatch::parseOneTile(TileData& tileData, TileKey tile) {
     return tileData.idxinternal.size();
 }
 
-int32_t Tiles2Minibatch::parseBoundaryFile(TileData& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
     std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
     std::ifstream ifs(bufferPtr->tmpFile, std::ios::binary);
     if (!ifs) {
@@ -92,9 +95,9 @@ int32_t Tiles2Minibatch::parseBoundaryFile(TileData& tileData, std::shared_ptr<B
     tileData.clear();
     bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     while (true) {
-        Record rec;
-        ifs.read(reinterpret_cast<char*>(&rec), sizeof(Record));
-        if (ifs.gcount() != sizeof(Record)) break;
+        RecordT<T> rec;
+        ifs.read(reinterpret_cast<char*>(&rec), sizeof(RecordT<T>));
+        if (ifs.gcount() != sizeof(RecordT<T>)) break;
         tileData.pts.push_back(rec);
         if (isInternalToBuffer(rec.x, rec.y, bufferPtr->key)) {
             tileData.idxinternal.push_back(npt);
@@ -104,7 +107,8 @@ int32_t Tiles2Minibatch::parseBoundaryFile(TileData& tileData, std::shared_ptr<B
     return tileData.idxinternal.size();
 }
 
-int32_t Tiles2Minibatch::initAnchors(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
 
     anchors.clear();
     std::vector<Document> documents;
@@ -159,7 +163,8 @@ int32_t Tiles2Minibatch::initAnchors(TileData& tileData, std::vector<cv::Point2f
     return anchors.size();
 }
 
-int32_t Tiles2Minibatch::makeMinibatch(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
 
     PointCloudCV<float> pc;
     pc.pts = std::move(anchors);
@@ -235,7 +240,8 @@ int32_t Tiles2Minibatch::makeMinibatch(TileData& tileData, std::vector<cv::Point
     return npt;
 }
 
-int32_t Tiles2Minibatch::outputOriginalDataWithPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds) {
     std::lock_guard<std::mutex> lock(mainOutMutex);
     int32_t npts = 0;
     int32_t nrows = topVals.rows();
@@ -245,14 +251,15 @@ int32_t Tiles2Minibatch::outputOriginalDataWithPixelResult(const TileData& tileD
         if (idx < 0 || idx >= nrows) {
             continue;
         }
-        const Record& rec = tileData.pts[idxorg];
+        const RecordT<T>& rec = tileData.pts[idxorg];
         std::stringstream ss;
-        // set precision to 4 decimal for double/float
-        ss.precision(4);
-        ss << rec.x << "\t" << rec.y << "\t" << featureNames[rec.idx] << "\t" << rec.ct;
+        ss.precision(floatCoordDigits);
+        ss << std::fixed << rec.x << "\t" << rec.y << "\t" << featureNames[rec.idx] << "\t" << rec.ct;
         for (int32_t j = 0; j < topk_; ++j) {
             ss << "\t" << topIds(idx, j);
         }
+        ss.precision(probDigits);
+        ss << std::scientific;
         for (int32_t j = 0; j < topk_; ++j) {
             ss << "\t" << topVals(idx, j);
         }
@@ -263,7 +270,8 @@ int32_t Tiles2Minibatch::outputOriginalDataWithPixelResult(const TileData& tileD
     return npts;
 }
 
-int32_t Tiles2Minibatch::outputPixelResult(const TileData& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::outputPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds) {
     std::lock_guard<std::mutex> lock(mainOutMutex);
     size_t N = tileData.coords.size();
     std::vector<bool> internal(N, 0);
@@ -280,13 +288,14 @@ int32_t Tiles2Minibatch::outputPixelResult(const TileData& tileData, const Matri
         }
         std::stringstream ss;
         // set precision to %.2f for coordinates
-        ss.precision(2);
+        ss.precision(floatCoordDigits);
         ss << std::fixed << tileData.coords[j].first << "\t" << tileData.coords[j].second;
         // set precision to 4 decimal for probabilities
-        ss.precision(4);
         for (int32_t k = 0; k < topk_; ++k) {
             ss << "\t" << topIds(j, k);
         }
+        ss.precision(probDigits);
+        ss << std::scientific;
         for (int32_t k = 0; k < topk_; ++k) {
             ss << "\t" << topVals(j, k);
         }
@@ -297,7 +306,8 @@ int32_t Tiles2Minibatch::outputPixelResult(const TileData& tileData, const Matri
     return npts;
 }
 
-void Tiles2Minibatch::processTile(TileData &tileData, int threadId, vec2f_t* anchorPtr) {
+template<typename T>
+void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, vec2f_t* anchorPtr) {
     if (tileData.pts.empty()) {
         return;
     }
@@ -337,7 +347,8 @@ void Tiles2Minibatch::processTile(TileData &tileData, int threadId, vec2f_t* anc
     notice("Thread %d fit minibatch with %d anchors and output %d internal pixels", threadId, nAnchors, npts);
 }
 
-void Tiles2Minibatch::writeHeaderToJson() {
+template<typename T>
+void Tiles2Minibatch<T>::writeHeaderToJson() {
     size_t pos = outputFile.find_last_of(".");
     std::string jsonFile;
     if (pos != std::string::npos) {
@@ -368,7 +379,8 @@ void Tiles2Minibatch::writeHeaderToJson() {
     jsonOut.close();
 }
 
-int32_t Tiles2Minibatch::initAnchorsHybrid(TileData& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors) {
+template<typename T>
+int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors) {
     if ((fixedAnchors == nullptr) || fixedAnchors->empty()) {
         return initAnchors(tileData, anchors, minibatch);
     }
@@ -484,3 +496,6 @@ int32_t Tiles2Minibatch::initAnchorsHybrid(TileData& tileData, std::vector<cv::P
     minibatch.M = M_;
     return anchors.size();
 }
+
+template class Tiles2Minibatch<int32_t>;
+template class Tiles2Minibatch<float>;

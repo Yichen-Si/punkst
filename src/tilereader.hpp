@@ -16,11 +16,14 @@
 #include "Eigen/Sparse"
 using Eigen::SparseMatrix;
 
+enum class CoordType { INTEGER, FLOAT };
+
 // for serializing to temporary files
 #pragma pack(push, 1)
-struct Record {
-    int32_t x;
-    int32_t y;
+template<typename T>
+struct RecordT {
+    T x;
+    T y;
     uint32_t idx;
     uint32_t ct;
 };
@@ -215,7 +218,8 @@ struct lineParserUnival : public lineParser {
         init(_ix, _iy, _iz, _ivals, _dfile);
     }
 
-    int32_t parse(Record& rec, std::string& line) {
+    template<typename T>
+    int32_t parse(RecordT<T>& rec, std::string& line) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < n_tokens) {
@@ -230,8 +234,9 @@ struct lineParserUnival : public lineParser {
         } else {
             rec.idx = std::stoul(tokens[icol_feature]);
         }
-        rec.x = std::stoi(tokens[icol_x]);
-        rec.y = std::stoi(tokens[icol_y]);
+        if (!str2num<T>(tokens[icol_x], rec.x) || !str2num<T>(tokens[icol_y], rec.y)) {
+            return -1;
+        }
         rec.ct = std::stoi(tokens[icol_val]);
         return rec.idx;
     }
@@ -302,9 +307,10 @@ public:
 class TileReader : public TileReaderBase {
 public:
 
-    TileReader(const std::string &tsvFilename, const std::string &indexFilename, int32_t tileSize = -1)
+    TileReader(const std::string &tsvFilename, const std::string &indexFilename, int32_t tileSize = -1, bool isInt = false)
         : TileReaderBase(tsvFilename, indexFilename, tileSize) {
         loadIndex(indexFilename);
+        coordType = isInt ? CoordType::INTEGER : CoordType::FLOAT;
     }
 
     // Given a tile identified by (tileRow, tileCol), returns an iterator
@@ -321,7 +327,9 @@ public:
         return std::make_unique<BoundedReadline>(tsvFilename, info.startOffset, info.endOffset);
     }
 
+    CoordType getCoordType() const { return coordType; }
 private:
+    CoordType coordType;
     void loadIndex(const std::string &indexFilename) {
         std::ifstream indexFile(indexFilename);
         if (!indexFile.is_open()) {
@@ -459,7 +467,7 @@ private:
     std::unique_ptr<std::ifstream> file;
 };
 
-
+// currently only for integer coordinates
 class BinaryTileReader : public TileReaderBase {
 public:
     // The constructor takes:

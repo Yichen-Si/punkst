@@ -72,8 +72,8 @@ protected:
         return true;
     }
 
-    void addPixelToUnitMaps(PixelValues& pixel, int32_t hx, int32_t hy, std::unordered_map<int64_t, UnitValues>& Units, int32_t l = -1) {
-        int64_t key = (static_cast<int64_t>(hx) << 32) | hy;
+    void addPixelToUnitMaps(PixelValues& pixel, uint32_t hx, uint32_t hy, std::unordered_map<int64_t, UnitValues>& Units, int32_t l = -1) {
+        int64_t key = (static_cast<uint64_t>(hx) << 32) | hy;
         auto it = Units.find(key);
         if (it == Units.end()) {
             Units.insert({key, UnitValues(hx, hy, pixel, l)});
