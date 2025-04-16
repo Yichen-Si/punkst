@@ -13,6 +13,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool outputOritinalData = false;
     bool featureIsIndex = false;
     bool coordsAreInt = false;
+    bool useTicketSystem = false;
     int32_t floatCoordDigits = 4, probDigits = 4;
 
     ParamList pl;
@@ -40,6 +41,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     // Output Options
     pl.add_option("out", "Output TSV file", outFile)
       .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
+      .add_option("use-ticket-system", "Use ticket system to ensure predictable output order", useTicketSystem)
       .add_option("temp-dir", "Directory to store temporary files", tmpDir)
       .add_option("top-k", "Top K factors to output", topK)
       .add_option("min-init-count", "Minimum", minInitCount)
@@ -140,7 +142,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     notice("Initialized anchor model with %d features and %d factors", nFeatures, K);
 
     if (coordsAreInt) {
-        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
+        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+        tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
         tiles2minibatch.setFeatureNames(featureNames);
         tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
         tiles2minibatch.setOutputProbDigits(probDigits);
@@ -150,7 +153,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         tiles2minibatch.run();
     } else {
-        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, outputOritinalData, nFeatures, 0, topK, verbose, debug);
+        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+        tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
         tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
         tiles2minibatch.setOutputProbDigits(probDigits);
         tiles2minibatch.setFeatureNames(featureNames);

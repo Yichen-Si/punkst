@@ -4,6 +4,7 @@
 #include <random>
 #include <cassert>
 #include <stdexcept>
+#include <atomic>
 #include "error.hpp"
 #include "json.hpp"
 #include "nanoflann.hpp"
@@ -98,6 +99,7 @@ public:
         if (!mainOut) {
             error("Error opening main output file: %s", outputFile.c_str());
         } // Assume tileSize is provided by the TileReader.
+        mainOut.close();
         tileSize = tileReader.getTileSize();
     }
 
@@ -119,7 +121,7 @@ protected:
 
     std::ofstream mainOut;
     std::mutex mainOutMutex;  // Protects writing to mainOut
-    std::unordered_map<uint32_t, std::shared_ptr<BoundaryBuffer>> boundaryBuffers;
+    std::map<uint32_t, std::shared_ptr<BoundaryBuffer>> boundaryBuffers;
     std::mutex boundaryBuffersMapMutex; // Protects modifying boundaryBuffers
     ThreadSafeQueue<TileKey> tileQueue;
     ThreadSafeQueue<std::shared_ptr<BoundaryBuffer>> bufferQueue;
@@ -286,8 +288,8 @@ public:
         TileReader& tileReader, lineParserUnival& lineParser,
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
-        double c = 20, double h = 0.7, double res = 1, bool outorg = true, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
-        Tiles2MinibatchBase(nThreads, r + hexGrid.size, outputFile, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), outputOriginalData(outorg), M_(M), topk_(k), debug_(debug) {
+        double c = 20, double h = 0.7, double res = 1, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
+        Tiles2MinibatchBase(nThreads, r + hexGrid.size, outputFile, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug), outputOriginalData(false), useTicketSystem(false), currentTicket(0), nextOutputTicket(0) {
         // check type consistency
         if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
             assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
@@ -317,6 +319,7 @@ public:
         if (N <= 0) {
             N = lda.get_N_global() * 100;
         }
+        pseudobulk = MatrixXd::Zero(K_, M_);
         slda.init(K_, M_, N, seed);
         slda.init_global_parameter(lda.get_model());
         slda.verbose_ = verbose;
@@ -342,10 +345,18 @@ public:
     void setOutputProbDigits(int32_t digits) {
         probDigits = digits;
     }
+    void setOutputOptions(bool includeOrg, bool useTicket) {
+        outputOriginalData = includeOrg;
+        useTicketSystem = useTicket;
+    }
 
     int32_t loadAnchors(const std::string& anchorFile);
 
     void run() override {
+        mainOut.open(this->outputFile, std::ios::out);
+        if (!mainOut) {
+            error("Error opening main output file: %s", outputFile.c_str());
+        }
         // write header
         if (outputOriginalData) {
             mainOut << "#x\ty\tfeature\tct";
@@ -376,6 +387,10 @@ public:
         workThreads.clear();
         // Phase 2: Process boundary buffers
         notice("Phase 2 Launching %d worker threads", nThreads);
+        if (useTicketSystem) {
+            nextOutputTicket.store(0);
+            currentTicket.store(0);
+        }
         { // Enqueue all boundary buffers from the global map.
             std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
             for (const auto &entry : boundaryBuffers) {
@@ -389,13 +404,20 @@ public:
         for (auto &t : workThreads) {
             t.join();
         }
+        mainOut.close();
         writeHeaderToJson();
+        writePseudobulkToTsv();
     }
 
 protected:
     int32_t debug_;
     int32_t M_, K_, topk_;
     bool weighted, outputOriginalData;
+    bool useTicketSystem;
+    std::atomic<int> currentTicket;
+    std::atomic<int> nextOutputTicket;
+    std::mutex ticketMutex;
+    std::condition_variable ticketCondition;
     LatentDirichletAllocation& lda;
     OnlineSLDA slda;
     lineParserUnival& lineParser;
@@ -407,8 +429,10 @@ protected:
     using vec2f_t = std::vector<std::vector<float>>;
     std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile; // we may need more than one set of pre-defined anchors in the future
     std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
-    int32_t nLloydIter = 2;
+    int32_t nLloydIter = 1;
     int32_t floatCoordDigits = 4, probDigits = 4;
+    MatrixXd pseudobulk; // K x M
+    std::mutex pseudobulkMutex; // Protects pseudobulk
 
     // Parse pixels from one tile
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
@@ -424,10 +448,12 @@ protected:
     int32_t outputPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
 
     // Process one tile or one boundary buffer
-    void processTile(TileData<T> &tileData, int threadId=0, vec2f_t* anchorPtr = nullptr);
+    void processTile(TileData<T> &tileData, int threadId=0, int ticket = 0, vec2f_t* anchorPtr = nullptr);
 
     // write output column info to a json file
     void writeHeaderToJson();
+    // write posterior pseudobulk to a tsv file
+    void writePseudobulkToTsv();
 
     void tileWorker(int threadId) override {
         TileKey tile;
@@ -440,7 +466,12 @@ protected:
             if (fixedAnchorForTile.find(tile) != fixedAnchorForTile.end()) {
                 anchorPtr = &fixedAnchorForTile[tile];
             }
-            processTile(tileData, threadId, anchorPtr);
+            int ticket = 0;
+            if (useTicketSystem) {
+                ticket = nextOutputTicket.fetch_add(1);
+            }
+
+            processTile(tileData, threadId, ticket, anchorPtr);
         }
     }
 
@@ -455,7 +486,11 @@ protected:
             if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
                 anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];
             }
-            processTile(tileData, threadId, anchorPtr);
+            int ticket = 0;
+            if (useTicketSystem) {
+                ticket = nextOutputTicket.fetch_add(1);
+            }
+            processTile(tileData, threadId, ticket, anchorPtr);
             std::remove(bufferPtr->tmpFile.c_str());
         }
     }

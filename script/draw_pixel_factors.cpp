@@ -9,7 +9,8 @@
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
     std::string dataFile, headerFile, colorFile, outFile;
-    double scale, xmin, xmax, ymin, ymax;
+    double scale = 1;
+    double xmin, xmax, ymin, ymax;
     int32_t verbose = 1000000;
 
     ParamList pl;
@@ -88,6 +89,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     // Image size
     int width = static_cast<int>(std::floor((xmax - xmin) / scale)) + 1;
     int height = static_cast<int>(std::floor((ymax - ymin) / scale)) + 1;
+    notice("Image size: %d x %d", width, height);
     if (width <=1 || height <= 1) {
         error("Image dimensions are 0. Please check the input parameters.");
     }
@@ -117,19 +119,24 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         std::fill(countImg[i].begin(), countImg[i].end(), 0);
     }
 
-    int32_t nline = 0;
+    int32_t nline = 0, nskip = 0, nkept = 0;
     while (std::getline(dataStream, line)) {
         if (line.empty()) continue;
         if (line[0] == '#') continue;
         nline++;
         if (nline % verbose == 0) {
-            notice("Processed %d lines", nline);
+            notice("Processed %d lines, skipped %d due to density limit, recorded %d", nline, nskip, nkept);
         }
 
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() != maxIdx + 1) {
-            error("Error reading data file at line: %s", line.c_str());
+            warning("Error reading data file at line: %s\nExpected %d columns, got %zu", line.c_str(), maxIdx + 1, tokens.size());
+            if (nkept > 10000) {
+                break;
+            } else {
+                throw std::runtime_error("Invalid or corrupted input");
+            }
         }
         double x = std::stod(tokens[icol_x]);
         double y = std::stod(tokens[icol_y]);
@@ -137,10 +144,13 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         int xpix = static_cast<int>((x - xmin) / scale);
         int ypix = static_cast<int>((y - ymin) / scale);
         // Discard records that fall outside the image bounds.
-        if (xpix < 0 || xpix >= width || ypix < 0 || ypix >= height)
+        if (xpix < 0 || xpix >= width || ypix < 0 || ypix >= height) {
             continue;
-        if (countImg[ypix][xpix] >= 255)
+        }
+        if (countImg[ypix][xpix] >= 255) {
+            nskip++;
             continue;
+        }
 
         // weighted RGB
         float r = 0, g = 0, b = 0;
@@ -163,10 +173,12 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             g += cmtx[j][1] * p;
             b += cmtx[j][2] * p;
         }
-        if (!validRecord)
+        if (!validRecord) {
             continue;
+        }
         sumImg[ypix][xpix] += cv::Vec3f(r, g, b);
         countImg[ypix][xpix] += 1;
+        nkept++;
     }
     dataStream.close();
     notice("Finished reading input pixels, start populating an image");

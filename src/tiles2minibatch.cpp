@@ -307,7 +307,7 @@ int32_t Tiles2Minibatch<T>::outputPixelResult(const TileData<T>& tileData, const
 }
 
 template<typename T>
-void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, vec2f_t* anchorPtr) {
+void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     if (tileData.pts.empty()) {
         return;
     }
@@ -328,7 +328,11 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, vec2f_
     if (nPixels < 10) {
         return;
     }
-    auto ret = slda.do_e_step(minibatch, false);
+    auto smtx = slda.do_e_step(minibatch, true);
+    {
+        std::lock_guard<std::mutex> lock(pseudobulkMutex);
+        pseudobulk += smtx;
+    }
     if (debug_) {
         std::cout << "Thread " << threadId << " finished decoding" << std::endl << std::flush;
     }
@@ -339,11 +343,28 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, vec2f_
         std::cout << "Thread " << threadId << " start writing to output" << std::endl << std::flush;
     }
     int32_t npts;
-    if (outputOriginalData) {
-        npts = outputOriginalDataWithPixelResult(tileData, topVals, topIds);
+    if (useTicketSystem) {
+        std::unique_lock<std::mutex> lock(ticketMutex);
+        ticketCondition.wait(lock, [this, ticket]() {
+            return ticket == currentTicket.load(std::memory_order_acquire);
+        });
+        if (outputOriginalData) {
+            npts = outputOriginalDataWithPixelResult(tileData, topVals, topIds);
+        } else {
+            npts = outputPixelResult(tileData, topVals, topIds);
+        }
+        currentTicket.fetch_add(1, std::memory_order_release);
+        lock.unlock();
+        ticketCondition.notify_all();
     } else {
-        npts = outputPixelResult(tileData, topVals, topIds);
+        if (outputOriginalData) {
+            npts = outputOriginalDataWithPixelResult(tileData, topVals, topIds);
+        } else {
+            npts = outputPixelResult(tileData, topVals, topIds);
+        }
     }
+
+
     notice("Thread %d fit minibatch with %d anchors and output %d internal pixels", threadId, nAnchors, npts);
 }
 
@@ -377,6 +398,35 @@ void Tiles2Minibatch<T>::writeHeaderToJson() {
     }
     jsonOut << std::setw(4) << header << std::endl;
     jsonOut.close();
+}
+
+template<typename T>
+void Tiles2Minibatch<T>::writePseudobulkToTsv() {
+    size_t pos = outputFile.find_last_of(".");
+    std::string pseudobulkFile;
+    if (pos != std::string::npos) {
+        pseudobulkFile = outputFile.substr(0, pos) + ".pseudobulk.tsv";
+    } else {
+        pseudobulkFile = outputFile + ".pseudobulk.tsv";
+    }
+    std::ofstream oss(pseudobulkFile, std::ios::out);
+    if (!oss) {
+        error("Error opening pseudobulk output file: %s", pseudobulkFile.c_str());
+    }
+    oss << "Feature";
+    const auto factorNames = lda.get_topic_names();
+    for (int32_t i = 0; i < K_; ++i) {
+        oss << "\t" << factorNames[i];
+    }
+    oss << "\n" << std::setprecision(probDigits) << std::fixed;
+    for (int32_t i = 0; i < M_; ++i) {
+        oss << featureNames[i];
+        for (int32_t j = 0; j < K_; ++j) {
+            oss << "\t" << pseudobulk(j, i);
+        }
+        oss << "\n";
+    }
+    oss.close();
 }
 
 template<typename T>
@@ -425,22 +475,23 @@ int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector
     cv::Rect2f rect(xmin, ymin, xrange, yrange);
     std::vector<int32_t> indices;
     for (int32_t t = 0; t < nLloydIter; ++t) {
-        cv::Subdiv2D subdiv(rect);
-        std::vector<std::vector<cv::Point2f>> facets;
-        std::vector<cv::Point2f> facetCenters;
-        subdiv.insert(anchors);
-        subdiv.getVoronoiFacetList(indices, facets, facetCenters);
-        for (size_t i = nFixed; i < nAnchors; ++i) {
-            if (i >= facets.size() || facets[i].empty())
-                continue;
-            std::vector<cv::Point2f> poly = clipPolygonToRect(facets[i], rect);
-            cv::Point2f centroid = centroidOfPolygon(poly);
-// if (centroid.x < xmin || centroid.x > xmin + xrange || centroid.y < ymin || centroid.y > ymin + yrange) {
-// warning("Anchor out of bounds: (%.2f, %.2f) -> (%.2f, %.2f)", anchors[i].x, anchors[i].y, centroid.x, centroid.y);
-// continue;
-// }
-            anchors[i] = centroid;
+        try {
+            cv::Subdiv2D subdiv(rect);
+            std::vector<std::vector<cv::Point2f>> facets;
+            std::vector<cv::Point2f> facetCenters;
+            subdiv.insert(anchors);
+            subdiv.getVoronoiFacetList(indices, facets, facetCenters);
+            for (size_t i = nFixed; i < nAnchors; ++i) {
+                if (i >= facets.size() || facets[i].empty())
+                    continue;
+                std::vector<cv::Point2f> poly = clipPolygonToRect(facets[i], rect);
+                cv::Point2f centroid = centroidOfPolygon(poly);
+                anchors[i] = centroid;
+            }
+        } catch (...) {
+            warning("Error in the %d-th Lloyd iteration", t+1);
         }
+
     }
     // 4 Aggregate pixels and initialize anchors
     PointCloudCV<float> pc;

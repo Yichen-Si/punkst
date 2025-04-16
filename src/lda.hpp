@@ -71,6 +71,22 @@ public:
     int32_t get_N_global() const {
         return total_doc_count_;
     }
+    void set_topic_names(std::vector<std::string>& names) {
+        if (names.size() != n_topics_) {
+            warning("The number of names does not match the number of factors");
+            return;
+        }
+        topic_names_ = names;
+    }
+    const std::vector<std::string>& get_topic_names() {
+        if (topic_names_.empty()) {
+            topic_names_.resize(n_topics_);
+            for (int i = 0; i < n_topics_; i++) {
+                topic_names_[i] = std::to_string(i);
+            }
+        }
+        return topic_names_;
+    }
     void get_topic_abundance(std::vector<double>& weights) const {
         weights.resize(n_topics_);
         for (int k = 0; k < n_topics_; k++) {
@@ -321,6 +337,7 @@ private:
     double learning_decay_; // kappa
     double learning_offset_; // tau_0
     int update_count_;
+    std::vector<std::string> topic_names_;
     int32_t verbose_;
     std::mt19937 random_engine_;
 
