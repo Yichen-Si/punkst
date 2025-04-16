@@ -40,6 +40,13 @@ theme:
 
 nav:
   - Home: index.md
+  - Modules:
+    - Overview: modules/index.md
+    - pts2tiles: modules/pts2tiles.md
+    - tiles2hex: modules/tiles2hex.md
+    - lda4hex: modules/lda4hex.md
+    - pixel-decode: modules/pixel-decode.md
+    - Visualization: modules/visualization.md
   - Examples:
     - Basic: examples/basic.md
 
@@ -63,9 +70,9 @@ markdown_extensions:
       smart_enable: all
   - pymdownx.caret
   - pymdownx.details
-  - pymdownx.emoji:
-      emoji_generator: !!python/name:material.extensions.emoji.to_svg
-      emoji_index: !!python/name:material.extensions.emoji.twemoji
+  # - pymdownx.emoji:
+  #     emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  #     emoji_index: !!python/name:material.extensions.emoji.twemoji
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span

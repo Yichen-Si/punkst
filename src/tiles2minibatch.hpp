@@ -481,7 +481,10 @@ protected:
             TileData<T> tileData;
             int32_t ret = parseBoundaryFile(tileData, bufferPtr);
             notice("Thread %d read boundary buffer (%d, %d, %d) with %d internal pixels", threadId, (bufferPtr->key & 0x1), bufferPtr->key >> 16, (bufferPtr->key >> 1) & 0x7FFF, ret);
-            if (ret <= 10) continue;
+            if (ret <= 10) {
+                std::remove(bufferPtr->tmpFile.c_str());
+                continue;
+            }
             vec2f_t* anchorPtr = nullptr;
             if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
                 anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];

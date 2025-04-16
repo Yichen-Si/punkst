@@ -290,7 +290,7 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
       .add_option("minibatch-size", "Minibatch size (default: 128)", batchSize)
       .add_option("min-count-train", "Minimum total count for training (default: 20)", minCountTrain)
-      .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
+      .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 0.002 / nTopics)", mDelta)
       .add_option("n-epochs", "Number of epochs (default: 1)", nEpochs)
       .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight);
     // Output Options
