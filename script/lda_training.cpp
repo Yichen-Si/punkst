@@ -274,7 +274,7 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     int32_t minCountTrain = 20;
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1., eta = -1.;
-    double mDelta = -1;
+    double mDelta = 1e-3;
     double defaultWeight = 1.;
     bool transform = false;
 
@@ -290,7 +290,7 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
       .add_option("minibatch-size", "Minibatch size (default: 128)", batchSize)
       .add_option("min-count-train", "Minimum total count for training (default: 20)", minCountTrain)
-      .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 0.002 / nTopics)", mDelta)
+      .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("n-epochs", "Number of epochs (default: 1)", nEpochs)
       .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight);
     // Output Options
@@ -323,9 +323,6 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     if (seed <= 0) {
         seed = std::random_device{}();
     }
-    if (mDelta <= 0) {
-        mDelta = 0.002 / nTopics;
-    }
 
     if (batchSize <= 0) {
         batchSize = 128;
@@ -348,6 +345,15 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     for (int epoch = 0; epoch < nEpochs; ++epoch) {
         int32_t n = lda4hex.trainOnline(lda, inFile, batchSize, minCountTrain);
         notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
+        std::vector<double> weights;
+        lda.get_topic_abundance(weights);
+        std::sort(weights.begin(), weights.end(), std::greater<double>());
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(4);
+        for (const auto& w : weights) {
+            ss << w << "\t";
+        }
+        notice("  Topic relative abundance: %s", ss.str().c_str());
     }
 
     // write model matrix to file

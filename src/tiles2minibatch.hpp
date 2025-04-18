@@ -353,23 +353,7 @@ public:
     int32_t loadAnchors(const std::string& anchorFile);
 
     void run() override {
-        mainOut.open(this->outputFile, std::ios::out);
-        if (!mainOut) {
-            error("Error opening main output file: %s", outputFile.c_str());
-        }
-        // write header
-        if (outputOriginalData) {
-            mainOut << "#x\ty\tfeature\tct";
-        } else {
-            mainOut << "#x\ty";
-        }
-        for (int32_t i = 0; i < topk_; ++i) {
-            mainOut << "\tK" << i+1;
-        }
-        for (int32_t i = 0; i < topk_; ++i) {
-            mainOut << "\tP" << i+1;
-        }
-        mainOut << "\n";
+        setupOutput();
         // Phase 1: Process tiles
         notice("Phase 1 Launching %d worker threads", nThreads);
         for (int i = 0; i < nThreads; ++i) {
@@ -405,6 +389,7 @@ public:
             t.join();
         }
         mainOut.close();
+        indexOut.close();
         writeHeaderToJson();
         writePseudobulkToTsv();
     }
@@ -430,6 +415,8 @@ protected:
     std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile; // we may need more than one set of pre-defined anchors in the future
     std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
     int32_t nLloydIter = 1;
+    std::ofstream indexOut;
+    size_t outputSize = 0;
     int32_t floatCoordDigits = 4, probDigits = 4;
     MatrixXd pseudobulk; // K x M
     std::mutex pseudobulkMutex; // Protects pseudobulk
@@ -496,6 +483,38 @@ protected:
             processTile(tileData, threadId, ticket, anchorPtr);
             std::remove(bufferPtr->tmpFile.c_str());
         }
+    }
+
+    void setupOutput() {
+        mainOut.open(outputFile, std::ios::out);
+        if (!mainOut) {
+            error("Error opening main output file: %s", outputFile.c_str());
+        }
+        // write header
+        if (outputOriginalData) {
+            mainOut << "#x\ty\tfeature\tct";
+        } else {
+            mainOut << "#x\ty";
+        }
+        for (int32_t i = 0; i < topk_; ++i) {
+            mainOut << "\tK" << i+1;
+        }
+        for (int32_t i = 0; i < topk_; ++i) {
+            mainOut << "\tP" << i+1;
+        }
+        mainOut << "\n";
+        size_t pos = outputFile.find_last_of(".");
+        std::string indexFile;
+        if (pos == std::string::npos) {
+            indexFile = outputFile + ".index";
+        } else {
+            indexFile = outputFile.substr(0, pos) + ".index";
+        }
+        indexOut.open(indexFile, std::ios::out | std::ios::binary);
+        if (!indexOut) {
+            error("Error opening index output file: %s", indexFile.c_str());
+        }
+        indexOut << std::fixed << std::setprecision(floatCoordDigits);
     }
 
 };

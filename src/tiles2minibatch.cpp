@@ -243,8 +243,9 @@ int32_t Tiles2Minibatch<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv:
 template<typename T>
 int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds) {
     std::lock_guard<std::mutex> lock(mainOutMutex);
-    int32_t npts = 0;
+    uint32_t npts = 0;
     int32_t nrows = topVals.rows();
+    char buf[65536];
     for (size_t i = 0; i < tileData.idxinternal.size(); ++i) {
         int32_t idxorg = tileData.idxinternal[i]; // index in the original data
         int32_t idx = tileData.orgpts2pixel[idxorg]; // index in the pixel minibatch
@@ -252,21 +253,67 @@ int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>&
             continue;
         }
         const RecordT<T>& rec = tileData.pts[idxorg];
-        std::stringstream ss;
-        ss.precision(floatCoordDigits);
-        ss << std::fixed << rec.x << "\t" << rec.y << "\t" << featureNames[rec.idx] << "\t" << rec.ct;
-        for (int32_t j = 0; j < topk_; ++j) {
-            ss << "\t" << topIds(idx, j);
+        int len = 0;
+        if constexpr (std::is_same_v<T, int32_t>) {
+            len = std::snprintf(
+                buf, sizeof(buf),
+                "%d\t%d\t",
+                rec.x,
+                rec.y
+            );
+        } else {
+            len = std::snprintf(
+                buf, sizeof(buf),
+                "%.*f\t%.*f\t",
+                floatCoordDigits,
+                rec.x,
+                floatCoordDigits,
+                rec.y
+            );
         }
-        ss.precision(probDigits);
-        ss << std::scientific;
-        for (int32_t j = 0; j < topk_; ++j) {
-            ss << "\t" << topVals(idx, j);
+        len += std::snprintf(
+            buf + len, sizeof(buf) - len,
+            "%s\t%d",
+            featureNames[rec.idx].c_str(),
+            rec.ct
+        );
+        // write the top‑k IDs
+        for (int32_t k = 0; k < topk_; ++k) {
+            int n = std::snprintf(
+                buf + len,
+                sizeof(buf) - len,
+                "\t%d",
+                topIds(idx, k)
+            );
+            if (n < 0 || n >= int(sizeof(buf) - len)) {
+                error("%s: error writing output line", __func__);
+            }
+            len += n;
         }
-        ss << "\n";
-        mainOut << ss.rdbuf();
+        // write the top‑k probabilities in scientific form
+        for (int32_t k = 0; k < topk_; ++k) {
+            int n = std::snprintf(
+                buf + len,
+                sizeof(buf) - len,
+                "\t%.*e",
+                probDigits,
+                topVals(idx, k)
+            );
+            if (n < 0 || n >= int(sizeof(buf) - len)) {
+                error("%s: error writing output line", __func__);
+            }
+            len += n;
+        }
+        buf[len++] = '\n';
+        mainOut.write(buf, len);
         npts++;
     }
+    size_t endPos = mainOut.tellp();
+    IndexEntry<float> e{outputSize, endPos, npts,
+        tileData.xmin, tileData.xmax,
+        tileData.ymin, tileData.ymax};
+    indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
+    outputSize += endPos;
     return npts;
 }
 
@@ -281,28 +328,57 @@ int32_t Tiles2Minibatch<T>::outputPixelResult(const TileData<T>& tileData, const
         }
         internal[tileData.orgpts2pixel[j]] = true;
     }
-    int32_t npts = 0;
+    uint32_t npts = 0;
+    char buf[512];
     for (size_t j = 0; j < N; ++j) {
         if (!internal[j]) {
             continue;
         }
-        std::stringstream ss;
-        // set precision to %.2f for coordinates
-        ss.precision(floatCoordDigits);
-        ss << std::fixed << tileData.coords[j].first << "\t" << tileData.coords[j].second;
-        // set precision to 4 decimal for probabilities
+        int len = len = std::snprintf(
+            buf, sizeof(buf),
+            "%.*f\t%.*f",
+            floatCoordDigits,
+            tileData.coords[j].first,
+            floatCoordDigits,
+            tileData.coords[j].second
+        );
+        // write the top‑k IDs
         for (int32_t k = 0; k < topk_; ++k) {
-            ss << "\t" << topIds(j, k);
+            int n = std::snprintf(
+                buf + len,
+                sizeof(buf) - len,
+                "\t%d",
+                topIds(j, k)
+            );
+            if (n < 0 || n >= int(sizeof(buf) - len)) {
+                error("%s: error writing output line", __func__);
+            }
+            len += n;
         }
-        ss.precision(probDigits);
-        ss << std::scientific;
+        // write the top‑k probabilities in scientific form
         for (int32_t k = 0; k < topk_; ++k) {
-            ss << "\t" << topVals(j, k);
+            int n = std::snprintf(
+                buf + len,
+                sizeof(buf) - len,
+                "\t%.*e",
+                probDigits,
+                topVals(j, k)
+            );
+            if (n < 0 || n >= int(sizeof(buf) - len)) {
+                error("%s: error writing output line", __func__);
+            }
+            len += n;
         }
-        ss << "\n";
-        mainOut << ss.rdbuf();
+        buf[len++] = '\n';
+        mainOut.write(buf, len);
         npts++;
     }
+    size_t endPos = mainOut.tellp();
+    IndexEntry<float> e{outputSize, endPos, npts,
+        tileData.xmin, tileData.xmax,
+        tileData.ymin, tileData.ymax};
+    indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
+    outputSize += endPos;
     return npts;
 }
 
@@ -342,7 +418,7 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
     if (debug_) {
         std::cout << "Thread " << threadId << " start writing to output" << std::endl << std::flush;
     }
-    int32_t npts;
+    uint32_t npts;
     if (useTicketSystem) {
         std::unique_lock<std::mutex> lock(ticketMutex);
         ticketCondition.wait(lock, [this, ticket]() {

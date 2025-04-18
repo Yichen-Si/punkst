@@ -181,7 +181,7 @@ public:
                 }
             }
             notice("Partial fit: %d documents. Average iterations per doc: %.2f, %d documents did not reach mean change %.1e in %d iterations.", minibatch_size, std::accumulate(niters.begin(), niters.end(), 0) / static_cast<double>(niters.size()), fail_converge, mean_change_tol_, max_doc_update_iter_);
-            if (verbose_ > 1) {
+            if (verbose_ > 2) {
                 std::vector<double> scores = approx_bound(docs, doc_topic_distr, false);
                 scores[0] /= minibatch_size;
                 scores[1] /= minibatch_size;
@@ -360,7 +360,7 @@ private:
             doc_topic = *doc_topic_;
         }
 
-        exp_doc.resize(n_topics_); // exp(psi(gamma) - psi(sum(gamma)))
+        exp_doc.resize(n_topics_); // exp(E[log(theta)])
         double sum = doc_topic.sum();
         double psi_total = psi(sum);
         for (int k = 0; k < n_topics_; k++) {
@@ -373,9 +373,11 @@ private:
             exp_topic_word.col(j) = exp_Elog_beta_.col(doc.ids[j]);
         }
         // Iterative update for the document.
-        for (int iter = 0; iter < max_doc_update_iter_; iter++) {
+        double diff = 1.;
+        int iter = 0;
+        for (; iter < max_doc_update_iter_; iter++) {
             // VectorXd last_doc = doc_topic; // Save the previous state.
-            VectorXd last_doc = exp_doc;
+            VectorXd last_doc = doc_topic;
 
             // norm_phi = exp_doc^T * exp_topic_word (|ids| x 1).
             VectorXd norm_phi = exp_topic_word.transpose() * exp_doc;
@@ -393,12 +395,15 @@ private:
             exp_doc = dirichlet_expectation_1d(doc_topic, doc_topic_prior_);
 
             // Check convergence via mean absolute change.
-            double diff = (last_doc - exp_doc).cwiseAbs().sum() / n_topics_;
+            diff = (last_doc - doc_topic).cwiseAbs().sum() / n_topics_;
             if (diff < mean_change_tol_) {
-                return iter;
+                break;
             }
         }
-        return max_doc_update_iter_;
+        if (verbose_ > 1) {
+            notice("%s: finished after %d iterations, mean change %.1e", __FUNCTION__, iter, diff);
+        }
+        return iter;
     }
 
     // Compute perplexity from precomputed document-topic distributions.

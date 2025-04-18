@@ -5,6 +5,13 @@
 #include "json.hpp"
 #include "assert.h"
 
+template<typename T>
+struct IndexEntry {
+    uint64_t st, ed;
+    uint32_t n;
+    T xmin, xmax, ymin, ymax;
+};
+
 struct Document {
     std::vector<uint32_t> ids; // Length: number of nonzero words in the doc
     std::vector<double> cnts;
@@ -257,7 +264,6 @@ private:
         // Parse the JSON file.
         nlohmann::json meta;
         metaIn >> meta;
-
         hexSize = meta.value("hex_size", -0.0);
         hexGrid.init(hexSize);
         nUnits = meta.value("n_units", 0);

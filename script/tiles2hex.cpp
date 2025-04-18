@@ -7,7 +7,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     std::vector<float> radius;
     int nThreads = 1, debug = 0, verbose = 1000000;
     int icol_x, icol_y, icol_feature;
-    double hexSize;
+    double hexSize = -1, hexGridDist = -1;
     std::vector<int32_t> icol_ints;
     std::vector<int32_t> min_counts;
     bool noBackground = false;
@@ -24,6 +24,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         .add_option("anchor-files", "Anchor files", anchorFiles)
         .add_option("radius", "Radius for each set of anchors", radius)
         .add_option("hex-size", "Hexagon size (size length)", hexSize)
+        .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
         .add_option("temp-dir", "Directory to store temporary files", tmpDir)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads);
     // Output Options
@@ -42,7 +43,15 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         return 1;
     }
 
+    if (hexSize <= 0) {
+        if (hexGridDist <= 0) {
+            error("Hexagon size or hexagon grid distance must be specified");
+        } else {
+            hexSize = hexGridDist / sqrt(3);
+        }
+    }
     HexGrid hexGrid(hexSize);
+
     TileReader tileReader(inTsv, inIndex);
     if (!tileReader.isValid()) {
         error("Error opening input file: %s", inTsv.c_str());

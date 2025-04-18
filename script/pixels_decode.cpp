@@ -8,6 +8,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     int icol_x, icol_y, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
     double radius = -1, anchorDist = -1;
+    double mDelta = 1e-3;
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
     double pixelResolution = 1, defaultWeight = 0.;
     bool outputOritinalData = false;
@@ -34,6 +35,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("hex-size", "Hexagon size (side length)", hexSize)
       .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
       .add_option("anchor-dist", "Distance between adjacent anchors", anchorDist)
+      .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("radius", "Radius", radius)
       .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
@@ -138,7 +140,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
     notice("Initialized tile reader");
 
-    LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model, 100, 0.005/K);
+    LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model, 100, mDelta);
     notice("Initialized anchor model with %d features and %d factors", nFeatures, K);
 
     if (coordsAreInt) {
