@@ -106,6 +106,9 @@ public:
         meta["n_anchor_sets"] = nAnchorSets;
         meta["n_layers"] = nLayer;
         meta["anchor_radius"] = radius;
+        meta["offset_data"] = 4;
+        meta["icol_layer"] = 3;
+        meta["icols_identifier"] = std::vector<int32_t>{0, 1, 2, 3};
     }
 
 protected:

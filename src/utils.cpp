@@ -324,13 +324,13 @@ bool set_rgb(const char *s_color, std::vector<int32_t>& rgb) {
         std::vector<std::string> tokens;
         split(tokens, ",", s_color);
         if (tokens.size() != 3) {
-            error("Invalid color code %s", s_color);
+            warning("Invalid color code %s", s_color);
             return false;
         }
         for (int32_t i = 0; i < 3; ++i) {
             bool valid_byte = str2int32(tokens[i], rgb[i]);
             if (!valid_byte || rgb[i] < 0 || rgb[i] > 255) {
-                error("Invalid color code %s", s_color);
+                warning("Invalid color code %s", s_color);
                 return false;
             }
         }
@@ -350,13 +350,13 @@ bool set_rgb(const char *s_color, std::array<int32_t, 3>& rgb) {
         std::vector<std::string> tokens;
         split(tokens, ",", s_color);
         if (tokens.size() != 3) {
-            error("Invalid color code %s", s_color);
+            warning("Invalid color code %s", s_color);
             return false;
         }
         for (int32_t i = 0; i < 3; ++i) {
             bool valid_byte = str2int32(tokens[i], rgb[i]);
             if (!valid_byte || rgb[i] < 0 || rgb[i] > 255) {
-                error("Invalid color code %s", s_color);
+                warning("Invalid color code %s", s_color);
                 return false;
             }
         }

@@ -68,6 +68,7 @@ set(SOURCE_FILES
     src/tiles2bins.hpp
     src/tiles2bins.cpp
     src/dataunits.hpp
+    src/dataunits.cpp
     src/lda.hpp
     src/numerical_utils.hpp
     src/numerical_utils.cpp

@@ -104,7 +104,7 @@ def de_bulk(_args):
 
     K = len(header)
     M = info.shape[0]
-    info.rename(columns={args.feature_label, "gene"}, inplace=True)
+    info.rename(columns={args.feature_label: "gene"}, inplace=True)
     print(f"Read posterior count over {M} genes and {K} factors")
 
     # Apply gene filtering

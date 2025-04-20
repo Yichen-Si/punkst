@@ -91,6 +91,7 @@ public:
                 return;
             }
         }
+        buffer.resize(size);
 
         // Prefix based on log level
         std::string prefix;

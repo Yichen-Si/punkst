@@ -1,30 +1,29 @@
-#include "punkst.h"
-#include "utils.h"
-#include "json.hpp"
+#include "pixresultreader.hpp"
 #include <opencv2/opencv.hpp>
-#include <fstream>
-#include <sstream>
-#include <iostream>
 
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
-
-    std::string dataFile, headerFile, colorFile, outFile;
-    double scale = 1;
-    double xmin, xmax, ymin, ymax;
+    std::string dataFile, indexFile, headerFile, colorFile, outFile;
+    std::vector<std::string> channelListStr, colorListStr;
+    double scale = 1, xmin, xmax, ymin, ymax;
     int32_t verbose = 1000000;
+    bool filter = false;
 
     ParamList pl;
-    // Input Options
-    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", dataFile)
-      .add_option("header-json", "Header file", headerFile)
-      .add_option("in-color", "Input color file", colorFile)
-      .add_option("scale", "Scale factor to translate coordinates to pixel in the output image ((x-xmin)/scale = pixel_x)", scale)
-      .add_option("xmin", "Minimum x coordinate", xmin)
-      .add_option("xmax", "Maximum x coordinate", xmax)
-      .add_option("ymin", "Minimum y coordinate", ymin)
-      .add_option("ymax", "Maximum y coordinate", ymax);
-    // Output Options
-    pl.add_option("out", "Output image file", outFile)
+    // Input options
+    pl.add_option("in-tsv", "Input TSV file. Lines begin with # will be ignored", dataFile, true)
+      .add_option("header-json", "Header JSON file", headerFile)
+      .add_option("index", "Index file", indexFile)
+      .add_option("in-color", "Input color file (RGB triples)", colorFile)
+      .add_option("scale", "Scale factor: (x-xmin)/scale → pixel_x", scale)
+      .add_option("xmin", "Minimum x coordinate", xmin, true)
+      .add_option("xmax", "Maximum x coordinate", xmax, true)
+      .add_option("ymin", "Minimum y coordinate", ymin, true)
+      .add_option("ymax", "Maximum y coordinate", ymax, true)
+      .add_option("filter", "Access only the queried region using the index", filter)
+      .add_option("channel-list", "Comma-separated channel IDs to draw", channelListStr)
+      .add_option("color-list", "Comma-separated hex colors (#RRGGBB)", colorListStr);
+    // Output
+    pl.add_option("out", "Output image file", outFile, true)
       .add_option("verbose", "Verbose", verbose);
 
     try {
@@ -36,176 +35,128 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         return 1;
     }
 
-    if (dataFile.empty() || headerFile.empty() || colorFile.empty() || outFile.empty()) {
-        error("--in-tsv, --header-json, --in-color, and --out are required");
-    }
-    if (!checkOutputWritable(outFile)) {
+    if (filter && indexFile.empty())
+        error("Index file must be provided when --filter is set");
+
+    if (!checkOutputWritable(outFile))
         error("Output file is not writable: %s", outFile.c_str());
-    }
-    std::ifstream dataStream(dataFile);
-    if (!dataStream.is_open()) {
-        error("Error opening data file: %s", dataFile.c_str());
-    }
-    std::ifstream colorStream(colorFile);
-    if (!colorStream.is_open()) {
-        error("Error opening color file: %s", colorFile.c_str());
-    }
-    std::ifstream headerStream(headerFile);
-    if (!headerStream.is_open()) {
-        error("Error opening header file: %s", headerFile.c_str());
-    }
 
-    // Load the JSON header file.
-    nlohmann::json header;
-    try {
-        headerStream >> header;
-    } catch (const std::exception& e) {
-        std::cerr << "Error parsing JSON header: " << e.what() << std::endl;
-        return -1;
-    }
-    headerStream.close();
-    uint32_t icol_x = header["x"];
-    uint32_t icol_y = header["y"];
-    std::vector<uint32_t> icol_ks;
-    std::vector<uint32_t> icol_ps;
-    int32_t k  = 1;
-    while (header.contains("K" + std::to_string(k)) && header.contains("P" + std::to_string(k))) {
-        icol_ks.push_back(header["K" + std::to_string(k)]);
-        icol_ps.push_back(header["P" + std::to_string(k)]);
-        k++;
-    }
-    if (icol_ks.empty()) {
-        error("No K and P columns found in the header file");
-    }
-    k = std::min(3, k-1);
-    uint32_t maxIdx = std::max(icol_x, icol_y);
-    for (int i = 0; i < k; ++i) {
-        maxIdx = std::max(maxIdx, std::max(icol_ks[i], icol_ps[i]));
-    }
+    bool selected = !channelListStr.empty();
+    if (!selected && colorFile.empty())
+        error("Either --in-color or both --channel-list and --color-list must be provided");
 
-    if (scale <= 0) {
-        error("--scale must be greater than 0");
-    }
-    // Image size
-    int width = static_cast<int>(std::floor((xmax - xmin) / scale)) + 1;
-    int height = static_cast<int>(std::floor((ymax - ymin) / scale)) + 1;
-    notice("Image size: %d x %d", width, height);
-    if (width <=1 || height <= 1) {
-        error("Image dimensions are 0. Please check the input parameters.");
-    }
-
-    // RGB color table
     std::vector<std::vector<int>> cmtx;
-    std::string line;
-    while (std::getline(colorStream, line)) {
-        if (line.empty()) continue;
-        std::istringstream iss(line);
-        int r, g, b;
-        if (!(iss >> r >> g >> b))
-            continue;
-        cmtx.push_back({r, g, b});
-    }
-    colorStream.close();
-    int32_t K = cmtx.size();
-
-    // Prepare accumulators for each pixel.
-    // sumImg will store the cumulative RGB contributions
-    // countImg will store the number of records that contribute to each pixel
-    std::vector<std::vector<cv::Vec3f>> sumImg(height, std::vector<cv::Vec3f>(width, cv::Vec3f(0, 0, 0)));
-    std::vector<std::vector<uint8_t>> countImg;
-    countImg.resize(height);
-    for (int i = 0; i < height; ++i) {
-        countImg[i].resize(width);
-        std::fill(countImg[i].begin(), countImg[i].end(), 0);
-    }
-
-    int32_t nline = 0, nskip = 0, nkept = 0;
-    while (std::getline(dataStream, line)) {
-        if (line.empty()) continue;
-        if (line[0] == '#') continue;
-        nline++;
-        if (nline % verbose == 0) {
-            notice("Processed %d lines, skipped %d due to density limit, recorded %d", nline, nskip, nkept);
+    std::unordered_map<int,std::vector<int32_t>> selectedMap;
+    if (selected) { // parse selected channels
+        if (colorListStr.empty())
+            colorListStr = std::vector<std::string>{"144A74", "FF9900", "DD65E6", "FFEC11"}; // default colors
+        if (channelListStr.size()>colorListStr.size()) {
+            error("--channel-list and --color-list must have same length");
         }
+        for (size_t i=0;i<channelListStr.size();++i) {
+            std::vector<int32_t> c;
+            if (!set_rgb(colorListStr[i].c_str(), c))
+                error("Invalid --color-list");
+            selectedMap[ std::stoi(channelListStr[i]) ] = c;
+        }
+    } else {
+        std::ifstream cs(colorFile);
+        if (!cs.is_open())
+            error("Error opening color file: %s", colorFile.c_str());
+        std::string line;
+        while (std::getline(cs,line)) {
+            if (line.empty()) continue;
+            std::istringstream iss(line);
+            int r,g,b;
+            if (iss>>r>>g>>b) cmtx.push_back({r,g,b});
+        }
+    }
 
-        std::vector<std::string> tokens;
-        split(tokens, "\t", line);
-        if (tokens.size() != maxIdx + 1) {
-            warning("Error reading data file at line: %s\nExpected %d columns, got %zu", line.c_str(), maxIdx + 1, tokens.size());
-            if (nkept > 10000) {
-                break;
+    // set up reader
+    PixelResultReader reader(dataFile, indexFile, headerFile);
+    int32_t k = reader.getK();
+    if (k<=0) error("No factor columns found in header");
+    if (filter) {
+        if (reader.query(xmin, xmax, ymin, ymax) <= 0)
+            error("No data in the queried region");
+    }
+
+    if (scale<=0) error("--scale must be >0");
+
+    // image dims
+    int width  = int(std::floor((xmax-xmin)/scale))+1;
+    int height = int(std::floor((ymax-ymin)/scale))+1;
+    notice("Image size: %d x %d", width, height);
+    if (width<=1||height<=1)
+        error("Image dimensions are zero; check your bounds/scale");
+
+    // accumulators
+    std::vector<std::vector<cv::Vec3f>> sumImg(height, std::vector<cv::Vec3f>(width));
+    std::vector<std::vector<uint8_t>>   countImg(height, std::vector<uint8_t>(width,0));
+
+    // read & accumulate
+    PixelFactorResult rec;
+    int32_t ret, nline=0, nskip=0, nkept=0;
+    while ((ret = reader.next(rec)) >= 0) {
+        if (ret==0) {
+            if (nkept>10000) break;
+            error("Invalid or corrupted input");
+        }
+        if (++nline % verbose == 0)
+            notice("Processed %d lines, skipped %d, kept %d", nline, nskip, nkept);
+
+        int xpix = int((rec.x - xmin)/scale);
+        int ypix = int((rec.y - ymin)/scale);
+        if (xpix<0||xpix>=width||ypix<0||ypix>=height) continue;
+        if (countImg[ypix][xpix]>=255) { nskip++; continue; }
+
+        float R=0,G=0,B=0;
+        bool valid=false;
+        for (int i=0;i<k;++i) {
+            int ch = rec.ks[i];
+            double p = rec.ps[i];
+            if (selected) {
+                auto it = selectedMap.find(ch);
+                if (it == selectedMap.end()) continue;
+                auto& c = it->second;
+                R += c[0]*p;
+                G += c[1]*p;
+                B += c[2]*p;
+                valid = true;
             } else {
-                throw std::runtime_error("Invalid or corrupted input");
+                if (ch<0 || ch>= (int)cmtx.size()) { valid=false; break; }
+                R += cmtx[ch][0]*p;
+                G += cmtx[ch][1]*p;
+                B += cmtx[ch][2]*p;
+                valid = true;
             }
         }
-        double x = std::stod(tokens[icol_x]);
-        double y = std::stod(tokens[icol_y]);
-        // Compute pixel indices.
-        int xpix = static_cast<int>((x - xmin) / scale);
-        int ypix = static_cast<int>((y - ymin) / scale);
-        // Discard records that fall outside the image bounds.
-        if (xpix < 0 || xpix >= width || ypix < 0 || ypix >= height) {
-            continue;
-        }
-        if (countImg[ypix][xpix] >= 255) {
-            nskip++;
-            continue;
-        }
+        if (!valid) continue;
 
-        // weighted RGB
-        float r = 0, g = 0, b = 0;
-        bool validRecord = true;
-        for (int i = 0; i < k; i++) {
-            int j;
-            double p;
-            try {
-                j = std::stoi(tokens[icol_ks[i]]);
-                p = std::stod(tokens[icol_ps[i]]);
-            } catch (std::exception& e) {
-                validRecord = false;
-                break;
-            }
-            if (j < 0 || j >= K) {
-                validRecord = false;
-                break;
-            }
-            r += cmtx[j][0] * p;
-            g += cmtx[j][1] * p;
-            b += cmtx[j][2] * p;
-        }
-        if (!validRecord) {
-            continue;
-        }
-        sumImg[ypix][xpix] += cv::Vec3f(r, g, b);
+        sumImg[ypix][xpix] += cv::Vec3f(R,G,B);
         countImg[ypix][xpix] += 1;
-        nkept++;
+        ++nkept;
     }
-    dataStream.close();
-    notice("Finished reading input pixels, start populating an image");
+    notice("Finished reading input; building image");
 
-    // Create the output image (CV_8UC3).
-    cv::Mat outputImage(height, width, CV_8UC3, cv::Scalar(0, 0, 0));
-
-    // For each pixel, if there are contributions, compute the average RGB value.
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
-            if (countImg[i][j] > 0) {
-                cv::Vec3f avg = sumImg[i][j] / countImg[i][j];
-                // Clamp the values to the 0-255 range.
-                uchar R = cv::saturate_cast<uchar>(avg[0]);
-                uchar G = cv::saturate_cast<uchar>(avg[1]);
-                uchar B = cv::saturate_cast<uchar>(avg[2]);
-                // Note: OpenCV uses BGR order.
-                outputImage.at<cv::Vec3b>(i, j) = cv::Vec3b(B, G, R);
+    // finalize image
+    cv::Mat out(height, width, CV_8UC3, cv::Scalar(0,0,0));
+    for (int y=0;y<height;++y) {
+        for (int x=0;x<width;++x) {
+            if (countImg[y][x]) {
+                cv::Vec3f avg = sumImg[y][x] / countImg[y][x];
+                out.at<cv::Vec3b>(y,x) = cv::Vec3b(
+                    cv::saturate_cast<uchar>(avg[2]),  // B
+                    cv::saturate_cast<uchar>(avg[1]),  // G
+                    cv::saturate_cast<uchar>(avg[0])   // R
+                );
             }
         }
     }
 
-    // Write the image to a PNG file.
     notice("Writing image to %s ...", outFile.c_str());
-    if (!cv::imwrite(outFile, outputImage)) {
-        error("Error writing output image file: %s", outFile.c_str());
-    }
+    if (!cv::imwrite(outFile, out))
+        error("Error writing output image: %s", outFile.c_str());
 
     return 0;
 }

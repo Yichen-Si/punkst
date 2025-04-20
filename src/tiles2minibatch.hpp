@@ -49,7 +49,7 @@ struct TileData {
 
 // manage one temporary buffer
 struct BoundaryBuffer {
-    uint32_t key;
+    uint32_t key; // row|col|isVertical
     std::string tmpFile;
     uint8_t nTiles;
     std::shared_ptr<std::mutex> mutex;
@@ -140,8 +140,13 @@ protected:
     }
 
     bool decodeTempFileKey(uint32_t key, int32_t& R, int32_t& C) {
-        R = static_cast<int32_t>(key >> 16);
-        C = static_cast<int32_t>((key >> 1) & 0x7FFF);
+        R = static_cast<int16_t>( key >> 16 );
+        uint32_t rawC = (key >> 1) & 0x7FFF;
+        if (rawC & 0x4000) {
+            C = static_cast<int32_t>(rawC | 0xFFFF8000u);
+        } else {
+            C = static_cast<int32_t>(rawC);
+        }
         return (key & 0x1) != 0;
     }
 
@@ -467,7 +472,6 @@ protected:
         while (bufferQueue.pop(bufferPtr)) {
             TileData<T> tileData;
             int32_t ret = parseBoundaryFile(tileData, bufferPtr);
-            notice("Thread %d read boundary buffer (%d, %d, %d) with %d internal pixels", threadId, (bufferPtr->key & 0x1), bufferPtr->key >> 16, (bufferPtr->key >> 1) & 0x7FFF, ret);
             if (ret <= 10) {
                 std::remove(bufferPtr->tmpFile.c_str());
                 continue;

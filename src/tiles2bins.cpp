@@ -20,6 +20,11 @@ Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& outFil
     }
     meta["hex_size"] = hexGrid.size;
     meta["n_modalities"] = nModal;
+    meta["random_key"] = 0;
+    meta["icol_x_hex"] = 1;
+    meta["icol_y_hex"] = 2;
+    meta["offset_data"] = 3;
+    meta["icols_identifier"] = std::vector<int32_t>{0,1,2};
 }
 
 void Tiles2Hex::writeMetadata() {
@@ -376,7 +381,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
 }
 
 bool Tiles2UnitsByAnchor::mergeBoundaryHexagons() {
-    std::vector<std::unordered_map<int64_t, UnitValues>> mergedUnitsList(nLayer);
+    std::vector<std::unordered_map<uint64_t, UnitValues>> mergedUnitsList(nLayer);
     for (int i = 0; i < nThreads; ++i) {
         std::string fname = tmpDir + std::to_string(i) + ".txt";
         std::ifstream ifs(fname);
@@ -393,7 +398,7 @@ bool Tiles2UnitsByAnchor::mergeBoundaryHexagons() {
                 continue;
             }
             nunits++;
-            int64_t key = (static_cast<int64_t>(unit.x) << 32) | unit.y;
+            uint64_t key = (static_cast<uint64_t>(unit.x) << 32) | unit.y;
             if (unit.label > nLayer) {
                 error("Error: unit label %d exceeds the number of layers %d", unit.label, nLayer);
             }

@@ -85,9 +85,9 @@ template<typename T>
 int32_t Tiles2Minibatch<T>::parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
     std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
     std::ifstream ifs(bufferPtr->tmpFile, std::ios::binary);
+    int32_t bufRow, bufCol;
+    bool isVertical = decodeTempFileKey(bufferPtr->key, bufRow, bufCol);
     if (!ifs) {
-        int32_t bufRow, bufCol;
-        bool isVertical = decodeTempFileKey(bufferPtr->key, bufRow, bufCol);
         warning("Error opening temporary file (%d, %d, %d): %s", int32_t (isVertical), bufRow, bufCol, (bufferPtr->tmpFile).c_str());
         return -1;
     }
@@ -104,6 +104,7 @@ int32_t Tiles2Minibatch<T>::parseBoundaryFile(TileData<T>& tileData, std::shared
         }
         npt++;
     }
+    notice("Read boundary buffer (%d, %d, %d) with %d internal pixels", isVertical, bufRow, bufCol, npt);
     return tileData.idxinternal.size();
 }
 

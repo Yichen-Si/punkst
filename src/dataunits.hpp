@@ -93,62 +93,8 @@ struct UnitValues {
         }
         return true;
     }
-    bool writeToFile(std::ostream& os, uint32_t key) const {
-        os << uint32toHex(key) << "\t";
-        if (label >= 0)
-            os << label << "\t";
-        os << x << "\t" << y;
-        for (size_t i = 0; i < vals.size(); ++i) {
-            os << "\t" << vals[i].size() << "\t" << valsums[i];
-        }
-        for (const auto& val : vals) {
-            for (const auto& entry : val) {
-                os << "\t" << entry.first << " " << entry.second;
-            }
-        }
-        os << "\n";
-        return os.good();
-    }
-    bool readFromLine(const std::string& line, int32_t nModal, bool labeled = false) {
-        std::istringstream iss(line);
-        std::string hexKey;
-        try {
-            if (labeled) {
-                iss >> hexKey >> label >> x >> y;
-                if (label < 0) {
-                    return false;
-                }
-            } else {
-                iss >> hexKey >> x >> y;
-            }
-        } catch (const std::exception& e) {
-            error("Error reading line: %s\n %s", line.c_str(), e.what());
-        } catch (...) {
-            error("Unknown error reading line: %s", line.c_str());
-        }
-        clear();
-        vals.resize(nModal);
-        valsums.resize(nModal);
-        std::vector<int32_t> nfeatures(nModal, 0);
-        std::vector<uint32_t> counts(nModal, 0);
-        for (int i = 0; i < nModal; ++i) {
-            if (!(iss >> nfeatures[i] >> counts[i])) {
-                return false;
-            }
-        }
-        for (size_t i = 0; i < nModal; ++i) {
-            for (int j = 0; j < nfeatures[i]; ++j) {
-                uint32_t feature;
-                int32_t value;
-                if (!(iss >> feature >> value)) {
-                    return false;
-                }
-                vals[i][feature] = value;
-                valsums[i] += value;
-            }
-        }
-        return true;
-    }
+    bool writeToFile(std::ostream& os, uint32_t key) const;
+    bool readFromLine(const std::string& line, int32_t nModal, bool labeled = false);
 };
 
 
@@ -202,86 +148,21 @@ public:
         assert (features.size() == nFeatures && "Feature names size does not match the number of features");
     }
 
-    bool parseLine(UnitValues &unit, const std::string &line, bool labeled = false) {
-        return unit.readFromLine(line, nModal, labeled);
-    }
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0) {
-        int32_t x, y, layer;
+        int32_t x=0, y=0, layer=0;
         return parseLine(doc, x, y, layer, line, modal);
     }
-    int32_t parseLine(Document& doc, int32_t& x, int32_t& y, int32_t& layer, const std::string &line, int32_t modal = 0) {
-        assert(modal < nModal && "Modal out of range");
-        std::istringstream iss(line);
-        std::string hexKey;
-        std::vector<int32_t> nfeatures(nModal, 0);
-        std::vector<uint32_t> counts(nModal, 0);
-        layer = 0;
-        try {
-            if (nLayer > 1) {
-                iss >> hexKey >> layer >> x >> y;
-            } else {
-                iss >> hexKey >> x >> y;
-            }
-            for (int i = 0; i < nModal; ++i) {
-                iss >> nfeatures[i] >> counts[i];
-            }
-        } catch (const std::exception& e) {
-            error("Error reading line: %s\n %s", line.c_str(), e.what());
-        } catch (...) {
-            error("Unknown error reading line: %s", line.c_str());
-        }
-        for (int l = 0; l < modal; ++l) { // skip
-            for (int i = 0; i < nfeatures[l]; ++i) {
-                uint32_t feature;
-                int32_t value;
-                if (!(iss >> feature >> value)) {
-                    return -1;
-                }
-            }
-        }
-        doc.ids.resize(nfeatures[modal]);
-        doc.cnts.resize(nfeatures[modal]);
-        for (int i = 0; i < nfeatures[modal]; ++i) {
-            if (!(iss >> doc.ids[i] >> doc.cnts[i])) {
-                return -1;
-            }
-        }
-        return counts[modal];
-    }
+    int32_t parseLine(Document& doc, int32_t& x, int32_t& y, int32_t& layer, const std::string &line, int32_t modal = 0);
+    int32_t parseLine(UnitValues &unit, const std::string &line);
 
 
 private:
 
     int32_t nModal;
     int32_t nLayer;
+    int32_t offset_data;
+    int32_t icol_layer, icol_x, icol_y;
+    int32_t mintokens;
 
-    void readMetadata(const std::string &metaFile) {
-        std::ifstream metaIn(metaFile);
-        if (!metaIn) {
-            throw std::runtime_error("Error opening metadata file " + metaFile);
-        }
-
-        // Parse the JSON file.
-        nlohmann::json meta;
-        metaIn >> meta;
-        hexSize = meta.value("hex_size", -0.0);
-        hexGrid.init(hexSize);
-        nUnits = meta.value("n_units", 0);
-        nLayer = meta.value("n_layers", 1);
-        nModal = meta.value("n_modalities", 0);
-        nFeatures = meta.value("n_features", 0);
-        features.resize(nFeatures);
-        if (meta.contains("dictionary")) {
-            for (auto& item : meta["dictionary"].items()) {
-                if (!item.value().is_number_integer()) {
-                    throw std::runtime_error("Dictionary (key: value) pairs must have integer values");
-                }
-                features[item.value()] = item.key();
-            }
-        } else {
-            for (int i = 0; i < nFeatures; ++i) {
-                features[i] = std::to_string(i);
-            }
-        }
-    }
+    void readMetadata(const std::string &metaFile);
 };
