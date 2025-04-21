@@ -105,6 +105,17 @@ struct lineParser {
         }
     }
 
+    int32_t getFeatureList(std::vector<std::string>& featureList) {
+        if (!isFeatureDict) {
+            return -1;
+        }
+        featureList.resize(featureDict.size());
+        for (const auto& pair : featureDict) {
+            featureList[pair.second] = pair.first;
+        }
+        return featureDict.size();
+    }
+
     int32_t parse(PixelValues& pixel, std::string& line) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);

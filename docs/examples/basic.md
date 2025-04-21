@@ -2,7 +2,28 @@
 
 This example demonstrates how to perform pixel level factor analysis with punkst, achieving similar results to FICTURE (2024) with improved efficiency.
 
-## Setup
+## Use example Makefile
+
+We provide a template Makefile and config file in `./docs/examples/basic` to generate the full workflow of FICTURE.
+
+You can copy `./docs/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
+
+The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the params in the "job  section of the config and ignore the generated bash script.
+
+```bash
+# set repopath to the path of the punkst repo
+python ${repopath}/ext/py/generate_workflow.py -c config.json -o run.sh -m Makefile -t ${repopath}/docs/examples/basic/Makefile
+```
+
+You can check the generated workflow before execution by
+```bash
+make -f Makefile --dry-run
+```
+
+
+## Step by step
+
+### Setup
 
 First, set up the environment variables:
 
@@ -12,11 +33,11 @@ tmpdir=./tmp        # Directory for temporary files (must be empty or creatable)
 path=./your_data    # Path to your data directory
 ```
 
-## Input Format
+### Input Format
 
 The input should be a TSV file with X coordinate, Y coordinate, feature, and count columns.
 
-## Step 1: Group pixels to tiles
+### Step 1: Group pixels to tiles
 
 Group pixels into non-overlapping square tiles for faster processing:
 
@@ -32,7 +53,7 @@ Key parameters:
 
 [Detailed documentation for pts2tiles](../modules/pts2tiles.md)
 
-## Step 2: Create hexagonal units
+### Step 2: Create hexagonal units
 
 Group pixels into non-overlapping hexagons:
 
@@ -54,7 +75,7 @@ sort -k1,1 --parallel ${threads} -S 1G ${path}/hex.txt > ${path}/hex.randomized.
 
 [Detailed documentation for tiles2hex](../modules/tiles2hex.md)
 
-## Step 3: Run LDA on hexagon data
+### Step 3: Run LDA on hexagon data
 
 Perform Latent Dirichlet Allocation on the hexagon data:
 
@@ -71,7 +92,7 @@ Key parameters:
 
 [Detailed documentation for lda4hex](../modules/lda4hex.md)
 
-## Step 4: Decode pixels with the model
+### Step 4: Decode pixels with the model
 
 Annotate each pixel with top factors and their probabilities:
 
@@ -90,7 +111,7 @@ Key parameters:
 
 [Detailed documentation for pixel-decode](../modules/pixel-decode.md)
 
-## Step 5: Visualize the results
+### Step 5: Visualize the results
 
 Visualize the pixel decoding results:
 

@@ -83,6 +83,10 @@ set(SOURCE_FILES
     src/tiles2minibatch.cpp
     script/pixels_decode.cpp
     script/draw_pixel_factors.cpp
+    src/tiles2cooccurrence.hpp
+    script/coocurrence.cpp
+    src/markerselection.hpp
+    script/coloc2markers.cpp
     script/scribble_parse.cpp
     script/draw_tsv_by_col.cpp
     script/nuclei_mask.cpp

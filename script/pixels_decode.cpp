@@ -3,7 +3,7 @@
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
-    std::string inTsv, inIndex, modelFile, anchorFile, outFile, tmpDir, dictFile, weightFile;
+    std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDir, dictFile, weightFile;
     int nThreads = 1, seed = -1, debug = 0, verbose = 0;
     int icol_x, icol_y, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
@@ -19,15 +19,15 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     ParamList pl;
     // Input Options
-    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
-      .add_option("in-index", "Input index file", inIndex)
-      .add_option("model", "Model file", modelFile)
+    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv, true)
+      .add_option("in-index", "Input index file", inIndex, true)
+      .add_option("model", "Model file", modelFile, true)
       .add_option("anchor", "Anchor file", anchorFile)
-      .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
-      .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
+      .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x, true)
+      .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y, true)
       .add_option("coords-are-int", "If the coordinates are integers, otherwise assume they are floats", coordsAreInt)
-      .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
-      .add_option("icol-val", "Column index for count/value (0-based)", icol_val)
+      .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, true)
+      .add_option("icol-val", "Column index for count/value (0-based)", icol_val, true)
       .add_option("feature-is-index", "If the feature column contains integer indices, otherwise assume it contains feature names", featureIsIndex)
       .add_option("default-weight", "Default weight for features not in the weight file", defaultWeight)
       .add_option("feature-weights", "Input weights file", weightFile)
@@ -41,10 +41,11 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
       .add_option("seed", "Random seed", seed);
     // Output Options
-    pl.add_option("out", "Output TSV file", outFile)
+    pl.add_option("out", "Output TSV file (backward compatibility)", outFile)
+      .add_option("out-pref", "Output prefix", outPref)
       .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
       .add_option("use-ticket-system", "Use ticket system to ensure predictable output order", useTicketSystem)
-      .add_option("temp-dir", "Directory to store temporary files", tmpDir)
+      .add_option("temp-dir", "Directory to store temporary files", tmpDir, true)
       .add_option("top-k", "Top K factors to output", topK)
       .add_option("min-init-count", "Minimum", minInitCount)
       .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used if input coordinates are float or --output-original is not set)", floatCoordDigits)
@@ -59,6 +60,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
         pl.print_help();
         return 1;
+    }
+    if (outFile.empty() && outPref.empty()) {
+        error("--out-pref or --out must be specified");
     }
 
     if (hexSize <= 0) {
@@ -143,8 +147,17 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model, 100, mDelta);
     notice("Initialized anchor model with %d features and %d factors", nFeatures, K);
 
+    if (outPref.empty()) {
+        size_t pos = outFile.find_last_of(".");
+        if (pos != std::string::npos) {
+            outPref = outFile.substr(0, pos);
+        } else {
+            outPref = outFile;
+        }
+    }
+
     if (coordsAreInt) {
-        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outPref, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
         tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
         tiles2minibatch.setFeatureNames(featureNames);
         tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
@@ -155,7 +168,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         tiles2minibatch.run();
     } else {
-        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outFile, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outPref, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
         tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
         tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
         tiles2minibatch.setOutputProbDigits(probDigits);

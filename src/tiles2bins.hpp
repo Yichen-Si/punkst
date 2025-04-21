@@ -20,7 +20,7 @@ class Tiles2Hex {
 
 public:
 
-    Tiles2Hex(int32_t nThreads, std::string& tmpDir, std::string& outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> minCounts = {});
+    Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts = {});
     ~Tiles2Hex() {
         if (mainOut.is_open()) {
             mainOut.close();
@@ -88,8 +88,8 @@ class Tiles2UnitsByAnchor : public Tiles2Hex {
 
 public:
 
-    Tiles2UnitsByAnchor(int32_t nThreads, std::string& tmpDir, std::string& outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<std::string>& anchorFiles, std::vector<float>& radius, std::vector<int32_t> minCounts = {}, bool noBackground = false)
-        : Tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, minCounts), noBackground(noBackground) {
+    Tiles2UnitsByAnchor(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<std::string>& anchorFiles, std::vector<float>& radius, std::vector<int32_t> _minCounts = {}, bool _noBackground = false)
+        : Tiles2Hex(nThreads, _tmpDir, _outFile, hexGrid, tileReader, parser, _minCounts), noBackground(_noBackground) {
         assert(!anchorFiles.empty() && anchorFiles.size() == radius.size());
         for (auto& f : anchorFiles) {
             readAnchors(f);
@@ -108,7 +108,7 @@ public:
         meta["anchor_radius"] = radius;
         meta["offset_data"] = 4;
         meta["icol_layer"] = 3;
-        meta["icols_identifier"] = std::vector<int32_t>{0, 1, 2, 3};
+        meta["icols_identifier"] = {0, 1, 2, 3};
     }
 
 protected:

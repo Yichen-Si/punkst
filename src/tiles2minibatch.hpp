@@ -87,15 +87,16 @@ class Tiles2MinibatchBase {
 
 public:
 
-    Tiles2MinibatchBase(int nThreads, double r, const std::string& outputFile, const std::string& _tmpDir, TileReader& tileReader)
-    : nThreads(nThreads), r(r), outputFile(outputFile), tmpDir(_tmpDir), tileReader(tileReader) {
+    Tiles2MinibatchBase(int nThreads, double r, const std::string& _outPref, const std::string& _tmpDir, TileReader& tileReader)
+    : nThreads(nThreads), r(r), outPref(_outPref), tmpDir(_tmpDir), tileReader(tileReader) {
         if (!createDirectory(tmpDir)) {
             throw std::runtime_error("Error creating temporary directory (or the existing directory is not empty): " + tmpDir);
         }
         if (tmpDir.back() != '/') {
             tmpDir.push_back('/');
         }
-        mainOut.open(this->outputFile, std::ios::out);
+        std::string outputFile = outPref + ".tsv";
+        mainOut.open(outputFile, std::ios::out);
         if (!mainOut) {
             error("Error opening main output file: %s", outputFile.c_str());
         } // Assume tileSize is provided by the TileReader.
@@ -116,7 +117,7 @@ protected:
     int nThreads; // Number of worker threads
     int tileSize; // Tile size (square)
     double r;     // Processing radius (padding width)
-    std::string outputFile, tmpDir;
+    std::string outPref, tmpDir;
     TileReader& tileReader;
 
     std::ofstream mainOut;
@@ -288,13 +289,13 @@ class Tiles2Minibatch : public Tiles2MinibatchBase {
 
 public:
     Tiles2Minibatch(int nThreads, double r,
-        const std::string& outputFile, const std::string& _tmpDir,
+        const std::string& _outPref, const std::string& _tmpDir,
         LatentDirichletAllocation& _lda,
         TileReader& tileReader, lineParserUnival& lineParser,
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
         double c = 20, double h = 0.7, double res = 1, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
-        Tiles2MinibatchBase(nThreads, r + hexGrid.size, outputFile, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug), outputOriginalData(false), useTicketSystem(false), currentTicket(0), nextOutputTicket(0) {
+        Tiles2MinibatchBase(nThreads, r + hexGrid.size, _outPref, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug), outputOriginalData(false), useTicketSystem(false), currentTicket(0), nextOutputTicket(0) {
         // check type consistency
         if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
             assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
@@ -490,6 +491,7 @@ protected:
     }
 
     void setupOutput() {
+        std::string outputFile = outPref + ".tsv";
         mainOut.open(outputFile, std::ios::out);
         if (!mainOut) {
             error("Error opening main output file: %s", outputFile.c_str());
@@ -507,13 +509,7 @@ protected:
             mainOut << "\tP" << i+1;
         }
         mainOut << "\n";
-        size_t pos = outputFile.find_last_of(".");
-        std::string indexFile;
-        if (pos == std::string::npos) {
-            indexFile = outputFile + ".index";
-        } else {
-            indexFile = outputFile.substr(0, pos) + ".index";
-        }
+        std::string indexFile = outPref + ".index";
         indexOut.open(indexFile, std::ios::out | std::ios::binary);
         if (!indexOut) {
             error("Error opening index output file: %s", indexFile.c_str());

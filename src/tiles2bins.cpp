@@ -1,7 +1,7 @@
 #include "tiles2bins.hpp"
 
-Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> minCounts)
-: nThreads(nThreads), tmpDir(_tmpDir), outFile(outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(minCounts), nUnits(0), nFeatures(0) {
+Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts)
+: nThreads(nThreads), tmpDir(_tmpDir), outFile(_outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(_minCounts), nUnits(0), nFeatures(0) {
     if (!createDirectory(tmpDir)) {
         error("Error creating temporary directory (or the existing directory is not empty): %s", tmpDir.c_str());
     }
@@ -24,7 +24,7 @@ Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& outFil
     meta["icol_x_hex"] = 1;
     meta["icol_y_hex"] = 2;
     meta["offset_data"] = 3;
-    meta["icols_identifier"] = std::vector<int32_t>{0,1,2};
+    meta["icols_identifier"] = {0,1,2};
 }
 
 void Tiles2Hex::writeMetadata() {
@@ -134,6 +134,7 @@ void Tiles2Hex::worker(int threadId) {
                 nFeatures = maxFeatureIdxLocal;
             }
         }
+        notice("Thread %d: processed %zu hexagons in tile (%d, %d)", threadId, unitBuffer.size(), tile.row, tile.col);
     } // end while tiles
     outFile.close();
 }
@@ -147,6 +148,7 @@ bool Tiles2Hex::run() {
         }
         tileQueue.set_done();
         // Call worker directly instead of spawning a new thread.
+        notice("Running single-threaded...");
         worker(0);
     } else {
         // Launch worker threads to process tiles.

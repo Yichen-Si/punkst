@@ -447,13 +447,7 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
 
 template<typename T>
 void Tiles2Minibatch<T>::writeHeaderToJson() {
-    size_t pos = outputFile.find_last_of(".");
-    std::string jsonFile;
-    if (pos != std::string::npos) {
-        jsonFile = outputFile.substr(0, pos) + ".json";
-    } else {
-        jsonFile = outputFile + ".json";
-    }
+    std::string jsonFile = outPref + ".json";
     std::ofstream jsonOut(jsonFile);
     if (!jsonOut) {
         error("Error opening json output file: %s", jsonFile.c_str());
@@ -479,13 +473,7 @@ void Tiles2Minibatch<T>::writeHeaderToJson() {
 
 template<typename T>
 void Tiles2Minibatch<T>::writePseudobulkToTsv() {
-    size_t pos = outputFile.find_last_of(".");
-    std::string pseudobulkFile;
-    if (pos != std::string::npos) {
-        pseudobulkFile = outputFile.substr(0, pos) + ".pseudobulk.tsv";
-    } else {
-        pseudobulkFile = outputFile + ".pseudobulk.tsv";
-    }
+    std::string pseudobulkFile = outPref + ".pseudobulk.tsv";
     std::ofstream oss(pseudobulkFile, std::ios::out);
     if (!oss) {
         error("Error opening pseudobulk output file: %s", pseudobulkFile.c_str());
