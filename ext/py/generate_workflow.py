@@ -58,14 +58,16 @@ def render_makefile(template_path, out_path, wf):
     print(f"Generated Makefile: {out_path}")
 
 
-def write_sbatch_script(job, makefile_out, sbatch_out):
+def write_sbatch_script(job, makefile_out, sbatch_out, pyenv=None):
     lines = ['#!/bin/bash']
     # SBATCH headers
     for key, val in job.items():
         lines.append(f"#SBATCH --{key}={val}")
     lines.append("")
-    lines.append("source /net/wonderland/home/ycsi/env/py39/bin/activate")
-    lines.append("set -euo pipefail")
+    if pyenv:
+        lines.append(f"# Activate Python environment: {pyenv}")
+        lines.append(f"source {pyenv}/bin/activate")
+    lines.append("\nset -euo pipefail")
     lines.append("")
     lines.append(f"# Run the generated Makefile")
     lines.append(f"make -f {makefile_out}")
@@ -79,7 +81,7 @@ def write_sbatch_script(job, makefile_out, sbatch_out):
 def main():
     p = argparse.ArgumentParser(description="Generate Makefile + SLURM script from config")
     p.add_argument('-c', '--config', required=True, help="JSON config file path")
-    p.add_argument('-o', '--output', required=True, help="Output sbatch script path")
+    p.add_argument('-o', '--output', default="", help="Output sbatch script path")
     p.add_argument('-t', '--template', required=True,
                    help="Makefile template path (with {PLACEHOLDERS})")
     p.add_argument('-m', '--makefile', default='Makefile',
@@ -90,14 +92,16 @@ def main():
     cfg = json.load(open(args.config))
     job = cfg.get('job', {})
     wf  = cfg.get('workflow', {})
+    pyenv = cfg.get('pyenv', None)
     # Render Makefile
     render_makefile(args.template, args.makefile, wf)
     # Emit sbatch wrapper
-    write_sbatch_script(job, args.makefile, args.output)
-    # remove temporary directory if it exists
-    tmpdir= wf.get("datadir") + "/tmp_" + str(wf.get("seed") )
+    if (args.output):
+        write_sbatch_script(job, args.makefile, args.output, pyenv)
+    # check temporary directory
+    tmpdir= wf.get("tmpdir")
     if os.path.exists(tmpdir):
-        print(f"Please removed temporary directory before submit the job: {tmpdir}")
+        print(f"Please removed temporary directory or all its content before running the workflow: {tmpdir}")
 
 if __name__ == '__main__':
     main()

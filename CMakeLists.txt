@@ -87,6 +87,7 @@ set(SOURCE_FILES
     script/coocurrence.cpp
     src/markerselection.hpp
     script/coloc2markers.cpp
+    script/convert_dge.cpp
     script/scribble_parse.cpp
     script/draw_tsv_by_col.cpp
     script/nuclei_mask.cpp

@@ -1,5 +1,4 @@
 #include "utils.h"
-
 // String manipulation functions
 
 // Splits a line into a vector - PERL style
@@ -113,39 +112,24 @@ void hprintf(htsFile* fp, const char * msg, ...) {
     }
 }
 
-// String to number conversion functions
+// String to number conversion shortcuts
 bool str2int32(const std::string& str, int32_t& value) {
     return str2num<int32_t>(str, value);
 }
-
 bool str2int64(const std::string& str, int64_t& value) {
     return str2num<int64_t>(str, value);
 }
-
 bool str2uint32(const std::string& str, uint32_t& value) {
     return str2num<uint32_t>(str, value);
 }
-
 bool str2uint64(const std::string& str, uint64_t& value) {
     return str2num<uint64_t>(str, value);
 }
-
 bool str2double(const std::string& str, double& value) {
-    try {
-        value = std::stod(str);
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return str2num<double>(str, value);
 }
-
 bool str2float(const std::string& str, float& value) {
-    try {
-        value = std::stof(str);
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return str2num<float>(str, value);
 }
 
 bool str2bool(const std::string& str, bool& value) {

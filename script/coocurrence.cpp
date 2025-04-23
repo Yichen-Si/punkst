@@ -4,9 +4,8 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
     std::string inTsv, inIndex, outPref, dictFile;
     double radius, halflife = -1, localMin = 0;
     int nThreads = 1, debug = 0;
-    int icol_x, icol_y, icol_feature;
-    std::vector<int32_t> icol_ints;
-    bool binaryOutput = false;
+    int icol_x, icol_y, icol_feature, icol_val;
+    bool binaryOutput = false, weightByCount = false;
     int minNeighbor = 1;
 
     ParamList pl;
@@ -17,7 +16,8 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
         .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y, true)
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
         .add_option("feature-dict", "If feature column is not integer, provide a dictionary/list of all possible values", dictFile)
-        .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
+        .add_option("icol-val", "Column index for the integer count (0-based)", icol_val)
+        .add_option("weight-by-count", "Weight co-occurrence by the product of the number of transcripts (default: false)", weightByCount)
         .add_option("radius", "Radius to count coocurrence", radius, true)
         .add_option("halflife", "Halflife for exponential decay (default: -1, unweighted count)", halflife)
         .add_option("min-neighbor", "Minimum number of neighbors within the radius for a pixel to be included", minNeighbor)
@@ -42,9 +42,9 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
         error("Error opening input file: %s", inTsv.c_str());
         return 1;
     }
-    lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile);
+    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
 
-    Tiles2FeatureCooccurrence cooccurrence(nThreads, tileReader, parser, outPref, radius, halflife, localMin, binaryOutput, minNeighbor);
+    Tiles2FeatureCooccurrence cooccurrence(nThreads, tileReader, parser, outPref, radius, halflife, localMin, binaryOutput, minNeighbor, weightByCount);
 
     cooccurrence.run();
 

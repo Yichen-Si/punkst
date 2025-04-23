@@ -6,16 +6,29 @@
 #include <stdexcept>
 #include <utility>
 
+#include "Eigen/Core"
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
-using Eigen::MatrixXd;
-using Eigen::VectorXd;
-using Eigen::SparseMatrix;
 
 // Calculate the mean absolute difference between two arrays.
 double mean_change(const std::vector<double>& arr1, const std::vector<double>& arr2);
 
-double mean_max_row_change(const MatrixXd& arr1, const MatrixXd& arr2);
+template<typename Derived>
+auto mean_max_row_change(const Eigen::MatrixBase<Derived>& arr1,
+                         const Eigen::MatrixBase<Derived>& arr2)
+    -> typename Derived::Scalar
+{
+    using Scalar = typename Derived::Scalar;
+    if (arr1.rows() != arr2.rows() || arr1.cols() != arr2.cols()) {
+        return std::numeric_limits<Scalar>::infinity();
+    }
+    Scalar total = Scalar(0);
+    for (int i = 0; i < arr1.rows(); ++i) {
+        total += (arr1.row(i) - arr2.row(i)).cwiseAbs().maxCoeff();
+    }
+    return total / arr1.rows();
+}
+
 
 // Psi (digamma) function (not optimized for maximum accuracy)
 double psi(double x);
@@ -25,16 +38,91 @@ double psi(double x);
 void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset = 0);
 
 // Vector version
-VectorXd dirichlet_expectation_1d(VectorXd& alpha, double offset = 0);
+template<typename Derived>
+Derived dirichlet_expectation_1d(const Eigen::MatrixBase<Derived>& alpha,
+                                 typename Derived::Scalar offset = Derived::Scalar(0))
+{
+    using Scalar = typename Derived::Scalar;
+    Derived tmp = alpha.derived();
+    tmp.array() += offset;
+    Scalar total = tmp.sum();
+    double psi_total = psi(static_cast<double>(total));
+    for (int i = 0; i < tmp.size(); ++i) {
+        tmp(i) = Scalar(std::exp(psi(static_cast<double>(tmp(i))) - psi_total));
+    }
+    return tmp;
+}
 
 // row-wise exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
-MatrixXd dirichlet_expectation_2d(const MatrixXd& alpha);
+template<typename Derived>
+Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha)
+{
+    using Scalar = typename Derived::Scalar;
+    Derived result(alpha.rows(), alpha.cols());
+    for (int i = 0; i < alpha.rows(); ++i) {
+        auto row = alpha.row(i);
+        Scalar total = row.sum();
+        double psi_total = psi(static_cast<double>(total));
+        for (int j = 0; j < alpha.cols(); ++j) {
+            result(i,j) = Scalar(
+                std::exp(psi(static_cast<double>(alpha(i,j))) - psi_total)
+            );
+        }
+    }
+    return result;
+}
 
 // row-wise E[log X] for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
-MatrixXd dirichlet_entropy_2d(const MatrixXd& alpha);
+template<typename Derived>
+Derived dirichlet_entropy_2d(const Eigen::MatrixBase<Derived>& alpha)
+{
+    using Scalar = typename Derived::Scalar;
+    Derived result(alpha.rows(), alpha.cols());
+    for (int i = 0; i < alpha.rows(); ++i) {
+        auto row = alpha.row(i);
+        Scalar total = row.sum();
+        double psi_total = psi(static_cast<double>(total));
+        for (int j = 0; j < alpha.cols(); ++j) {
+            result(i,j) = Scalar(
+                psi(static_cast<double>(alpha(i,j))) - psi_total
+            );
+        }
+    }
+    return result;
+}
 
 // If b is provided, it must be of the same size as a.
-std::pair<double, double> logsumexp(const VectorXd &a, const VectorXd* b = nullptr);
+template<typename Derived>
+std::pair<typename Derived::Scalar, typename Derived::Scalar>
+logsumexp(const Eigen::MatrixBase<Derived>& a,
+          const Eigen::MatrixBase<Derived>* b = nullptr)
+{
+    using Scalar = typename Derived::Scalar;
+    if (a.size() == 0) {
+        return { -std::numeric_limits<Scalar>::infinity(), Scalar(0) };
+    }
+    Scalar maxVal = a.maxCoeff();
+    if (!std::isfinite(maxVal)) {
+        return { -std::numeric_limits<Scalar>::infinity(), Scalar(0) };
+    }
+    Scalar sumExp = Scalar(0);
+    Scalar sign = Scalar(0);
+    if (!b) {
+        for (int i = 0; i < a.size(); ++i) {
+            sumExp += std::exp(a(i) - maxVal);
+        }
+        sign = Scalar(1);
+    } else {
+        for (int i = 0; i < a.size(); ++i) {
+            auto term = (*b)(i) * std::exp(a(i) - maxVal);
+            sumExp += term;
+        }
+        sign = sumExp > 0 ? Scalar(1) : (sumExp < 0 ? Scalar(-1) : Scalar(0));
+        sumExp = std::abs(sumExp);
+    }
+    Scalar lse = maxVal + std::log(sumExp);
+    return { lse, sign };
+}
 
 inline double expit(double x) {
     return 1.0 / (1.0 + std::exp(-x));
@@ -88,4 +176,32 @@ void rowNormalize(SparseMatrixType& mat) {
 }
 
 // find largest values and indices
-void findTopK(MatrixXd& topVals, Eigen::MatrixXi& topIds, const MatrixXd& mtx, int32_t k);
+template<typename Derived>
+void findTopK(
+    Eigen::Matrix<typename Derived::Scalar,
+                  Eigen::Dynamic,Eigen::Dynamic>& topVals,
+    Eigen::Matrix<int,Eigen::Dynamic,Eigen::Dynamic>& topIds,
+    const Eigen::MatrixBase<Derived>& mtx,
+    int k)
+{
+    using Scalar = typename Derived::Scalar;
+    int nRows = mtx.rows();
+    int nCols = mtx.cols();
+    k = std::min(k, nCols);
+    topVals.resize(nRows,k);
+    topIds.resize(nRows,k);
+    for (int i = 0; i < nRows; ++i) {
+        std::vector<std::pair<Scalar,int>> rowData;
+        rowData.reserve(nCols);
+        for (int j = 0; j < nCols; ++j) {
+            rowData.emplace_back(mtx(i,j), j);
+        }
+        std::partial_sort(rowData.begin(), rowData.begin()+k, rowData.end(),
+            [](auto &a, auto &b){ return a.first > b.first; }
+        );
+        for (int j = 0; j < k; ++j) {
+            topVals(i,j) = rowData[j].first;
+            topIds(i,j) = rowData[j].second;
+        }
+    }
+}

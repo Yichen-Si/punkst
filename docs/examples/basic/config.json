@@ -11,7 +11,8 @@
       "threads": 4,
       "seed": 1,
       "gitpath": "/path/to/punkst",
-      "datadir": "/path/for/output",
+      "datadir": "/path/to/output",
+      "tmpdir": "/path/to/store/temporary/files",
       "transcripts": "/path/to/input/transcripts.tsv",
       "features": "/path/to/input/features.txt",
       "icol_x": 0,
@@ -27,6 +28,8 @@
       "xmin": 0,
       "xmax": 11454,
       "ymin": 0,
-      "ymax": 23812
-    }
+      "ymax": 23812,
+      "scale": 1
+    },
+    "pyenv": "/path/to/venv"
   }

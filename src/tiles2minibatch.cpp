@@ -124,7 +124,7 @@ int32_t Tiles2Minibatch<T>::initAnchors(TileData<T>& tileData, std::vector<cv::P
             }
             // Create the vector of Document from the aggregated data.
             for (auto& hexEntry : hexAggregation) {
-                double sum = std::accumulate(hexEntry.second.begin(), hexEntry.second.end(), 0.0, [](double acc, const auto& p) { return acc + p.second; });
+                float sum = std::accumulate(hexEntry.second.begin(), hexEntry.second.end(), 0.0, [](float acc, const auto& p) { return acc + p.second; });
                 if (sum < anchorMinCount) {
                     continue;
                 }
@@ -150,11 +150,11 @@ int32_t Tiles2Minibatch<T>::initAnchors(TileData<T>& tileData, std::vector<cv::P
     if (documents.empty()) {
         return 0;
     }
-    minibatch.gamma = lda.transform(documents);
+    minibatch.gamma = lda.transform(documents).cast<float>();
     // TODO: need to test if scaling/normalizing gamma is better
     // scale each row so that the mean is 1
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
-        double sum = minibatch.gamma.row(i).sum();
+        float sum = minibatch.gamma.row(i).sum();
         if (sum > 0) {
             minibatch.gamma.row(i) /= sum / K_;
         }
@@ -172,13 +172,13 @@ int32_t Tiles2Minibatch<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv:
     kd_tree_cv2f_t kdtree(2, pc, {10});
     std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
 
-    double l2radius = distR * distR;
-    std::vector<Eigen::Triplet<double>> triplets4mtx;
-    std::vector<Eigen::Triplet<double>> triplets4wij;
-    std::vector<Eigen::Triplet<double>> triplets4psi;
+    float l2radius = distR * distR;
+    std::vector<Eigen::Triplet<float>> triplets4mtx;
+    std::vector<Eigen::Triplet<float>> triplets4wij;
+    std::vector<Eigen::Triplet<float>> triplets4psi;
     uint32_t npt = 0;
     tileData.orgpts2pixel.resize(tileData.pts.size(), -1);
-    std::unordered_map<uint64_t, std::pair<std::unordered_map<uint32_t, double>, std::vector<uint32_t>> > pixAgg;
+    std::unordered_map<uint64_t, std::pair<std::unordered_map<uint32_t, float>, std::vector<uint32_t>> > pixAgg;
     uint32_t i = 0;
     for (const auto& pt : tileData.pts) {
         int32_t x = int32_t (pt.x / pixelResolution);
@@ -212,15 +212,15 @@ int32_t Tiles2Minibatch<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv:
         for (auto & v : kv.second.second) {
             tileData.orgpts2pixel[v] = npt;
         }
-        std::vector<double> dvec(n, 0);
+        std::vector<float> dvec(n, 0);
         for (size_t i = 0; i < n; ++i) {
             uint32_t idx = indices_dists[i].first;
-            double dist = indices_dists[i].second;
+            float dist = indices_dists[i].second;
             dist = std::max(std::min(1. - pow(dist / distR, distNu), 0.95), 0.05);
             dvec[i] = dist;
             triplets4wij.emplace_back(npt, idx, logit(dist));
         }
-        double rowsum = std::accumulate(dvec.begin(), dvec.end(), 0.0);
+        float rowsum = std::accumulate(dvec.begin(), dvec.end(), 0.0);
         for (size_t i = 0; i < n; ++i) {
             triplets4psi.emplace_back(npt, indices_dists[i].first, dvec[i] / rowsum);
         }
@@ -242,7 +242,7 @@ int32_t Tiles2Minibatch<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv:
 }
 
 template<typename T>
-int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds) {
+int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds) {
     std::lock_guard<std::mutex> lock(mainOutMutex);
     uint32_t npts = 0;
     int32_t nrows = topVals.rows();
@@ -319,7 +319,7 @@ int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>&
 }
 
 template<typename T>
-int32_t Tiles2Minibatch<T>::outputPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds) {
+int32_t Tiles2Minibatch<T>::outputPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds) {
     std::lock_guard<std::mutex> lock(mainOutMutex);
     size_t N = tileData.coords.size();
     std::vector<bool> internal(N, 0);
@@ -413,7 +413,7 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
     if (debug_) {
         std::cout << "Thread " << threadId << " finished decoding" << std::endl << std::flush;
     }
-    MatrixXd topVals;
+    MatrixXf topVals;
     Eigen::MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
     if (debug_) {
@@ -582,7 +582,7 @@ int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector
         if (kv.empty()) {
             continue;
         }
-        double sum = std::accumulate(kv.begin(), kv.end(), 0.0, [](double a, const auto& b) { return a + b.second; });
+        float sum = std::accumulate(kv.begin(), kv.end(), 0.0, [](float a, const auto& b) { return a + b.second; });
         if (sum < anchorMinCount) {
             continue;
         }
@@ -601,9 +601,9 @@ int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector
         }
         docs.push_back(std::move(doc));
     }
-    minibatch.gamma = lda.transform(docs);
+    minibatch.gamma = lda.transform(docs).cast<float>();
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
-        double sum = minibatch.gamma.row(i).sum();
+        float sum = minibatch.gamma.row(i).sum();
         if (sum > 0) {
             minibatch.gamma.row(i) /= sum / K_;
         }

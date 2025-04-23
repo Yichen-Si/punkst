@@ -99,7 +99,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     int32_t ret, nline=0, nskip=0, nkept=0;
     while ((ret = reader.next(rec)) >= 0) {
         if (ret==0) {
-            if (nkept>10000) break;
+            if (nkept>10000) {
+                warning("Stopped at invalid line %d", nline);
+                break;
+            }
             error("Invalid or corrupted input");
         }
         if (++nline % verbose == 0)

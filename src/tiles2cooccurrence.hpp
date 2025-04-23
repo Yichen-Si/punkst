@@ -12,15 +12,15 @@
 class Tiles2FeatureCooccurrence {
 public:
     Tiles2FeatureCooccurrence(
-        int32_t nThreads, TileReader& tileReader, lineParser& parser,
+        int32_t nThreads, TileReader& tileReader, lineParserUnival& parser,
         const std::string& outPref,
         double radius, double halflife=-1,
         double localMin=0, bool binaryOutput = false,
-        int32_t minNeighbor = 1) :
+        int32_t minNeighbor = 1, bool weightByCount = false) :
         nThreads_(nThreads) , outPref_(outPref) , r2_(radius * radius)
         , halflife_(halflife), weightByDistance_(halflife > 0)
         , tileReader_(tileReader) , parser_(parser)
-        , localMin_(localMin), binaryOutput_(binaryOutput), minNeighbor_(minNeighbor) {
+        , localMin_(localMin), binaryOutput_(binaryOutput), minNeighbor_(minNeighbor), weightByCount_(weightByCount) {
         std::vector<TileKey> tiles;
         tileReader_.getTileList(tiles);
         for (auto &t : tiles) {
@@ -47,17 +47,17 @@ private:
     double halflife_, tau_;
     std::string outPref_;
     double localMin_;
-    bool weightByDistance_, binaryOutput_;
+    bool weightByDistance_, weightByCount_, binaryOutput_;
     int32_t minNeighbor_;
 
     TileReader&   tileReader_;
-    lineParser&   parser_;
+    lineParserUnival&   parser_;
 
     ThreadSafeQueue<TileKey> tileQueue_;
     std::vector<std::thread>  threads_;
 
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, double>> globalCounts_;
-    std::unordered_map<uint32_t, std::array<uint64_t, 3> > globalMargianls_;
+    std::unordered_map<uint32_t, std::array<uint64_t, 4> > globalMargianls_;
 
     std::mutex globalMtx_;
 
@@ -67,20 +67,25 @@ private:
             // read this tile’s points
             PointCloud<float> cloud;            // from nanoflann_utils
             std::vector<uint32_t> feats;
+            std::vector<uint8_t> counts;
+            std::unordered_map<uint32_t, std::unordered_map<uint32_t, double>> localCounts;
+            std::unordered_map<uint32_t, std::array<uint64_t, 4> > localMarginals;
 
             auto iter = tileReader_.get_tile_iterator(tile.row, tile.col);
             std::string line;
             while (iter->next(line)) {
-                PixelValues px;
+                RecordT<float> px;
                 if (parser_.parse(px, line) < 0) continue;
                 cloud.pts.emplace_back(px.x, px.y);  // z=0
-                feats.push_back(uint32_t(px.feature));
+                feats.push_back(px.idx);
+                if (weightByCount_) {
+                    counts.push_back(static_cast<uint8_t>(std::max(256u, px.ct)));
+                }
+                localMarginals[px.idx][0] += 1;
+                localMarginals[px.idx][1] += px.ct;
             }
             const size_t N = cloud.pts.size();
             if (N < 2) continue;
-
-            std::unordered_map<uint32_t, std::unordered_map<uint32_t, double>> localCounts;
-            std::unordered_map<uint32_t, std::array<uint64_t, 3> > localMarginals;
 
             // build local tree
             kd_tree_f2_t tree(2, cloud,
@@ -93,20 +98,32 @@ private:
                 float query_pt[2] = { cloud.pts[i].x, cloud.pts[i].y };
                 uint32_t n = tree.radiusSearch(query_pt, r2_, indices_dists);
                 uint32_t f1 = feats[i];
-                localMarginals[f1][0] += 1;
                 if (n < minNeighbor_) {
                     nSkip++;
                     continue;
                 }
-                localMarginals[f1][1] += 1;
-                localMarginals[f1][2] += n;
-                for (uint32_t j = 0; j < n; ++j) {
-                    auto &m = indices_dists[j];
-                    uint32_t f2 = feats[m.first];
-                    if (weightByDistance_) {
-                        localCounts[f1][f2] += exp(-tau_ * m.second);
-                    } else {
-                        localCounts[f1][f2] += 1;
+                localMarginals[f1][3] += n;
+                if (weightByCount_) {
+                    localMarginals[f1][2] += counts[i];
+                    for (uint32_t j = 0; j < n; ++j) {
+                        auto &m = indices_dists[j];
+                        uint32_t f2 = feats[m.first];
+                        if (weightByDistance_) {
+                            localCounts[f1][f2] += exp(-tau_ * m.second) * counts[m.first] * counts[i];
+                        } else {
+                            localCounts[f1][f2] += counts[m.first] * counts[i];
+                        }
+                    }
+                } else {
+                    localMarginals[f1][2] += 1;
+                    for (uint32_t j = 0; j < n; ++j) {
+                        auto &m = indices_dists[j];
+                        uint32_t f2 = feats[m.first];
+                        if (weightByDistance_) {
+                            localCounts[f1][f2] += exp(-tau_ * m.second);
+                        } else {
+                            localCounts[f1][f2] += 1;
+                        }
                     }
                 }
             }
@@ -121,7 +138,7 @@ private:
                 }
                 for (auto &kv : localMarginals) {
                     auto &kv2 = globalMargianls_[kv.first];
-                    for (int i = 0; i < 3; ++i) {
+                    for (uint32_t i = 0; i < kv2.size(); ++i) {
                         kv2[i] += kv.second[i];
                     }
                 }
@@ -140,14 +157,15 @@ private:
         std::vector<std::string> featureList;
         if (parser_.getFeatureList(featureList) < 0) {
             warning("Feature names are not found");
+            // feature name, total uniq pixels, total counts, used pixels, counted neighboring pixels
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%lu\t%lu\t%lu\n", kv.first,
-                    kv.second[0], kv.second[1], kv.second[2]);
+                fprintf(ofs, "%u\t%lu\t%lu\t%lu\t%lu\n", kv.first,
+                    kv.second[0], kv.second[1], kv.second[2], kv.second[3]);
             }
         } else {
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%s\t%lu\t%lu\t%lu\n", kv.first,
-                    featureList[kv.first].c_str(), kv.second[0], kv.second[1], kv.second[2]);
+                fprintf(ofs, "%u\t%s\t%lu\t%lu\t%lu\t%lu\n", kv.first,
+                    featureList[kv.first].c_str(), kv.second[0], kv.second[1], kv.second[2], kv.second[3]);
             }
         }
         fclose(ofs);

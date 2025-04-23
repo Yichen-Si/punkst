@@ -20,9 +20,7 @@
 
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
-using Eigen::MatrixXd;
-using Eigen::VectorXd;
-using Eigen::SparseMatrix;
+using Eigen::MatrixXf;
 
 template<typename T>
 struct TileData {
@@ -325,7 +323,7 @@ public:
         if (N <= 0) {
             N = lda.get_N_global() * 100;
         }
-        pseudobulk = MatrixXd::Zero(K_, M_);
+        pseudobulk = MatrixXf::Zero(K_, M_);
         slda.init(K_, M_, N, seed);
         slda.init_global_parameter(lda.get_model());
         slda.verbose_ = verbose;
@@ -424,7 +422,7 @@ protected:
     std::ofstream indexOut;
     size_t outputSize = 0;
     int32_t floatCoordDigits = 4, probDigits = 4;
-    MatrixXd pseudobulk; // K x M
+    MatrixXf pseudobulk; // K x M
     std::mutex pseudobulkMutex; // Protects pseudobulk
 
     // Parse pixels from one tile
@@ -437,8 +435,8 @@ protected:
     int32_t makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
 
     // Write the results of internal points
-    int32_t outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
-    int32_t outputPixelResult(const TileData<T>& tileData, const MatrixXd& topVals, const Eigen::MatrixXi& topIds);
+    int32_t outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds);
+    int32_t outputPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds);
 
     // Process one tile or one boundary buffer
     void processTile(TileData<T> &tileData, int threadId=0, int ticket = 0, vec2f_t* anchorPtr = nullptr);

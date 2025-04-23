@@ -4,7 +4,7 @@
 struct PixelFactorResult {
     double x, y;
     std::vector<int32_t> ks;
-    std::vector<double> ps;
+    std::vector<float> ps;
 };
 
 class PixelResultReader {
@@ -93,17 +93,18 @@ private:
         std::vector<std::string> tok;
         split(tok, "\t", line);
         if (tok.size() < maxIdx+1) return false;
-        try {
-            R.x = std::stod(tok[icol_x]);
-            R.y = std::stod(tok[icol_y]);
-            R.ks.clear();
-            R.ps.clear();
-            for (int i = 0; i < k; ++i) {
-                R.ks.push_back(std::stoi(tok[icol_ks[i]]));
-                R.ps.push_back(std::stod(tok[icol_ps[i]]));
-            }
-        } catch (...) {
+        if (!str2double(tok[icol_x], R.x) ||
+            !str2double(tok[icol_y], R.y)) {
+            warning("Error parsing line: %s", line.c_str());
             return false;
+        }
+        R.ks.resize(k);
+        R.ps.resize(k);
+        for (int i = 0; i < k; ++i) {
+            if (!str2int32(tok[icol_ks[i]], R.ks[i]) ||
+                !str2float(tok[icol_ps[i]], R.ps[i])) {
+                warning("Error parsing line: %s", line.c_str());
+            }
         }
         return true;
     }

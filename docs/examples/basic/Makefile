@@ -1,6 +1,7 @@
 # ─── Configurable parameters (these get filled in by your Python script) ────
 GITPATH      := {GITPATH}
 DATADIR      := {DATADIR}
+TMPDIR       := {TMPDIR}
 TRANSCRIPTS  := {TRANSCRIPTS}
 FEATURES     := {FEATURES}
 ICOL_X       := {ICOL_X}
@@ -16,11 +17,10 @@ TOPICS       := {TOPICS}
 PIXHEX       := {PIXHEX}
 NMOVE        := {NMOVE}
 RES          := {RES}
+SCALE        := {SCALE}
 BOUNDS       := --xmin {XMIN} --xmax {XMAX} --ymin {YMIN} --ymax {YMAX}
 
 PUNKST       := $(GITPATH)/bin/punkst
-TMPDIR       := $(DATADIR)/tmp_$(SEED)
-
 
 # ─── Compute the full list of final report files ──────────────────────────
 REPORTS := \
@@ -61,7 +61,7 @@ $(DATADIR)/hex_$(1)_randomized.txt $(DATADIR)/hex_$(1).json: \
 	  --out $(DATADIR)/hex_$(1).txt \
 	  --temp-dir $(TMPDIR) --threads $(THREADS)
 	sort -k1,1 --parallel $(THREADS) -S 2G \
-	  $(DATADIR)/hex_$(1).txt > $$@
+	  $(DATADIR)/hex_$(1).txt > $(DATADIR)/hex_$(1)_randomized.txt
 	rm $(DATADIR)/hex_$(1).txt
 endef
 $(foreach H,$(HEXGRIDS),$(eval $(call HEX_RULE,$H)))
@@ -136,7 +136,8 @@ $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).1um.png: \
 	/usr/bin/time -v $(PUNKST) draw-pixel-factors \
 	  --in-tsv $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
 	  --in-color $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv \
-	  --out $$@ $(BOUNDS) --scale 1
+	  --out $$@ \
+	  $(BOUNDS) --scale $(SCALE)
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\

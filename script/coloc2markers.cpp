@@ -8,8 +8,12 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
     bool binaryInput = false;
     int32_t minCount = 1;
     std::vector<std::string> selectedMarkers;
-    int32_t verbose = 0;
     double maxRankFraction = 0.2;
+    int32_t maxIter = 500;
+    double tol = 1e-6;
+    int32_t threads = -1;
+    int32_t verbose = 0;
+    bool recoverFactors = false, weightFactorsByCounts = false;
 
     ParamList pl;
     pl.add_option("input", "Input co-occurrence matrix (binary or TSV)", inFile, true)
@@ -20,6 +24,11 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
         .add_option("value-bytes", "Number of bytes for each value in the matrix (default: 8, only used for binary input)", valueBytes)
         .add_option("fixed", "Fixed markers", selectedMarkers)
         .add_option("min-count", "Minimum count for a feature to be considered as a marker (default: 1)", minCount);
+    pl.add_option("recover-factors", "Recover factors from the co-occurrence matrix after selecting markers", recoverFactors)
+        .add_option("threads", "Number of threads to use (only used if --recover-factors is set. Default: -1, auto)", threads)
+        .add_option("max-iter", "Maximum number of iterations for factor recovery (default: 500)", maxIter)
+        .add_option("tol", "Tolerance for convergence (default: 1e-6)", tol)
+        .add_option("weight-by-counts", "Weight factors by counts (default: false)", weightFactorsByCounts);
     pl.add_option("out", "Output prefix", outPref, true)
         .add_option("neighbor-max-rank-fraction", "Maximum fraction of rank to consider for (mutual) neighbors (default: 0.2)", maxRankFraction)
         .add_option("verbose", "Verbose level (default: 0)", verbose);
@@ -59,6 +68,32 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
     }
     ofs.close();
     ofsShort.close();
+
+    if (!recoverFactors)
+        return 0;
+
+    selector.conputeTopicDistribution(maxIter, tol, threads, weightFactorsByCounts);
+    auto& features = selector.getFeatureInfo();
+    outFile = outPref + ".factors.tsv";
+    ofs.open(outFile);
+    if (!ofs) {
+        error("Cannot open output: %s", outFile.c_str());
+    }
+    uint32_t M = features.size();
+    ofs << std::scientific << std::setprecision(4);
+    ofs << "Feature";
+    for (int i = 0; i < K; ++i) {
+        ofs << "\t" << i;
+    }
+    ofs << "\n";
+    for (uint32_t j = 0; j < M; ++j) {
+        ofs << features.at(j).name;
+        for (int i = 0; i < K; ++i) {
+            ofs << "\t" << selector.betas(j, i);
+        }
+        ofs << "\n";
+    }
+    ofs.close();
 
     return 0;
 }

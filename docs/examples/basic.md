@@ -2,13 +2,13 @@
 
 This example demonstrates how to perform pixel level factor analysis with punkst, achieving similar results to FICTURE (2024) with improved efficiency.
 
-## Use example Makefile
+## Use the example Makefile template
 
-We provide a template Makefile and config file in `./docs/examples/basic` to generate the full workflow of FICTURE.
+We provide a template Makefile and config file in `punkst/docs/examples/basic` to generate the full workflow of FICTURE.
 
-You can copy `./docs/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
+You can copy `punkst/docs/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
 
-The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the params in the "job  section of the config and ignore the generated bash script.
+The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the `-o` option.
 
 ```bash
 # set repopath to the path of the punkst repo

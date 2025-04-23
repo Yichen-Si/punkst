@@ -37,38 +37,61 @@ struct KStringRAII {
 
 void hprintf(htsFile* fp, const char * msg, ...);
 
-// String to number conversion functions // need newer gcc
-// template<typename T>
-// bool str2num(const std::string& str, T& value) {
-//     if (str.empty()) return false;
-//     auto result = std::from_chars(str.data(), str.data() + str.size(), value);
-//     return result.ec == std::errc{};
-// }
-// Generic template for integral types
+// String to number conversion functions
 template<typename T>
-std::enable_if_t<std::is_integral_v<T>, bool>
-str2num(const std::string &str, T &value) {
-    if (str.empty()) return false;
-    auto result = std::from_chars(str.data(), str.data() + str.size(), value);
-    return result.ec == std::errc{};
-}
+bool str2num(const std::string &str, T &value) {
+    // Only arithmetic types supported
+    static_assert(std::is_arithmetic_v<T>, "str2num only supports arithmetic types");
 
-// Overload for floating point types
-template<typename T>
-std::enable_if_t<std::is_floating_point_v<T>, bool>
-str2num(const std::string &str, T &value) {
-    if (str.empty()) return false;
-    char* endPtr = nullptr;
-    errno = 0;
-    if constexpr (std::is_same_v<T, float>) {
-        value = std::strtof(str.c_str(), &endPtr);
-    } else if constexpr (std::is_same_v<T, double>) {
-        value = std::strtod(str.c_str(), &endPtr);
-    } else if constexpr (std::is_same_v<T, long double>) {
-        value = std::strtold(str.c_str(), &endPtr);
+    if constexpr (std::is_integral_v<T>) {
+        // integer parse via from_chars (no locale, fast, non-throwing)
+        auto first = str.data(), last = str.data() + str.size();
+        std::from_chars_result res = std::from_chars(first, last, value);
+        // success only if no error AND entire string consumed
+        return res.ec == std::errc() && res.ptr == last;
     }
-    // Check if conversion succeeded: endPtr should point to a non-empty part and errno must be 0.
-    return endPtr != str.c_str() && errno == 0;
+    else if constexpr (std::is_floating_point_v<T>) {
+        // floating-point parse via C functions (sets errno on under/overflow)
+        errno = 0;
+        const char* cstr = str.c_str();
+        char* end = nullptr;
+
+        // pick the right function for T
+        long double tmp_ld = 0;
+        if constexpr (std::is_same_v<T, float>) {
+            tmp_ld = std::strtof(cstr, &end);
+        }
+        else if constexpr (std::is_same_v<T, double>) {
+            tmp_ld = std::strtod(cstr, &end);
+        }
+        else { // long double
+            tmp_ld = std::strtold(cstr, &end);
+        }
+
+        // no characters parsed?
+        if (end == cstr)
+            return false;
+        // extra junk after number?
+        if (*end != '\0')
+            return false;
+
+        // under/overflow?
+        if (errno == ERANGE) {
+            if (tmp_ld < 1e-8) {
+                // underflow → treat as zero
+                value = T(0);
+                errno = 0;
+                return true;
+            }
+            // overflow → fail
+            return false;
+        }
+        // normal success
+        value = static_cast<T>(tmp_ld);
+        return true;
+    }
+    // unreachable, static_assert above will trap non-arithmetic
+    return false;
 }
 
 bool str2int32(const std::string& str, int32_t& value);

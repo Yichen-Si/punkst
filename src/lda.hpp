@@ -19,6 +19,10 @@ using Eigen::RowVectorXd;
 
 class LatentDirichletAllocation {
 public:
+
+    std::vector<std::string> topic_names_;
+    std::vector<std::string> feature_names_;
+
     LatentDirichletAllocation(int n_topics, int n_features,
                               int seed = std::random_device{}(),
                               int nThreads = 0, int verbose = 0,
@@ -29,7 +33,8 @@ public:
                               double learning_decay = 0.7, // kappa
                               double learning_offset = 10.0, // tau_0
                               int total_doc_count = 1000000,
-                              const std::optional<MatrixXd>& topic_word_distr = std::nullopt)
+            std::optional<std::reference_wrapper<std::string>> mfileptr = std::nullopt,
+            const std::optional<MatrixXd>& topic_word_distr = std::nullopt, double pariorScale = -1.)
         : n_topics_(n_topics), n_features_(n_features), seed_(seed),
         nThreads_(nThreads), verbose_(verbose),
         doc_topic_prior_(doc_topic_prior),
@@ -39,21 +44,32 @@ public:
         learning_decay_(learning_decay), learning_offset_(learning_offset),
         total_doc_count_(total_doc_count),
         update_count_(0) {
-        init(topic_word_distr);
+        if (mfileptr && !(mfileptr->get()).empty()) {
+            set_model_from_tsv(mfileptr->get(), pariorScale);
+        } else {
+            init_model(topic_word_distr);
+        }
+        init();
     }
-    LatentDirichletAllocation(int n_topics, int n_features,
-        int seed = std::random_device{}(),
-        int nThreads = 0, int verbose = 0,
-        const std::optional<MatrixXd>& topic_word_distr = std::nullopt,
+
+    LatentDirichletAllocation(const std::string& modelFile,
+        int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
         int max_doc_update_iter = 100,
-        double mean_change_tol = -1.) : n_topics_(n_topics), n_features_(n_features), seed_(seed), nThreads_(nThreads), verbose_(verbose), max_doc_update_iter_(max_doc_update_iter),
-        mean_change_tol_(mean_change_tol), update_count_(0) {
-            doc_topic_prior_ = -1.;
-            topic_word_prior_ = -1.;
-            learning_decay_ = 0.7;
-            learning_offset_ = 10.0;
-            total_doc_count_ = 1000000;
-            init(topic_word_distr);
+        double mean_change_tol = -1.,
+        double learning_offset = 10.0, // tau_0
+        double learning_decay = 0.7, // kappa
+        double doc_topic_prior = -1., // alpha
+        double topic_word_prior = -1., // eta
+        int total_doc_count = 1000000) : seed_(seed),
+        nThreads_(nThreads), verbose_(verbose),
+        doc_topic_prior_(doc_topic_prior),
+        topic_word_prior_(topic_word_prior),
+        max_doc_update_iter_(max_doc_update_iter),
+        mean_change_tol_(mean_change_tol),
+        learning_decay_(learning_decay), learning_offset_(learning_offset),
+        total_doc_count_(total_doc_count), update_count_(0) {
+        set_model_from_tsv(modelFile);
+        init();
     }
 
     const MatrixXd& get_model() const {
@@ -70,13 +86,6 @@ public:
     }
     int32_t get_N_global() const {
         return total_doc_count_;
-    }
-    void set_topic_names(std::vector<std::string>& names) {
-        if (names.size() != n_topics_) {
-            warning("The number of names does not match the number of factors");
-            return;
-        }
-        topic_names_ = names;
     }
     const std::vector<std::string>& get_topic_names() {
         if (topic_names_.empty()) {
@@ -106,6 +115,7 @@ public:
         }
     }
 
+    // Set the model matrix
     void set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals) {
         if (lambdaVals.size() != n_topics_ || lambdaVals[0].size() != n_features_) {
             warning("Model matrix size mismatch, reset according to the provided global parameters. (%d x %d) -> (%d x %d)", n_topics_, n_features_, lambdaVals.size(), lambdaVals[0].size());
@@ -131,10 +141,55 @@ public:
         components_ = lambda;
         exp_Elog_beta_ = dirichlet_expectation_2d(components_);
     }
+    // Read a model matrix from file
+    void set_model_from_tsv(const std::string& modelFile, double scalar = -1.) {
+        std::ifstream modelIn(modelFile, std::ios::in);
+        if (!modelIn) {
+            error("Error opening model file: %s", modelFile.c_str());
+        }
+        std::string line;
+        std::vector<std::string> tokens;
+        std::getline(modelIn, line);
+        split(tokens, "\t", line);
+        int32_t K = tokens.size() - 1;
+        feature_names_.clear();
+        topic_names_.resize(K);
+        for (int32_t i = 0; i < K; ++i) {
+            topic_names_[i] = tokens[i + 1];
+        }
+        std::vector<std::vector<double>> modelValues;
+        while (std::getline(modelIn, line)) {
+            split(tokens, "\t", line);
+            if (tokens.size() != K + 1) {
+                error("Error reading model file at line ", line.c_str());
+            }
+            feature_names_.push_back(tokens[0]);
+            std::vector<double> values(K);
+            for (int32_t i = 0; i < K; ++i) {
+                values[i] = std::stod(tokens[i + 1]);
+            }
+            modelValues.push_back(values);
+        }
+        modelIn.close();
+
+        n_topics_ = K;
+        n_features_ = feature_names_.size();
+        notice("Read %d topics and %d features from model file", n_topics_, n_features_);
+
+        components_.resize(n_topics_, n_features_);
+        for (uint32_t i = 0; i < n_features_; ++i) {
+            for (int32_t j = 0; j < K; ++j) {
+                components_(j, i) = modelValues[i][j];
+            }
+        }
+        if (scalar > 0.) {
+            components_ *= scalar;
+        }
+        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
+    }
 
     // Online update
     // process a mini-batch of documents to update the global topic-word distribution.
-
     void partial_fit(const std::vector<Document>& docs) {
         int minibatch_size = docs.size();
         MatrixXd ss = MatrixXd::Zero(n_topics_, n_features_);
@@ -337,7 +392,6 @@ private:
     double learning_decay_; // kappa
     double learning_offset_; // tau_0
     int update_count_;
-    std::vector<std::string> topic_names_;
     int32_t verbose_;
     std::mt19937 random_engine_;
 
@@ -424,7 +478,25 @@ private:
         return std::exp(-perword_bound);
     }
 
-    void init(const std::optional<MatrixXd>& topic_word_distr = std::nullopt) {
+    void init_model(const std::optional<MatrixXd>& topic_word_distr = std::nullopt, double scalar = -1.) {
+        if (topic_word_distr) {
+            components_ = *topic_word_distr;
+            if (scalar > 0.) {
+                components_ *= scalar;
+            }
+        } else {
+            components_.resize(n_topics_, n_features_);
+            std::gamma_distribution<double> gamma_dist(100.0, 0.01);
+            for (int k = 0; k < n_topics_; k++) {
+                for (int j = 0; j < n_features_; j++) {
+                    components_(k, j) = gamma_dist(random_engine_);
+                }
+            }
+        }
+        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
+    }
+
+    void init() {
         if (nThreads_ > 0) {
             omp_set_num_threads(nThreads_);
         } else {
@@ -438,19 +510,6 @@ private:
         }
         random_engine_.seed(seed_);
         eps_ = std::numeric_limits<double>::epsilon();
-
-        if (topic_word_distr) {
-            components_ = *topic_word_distr;
-        } else {
-            components_.resize(n_topics_, n_features_);
-            std::gamma_distribution<double> gamma_dist(100.0, 0.01);
-            for (int k = 0; k < n_topics_; k++) {
-                for (int j = 0; j < n_features_; j++) {
-                    components_(k, j) = gamma_dist(random_engine_);
-                }
-            }
-        }
-        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
         if (doc_topic_prior_ < 0) {
             doc_topic_prior_ = 1. / n_topics_;
         }

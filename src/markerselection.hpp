@@ -10,15 +10,18 @@
 #include <cstdint>
 #include <unordered_set>
 #include "error.hpp"
-
+#include <omp.h>
 
 class MarkerSelector {
 public:
-    // Construct with known matrix dimension M and weighting mode.
-    MarkerSelector(const std::string& featureFile, const std::string& mtxFile, bool binary, int valueBytes, int minCount = 1, int32_t verbose = 0) : verbose_(verbose) {
-        loadGeneInfo(featureFile, minCount);
-        loadCooccurrenceMatrix(mtxFile, binary, valueBytes);
-    }
+
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> betas; // M x K
+
+    struct featureInfo {
+        std::string name;
+        uint64_t totalOcc;
+        uint64_t totalNeighbor;
+    };
 
     struct markerSetInfo {
         std::string name;
@@ -37,10 +40,18 @@ public:
         markerSetInfo(const std::string& name, uint64_t count) : name(name), count(count) {};
     };
 
-    // Select K anchors, optionally fixing a subset
-    void selectMarkers(
-        int K, std::vector<std::string>& selectedAnchors) {
+    // Construct with known matrix dimension M and weighting mode.
+    MarkerSelector(const std::string& featureFile, const std::string& mtxFile, bool binary, int valueBytes, int minCount = 1, int32_t verbose = 0) : verbose_(verbose) {
+        loadGeneInfo(featureFile, minCount);
+        loadCooccurrenceMatrix(mtxFile, binary, valueBytes);
+    }
 
+    // Select K anchors, optionally fixing a subset
+    void selectMarkers(int K, std::vector<std::string>& selectedAnchors) {
+
+        if (Q_.rows() < K) {
+            error("Number of markers %d is larger than the number of features %d", K, Q_.rows());
+        }
         anchors.clear();
         anchors.reserve(K);
 
@@ -151,6 +162,113 @@ public:
         }
     }
 
+    // Compute P(w=j|z=k) (or P(w=j,z=k))
+    void conputeTopicDistribution(int max_iter = 500, double tol = 1e-6, int threads = -1, bool weightByCounts = false) {
+        if (anchors.empty()) {
+            error("No anchors selected, please call selectMarkers(K, ...) first");
+        }
+        if (threads > 0) {
+            omp_set_num_threads(threads);
+        }
+        const int M = M_;
+        const int K = static_cast<int>(anchors.size());
+        betas.resize(M, K);
+
+        // Pre‐extract the K anchor rows
+        std::vector<std::vector<double>> Qs(K, std::vector<double>(M));
+        for (int k = 0; k < K; ++k) {
+            int idx = anchors[k];
+            const double* src = Q_.data() + idx * M;
+            std::copy(src, src + M, Qs[k].begin());
+        }
+
+        // Marginal probabilities
+        Eigen::RowVectorXd pk(K);
+        pk.setZero();
+
+        #pragma omp parallel
+        {
+            // Buffers for each i
+            std::vector<double> c(K), c_new(K), g(K), r(M);
+
+            #pragma omp for schedule(dynamic)
+            for (int i = 0; i < M; ++i) {
+                const double* q = Q_.data() + i * M;  // Q_.row(i)
+
+                // Initialize weights uniformly
+                for (int k = 0; k < K; ++k)
+                    c[k] = 1.0 / K;
+
+                // Iterative multiplicative‐updates
+                int iter = 0;
+                double diff = 0;
+                for (; iter < max_iter; ++iter) {
+                    // r_j = ∑_k c_k * Qs[k][j]
+                    for (int j = 0; j < M; ++j) {
+                        double sum = 0;
+                        for (int k = 0; k < K; ++k)
+                            sum += c[k] * Qs[k][j];
+                        r[j] = sum;
+                    }
+                    // g_k = ∑_j p_j * Qs[k][j] / r_j
+                    std::fill(g.begin(), g.end(), 0.0);
+                    for (int j = 0; j < M; ++j) {
+                        double rij = r[j];
+                        if (rij > 0) {
+                            double inv = q[j] / rij;
+                            for (int k = 0; k < K; ++k)
+                                g[k] += inv * Qs[k][j];
+                        }
+                    }
+                    // Update and renormalize
+                    double norm = 0;
+                    for (int k = 0; k < K; ++k) {
+                        c_new[k] = c[k] * g[k];
+                        norm    += c_new[k];
+                    }
+                    if (norm <= 0) break;
+                    for (int k = 0; k < K; ++k)
+                        c_new[k] /= norm;
+
+                    // Convergence check
+                    diff = 0;
+                    for (int k = 0; k < K; ++k)
+                        diff = std::max(diff, std::abs(c_new[k] - c[k]));
+                    c.swap(c_new);
+                    if (diff < tol) break;
+                    if (verbose_ > 2 && iter % 100 == 0) {
+                        notice("%s: %d-th feature %s, iter %d, max abs diff %.3e", __FUNCTION__, i, features_[i].name.c_str(), iter, diff);
+                    }
+                }
+                if (verbose_ > 1 || (verbose_ > 0 && i % 1000 == 0)) {
+                    notice("%s: solved %d-th feature in %d iterations, final max abs diff %.3e", __FUNCTION__, i, iter, diff);
+                }
+                // Store result
+                double* out = betas.data() + i * K;
+                for (int k = 0; k < K; ++k)
+                    out[k] = c[k] * rowWeights_(i);
+
+                if (weightByCounts) {
+                    #pragma omp critical
+                    for (int k = 0; k < K; ++k) {
+                        pk(k) += c[k] * features_[i].totalOcc;
+                    }
+                }
+
+            }
+        }
+        // column normalize betas
+        Eigen::RowVectorXd colsums = betas.colwise().sum();
+        betas.array().rowwise() /= (colsums.array() + 1e-8);
+        if (weightByCounts) {
+            betas.array().rowwise() *= pk.array();
+        }
+    }
+
+    std::unordered_map<uint32_t, featureInfo> const & getFeatureInfo() const {
+        return features_;
+    }
+
     std::vector<markerSetInfo> findNeighborsToAnchors(int32_t m, double maxRankFraction = -1) {
         if (!rankMatrixBuilt) {
             buildRankMatrix();
@@ -216,17 +334,13 @@ public:
     }
 
 private:
-    struct featureInfo {
-        std::string name;
-        uint64_t totalOcc;
-        uint64_t totalNeighbor;
-    };
 
     uint32_t M_;
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> Q_;
-    std::unordered_map<uint32_t, featureInfo>  features_;
-    std::vector<uint32_t>     validIndex_;
-    std::vector<bool>         validGene_;
+    Eigen::VectorXd rowWeights_;
+    std::unordered_map<uint32_t, featureInfo> features_;
+    std::vector<uint32_t> validIndex_;
+    std::vector<bool> validGene_;
     std::unordered_map<std::string, int> nameToIdx_;
     std::vector<int> anchors;
     std::vector<std::vector<uint32_t>> rank;
@@ -302,17 +416,17 @@ private:
         while (std::getline(ifs, line)) {
             if (line.empty()) continue;
             std::istringstream iss(line);
-            uint32_t idx, raw, tot, neigh;
+            uint32_t idx, rawpix, rawct, ct, neigh;
             std::string name;
-            if (!(iss >> idx >> name >> raw >> tot >> neigh)) {
+            if (!(iss >> idx >> name >> rawpix >> rawct >> ct >> neigh)) {
                 warning("Invalid line in gene info file: %s", line.c_str());
                 continue;
             }
             if (idx > M_) {
                 M_ = idx;
             }
-            features_[idx] = {name, tot, neigh};
-            if (tot > minUsedCount) {
+            features_[idx] = {name, ct, neigh};
+            if (ct > minUsedCount) {
                 validIndex_.push_back(idx);
             }
             nameToIdx_[name] = idx;
@@ -330,9 +444,10 @@ private:
 
     // Normalize each row of Q_ to sum to 1.
     void normalizeRows() {
-        Eigen::VectorXd rowSums = Q_.rowwise().sum();
+        rowWeights_ = Q_.rowwise().sum();
         for (int i = 0; i < M_; ++i)
-            if (rowSums(i) > 0) Q_.row(i) /= rowSums(i);
+            if (rowWeights_(i) > 0) Q_.row(i) /= rowWeights_(i);
+        rowWeights_ /= rowWeights_.sum();
     }
 
 };

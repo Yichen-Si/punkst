@@ -89,43 +89,10 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         notice("Using random seed %d", seed);
     }
 
-    // read model matrix
-    std::ifstream modelIn(modelFile, std::ios::in);
-    if (!modelIn) {
-        error("Error opening model file: %s", modelFile.c_str());
-        return 1;
-    }
-    std::string line;
-    std::vector<std::string> featureNames, factorNames, tokens;
-    std::getline(modelIn, line);
-    split(tokens, "\t", line);
-    int32_t K = tokens.size() - 1;
-    factorNames.resize(K);
-    for (int32_t i = 0; i < K; ++i) {
-        factorNames[i] = tokens[i + 1];
-    }
-    std::vector<std::vector<double>> modelValues;
-    while (std::getline(modelIn, line)) {
-        split(tokens, "\t", line);
-        if (tokens.size() != K + 1) {
-            error("Error reading model file at line ", line.c_str());
-        }
-        featureNames.push_back(tokens[0]);
-        std::vector<double> values(K);
-        for (int32_t i = 0; i < K; ++i) {
-            values[i] = std::stod(tokens[i + 1]);
-        }
-        modelValues.push_back(values);
-    }
-    modelIn.close();
-    uint32_t nFeatures = featureNames.size();
-    MatrixXd model(K, nFeatures);
-    for (uint32_t i = 0; i < nFeatures; ++i) {
-        for (int32_t j = 0; j < K; ++j) {
-            model(j, i) = modelValues[i][j];
-        }
-    }
-    notice("Read %zu features and %d factors from model file", nFeatures, K);
+    LatentDirichletAllocation lda(modelFile, seed, 1, 0);
+    auto& featureNames = lda.feature_names_;
+    int32_t nFeatures = lda.get_n_features();
+    notice("Initialized anchor model with %d features and %d factors", nFeatures, lda.get_n_topics());
 
     HexGrid hexGrid(hexSize);
     TileReader tileReader(inTsv, inIndex, -1, coordsAreInt);
@@ -143,9 +110,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         parser.readWeights(weightFile, defaultWeight, nFeatures);
     }
     notice("Initialized tile reader");
-
-    LatentDirichletAllocation lda(K, nFeatures, seed, 1, 0, model, 100, mDelta);
-    notice("Initialized anchor model with %d features and %d factors", nFeatures, K);
 
     if (outPref.empty()) {
         size_t pos = outFile.find_last_of(".");

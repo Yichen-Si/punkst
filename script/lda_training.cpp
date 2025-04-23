@@ -79,7 +79,7 @@ public:
         weightFeatures = true;
     }
 
-    int32_t trainOnline(LatentDirichletAllocation& lda, const std::string& inFile, int32_t _bsize = 128, int32_t _minCountTrain = 0) {
+    int32_t trainOnline(LatentDirichletAllocation& lda, const std::string& inFile, int32_t _bsize = 512, int32_t _minCountTrain = 0) {
         batchSize = _bsize;
         minCountTrain = _minCountTrain;
         ntot = 0;
@@ -127,7 +127,8 @@ public:
         outFileStream.close();
     }
 
-    void fitAndWriteToFile(LatentDirichletAllocation& lda, const std::string& inFile, const std::string& outFile) {
+    void fitAndWriteToFile(LatentDirichletAllocation& lda, const std::string& inFile, const std::string& outFile, int32_t _bsize = 512) {
+        batchSize = _bsize;
         std::ifstream inFileStream(inFile);
         if (!inFileStream) {
             error("Error opening input file: %s", inFile.c_str());
@@ -263,10 +264,10 @@ private:
 
 int32_t cmdLDA4Hex(int argc, char** argv) {
 
-    std::string inFile, metaFile, weightFile, outPrefix, nameFile;
-    int32_t nTopics;
+    std::string inFile, metaFile, weightFile, outPrefix, priorFile, nameFile;
+    int32_t nTopics = 0;
     int32_t seed = -1;
-    int32_t nEpochs = 1, batchSize = 128;
+    int32_t nEpochs = 1, batchSize = 512;
     int32_t verbose = 0;
     int32_t maxIter = 100;
     int32_t nThreads = 0;
@@ -276,7 +277,9 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     double alpha = -1., eta = -1.;
     double mDelta = 1e-3;
     double defaultWeight = 1.;
+    double priorScale = 1.;
     bool transform = false;
+    bool projection_only = false;
 
     ParamList pl;
     // Input Options
@@ -288,15 +291,24 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("seed", "Random seed", seed)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
-      .add_option("minibatch-size", "Minibatch size (default: 128)", batchSize)
       .add_option("min-count-train", "Minimum total count for training (default: 20)", minCountTrain)
+      .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight);
+    pl.add_option("kappa", "Learning decay (default: 0.7)", kappa)
+      .add_option("tau0", "Learning offset (default: 10.0)", tau0)
+      .add_option("max-iter", "Maximum number of iterations for each document (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("n-epochs", "Number of epochs (default: 1)", nEpochs)
-      .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight);
+      .add_option("minibatch-size", "Minibatch size (default: 512)", batchSize)
+      .add_option("alpha", "Document-topic prior (default: 1/K)", alpha)
+      .add_option("eta", "Topic-word prior (default: 1/K)", eta);
+    pl.add_option("model-prior", "File that contains the initial model matrix", priorFile)
+      .add_option("prior-scale", "Scale the initial model matrix uniformly by this value (default: use the matrix as it is)", priorScale);
     // Output Options
     pl.add_option("out-prefix", "Output hex file", outPrefix)
       .add_option("verbose", "Verbose", verbose)
-      .add_option("transform", "Transform the input data to the LDA space after training", transform);
+      .add_option("transform", "Transform the data to the LDA space after training", transform)
+      .add_option("projection-only", "Transform the data using the prior model without further training", projection_only);
+
 
     try {
         pl.readArgs(argc, argv);
@@ -310,22 +322,25 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     if (inFile.empty() || metaFile.empty() || outPrefix.empty()) {
         error("--in-data --in-meta and --out are required");
     }
+    if (projection_only) {
+        transform = true;
+    }
+
     std::string outModel = outPrefix + ".model.tsv";
     std::ofstream outFileStream(outModel);
     if (!outFileStream) {
         error("Error opening output file: %s for writing", outModel.c_str());
     }
     outFileStream.close();
+
     if (nTopics <= 0) {
         error("Number of topics must be greater than 0");
     }
-
     if (seed <= 0) {
         seed = std::random_device{}();
     }
-
     if (batchSize <= 0) {
-        batchSize = 128;
+        batchSize = 512;
         warning("Minibatch size must be greater than 0, using default value of 128");
     }
     if (nEpochs <= 0) {
@@ -340,32 +355,34 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
         lda4hex.readWeights(weightFile, defaultWeight);
     }
 
-    LatentDirichletAllocation lda(nTopics, lda4hex.nFeatures(), seed, nThreads, verbose, alpha, eta, maxIter, mDelta, kappa, tau0, lda4hex.nUnits() * nEpochs);
+    LatentDirichletAllocation lda(nTopics, lda4hex.nFeatures(), seed, nThreads, verbose, alpha, eta, maxIter, mDelta, kappa, tau0, lda4hex.nUnits() * nEpochs, priorFile, std::nullopt, priorScale);
 
-    for (int epoch = 0; epoch < nEpochs; ++epoch) {
-        int32_t n = lda4hex.trainOnline(lda, inFile, batchSize, minCountTrain);
-        notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
-        std::vector<double> weights;
-        lda.get_topic_abundance(weights);
-        std::sort(weights.begin(), weights.end(), std::greater<double>());
-        std::stringstream ss;
-        ss << std::fixed << std::setprecision(4);
-        for (const auto& w : weights) {
-            ss << w << "\t";
+    if (!projection_only) {
+        for (int epoch = 0; epoch < nEpochs; ++epoch) {
+            int32_t n = lda4hex.trainOnline(lda, inFile, batchSize, minCountTrain);
+            notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
+            std::vector<double> weights;
+            lda.get_topic_abundance(weights);
+            std::sort(weights.begin(), weights.end(), std::greater<double>());
+            std::stringstream ss;
+            ss << std::fixed << std::setprecision(4);
+            for (const auto& w : weights) {
+                ss << w << "\t";
+            }
+            notice("  Topic relative abundance: %s", ss.str().c_str());
         }
-        notice("  Topic relative abundance: %s", ss.str().c_str());
-    }
 
-    // write model matrix to file
-    lda4hex.writeModelToFile(lda, outModel);
-    notice("Model written to %s", outModel.c_str());
+        // write model matrix to file
+        lda4hex.writeModelToFile(lda, outModel);
+        notice("Model written to %s", outModel.c_str());
+    }
 
     if (!transform) {
         return 0;
     }
     // transform the input data to the LDA space
     std::string outFile = outPrefix + ".results.tsv";
-    lda4hex.fitAndWriteToFile(lda, inFile, outFile);
+    lda4hex.fitAndWriteToFile(lda, inFile, outFile, batchSize);
     notice("Transformed data written to %s", outFile.c_str());
 
     return 0;
