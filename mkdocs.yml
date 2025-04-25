@@ -40,6 +40,8 @@ theme:
 
 nav:
   - Home: index.md
+  - Quickstart:
+    - Basic: basic.md
   - Modules:
     - Overview: modules/index.md
     - pts2tiles: modules/pts2tiles.md
@@ -47,8 +49,6 @@ nav:
     - lda4hex: modules/lda4hex.md
     - pixel-decode: modules/pixel-decode.md
     - Visualization: modules/visualization.md
-  - Examples:
-    - Basic: examples/basic.md
 
 plugins:
   - blog

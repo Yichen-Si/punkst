@@ -314,7 +314,7 @@ int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>&
         tileData.xmin, tileData.xmax,
         tileData.ymin, tileData.ymax};
     indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
-    outputSize += endPos;
+    outputSize == endPos;
     return npts;
 }
 
@@ -379,7 +379,7 @@ int32_t Tiles2Minibatch<T>::outputPixelResult(const TileData<T>& tileData, const
         tileData.xmin, tileData.xmax,
         tileData.ymin, tileData.ymax};
     indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
-    outputSize += endPos;
+    outputSize = endPos;
     return npts;
 }
 

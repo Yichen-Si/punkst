@@ -5,7 +5,6 @@ import pandas as pd
 import sklearn.neighbors
 from scipy.sparse import coo_array
 from datetime import datetime
-from sklearn.manifold import MDS
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -13,45 +12,84 @@ from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
 matplotlib.use('Agg')
 
-def assign_color_mds_line(mtx, cmap_name, weight=None, top_color=None, seed=None, n_jobs=1):
-    # mtx is a K by K similarity/proximity matrix
-    assert mtx.shape[0] == mtx.shape[1], "mtx must be square"
+def assign_color_tsp(
+    mtx: np.ndarray,
+    cmap_name: str = "nipy_spectral",
+    weight: np.ndarray = None,
+    two_opt: bool = True,
+    spectral_offset: float = 0.05,
+    anchor_color: str = None,
+    anchor_grid: int = 1024
+) -> np.ndarray:
     K = mtx.shape[0]
-    # weight is a K vector of factor abundance
-    if weight is None:
-        weight = np.ones(K)
-    weight /= weight.sum()
-    # The color of the top factor (the one with the largest weight)
-    if top_color is None:
-        top_color = "#fcd217"
-    else:
-        match = re.search(r'^#(?:[0-9a-fA-F]{3}){1,2}$', top_color)
-        if match is None:
-            top_color = "#fcd217"
-    # Find the offset to map the top factor to the desired color
-    cgrid = 200
-    cmtx=plt.get_cmap(cmap_name)(np.arange(cgrid)/cgrid)
-    h = top_color.lstrip('#')
-    top_color_rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
-    d = np.abs(cmtx[:, :3] - np.array(top_color_rgb).reshape((1, -1)) ).sum(axis = 1)
-    anchor_pos = d.argmin() / cgrid
-    anchor_angle = anchor_pos * 2 * np.pi
+    assert mtx.shape == (K, K)
 
-    mds = MDS(n_components=1, dissimilarity="precomputed", random_state=seed)
-    mds_coordinates = mds.fit_transform(mtx).flatten()
-    c_order = np.argsort(np.argsort(mds_coordinates))
-    w_vec = weight[np.argsort(mds_coordinates)]
-    w_vec = np.cumsum(w_vec) - w_vec/2
-    normalized_coordinates = np.zeros(K)
-    normalized_coordinates[c_order] = w_vec
-    angle = normalized_coordinates * 2 * np.pi
-    anchor_k = np.argmax(weight)
-    angle_shift = angle + (anchor_angle - angle[anchor_k])
-    if angle_shift.max() > 2*np.pi:
-        angle_shift -= np.pi * 2
-    angle_shift[angle_shift < 0] = 2 * np.pi + angle_shift[angle_shift < 0]
-    c_pos = angle_shift / np.pi / 2
-    return c_pos
+    # --- normalize weight or use uniform ---
+    if weight is None:
+        weight = np.ones(K) / K
+    else:
+        weight = weight.astype(float)
+        weight /= weight.sum()
+
+    # --- build a "distance" matrix D = normalized similarity ---
+    D = mtx.astype(float).copy()
+    D /= D.max()
+
+    # --- greedy TSP nearest-neighbour (minimize D) ---
+    start = int(weight.argmax())
+    cycle = [start]
+    unvisited = set(range(K)) - {start}
+    current = start
+    while unvisited:
+        nxt = min(unvisited, key=lambda j: D[current, j])
+        cycle.append(nxt)
+        unvisited.remove(nxt)
+        current = nxt
+
+    # --- 2-opt improvement ---
+    if two_opt:
+        improved = True
+        while improved:
+            improved = False
+            for i in range(1, K - 2):
+                for j in range(i + 1, K):
+                    a, b = cycle[i - 1], cycle[i]
+                    c, d = cycle[j - 1], cycle[j % K]
+                    if D[a, b] + D[c, d] > D[a, c] + D[b, d]:
+                        cycle[i:j] = reversed(cycle[i:j])
+                        improved = True
+    print(cycle)
+    # --- even‐spaced angular positions on [0,1) ---
+    c_pos = np.empty(K, float)
+    for rank, idx in enumerate(cycle):
+        c_pos[idx] = rank / K
+
+    cmap = plt.get_cmap(cmap_name)
+    # --- if the user wants to pin one factor to an anchor color ---
+    if anchor_color is not None:
+        # pick which factor to pin
+        anchor_index = int(weight.argmax())
+        # convert hex to RGB
+        target_rgb = np.array(mcolors.to_rgb(anchor_color))[None, :]
+        # sample the colormap finely
+        grid = np.linspace(0, 1, anchor_grid)
+        grid_rgb = cmap(grid)[:, :3]
+        # compute Euclidean distance in RGB‐space
+        dists = np.linalg.norm(grid_rgb - target_rgb, axis=1)
+        # find the grid position whose color best matches the anchor
+        t_anchor = grid[dists.argmin()]
+        # shift all c_pos so that anchor_index lands on t_anchor
+        delta = t_anchor - c_pos[anchor_index]
+        c_pos = (c_pos + delta) % 1.0
+
+    # --- inset by spectral_offset and renormalize ---
+    c_pos = c_pos * (1 - 2*spectral_offset) + spectral_offset
+
+    # --- finally sample the colormap to get RGB colors ---
+    rgb = cmap(c_pos)[:, :3]
+
+    return rgb
+
 
 def plot_colortable(colors, title, sort_colors=True, ncols=4, dpi = 80,\
                     cell_width = 212, cell_height = 22,\
@@ -107,12 +145,11 @@ def choose_color(_args):
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=str, help='')
     parser.add_argument('--output', type=str, help='')
-    parser.add_argument('--cmap-name', type=str, default="turbo", help="Name of Matplotlib colormap to use (better close to a circular colormap)")
+    parser.add_argument('--cmap-name', type=str, default="nipy_spectral", help="Name of Matplotlib colormap to use (better close to a circular colormap)")
     parser.add_argument('--top-color', type=str, default="#fcd217", help="HEX color code for the top factor")
-    parser.add_argument('--even-space', action='store_true', help="Evenly space the factors on the circle")
+    parser.add_argument('--even-space', action='store_true', help="Evenly space the factors on the spectrum")
     parser.add_argument("--skip-columns", type=str, action="append", default=[], help="Columns that are neither coordiante nor factor in the input file")
     parser.add_argument('--annotation', type=str, default = '', help='')
-    parser.add_argument('--thread', type=int, default=-1, help='')
     parser.add_argument('--seed', type=int, default=-1, help='')
     args = parser.parse_args(_args)
 
@@ -135,7 +172,7 @@ def choose_color(_args):
 
     cmap_name = args.cmap_name
     if args.cmap_name not in plt.colormaps():
-        cmap_name = "turbo"
+        cmap_name = "nipy_spectral"
 
     df = pd.read_csv(args.input, sep='\t', header=0)
     df.rename(columns = {"X":"x","Y":"y"},inplace=True)
@@ -151,7 +188,7 @@ def choose_color(_args):
         weight = df.loc[:, factor_header].sum(axis = 0).values
         weight = weight**(1/2)
         weight /= weight.sum()
-        weight = np.clip(weight, .2/K, 1)
+        weight = np.clip(weight, .5/K, 4/K)
         weight /= weight.sum()
 
     # Find neearest neighbors
@@ -161,26 +198,20 @@ def choose_color(_args):
     c_indx = indx.reshape(-1)
     dist = dist.reshape(-1)
     nn = dist[dist > 0].min()
-    mask = (dist < nn + .5) & (dist > 0)
+    mask = (dist < nn + .5)
     r_indx = r_indx[mask]
     c_indx = c_indx[mask]
     # Compute spatial similarity
     Sig = coo_array((np.ones(len(r_indx)), (r_indx, c_indx)), shape=(N, N)).tocsr()
     W = np.array(df.loc[:, factor_header])
     mtx = W.T @ Sig @ W
-    # Translate into a symmetric similarity measure
+    # row normalize
+    mtx = mtx / np.sqrt(np.sum(mtx, axis=1, keepdims=True))
+    # take the element-wise max of mtx and mtx.T
+    mtx = np.maximum(mtx, mtx.T)
     # Large values in mtx indicate close proximity, to be mapped to distinct colors
-    np.fill_diagonal(mtx, 0)
-    mtx /= mtx.sum(axis = 1)
-    mtx = mtx + mtx.T
 
-    c_pos = assign_color_mds_line(mtx, cmap_name, weight=weight, top_color=args.top_color, seed=seed, n_jobs=args.thread)
-
-    spectral_offset = .05 # avoid extremely dark colors
-    c_pos = (c_pos - c_pos.min()) / (c_pos.max() - c_pos.min()) * (1 - spectral_offset) + spectral_offset
-
-    c_rank = np.argsort(np.argsort(c_pos))
-    cmtx = plt.get_cmap(cmap_name)(c_pos)[:, :3] # K x 3
+    cmtx = assign_color_tsp(mtx, cmap_name=cmap_name, weight=weight, two_opt=True, spectral_offset=0.05, anchor_color=args.top_color)
     # translate RGB to 0-255
     cmtx_int = (cmtx * 255).astype(int) # K x 3
     # translate each RGB color to hex code

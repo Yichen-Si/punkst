@@ -34,7 +34,6 @@ import sys
 def render_makefile(template_path, out_path, wf):
     # Prepare formatting dict: uppercase keys, lists to space-joined strings
     fmt = {}
-    wf['bounds'] = f"--xmin {wf['xmin']} --xmax {wf['xmax']} --ymin {wf['ymin']} --ymax {wf['ymax']}"
     for k, v in wf.items():
         key = k.upper()
         if isinstance(v, list):
@@ -62,7 +61,10 @@ def write_sbatch_script(job, makefile_out, sbatch_out, pyenv=None):
     lines = ['#!/bin/bash']
     # SBATCH headers
     for key, val in job.items():
-        lines.append(f"#SBATCH --{key}={val}")
+        if key != "extra_lines":
+            lines.append(f"#SBATCH --{key}={val}")
+        else:
+            lines.append(val)
     lines.append("")
     if pyenv:
         lines.append(f"# Activate Python environment: {pyenv}")

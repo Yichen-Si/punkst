@@ -181,6 +181,18 @@ struct Rectangle {
     bool contains(T x, T y) const {
         return (x >= xmin && x < xmax && y >= ymin && y < ymax);
     }
+    int32_t intersect(const Rectangle<T>& other) const {
+        if (other.xmin >= xmax || other.xmax <= xmin || other.ymin >= ymax || other.ymax <= ymin) {
+            return 0; // no intersection
+        }
+        if (other.xmin <= xmin && other.xmax >= xmax && other.ymin <= ymin && other.ymax >= ymax) {
+            return 2; // the other rectangle fully contains this one
+        }
+        if (other.xmin >= xmin && other.xmax <= xmax && other.ymin >= ymin && other.ymax <= ymax) {
+            return 3; // this rectangle fully contains the other one
+        }
+        return 1; // partial intersection
+    }
     bool cutInside(Rectangle<T>& rec, T r) {
         rec.xmin = xmin + r;
         rec.ymin = ymin + r;
@@ -196,6 +208,26 @@ struct Rectangle {
         return rec.proper();
     }
 };
+
+template <typename T>
+int32_t parseCoordsToRects(std::vector<Rectangle<T>>& rects, const std::vector<T>& coords) {
+    if (coords.size() % 4 != 0) {
+        return -1;
+    }
+    for (size_t i = 0; i < coords.size() / 4; ++i) {
+        T x1 = coords[i * 4];     // xmin
+        T y1 = coords[i * 4 + 1]; // ymin
+        T x2 = coords[i * 4 + 2]; // xmax
+        T y2 = coords[i * 4 + 3]; // ymax
+        Rectangle<T> rect(x1, y1, x2, y2);
+        if (!rect.proper()) {
+            warning("Invalid bounding box: %f %f %f %f", x1, y1, x2, y2);
+            continue;
+        }
+        rects.push_back(rect);
+    }
+    return rects.size();
+}
 
 // Centroid of a polygon by triangulation and weighted average
 cv::Point2d centroidOfPolygonTriangulation(const std::vector<cv::Point2d>& poly);

@@ -332,6 +332,9 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
         error("Error opening output file: %s for writing", outModel.c_str());
     }
     outFileStream.close();
+    if (std::filesystem::exists(outModel)) {
+        std::filesystem::remove(outModel);
+    }
 
     if (nTopics <= 0) {
         error("Number of topics must be greater than 0");

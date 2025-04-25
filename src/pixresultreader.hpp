@@ -59,7 +59,7 @@ public:
     int32_t next(PixelFactorResult& out) {
         if (done) return -1;
         if (bounded) {
-            return nextBounded(out) ? 1 : 0;
+            return nextBounded(out);
         }
         std::string line;
         while (true) {
@@ -95,7 +95,7 @@ private:
         if (tok.size() < maxIdx+1) return false;
         if (!str2double(tok[icol_x], R.x) ||
             !str2double(tok[icol_y], R.y)) {
-            warning("Error parsing line: %s", line.c_str());
+            warning("%s: Error parsing x,y from line: %s", __FUNCTION__, line.c_str());
             return false;
         }
         R.ks.resize(k);
@@ -103,7 +103,7 @@ private:
         for (int i = 0; i < k; ++i) {
             if (!str2int32(tok[icol_ks[i]], R.ks[i]) ||
                 !str2float(tok[icol_ps[i]], R.ps[i])) {
-                warning("Error parsing line: %s", line.c_str());
+                warning("%s: Error parsing K,P from line: %s", __FUNCTION__, line.c_str());
             }
         }
         return true;
@@ -191,8 +191,8 @@ private:
         dataStream.seekg(blk.e.st);
     }
 
-    bool nextBounded(PixelFactorResult& out) {
-        if (done) return false;
+    int32_t nextBounded(PixelFactorResult& out) {
+        if (done) return -1;
         std::string line;
         while (true) {
             auto &blk = blocks[idxBlock];
@@ -203,7 +203,7 @@ private:
                 // move to next block
                 if (++idxBlock >= blocks.size()) {
                     done = true;
-                    return false;
+                    return -1;
                 }
                 openBlock(blocks[idxBlock]);
                 continue;
@@ -220,7 +220,7 @@ private:
                     rec.y >= qymin && rec.y <= qymax))
             {
                 out = std::move(rec);
-                return true;
+                return 1;
             }
             // else skip it, keep reading
         }

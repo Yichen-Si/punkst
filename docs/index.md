@@ -8,7 +8,7 @@ The punkst toolkit provides a pipeline for efficient pixel level factor analysis
 
 ### Workflow Overview
 
-Check [the quick start page](examples/basic.md) for help on generating the full workflow using Makefile or running each command step by step.
+Check [the quick start page](basic.md) for help on generating the full workflow using Makefile or running each command step by step.
 
 1. [pts2tiles](modules/pts2tiles.md): Group pixels to tiles for faster processing
 2. [tiles2hex](modules/tiles2hex.md): Group pixels into non-overlapping hexagons

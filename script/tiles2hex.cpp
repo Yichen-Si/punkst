@@ -11,6 +11,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     std::vector<int32_t> icol_ints;
     std::vector<int32_t> min_counts;
     bool noBackground = false;
+    std::vector<double> boundingBoxes;
 
     ParamList pl;
     // Input Options
@@ -21,6 +22,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
         .add_option("feature-dict", "If feature column is not integer, provide a dictionary/list of all possible values", dictFile)
         .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
+        .add_option("bounding-boxes", "Rectangular query regions (xmin ymin xmax ymax)*", boundingBoxes)
         .add_option("anchor-files", "Anchor files", anchorFiles)
         .add_option("radius", "Radius for each set of anchors", radius)
         .add_option("hex-size", "Hexagon size (size length)", hexSize)
@@ -52,12 +54,21 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     }
     HexGrid hexGrid(hexSize);
 
-    TileReader tileReader(inTsv, inIndex);
+    std::vector<Rectangle<double>> rects;
+    if (boundingBoxes.size() > 0) {
+        int32_t nrects = parseCoordsToRects(rects, boundingBoxes);
+        if (nrects <= 0) {
+            error("Error parsing bounding boxes");
+        }
+        notice("Received %d bounding boxes", nrects);
+    }
+
+    TileReader tileReader(inTsv, inIndex, &rects);
     if (!tileReader.isValid()) {
         error("Error opening input file: %s", inTsv.c_str());
         return 1;
     }
-    lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile);
+    lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile, &rects);
     if (parser.n_ints == 0) {
         error("No integer columns specified");
     }

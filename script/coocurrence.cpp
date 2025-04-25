@@ -7,6 +7,7 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
     int icol_x, icol_y, icol_feature, icol_val;
     bool binaryOutput = false, weightByCount = false;
     int minNeighbor = 1;
+    std::vector<double> boundingBoxes;
 
     ParamList pl;
     // Input Options
@@ -17,6 +18,7 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
         .add_option("feature-dict", "If feature column is not integer, provide a dictionary/list of all possible values", dictFile)
         .add_option("icol-val", "Column index for the integer count (0-based)", icol_val)
+        .add_option("bounding-boxes", "Rectangular query regions (xmin ymin xmax ymax)*", boundingBoxes)
         .add_option("weight-by-count", "Weight co-occurrence by the product of the number of transcripts (default: false)", weightByCount)
         .add_option("radius", "Radius to count coocurrence", radius, true)
         .add_option("halflife", "Halflife for exponential decay (default: -1, unweighted count)", halflife)
@@ -37,12 +39,21 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
         return 1;
     }
 
-    TileReader tileReader(inTsv, inIndex);
+    std::vector<Rectangle<double>> rects;
+    if (boundingBoxes.size() > 0) {
+        int32_t nrects = parseCoordsToRects(rects, boundingBoxes);
+        if (nrects <= 0) {
+            error("Error parsing bounding boxes");
+        }
+        notice("Received %d bounding boxes", nrects);
+    }
+
+    TileReader tileReader(inTsv, inIndex, &rects);
     if (!tileReader.isValid()) {
-        error("Error opening input file: %s", inTsv.c_str());
+        error("Error parsing input index file");
         return 1;
     }
-    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile, &rects);
 
     Tiles2FeatureCooccurrence cooccurrence(nThreads, tileReader, parser, outPref, radius, halflife, localMin, binaryOutput, minNeighbor, weightByCount);
 

@@ -95,7 +95,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     notice("Initialized anchor model with %d features and %d factors", nFeatures, lda.get_n_topics());
 
     HexGrid hexGrid(hexSize);
-    TileReader tileReader(inTsv, inIndex, -1, coordsAreInt);
+    TileReader tileReader(inTsv, inIndex, nullptr, -1, coordsAreInt);
     if (!tileReader.isValid()) {
         error("Error in input tiles: %s", inTsv.c_str());
     }

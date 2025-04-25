@@ -4,15 +4,15 @@ This example demonstrates how to perform pixel level factor analysis with punkst
 
 ## Use the example Makefile template
 
-We provide a template Makefile and config file in `punkst/docs/examples/basic` to generate the full workflow of FICTURE.
+We provide a template Makefile and config file in `punkst/examples` to generate the full workflow of FICTURE.
 
-You can copy `punkst/docs/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
+You can copy `punkst/examples/basic/generic/config.json` to your own directory modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
 
 The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the `-o` option.
 
 ```bash
 # set repopath to the path of the punkst repo
-python ${repopath}/ext/py/generate_workflow.py -c config.json -o run.sh -m Makefile -t ${repopath}/docs/examples/basic/Makefile
+python ${repopath}/ext/py/generate_workflow.py -c config.json -o run.sh -m Makefile -t ${repopath}/examples/basic/generic/Makefile
 ```
 
 You can check the generated workflow before execution by
@@ -20,6 +20,7 @@ You can check the generated workflow before execution by
 make -f Makefile --dry-run
 ```
 
+The following section explains the steps in the Makefile.
 
 ## Step by step
 
@@ -43,15 +44,16 @@ Group pixels into non-overlapping square tiles for faster processing:
 
 ```bash
 punkst pts2tiles --in-tsv ${path}/transcripts.tsv --icol-x 0 --icol-y 1 --skip 0 \
-  --temp-dir ${tmpdir} --tile-size 50000 --tile-buffer 1000 --threads ${threads} \
+  --temp-dir ${tmpdir} --tile-size 500 --tile-buffer 1000 --threads ${threads} \
   --out-prefix ${path}/transcripts.tiled
 ```
 
 Key parameters:
 - `--icol-x`, `--icol-y`: Column indices for X and Y coordinates (0-based)
+- If your input file has a header, use `--skip 1` to skip the first (or more) lines
 - `--tile-size`: Size (side length) of the square tiles
 
-[Detailed documentation for pts2tiles](../modules/pts2tiles.md)
+[Detailed documentation for pts2tiles](./modules/pts2tiles.md)
 
 ### Step 2: Create hexagonal units
 
@@ -60,7 +62,7 @@ Group pixels into non-overlapping hexagons:
 ```bash
 punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
   --feature-dict ${path}/features.txt --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
-  --min-count 20 --hex-size 1039 --out ${path}/hex.txt --temp-dir ${tmpdir} --threads ${threads}
+  --min-count 20 --hex-size 7 --out ${path}/hex.txt --temp-dir ${tmpdir} --threads ${threads}
 ```
 
 Key parameters:
@@ -68,12 +70,13 @@ Key parameters:
 - `--hex-size`: Side length of the hexagons
 - `--min-count`: Minimum count for a hexagon to be included
 
-Shuffle the output for better training:
+Shuffle the output for training:
 ```bash
 sort -k1,1 --parallel ${threads} -S 1G ${path}/hex.txt > ${path}/hex.randomized.txt
+rm ${path}/hex.txt
 ```
 
-[Detailed documentation for tiles2hex](../modules/tiles2hex.md)
+[Detailed documentation for tiles2hex](./modules/tiles2hex.md)
 
 ### Step 3: Run LDA on hexagon data
 
@@ -90,7 +93,7 @@ Key parameters:
 - `--transform`: Generate transform results after model fitting
 - `--min-count-train`: Minimum count for a hexagon to be included in training
 
-[Detailed documentation for lda4hex](../modules/lda4hex.md)
+[Detailed documentation for lda4hex](./modules/lda4hex.md)
 
 ### Step 4: Decode pixels with the model
 
@@ -99,36 +102,37 @@ Annotate each pixel with top factors and their probabilities:
 ```bash
 punkst pixel-decode --model ${path}/hex.lda.model.tsv --in-tsv ${path}/transcripts.tiled.tsv \
   --in-index ${path}/transcripts.tiled.index --temp-dir ${tmpdir} --out ${path}/pixel.decode.tsv \
-  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 1200 --n-moves 2 \
-  --min-init-count 20 --pixel-res 50 --threads ${threads} --seed 1 --output-original
+  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 12 --n-moves 2 \
+  --min-init-count 20 --pixel-res 0.5 --threads ${threads} --seed 1 --output-original
 ```
 
 Key parameters:
 - `--model`: Model file created by lda4hex
-- `--hex-grid-dist`: Center-to-center distance for hexagons
+- `--hex-grid-dist`: Center-to-center distance of the hexagonal grid
 - `--n-moves`: Number of sliding moves to generate anchors
 - `--pixel-res`: Resolution for the analysis (in the same unit as coordinates)
 
-[Detailed documentation for pixel-decode](../modules/pixel-decode.md)
+[Detailed documentation for pixel-decode](./modules/pixel-decode.md)
 
 ### Step 5: Visualize the results
 
 Visualize the pixel decoding results:
 
+Choose a color table from the intermediate results
+```bash
+python punkst/ext/py/color_helper.py --input ${path}/hex.lda.results.tsv --output ${path}/color
+```
+
+Generate an image for the pixel level factor assignment
 ```bash
 punkst draw-pixel-factors --in-tsv ${path}/pixel.decode.tsv --header-json ${path}/pixel.decode.json \
-  --in-color ${path}/color.rgb.tsv --out ${path}/pixel.png --scale 100 \
+  --in-color ${path}/color.rgb.tsv --out ${path}/pixel.png --scale 1 \
   --xmin ${xmin} --xmax ${xmax} --ymin ${ymin} --ymax ${ymax}
 ```
 
 Key parameters:
 - `--in-color`: TSV file with RGB colors for each factor
-- `--scale`: Scales input coordinates to pixels in the output image
+- `--scale`: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel)
 - `--xmin`, `--xmax`, `--ymin`, `--ymax`: Range of coordinates to visualize
 
-Generate a color table from LDA results:
-```bash
-python punkst/ext/py/color_helper.py --input ${path}/hex.lda.results.tsv --output ${path}/color
-```
-
-[Detailed documentation for visualization](../modules/visualization.md)
+[Detailed documentation for visualization](./modules/visualization.md)

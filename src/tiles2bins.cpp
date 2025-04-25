@@ -67,6 +67,7 @@ void Tiles2Hex::worker(int threadId) {
         double tile_xmax = (tile.col + 1) * tileSize;
         double tile_ymin = tile.row * tileSize;
         double tile_ymax = (tile.row + 1) * tileSize;
+        bool checkBounds = tileReader.isPartial(tile);
 
         // Get an iterator for points in this tile.
         std::unique_ptr<BoundedReadline> iter;
@@ -83,7 +84,7 @@ void Tiles2Hex::worker(int threadId) {
         std::string line;
         while (iter->next(line)) {
             PixelValues pixel;
-            int32_t ret = parser.parse(pixel, line);
+            int32_t ret = parser.parse(pixel, line, checkBounds);
             if (!parser.isFeatureDict && pixel.feature >= maxFeatureIdxLocal) {
                 maxFeatureIdxLocal = pixel.feature + 1;
             }
@@ -278,7 +279,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
         double tile_xmax = (tile.col + 1) * tileSize;
         double tile_ymin = tile.row * tileSize;
         double tile_ymax = (tile.row + 1) * tileSize;
-
+        bool checkBounds = tileReader.isPartial(tile);
         // Get an iterator for points in this tile.
         std::unique_ptr<BoundedReadline> iter;
         try {
@@ -296,7 +297,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
         int32_t nbg = 0, nfront = 0;
         while (iter->next(line)) {
             PixelValues pixel;
-            int32_t ret = parser.parse(pixel, line);
+            int32_t ret = parser.parse(pixel, line, checkBounds);
             if (!parser.isFeatureDict && pixel.feature >= maxFeatureIdxLocal) {
                 maxFeatureIdxLocal = pixel.feature + 1;
             }

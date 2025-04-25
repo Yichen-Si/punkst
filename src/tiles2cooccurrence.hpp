@@ -70,12 +70,13 @@ private:
             std::vector<uint8_t> counts;
             std::unordered_map<uint32_t, std::unordered_map<uint32_t, double>> localCounts;
             std::unordered_map<uint32_t, std::array<uint64_t, 4> > localMarginals;
+            bool checkBounds = tileReader_.isPartial(tile);
 
             auto iter = tileReader_.get_tile_iterator(tile.row, tile.col);
             std::string line;
             while (iter->next(line)) {
                 RecordT<float> px;
-                if (parser_.parse(px, line) < 0) continue;
+                if (parser_.parse(px, line, checkBounds) < 0) continue;
                 cloud.pts.emplace_back(px.x, px.y);  // z=0
                 feats.push_back(px.idx);
                 if (weightByCount_) {

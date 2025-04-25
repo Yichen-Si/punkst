@@ -52,6 +52,7 @@ struct TileKeyHash {
 struct TileInfo {
     std::streampos startOffset;
     std::streampos endOffset;
+    bool partial = false;
 };
 
 // Parse a line in the tsv tiled pixel file
@@ -62,10 +63,14 @@ struct lineParser {
     int32_t n_ints, n_tokens;
     bool isFeatureDict, weighted;
     std::vector<double> weights;
+    std::vector<Rectangle<double>> rects;
 
     lineParser() {isFeatureDict = false; weighted = false;}
-    lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile) {
+    lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
         weighted = false;
+        if (_rects != nullptr && !_rects->empty()) {
+            rects = *_rects;
+        }
         init(_ix, _iy, _iz, _ivals, _dfile);
     }
     void init(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile) {
@@ -116,7 +121,7 @@ struct lineParser {
         return featureDict.size();
     }
 
-    int32_t parse(PixelValues& pixel, std::string& line) {
+    int32_t parse(PixelValues& pixel, std::string& line, bool checkBounds = false) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < n_tokens) {
@@ -124,6 +129,18 @@ struct lineParser {
         }
         pixel.x = std::stod(tokens[icol_x]);
         pixel.y = std::stod(tokens[icol_y]);
+        if (checkBounds) {
+            bool valid = false;
+            for (const auto& rect : rects) {
+                if (rect.contains(pixel.x, pixel.y)) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (!valid) {
+                return 0;
+            }
+        }
         if (isFeatureDict) {
             auto it = featureDict.find(tokens[icol_feature]);
             if (it == featureDict.end()) {
@@ -223,18 +240,36 @@ struct lineParser {
 struct lineParserUnival : public lineParser {
     size_t icol_val;
     lineParserUnival() {}
-    lineParserUnival(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile) {
+    lineParserUnival(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
+        if (_rects != nullptr && !_rects->empty()) {
+            rects = *_rects;
+        }
         icol_val = _ival;
         std::vector<int32_t> _ivals = { (int32_t) _ival};
         init(_ix, _iy, _iz, _ivals, _dfile);
     }
 
     template<typename T>
-    int32_t parse(RecordT<T>& rec, std::string& line) {
+    int32_t parse(RecordT<T>& rec, std::string& line, bool checkBounds = false) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < n_tokens) {
             return -2;
+        }
+        if (!str2num<T>(tokens[icol_x], rec.x) || !str2num<T>(tokens[icol_y], rec.y)) {
+            return -2;
+        }
+        if (checkBounds) {
+            bool valid = false;
+            for (const auto& rect : rects) {
+                if (rect.contains(rec.x, rec.y)) {
+                    valid = true;
+                    break;
+                }
+            }
+            if (!valid) {
+                return -1;
+            }
         }
         if (isFeatureDict) {
             auto it = featureDict.find(tokens[icol_feature]);
@@ -244,9 +279,6 @@ struct lineParserUnival : public lineParser {
             rec.idx = it->second;
         } else {
             rec.idx = std::stoul(tokens[icol_feature]);
-        }
-        if (!str2num<T>(tokens[icol_x], rec.x) || !str2num<T>(tokens[icol_y], rec.y)) {
-            return -1;
         }
         rec.ct = std::stoi(tokens[icol_val]);
         return rec.idx;
@@ -262,14 +294,18 @@ protected:
     std::unordered_map<TileKey, TileInfo, TileKeyHash> index;
     // Helper function to load the index file.
     virtual void loadIndex(const std::string &indexFilename) = 0;
+    std::vector<Rectangle<double>> rects;
 
 public:
     int32_t minrow = INT32_MAX;
     int32_t mincol = INT32_MAX;
     int32_t maxrow = INT32_MIN;
     int32_t maxcol = INT32_MIN;
-    TileReaderBase(const std::string &tsvFilename, const std::string &indexFilename, int32_t tileSize = -1)
+    TileReaderBase(const std::string &tsvFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1)
         : tsvFilename(tsvFilename), tileSize(tileSize) {
+        if (_rects != nullptr) {
+            rects = *_rects;
+        }
     }
     int32_t getTileSize() const {
         return tileSize;
@@ -287,6 +323,13 @@ public:
         tile.col = static_cast<int32_t>(std::floor(x / tileSize));
         return index.find(tile) != index.end();
     }
+    bool isPartial(TileKey &tile) const {
+        auto it = index.find(tile);
+        if (it == index.end()) {
+            return false;
+        }
+        return it->second.partial;
+    }
     void getTileList(std::vector<TileKey> &tileList) const {
         tileList.reserve(nTiles);
         tileList.clear();
@@ -294,6 +337,67 @@ public:
             tileList.push_back(pair.first);
         }
     }
+    template<typename T>
+    void getTilesInBounds(const std::vector<Rectangle<T>>& _rects,
+        std::unordered_map<TileKey,bool,TileKeyHash>& tileMap) {
+        for (const auto& r : _rects) {
+            if (!r.proper()) continue;
+            // Compute candidate tile‐row/col ranges
+            int rowMin = static_cast<int>( std::floor(static_cast<double>(r.ymin) / tileSize) );
+            int rowMax = static_cast<int>( std::floor(static_cast<double>(r.ymax) / tileSize) );
+            int colMin = static_cast<int>( std::floor(static_cast<double>(r.xmin) / tileSize) );
+            int colMax = static_cast<int>( std::floor(static_cast<double>(r.xmax) / tileSize) );
+
+            for (int row = rowMin; row <= rowMax; ++row) {
+                for (int col = colMin; col <= colMax; ++col) {
+                    TileKey key{row, col};
+                    // the exact bounds of this tile in world‐space
+                    Rectangle<T> tileRect(
+                        static_cast<T>(col     * tileSize),
+                        static_cast<T>(row     * tileSize),
+                        static_cast<T>((col+1) * tileSize),
+                        static_cast<T>((row+1) * tileSize)
+                    );
+                    int32_t code = tileRect.intersect(r);
+                    if (code == 0)
+                        continue;             // no overlap
+
+                    bool fullyInThisRect = (code == 2);
+                    auto it = tileMap.find(key);
+                    if (it == tileMap.end()) {
+                        tileMap.emplace(key, fullyInThisRect);
+                    }
+                    else if (!it->second && fullyInThisRect) {
+                        // once fully-contained, always fully-contained
+                        it->second = true;
+                    }
+                }
+            }
+        }
+    }
+
+    template<typename T>
+    void getTileList(const std::vector<Rectangle<T>>& _rects,
+                     std::vector<TileKey>&            tileList,
+                     std::vector<bool>&               isContained) const {
+        if (!isValid()) {
+            throw std::runtime_error("TileReaderBase is not initialized or has empty index");
+        }
+
+        // Map each TileKey -> whether we've seen it _fully contained_
+        std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
+        tileMap.reserve(index.size());
+        getTilesInBounds(_rects, tileMap);
+
+        // Flatten
+        tileList.clear();
+        isContained.clear();
+        for (auto &kv : tileMap) {
+            tileList.push_back(kv.first);
+            isContained.push_back(kv.second);
+        }
+    }
+
     bool isValid() const {
         return !index.empty() && tileSize > 0;
     }
@@ -318,8 +422,8 @@ public:
 class TileReader : public TileReaderBase {
 public:
 
-    TileReader(const std::string &tsvFilename, const std::string &indexFilename, int32_t tileSize = -1, bool isInt = false)
-        : TileReaderBase(tsvFilename, indexFilename, tileSize) {
+    TileReader(const std::string &tsvFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1, bool isInt = false)
+        : TileReaderBase(tsvFilename, indexFilename, _rects, tileSize) {
         loadIndex(indexFilename);
         coordType = isInt ? CoordType::INTEGER : CoordType::FLOAT;
     }
@@ -331,8 +435,8 @@ public:
         TileKey key {tileRow, tileCol};
         auto it = index.find(key);
         if (it == index.end()) {
-            throw std::runtime_error("Tile (" + std::to_string(tileRow) + "," +
-                                        std::to_string(tileCol) + ") not found in index");
+            warning("%s: Tile (%d, %d) not found in index", __FUNCTION__, tileRow, tileCol);
+            return nullptr;
         }
         const TileInfo &info = it->second;
         return std::make_unique<BoundedReadline>(tsvFilename, info.startOffset, info.endOffset);
@@ -372,26 +476,52 @@ private:
             throw std::runtime_error("Tile size is not specified or found in index file");
         }
 
-        // read each line: tilerow, tilecol, startOffset, endOffset
-        while (1) {
-            if (line.empty()) continue;
-            std::istringstream iss(line);
-            int row, col;
-            std::streamoff start, end;
-            if (!(iss >> row >> col >> start >> end)) {
-                throw std::runtime_error("Malformed index line: " + line);
+        if (rects.size() > 0) {
+            std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
+            getTilesInBounds(rects, tileMap);
+            while (1) {
+                if (line.empty()) continue;
+                std::istringstream iss(line);
+                int row, col;
+                std::streamoff start, end;
+                // read each line: tilerow, tilecol, startOffset, endOffset
+                if (!(iss >> row >> col >> start >> end)) {
+                    throw std::runtime_error("Malformed index line: " + line);
+                }
+                auto it = tileMap.find(TileKey{row, col});
+                if (it != tileMap.end()) {
+                    index.emplace(TileKey{row, col}, TileInfo{start, end, !(it->second)});
+                    if (row < minrow) minrow = row;
+                    if (col < mincol) mincol = col;
+                    if (row > maxrow) maxrow = row;
+                    if (col > maxcol) maxcol = col;
+                }
+                if (!std::getline(indexFile, line)) {
+                    break;  // End of file
+                }
             }
-            index.emplace(TileKey{row, col}, TileInfo{start, end});
-            if (row < minrow) minrow = row;
-            if (col < mincol) mincol = col;
-            if (row > maxrow) maxrow = row;
-            if (col > maxcol) maxcol = col;
-            if (!std::getline(indexFile, line)) {
-                break;  // End of file
+        } else {
+            while (1) {
+                if (line.empty()) continue;
+                std::istringstream iss(line);
+                int row, col;
+                std::streamoff start, end;
+                if (!(iss >> row >> col >> start >> end)) {
+                    throw std::runtime_error("Malformed index line: " + line);
+                }
+                index.emplace(TileKey{row, col}, TileInfo{start, end});
+                if (row < minrow) minrow = row;
+                if (col < mincol) mincol = col;
+                if (row > maxrow) maxrow = row;
+                if (col > maxcol) maxcol = col;
+                if (!std::getline(indexFile, line)) {
+                    break;  // End of file
+                }
             }
         }
         nTiles = index.size();
         indexFile.close();
+        notice("Read %zu tiles from index file", nTiles);
     }
 };
 
@@ -487,8 +617,8 @@ public:
     //   numInt: number of integer fields,
     //   numFloat: number of float fields.
     // The number of categorical fields is deduced from the dictionary header.
-    BinaryTileReader(const std::string &binFilename, const std::string &indexFilename, int32_t tileSize = -1)
-        : TileReaderBase(binFilename, indexFilename, tileSize),
+    BinaryTileReader(const std::string &binFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1)
+        : TileReaderBase(binFilename, indexFilename, _rects, tileSize),
             numCat(0), numInt(0), numFloat(0) {
         loadIndex(indexFilename);
         readDictionaries();

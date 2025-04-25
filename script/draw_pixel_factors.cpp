@@ -77,8 +77,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     int32_t k = reader.getK();
     if (k<=0) error("No factor columns found in header");
     if (filter) {
-        if (reader.query(xmin, xmax, ymin, ymax) <= 0)
+        int32_t ntiles = reader.query(xmin, xmax, ymin, ymax);
+        if (ntiles <= 0)
             error("No data in the queried region");
+        notice("Found %d tiles intersecting the queried region", ntiles);
     }
 
     if (scale<=0) error("--scale must be >0");
@@ -103,7 +105,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 warning("Stopped at invalid line %d", nline);
                 break;
             }
-            error("Invalid or corrupted input");
+            error("%s: Invalid or corrupted input", __FUNCTION__);
         }
         if (++nline % verbose == 0)
             notice("Processed %d lines, skipped %d, kept %d", nline, nskip, nkept);
