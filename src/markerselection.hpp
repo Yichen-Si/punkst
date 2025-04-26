@@ -10,7 +10,10 @@
 #include <cstdint>
 #include <unordered_set>
 #include "error.hpp"
-#include <omp.h>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
+#include <tbb/combinable.h>
+#include <tbb/global_control.h>
 
 class MarkerSelector {
 public:
@@ -167,8 +170,9 @@ public:
         if (anchors.empty()) {
             error("No anchors selected, please call selectMarkers(K, ...) first");
         }
+        std::optional<tbb::global_control> gc;
         if (threads > 0) {
-            omp_set_num_threads(threads);
+            gc.emplace(tbb::global_control::max_allowed_parallelism, threads);
         }
         const int M = M_;
         const int K = static_cast<int>(anchors.size());
@@ -183,16 +187,18 @@ public:
         }
 
         // Marginal probabilities
-        Eigen::RowVectorXd pk(K);
-        pk.setZero();
+        tbb::combinable<Eigen::RowVectorXd> pk_acc{
+            [&]{ return Eigen::RowVectorXd::Zero(K); }
+        };
 
-        #pragma omp parallel
-        {
-            // Buffers for each i
+        tbb::parallel_for(
+            tbb::blocked_range<int>(0, M),
+            [&](const tbb::blocked_range<int>& range) {
+
             std::vector<double> c(K), c_new(K), g(K), r(M);
+            auto& local_pk = pk_acc.local();
 
-            #pragma omp for schedule(dynamic)
-            for (int i = 0; i < M; ++i) {
+            for (int i = range.begin(); i < range.end(); ++i) {
                 const double* q = Q_.data() + i * M;  // Q_.row(i)
 
                 // Initialize weights uniformly
@@ -251,16 +257,18 @@ public:
                 if (weightByCounts) {
                     #pragma omp critical
                     for (int k = 0; k < K; ++k) {
-                        pk(k) += c[k] * features_[i].totalOcc;
+                        local_pk[k] += c[k] * features_[i].totalOcc;
                     }
                 }
-
             }
-        }
+        });
         // column normalize betas
         Eigen::RowVectorXd colsums = betas.colwise().sum();
         betas.array().rowwise() /= (colsums.array() + 1e-8);
         if (weightByCounts) {
+            // combine per-thread
+            Eigen::RowVectorXd pk(K);
+            pk = pk_acc.combine([](auto &a, auto &b){ return a + b; });
             betas.array().rowwise() *= pk.array();
         }
     }

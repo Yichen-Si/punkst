@@ -7,10 +7,14 @@
 #include <iostream>
 #include <random>
 #include <optional>
-#include <omp.h>
 #include "numerical_utils.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
+#include <tbb/combinable.h>
+#include <tbb/global_control.h>
 
 #include "Eigen/Dense"
 using Eigen::MatrixXd;
@@ -68,6 +72,7 @@ public:
         mean_change_tol_(mean_change_tol),
         learning_decay_(learning_decay), learning_offset_(learning_offset),
         total_doc_count_(total_doc_count), update_count_(0) {
+        set_nthreads(nThreads);
         set_model_from_tsv(modelFile);
         init();
     }
@@ -109,10 +114,12 @@ public:
     void set_nthreads(int nThreads) {
         nThreads_ = nThreads;
         if (nThreads_ > 0) {
-            omp_set_num_threads(nThreads_);
-        } else {
-            nThreads_ = omp_get_max_threads();
-        }
+            tbb_ctrl_ = std::make_unique<tbb::global_control>(
+               tbb::global_control::max_allowed_parallelism,
+               std::size_t(nThreads_));
+          } else {
+            tbb_ctrl_.reset();
+          }
     }
 
     // Set the model matrix
@@ -192,42 +199,59 @@ public:
     // process a mini-batch of documents to update the global topic-word distribution.
     void partial_fit(const std::vector<Document>& docs) {
         int minibatch_size = docs.size();
-        MatrixXd ss = MatrixXd::Zero(n_topics_, n_features_);
         MatrixXd doc_topic_distr = MatrixXd::Zero(minibatch_size, n_topics_);
-        std::vector<int32_t> niters;
-        #pragma omp parallel
-        {
-            MatrixXd local_ss = MatrixXd::Zero(n_topics_, n_features_);
-            MatrixXd local_doc_topic_distr = MatrixXd::Zero(minibatch_size, n_topics_);
-            std::vector<int32_t> local_niters;
-            #pragma omp for
-            for (int d = 0; d < minibatch_size; d++) {
-                // Use the shared routine to get the document's variational parameters.
-                VectorXd doc_topic, exp_doc;
-                local_niters.push_back(fit_one_document(doc_topic, exp_doc, docs[d]));
-                doc_topic_distr.row(d) = doc_topic.transpose();
-                int n_ids = docs[d].ids.size();
-                // For each nonzero word in the document, update sufficient statistics.
-                for (int j = 0; j < n_ids; j++) {
-                    int word_id = docs[d].ids[j];
-                    double count = docs[d].cnts[j];
-                    double norm_phi =eps_;
-                    for (int k = 0; k < n_topics_; k++) {
-                        norm_phi += exp_doc[k] * exp_Elog_beta_(k, word_id);
-                    }
-                    for (int k = 0; k < n_topics_; k++) {
-                        double phi = (exp_doc[k] * exp_Elog_beta_(k, word_id)) / norm_phi;
-                        local_ss(k, word_id) += count * phi;
+
+        tbb::combinable<MatrixXd> ss_acc{
+            [&]{ return MatrixXd::Zero(n_topics_, n_features_); }
+        };
+        tbb::combinable<std::vector<int32_t>> niters_acc{
+            []{ return std::vector<int32_t>(); }
+        };
+
+        tbb::parallel_for(
+            tbb::blocked_range<int>(0, minibatch_size),
+            [&](const tbb::blocked_range<int>& range) {
+                auto& local_ss   = ss_acc.local();
+                auto& local_nits = niters_acc.local();
+                for (int d = range.begin(); d < range.end(); ++d) {
+                    // Use the shared routine to get the document's variational parameters.
+                    VectorXd doc_topic, exp_doc;
+                    int iter = fit_one_document(doc_topic, exp_doc, docs[d]);
+                    doc_topic_distr.row(d) = doc_topic.transpose();
+                    local_nits.push_back(iter);
+                    const auto& doc = docs[d];
+                    int n_ids = doc.ids.size();
+                    // For each nonzero word in the document, update sufficient statistics.
+                    for (int j = 0; j < n_ids; j++) {
+                        int word_id = doc.ids[j];
+                        double count = doc.cnts[j];
+                        double norm_phi =eps_;
+                        for (int k = 0; k < n_topics_; k++) {
+                            norm_phi += exp_doc[k] * exp_Elog_beta_(k, word_id);
+                        }
+                        for (int k = 0; k < n_topics_; k++) {
+                            double phi = (exp_doc[k] * exp_Elog_beta_(k, word_id)) / norm_phi;
+                            local_ss(k, word_id) += count * phi;
+                        }
                     }
                 }
-            }
-            #pragma omp critical
-            {
-                ss += local_ss;
-                doc_topic_distr += local_doc_topic_distr;
-                niters.insert(niters.end(), local_niters.begin(), local_niters.end());
-            }
-        }
+            });
+
+            // 4) Merge thread‐local ss and niters into the global buffers
+            MatrixXd ss = ss_acc.combine(
+                [](const MatrixXd &A, const MatrixXd &B) {
+                    return A + B;
+                }
+            );
+            std::vector<int32_t> niters = niters_acc.combine(
+                [](const std::vector<int32_t> &a,
+                   const std::vector<int32_t> &b) {
+                    std::vector<int32_t> out = a;
+                    out.insert(out.end(), b.begin(), b.end());
+                    return out;
+                }
+            );
+
         if (verbose_ > 0) {
             int32_t fail_converge = 0;
             for (int i = 0; i < niters.size(); i++) {
@@ -269,98 +293,114 @@ public:
 
         MatrixXd doc_topic_distr(n_samples, n_topics_);
         // Parallel update: process each document independently.
-        #pragma omp parallel for schedule(dynamic)
-        for (int d = 0; d < n_samples; d++) {
+        tbb::parallel_for(0, n_samples, [&](int d) {
             // Update document d using the helper function.
             VectorXd updated_doc, exp_doc;
             int32_t niter = fit_one_document(updated_doc, exp_doc, docs[d]);
             doc_topic_distr.row(d) = updated_doc.transpose();
-        }
+        });
         return doc_topic_distr;
     }
 
     // Compute the approximate variational bound
     std::vector<double> approx_bound(const std::vector<Document>& docs,
         const MatrixXd& doc_topic_distr, bool sub_sampling) {
-        int n_docs = docs.size();
-        int n_topics = n_topics_;
-        int n_features = n_features_;
+        const int n_docs     = static_cast<int>(docs.size());
+        const int n_topics   = n_topics_;
+        const int n_features = n_features_;
 
-        double score1 = 0.0; // expected log likelihood
-        double score2 = 0.0; // document-topic prior term
-        double score3 = 0.0; // topic-word prior term
+        // 1) Expected log likelihood
+        double score1 = tbb::parallel_reduce(
+            tbb::blocked_range<int>(0, n_docs), 0.0,
+            [&](const tbb::blocked_range<int>& range, double local_sum) {
+                for (int d = range.begin(); d != range.end(); ++d) {
+                    const auto& doc = docs[d];
+                    double sum_gamma = doc_topic_distr.row(d).sum();
+                    // for each word in doc
+                    for (size_t idx = 0; idx < doc.ids.size(); ++idx) {
+                        int    word_id = doc.ids[idx];
+                        double count   = doc.cnts[idx];
+                        // log-sum-exp over topics
+                        double max_val = -std::numeric_limits<double>::infinity();
+                        std::vector<double> temp(n_topics);
+                        for (int k = 0; k < n_topics; ++k) {
+                            double doc_term   = psi(doc_topic_distr(d,k)) - psi(sum_gamma);
+                            double row_sum    = components_.row(k).sum();
+                            double topic_term = psi(components_(k,word_id)) - psi(row_sum);
+                            double comb       = doc_term + topic_term;
+                            temp[k] = comb;
+                            if (comb > max_val) max_val = comb;
+                        }
+                        double sum_exp = 0.0;
+                        for (int k = 0; k < n_topics; ++k)
+                            sum_exp += std::exp(temp[k] - max_val);
 
-        // 1. Expected log likelihood: E[log p(docs | theta, beta)]
-        #pragma omp parallel for reduction(+:score1)
-        for (int d = 0; d < n_docs; d++) {
-            const Document& doc = docs[d];
-            // Compute sum of gamma for document d.
-            double sum_gamma = doc_topic_distr.row(d).sum();
-            for (size_t idx = 0; idx < doc.ids.size(); idx++) {
-                int word_id = doc.ids[idx];
-                double count = doc.cnts[idx];
-
-                // Compute logsumexp over topics:
-                double max_val = -std::numeric_limits<double>::infinity();
-                std::vector<double> temp_vals(n_topics);
-                for (int k = 0; k < n_topics; k++) {
-                    // Document part: psi(gamma_dk) - psi(sum(gamma))
-                    double doc_term = psi(doc_topic_distr(d, k)) - psi(sum_gamma);
-                    // Topic-word part: psi(components_(k,word_id)) - psi(sum_j components_(k,j))
-                    double row_sum = components_.row(k).sum();
-                    double topic_term = psi(components_(k, word_id)) - psi(row_sum);
-                    double combined = doc_term + topic_term;
-                    temp_vals[k] = combined;
-                    if (combined > max_val) {
-                        max_val = combined;
+                        double word_ll = max_val + std::log(sum_exp);
+                        local_sum += count * word_ll;
                     }
                 }
-                double sum_exp = 0.0;
-                for (int k = 0; k < n_topics; k++) {
-                    sum_exp += std::exp(temp_vals[k] - max_val);
+                return local_sum;
+            },
+            std::plus<>()  // how to combine partial sums
+        );
+
+        // 2) Document–topic prior term
+        double score2 = tbb::parallel_reduce(
+            tbb::blocked_range<int>(0, n_docs), 0.0,
+            [&](const tbb::blocked_range<int>& range, double local_sum) {
+                for (int d = range.begin(); d != range.end(); ++d) {
+                    Eigen::VectorXd gamma = doc_topic_distr.row(d).transpose();
+                    double sum_gamma  = gamma.sum();
+                    double psi_sum    = psi(sum_gamma);
+                    double doc_score  = 0.0;
+                    for (int k = 0; k < n_topics; ++k) {
+                        double gmk = gamma[k];
+                        doc_score += (doc_topic_prior_ - gmk) * (psi(gmk) - psi_sum);
+                        doc_score += std::lgamma(gmk) - std::lgamma(doc_topic_prior_);
+                    }
+                    doc_score += std::lgamma(doc_topic_prior_*n_topics)
+                               - std::lgamma(sum_gamma);
+                    local_sum += doc_score;
                 }
-                double word_log_sum_exp = max_val + std::log(sum_exp);
-                score1 += count * word_log_sum_exp;
-            }
-        }
-
-        // 2. Document-topic prior term: E[log p(theta | alpha) - log q(theta | gamma)]
-        #pragma omp parallel for reduction(+:score2)
-        for (int d = 0; d < n_docs; d++) {
-            Eigen::VectorXd gamma = doc_topic_distr.row(d).transpose();
-            double sum_gamma = gamma.sum();
-            double psi_sum = psi(sum_gamma);
-            double doc_score = 0.0;
-            for (int k = 0; k < n_topics; k++) {
-                double gamma_val = gamma[k];
-                doc_score += (doc_topic_prior_ - gamma_val) * (psi(gamma_val) - psi_sum);
-                doc_score += std::lgamma(gamma_val) - std::lgamma(doc_topic_prior_);
-            }
-            doc_score += std::lgamma(doc_topic_prior_ * n_topics) - std::lgamma(sum_gamma);
-            score2 += doc_score;
-        }
+                return local_sum;
+            },
+            std::plus<>()
+        );
+        // optional scaling for subsampling
         if (sub_sampling) {
-            double doc_ratio = static_cast<double>(total_doc_count_) / n_docs;
-            score1 *= doc_ratio;
-            score2 *= doc_ratio;
+            double ratio = static_cast<double>(total_doc_count_) / n_docs;
+            score1 *= ratio;
+            score2 *= ratio;
         }
 
-        // 3. Topic-word prior term: E[log p(beta | eta) - log q(beta | lambda)]
-        #pragma omp parallel for reduction(+:score3)
-        for (int k = 0; k < n_topics; k++) {
-            double row_sum = components_.row(k).sum();
-            double psi_row_sum = psi(row_sum);
-            double topic_score = 0.0;
-            for (int j = 0; j < n_features; j++) {
-                double lambda_val = components_(k, j);
-                topic_score += (topic_word_prior_ - lambda_val) * (psi(lambda_val) - psi_row_sum);
-                topic_score += std::lgamma(lambda_val) - std::lgamma(topic_word_prior_);
-            }
-            topic_score += std::lgamma(topic_word_prior_ * n_features) - std::lgamma(row_sum);
-            score3 += topic_score;
-        }
+        // 3) Topic–word prior term
+        double score3 = tbb::parallel_reduce(
+            tbb::blocked_range<int>(0, n_topics),
+            0.0,
+            [&](const tbb::blocked_range<int>& range, double local_sum) {
+                for (int k = range.begin(); k != range.end(); ++k) {
+                    double row_sum    = components_.row(k).sum();
+                    double psi_row    = psi(row_sum);
+                    double topic_score = 0.0;
 
-        return {score1, score2, score3};
+                    for (int j = 0; j < n_features; ++j) {
+                        double lkj = components_(k,j);
+                        topic_score += (topic_word_prior_ - lkj)
+                                     * (psi(lkj) - psi_row);
+                        topic_score += std::lgamma(lkj)
+                                     - std::lgamma(topic_word_prior_);
+                    }
+                    topic_score += std::lgamma(topic_word_prior_*n_features)
+                                 - std::lgamma(row_sum);
+
+                    local_sum += topic_score;
+                }
+                return local_sum;
+            },
+            std::plus<>()
+        );
+
+        return { score1, score2, score3 };
     }
 
     // Compute the score (variational bound) for the given documents.
@@ -394,6 +434,7 @@ private:
     int update_count_;
     int32_t verbose_;
     std::mt19937 random_engine_;
+    std::unique_ptr<tbb::global_control> tbb_ctrl_;
 
     // Update a single document's topic distribution.
     // doc: sparse representation of the document.
@@ -497,11 +538,7 @@ private:
     }
 
     void init() {
-        if (nThreads_ > 0) {
-            omp_set_num_threads(nThreads_);
-        } else {
-            nThreads_ = omp_get_max_threads();
-        }
+        set_nthreads(nThreads_);
         if (mean_change_tol_ < 0) {
             mean_change_tol_ = 0.001 / n_topics_;
         }

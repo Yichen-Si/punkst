@@ -19,6 +19,7 @@ PIXHEX       := {PIXHEX}
 NMOVE        := {NMOVE}
 RES          := {RES}
 SCALE        := {SCALE}
+BOUNDS       := --xmin {XMIN} --xmax {XMAX} --ymin {YMIN} --ymax {YMAX}
 
 PUNKST       := $(GITPATH)/bin/punkst
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
@@ -140,8 +141,7 @@ $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pixel.png: \
 	  --in-tsv $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
 	  --in-color $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv \
 	  --out $$@ \
-	  --xmin $(XMIN) --xmax $(XMAX) --ymin $(YMIN) --ymax $(YMAX) \
-	  --scale $(SCALE)
+	  $(BOUNDS) --scale $(SCALE)
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\

@@ -1,4 +1,27 @@
 #include "utils.h"
+
+// void hprintf(htsFile* fp, const char * msg, ...) {
+//     va_list ap;
+//     va_start(ap, msg);
+
+//     // Use RAII to manage kstring_t memory.
+//     KStringRAII tmp;
+//     kvsprintf(&tmp.ks, msg, ap);
+//     va_end(ap);
+
+//     int ret;
+//     if (auto comp = fp->format.compression; comp != no_compression)
+//         ret = bgzf_write(fp->fp.bgzf, tmp.ks.s, tmp.ks.l);
+//     else
+//         ret = hwrite(fp->fp.hfile, tmp.ks.s, tmp.ks.l);
+
+//     if (ret < 0) {
+//         error("[E:%s:%d %s] [E:%s:%d %s] hprintf failed. Aborting..",
+//               __FILE__, __LINE__, __FUNCTION__,
+//               __FILE__, __LINE__, __FUNCTION__);
+//     }
+// }
+
 // String manipulation functions
 
 // Splits a line into a vector - PERL style
@@ -88,28 +111,6 @@ std::string join(const std::vector<std::string>& tokens, const std::string& deli
     }
 
     return result.str();
-}
-
-void hprintf(htsFile* fp, const char * msg, ...) {
-    va_list ap;
-    va_start(ap, msg);
-
-    // Use RAII to manage kstring_t memory.
-    KStringRAII tmp;
-    kvsprintf(&tmp.ks, msg, ap);
-    va_end(ap);
-
-    int ret;
-    if (auto comp = fp->format.compression; comp != no_compression)
-        ret = bgzf_write(fp->fp.bgzf, tmp.ks.s, tmp.ks.l);
-    else
-        ret = hwrite(fp->fp.hfile, tmp.ks.s, tmp.ks.l);
-
-    if (ret < 0) {
-        error("[E:%s:%d %s] [E:%s:%d %s] hprintf failed. Aborting..",
-              __FILE__, __LINE__, __FUNCTION__,
-              __FILE__, __LINE__, __FUNCTION__);
-    }
 }
 
 // String to number conversion shortcuts

@@ -14,11 +14,20 @@
 #include <locale>
 #include <stdexcept>
 #include <opencv2/opencv.hpp>
-extern "C" {
-    #include "htslib/hts.h"
-    #include "htslib/bgzf.h"
-    #include "htslib/hfile.h"
-}
+// extern "C" {
+//     #include "htslib/hts.h"
+//     #include "htslib/bgzf.h"
+//     #include "htslib/hfile.h"
+// }
+
+// // RAII wrapper for kstring_t: it ensures that the allocated buffer is freed automatically.
+// struct KStringRAII {
+//     kstring_t ks;
+//     KStringRAII() : ks{0, 0, nullptr} {}
+//     ~KStringRAII() { free(ks.s); }
+// };
+
+// void hprintf(htsFile* fp, const char * msg, ...);
 
 // String manipulation functions
 void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str, uint32_t limit=UINT_MAX, bool clear=true, bool collapse=true, bool strip=false);
@@ -27,15 +36,6 @@ std::string trim(const std::string& str);
 std::string to_lower(const std::string& str);
 std::string to_upper(const std::string& str);
 std::string join(const std::vector<std::string>& tokens, const std::string& delim);
-
-// RAII wrapper for kstring_t: it ensures that the allocated buffer is freed automatically.
-struct KStringRAII {
-    kstring_t ks;
-    KStringRAII() : ks{0, 0, nullptr} {}
-    ~KStringRAII() { free(ks.s); }
-};
-
-void hprintf(htsFile* fp, const char * msg, ...);
 
 // String to number conversion functions
 template<typename T>

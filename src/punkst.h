@@ -14,9 +14,9 @@
 
 #include "commands.hpp"
 #include "error.hpp"
-extern "C" {
-    #include "htslib/kseq.h"
-    #include "htslib/kstring.h"
-    #include "htslib/khash.h"
-    #include "htslib/hts.h"
-}
+// extern "C" {
+//     #include "htslib/kseq.h"
+//     #include "htslib/kstring.h"
+//     #include "htslib/khash.h"
+//     #include "htslib/hts.h"
+// }
