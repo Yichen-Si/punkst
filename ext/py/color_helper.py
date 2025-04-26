@@ -204,7 +204,9 @@ def choose_color(_args):
     # Compute spatial similarity
     Sig = coo_array((np.ones(len(r_indx)), (r_indx, c_indx)), shape=(N, N)).tocsr()
     W = np.array(df.loc[:, factor_header])
-    mtx = W.T @ Sig @ W
+    mtx = W.T @ Sig @ W + 1e-6
+    # set diagonal to 0
+    np.fill_diagonal(mtx, 0)
     # row normalize
     mtx = mtx / np.sqrt(np.sum(mtx, axis=1, keepdims=True))
     # take the element-wise max of mtx and mtx.T

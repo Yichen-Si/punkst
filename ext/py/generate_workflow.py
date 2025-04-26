@@ -57,18 +57,15 @@ def render_makefile(template_path, out_path, wf):
     print(f"Generated Makefile: {out_path}")
 
 
-def write_sbatch_script(job, makefile_out, sbatch_out, pyenv=None):
+def write_sbatch_script(job, makefile_out, sbatch_out):
     lines = ['#!/bin/bash']
     # SBATCH headers
     for key, val in job.items():
         if key != "extra_lines":
             lines.append(f"#SBATCH --{key}={val}")
-        else:
-            lines.append(val)
     lines.append("")
-    if pyenv:
-        lines.append(f"# Activate Python environment: {pyenv}")
-        lines.append(f"source {pyenv}/bin/activate")
+    if "extra_lines" in job:
+        lines.append(job["extra_lines"])
     lines.append("\nset -euo pipefail")
     lines.append("")
     lines.append(f"# Run the generated Makefile")
@@ -94,15 +91,14 @@ def main():
     cfg = json.load(open(args.config))
     job = cfg.get('job', {})
     wf  = cfg.get('workflow', {})
-    pyenv = cfg.get('pyenv', None)
     # Render Makefile
     render_makefile(args.template, args.makefile, wf)
     # Emit sbatch wrapper
-    if (args.output):
-        write_sbatch_script(job, args.makefile, args.output, pyenv)
+    if (args.output and len(job) > 0):
+        write_sbatch_script(job, args.makefile, args.output)
     # check temporary directory
     tmpdir= wf.get("tmpdir")
-    if os.path.exists(tmpdir):
+    if tmpdir and os.path.exists(tmpdir):
         print(f"Please removed temporary directory or all its content before running the workflow: {tmpdir}")
 
 if __name__ == '__main__':

@@ -57,13 +57,13 @@ set(SOURCE_FILES
     src/punkst.cpp
     src/utils.h
     src/utils.cpp
-    src/layout.h
-    src/scribble.h
+    # src/layout.h
+    # src/scribble.h
     src/seqmatch.h
     src/seqmatch.hpp
     src/hexgrid.h
     src/threads.hpp
-    src/mbtiles.h
+    # src/mbtiles.h
     src/tilereader.hpp
     src/tiles2bins.hpp
     src/tiles2bins.cpp
@@ -72,8 +72,6 @@ set(SOURCE_FILES
     src/lda.hpp
     src/numerical_utils.hpp
     src/numerical_utils.cpp
-    # src/pointcloud.pb.h
-    # src/pointcloud.pb.cc
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
@@ -88,10 +86,10 @@ set(SOURCE_FILES
     src/markerselection.hpp
     script/coloc2markers.cpp
     script/convert_dge.cpp
-    script/scribble_parse.cpp
-    script/draw_tsv_by_col.cpp
-    script/nuclei_mask.cpp
-    script/nuclei_center.cpp
+    # script/scribble_parse.cpp
+    # script/draw_tsv_by_col.cpp
+    # script/nuclei_mask.cpp
+    # script/nuclei_center.cpp
     )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

@@ -4,10 +4,10 @@ int32_t test(int32_t argc, char** argv);
 int32_t cmdPts2TilesTsv(int32_t argc, char** argv);
 int32_t cmdPts2TilesBinary(int32_t argc, char** argv);
 int32_t cmdTiles2HexTxt(int32_t argc, char** argv);
-int32_t cmdFASTQscribble(int32_t argc, char** argv);
-int32_t cmdTsvDrawByColumn(int32_t argc, char** argv);
-int32_t cmdImgNucleiMask(int32_t argc, char** argv);
-int32_t cmdImgNucleiCenter(int32_t argc, char** argv);
+// int32_t cmdFASTQscribble(int32_t argc, char** argv);
+// int32_t cmdTsvDrawByColumn(int32_t argc, char** argv);
+// int32_t cmdImgNucleiMask(int32_t argc, char** argv);
+// int32_t cmdImgNucleiCenter(int32_t argc, char** argv);
 int32_t cmdLDA4Hex(int argc, char** argv);
 int32_t cmdPixelDecode(int32_t argc, char** argv);
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv);
@@ -27,11 +27,11 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("draw-pixel-factors", "Draw pixel factors", "Draw pixel level factors", cmdDrawPixelFactors)
         .add_command("cooccurrence", "Compute feature co-occurrence", "Compute feature co-occurrence within a given radius", cmdTiles2FeatureCooccurrence)
         .add_command("coloc2markers", "Select markers from co-occurrence matrix", "Select markers from co-occurrence matrix", cmdQ2Markers)
-        .add_command("convert-dge", "Convert DGE files to a TSV", "Convert DGE files to a sginel TSV (to prepare Visium HD input)", cmdConvertDGE)
-        .add_command("scribble-parse", "Parse SCRIBBLE reads", "Parse SCRIBBLE reads", cmdFASTQscribble)
-        .add_command("draw-by-column", "Draw image from TSV", "Given a TSV file and column RGB, draw a PNG file", cmdTsvDrawByColumn)
-        .add_command("nuclei-mask", "Generate nuclei mask", "Generate nuclei mask from image data", cmdImgNucleiMask)
-        .add_command("nuclei-center", "Annotate nuclei centers", "Find nuclei centers and annotate transcripts", cmdImgNucleiCenter);
+        .add_command("convert-dge", "Convert DGE files to a TSV", "Convert DGE files to a sginel TSV (to prepare Visium HD input)", cmdConvertDGE);
+        // .add_command("scribble-parse", "Parse SCRIBBLE reads", "Parse SCRIBBLE reads", cmdFASTQscribble)
+        // .add_command("draw-by-column", "Draw image from TSV", "Given a TSV file and column RGB, draw a PNG file", cmdTsvDrawByColumn)
+        // .add_command("nuclei-mask", "Generate nuclei mask", "Generate nuclei mask from image data", cmdImgNucleiMask)
+        // .add_command("nuclei-center", "Annotate nuclei centers", "Find nuclei centers and annotate transcripts", cmdImgNucleiCenter);
 
     if (argc < 2) {
         std::cerr << "Licensed under the Apache License v2.0 http://www.apache.org/licenses/\n\n";

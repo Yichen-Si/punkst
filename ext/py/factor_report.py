@@ -45,8 +45,6 @@ def factor_report(_args):
 
     output_pref = args.output_pref
 
-    K = color_table.shape[0]
-
     factor_header = list(post.columns[1:])
     for u in factor_header:
         post[u] = post[u].astype(float)

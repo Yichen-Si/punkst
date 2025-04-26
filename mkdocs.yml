@@ -40,8 +40,8 @@ theme:
 
 nav:
   - Home: index.md
-  - Quickstart:
-    - Basic: basic.md
+  - Quickstart: basic.md
+  - Input: input/index.md
   - Modules:
     - Overview: modules/index.md
     - pts2tiles: modules/pts2tiles.md

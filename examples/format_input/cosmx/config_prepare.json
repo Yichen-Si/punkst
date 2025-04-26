@@ -1,0 +1,9 @@
+{
+    "workflow": {
+      "raw_tx" : "/path/to/raw/tx_file.csv",
+      "raw_meta": "/path/to/raw/metadata_file.csv",
+      "raw_mtx": "/path/to/raw/exprMat_file.csv",
+      "microns_per_pixel": 0.12,
+      "datadir": "/path/to/output"
+    }
+  }

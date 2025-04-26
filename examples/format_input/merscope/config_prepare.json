@@ -1,0 +1,7 @@
+{
+    "workflow": {
+      "rawdir" : "/path/to/raw/data",
+      "compressed" : 1,
+      "datadir": "/path/to/output"
+    }
+  }

@@ -1,0 +1,36 @@
+{
+    "workflow": {
+      "threads": 4,
+      "seed": 1,
+      "gitpath": "/path/to/punkst",
+      "datadir": "/path/to/output",
+      "tmpdir": "/path/to/store/temporary/files",
+      "transcripts": "/path/to/input/transcripts.tsv",
+      "features": "/path/to/input/features.txt",
+      "icol_x": 0,
+      "icol_y": 1,
+      "icol_feature": 2,
+      "icol_count": 3,
+      "skip": 1,
+      "tilesize": 500,
+      "hexgrids": [12],
+      "topics": [12, 24],
+      "pixhex": 12,
+      "nmove": 3,
+      "res": 0.5,
+      "xmin": 6690,
+      "xmax": 7365,
+      "ymin": 6772,
+      "ymax": 7447,
+      "scale": 1
+    },
+    "job": {
+      "time": "12:00:00",
+      "cpus-per-task": 4,
+      "mem": "4G",
+      "job-name": "test",
+      "output": "logs/%x.%j.out",
+      "error":  "logs/%x.%j.err",
+      "extra_lines" : "# other customized commands, e.g. start python venv, load gcc module in your system etc. \nsource /path/to/venv/bin/activate"
+    }
+  }
