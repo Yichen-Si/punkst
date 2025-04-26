@@ -93,13 +93,18 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         error("Image dimensions are zero; check your bounds/scale");
 
     // accumulators
-    std::vector<std::vector<cv::Vec3f>> sumImg(height, std::vector<cv::Vec3f>(width));
-    std::vector<std::vector<uint8_t>>   countImg(height, std::vector<uint8_t>(width,0));
+    cv::Mat3f sumImg(height, width, cv::Vec3f(0,0,0));
+    cv::Mat1b countImg(height, width, uchar(0));
 
     // read & accumulate
     PixelFactorResult rec;
-    int32_t ret, nline=0, nskip=0, nkept=0;
-    while ((ret = reader.next(rec)) >= 0) {
+    int32_t nline=0, nskip=0, nkept=0;
+    int32_t ret = 1;
+    while (ret >= 0) {
+        ret = reader.next(rec);
+        if (ret < 0) {
+            break;
+        }
         if (ret==0) {
             if (nkept>10000) {
                 warning("Stopped at invalid line %d", nline);
@@ -113,7 +118,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         int xpix = int((rec.x - xmin)/scale);
         int ypix = int((rec.y - ymin)/scale);
         if (xpix<0||xpix>=width||ypix<0||ypix>=height) continue;
-        if (countImg[ypix][xpix]>=255) { nskip++; continue; }
+        if (countImg(ypix, xpix)>=255) { nskip++; continue; }
 
         float R=0,G=0,B=0;
         bool valid=false;
@@ -138,8 +143,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         }
         if (!valid) continue;
 
-        sumImg[ypix][xpix] += cv::Vec3f(R,G,B);
-        countImg[ypix][xpix] += 1;
+        sumImg(ypix, xpix) += cv::Vec3f(R,G,B);
+        countImg(ypix, xpix) += 1;
+
         ++nkept;
     }
     notice("Finished reading input; building image");
@@ -148,8 +154,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     cv::Mat out(height, width, CV_8UC3, cv::Scalar(0,0,0));
     for (int y=0;y<height;++y) {
         for (int x=0;x<width;++x) {
-            if (countImg[y][x]) {
-                cv::Vec3f avg = sumImg[y][x] / countImg[y][x];
+            if (countImg(y,x)) {
+                cv::Vec3f avg = sumImg(y,x) / countImg(y,x);
                 out.at<cv::Vec3b>(y,x) = cv::Vec3b(
                     cv::saturate_cast<uchar>(avg[2]),  // B
                     cv::saturate_cast<uchar>(avg[1]),  // G

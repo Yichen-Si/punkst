@@ -40,7 +40,7 @@ all: $(REPORTS)
 # ─── Step 1: bag pixels → tiles.tsv + tiles.index ─────────────────────
 $(TILETSV) $(TILEINDEX): $(TRANSCRIPTS)
 	@echo "[1/6] pts2tiles → $@"
-	/usr/bin/time -v $(PUNKST) pts2tiles \
+	 $(PUNKST) pts2tiles \
 	  --in-tsv $(TRANSCRIPTS) \
 	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) --skip $(SKIP) \
 	  --tile-size $(TILESIZE) \
@@ -55,7 +55,7 @@ $(DATADIR)/hex_$(1)_randomized.txt $(DATADIR)/hex_$(1).json: \
     $(TILEINDEX) \
     $(FEATURES)
 	@echo "[2/6] tiles2hex (hex=$(1)) → $$@"
-	/usr/bin/time -v $(PUNKST) tiles2hex \
+	 $(PUNKST) tiles2hex \
 	  --in-tsv $(TILETSV) \
 	  --in-index $(TILEINDEX) \
 	  --feature-dict $(FEATURES) \
@@ -77,7 +77,7 @@ $(DATADIR)/k$(2)_hex_$(1).model.tsv $(DATADIR)/k$(2)_hex_$(1).results.tsv: \
     $(DATADIR)/hex_$(1)_randomized.txt \
     $(DATADIR)/hex_$(1).json
 	@echo "[3/6] lda4hex (K=$(2), hex=$(1)) → $$@"
-	/usr/bin/time -v $(PUNKST) lda4hex \
+	 $(PUNKST) lda4hex \
 	  --in-data $(DATADIR)/hex_$(1)_randomized.txt \
 	  --in-meta $(DATADIR)/hex_$(1).json \
 	  --n-topics $(2) \
@@ -113,7 +113,7 @@ $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pseudobulk.tsv: \
     $(TILETSV) \
     $(TILEINDEX)
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$*.tsv"
-	/usr/bin/time -v $(PUNKST) pixel-decode \
+	 $(PUNKST) pixel-decode \
 	  --model $(DATADIR)/k$(2)_hex_$(1).model.tsv \
 	  --in-tsv $(TILETSV) \
 	  --in-index $(TILEINDEX) \
@@ -137,7 +137,7 @@ $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pixel.png: \
     $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
     $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv
 	@echo "[5/6] draw-pixel-factors (K=$(2), hex=$(1)) → $$@"
-	/usr/bin/time -v $(PUNKST) draw-pixel-factors \
+	 $(PUNKST) draw-pixel-factors \
 	  --in-tsv $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
 	  --in-color $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv \
 	  --out $$@ \

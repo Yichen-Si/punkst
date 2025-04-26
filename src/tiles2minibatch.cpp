@@ -150,7 +150,7 @@ int32_t Tiles2Minibatch<T>::initAnchors(TileData<T>& tileData, std::vector<cv::P
     if (documents.empty()) {
         return 0;
     }
-    minibatch.gamma = lda.transform(documents).cast<float>();
+    minibatch.gamma = lda.transform(documents).template cast<float>();
     // TODO: need to test if scaling/normalizing gamma is better
     // scale each row so that the mean is 1
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
@@ -314,7 +314,7 @@ int32_t Tiles2Minibatch<T>::outputOriginalDataWithPixelResult(const TileData<T>&
         tileData.xmin, tileData.xmax,
         tileData.ymin, tileData.ymax};
     indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
-    outputSize == endPos;
+    outputSize = endPos;
     return npts;
 }
 
@@ -514,7 +514,7 @@ int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector
     double buff = gridDist / 4.;
     hex_grid_cart<float>(lattice, tileData.xmin + buff, tileData.xmax - buff, tileData.ymin + buff, tileData.ymax - buff, gridDist);
     // 2 Remove lattice points too close to any fixed anchors
-    KDTreeVectorOfVectorsAdaptor<vec2f_t, float> reftree(2, *fixedAnchors, {10});
+    KDTreeVectorOfVectorsAdaptor<vec2f_t, float> reftree(2, *fixedAnchors, 10);
     float l2radius = gridDist * gridDist / 4.;
     int32_t nRemoved = 0;
     for (const auto& pt : lattice) {
@@ -601,7 +601,7 @@ int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector
         }
         docs.push_back(std::move(doc));
     }
-    minibatch.gamma = lda.transform(docs).cast<float>();
+    minibatch.gamma = lda.transform(docs).template cast<float>();
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
         float sum = minibatch.gamma.row(i).sum();
         if (sum > 0) {

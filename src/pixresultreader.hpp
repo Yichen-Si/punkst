@@ -86,7 +86,7 @@ private:
     std::vector<Block> blocks_all, blocks;
     std::ifstream dataStream;
     size_t idxBlock;
-    bool bounded, done = false;
+    bool bounded = false, done = false;
     double qxmin, qxmax, qymin, qymax;
 
     bool parseLine(const std::string& line, PixelFactorResult& R) const {

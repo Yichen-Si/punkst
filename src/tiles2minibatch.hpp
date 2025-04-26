@@ -66,6 +66,7 @@ struct BoundaryBuffer {
         if ((key & 0x1) == 0 && nTiles == 6) { // Horizontal buffer
             return true;
         }
+        return false;
     }
     template<typename T>
     void writeToFile(const std::vector<RecordT<T>>& records) {
