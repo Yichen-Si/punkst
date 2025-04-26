@@ -40,6 +40,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Install: install.md
   - Quickstart: basic.md
   - Input: input/index.md
   - Modules:

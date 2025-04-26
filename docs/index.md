@@ -1,7 +1,5 @@
 # punkst
 
-punkst collects tools for analyzing high resolution spatial transcriptomics data.
-
 ## Pixel level factor analysis
 
 The punkst toolkit provides a pipeline for efficient pixel level factor analysis, which achieves the same result as FICTURE (2024) with improved efficiency.

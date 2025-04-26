@@ -1,15 +1,28 @@
 cmake_minimum_required(VERSION 3.15...3.23)
 project(punkst)
 
+# TBB
+option(FETCH_TBB
+  "If ON, download & build oneTBB via FetchContent when no system TBB is found"
+  OFF
+)
 find_package(TBB QUIET)
 if (NOT TBB_FOUND)
-    include(FetchContent)
-    FetchContent_Declare(
+  if (NOT FETCH_TBB)
+    message(FATAL_ERROR
+      "TBB was not found on your system.\n"
+      "Either install TBB (e.g. libtbb-dev / brew install tbb),\n"
+      "or re-run CMake with -DFETCH_TBB=ON to automatically download and build oneTBB."
+    )
+  endif()
+  # Only reached when FETCH_TBB=ON
+  include(FetchContent)
+  FetchContent_Declare(
     oneTBB
     GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
     GIT_TAG        v2022.1.0
-    )
-    FetchContent_MakeAvailable(oneTBB)
+  )
+  FetchContent_MakeAvailable(oneTBB)
 endif()
 
 set(APP_EXE punkst)

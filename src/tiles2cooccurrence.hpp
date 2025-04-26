@@ -160,12 +160,12 @@ private:
             warning("Feature names are not found");
             // feature name, total uniq pixels, total counts, used pixels, counted neighboring pixels
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%llu\t%llu\t%llu\t%llu\n", kv.first,
+                fprintf(ofs, "%u\t%lu\t%lu\t%lu\t%lu\n", kv.first,
                     kv.second[0], kv.second[1], kv.second[2], kv.second[3]);
             }
         } else {
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%s\t%llu\t%llu\t%llu\t%llu\n", kv.first,
+                fprintf(ofs, "%u\t%s\t%lu\t%lu\t%lu\t%lu\n", kv.first,
                     featureList[kv.first].c_str(), kv.second[0], kv.second[1], kv.second[2], kv.second[3]);
             }
         }
@@ -208,7 +208,7 @@ private:
                         fprintf(ofs, "%u\t%u\t%.2f\n", f1, f2, w);
                     } else {
                         int64_t c = int64_t(kv2.second);
-                        fprintf(ofs, "%u\t%u\t%lld\n", f1, f2, c);
+                        fprintf(ofs, "%u\t%u\t%ld\n", f1, f2, c);
                     }
                 }
             }
