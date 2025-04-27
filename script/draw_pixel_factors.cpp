@@ -95,16 +95,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     // accumulators
     cv::Mat3f sumImg(height, width, cv::Vec3f(0,0,0));
     cv::Mat1b countImg(height, width, uchar(0));
-
     // read & accumulate
     PixelFactorResult rec;
-    int32_t nline=0, nskip=0, nkept=0;
-    int32_t ret = 1;
-    while (ret >= 0) {
-        ret = reader.next(rec);
-        if (ret < 0) {
-            break;
-        }
+    int32_t ret, nline=0, nskip=0, nkept=0;
+    while ((ret = reader.next(rec)) >= 0) {
         if (ret==0) {
             if (nkept>10000) {
                 warning("Stopped at invalid line %d", nline);
