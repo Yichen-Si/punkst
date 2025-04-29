@@ -2,7 +2,8 @@
 
 ## Pixel level factor analysis
 
-The punkst toolkit provides a pipeline for efficient pixel level factor analysis, which achieves the same result as FICTURE (2024) with improved efficiency.
+The punkst toolkit provides a pipeline for efficient pixel level factor analysis, which achieves the same result as[ FICTURE (2024)](https://doi.org/10.1038/s41592-024-02415-2) with improved efficiency. ([Previous python package](https://github.com/seqscope/ficture) is still functioning.)
+
 
 Check [the quick start page](basic.md) for help on generating the full workflow using Makefile or running each command step by step.
 
