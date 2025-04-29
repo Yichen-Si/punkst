@@ -1,12 +1,8 @@
 # punkst
 
-punkst is an ongoing effort to provide scalable tools for analyzing high resolution spatial transcriptomics data. Currently it mainly contains a new implementation of FICTURE.
+punkst is an ongoing effort to provide scalable tools for analyzing high resolution spatial transcriptomics data. Currently it mainly contains a new implementation of [FICTURE](https://doi.org/10.1038/s41592-024-02415-2).
 
 Documentation: [https://Yichen-Si.github.io/punkst](https://Yichen-Si.github.io/punkst)
-
-[FICTURE paper](https://doi.org/10.1038/s41592-024-02415-2)
-
-[Python implementation](https://github.com/seqscope/ficture)
 
 ## Installation
 See more details in [install page](https://yichen-si.github.io/punkst/install/).
