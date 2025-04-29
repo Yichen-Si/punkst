@@ -16,9 +16,9 @@ TAB := $(shell printf '\t')
 
 # ─── Step 0. Prepare‐data ─────────────────────────────────────────────────
 .PHONY: all
-all: $(CELLCOORD) $(FEATURES) $(TRANSCRIPTS) $(COORDRANGE)
+all: $(COORDRANGE) $(FEATURES) $(TRANSCRIPTS)
 
-$(CELLCOORD) $(COORDRANGE):
+$(COORDRANGE):
 	cut -d',' -f 7-8 $(RAW_META) | tail -n +2 | awk -F',' -v OFS="$(TAB)" \
 		-v mu=$(MICRONS_PER_PIXEL) \
 	    -v out="$(CELLCOORD)" \

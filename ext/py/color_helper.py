@@ -12,6 +12,64 @@ from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
 matplotlib.use('Agg')
 
+def _rgb_to_lab(rgb):
+    """rgb: (M,3) in [0,1] → Lab: (M,3)"""
+    # 1) linearize
+    def to_lin(c):
+        return np.where(c <= 0.04045,
+                        c / 12.92,
+                        ((c + 0.055) / 1.055) ** 2.4)
+    rgb_lin = to_lin(rgb)
+
+    # 2) lin RGB → XYZ (D65)
+    M = np.array([[0.4124564, 0.3575761, 0.1804375],
+                  [0.2126729, 0.7151522, 0.0721750],
+                  [0.0193339, 0.1191920, 0.9503041]])
+    XYZ = rgb_lin @ M.T
+
+    # 3) normalize by reference white
+    white = np.array([0.95047, 1.00000, 1.08883])
+    xyz = XYZ / white
+
+    # 4) f(t) for Lab
+    delta = 6/29
+    def f(t):
+        return np.where(t > delta**3,
+                        np.cbrt(t),
+                        t/(3*delta**2) + 4/29)
+    f_xyz = f(xyz)
+
+    L = 116*f_xyz[:,1] - 16
+    a = 500*(f_xyz[:,0] - f_xyz[:,1])
+    b = 200*(f_xyz[:,1] - f_xyz[:,2])
+    return np.stack([L, a, b], axis=1)
+
+def _tsp_cycle(D, start=None, two_opt=True, seed=None):
+    N = D.shape[0]
+    if start is None:
+        rng = np.random.RandomState(seed)
+        start = int(rng.randint(N))
+    cycle = [start]
+    unvisited = set(range(N)) - {start}
+    curr = start
+    while unvisited:
+        nxt = min(unvisited, key=lambda j: D[curr, j])
+        cycle.append(nxt)
+        unvisited.remove(nxt)
+        curr = nxt
+    if two_opt:
+        improved = True
+        while improved:
+            improved = False
+            for i in range(1, N - 2):
+                for j in range(i + 1, N):
+                    a, b = cycle[i-1], cycle[i]
+                    c, d = cycle[j-1], cycle[j % N]
+                    if D[a,b] + D[c,d] > D[a,c] + D[b,d]:
+                        cycle[i:j] = reversed(cycle[i:j])
+                        improved = True
+    return cycle
+
 def assign_color_tsp(
     mtx: np.ndarray,
     cmap_name: str = "nipy_spectral",
@@ -37,28 +95,7 @@ def assign_color_tsp(
 
     # --- greedy TSP nearest-neighbour (minimize D) ---
     start = int(weight.argmax())
-    cycle = [start]
-    unvisited = set(range(K)) - {start}
-    current = start
-    while unvisited:
-        nxt = min(unvisited, key=lambda j: D[current, j])
-        cycle.append(nxt)
-        unvisited.remove(nxt)
-        current = nxt
-
-    # --- 2-opt improvement ---
-    if two_opt:
-        improved = True
-        while improved:
-            improved = False
-            for i in range(1, K - 2):
-                for j in range(i + 1, K):
-                    a, b = cycle[i - 1], cycle[i]
-                    c, d = cycle[j - 1], cycle[j % K]
-                    if D[a, b] + D[c, d] > D[a, c] + D[b, d]:
-                        cycle[i:j] = reversed(cycle[i:j])
-                        improved = True
-    print(cycle)
+    cycle = _tsp_cycle(D, start=start, two_opt=two_opt)
     # --- even‐spaced angular positions on [0,1) ---
     c_pos = np.empty(K, float)
     for rank, idx in enumerate(cycle):
@@ -90,6 +127,57 @@ def assign_color_tsp(
 
     return rgb
 
+def assign_color_from_table(
+    mtx: np.ndarray,
+    color_df: pd.DataFrame,
+    weight: np.ndarray = None,
+    seed: int = None,
+    two_opt: bool = True
+) -> np.ndarray:
+    """
+    Pick K colors from a pool of M ≥ K in color_df, so that
+    items with high similarity in `mtx` get maximally distinct colors,
+    using Lab-space ΔE₇₆ for color-color distance.
+    Returns rgb[K,3] floats in [0,1].
+    """
+    K = mtx.shape[0]
+
+    # --- parse candidate colors ---
+    if {"R","G","B"}.issubset(color_df.columns):
+        rgb_cand = color_df[["R","G","B"]].values.astype(float)
+        if rgb_cand.max() > 1.0:
+            rgb_cand /= 255.0
+    elif "Color_hex" in color_df.columns:
+        rgb_cand = np.vstack(color_df["Color_hex"].map(mcolors.to_rgb).values)
+    else:
+        raise ValueError("color table needs R,G,B or Color_hex")
+
+    M = rgb_cand.shape[0]
+    if M < K:
+        raise ValueError(f"Need at least {K} colors, got {M}")
+    if M > K:
+        rgb_cand = rgb_cand[:K]
+
+    # --- compute Lab for candidates and ΔE₇₆ distance matrix ---
+    lab_cand = _rgb_to_lab(rgb_cand)
+    Dc = np.linalg.norm(lab_cand[:,None,:] - lab_cand[None,:,:], axis=2)
+    Dc /= Dc.max()
+
+    # --- cycle the colors and the items ---
+    color_cycle = _tsp_cycle(Dc, start = 0, two_opt=two_opt)
+
+    Di = mtx.astype(float).copy()
+    Di /= Di.max()
+    start_i = int(weight.argmax()) if (weight is not None) else None
+    item_cycle = _tsp_cycle(Di, start=start_i, two_opt=two_opt)
+
+    # --- assign evenly along the color‐cycle ---
+    rgb = np.empty((K,3), float)
+    for pos, item_idx in enumerate(item_cycle):
+        cidx = color_cycle[pos]
+        rgb[item_idx] = rgb_cand[cidx]
+
+    return rgb
 
 def plot_colortable(colors, title, sort_colors=True, ncols=4, dpi = 80,\
                     cell_width = 212, cell_height = 22,\
@@ -145,7 +233,8 @@ def choose_color(_args):
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=str, help='')
     parser.add_argument('--output', type=str, help='')
-    parser.add_argument('--cmap-name', type=str, default="nipy_spectral", help="Name of Matplotlib colormap to use (better close to a circular colormap)")
+    parser.add_argument('--cmap-name', type=str, help="Name of Matplotlib colormap to use (better close to a circular colormap)")
+    parser.add_argument('--color-table', type=str, help="TSV with R,G,B or Color_hex of candidate colors")
     parser.add_argument('--top-color', type=str, default="#fcd217", help="HEX color code for the top factor")
     parser.add_argument('--even-space', action='store_true', help="Evenly space the factors on the spectrum")
     parser.add_argument("--skip-columns", type=str, action="append", default=[], help="Columns that are neither coordiante nor factor in the input file")
@@ -169,10 +258,6 @@ def choose_color(_args):
             for line in f:
                 x = line.strip().split('\t')
                 factor_name[x[0]] = x[1]
-
-    cmap_name = args.cmap_name
-    if args.cmap_name not in plt.colormaps():
-        cmap_name = "nipy_spectral"
 
     df = pd.read_csv(args.input, sep='\t', header=0)
     df.rename(columns = {"X":"x","Y":"y"},inplace=True)
@@ -213,7 +298,28 @@ def choose_color(_args):
     mtx = np.maximum(mtx, mtx.T)
     # Large values in mtx indicate close proximity, to be mapped to distinct colors
 
-    cmtx = assign_color_tsp(mtx, cmap_name=cmap_name, weight=weight, two_opt=True, spectral_offset=0.05, anchor_color=args.top_color)
+    if not args.color_table and not args.color_table and K <= 48:
+        # use default colortable
+        # get path to the current script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        args.color_table = os.path.join(script_dir, "cmap.48.tsv")
+        print("Using default color table", args.color_table)
+
+    if args.color_table:
+        ct = pd.read_csv(args.color_table, sep='\t', header=0)
+        cmtx = assign_color_from_table (
+            mtx, ct,
+            weight=weight,
+            seed=seed,
+            two_opt=True
+        )
+    else:
+        cmap_name = args.cmap_name
+        if args.cmap_name not in plt.colormaps():
+            cmap_name = "nipy_spectral"
+        print("Using colormap", cmap_name)
+        cmtx = assign_color_tsp(mtx, cmap_name=cmap_name, weight=weight, two_opt=True, spectral_offset=0.05, anchor_color=args.top_color)
+
     # translate RGB to 0-255
     cmtx_int = (cmtx * 255).astype(int) # K x 3
     # translate each RGB color to hex code

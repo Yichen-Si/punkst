@@ -22,9 +22,9 @@ endif
 
 # ─── Step 0. Prepare‐data ─────────────────────────────────────────────────
 .PHONY: all
-all: $(CELLCOORD) $(FEATURES) $(TRANSCRIPTS) $(COORDRANGE)
+all: $(COORDRANGE) $(FEATURES) $(TRANSCRIPTS)
 
-$(CELLCOORD) $(COORDRANGE):
+$(COORDRANGE):
 	$(CAT_CMD) $(RAW_METADATA) | cut -d',' -f 4-9 | tail -n +2 | awk -F',' -v OFS="\t" -v out="$(CELLCOORD)" ' \
 	    NR==1 {{ \
 	        xmin = $$3; ymin = $$4; \
@@ -43,8 +43,6 @@ $(CELLCOORD) $(COORDRANGE):
 	        print "YMIN:=" ymin >> "$(COORDRANGE)"; \
 	        print "YMAX:=" ymax >> "$(COORDRANGE)"; \
 	    }}'
-
--include $(COORDRANGE)
 
 $(FEATURES):
 ifeq ($(COMPRESSED),1)

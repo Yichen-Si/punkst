@@ -34,11 +34,11 @@ REPORTS := \
     )\
   )
 
-.PHONY: all clean
+.PHONY: all clean clean_all
 all: $(REPORTS)
 
 # ─── Step 1: bag pixels → tiles.tsv + tiles.index ─────────────────────
-$(TILETSV) $(TILEINDEX): $(TRANSCRIPTS)
+$(TILETSV): $(TRANSCRIPTS)
 	@echo "[1/6] pts2tiles → $@"
 	 $(PUNKST) pts2tiles \
 	  --in-tsv $(TRANSCRIPTS) \
@@ -50,11 +50,10 @@ $(TILETSV) $(TILEINDEX): $(TRANSCRIPTS)
 
 # ─── Step 2: for each H in HEXGRIDS → hex_H_randomized.txt ────────────
 define HEX_RULE
-$(DATADIR)/hex_$(1)_randomized.txt $(DATADIR)/hex_$(1).json: \
+$(DATADIR)/hex_$(1)_randomized.txt: \
     $(TILETSV) \
-    $(TILEINDEX) \
     $(FEATURES)
-	@echo "[2/6] tiles2hex (hex=$(1)) → $$@"
+	@echo "[2/6] tiles2hex (hex=$(1)) → $(DATADIR)/hex_$(1)_randomized.txt"
 	 $(PUNKST) tiles2hex \
 	  --in-tsv $(TILETSV) \
 	  --in-index $(TILEINDEX) \
@@ -73,10 +72,9 @@ $(foreach H,$(HEXGRIDS),$(eval $(call HEX_RULE,$H)))
 
 # ─── Step 3: for each (K,H) → model.tsv + color.rgb.tsv ──────────────
 define LDA_MODEL_RULE
-$(DATADIR)/k$(2)_hex_$(1).model.tsv $(DATADIR)/k$(2)_hex_$(1).results.tsv: \
-    $(DATADIR)/hex_$(1)_randomized.txt \
-    $(DATADIR)/hex_$(1).json
-	@echo "[3/6] lda4hex (K=$(2), hex=$(1)) → $$@"
+$(DATADIR)/k$(2)_hex_$(1).model.stamp: \
+    $(DATADIR)/hex_$(1)_randomized.txt
+	@echo "[3/6] lda4hex (K=$(2), hex=$(1)) → $(DATADIR)/k$(2)_hex_$(1).model.tsv"
 	 $(PUNKST) lda4hex \
 	  --in-data $(DATADIR)/hex_$(1)_randomized.txt \
 	  --in-meta $(DATADIR)/hex_$(1).json \
@@ -84,6 +82,7 @@ $(DATADIR)/k$(2)_hex_$(1).model.tsv $(DATADIR)/k$(2)_hex_$(1).results.tsv: \
 	  --out-prefix $(DATADIR)/k$(2)_hex_$(1) \
 	  --transform --min-count-train 50 --minibatch-size 512 \
 	  --threads $(THREADS) --seed $(SEED) --n-epochs 1
+	touch $(DATADIR)/k$(2)_hex_$(1).model.stamp
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\
@@ -93,7 +92,7 @@ $(foreach H,$(HEXGRIDS),\
 
 define COLOR_RULE
 $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv: \
-    $(DATADIR)/k$(2)_hex_$(1).results.tsv
+    $(DATADIR)/k$(2)_hex_$(1).model.stamp
 	@echo "[3/6] color_helper (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/color_helper.py \
 	  --input $(DATADIR)/k$(2)_hex_$(1).results.tsv \
@@ -107,11 +106,9 @@ $(foreach H,$(HEXGRIDS),\
 
 # ─── Step 4: pixel-decode → .tsv + .pseudobulk.tsv ────────────────────
 define PIXEL_RULE
-$(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
-$(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pseudobulk.tsv: \
-    $(DATADIR)/k$(2)_hex_$(1).model.tsv \
-    $(TILETSV) \
-    $(TILEINDEX)
+$(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).decode.stamp: \
+    $(DATADIR)/k$(2)_hex_$(1).model.stamp \
+    $(TILETSV)
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$*.tsv"
 	 $(PUNKST) pixel-decode \
 	  --model $(DATADIR)/k$(2)_hex_$(1).model.tsv \
@@ -124,6 +121,7 @@ $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pseudobulk.tsv: \
 	  --min-init-count 20 --pixel-res $(RES) \
 	  --temp-dir $(TMPDIR) --threads $(THREADS) --seed $(SEED) \
 	  --output-original --output-coord-digits 2 --output-prob-digits 4
+	touch $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).decode.stamp
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\
@@ -134,7 +132,7 @@ $(foreach H,$(HEXGRIDS),\
 # ─── Step 5: draw-pixel-factors → png ───────────────────────────
 define DRAW_RULE
 $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pixel.png: \
-    $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
+    $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).decode.stamp \
     $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv
 	@echo "[5/6] draw-pixel-factors (K=$(2), hex=$(1)) → $$@"
 	 $(PUNKST) draw-pixel-factors \
@@ -150,15 +148,27 @@ $(foreach H,$(HEXGRIDS),\
 )
 
 # ─── Step 6: de_bulk + factor_report → final .report ───────────────
-define REPORT_RULE
-$(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).factor.info.html: \
-    $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pseudobulk.tsv \
-    $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv
-	@echo "[6/6] de_bulk+factor_report (K=$(2), hex=$(1)) → $$@"
+define DE_RULE
+$(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).de_bulk.tsv: \
+    $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).decode.stamp
+	@echo "[6/6] de_bulk (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/de_bulk.py \
 	  --input $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pseudobulk.tsv \
 	  --output $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).de_bulk.tsv \
 	  --feature_label Feature --thread $(THREADS)
+endef
+$(foreach H,$(HEXGRIDS),\
+  $(foreach K,$(TOPICS),\
+    $(eval $(call DE_RULE,$H,$K))\
+  )\
+)
+
+define REPORT_RULE
+$(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).factor.info.html: \
+    $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).decode.stamp \
+	$(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).de_bulk.tsv \
+    $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv
+	@echo "[6/6] factor_report (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/factor_report.py \
 	  --de $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).de_bulk.tsv \
 	  --pseudobulk $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pseudobulk.tsv \
@@ -172,9 +182,13 @@ $(foreach H,$(HEXGRIDS),\
   )\
 )
 
-# ─── Clean up all generated files ──────────────────────────────────
+# ─── Clean up parameter specific files ──────────────────────────────────
 clean:
 	rm -rf $(TMPDIR) \
-	       $(DATADIR)/transcripts.tiled.* \
-	       $(DATADIR)/hex_*_randomized.txt \
+	       $(DATADIR)/hex_* \
+	       $(DATADIR)/k*_hex_*
+clean_all:
+	rm -rf $(TMPDIR) \
+		   $(DATADIR)/transcripts.tiled.* \
+	       $(DATADIR)/hex_* \
 	       $(DATADIR)/k*_hex_*

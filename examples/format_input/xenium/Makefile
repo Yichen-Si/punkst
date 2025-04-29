@@ -14,7 +14,7 @@ TAB := $(shell printf '\t')
 
 # ─── Step 0. Prepare‐data ─────────────────────────────────────────────────
 .PHONY: all
-all: $(CELLCOORD) $(FEATURES) $(TRANSCRIPTS) $(COORDRANGE)
+all: $(FEATURES) $(TRANSCRIPTS) $(COORDRANGE)
 
 $(TRANSCRIPTS):
 	@echo "Extracting Xenium transcripts → $@"
@@ -32,7 +32,7 @@ $(FEATURES):
 	  > $@
 
 # ─── cell_coordinates.tsv + coord_range.txt ← sample all cells
-$(CELLCOORD) $(COORDRANGE):
+$(COORDRANGE):
 	zcat $(RAWDIR)/cells.csv.gz \
 	  | cut -d',' -f2-3 \
 	  | tail -n +2 \
@@ -55,5 +55,3 @@ $(CELLCOORD) $(COORDRANGE):
 	    printf "YMIN:=%.4f\n", ymin  >> range; \
 	    printf "YMAX:=%.4f\n", ymax  >> range; \
 	  }}'
-
--include $(COORDRANGE)
