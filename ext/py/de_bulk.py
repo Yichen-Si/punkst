@@ -1,180 +1,156 @@
-import sys, os, re, argparse
+### Simple differential expression tests
+
+import sys, io, os, gzip, copy, re, time, argparse
 import numpy as np
 import pandas as pd
 import scipy.stats
+from mpmath import mp
 from scipy.sparse import *
-from joblib import Parallel, delayed
+from joblib.parallel import Parallel, delayed
 
-def gen_even_slices(n, n_packs):
-    """Generate approximately even-sized slices of indices."""
-    start = 0
-    if n_packs < 1:
-        raise ValueError("gen_even_slices got n_packs=%s, must be >=1" % n_packs)
-    for pack_num in range(n_packs):
-        this_n = n // n_packs
-        if pack_num < n % n_packs:
-            this_n += 1
-        if this_n > 0:
-            end = start + this_n
-            yield np.arange(start, end)
-            start = end
+from ficture.utils import utilt
 
+## calculate the log10 of the chi2 upper tail probability
 def log10_chi2_sf(x, df=1):
-    return -np.log10(scipy.stats.chi2.sf(x, df))
-
-def process_chunk(gene_chunk, header, total_k, total_umi):
-    """Process a chunk of genes for all factors."""
-    results = []
-
-    for k, kname in enumerate(header):
-        if total_k[k] <= 0:
-            continue
-
-        k_counts = gene_chunk[kname].values
-        gene_tots = gene_chunk['gene_tot'].values
-        gene_names = gene_chunk.index.values
-
-        # Filter genes with counts > 0 for this factor
-        valid_idx = k_counts > 0
-        if not np.any(valid_idx):
-            continue
-
-        valid_k_counts = k_counts[valid_idx]
-        valid_gene_tots = gene_tots[valid_idx]
-        valid_names = gene_names[valid_idx]
-
-        # Calculate contingency table values for all genes at once
-        a = valid_k_counts  # cell 0,0
-        b = valid_gene_tots - a  # cell 0,1
-        c = total_k[k] - a  # cell 1,0
-        d = total_umi - total_k[k] - valid_gene_tots + a  # cell 1,1
-
-        # Calculate fold change
-        fold_changes = (a / total_k[k]) / (b / (total_umi - total_k[k]))
-
-        # Filter for fold change > 1
-        fc_valid = fold_changes >= 1
-        if not np.any(fc_valid):
-            continue
-
-        # Apply filters
-        a, b, c, d = a[fc_valid], b[fc_valid], c[fc_valid], d[fc_valid]
-        fold_changes = fold_changes[fc_valid]
-        names = valid_names[fc_valid]
-        gene_tots = valid_gene_tots[fc_valid]
-
-        # Calculate chi-square statistic and p-value for each gene
-        for i in range(len(names)):
-            # Add 1 to avoid zeros (Laplace smoothing)
-            tab = np.array([[a[i] + 1, b[i] + 1], [c[i] + 1, d[i] + 1]])
-            chi2, p, _, _ = scipy.stats.chi2_contingency(tab, correction=False)
-            results.append([names[i], kname, chi2, p, fold_changes[i], gene_tots[i]])
-
-    return results
+    mp.dps = 8
+    log_gamma_a = mp.loggamma(df/2.0)
+    log_upper_gamma = mp.log(mp.gammainc(df/2.0, float(x)/2.0, mp.inf, regularized=False))
+    log_sf = log_upper_gamma - log_gamma_a
+    return 0-log_sf/np.log(10)
 
 def de_bulk(_args):
+
     parser = argparse.ArgumentParser(prog="de_bulk")
     parser.add_argument('--input', type=str, help='')
     parser.add_argument('--output', type=str, help='')
     parser.add_argument('--feature', type=str, default='', help='')
-    parser.add_argument('--feature_label', type=str, default="gene", help='')
+    parser.add_argument('--feature_label', type=str, default = "gene", help='')
     parser.add_argument('--min_ct_per_feature', default=50, type=int, help='')
     parser.add_argument('--max_pval_output', default=1e-3, type=float, help='')
     parser.add_argument('--min_fold_output', default=1.5, type=float, help='')
     parser.add_argument('--min_output_per_factor', default=10, type=int, help='Even when there are no significant DE genes, output top genes for each factor')
     parser.add_argument('--thread', default=1, type=int, help='')
+    parser.add_argument('--use_input_header', action = 'store_true', help='')
     args = parser.parse_args(_args)
 
     if len(_args) == 0:
         parser.print_help()
         return
 
-    pcut = args.max_pval_output
-    fcut = args.min_fold_output
-
-    # Load gene filtering set if provided
+    pcut=args.max_pval_output
+    fcut=args.min_fold_output
     gene_kept = set()
     if os.path.exists(args.feature):
         feature = pd.read_csv(args.feature, sep='\t', header=0)
-        gene_kept = set(feature[args.feature_label].values)
+        gene_kept = set(feature[args.feature_label].values )
 
     # Read aggregated count table
-    info = pd.read_csv(args.input, sep='\t', header=0)
-    header = [x for x in info.columns if x != args.feature_label]
-
+    info = pd.read_csv(args.input,sep='\t',header=0)
+    oheader = []
+    header = []
+    if args.use_input_header:
+        header = [x for x in info.columns if x != args.feature_label]
+        oheader = header
+    else:
+        for x in info.columns:
+            y = re.match('^[A-Za-z]*_*(\d+)$', x)
+            if y:
+                header.append(y.group(1))
+                oheader.append(x)
     K = len(header)
     M = info.shape[0]
-    info.rename(columns={args.feature_label: "gene"}, inplace=True)
+    reheader = {oheader[k]:header[k] for k in range(K)}
+    reheader[args.feature_label] = "gene"
+    info.rename(columns = reheader, inplace=True)
     print(f"Read posterior count over {M} genes and {K} factors")
 
-    # Apply gene filtering
     if len(gene_kept) > 0:
         info = info.loc[info.gene.isin(gene_kept), :]
-
-    # Calculate totals once for efficiency
-    info["gene_tot"] = info[header].sum(axis=1)
+    info["gene_tot"] = info.loc[:, header].sum(axis=1)
+    #info["gene_tot"] = info.loc[:, header].sum(axis=1).astype(int)
     info = info[info["gene_tot"] > args.min_ct_per_feature]
     info.index = info.gene.values
-
-    # Pre-calculate these values once
     total_umi = info.gene_tot.sum()
-    total_k = info[header].sum(axis=0).values
-
+    total_k = np.array(info.loc[:, header].sum(axis = 0) )
     M = info.shape[0]
+
     print(f"Testing {M} genes over {K} factors")
 
-    # Prepare data for parallel processing
-    results = []
+    def chisq(k,info,total_k,total_umi):
+        res = []
+        if total_k <= 0:
+            return res
+        for name, v in info.iterrows():
+            if v[k] <= 0:
+                continue
+            tab=np.zeros((2,2))
+            tab[0,0]=v[str(k)]
+            tab[0,1]=v["gene_tot"]-tab[0,0]
+            tab[1,0]=total_k-tab[0,0]
+            tab[1,1]=total_umi-total_k-v["gene_tot"]+tab[0,0]
+            #fd=tab[0,0]/total_k/tab[0,1]*(total_umi-total_k)
+            # add 0.5 to avoid division by zero ()
+            if float(tab[0,1]) > 0 and (total_umi - total_k) >0:
+                fd_numerator = tab[0,0] / total_k
+                fd_denominator = tab[0,1] / (total_umi - total_k) 
+            else:
+                fd_numerator = (tab[0,0] + 0.5) / ( total_k + 1)
+                fd_denominator = (tab[0,1] + 0.5) / ( total_umi - total_k + 1 )
+            fd = fd_numerator / fd_denominator
+            if fd < 1:
+                continue
+            tab = np.around(tab, 0).astype(int) + 1
+            chi2, p, dof, ex = scipy.stats.chi2_contingency(tab, correction=False)
+            res.append([name,k,chi2,p,fd,v["gene_tot"]])
+        return res
 
+    res = []
     if args.thread > 1:
-        # Split genes into chunks for parallel processing
-        gene_chunks = []
-        for idx in gen_even_slices(M, args.thread):
-            gene_chunks.append(info.iloc[idx])
-
-        # Process chunks in parallel
-        with Parallel(n_jobs=args.thread, verbose=0) as parallel:
-            chunk_results = parallel(delayed(process_chunk)(
-                chunk, header, total_k, total_umi) for chunk in gene_chunks)
-
-        # Combine results
-        for chunk_result in chunk_results:
-            results.extend(chunk_result)
+        for k, kname in enumerate(header):
+            idx_slices = [idx for idx in utilt.gen_even_slices(M, args.thread)]
+            with Parallel(n_jobs=args.thread, verbose=0) as parallel:
+                result = parallel(delayed(chisq)(kname, \
+                            info.iloc[idx, :].loc[:, [kname, 'gene_tot']],\
+                            total_k[k], total_umi) for idx in idx_slices)
+            res += [item for sublist in result for item in sublist]
     else:
-        # Single-threaded processing
-        results = process_chunk(info, header, total_k, total_umi)
+        for name, v in info.iterrows():
+            for k, kname in enumerate(header):
+                if total_k[k] <= 0 or v[str(k)] <= 0:
+                    continue
+                tab=np.zeros((2,2))
+                tab[0,0]=v[kname]
+                tab[0,1]=v["gene_tot"]-tab[0,0]
+                tab[1,0]=total_k[k]-tab[0,0]
+                tab[1,1]=total_umi-total_k[k]-v["gene_tot"]+tab[0,0]
+                #fd=tab[0,0]/total_k[k]/tab[0,1]*(total_umi-total_k[k])
+                if tab[0,1]>0 and (total_umi - total_k[k]) > 0:
+                    fd_numerator = float(tab[0,0]) / total_k[k]
+                    fd_denominator = float(tab[0,1]) / (total_umi - total_k[k]) 
+                else:
+                    fd_numerator = (tab[0,0] + 0.5) / (total_k[k] + 1)
+                    fd_denominator = (tab[0,1] + 0.5) / (total_umi - total_k[k] + 1)
+                fd = fd_numerator / fd_denominator
+                if fd < 1:
+                    continue
+                tab = np.around(tab, 0).astype(int) + 1
+                chi2, p, dof, ex = scipy.stats.chi2_contingency(tab, correction=False)
+                res.append([name,kname,chi2,p,fd,v["gene_tot"]])
 
-    # Create and process results dataframe
-    if results:
-        chidf = pd.DataFrame(results, columns=['gene', 'factor', 'Chi2', 'pval', 'FoldChange', 'gene_total'])
+    chidf=pd.DataFrame(res,columns=['gene','factor','Chi2','pval','FoldChange','gene_total'])
+    chidf["Rank"] = chidf.groupby(by = "factor")["Chi2"].rank(ascending=False)
+    chidf = chidf.loc[((chidf.pval<pcut)&(chidf.FoldChange>fcut)) | (chidf.Rank < args.min_output_per_factor), :]
+    chidf.sort_values(by=['factor','Chi2'],ascending=[True,False],inplace=True)
+    chidf.Chi2 = chidf.Chi2.map(lambda x : "{:.1f}".format(x) )
+    chidf.FoldChange = chidf.FoldChange.map(lambda x : "{:.2f}".format(x) )
+    chidf.gene_total = chidf.gene_total.astype(int)
+    chidf["log10pval"] = [log10_chi2_sf(x) for x in chidf.Chi2]
+    chidf.drop(columns = 'Rank', inplace=True)
 
-        # Rank genes within each factor
-        chidf["Rank"] = chidf.groupby("factor")["Chi2"].rank(ascending=False)
-
-        # Filter results
-        chidf = chidf.loc[
-            ((chidf.pval < pcut) & (chidf.FoldChange > fcut)) |
-            (chidf.Rank <= args.min_output_per_factor)
-        ]
-
-        # Sort by factor and Chi2 score
-        chidf.sort_values(by=['factor', 'Chi2'], ascending=[True, False], inplace=True)
-
-        # Format output columns
-        chidf.Chi2 = chidf.Chi2.map(lambda x: "{:.1f}".format(x))
-        chidf.FoldChange = chidf.FoldChange.map(lambda x: "{:.2f}".format(x))
-        chidf.gene_total = chidf.gene_total.astype(int)
-
-        # Calculate log10 p-values efficiently
-        chidf["log10pval"] = np.array([log10_chi2_sf(float(x)) for x in chidf.Chi2])
-
-        # Drop temporary columns
-        chidf.drop(columns='Rank', inplace=True)
-
-        # Write results to file
-        chidf.to_csv(args.output, sep='\t', float_format="%.2e", index=False)
-    else:
-        print("No significant results found.")
+    outpath=os.path.dirname(args.output)
+    if not os.path.exists(outpath):
+        os.makedirs(outpath)
+    chidf.to_csv(args.output,sep='\t',float_format="%.2e",index=False)
 
 if __name__ == "__main__":
     de_bulk(sys.argv[1:])
