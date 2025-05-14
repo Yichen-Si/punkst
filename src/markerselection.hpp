@@ -424,16 +424,16 @@ private:
         while (std::getline(ifs, line)) {
             if (line.empty()) continue;
             std::istringstream iss(line);
-            uint32_t idx, rawpix, rawct, ct, neigh;
+            uint32_t idx, ct;
             std::string name;
-            if (!(iss >> idx >> name >> rawpix >> rawct >> ct >> neigh)) {
+            if (!(iss >> idx >> name >> ct)) {
                 warning("Invalid line in gene info file: %s", line.c_str());
                 continue;
             }
             if (idx > M_) {
                 M_ = idx;
             }
-            features_[idx] = {name, ct, neigh};
+            features_[idx] = {name, ct};
             if (ct > minUsedCount) {
                 validIndex_.push_back(idx);
             }

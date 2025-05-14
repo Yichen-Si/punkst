@@ -158,15 +158,15 @@ private:
         std::vector<std::string> featureList;
         if (parser_.getFeatureList(featureList) < 0) {
             warning("Feature names are not found");
-            // feature name, total uniq pixels, total counts, used pixels, counted neighboring pixels
+            // feature name, used pixels, total uniq pixels, total counts, counted neighboring pixels
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%lu\t%lu\t%lu\t%lu\n", kv.first,
-                    kv.second[0], kv.second[1], kv.second[2], kv.second[3]);
+                fprintf(ofs, "%u\t%lu\t%lu\t%lu\t%lu\n", kv.first, kv.second[2],
+                    kv.second[0], kv.second[1], kv.second[3]);
             }
         } else {
             for (auto &kv : globalMargianls_) {
                 fprintf(ofs, "%u\t%s\t%lu\t%lu\t%lu\t%lu\n", kv.first,
-                    featureList[kv.first].c_str(), kv.second[0], kv.second[1], kv.second[2], kv.second[3]);
+                    featureList[kv.first].c_str(), kv.second[2], kv.second[0], kv.second[1], kv.second[3]);
             }
         }
         fclose(ofs);

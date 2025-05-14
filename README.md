@@ -15,13 +15,13 @@ If you are having difficulty installing, let us known (by opening an issue), and
 - Git
 - CMake: 3.15 to 3.23
 - C++17 compiler* (GCC ≥8, Clang ≥5, MSVC 2017+)
-- TBB, Eigen, OpenCV
+- TBB, OpenCV
 
 *We do assume your compiler properly supports C++17. Consider updating the compiler if you encounter issues.
 
 ```bash
 # 1) Clone the repository
-git clone https://github.com/your-org/punkst.git
+git clone --recursive https://github.com/your-org/punkst.git
 cd punkst
 # 2) Create and enter a build directory
 mkdir build && cd build
@@ -29,6 +29,11 @@ mkdir build && cd build
 cmake ..
 # 4) Build
 cmake --build . --parallel # or make
+```
+
+If you did not clone the submodule (Eigen) initially, you can do
+```bash
+git submodule update --init
 ```
 
 If TBB is not found, you can install it by `sudo apt-get install libtbb-dev` or `yum install tbb-devel` on linux and `brew install tbb` on macOS.
@@ -44,7 +49,6 @@ make -j$(nproc) && make install
 If you installed some dependencies locally, you may need to specify their paths like
 ```bash
 cmake .. \
-  -DEIGEN_INCLUDE_DIR=$HOME/.local/include \
   -DOpenCV_DIR=$HOME/.local/lib/cmake/opencv4 \
   -DCMAKE_PREFIX_PATH="$HOME/.local"
   ```

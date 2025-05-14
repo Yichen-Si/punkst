@@ -174,6 +174,31 @@ bool createDirectory(const std::string& dir) {
     return true;
 }
 
+std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t maxTries) {
+    std::filesystem::create_directories(parent);
+
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<uint64_t> dist;
+
+    auto now = [] {
+      return std::chrono::steady_clock::now()
+             .time_since_epoch()
+             .count();
+    };
+
+    for (size_t i = 0; i < maxTries; ++i) {
+      // combine timestamp_random
+      std::ostringstream name;
+      name << "t" << now() << '_' << std::hex << dist(gen);
+      std::filesystem::path candidate = parent / name.str();
+      if (std::filesystem::create_directory(candidate))
+        return candidate;
+    }
+    throw std::runtime_error("Could not create unique temp dir under "
+                              + parent.string());
+}
+
 std::vector<int> computeLPSArray(const std::string& pattern) {
     int M = pattern.size();
     std::vector<int> lps(M, 0);

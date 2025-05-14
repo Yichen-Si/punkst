@@ -30,11 +30,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
 
 # Eigen
-find_path(EIGEN_INCLUDE_DIR Eigen/Dense HINTS ../eigen)
-if(NOT EIGEN_INCLUDE_DIR)
-    message(FATAL_ERROR "EIGEN_INCLUDE_DIR not found")
+set(EIGEN3_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ext/eigen")
+if (NOT EXISTS "${EIGEN3_INCLUDE_DIR}/Eigen/Dense")
+    message(FATAL_ERROR "Eigen submodule missing. Did you run 'git submodule update --init'?")
 endif()
-message(STATUS ${EIGEN_INCLUDE_DIR})
+add_library(Eigen3::Eigen INTERFACE IMPORTED)
+set_target_properties(Eigen3::Eigen PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
 
 # OpenCV
 find_package(OpenCV REQUIRED HINTS ../opencv/build /usr/lib /usr/local)
@@ -83,7 +85,6 @@ target_include_directories(${APP_EXE} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/cimg
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanoflann
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nlohmann
-    ${EIGEN_INCLUDE_DIR}
 )
 
 find_package(Threads REQUIRED)
@@ -95,6 +96,7 @@ target_compile_options(${APP_EXE} PRIVATE -O3 -pthread)
 
 target_link_libraries(${APP_EXE} PRIVATE
     ${OpenCV_LIBRARIES}
+    Eigen3::Eigen
     TBB::tbb
     Threads::Threads
     ZLIB::ZLIB

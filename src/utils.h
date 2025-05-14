@@ -3,12 +3,14 @@
 #include "punkst.h"
 #include <tuple>
 #include <functional>
+#include <random>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
 #include <filesystem>
+#include <chrono>
 #include <optional>
 #include <charconv>
 #include <locale>
@@ -263,6 +265,13 @@ std::vector<cv::Point2f> clipPolygonToRect(const std::vector<cv::Point2f>& poly,
 // File handling related
 bool createDirectory(const std::string& dir);
 bool checkOutputWritable(const std::string& outFile, bool newFile = true);
+std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t maxTries = 100);
+struct ScopedTempDir {
+    std::filesystem::path path;
+    explicit ScopedTempDir(const std::filesystem::path& parent)
+      : path(makeTempDir(parent)) {}
+    ~ScopedTempDir() { std::error_code ec; std::filesystem::remove_all(path, ec); }
+};
 
 // Iterator for lines
 class BoundedReadline {
