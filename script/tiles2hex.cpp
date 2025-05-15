@@ -69,7 +69,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         return 1;
     }
     lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile, &rects);
-    if (parser.n_ints == 0) {
+    if (parser.n_ct == 0) {
         error("No integer columns specified");
     }
 

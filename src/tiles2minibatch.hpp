@@ -22,17 +22,27 @@
 #include "Eigen/Sparse"
 using Eigen::MatrixXf;
 
+enum class FieldType : uint8_t { INT32, FLOAT, STRING };
+struct FieldDef {
+    FieldType  type;
+    size_t     size;    // STRING: fixed byte length; INT32/FLOAT: sizeof()
+    size_t     offset;  // filled in after we know all fields
+};
+
 template<typename T>
 struct TileData {
     float xmin, xmax, ymin, ymax;
     std::unordered_map<uint32_t, std::vector<RecordT<T>>> buffers; // local buffer to accumulate records to be written to temporary files
+    std::unordered_map<uint32_t, std::vector<RecordExtendedT<T>>> extBuffers;
     std::vector<RecordT<T>> pts; // original data points
+    std::vector<RecordExtendedT<T>> extPts; // original data points with extended info fields
     std::vector<int32_t> idxinternal; // indices for internal data points to output
     std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
     std::vector<std::pair<double, double>> coords; // unique coordinates
     void clear() {
         buffers.clear();
         pts.clear();
+        extPts.clear();
         idxinternal.clear();
         orgpts2pixel.clear();
         coords.clear();
@@ -68,14 +78,64 @@ struct BoundaryBuffer {
         }
         return false;
     }
+
     template<typename T>
     void writeToFile(const std::vector<RecordT<T>>& records) {
         std::lock_guard<std::mutex> lock(*mutex);
         std::ofstream ofs(tmpFile, std::ios::binary | std::ios::app);
         if (!ofs) {
-            throw std::runtime_error("Error creating temporary file: " + tmpFile);
+            error("%s: error opening temporary file %s", __FUNCTION__, tmpFile.c_str());
         }
         ofs.write(reinterpret_cast<const char*>(records.data()), records.size() * sizeof(RecordT<T>));
+        ofs.close();
+        nTiles++;
+    }
+
+    template<typename T>
+    void writeToFileExtended(
+        const std::vector<RecordExtendedT<T>>& recs,
+        const std::vector<FieldDef>&           schema,
+        size_t                                 recordSize
+    ) {
+        if (recs.empty()) return;
+        std::lock_guard<std::mutex> lock(*mutex);
+        // pack into one big byte‐array
+        std::vector<uint8_t> buf;
+        buf.reserve(recs.size() * recordSize);
+        for (auto &r : recs) {
+            size_t baseOff = buf.size();
+            buf.resize(buf.size() + recordSize);
+            // 1) the base blob
+            std::memcpy(buf.data() + baseOff, &r.recBase, sizeof(r.recBase));
+            // 2) each extra field by schema
+            uint32_t i_int = 0, i_flt = 0, i_str = 0;
+            for (size_t fi = 0; fi < schema.size(); ++fi) {
+                auto const &f = schema[fi];
+                auto dst = buf.data() + baseOff + f.offset;
+                switch (f.type) {
+                    case FieldType::INT32: {
+                        int32_t v = r.intvals[i_int++];
+                        std::memcpy(dst, &v, sizeof(v));
+                    } break;
+                    case FieldType::FLOAT: {
+                        float v = r.floatvals[i_flt++];
+                        std::memcpy(dst, &v, sizeof(v));
+                    } break;
+                    case FieldType::STRING: {
+                        auto &s = r.strvals[i_str++];
+                        std::memcpy(dst, s.data(), std::min(s.size(), f.size));
+                        if (s.size() < f.size) {
+                            std::memset(dst + s.size(), 0, f.size - s.size());
+                        }
+                    } break;
+                }
+            }
+        }
+        std::ofstream ofs(tmpFile, std::ios::binary | std::ios::app);
+        if (!ofs) {
+            error("%s: error opening temporary file %s", __FUNCTION__, tmpFile.c_str());
+        }
+        ofs.write(reinterpret_cast<const char*>(buf.data()), buf.size());
         ofs.close();
         nTiles++;
     }
@@ -289,8 +349,12 @@ public:
         TileReader& tileReader, lineParserUnival& lineParser,
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
-        double c = 20, double h = 0.7, double res = 1, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
-        Tiles2MinibatchBase(nThreads, r + hexGrid.size, _outPref, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug), outputOriginalData(false), useTicketSystem(false), currentTicket(0) {
+        double c = 20, double h = 0.7, double res = 1,
+        int32_t M = 0, int32_t N = 0, int32_t k = 3,
+        int32_t verbose = 0, int32_t debug = 0) :
+        Tiles2MinibatchBase(nThreads, r + hexGrid.size, _outPref, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug),
+        outputOriginalData(false), useExtended_(lineParser.isExtended),
+        useTicketSystem(false), currentTicket(0) {
         // check type consistency
         if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
             assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
@@ -302,6 +366,9 @@ public:
         }
         if (pixelResolution <= 0) {
             pixelResolution = 1;
+        }
+        if (useExtended_) {
+            setExtendedSchema();
         }
         weighted = lineParser.weighted;
         M_ = lda.get_n_features();
@@ -413,6 +480,9 @@ protected:
     std::atomic<int> currentTicket;
     std::mutex ticketMutex;
     std::condition_variable ticketCondition;
+    bool useExtended_;
+    size_t recordSize_ = 0;
+    std::vector<FieldDef> schema_;
     LatentDirichletAllocation& lda;
     OnlineSLDA slda;
     lineParserUnival& lineParser;
@@ -435,6 +505,7 @@ protected:
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
     // Parse a binary temporary file (written by BoundaryBuffer)
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
 
     int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
     int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
@@ -451,6 +522,35 @@ protected:
     void writeHeaderToJson();
     // write posterior pseudobulk to a tsv file
     void writePseudobulkToTsv();
+
+    // Call *before* run()
+    void setExtendedSchema() {
+        if (!lineParser.isExtended) {
+            useExtended_ = false;
+            return;
+        }
+        useExtended_ = true;
+        schema_.clear();
+        size_t offset = sizeof(RecordT<T>);
+        size_t n_ints = lineParser.icol_ints.size();
+        size_t n_floats = lineParser.icol_floats.size();
+        size_t n_strs = lineParser.icol_strs.size();
+        for (size_t i = 0; i < n_ints; ++i) {
+            schema_.push_back({FieldType::INT32, sizeof(int32_t), 0});
+        }
+        for (size_t i = 0; i < n_floats; ++i) {
+            schema_.push_back({FieldType::FLOAT, sizeof(float), 0});
+        }
+        for (size_t i = 0; i < n_strs; ++i) {
+            schema_.push_back({FieldType::STRING, lineParser.str_lens[i], 0});
+        }
+        // now fix up offsets and total size
+        for (auto &f : schema_) {
+            f.offset = offset;
+            offset  += f.size;
+        }
+        recordSize_ = offset;
+    }
 
     void tileWorker(int threadId) override {
         std::pair<TileKey, int32_t> tileTicket;
@@ -482,7 +582,12 @@ protected:
             bufferPtr = bufferTicket.first;
             ticket = bufferTicket.second;
             TileData<T> tileData;
-            int32_t ret = parseBoundaryFile(tileData, bufferPtr);
+            int32_t ret;
+            if (useExtended_) {
+                ret = parseBoundaryFileExtended(tileData, bufferPtr);
+            } else {
+                ret = parseBoundaryFile(tileData, bufferPtr);
+            }
             notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __FUNCTION__, threadId, ticket, bufferPtr->key, ret);
             if (ret <= 10) {
                 std::remove(bufferPtr->tmpFile.c_str());
@@ -515,6 +620,17 @@ protected:
         }
         for (int32_t i = 0; i < topk_; ++i) {
             mainOut << "\tP" << i+1;
+        }
+        if (useExtended_) {
+            for (const auto &v : lineParser.name_ints) {
+                mainOut << "\t" << v;
+            }
+            for (const auto &v : lineParser.name_floats) {
+                mainOut << "\t" << v;
+            }
+            for (const auto &v : lineParser.name_strs) {
+                mainOut << "\t" << v;
+            }
         }
         mainOut << "\n";
         std::string indexFile = outPref + ".index";

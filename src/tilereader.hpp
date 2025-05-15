@@ -29,6 +29,17 @@ struct RecordT {
 };
 #pragma pack(pop)
 
+template<typename T>
+struct RecordExtendedT {
+    RecordT<T> recBase;
+    std::vector<int32_t> intvals;
+    std::vector<float> floatvals;
+    std::vector<std::string> strvals;
+    RecordExtendedT() : recBase{T{}, T{}, 0u, 0u} {}
+    RecordExtendedT(const RecordT<T>& base) : recBase(base){}
+    RecordExtendedT(T x, T y, uint32_t idx, uint32_t ct) : recBase{x, y, idx, ct} {}
+};
+
 // Identify a tile by (row, col)
 struct TileKey {
     int32_t row;
@@ -58,12 +69,15 @@ struct TileInfo {
 // Parse a line in the tsv tiled pixel file
 struct lineParser {
     size_t icol_x, icol_y, icol_feature;
-    std::vector<int32_t> icol_ints;
+    std::vector<int32_t> icol_ct;
     std::unordered_map<std::string, uint32_t> featureDict;
-    int32_t n_ints, n_tokens;
+    int32_t n_ct, n_tokens;
     bool isFeatureDict, weighted;
     std::vector<double> weights;
     std::vector<Rectangle<double>> rects;
+    std::vector<uint32_t> icol_ints, icol_floats, icol_strs, str_lens;
+    std::vector<std::string> name_ints, name_floats, name_strs;
+    bool isExtended = false;
 
     lineParser() {isFeatureDict = false; weighted = false;}
     lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
@@ -77,12 +91,12 @@ struct lineParser {
         icol_x = _ix;
         icol_y = _iy;
         icol_feature = _iz;
-        n_ints = _ivals.size();
-        icol_ints.resize(n_ints);
+        n_ct = _ivals.size();
+        icol_ct.resize(n_ct);
         n_tokens = icol_feature;
-        for (int32_t i = 0; i < n_ints; ++i) {
-            icol_ints[i] = _ivals[i];
-            n_tokens = std::max(n_tokens, icol_ints[i]);
+        for (int32_t i = 0; i < n_ct; ++i) {
+            icol_ct[i] = _ivals[i];
+            n_tokens = std::max(n_tokens, icol_ct[i]);
         }
         n_tokens += 1;
         if (_dfile.empty()) {
@@ -107,6 +121,32 @@ struct lineParser {
                 error("Error reading feature dictionary file: %s", _dfile.c_str());
             }
             notice("Read %zu features from dictionary file", featureDict.size());
+        }
+    }
+    bool checkExtraColumns() {
+        if (icol_strs.size() != str_lens.size()) {
+            return false;
+        }
+        if (name_ints.size() < icol_ints.size()) {
+            uint32_t i = name_ints.size();
+            while (i < icol_ints.size()) {
+                name_ints.push_back("int_" + std::to_string(i));
+                i++;
+            }
+        }
+        if (name_floats.size() < icol_floats.size()) {
+            uint32_t i = name_floats.size();
+            while (i < icol_floats.size()) {
+                name_floats.push_back("float_" + std::to_string(i));
+                i++;
+            }
+        }
+        if (name_strs.size() < icol_strs.size()) {
+            uint32_t i = name_strs.size();
+            while (i < icol_strs.size()) {
+                name_strs.push_back("str_" + std::to_string(i));
+                i++;
+            }
         }
     }
 
@@ -152,10 +192,10 @@ struct lineParser {
                 return -1;
             }
         }
-        pixel.intvals.resize(n_ints);
+        pixel.intvals.resize(n_ct);
         int32_t totVal = 0;
-        for (size_t i = 0; i < n_ints; ++i) {
-            if (!str2int32(tokens[icol_ints[i]], pixel.intvals[i])) {
+        for (size_t i = 0; i < n_ct; ++i) {
+            if (!str2int32(tokens[icol_ct[i]], pixel.intvals[i])) {
                 return -1;
             }
             totVal += pixel.intvals[i];
@@ -282,6 +322,36 @@ struct lineParserUnival : public lineParser {
         }
         rec.ct = std::stoi(tokens[icol_val]);
         return rec.idx;
+    }
+
+    template<typename T>
+    int32_t parse( RecordExtendedT<T>& rec, std::string &line ) {
+        int32_t base_idx = parse(rec.recBase, line);
+        if (base_idx < 0) return base_idx;
+        std::vector<std::string> tokens;
+        split(tokens, "\t", line);
+        // 3) extra ints
+        rec.intvals.resize(icol_ints.size());
+        for (size_t i = 0; i < icol_ints.size(); ++i) {
+            if (!str2num<int32_t>(tokens[icol_ints[i]], rec.intvals[i])) {
+                return -2;
+            }
+        }
+        // 4) extra floats
+        rec.floatvals.resize(icol_floats.size());
+        for (size_t i = 0; i < icol_floats.size(); ++i) {
+            if (!str2num<float>(tokens[icol_floats[i]], rec.floatvals[i])) {
+                return -2;
+            }
+        }
+        // 5) extra strings (pad/truncate to str_len)
+        rec.strvals.resize(icol_strs.size());
+        for (size_t i = 0; i < icol_strs.size(); ++i) {
+            auto &s = tokens[icol_strs[i]];
+            if (s.size() > str_lens[i]) s.resize(str_lens[i]);
+            rec.strvals[i] = s;
+        }
+        return base_idx;
     }
 };
 

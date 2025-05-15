@@ -16,6 +16,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool coordsAreInt = false;
     bool useTicketSystem = false;
     int32_t floatCoordDigits = 4, probDigits = 4;
+    std::vector<std::string> annoInts, annoFloats, annoStrs;
 
     ParamList pl;
     // Input Options
@@ -44,6 +45,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     pl.add_option("out", "Output TSV file (backward compatibility)", outFile)
       .add_option("out-pref", "Output prefix", outPref)
       .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
+      .add_option("ext-col-ints", "Additional integer columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoInts)
+      .add_option("ext-col-floats", "Additional float columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoFloats)
+      .add_option("ext-col-strs", "Additional string columns to carry over to output file, in the form of \"idx1:name1:len1 idx2:name2:len2 ...\" where 'idx' are 0-based column indices and 'len' are maximum lengths of strings", annoStrs)
       .add_option("use-ticket-system", "Use ticket system to ensure predictable output order", useTicketSystem)
       .add_option("temp-dir", "Directory to store temporary files", tmpDirPath, true)
       .add_option("top-k", "Top K factors to output", topK)
@@ -109,7 +113,41 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (!weightFile.empty()) {
         parser.readWeights(weightFile, defaultWeight, nFeatures);
     }
+    // parse additional annotation columns
+    for (const auto& anno : annoInts) {
+        uint32_t idx;
+        std::vector<std::string> tokens;
+        split(tokens, ":", anno);
+        if (tokens.size() < 2 || !str2num<uint32_t>(tokens[0], idx)) {
+            error("Invalid value in --ext-col-ints: %s", anno.c_str());
+        }
+        parser.icol_ints.push_back(idx);
+        parser.name_ints.push_back(tokens[1]);
+    }
+    for (const auto& anno : annoFloats) {
+        uint32_t idx;
+        std::vector<std::string> tokens;
+        split(tokens, ":", anno);
+        if (tokens.size() < 2 || !str2num<uint32_t>(tokens[0], idx)) {
+            error("Invalid value in --ext-col-floats: %s", anno.c_str());
+        }
+        parser.icol_floats.push_back(idx);
+        parser.name_floats.push_back(tokens[1]);
+    }
+    for (const auto& anno : annoStrs) {
+        uint32_t idx, len;
+        std::vector<std::string> tokens;
+        split(tokens, ":", anno);
+        if (tokens.size() < 3 || !str2num<uint32_t>(tokens[0], idx) || !str2num<uint32_t>(tokens[2], len)) {
+            error("Invalid value in --ext-col-strs: %s", anno.c_str());
+        }
+        parser.icol_strs.push_back(idx);
+        parser.name_strs.push_back(tokens[1]);
+        parser.str_lens.push_back(len);
+    }
+    parser.isExtended = !parser.icol_ints.empty() || !parser.icol_floats.empty() || !parser.icol_strs.empty();
     notice("Initialized tile reader");
+std::cout << parser.name_ints.size() << " " << parser.name_floats.size() << " " << parser.name_strs.size() << "\n";
 
     if (outPref.empty()) {
         size_t pos = outFile.find_last_of(".");

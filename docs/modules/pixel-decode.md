@@ -1,71 +1,119 @@
 # pixel-decode
 
-### Pixel level decoding
+## Overview
 
-`pixel-decode` takes a model and the tiled pixel level data to annotate each pixel with the top factors and their probabilities.
+`pixel-decode` takes a trained LDA model and tiled pixel-level data to annotate each pixel with the top factors and their probabilities. This module enables spatial mapping of gene expression patterns at single-pixel resolution.
 
 ```bash
-punkst pixel-decode --model ${path}/hex.lda.model.tsv --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index --temp-dir ${tmpdir} --out ${path}/pixel.decode.tsv --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 1200 --n-moves 2 --min-init-count 20 --pixel-res 50 --threads ${threads} --seed 1 --output-original
+punkst pixel-decode --model ${path}/hex_12.model.tsv \
+--in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
+--temp-dir ${tmpdir} --out-pref ${path}/pixel.decode \
+--icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
+--hex-grid-dist 12 --n-moves 2 \
+--pixel-res 0.5 --threads ${threads} --seed 1 --output-original
 ```
 
-The pixel level inference result (in this case `${path}/pixel.decode.tsv`) contains the coordinates and the inferred top factors and their posterior probabilities for each pixel. We also create a pseudobulk file (`${path}/pixel.decode.pseudobulk.tsv`) where each row is a gene and each column is a factor.
+The pixel-level inference result (in this case `${path}/pixel.decode.tsv`) contains the coordinates and the inferred top factors and their posterior probabilities for each pixel. The module also creates a pseudobulk file (`${path}/pixel.decode.pseudobulk.tsv`) where each row is a gene and each column is a factor.
 
 ## Required Parameters
 
-`--in-tsv` specifies the tiled data created by `pts2tiles`.
+`--in-tsv` - Specifies the tiled data created by `pts2tiles`.
 
-`--in-index` specifies the index file created by `pts2tiles`.
+`--in-index` - Specifies the index file created by `pts2tiles`.
 
-`--icol-x`, `--icol-y` specify the columns with X and Y coordinates (0-based).
+`--icol-x`, `--icol-y` - Specify the columns with X and Y coordinates (0-based).
 
-`--icol-feature` specifies the column index for feature (0-based).
+`--icol-feature` - Specifies the column index for feature (0-based).
 
-`--icol-val` specifies the column index for count/value (0-based).
+`--icol-val` - Specifies the column index for count/value (0-based).
 
-`--model` specifies the model file where the first column contains feature names and the subsequent columns contain the parameters for each factor. The format should match that created by `lda4hex`.
+`--model` - Specifies the model file where the first column contains feature names and the subsequent columns contain the parameters for each factor. The format should match that created by `lda4hex`.
 
-`--out` specifies the output file.
+`--temp-dir` - Specifies the directory to store temporary files.
 
-`--temp-dir` specifies the directory to store temporary files.
+**Output specification** - One of these must be provided:
+- `--out` - Specifies the output file (for backward compatibility).
+- `--out-pref` - Specifies the output prefix for all output files.
 
-One of `--hex-size` or `--hex-grid-dist`: `--hex-size` specifies the size (side length) of the hexagons for initializing anchors; `--hex-grid-dist` specifies center-to-center distance in the axial coordinate system used to place anchors. `hex-grid-dist` equals `hex-size * sqrt(3)`.
+**Hexagon grid parameters** - One of these must be provided:
+- `--hex-size` - Specifies the size (side length) of the hexagons for initializing anchors.
+- `--hex-grid-dist` - Specifies center-to-center distance in the axial coordinate system used to place anchors. Equals `hex-size * sqrt(3)`.
 
-One of `--anchor-dist` or `--n-moves`: `--anchor-dist` specifies the distance between adjacent anchors; `--n-moves` specifies the number of sliding moves in each axis to generate the anchors. If `--n-moves` is `n`, `anchor-dist` equals `hex-grid-dist` / `n`.
+**Anchor spacing parameters** - One of these must be provided:
+- `--anchor-dist` - Specifies the distance between adjacent anchors.
+- `--n-moves` - Specifies the number of sliding moves in each axis to generate the anchors. If `--n-moves` is `n`, `anchor-dist` equals `hex-grid-dist` / `n`.
 
 ## Optional Parameters
 
 ### Input Parameters
 
-`--coords-are-int` if set, indicates that the coordinates are integers; otherwise, they are treated as floating point values.
+`--coords-are-int` - If set, indicates that the coordinates are integers; otherwise, they are treated as floating point values.
 
-`--feature-is-index` if set, the values in `--icol-feature` are interpreted as feature indices. Otherwise, they are expected to be feature names.
+`--feature-is-index` - If set, the values in `--icol-feature` are interpreted as feature indices. Otherwise, they are expected to be feature names.
 
-`--feature-weights` specifies a file to weight each feature. The first column should contain the feature names, and the second column should contain the weights.
+`--feature-weights` - Specifies a file to weight each feature. The first column should contain the feature names, and the second column should contain the weights.
 
-`--default-weight` specifies the default weight for features not present in the weights file (only if `--feature-weights` is specified). Default is 0.
+`--default-weight` - Specifies the default weight for features not present in the weights file (only if `--feature-weights` is specified). Default: 0.
 
-`--anchor` specifies a file containing anchor points to use in addition to evenly spaced lattice points.
+`--anchor` - Specifies a file containing anchor points to use in addition to evenly spaced lattice points.
+
+### Data Annotation Parameters
+
+`--ext-col-ints` - Additional integer columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices.
+
+`--ext-col-floats` - Additional float columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices.
+
+`--ext-col-strs` - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings.
 
 ### Processing Parameters
 
-`--pixel-res` resolution for the analysis, in the same unit as the input coordinates. The default is `1` so each pixel is treated independently. Setting the resolution equivalent to $0.5\sim 1 \mu m$ is recommended, but it could be smaller if your data is very dense.
+`--pixel-res` - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense.
 
-`--radius` specifies the radius within which to search for anchors. If not specified, it defaults to `anchor-dist * 1.2`.
+`--radius` - Specifies the radius within which to search for anchors. Default: `anchor-dist * 1.2`.
 
-`--min-init-count` specifies the minimum total count within the hexagon around an anchor for the anchor to be included. It will filter out regions outside tissues with sparse noise. Default is 10.
+`--min-init-count` - Minimum total count within the hexagon around an anchor for it to be included. Filters out regions outside tissues with sparse noise. Default: 10.
 
-`--threads` specifies the number of threads to use. Default is 1.
+`--mean-change-tol` - Tolerance for convergence in terms of the mean absolute change in the topic proportions of a document. Default: 1e-3.
 
-`--seed` specifies the random seed to use for reproducibility. If not provided, a random seed will be generated.
+`--threads` - Number of threads to use for parallel processing. Default: 1.
+
+`--seed` - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.
 
 ### Output Parameters
 
-`--output-original` if set, the original data including the feature names and counts will be included in the output. If `pixel-res` is not `1` and `--output-original` is not set, the output contains results per collapsed pixel.
+`--output-original` - If set, the original data including the feature names and counts will be included in the output. If `pixel-res` is not 1 and `--output-original` is not set, the output contains results per collapsed pixel.
 
-`--use-ticket-system` if set, the order of pixels in the output file is deterministic so the same between runs (though not the same asthat in the input). This may incurr a small performance penalty.
+`--use-ticket-system` - If set, the order of pixels in the output file is deterministic across runs (though not necessarily the same as the input order). May incur a small performance penalty.
 
-`--top-k` specifies the number of top factors to include in the output. Default is 3.
+`--top-k` - Number of top factors to include in the output. Default: 3.
 
-`--output-coord-digits` specifies the number of decimal digits to output for coordinates (only used if input coordinates are float or `--output-original` is not set). Default is 4.
+`--output-coord-digits` - Number of decimal digits to output for coordinates (only used if input coordinates are float or `--output-original` is not set). Default: 4.
 
-`--output-prob-digits` specifies the number of decimal digits to output for probabilities. Default is 4.
+`--output-prob-digits` - Number of decimal digits to output for probabilities. Default: 4.
+
+`--verbose` - Increase verbosity of output messages.
+
+`--debug` - Enable debug mode for additional diagnostic information.
+
+## Output Files
+
+When using `--out-pref`, the following files are generated:
+- `<prefix>.tsv` - Main output file with pixel-level factor assignments
+- `<prefix>.pseudobulk.tsv` - Gene-by-factor matrix showing feature distribution across topics
+
+## Example Usage Scenarios
+
+### Basic Usage
+```bash
+punkst pixel-decode --model model.tsv --in-tsv data.tsv --in-index data.index --temp-dir /tmp --out-pref results --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 500 --n-moves 4 --threads 8
+```
+
+### With Data Annotations
+```bash
+punkst pixel-decode --model model.tsv --in-tsv data.tsv --in-index data.index --temp-dir /tmp --out-pref results --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 500 --n-moves 4 --ext-col-ints "4:celltype 5:cluster" --ext-col-strs "6:sample_id:20" --output-original
+```
+
+### High-Resolution Analysis
+```bash
+punkst pixel-decode --model model.tsv --in-tsv data.tsv --in-index data.index --temp-dir /tmp --out-pref results --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 200 --n-moves 8 --pixel-res 0.5 --min-init-count 5 --top-k 5 --threads 16
+```

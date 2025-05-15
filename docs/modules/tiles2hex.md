@@ -7,7 +7,11 @@ The input is the tiled data created by `pts2tiles`. The output is a plain tab-de
 ## Basic Usage
 
 ```bash
-punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index transcripts.tiled.index --feature-dict ${path}/features.txt --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 --min-count 20 --hex-size ${hex_size} --out ${path}/hex.txt --temp-dir ${tmpdir} --threads ${threads}
+punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
+--feature-dict ${path}/features.txt \
+--icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
+--min-count 20 --hex-grid-dist 12 \
+--out ${path}/hex_12.txt --temp-dir ${tmpdir} --threads ${threads}
 ```
 
 ### Required Parameters

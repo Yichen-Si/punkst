@@ -2,38 +2,100 @@
 
 **`lda4hex` runs LDA on the hexagon data.**
 
+## Input format
+
+The input data is a plain text file where each line containing the sparse encoding of the gene counts for one unit (hexagon, cell, etc.). The orders of the units should be **randomized**.
+
+If generated hexagon data from `tiles2hex` you probably don't need to know the following details.
+
+### Required data
+The required structure of each line is as follows (entries are separated by tabs):
+- one integer (m) for the number of unique genes in this unit
+- one integer for the total count of all genes in this unit
+- followed by m pairs of integers, each pair consisting of a gene index (0-based) and the count of that gene in this unit (separated by a single space). In a cell-by-gene count matrix, the pairs are the (column, value) pairs of all non-zero entries in one row corresponding to a cell.
+
+There could be other fields in the input before the above required (m+2) fields, the number of data fields before the required fields should be specified under the key "offset_data" in the json metadata file.
+
+### Required metadata
+We require a json file with at least the following information:
+- "dictionary": a dictionary that contains key: value pairs where each key is a gene name and each value is the corresponding index of that gene in the sparse encoding in the input data file. (You could skip this dictionary if you provides all and only the present genes' information in the order consistent with the indices (the column names and column sums in a cell-by-gene matrix) by `--features` in `lda2hex` (see below))
+- "offset_data": an integer that specifies the number of fields before the required fields in the input data file.
+- "header_info": a list of size `offset_data` that contains the names of the fields before the required fields in the input data file. We will carry over these fields to the output files.
+
+## Usage
+
 ```bash
-punkst lda4hex --in-data ${path}/hex.randomized.txt --in-meta ${path}/hex.json --n-topics 12 --out-prefix ${path}/hex.lda --transform --min-count-train 50 --minibatch-size 512 --threads ${threads} --seed 1 --n-epochs 2 --mean-change-tol 1e-4
+punkst lda4hex --in-data ${path}/hex_12.randomized.txt --in-meta ${path}/hex_12.json \
+--n-topics 12 --out-prefix ${path}/hex_12 --transform \
+--min-count-train 50 --minibatch-size 512 --threads ${threads} --seed 1
 ```
 
-**Required:**
+### Required
 
-`--in-data` specifies the input data file (created by `tiles2hex` then shuffled).
+`--in-data` - Specifies the input data file (created by `tiles2hex` then shuffled).
 
-`--in-meta` specifies the metadata file created by `tiles2hex`.
+`--in-meta` - Specifies the metadata file created by `tiles2hex`.
 
-`--n-topics` specifies the number of topics to learn.
+`--n-topics` - Specifies the number of topics to learn.
 
-`--out-prefix` specifies the prefix for the output files.
+`--out-prefix` - Specifies the prefix for the output files.
 
-**Optional:**
+### Optional
 
-`--threads` specifies the number of threads to use.
+#### Feature Filtering
 
-`--seed` specifies the random seed to use.
+`--features` - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene.
 
-`--minibatch-size` specifies the size of the minibatches to use during training.
+`--min-count-per-feature` - Minimum total count for features to be included. Require `--features` to be specified. Default: 1.
 
-`--min-count-train` specifies the minimum count for a hexagon to be included in the training set.
+`--include-feature-regex` - Regular expression (POSIX extended) to include only features matching this pattern. Default: include all features.
 
-`--n-epochs` specifies the number of epochs to train for.
+`--exclude-feature-regex` - Regular expression (POSIX extended) to exclude features matching this pattern. Default: exclude no features.
 
-`--mean-change-tol` specifies the tolerance for convergence in the e-step in terms of the mean absolute change in the topic proportions of a document. The default is `0.002` divided by the number of topics.
+**Feature Selection Logic:** the above three filters are applied jointly, so only genes with at least the minimum count, matching the include regex (if provided), and not matching the exclude regex (if provided) will be included in the model.
 
-`--feature-names` specifies a file with the names of features, one per line, corresponding to the feature indices in the input file. It is used only if the json file provided by `--in-meta` does not contains a feature dictionary.
+#### Feature Weighting
 
-`--feature-weights` specifies a file to weight each feature. If feature names are provided either in the json file or with `--feature-names`, the weight file should contain the feature names in the first column and the weights in the second column. Otherwise, the first column should contain the feature indices.
+`--feature-weights` - Path to a file containing a weight for each gene. Format should be gene name (first column) and weight (second column). If the json metadata file does not contain a dictionary, the first column should be the gene index (0-based) instead.
 
-`--default-weight` specifies the default weight for features not present in the weights file (only if `--feature-weights` is specified).
+`--default-weight` - Default weight for features not present in the weights file. Set to 0 to ignore features not in the weights file. Default: 1.0.
 
-`--transform` specifies whether to transform the data after model fitting. If set, an output file `prefix.results.tsv` will be created.
+<!-- `--modal` - Modality to use (0-based). Default: 0. (Only if your input data is generated by `tiles2hex` in multi-modality mode.) -->
+
+#### LDA Training Parameters
+
+`--threads` - Number of threads to use. Default: 1.
+
+`--seed` - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.
+
+`--minibatch-size` - Size of the minibatches to use during training. Default: 512.
+
+`--min-count-train` - Minimum total count for a hexagon to be included in the training set. Default: 20.
+
+`--n-epochs` - Number of epochs to train for. Default: 1.
+
+`--mean-change-tol` - Tolerance for convergence in the e-step in terms of the mean absolute change in the topic proportions of a document. Default: 1e-3.
+
+`--max-iter` - Maximum number of iterations for each document. Default: 100.
+
+`--kappa` - Learning decay parameter for online LDA. Default: 0.7.
+
+`--tau0` - Learning offset parameter for online LDA. Default: 10.0.
+
+`--alpha` - Document-topic prior. Default: 1/K (where K is the number of topics).
+
+`--eta` - Topic-word prior. Default: 1/K (where K is the number of topics).
+
+#### Model Initialization
+
+`--model-prior` - File that contains the initial model matrix.
+
+`--prior-scale` - Scale the initial model matrix uniformly by this value. Default: use the matrix as is.
+
+#### Output Control
+
+`--transform` - Transform the data to the LDA space after training. If set, an output file `<prefix>.results.tsv` will be created.
+
+`--projection-only` - Transform the data using the prior model without further training. Implies `--transform`.
+
+`--verbose` - Control the verbosity level of output messages.

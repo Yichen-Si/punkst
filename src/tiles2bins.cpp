@@ -2,7 +2,7 @@
 
 Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts)
 : nThreads(nThreads), tmpDir(_tmpDirPath), outFile(_outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(_minCounts), nUnits(0), nFeatures(0) {
-    nModal = parser.n_ints;
+    nModal = parser.n_ct;
     mainOut.open(outFile, std::ios::out);
     if (!mainOut) {
         error("Error opening output file %s for writing", outFile.c_str());
