@@ -33,7 +33,8 @@ public:
 
 protected:
     int32_t nThreads;
-    std::string outFile, tmpDir;
+    std::string outFile;
+    ScopedTempDir tmpDir;
     int32_t nModal, nUnits, nFeatures;
     std::vector<int32_t> minCounts;
     nlohmann::json meta;
@@ -82,6 +83,23 @@ protected:
         }
     }
 
+    void writeUnit(const UnitValues& unit, uint32_t key) {
+        double x, y;
+        hexGrid.axial_to_cart(x, y, unit.x, unit.y);
+        mainOut << uint32toHex(key) << "\t" << x << "\t" << y;
+        if (unit.label >= 0)
+            mainOut << "\t" << unit.label;
+        for (size_t i = 0; i < unit.vals.size(); ++i) {
+            mainOut << "\t" << unit.vals[i].size() << "\t" << unit.valsums[i];
+        }
+        for (const auto& val : unit.vals) {
+            for (const auto& entry : val) {
+                mainOut << "\t" << entry.first << " " << entry.second;
+            }
+        }
+        mainOut << "\n";
+    }
+
 };
 
 class Tiles2UnitsByAnchor : public Tiles2Hex {
@@ -108,7 +126,7 @@ public:
         meta["anchor_radius"] = radius;
         meta["offset_data"] = 4;
         meta["icol_layer"] = 3;
-        meta["icols_identifier"] = {0, 1, 2, 3};
+        meta["header_info"] = {"random_key", "x", "y", "layer"};
     }
 
 protected:

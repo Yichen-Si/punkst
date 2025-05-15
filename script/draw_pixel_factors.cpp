@@ -2,9 +2,10 @@
 #include <opencv2/opencv.hpp>
 
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
-    std::string dataFile, indexFile, headerFile, colorFile, outFile;
+    std::string dataFile, indexFile, headerFile, rangeFile, colorFile, outFile;
     std::vector<std::string> channelListStr, colorListStr;
-    double scale = 1, xmin, xmax, ymin, ymax;
+    double scale = 1;
+    double xmin = 0, xmax = -1, ymin = 0, ymax = -1;
     int32_t verbose = 1000000;
     bool filter = false;
 
@@ -15,10 +16,11 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
       .add_option("index", "Index file", indexFile)
       .add_option("in-color", "Input color file (RGB triples)", colorFile)
       .add_option("scale", "Scale factor: (x-xmin)/scale → pixel_x", scale)
-      .add_option("xmin", "Minimum x coordinate", xmin, true)
-      .add_option("xmax", "Maximum x coordinate", xmax, true)
-      .add_option("ymin", "Minimum y coordinate", ymin, true)
-      .add_option("ymax", "Maximum y coordinate", ymax, true)
+      .add_option("range", "A file containing coordinate range (xmin ymin xmax ymax)", rangeFile)
+      .add_option("xmin", "Minimum x coordinate", xmin)
+      .add_option("xmax", "Maximum x coordinate", xmax)
+      .add_option("ymin", "Minimum y coordinate", ymin)
+      .add_option("ymax", "Maximum y coordinate", ymax)
       .add_option("filter", "Access only the queried region using the index", filter)
       .add_option("channel-list", "Comma-separated channel IDs to draw", channelListStr)
       .add_option("color-list", "Comma-separated hex colors (#RRGGBB)", colorListStr);
@@ -40,6 +42,34 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
     if (!checkOutputWritable(outFile))
         error("Output file is not writable: %s", outFile.c_str());
+
+    if (!rangeFile.empty()) {
+        std::ifstream in(rangeFile);
+        if (!in.is_open())
+            error("Error opening range file: %s", rangeFile.c_str());
+        std::array<bool,4> seen = {false, false, false, false};
+        std::string key;
+        double value;
+        while (in >> key >> value) {
+            if      (key == "xmin") { xmin = value; seen[0] = true; }
+            else if (key == "xmax") { xmax = value; seen[1] = true; }
+            else if (key == "ymin") { ymin = value; seen[2] = true; }
+            else if (key == "ymax") { ymax = value; seen[3] = true; }
+            else {
+                std::cerr << "Warning: unrecognized key '" << key << "' in "
+                        << rangeFile << "\n";
+            }
+        }
+        // Verify that we found them all
+        static constexpr const char* names[4] = {"xmin","xmax","ymin","ymax"};
+        for (int i = 0; i < 4; ++i) {
+            if (!seen[i]) {
+                error("Missing %s in range file: %s", names[i], rangeFile.c_str());
+            }
+        }
+    }
+    if (xmin >= xmax || ymin >= ymax)
+        error("Invalid range: xmin >= xmax or ymin >= ymax");
 
     bool selected = !channelListStr.empty();
     if (!selected && colorFile.empty())

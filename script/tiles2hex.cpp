@@ -2,7 +2,7 @@
 
 int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
 
-    std::string inTsv, inIndex, outFile, tmpDir, dictFile;
+    std::string inTsv, inIndex, outFile, tmpDirPath, dictFile;
     std::vector<std::string> anchorFiles;
     std::vector<float> radius;
     int nThreads = 1, debug = 0, verbose = 1000000;
@@ -20,14 +20,14 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
         .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
-        .add_option("feature-dict", "If feature column is not integer, provide a dictionary/list of all possible values", dictFile)
+        .add_option("feature-dict", "If feature column is not integer, provide the list of feature names", dictFile)
         .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
         .add_option("bounding-boxes", "Rectangular query regions (xmin ymin xmax ymax)*", boundingBoxes)
         .add_option("anchor-files", "Anchor files", anchorFiles)
         .add_option("radius", "Radius for each set of anchors", radius)
         .add_option("hex-size", "Hexagon size (size length)", hexSize)
         .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
-        .add_option("temp-dir", "Directory to store temporary files", tmpDir)
+        .add_option("temp-dir", "Directory to store temporary files", tmpDirPath)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads);
     // Output Options
     pl.add_option("out", "Output TSV file", outFile)
@@ -74,13 +74,13 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     }
 
     if (anchorFiles.empty()) {
-        Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, min_counts);
+        Tiles2Hex tiles2Hex(nThreads, tmpDirPath, outFile, hexGrid, tileReader, parser, min_counts);
         if (!tiles2Hex.run()) {
             return 1;
         }
         tiles2Hex.writeMetadata();
     } else {
-        Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, anchorFiles, radius, min_counts, noBackground);
+        Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDirPath, outFile, hexGrid, tileReader, parser, anchorFiles, radius, min_counts, noBackground);
         if (!tiles2Hex.run()) {
             return 1;
         }

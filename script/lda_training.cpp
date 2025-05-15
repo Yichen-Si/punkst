@@ -1,6 +1,7 @@
 #include "punkst.h"
 #include "lda.hpp"
 #include "dataunits.hpp"
+#include <regex>
 
 class LDA4Hex {
 
@@ -10,22 +11,77 @@ public:
         if (modal >= reader.getNmodal()) {
             error("modal %d is out of range", modal);
         }
-        if (reader.nFeatures <= 0) {
-            error("n_features is missing in the metadata");
-        }
-        notice("Read metadata: %zu features, %d hexagons with side length %.2f", reader.nFeatures, reader.nUnits, reader.hexSize);
         weightFeatures = false;
         ntot = 0;
         minCountTrain = 0;
+        M_ = reader.nFeatures;
     }
-    void setFeatureNames(const std::vector<std::string>& featureNames) {
-        reader.setFeatureNames(featureNames);
-    }
-    void setFeatureNames(const std::string& nameFile) {
-        reader.setFeatureNames(nameFile);
+    void setFeatures(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex) {
+        bool check_include = !include_ftr_regex.empty();
+        bool check_exclude = !exclude_ftr_regex.empty();
+        std::regex regex_include(include_ftr_regex, std::regex_constants::extended);
+        std::regex regex_exclude(exclude_ftr_regex, std::regex_constants::extended);
+        std::ifstream inFeature(featureFile);
+        if (!inFeature) {
+            error("Error opening features file: %s", featureFile.c_str());
+        }
+        std::string line;
+        uint32_t idx0 = 0, idx1 = 0;
+        std::unordered_map<uint32_t, uint32_t> idx_remap;
+        std::unordered_map<std::string, uint32_t> featureDict;
+        featureNames.clear();
+        if (reader.featureDict(featureDict)) {
+            while (std::getline(inFeature, line)) {
+                std::istringstream iss(line);
+                std::string feature;
+                int32_t count;
+                if (!(iss >> feature >> count)) {
+                    error("Error reading feature file at line: %s", line.c_str());
+                }
+                idx0++;
+                if (count < minCount) {
+                    continue;
+                }
+                auto it = featureDict.find(feature);
+                if (it == featureDict.end()) {
+                    continue;
+                }
+                if (check_include && !std::regex_match(feature, regex_include)) {
+                    continue;
+                }
+                if (check_exclude && std::regex_match(feature, regex_exclude)) {
+                    continue;
+                }
+                idx_remap[it->second] = idx1++;
+                featureNames.push_back(feature);
+            }
+        } else {
+            while (std::getline(inFeature, line)) {
+                std::istringstream iss(line);
+                std::string feature;
+                int32_t count;
+                if (!(iss >> feature >> count)) {
+                    error("Error reading feature file at line: %s", line.c_str());
+                }
+                if (count < minCount) {
+                    idx0++;
+                    continue;
+                }
+                bool include = !check_include || std::regex_match(feature, regex_include);
+                bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
+                if (include && !exclude) {
+                    idx_remap[idx0] = idx1++;
+                    featureNames.push_back(feature);
+                }
+                idx0++;
+            }
+        }
+        M_ = idx_remap.size();
+        notice("%s: %d features are kept out of %d", __FUNCTION__, idx1, idx0);
+        reader.setFeatureIndexRemap(idx_remap);
     }
 
-    void readWeights(const std::string& weightFile, double defaultWeight = 1.0) {
+    void setWeights(const std::string& weightFile, double defaultWeight = 1.0) {
         std::ifstream inWeight(weightFile);
         if (!inWeight) {
             error("Error opening weights file: %s", weightFile.c_str());
@@ -111,6 +167,17 @@ public:
         const MatrixXd& model = lda.get_model();
         int32_t nTopics = model.rows();
         int32_t nFeatures = model.cols();
+        if (featureNames.size() != nFeatures) {
+            if (reader.nFeatures != nFeatures) {
+                notice("%s: no valid feature names are set, using 0-based indices instead", __FUNCTION__);
+                featureNames.resize(nFeatures);
+                for (int i = 0; i < nFeatures; ++i) {
+                    featureNames[i] = std::to_string(i);
+                }
+            } else {
+                featureNames = reader.features;
+            }
+        }
         outFileStream << "Feature";
         for (int i = 0; i < nTopics; ++i) {
             outFileStream << "\t" << i;
@@ -118,7 +185,7 @@ public:
         outFileStream << "\n";
         outFileStream << std::fixed << std::setprecision(3);
         for (int i = 0; i < nFeatures; ++i) {
-            outFileStream << reader.features[i];
+            outFileStream << featureNames[i];
             for (int j = 0; j < nTopics; ++j) {
                 outFileStream << "\t" << model(j, i);
             }
@@ -138,10 +205,9 @@ public:
             error("Error opening output file: %s for writing", outFile.c_str());
         }
         bool labeled = reader.getNlayer() > 1;
-        if (labeled) {
-            outFileStream << "layer\t";
-        }
-        outFileStream << "x\ty";
+        std::string header;
+        reader.getInfoHeaderStr(header);
+        outFileStream << header;
         int32_t nTopics = lda.get_n_topics();
         for (int i = 0; i < nTopics; ++i) {
             outFileStream << "\t" << i;
@@ -164,7 +230,11 @@ public:
             }
             for (int i = 0; i < minibatch.size(); ++i) {
                 outFileStream << idens[i] << std::fixed << std::setprecision(4);
-                for (int j = 0; j < nTopics; ++j) {
+                if (idens[i].size() > 0) {
+                    outFileStream << "\t";
+                }
+                outFileStream << doc_topic(i, 0);
+                for (int j = 1; j < nTopics; ++j) {
                     outFileStream << "\t" << doc_topic(i, j);
                 }
                 outFileStream << "\n";
@@ -178,7 +248,7 @@ public:
         return reader.nUnits;
     }
     int32_t nFeatures() const {
-        return reader.nFeatures;
+        return M_;
     }
 
 private:
@@ -187,9 +257,12 @@ private:
 
     int32_t modal;
     int32_t ntot;
+    int32_t M_;
     int32_t minCountTrain;
     bool weightFeatures;
     std::vector<double> weights;
+    std::vector<std::string> featureNames;
+    std::vector<uint32_t> featureIdxUsed;
 
     std::vector<Document> minibatch;
     int32_t batchSize;
@@ -232,23 +305,12 @@ private:
                 return false;
             }
             Document doc;
-            int32_t x, y, layer;
-            int32_t ct = reader.parseLine(doc, x, y, layer, line, modal);
+            std::string info;
+            int32_t ct = reader.parseLine(doc, info, line, modal);
             if (ct < 0) {
                 error("Error parsing the %d-th line", ntot);
             }
-            std::stringstream ss;
-            if (labeled) {
-                ss << layer << "\t";
-            }
-            if (reader.hexSize <= 0) {
-                ss << x << "\t" << y;
-            } else {
-                double dx, dy;
-                reader.hexGrid.axial_to_cart(dx, dy, x, y);
-                ss << std::fixed << std::setprecision(3) << dx << "\t" << dy;
-            }
-            idens.push_back(ss.str());
+            idens.push_back(info);
             if (weightFeatures) {
                 for (size_t i = 0; i < doc.ids.size(); ++i) {
                     doc.cnts[i] *= weights[doc.ids[i]];
@@ -264,7 +326,9 @@ private:
 
 int32_t cmdLDA4Hex(int argc, char** argv) {
 
-    std::string inFile, metaFile, weightFile, outPrefix, priorFile, nameFile;
+    std::string inFile, metaFile, weightFile, outPrefix, priorFile, featureFile;
+    std::string include_ftr_regex;
+    std::string exclude_ftr_regex;
     int32_t nTopics = 0;
     int32_t seed = -1;
     int32_t nEpochs = 1, batchSize = 512;
@@ -272,7 +336,7 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     int32_t maxIter = 100;
     int32_t nThreads = 0;
     int32_t modal = 0;
-    int32_t minCountTrain = 20;
+    int32_t minCountTrain = 20, minCountFeature = 1;
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1., eta = -1.;
     double mDelta = 1e-3;
@@ -286,13 +350,16 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     pl.add_option("in-data", "Input hex file", inFile)
       .add_option("in-meta", "Metadata file", metaFile)
       .add_option("feature-weights", "Input weights file", weightFile)
-      .add_option("feature-names", "Feature names", nameFile)
+      .add_option("features", "Feature names and total counts", featureFile)
       .add_option("n-topics", "Number of topics", nTopics)
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("seed", "Random seed", seed)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
       .add_option("min-count-train", "Minimum total count for training (default: 20)", minCountTrain)
-      .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight);
+      .add_option("min-count-per-feature", "Minimum total count for features to be included. Require --features (default: 1)", minCountFeature)
+      .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight)
+      .add_option("include-feature-regex", "Include features that match this regex (grammar: POSIX extended) (default: all features)", include_ftr_regex)
+      .add_option("exclude-feature-regex", "Exclude features that match this regex (grammar: POSIX extended) (default: none)", exclude_ftr_regex);
     pl.add_option("kappa", "Learning decay (default: 0.7)", kappa)
       .add_option("tau0", "Learning offset (default: 10.0)", tau0)
       .add_option("max-iter", "Maximum number of iterations for each document (default: 100)", maxIter)
@@ -308,7 +375,6 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
       .add_option("verbose", "Verbose", verbose)
       .add_option("transform", "Transform the data to the LDA space after training", transform)
       .add_option("projection-only", "Transform the data using the prior model without further training", projection_only);
-
 
     try {
         pl.readArgs(argc, argv);
@@ -351,13 +417,12 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     }
 
     LDA4Hex lda4hex(metaFile, modal);
-    if (!nameFile.empty()) {
-        lda4hex.setFeatureNames(nameFile);
+    if (!featureFile.empty()) {
+        lda4hex.setFeatures(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
     if (!weightFile.empty()) {
-        lda4hex.readWeights(weightFile, defaultWeight);
+        lda4hex.setWeights(weightFile, defaultWeight);
     }
-
     LatentDirichletAllocation lda(nTopics, lda4hex.nFeatures(), seed, nThreads, verbose, alpha, eta, maxIter, mDelta, kappa, tau0, lda4hex.nUnits() * nEpochs, priorFile, std::nullopt, priorScale);
 
     if (!projection_only) {

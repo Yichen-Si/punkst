@@ -104,7 +104,6 @@ int32_t Tiles2Minibatch<T>::parseBoundaryFile(TileData<T>& tileData, std::shared
         }
         npt++;
     }
-    notice("Read boundary buffer (%d, %d, %d) with %d internal pixels", isVertical, bufRow, bufCol, npt);
     return tileData.idxinternal.size();
 }
 
@@ -386,6 +385,7 @@ int32_t Tiles2Minibatch<T>::outputPixelResult(const TileData<T>& tileData, const
 template<typename T>
 void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     if (tileData.pts.empty()) {
+        waitToAdvanceTicket(ticket);
         return;
     }
     std::vector<cv::Point2f> anchors;
@@ -396,6 +396,7 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
         std::cout << "Thread " << threadId << " initialized " << nAnchors << " anchors" << std::endl << std::flush;
     }
     if (nAnchors == 0) {
+        waitToAdvanceTicket(ticket);
         return;
     }
     int32_t nPixels = makeMinibatch(tileData, anchors, minibatch);
@@ -403,6 +404,7 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
         std::cout << "Thread " << threadId << " made minibatch with " << nPixels << " pixels" << std::endl << std::flush;
     }
     if (nPixels < 10) {
+        waitToAdvanceTicket(ticket);
         return;
     }
     auto smtx = slda.do_e_step(minibatch, true);
@@ -421,18 +423,21 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
     }
     uint32_t npts;
     if (useTicketSystem) {
-        std::unique_lock<std::mutex> lock(ticketMutex);
-        ticketCondition.wait(lock, [this, ticket]() {
-            return ticket == currentTicket.load(std::memory_order_acquire);
-        });
+        {
+            std::unique_lock<std::mutex> lock(ticketMutex);
+            if (debug_) {
+                std::cout << "Thread " << threadId << " waiting for ticket " << ticket << ", current ticket " << currentTicket.load(std::memory_order_acquire) << std::endl;
+            }
+            ticketCondition.wait(lock, [this, ticket]() {
+                return ticket == currentTicket.load(std::memory_order_acquire);
+            });
+        }
         if (outputOriginalData) {
             npts = outputOriginalDataWithPixelResult(tileData, topVals, topIds);
         } else {
             npts = outputPixelResult(tileData, topVals, topIds);
         }
-        currentTicket.fetch_add(1, std::memory_order_release);
-        lock.unlock();
-        ticketCondition.notify_all();
+        advanceTicket();
     } else {
         if (outputOriginalData) {
             npts = outputOriginalDataWithPixelResult(tileData, topVals, topIds);
@@ -440,9 +445,7 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
             npts = outputPixelResult(tileData, topVals, topIds);
         }
     }
-
-
-    notice("Thread %d fit minibatch with %d anchors and output %d internal pixels", threadId, nAnchors, npts);
+    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %d internal pixels", threadId, ticket, nAnchors, npts);
 }
 
 template<typename T>

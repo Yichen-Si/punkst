@@ -8,7 +8,19 @@ from mpmath import mp
 from scipy.sparse import *
 from joblib.parallel import Parallel, delayed
 
-from ficture.utils import utilt
+def gen_even_slices(n, n_packs):
+    """Generate approximately even-sized slices of indices."""
+    start = 0
+    if n_packs < 1:
+        raise ValueError("gen_even_slices got n_packs=%s, must be >=1" % n_packs)
+    for pack_num in range(n_packs):
+        this_n = n // n_packs
+        if pack_num < n % n_packs:
+            this_n += 1
+        if this_n > 0:
+            end = start + this_n
+            yield np.arange(start, end)
+            start = end
 
 ## calculate the log10 of the chi2 upper tail probability
 def log10_chi2_sf(x, df=1):
@@ -53,7 +65,7 @@ def de_bulk(_args):
         oheader = header
     else:
         for x in info.columns:
-            y = re.match('^[A-Za-z]*_*(\d+)$', x)
+            y = re.match(r"^[A-Za-z]*_*(\d+)$", x)
             if y:
                 header.append(y.group(1))
                 oheader.append(x)
@@ -92,7 +104,7 @@ def de_bulk(_args):
             # add 0.5 to avoid division by zero ()
             if float(tab[0,1]) > 0 and (total_umi - total_k) >0:
                 fd_numerator = tab[0,0] / total_k
-                fd_denominator = tab[0,1] / (total_umi - total_k) 
+                fd_denominator = tab[0,1] / (total_umi - total_k)
             else:
                 fd_numerator = (tab[0,0] + 0.5) / ( total_k + 1)
                 fd_denominator = (tab[0,1] + 0.5) / ( total_umi - total_k + 1 )
@@ -107,7 +119,7 @@ def de_bulk(_args):
     res = []
     if args.thread > 1:
         for k, kname in enumerate(header):
-            idx_slices = [idx for idx in utilt.gen_even_slices(M, args.thread)]
+            idx_slices = [idx for idx in gen_even_slices(M, args.thread)]
             with Parallel(n_jobs=args.thread, verbose=0) as parallel:
                 result = parallel(delayed(chisq)(kname, \
                             info.iloc[idx, :].loc[:, [kname, 'gene_tot']],\
@@ -126,7 +138,7 @@ def de_bulk(_args):
                 #fd=tab[0,0]/total_k[k]/tab[0,1]*(total_umi-total_k[k])
                 if tab[0,1]>0 and (total_umi - total_k[k]) > 0:
                     fd_numerator = float(tab[0,0]) / total_k[k]
-                    fd_denominator = float(tab[0,1]) / (total_umi - total_k[k]) 
+                    fd_denominator = float(tab[0,1]) / (total_umi - total_k[k])
                 else:
                     fd_numerator = (tab[0,0] + 0.5) / (total_k[k] + 1)
                     fd_denominator = (tab[0,1] + 0.5) / (total_umi - total_k[k] + 1)

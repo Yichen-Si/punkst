@@ -86,14 +86,8 @@ class Tiles2MinibatchBase {
 
 public:
 
-    Tiles2MinibatchBase(int nThreads, double r, const std::string& _outPref, const std::string& _tmpDir, TileReader& tileReader)
-    : nThreads(nThreads), r(r), outPref(_outPref), tmpDir(_tmpDir), tileReader(tileReader) {
-        if (!createDirectory(tmpDir)) {
-            throw std::runtime_error("Error creating temporary directory (or the existing directory is not empty): " + tmpDir);
-        }
-        if (tmpDir.back() != '/') {
-            tmpDir.push_back('/');
-        }
+    Tiles2MinibatchBase(int nThreads, double r, const std::string& _outPref, const std::string& _tmpDirPath, TileReader& tileReader)
+    : nThreads(nThreads), r(r), outPref(_outPref), tmpDir(_tmpDirPath), tileReader(tileReader) {
         std::string outputFile = outPref + ".tsv";
         mainOut.open(outputFile, std::ios::out);
         if (!mainOut) {
@@ -101,6 +95,7 @@ public:
         } // Assume tileSize is provided by the TileReader.
         mainOut.close();
         tileSize = tileReader.getTileSize();
+        notice("Created temporary directory: %s", tmpDir.path.string().c_str());
     }
 
     ~Tiles2MinibatchBase() {
@@ -116,23 +111,24 @@ protected:
     int nThreads; // Number of worker threads
     int tileSize; // Tile size (square)
     double r;     // Processing radius (padding width)
-    std::string outPref, tmpDir;
+    std::string outPref;
+    ScopedTempDir tmpDir;
     TileReader& tileReader;
 
     std::ofstream mainOut;
     std::mutex mainOutMutex;  // Protects writing to mainOut
     std::map<uint32_t, std::shared_ptr<BoundaryBuffer>> boundaryBuffers;
     std::mutex boundaryBuffersMapMutex; // Protects modifying boundaryBuffers
-    ThreadSafeQueue<TileKey> tileQueue;
-    ThreadSafeQueue<std::shared_ptr<BoundaryBuffer>> bufferQueue;
+    ThreadSafeQueue<std::pair<TileKey, int32_t> > tileQueue;
+    ThreadSafeQueue<std::pair<std::shared_ptr<BoundaryBuffer>, int32_t>> bufferQueue;
     std::vector<std::thread> workThreads;
 
     std::shared_ptr<BoundaryBuffer> getBoundaryBuffer(uint32_t key) {
         std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
         auto it = boundaryBuffers.find(key);
         if (it == boundaryBuffers.end()) {
-            std::string tmpFile = tmpDir + std::to_string(key);
-            auto buffer = std::make_shared<BoundaryBuffer>(key, tmpFile);
+            auto tmpFile = tmpDir.path / std::to_string(key);
+            auto buffer = std::make_shared<BoundaryBuffer>(key, tmpFile.string());
             boundaryBuffers[key] = buffer;
             return buffer;
         }
@@ -294,7 +290,7 @@ public:
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
         double c = 20, double h = 0.7, double res = 1, int32_t M = 0, int32_t N = 0, int32_t k = 3, int32_t verbose = 0, int32_t debug = 0) :
-        Tiles2MinibatchBase(nThreads, r + hexGrid.size, _outPref, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug), outputOriginalData(false), useTicketSystem(false), currentTicket(0), nextOutputTicket(0) {
+        Tiles2MinibatchBase(nThreads, r + hexGrid.size, _outPref, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug), outputOriginalData(false), useTicketSystem(false), currentTicket(0) {
         // check type consistency
         if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
             assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
@@ -366,27 +362,37 @@ public:
         }
         std::vector<TileKey> tileList;
         tileReader.getTileList(tileList);
+        std::sort(tileList.begin(), tileList.end());
+        currentTicket.store(0);
+        int32_t ticket = 0;
+        // Enqueue all tiles to the queue in a deterministic order
         for (const auto &tile : tileList) {
-            tileQueue.push(tile);
+            tileQueue.push(std::make_pair(tile, ticket++));
         }
         tileQueue.set_done();
         for (auto &t : workThreads) {
             t.join();
         }
         workThreads.clear();
+
         // Phase 2: Process boundary buffers
         notice("Phase 2 Launching %d worker threads", nThreads);
-        if (useTicketSystem) {
-            nextOutputTicket.store(0);
-            currentTicket.store(0);
+        std::vector<std::shared_ptr<BoundaryBuffer>> buffers;
+        buffers.reserve(boundaryBuffers.size());
+        for (auto &kv : boundaryBuffers) {
+            buffers.push_back(kv.second);
         }
-        { // Enqueue all boundary buffers from the global map.
-            std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
-            for (const auto &entry : boundaryBuffers) {
-                bufferQueue.push(entry.second);
-            }
-            bufferQueue.set_done();
+        std::sort(buffers.begin(), buffers.end(),
+            [](auto const &A, auto const &B){
+                return A->key < B->key;
+        });
+        currentTicket.store(0);
+        ticket = 0;
+        // Enqueue all boundary buffers from the global map.
+        for (auto &bufferPtr : buffers) {
+            bufferQueue.push(std::make_pair(bufferPtr, ticket++));
         }
+        bufferQueue.set_done();
         for (int i = 0; i < nThreads; ++i) {
             workThreads.push_back(std::thread(&Tiles2Minibatch::boundaryWorker, this, i));
         }
@@ -405,7 +411,6 @@ protected:
     bool weighted, outputOriginalData;
     bool useTicketSystem;
     std::atomic<int> currentTicket;
-    std::atomic<int> nextOutputTicket;
     std::mutex ticketMutex;
     std::condition_variable ticketCondition;
     LatentDirichletAllocation& lda;
@@ -448,41 +453,45 @@ protected:
     void writePseudobulkToTsv();
 
     void tileWorker(int threadId) override {
+        std::pair<TileKey, int32_t> tileTicket;
         TileKey tile;
-        while (tileQueue.pop(tile)) {
+        int32_t ticket;
+        while (tileQueue.pop(tileTicket)) {
+            tile = tileTicket.first;
+            ticket = tileTicket.second;
             TileData<T> tileData;
             int32_t ret = parseOneTile(tileData, tile);
-            notice("Thread %d read tile (%d, %d) with %d internal pixels", threadId, tile.row, tile.col, ret);
-            if (ret <= 10) continue;
+            notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __FUNCTION__, threadId, ticket, tile.row, tile.col, ret);
+            if (ret <= 10) {
+                waitToAdvanceTicket(ticket);
+                continue;
+            }
             vec2f_t* anchorPtr = nullptr;
             if (fixedAnchorForTile.find(tile) != fixedAnchorForTile.end()) {
                 anchorPtr = &fixedAnchorForTile[tile];
             }
-            int ticket = 0;
-            if (useTicketSystem) {
-                ticket = nextOutputTicket.fetch_add(1);
-            }
-
             processTile(tileData, threadId, ticket, anchorPtr);
         }
     }
 
     void boundaryWorker(int threadId) override {
+        std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
         std::shared_ptr<BoundaryBuffer> bufferPtr;
-        while (bufferQueue.pop(bufferPtr)) {
+        int32_t ticket;
+        while (bufferQueue.pop(bufferTicket)) {
+            bufferPtr = bufferTicket.first;
+            ticket = bufferTicket.second;
             TileData<T> tileData;
             int32_t ret = parseBoundaryFile(tileData, bufferPtr);
+            notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __FUNCTION__, threadId, ticket, bufferPtr->key, ret);
             if (ret <= 10) {
                 std::remove(bufferPtr->tmpFile.c_str());
+                waitToAdvanceTicket(ticket);
                 continue;
             }
             vec2f_t* anchorPtr = nullptr;
             if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
                 anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];
-            }
-            int ticket = 0;
-            if (useTicketSystem) {
-                ticket = nextOutputTicket.fetch_add(1);
             }
             processTile(tileData, threadId, ticket, anchorPtr);
             std::remove(bufferPtr->tmpFile.c_str());
@@ -514,6 +523,24 @@ protected:
             error("Error opening index output file: %s", indexFile.c_str());
         }
         indexOut << std::fixed << std::setprecision(floatCoordDigits);
+    }
+
+    void advanceTicket() {
+        if (!useTicketSystem) {
+            return;
+        }
+        currentTicket.fetch_add(1, std::memory_order_release);
+        ticketCondition.notify_all();
+    }
+    void waitToAdvanceTicket(int ticket) {
+        if (!useTicketSystem) {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(ticketMutex);
+        ticketCondition.wait(lock, [this, ticket]() {
+            return ticket == currentTicket.load(std::memory_order_acquire);
+        });
+        advanceTicket();
     }
 
 };

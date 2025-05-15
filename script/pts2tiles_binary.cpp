@@ -9,13 +9,8 @@
 
 class Pts2TilesBinary {
     public:
-        Pts2TilesBinary(int32_t numThreads, const std::string& inFile, std::string& tmpDir, const std::string& outFile, int32_t tileBuffer = 1000, int32_t nskip = 0) : numThreads(numThreads), inFile(inFile), tmpDir(tmpDir), outFile(outFile), tileBuffer(tileBuffer), nskip(nskip), recordSize(0) {
-            if (!createDirectory(tmpDir)) {
-                throw std::runtime_error("Error creating temporary directory (or the existing directory is not empty): " + tmpDir);
-            }
-            if (tmpDir.back() != '/') {
-                tmpDir += "/";
-            }
+        Pts2TilesBinary(int32_t numThreads, const std::string& inFile, std::string& tmpDirPath, const std::string& outFile, int32_t tileBuffer = 1000, int32_t nskip = 0) : numThreads(numThreads), inFile(inFile), tmpDir(tmpDirPath), outFile(outFile), tileBuffer(tileBuffer), nskip(nskip), recordSize(0) {
+            notice("Created temporary directory: %s", tmpDir.path.string().c_str());
         }
 
         // Set up the basic geometry (tile size, x/y column indices)
@@ -100,7 +95,8 @@ class Pts2TilesBinary {
     private:
         // Input and configuration.
         int32_t numThreads;
-        std::string tmpDir, inFile, outFile;
+        ScopedTempDir tmpDir;
+        std::string inFile, outFile;
         int32_t tileSize;
         int32_t tileBuffer; // Number of records to buffer per tile per thread before flushing
         int32_t nskip;
@@ -208,7 +204,7 @@ class Pts2TilesBinary {
                         std::lock_guard<std::mutex> lock(globalTilesMutex);
                         globalTiles[tileId] += (buf.size() / recordSize);
                     }
-                    std::string tmpFilename = tmpDir + std::to_string(tileId) + "_" + std::to_string(threadId) + ".bin";
+                    auto tmpFilename = tmpDir.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".bin");
                     std::ofstream out(tmpFilename, std::ios::binary | std::ios::app);
                     out.write(buf.data(), buf.size());
                     out.close();
@@ -222,7 +218,7 @@ class Pts2TilesBinary {
                         std::lock_guard<std::mutex> lock(globalTilesMutex);
                         globalTiles[pair.first] += (pair.second.size() / recordSize);
                     }
-                    std::string tmpFilename = tmpDir + std::to_string(pair.first) + "_" + std::to_string(threadId) + ".bin";
+                    auto tmpFilename = tmpDir.path / (std::to_string(pair.first) + "_" + std::to_string(threadId) + ".bin");
                     std::ofstream out(tmpFilename, std::ios::binary | std::ios::app);
                     out.write(pair.second.data(), pair.second.size());
                     out.close();
@@ -339,13 +335,13 @@ class Pts2TilesBinary {
         // Merge the temporary binary files for a given tile id into the final output file.
         void mergeTmpFileToOutput(int64_t tileId, std::ofstream& outfile) {
             for (uint32_t threadId = 0; threadId < static_cast<uint32_t>(numThreads); ++threadId) {
-                std::string tmpFilename = tmpDir + std::to_string(tileId) + "_" + std::to_string(threadId) + ".bin";
+                auto tmpFilename = tmpDir.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".bin");
                 std::ifstream tmpFile(tmpFilename, std::ios::binary);
                 if (tmpFile) {
                     outfile << tmpFile.rdbuf();
                     tmpFile.close();
                     // Remove temporary file after merging.
-                    std::remove(tmpFilename.c_str());
+                    std::filesystem::remove(tmpFilename);
                 }
             }
         }
@@ -399,7 +395,7 @@ class Pts2TilesBinary {
 
 int32_t cmdPts2TilesBinary(int32_t argc, char** argv) {
 
-    std::string inTsv, output, tmpDir;
+    std::string inTsv, output, tmpDirPath;
     int nThreads = 1, tileSize = 500000;
     int debug = 0, tileBuffer = 1000, verbose = 1000000;
     int icol_x, icol_y, nskip = 0;
@@ -418,7 +414,7 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv) {
       .add_option("icol-int", "Column indecies for integer data (0-based)", icol_int)
       .add_option("icol-float", "Column indecies for float data (0-based)", icol_float)
       .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
-      .add_option("temp-dir", "Directory to store temporary files", tmpDir)
+      .add_option("temp-dir", "Directory to store temporary files", tmpDirPath)
       .add_option("tile-size", "Tile size in units (default: 300 um)", tileSize)
       .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads);
@@ -448,7 +444,7 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv) {
     }
     notice("Will use %u threads for processing", numThreads);
 
-    Pts2TilesBinary pts2Tiles(numThreads, inTsv, tmpDir, output);
+    Pts2TilesBinary pts2Tiles(numThreads, inTsv, tmpDirPath, output);
     pts2Tiles.initCategoryDictionaries(catDictionaries, icol_cat, catInString);
     pts2Tiles.initLineParser(tileSize, icol_x, icol_y);
     pts2Tiles.addIntColumns(icol_int);

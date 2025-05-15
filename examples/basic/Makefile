@@ -3,7 +3,6 @@ GITPATH      := {GITPATH}
 DATADIR      := {DATADIR}
 TMPDIR       := {TMPDIR}
 TRANSCRIPTS  := {TRANSCRIPTS}
-FEATURES     := {FEATURES}
 ICOL_X       := {ICOL_X}
 ICOL_Y       := {ICOL_Y}
 ICOL_FEATURE := {ICOL_FEATURE}
@@ -19,11 +18,12 @@ PIXHEX       := {PIXHEX}
 NMOVE        := {NMOVE}
 RES          := {RES}
 SCALE        := {SCALE}
-BOUNDS       := --xmin {XMIN} --xmax {XMAX} --ymin {YMIN} --ymax {YMAX}
 
 PUNKST       := $(GITPATH)/bin/punkst
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
+COORD_RANGE  := $(DATADIR)/coord_range.tsv
+FEATURES     := $(DATADIR)/features.tsv
 
 # ─── Compute the full list of final report files ──────────────────────────
 REPORTS := \
@@ -38,21 +38,22 @@ REPORTS := \
 all: $(REPORTS)
 
 # ─── Step 1: bag pixels → tiles.tsv + tiles.index ─────────────────────
-$(TILETSV): $(TRANSCRIPTS)
+$(DATADIR)/prepare.stamp: $(TRANSCRIPTS)
 	@echo "[1/6] pts2tiles → $@"
 	 $(PUNKST) pts2tiles \
 	  --in-tsv $(TRANSCRIPTS) \
-	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) --skip $(SKIP) \
+	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) \
+	  --icol-feature $(ICOL_FEATURE) --icol-int $(ICOL_COUNT) --skip $(SKIP) \
 	  --tile-size $(TILESIZE) \
 	  --tile-buffer 1000 \
 	  --out-prefix $(DATADIR)/transcripts.tiled \
 	  --temp-dir $(TMPDIR) --threads $(THREADS)
+	touch $(DATADIR)/prepare.stamp
 
 # ─── Step 2: for each H in HEXGRIDS → hex_H_randomized.txt ────────────
 define HEX_RULE
 $(DATADIR)/hex_$(1)_randomized.txt: \
-    $(TILETSV) \
-    $(FEATURES)
+    $(DATADIR)/prepare.stamp
 	@echo "[2/6] tiles2hex (hex=$(1)) → $(DATADIR)/hex_$(1)_randomized.txt"
 	 $(PUNKST) tiles2hex \
 	  --in-tsv $(TILETSV) \
@@ -107,8 +108,8 @@ $(foreach H,$(HEXGRIDS),\
 # ─── Step 4: pixel-decode → .tsv + .pseudobulk.tsv ────────────────────
 define PIXEL_RULE
 $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).decode.stamp: \
-    $(DATADIR)/k$(2)_hex_$(1).model.stamp \
-    $(TILETSV)
+	$(DATADIR)/prepare.stamp \
+    $(DATADIR)/k$(2)_hex_$(1).model.stamp
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$*.tsv"
 	 $(PUNKST) pixel-decode \
 	  --model $(DATADIR)/k$(2)_hex_$(1).model.tsv \
@@ -139,7 +140,7 @@ $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).pixel.png: \
 	  --in-tsv $(DATADIR)/k$(2)_hex_$(1).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
 	  --in-color $(DATADIR)/k$(2)_hex_$(1).color.rgb.tsv \
 	  --out $$@ \
-	  $(BOUNDS) --scale $(SCALE)
+	  --range $(COORD_RANGE) --scale $(SCALE)
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\

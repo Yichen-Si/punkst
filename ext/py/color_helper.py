@@ -237,7 +237,7 @@ def choose_color(_args):
     parser.add_argument('--color-table', type=str, help="TSV with R,G,B or Color_hex of candidate colors")
     parser.add_argument('--top-color', type=str, default="#fcd217", help="HEX color code for the top factor")
     parser.add_argument('--even-space', action='store_true', help="Evenly space the factors on the spectrum")
-    parser.add_argument("--skip-columns", type=str, action="append", default=[], help="Columns that are neither coordiante nor factor in the input file")
+    parser.add_argument("--skip-columns", type=str, action="append", default=["random_key", "layer"], help="Columns that are neither coordiante nor factor in the input file")
     parser.add_argument('--annotation', type=str, default = '', help='')
     parser.add_argument('--seed', type=int, default=-1, help='')
     args = parser.parse_args(_args)

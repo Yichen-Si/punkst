@@ -103,8 +103,8 @@ class HexReader {
 public:
 
     int32_t nUnits, nFeatures;
-    HexGrid hexGrid;
     double hexSize;
+    bool hasCoordinates;
     std::vector<std::string> features;
 
     HexReader(const std::string &metaFile) {
@@ -125,36 +125,31 @@ public:
     int32_t getNlayer() const {
         return nLayer;
     }
-    void setFeatureNames(const std::vector<std::string>& featureNames) {
-        assert (featureNames.size() == nFeatures && "Feature names size does not match the number of features");
-        features = featureNames;
-    }
-    void setFeatureNames(const std::string& nameFile) {
-        std::ifstream inFile(nameFile);
-        if (!inFile) {
-            error("Error opening feature names file: %s", nameFile.c_str());
-        }
-        std::string line;
-        features.clear();
-        while (std::getline(inFile, line)) {
-            std::istringstream iss(line);
-            std::string feature;
-            if (!(iss >> feature)) {
-                error("Error reading feature names on line %s", line.c_str());
+    void getInfoHeaderStr(std::string &header) const {
+        header.clear();
+        for (size_t i = 0; i < header_info.size(); ++i) {
+            header += header_info[i];
+            if (i < header_info.size() - 1) {
+                header += "\t";
             }
-            features.push_back(feature);
         }
-        inFile.close();
-        assert (features.size() == nFeatures && "Feature names size does not match the number of features");
+    }
+    void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap) {
+        idx_remap = std::move(_idx_remap);
+        remap = true;
+        nFeatures = idx_remap.size();
+        std::vector<std::string> new_features(nFeatures);
+        for (const auto& pair : idx_remap) {
+            new_features[pair.second] = features[pair.first];
+        }
+        features = std::move(new_features);
     }
 
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0) {
-        int32_t x=0, y=0, layer=0;
-        return parseLine(doc, x, y, layer, line, modal);
+        std::string info;
+        return parseLine(doc, info, line, modal);
     }
-    int32_t parseLine(Document& doc, int32_t& x, int32_t& y, int32_t& layer, const std::string &line, int32_t modal = 0);
-    int32_t parseLine(UnitValues &unit, const std::string &line);
-
+    int32_t parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal = 0);
 
 private:
 
@@ -163,6 +158,9 @@ private:
     int32_t offset_data;
     int32_t icol_layer, icol_x, icol_y;
     int32_t mintokens;
+    std::vector<std::string> header_info;
+    std::unordered_map<uint32_t, uint32_t> idx_remap;
+    bool remap = false;
 
     void readMetadata(const std::string &metaFile);
 };

@@ -24,7 +24,7 @@
 
 // String manipulation functions
 
-// Splits a line into a vector - PERL style
+// Splits a line into a vector - one or more single character delimiters
 void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str,
     uint32_t limit, bool clear, bool collapse, bool strip) {
     if (clear)

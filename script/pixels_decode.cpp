@@ -3,7 +3,7 @@
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
-    std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDir, dictFile, weightFile;
+    std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDirPath, dictFile, weightFile;
     int nThreads = 1, seed = -1, debug = 0, verbose = 0;
     int icol_x, icol_y, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
@@ -45,7 +45,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("out-pref", "Output prefix", outPref)
       .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
       .add_option("use-ticket-system", "Use ticket system to ensure predictable output order", useTicketSystem)
-      .add_option("temp-dir", "Directory to store temporary files", tmpDir, true)
+      .add_option("temp-dir", "Directory to store temporary files", tmpDirPath, true)
       .add_option("top-k", "Top K factors to output", topK)
       .add_option("min-init-count", "Minimum", minInitCount)
       .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used if input coordinates are float or --output-original is not set)", floatCoordDigits)
@@ -121,7 +121,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
 
     if (coordsAreInt) {
-        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outPref, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
         tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
         tiles2minibatch.setFeatureNames(featureNames);
         tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
@@ -132,7 +132,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         tiles2minibatch.run();
     } else {
-        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outPref, tmpDir, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
         tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
         tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
         tiles2minibatch.setOutputProbDigits(probDigits);

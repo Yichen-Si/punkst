@@ -263,6 +263,10 @@ protected:
             nPoints += pair.second;
         }
         indexfile << "# npixels\t" << nPoints << "\n";
+        indexfile << "# xmin\t" << minX << "\n"
+                  << "# xmax\t" << maxX << "\n"
+                  << "# ymin\t" << minY << "\n"
+                  << "# ymax\t" << maxY << "\n";
         std::sort(sortedTiles.begin(), sortedTiles.end());
 
         for (const auto& tileId : sortedTiles) {
@@ -280,7 +284,7 @@ protected:
     bool writeAuxiliaryFiles() {
         size_t pos = outPref.find_last_of("/\\");
         std::string outDir = (pos == std::string::npos) ? "" : outPref.substr(0, pos + 1);
-        std::string outFile = outDir + "coord_range.txt";
+        std::string outFile = outDir + "coord_range.tsv";
         std::ofstream out(outFile);
         if (!out) {
             warning("Error opening output file for writing: %s", outFile.c_str());

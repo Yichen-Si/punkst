@@ -1,30 +1,26 @@
 #include "tiles2bins.hpp"
 
-Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts)
-: nThreads(nThreads), tmpDir(_tmpDir), outFile(_outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(_minCounts), nUnits(0), nFeatures(0) {
-    if (!createDirectory(tmpDir)) {
-        error("Error creating temporary directory (or the existing directory is not empty): %s", tmpDir.c_str());
-    }
-    if (tmpDir.back() != '/') {
-        tmpDir += "/";
-    }
+Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts)
+: nThreads(nThreads), tmpDir(_tmpDirPath), outFile(_outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(_minCounts), nUnits(0), nFeatures(0) {
     nModal = parser.n_ints;
     mainOut.open(outFile, std::ios::out);
     if (!mainOut) {
         error("Error opening output file %s for writing", outFile.c_str());
         return;
     }
+    mainOut << std::setprecision(4) << std::fixed;
     if (minCounts.size() != nModal) {
         minCounts.resize(nModal);
         std::fill(minCounts.begin(), minCounts.end(), 1);
     }
+    notice("Created temporary directory: %s", tmpDir.path.string().c_str());
     meta["hex_size"] = hexGrid.size;
     meta["n_modalities"] = nModal;
     meta["random_key"] = 0;
-    meta["icol_x_hex"] = 1;
-    meta["icol_y_hex"] = 2;
+    meta["icol_x"] = 1;
+    meta["icol_y"] = 2;
     meta["offset_data"] = 3;
-    meta["icols_identifier"] = {0,1,2};
+    meta["header_info"] = {"random_key", "x", "y"};
 }
 
 void Tiles2Hex::writeMetadata() {
@@ -51,10 +47,10 @@ void Tiles2Hex::worker(int threadId) {
     std::mt19937 gen(rd());
     std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
     // temporary file
-    std::string partialFile = tmpDir + std::to_string(threadId) + ".txt";
+    auto partialFile = tmpDir.path / (std::to_string(threadId) + ".txt");
     std::ofstream outFile(partialFile, std::ios::out);
     if (!outFile) {
-        error("Error opening temporary file: %s", partialFile.c_str());
+        error("Error opening temporary file: %s", partialFile.string().c_str());
     }
     uint32_t maxFeatureIdxLocal = 0;
     // Process one tile at a time
@@ -123,8 +119,7 @@ void Tiles2Hex::worker(int threadId) {
                     if (!flag) {
                         continue;
                     }
-                    uint32_t iden = rdUnif(gen);
-                    entry.second.writeToFile(mainOut, iden);
+                    writeUnit(entry.second, rdUnif(gen));
                     nUnits++;
                 } else {
                     entry.second.writeToFile(outFile, 0);
@@ -182,7 +177,7 @@ bool Tiles2Hex::run() {
 bool Tiles2Hex::mergeBoundaryHexagons() {
     std::unordered_map<int64_t, UnitValues> mergedUnits;
     for (int i = 0; i < nThreads; ++i) {
-        std::string fname = tmpDir + std::to_string(i) + ".txt";
+        auto fname = tmpDir.path / (std::to_string(i) + ".txt");
         std::ifstream ifs(fname);
         if (!ifs) {
             continue; // unlikely?
@@ -228,8 +223,7 @@ bool Tiles2Hex::mergeBoundaryHexagons() {
             if (!flag) {
                 continue;
             }
-            uint32_t rnd = rdUnif(gen);
-            entry.second.writeToFile(mainOut, rnd);
+            writeUnit(entry.second, rdUnif(gen));
             nUnits++;
         }
         mainOut.flush();
@@ -264,10 +258,10 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
     std::mt19937 gen(rd());
     std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
     // temporary file
-    std::string partialFile = tmpDir + std::to_string(threadId) + ".txt";
+    auto partialFile = tmpDir.path / (std::to_string(threadId) + ".txt");
     std::ofstream outFile(partialFile, std::ios::out);
     if (!outFile) {
-        error("Error opening temporary file: %s", partialFile.c_str());
+        error("Error opening temporary file: %s", partialFile.string().c_str());
     }
     uint32_t maxFeatureIdxLocal = 0;
     // Process one tile at a time
@@ -361,8 +355,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
                     if (!flag) {
                         continue;
                     }
-                    uint32_t iden = rdUnif(gen);
-                    entry.second.writeToFile(mainOut, iden);
+                    writeUnit(entry.second, rdUnif(gen));
                     nUnits++;
                 }
             }
@@ -386,7 +379,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
 bool Tiles2UnitsByAnchor::mergeBoundaryHexagons() {
     std::vector<std::unordered_map<uint64_t, UnitValues>> mergedUnitsList(nLayer);
     for (int i = 0; i < nThreads; ++i) {
-        std::string fname = tmpDir + std::to_string(i) + ".txt";
+        auto fname = tmpDir.path / (std::to_string(i) + ".txt");
         std::ifstream ifs(fname);
         if (!ifs) {
             continue; // unlikely?
@@ -437,8 +430,7 @@ bool Tiles2UnitsByAnchor::mergeBoundaryHexagons() {
                 if (!flag) {
                     continue;
                 }
-                uint32_t rnd = rdUnif(gen);
-                entry.second.writeToFile(mainOut, rnd);
+                writeUnit(entry.second, rdUnif(gen));
                 nUnits++;
             }
             nTot += mergedUnits.size();

@@ -96,10 +96,6 @@ def main():
     # Emit sbatch wrapper
     if (args.output and len(job) > 0):
         write_sbatch_script(job, args.makefile, args.output)
-    # check temporary directory
-    tmpdir= wf.get("tmpdir")
-    if tmpdir and os.path.exists(tmpdir):
-        print(f"Please removed temporary directory or all its content before running the workflow: {tmpdir}")
 
 if __name__ == '__main__':
     main()

@@ -6,7 +6,6 @@
       "datadir": "/path/to/output",
       "tmpdir": "/path/to/store/temporary/files",
       "transcripts": "/path/to/input/transcripts.tsv",
-      "features": "/path/to/input/features.txt",
       "icol_x": 0,
       "icol_y": 1,
       "icol_feature": 2,
@@ -18,10 +17,6 @@
       "pixhex": 12,
       "nmove": 3,
       "res": 0.5,
-      "xmin": 6690,
-      "xmax": 7365,
-      "ymin": 6772,
-      "ymax": 7447,
       "scale": 1
     },
     "job": {

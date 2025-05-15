@@ -1,6 +1,6 @@
 #include "dataunits.hpp"
 
-int32_t HexReader::parseLine(Document& doc, int32_t& x, int32_t& y, int32_t& layer, const std::string &line, int32_t modal) {
+int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal) {
     assert(modal < nModal && "Modal out of range");
     std::vector<int32_t> nfeatures(nModal, 0);
     std::vector<uint32_t> counts(nModal, 0);
@@ -10,17 +10,10 @@ int32_t HexReader::parseLine(Document& doc, int32_t& x, int32_t& y, int32_t& lay
     if (ntokens < mintokens) {
         return -1;
     }
-    if (icol_x >= 0 && icol_y >= 0) {
-        if (!str2int32(token[icol_x], x)){
-            return -1;
-        }
-        if (!str2int32(token[icol_y], y)){
-            return -1;
-        }
-    }
-    if (icol_layer >= 0) {
-        if(!str2int32(token[icol_layer], layer)) {
-            return -1;
+    for (uint32_t j = 0; j < offset_data; j++) {
+        info += token[j];
+        if (j < offset_data - 1) {
+            info += "\t";
         }
     }
     uint32_t i = offset_data;
@@ -36,58 +29,34 @@ int32_t HexReader::parseLine(Document& doc, int32_t& x, int32_t& y, int32_t& lay
     for (int l = 0; l < modal; ++l) { // skip
         i += nfeatures[l] * 2;
     }
-    doc.ids.resize(nfeatures[modal]);
-    doc.cnts.resize(nfeatures[modal]);
-    for (int j = 0; j < nfeatures[modal]; ++j) {
-        std::vector<std::string> pair;
-        split(pair, " ", token[i]);
-        if (!str2uint32(pair[0], doc.ids[j])) {return -1;}
-        if (!str2double(pair[1], doc.cnts[j])) {return -1;}
-        i += 1;
-    }
-    return counts[modal];
-}
-
-
-int32_t HexReader::parseLine(UnitValues &unit, const std::string &line) {
-    std::vector<int32_t> nfeatures(nModal, 0);
-    std::vector<uint32_t> counts(nModal, 0);
-    std::vector<std::string> token;
-    split(token, "\t", line);
-    size_t ntokens = token.size();
-    if (ntokens < mintokens) {
-        return -1;
-    }
-    if (icol_x >= 0 && icol_y >= 0) {
-        if (!str2int32(token[icol_x], unit.x)){return -1;}
-        if (!str2int32(token[icol_y], unit.y)){return -1;}
-    }
-    if (icol_layer >= 0) {
-        if(!str2int32(token[icol_layer], unit.label)) {return -1;}
-    }
-    uint32_t i = offset_data;
-    int32_t total;
-    for (int j = 0; j < nModal; j++) {
-        if(!str2int32(token[i], nfeatures[j])) {return -1;}
-        if(!str2uint32(token[i + 1], counts[j])) {return -1;}
-        total += counts[j];
-        i += 2;
-    }
-    unit.vals.resize(nModal);
-    unit.valsums.resize(nModal);
-    for (int j = 0; j < nModal; ++j) {
-        unit.valsums[j] = counts[j];
-        for (int k = 0; k < nfeatures[j]; ++k) {
+    if (remap) {
+        doc.ids.reserve(nfeatures[modal]);
+        doc.cnts.reserve(nfeatures[modal]);
+        for (int j = 0; j < nfeatures[modal]; ++j) {
             std::vector<std::string> pair;
             split(pair, " ", token[i]);
             uint32_t u, v;
             if (!str2uint32(pair[0], u)) {return -1;}
             if (!str2uint32(pair[1], v)) {return -1;}
-            unit.vals[j][u] = v;
+            auto it = idx_remap.find(u);
+            if (it != idx_remap.end()) {
+                doc.ids.push_back(it->second);
+                doc.cnts.push_back(v);
+            }
+            i += 1;
+        }
+    } else {
+        doc.ids.resize(nfeatures[modal]);
+        doc.cnts.resize(nfeatures[modal]);
+        for (int j = 0; j < nfeatures[modal]; ++j) {
+            std::vector<std::string> pair;
+            split(pair, " ", token[i]);
+            if (!str2uint32(pair[0], doc.ids[j])) {return -1;}
+            if (!str2double(pair[1], doc.cnts[j])) {return -1;}
             i += 1;
         }
     }
-    return total;
+    return counts[modal];
 }
 
 void HexReader::readMetadata(const std::string &metaFile) {
@@ -96,11 +65,10 @@ void HexReader::readMetadata(const std::string &metaFile) {
         throw std::runtime_error("Error opening metadata file " + metaFile);
     }
 
-    // Parse the JSON file.
+    // Parse the JSON file (only offset_data is required)
     nlohmann::json meta;
     metaIn >> meta;
-    hexSize = meta.value("hex_size", -0.0);
-    hexGrid.init(hexSize);
+    hexSize = meta.value("hex_size", 0);
     nUnits = meta.value("n_units", 0);
     nLayer = meta.value("n_layers", 1);
     nModal = meta.value("n_modalities", 1);
@@ -110,22 +78,29 @@ void HexReader::readMetadata(const std::string &metaFile) {
         throw std::runtime_error("Error: offset_data not found in metadata file");
     }
     icol_layer = meta.value("icol_layer", -1);
-    icol_x = meta.value("icol_x_hex", -1);
-    icol_y = meta.value("icol_y_hex", -1);
+    icol_x = meta.value("icol_x", -1);
+    icol_y = meta.value("icol_y", -1);
+    header_info = meta.value("header_info", std::vector<std::string>());
     features.resize(nFeatures);
     if (meta.contains("dictionary")) {
         for (auto& item : meta["dictionary"].items()) {
-            if (!item.value().is_number_integer()) {
-                throw std::runtime_error("Dictionary (key: value) pairs must have integer values");
+            if (!item.value().is_number_unsigned()) {
+                throw std::runtime_error("Dictionary (key: value) pairs must have non-negative integer values");
             }
-            features[item.value()] = item.key();
+            uint32_t idx = item.value();
+            if (idx >= nFeatures) {
+                features.resize(idx + 1);
+            }
+            features[idx] = item.key();
         }
-    } else {
+        nFeatures = features.size();
+    } else if (nFeatures > 0) {
         for (int i = 0; i < nFeatures; ++i) {
             features[i] = std::to_string(i);
         }
     }
     mintokens = offset_data + 2 * nModal;
+    hasCoordinates = (icol_x >= 0 && icol_y >= 0);
 }
 
 bool UnitValues::readFromLine(const std::string& line, int32_t nModal, bool labeled) {
