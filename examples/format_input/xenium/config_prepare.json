@@ -1,6 +1,6 @@
 {
     "workflow": {
-      "rawdir" : "/path/to/raw/data",
+      "raw_cells" : "/path/to/cells.csv.gz",
       "raw_transcripts": "/path/to/transcripts.csv.gz",
       "datadir": "/path/to/output"
     }

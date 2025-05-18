@@ -7,13 +7,13 @@
 Example usage
 ```bash
 punkst pts2tiles --in-tsv ${path}/transcripts.tsv \
---icol-x 0 --icol-y 1 --skip 0 --tile-size 500 \
+--icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 --skip 0 --tile-size 500 \
 --temp-dir ${tmpdir} --out-prefix ${path}/transcripts.tiled --threads ${threads}
 ```
 
 ### Required Parameters
 
-`--in-tsv` - The input TSV file containing spatial data points.
+`--in-tsv` - The input TSV file containing spatial data points. It could be a gzipped file ending with `.gz`. If the input is a stream from stdin, use `-` as the filename.
 
 `--icol-x`, `--icol-y` - The column indices for X and Y coordinates (0-based).
 
@@ -23,7 +23,7 @@ punkst pts2tiles --in-tsv ${path}/transcripts.tsv \
 
 `--temp-dir` - The directory for storing temporary files during processing.
 
-`--icol-feature` - The column index for feature names/IDs (0-based). If provided, the module will generate a feature counts file. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features.)
+`--icol-feature` - The column index for feature names/IDs (0-based). If provided, the module will generate a file including feature names and counts. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features.)
 
 `--icol-int` - Column indices for integer values to aggregate per feature. Can be specified multiple times to track multiple integer columns. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features, preferably excluding the extremely low count features.)
 

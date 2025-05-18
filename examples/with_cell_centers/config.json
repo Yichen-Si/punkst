@@ -6,7 +6,7 @@
     "datadir": "/path/to/output",
     "tmpdir": "/path/to/store/temporary/files",
     "transcripts": "/path/to/input/transcripts.tsv",
-    "features": "/path/to/input/features.txt",
+    "exclude_feature_regex": "'^(?:Gm\\d+|(?:Blank|BLANK|NegCon|NegPrb|mt-|MT-).*)$$'",
     "cellcoord": "/path/to/cell_center_coordinates.tsv",
     "nucleiradius": 3,
     "icol_x": 0,
@@ -20,10 +20,6 @@
     "pixhex": 12,
     "nmove": 3,
     "res": 0.5,
-    "xmin": 6690,
-    "xmax": 7365,
-    "ymin": 6772,
-    "ymax": 7447,
     "scale": 1
   },
   "job": {

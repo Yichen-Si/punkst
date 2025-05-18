@@ -48,9 +48,9 @@ punkst lda4hex --in-data ${path}/hex_12.randomized.txt --in-meta ${path}/hex_12.
 
 `--min-count-per-feature` - Minimum total count for features to be included. Require `--features` to be specified. Default: 1.
 
-`--include-feature-regex` - Regular expression (POSIX extended) to include only features matching this pattern. Default: include all features.
+`--include-feature-regex` - Regular expression ([modified ECMAScript grammar](https://en.cppreference.com/w/cpp/regex/ecmascript)) to include only features matching this pattern. Default: include all features.
 
-`--exclude-feature-regex` - Regular expression (POSIX extended) to exclude features matching this pattern. Default: exclude no features.
+`--exclude-feature-regex` - Regular expression (modified ECMAScript) to exclude features matching this pattern. Default: exclude no features.
 
 **Feature Selection Logic:** the above three filters are applied jointly, so only genes with at least the minimum count, matching the include regex (if provided), and not matching the exclude regex (if provided) will be included in the model.
 

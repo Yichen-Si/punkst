@@ -19,8 +19,8 @@ public:
     void setFeatures(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex) {
         bool check_include = !include_ftr_regex.empty();
         bool check_exclude = !exclude_ftr_regex.empty();
-        std::regex regex_include(include_ftr_regex, std::regex_constants::extended);
-        std::regex regex_exclude(exclude_ftr_regex, std::regex_constants::extended);
+        std::regex regex_include(include_ftr_regex);
+        std::regex regex_exclude(exclude_ftr_regex);
         std::ifstream inFeature(featureFile);
         if (!inFeature) {
             error("Error opening features file: %s", featureFile.c_str());
@@ -50,6 +50,7 @@ public:
                     continue;
                 }
                 if (check_exclude && std::regex_match(feature, regex_exclude)) {
+                    std::cout << "Exclude " << feature << std::endl;
                     continue;
                 }
                 idx_remap[it->second] = idx1++;
@@ -358,8 +359,8 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
       .add_option("min-count-train", "Minimum total count for training (default: 20)", minCountTrain)
       .add_option("min-count-per-feature", "Minimum total count for features to be included. Require --features (default: 1)", minCountFeature)
       .add_option("default-weight", "Default weight for features not in the provided weight file (default: 1.0, set it to 0 to ignore features not in the weight file)", defaultWeight)
-      .add_option("include-feature-regex", "Include features that match this regex (grammar: POSIX extended) (default: all features)", include_ftr_regex)
-      .add_option("exclude-feature-regex", "Exclude features that match this regex (grammar: POSIX extended) (default: none)", exclude_ftr_regex);
+      .add_option("include-feature-regex", "Include features that match this regex (grammar: Modified ECMAScript) (default: all features)", include_ftr_regex)
+      .add_option("exclude-feature-regex", "Exclude features that match this regex (grammar: Modified ECMAScript) (default: none)", exclude_ftr_regex);
     pl.add_option("kappa", "Learning decay (default: 0.7)", kappa)
       .add_option("tau0", "Learning offset (default: 10.0)", tau0)
       .add_option("max-iter", "Maximum number of iterations for each document (default: 100)", maxIter)

@@ -8,6 +8,7 @@ ICOL_Y       := {ICOL_Y}
 ICOL_FEATURE := {ICOL_FEATURE}
 ICOL_COUNT   := {ICOL_COUNT}
 SKIP         := {SKIP}
+EXCLUDE_FEATURE_REGEX := {EXCLUDE_FEATURE_REGEX}
 
 THREADS      := {THREADS}
 SEED         := {SEED}
@@ -79,9 +80,11 @@ $(DATADIR)/k$(2)_hex_$(1).model.stamp: \
 	 $(PUNKST) lda4hex \
 	  --in-data $(DATADIR)/hex_$(1)_randomized.txt \
 	  --in-meta $(DATADIR)/hex_$(1).json \
+	  --features $(FEATURES) \
 	  --n-topics $(2) \
-	  --out-prefix $(DATADIR)/k$(2)_hex_$(1) \
-	  --transform --min-count-train 50 --minibatch-size 512 \
+	  --out-prefix $(DATADIR)/k$(2)_hex_$(1) --transform \
+	  --min-count-per-feature 50 --min-count-train 50 --minibatch-size 512 \
+	  --exclude-feature-regex $(EXCLUDE_FEATURE_REGEX) \
 	  --threads $(THREADS) --seed $(SEED) --n-epochs 1
 	touch $(DATADIR)/k$(2)_hex_$(1).model.stamp
 endef

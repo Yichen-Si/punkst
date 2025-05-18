@@ -6,6 +6,7 @@
       "datadir": "/path/to/output",
       "tmpdir": "/path/to/store/temporary/files",
       "transcripts": "/path/to/input/transcripts.tsv",
+      "exclude_feature_regex": "'^(?:Gm\\d+|(?:Blank|BLANK|NegCon|NegPrb|mt-|MT-).*)$$'",
       "icol_x": 0,
       "icol_y": 1,
       "icol_feature": 2,

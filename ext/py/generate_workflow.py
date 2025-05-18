@@ -37,9 +37,9 @@ def render_makefile(template_path, out_path, wf):
     for k, v in wf.items():
         key = k.upper()
         if isinstance(v, list):
-            fmt[key] = " ".join(str(x) for x in v)
+            fmt[key] = " ".join(str(x).replace("$", "$$") for x in v)
         else:
-            fmt[key] = str(v)
+            fmt[key] = str(v).replace("$", "$$")
     # Read template
     try:
         with open(template_path) as tf:

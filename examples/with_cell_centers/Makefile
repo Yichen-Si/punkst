@@ -11,6 +11,7 @@ ICOL_Y       := {ICOL_Y}
 ICOL_FEATURE := {ICOL_FEATURE}
 ICOL_COUNT   := {ICOL_COUNT}
 SKIP         := {SKIP}
+EXCLUDE_FEATURE_REGEX := {EXCLUDE_FEATURE_REGEX}
 
 THREADS      := {THREADS}
 SEED         := {SEED}
@@ -21,7 +22,6 @@ PIXHEX       := {PIXHEX}
 NMOVE        := {NMOVE}
 RES          := {RES}
 SCALE        := {SCALE}
-BOUNDS       := --xmin {XMIN} --xmax {XMAX} --ymin {YMIN} --ymax {YMAX}
 
 CELLCOORD    := {CELLCOORD}
 NUCLEIRADIUS := {NUCLEIRADIUS}
@@ -30,6 +30,8 @@ NUR          := $(NUCLEIRADIUS)
 PUNKST       := $(GITPATH)/bin/punkst
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
+COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv
+FEATURES     := $(DATADIR)/transcripts.tiled.features.tsv
 
 TAB := $(shell printf '\t')
 
@@ -46,21 +48,22 @@ REPORTS := \
 all: $(REPORTS)
 
 # ─── Step 1: bag pixels → tiles.tsv + tiles.index ─────────────────────
-$(TILETSV): $(TRANSCRIPTS)
+$(DATADIR)/prepare.stamp: $(TRANSCRIPTS)
 	@echo "[1/6] pts2tiles → $@"
 	 $(PUNKST) pts2tiles \
 	  --in-tsv $(TRANSCRIPTS) \
-	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) --skip $(SKIP) \
+	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) \
+	  --icol-feature $(ICOL_FEATURE) --icol-int $(ICOL_COUNT) --skip $(SKIP) \
 	  --tile-size $(TILESIZE) \
 	  --tile-buffer 1000 \
 	  --out-prefix $(DATADIR)/transcripts.tiled \
 	  --temp-dir $(TMPDIR) --threads $(THREADS)
+	touch $(DATADIR)/prepare.stamp
 
 # ─── Step 2: for each H in HEXGRIDS → hex_H_randomized.txt ────────────
 define HEX_RULE
 $(DATADIR)/hex_$(1)_$(NUR)_randomized.txt: \
-    $(TILETSV) \
-    $(FEATURES) \
+    $(DATADIR)/prepare.stamp \
 	$(CELLCOORD)
 	@echo "[2/6] tiles2hex (hex=$(1)) → $$@"
 	 $(PUNKST) tiles2hex \
@@ -90,9 +93,11 @@ $(DATADIR)/k$(2)_hex_$(1)_$(NUR).model.stamp: \
 	 $(PUNKST) lda4hex \
 	  --in-data $(DATADIR)/hex_$(1)_$(NUR)_randomized.txt \
 	  --in-meta $(DATADIR)/hex_$(1)_$(NUR).json \
+	  --features $(FEATURES) \
 	  --n-topics $(2) \
-	  --out-prefix $(DATADIR)/k$(2)_hex_$(1)_$(NUR) \
-	  --transform --min-count-train 50 --minibatch-size 512 \
+	  --out-prefix $(DATADIR)/k$(2)_hex_$(1)_$(NUR) --transform \
+	  --min-count-per-feature 50 --min-count-train 50 --minibatch-size 512 \
+	  --exclude-feature-regex $(EXCLUDE_FEATURE_REGEX) \
 	  --threads $(THREADS) --seed $(SEED) --n-epochs 1
 	touch $(DATADIR)/k$(2)_hex_$(1)_$(NUR).model.stamp
 endef
@@ -121,7 +126,7 @@ $(foreach H,$(HEXGRIDS),\
 define PIXEL_RULE
 $(DATADIR)/k$(2)_hex_$(1)_$(NUR).$(PIXHEX)_$(NMOVE)_$(RES).decode.stamp: \
     $(DATADIR)/k$(2)_hex_$(1)_$(NUR).model.stamp\
-    $(TILETSV) \
+    $(DATADIR)/prepare.stamp \
 	$(CELLCOORD)
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$*.tsv"
 	 $(PUNKST) pixel-decode \
@@ -159,7 +164,7 @@ $(DATADIR)/k$(2)_hex_$(1)_$(NUR).$(PIXHEX)_$(NMOVE)_$(RES).pixel.png: \
 	  --in-tsv $(DATADIR)/k$(2)_hex_$(1)_$(NUR).$(PIXHEX)_$(NMOVE)_$(RES).tsv \
 	  --in-color $(DATADIR)/k$(2)_hex_$(1)_$(NUR).color.rgb.tsv \
 	  --out $$@ \
-	  $(BOUNDS) --scale $(SCALE)
+	  --range $(COORD_RANGE) --scale $(SCALE)
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\

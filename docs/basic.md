@@ -6,19 +6,14 @@ We will explain how to generate a full workflow using a template Makefile, then 
 
 ## Generic input format and example data
 
-There is a small example data in `punkst/examples/data`. Decompress the the data to your local directory `tar xvzf example_data.tar.gz -C /path/to/parent/dir`.
+There is a small example data `transcripts.tsv.gz` in `punkst/examples/data`.
 
 See [Input](./input/index.md) for details on starting from raw data from different platforms.
 
-We need three pieces of information:
+We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (`example_data/transcripts.tsv.gz`)
 
-- The main input file is a TSV file with X coordinate, Y coordinate, feature, and count columns. (`example_data/transcripts.tsv`) It can have other columns (which will be ignored), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.
-
-- A file containing a list of genes to use, one per line. If your file contains multiple columns, the first column delimited by any whitespace will be used. (`example_data/features.txt`)
-
-- The coordinate range: xmin, xmax, ymin, ymax. (For the example data you can find them in `example_data/coordinate_minmax.tsv`)
-
-
+It can be gzipped or uncompressed.
+It can have other columns (which will be ignored in analysis but can be optionally carried over to the pixel level output), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.
 
 ## Use the example Makefile template
 
@@ -54,12 +49,11 @@ Then `make -f Makefile` exectutes the workflow.
 
 - Specify the 0-based column indices in "transcripts" for X coordinate, Y coordinate, feature, and count: `"icol_x"`, `"icol_y"`, `"icol_feature"`, and `"icol_count"`. If the input file contains headers, set "skip" to the number of lines to skip.
 
-- `"features"`: a file that contains a list of genes to use. Rows in the transcripts file where the gene name on the column specified by `icol_feature` does not match any names in this file will be ignored. (If your feature list contains multiple columns, the first column delimited by any whitespace will be used.)
+- `"exclude_feature_regex"`: a regular expression to exclude features from the analysis. For example, to exclude negative control probes and/or mitochondrial genes.
 
 - `"tilesize"`: we store and process data by square tiles, this parameter specifies the size length of the tiles in the same unit as your coordinates. Tile sizes affect the memory usage and (perhaps less so) run time, we've been using 500$\mu$m for all of our experiments.
 
-- `"hexgrids"` (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using 12~18$\mu$m, but you might want to use a larger value if your data has very low transcript density.
-
+- `"hexgrids"` (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using $12\sim 18\mu m$ for most dataset, but you might want to use a larger value if your data has very low transcript density.
 
 - `"topics"` (list): the number of topics (factors) to learn.
 
@@ -70,8 +64,6 @@ Then `make -f Makefile` exectutes the workflow.
 - `"res"`: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using $0.5\mu m$.
 
 - `"scale"`: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want $0.5 \mu m$ to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is $2 \mu m$, you probably want to set scale to 2.
-
-- `"xmin", "xmax", "ymin", "ymax"`: the range of coordinates.
 
 - Section `"job"`: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".
 
@@ -93,8 +85,8 @@ path=/path/to/your_data # Path to your data directory
 Group pixels into non-overlapping square tiles for faster processing:
 
 ```bash
-punkst pts2tiles --in-tsv ${path}/transcripts.tsv \
-  --icol-x 0 --icol-y 1 --skip 0 \
+punkst pts2tiles --in-tsv transcripts.tsv \
+  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 --skip 1 \
   --tile-size 500 \
   --temp-dir ${tmpdir} --threads ${threads} \
   --out-prefix ${path}/transcripts.tiled
@@ -114,10 +106,10 @@ Group pixels into non-overlapping hexagons:
 ```bash
 punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv \
   --in-index ${path}/transcripts.tiled.index \
-  --feature-dict ${path}/features.txt \
+  --feature-dict ${path}/transcripts.tiled.features.tsv \
   --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
   --min-count 20 --hex-size 7 \
-  --out ${path}/hex.txt \
+  --out ${path}/hex_12.txt \
   --temp-dir ${tmpdir} --threads ${threads}
 ```
 
@@ -128,8 +120,8 @@ Key parameters:
 
 Shuffle the output for training:
 ```bash
-sort -k1,1 --parallel ${threads} ${path}/hex.txt > ${path}/hex.randomized.txt
-rm ${path}/hex.txt
+sort -k1,1 --parallel ${threads} ${path}/hex_12.txt > ${path}/hex_12.randomized.txt
+rm ${path}/hex_12.txt
 ```
 
 [Detailed documentation for tiles2hex](./modules/tiles2hex.md)
@@ -139,11 +131,11 @@ rm ${path}/hex.txt
 Perform Latent Dirichlet Allocation on the hexagon data:
 
 ```bash
-punkst lda4hex --in-data ${path}/hex.randomized.txt \
-  --in-meta ${path}/hex.json \
+punkst lda4hex --in-data ${path}/hex_12.randomized.txt \
+  --in-meta ${path}/hex_12.json \
   --n-topics 12 \
   --n-epochs 2 --min-count-train 50 \
-  --out-prefix ${path}/hex.lda --transform \
+  --out-prefix ${path}/hex_12 --transform \
   --threads ${threads} --seed 1
 ```
 
@@ -158,7 +150,7 @@ Key parameters:
 Annotate each pixel with top factors and their probabilities:
 
 ```bash
-punkst pixel-decode --model ${path}/hex.lda.model.tsv \
+punkst pixel-decode --model ${path}/hex_12.model.tsv \
   --in-tsv ${path}/transcripts.tiled.tsv \
   --in-index ${path}/transcripts.tiled.index \
   --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
@@ -185,7 +177,7 @@ Visualize the pixel decoding results:
 Optional: choose a color table based on the intermediate results. Otherwise, you need to create a RGB table with the following columns: R, G, B (including the header). So each row represents the RGB color for a factor, with integer values from 0 to 255. (Python dependency: [jinja2](https://pypi.org/project/Jinja2/), pandas, matplotlib.)
 
 ```bash
-python punkst/ext/py/color_helper.py --input ${path}/hex.lda.results.tsv --output ${path}/color
+python punkst/ext/py/color_helper.py --input ${path}/hex_12.results.tsv --output ${path}/color
 ```
 
 Generate an image for the pixel level factor assignment
@@ -200,6 +192,6 @@ punkst draw-pixel-factors --in-tsv ${path}/pixel.decode.tsv \
 Key parameters:
 - `--in-color`: TSV file with RGB colors for each factor
 - `--scale`: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel)
-- `--xmin`, `--xmax`, `--ymin`, `--ymax`: Range of coordinates to visualize
+- `--xmin`, `--xmax`, `--ymin`, `--ymax`: Range of coordinates to visualize. If you specified `--icol-feature` and `--icol-int` in `pts2tiles`, you can either find the range in the `transcripts.tiled.coord_range.tsv` file or pass it directly with `--range transcripts.tiled.coord_range.tsv`.
 
 [Detailed documentation for visualization](./modules/visualization.md)

@@ -147,7 +147,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
     parser.isExtended = !parser.icol_ints.empty() || !parser.icol_floats.empty() || !parser.icol_strs.empty();
     notice("Initialized tile reader");
-std::cout << parser.name_ints.size() << " " << parser.name_floats.size() << " " << parser.name_strs.size() << "\n";
 
     if (outPref.empty()) {
         size_t pos = outFile.find_last_of(".");

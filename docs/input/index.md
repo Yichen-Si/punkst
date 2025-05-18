@@ -51,11 +51,11 @@ Here the optional flag `--exclude-regex` takes a regular expression to exclude g
 
 The optional flag `--in-tissue-only` will exclude all barcodes that are labeled as not in the tissue.
 
-It wrote the main data `transcripts.tsv`, a file `coordinate_minmax.tsv` containing the coordinate range (xmin, xmax, ymin, ymax), and `features.tsv` listing the gene names and their total counts. We probably want to filter out some very rare probs/genes by `awk '$2 > 100' ${path}/features.tsv > ${path}/features_min100.tsv`. The coordinates in `transcripts.tsv` and the range in `coordinate_minmax.tsv` are all in microns.
+The command writes `transcripts.tsv` with coordinates in microns.
 
 ## CosMx SMI
 
-You can use the template `Makefile` and `config_prepare.json` in `punkst/examples/format_input/cosmx` to conver CosMx raw output files to the generic input format.
+You can use the template `Makefile` and `config_prepare.json` in `punkst/examples/format_input/cosmx` to conver CosMx raw output files to the generic input format. Alternatively, see the bash commands below.
 Copy the config file to your directory and set the raw file names. For example, here is an example for the public mouse half brain data:
 
 ```json
@@ -63,7 +63,6 @@ Copy the config file to your directory and set the raw file names. For example, 
     "workflow": {
       "raw_tx" : "Run1000_S1_Half_tx_file.csv",
       "raw_meta": "Run1000_S1_Half_metadata_file.csv",
-      "raw_mtx": "Run1000_S1_Half_exprMat_file.csv",
       "microns_per_pixel": 0.12,
       "datadir": "/output/test"
     }
@@ -72,41 +71,61 @@ Copy the config file to your directory and set the raw file names. For example, 
 
 You can find `"microns_per_pixel"` in the ReadMe.html, it may say something like "To convert to microns multiply the pixel value by 0.12 um per pixel".
 
+The following are the commands ran in the `Makefile`:
+
+```bash
+# Extract cell coordinates
+cut -d',' -f 7-8 ${RAW_META} | tail -n +2 | awk -F',' -v OFS="\t" \
+    -v mu=${MICRONS_PER_PIXEL} \
+    '{printf "%.2f\t%.2f\n", mu * $1, mu * $2 > out;}' > cell_coordinates.tsv
+
+# Extract transcripts
+awk -F',' -v mu=${MICRONS_PER_PIXEL} '\
+NR==1{gsub(/"/, "", $0); print $3, $4, $8, "count", $7, $9 }\
+NR>1{gsub(/"/, "", $8); gsub(/"/, "", $9); printf "%.2f\t%.2f\t%s\t%d\t%d\t%s\n", mu*$3, mu*$4, $8, 1, $7, $9 } ' ${RAW_TX} > transcripts.tsv
+```
+
 ## MERSCOPE
 
 You can use the template `Makefile` and `config_prepare.json` in `punkst/examples/format_input/merscope` to conver MERSCOPE raw output files to the generic input format.
 
-Set `"rawdir"` to be the path that contains the MERSCOPE output files. We will need the following files: `cell_by_gene.csv.gz`, `cell_metadata.csv.gz`, and `detected_transcripts.csv.gz`. If your data is compressed, set `"compressed"` to 1, otherwise (plain csv) set it to 0.
+Set `"rawdir"` to be the path that contains the MERSCOPE output files. We will need the following files: `cell_metadata.csv.gz` and `detected_transcripts.csv.gz`. If your data is compressed, set `"compressed"` to 1, otherwise (plain csv) set it to 0.
 Set `"datadir"` to the output directory.
+
+The following are the commands ran in the `Makefile`:
+
+```bash
+# Extract cell coordinates
+zcat ${RAWDIR}/cell_metadata.csv.gz | cut -d',' -f 4-9 | tail -n +2 | awk -F',' -v OFS="\t" '{ print $1, $2; }' > cell_coordinates.tsv
+# Extract transcripts
+zcat ${RAWDIR}/detected_transcripts.csv.gz \
+  | cut -d',' -f2-5,9 \
+  | sed \
+      -e '0,/barcode/{s/barcode/#barcode/}' \
+      -e 's/,/\t/g' \
+      -e 's/$/\t1/' \
+      -e '0,/barcode/{s/\t1$/\tcount/}' \
+    > transcripts.tsv
+```
 
 ## Xenium
 
 You can use the template `Makefile` and `config_prepare.json` in `punkst/examples/format_input/xenium` to conver Xenium raw output files to the generic input format.
 
-In the `config.json`, you need specify `"raw_transcripts"`, the path of the transcript file `transcripts.csv.gz`, and `"rawdir"` that contains the directory `cell_feature_matrix` (decompressed from `cell_feature_matrix.tar.gz`) and a cell metadata file `cells.csv.gz`.
+In the `config.json`, you need specify `"raw_transcripts"` as the path of the transcript file `transcripts.csv.gz` and `"raw_cells"` as the path of the cell metadata `cells.csv.gz`.
 
-The following is what happens in the Makefile:
-
-Basic on public datasets in [10X data release](https://www.10xgenomics.com/datasets), there will be a `transcripts.parquet.csv.gz` or `transcripts.csv.gz` file in the output bundle. We just need to decompress it and extract the columns we need: `x_location`, `y_location`, and `feature_name` (and add a dummy `count` as always 1).
+The following are the commands ran in the `Makefile`:
 
 ```bash
-cat transcripts.parquet.csv.gz | cut -d',' -f 4-6 | sed 's/"//g' | awk -F',' -v OFS=$"\t" ' {print $2, $3, $1, "1"} ' > transcripts.tsv
-```
+# Extract transcripts
+zcat transcripts.csv.gz \
+  | cut -d',' -f4-6 | sed 's/"//g' \
+  | awk -F',' -v OFS="\t" '{ print $2, $3, $1, "1" }' \
+  > transcripts.tsv
 
-Decompress `cell_feature_matrix.tar.gz`, you can find the list of genes in `cell_feature_matrix/features.tsv.gz`. Unfortunately we need the first column contains the gene names in the transcript file, so let's decompress and extract the second column (excluding the negative control probes):
-```bash
-zcat cell_feature_matrix/features.tsv.gz | grep "Gene Expression" | cut -f 2 > features.txt
-```
-
-If you don't know the range of the coordinates (needed in the standard Makefile workflow, though we only need that to make the final image), we could get it by parsing the cell metadata `cells.csv.gz` (just because it may be the smallest file with all coordinates):
-```bash
-zcat cells.csv.gz | cut -d',' -f 2-3 | tail -n +2 | head -n 1000 | awk -F',' -v OFS=$"\t" -v out="test_cell_centers.tsv" -v range="test_coord_range.txt" '\
-NR==1{xmin=$1; xmax=$1; ymin=$2; ymax=$2} \
-{if ($1 < xmin) {xmin=$1}; if ($1 > xmax) {xmax=$1}; \
-if ($2 < ymin) {ymin=$2}; if ($2 > ymax) {ymax=$2}; \
-print $1, $2 > out } \
-END{print "XMIN:=" xmin > range; \
-print "XMAX:=" xmax >> range; \
-print "YMIN:=" ymin >> range; \
-print "YMAX:=" ymax >> range}'
+# Extract cell coordinates
+zcat cells.csv.gz \
+  | cut -d',' -f2-3 \
+  | tail -n +2 \
+  | awk -F',' -v OFS="\t" '{printf "%.4f\t%.4f\n", $1,$2;}' > cell_coordinates.tsv
 ```
