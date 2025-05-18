@@ -38,6 +38,10 @@ std::string trim(const std::string& str);
 std::string to_lower(const std::string& str);
 std::string to_upper(const std::string& str);
 std::string join(const std::vector<std::string>& tokens, const std::string& delim);
+static bool ends_with(const std::string &s, const std::string &suffix) {
+    return s.size() >= suffix.size()
+        && 0 == s.compare(s.size()-suffix.size(), suffix.size(), suffix);
+}
 
 // String to number conversion functions
 template<typename T>

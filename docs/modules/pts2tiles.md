@@ -19,7 +19,7 @@ punkst pts2tiles --in-tsv ${path}/transcripts.tsv \
 
 `--tile-size` - The size (side length) of the square tiles. The unit is the same as the coordinates in the input file.
 
-`--out-prefix` - The prefix for the output files.
+`--out-prefix` - The prefix for all output files.
 
 `--temp-dir` - The directory for storing temporary files during processing.
 
@@ -40,7 +40,7 @@ punkst pts2tiles --in-tsv ${path}/transcripts.tsv \
 `--debug` - Enables additional debug output.
 
 #### Output Files
-- `${path}/transcripts.tiled.tsv`: the tiled tsv file.
-- `${path}/transcripts.tiled.index`: an index file that stores the offsets of each tile in the tiled tsv file. This will be used for fast access.
-- `${path}/coord_range.tsv`: a text file that contains the range of coordinates (xmin, xmax, ymin, ymax).
-- `${path}/features.tsv`: a tsv file containing the feature names and their aggregated values. This file is only generated if `--icol-feature` is specified.
+- `prefix.tsv`: the tiled tsv file.
+- `prefix.index`: an index file that stores the offsets of each tile in the tiled tsv file. This will be used for fast access.
+- `prefix.coord_range.tsv`: a text file that contains the range of coordinates (xmin, xmax, ymin, ymax).
+- `prefix.features.tsv`: a tsv file containing the feature names and their aggregated values. This file is only generated if `--icol-feature` is specified.

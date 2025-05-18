@@ -4,18 +4,27 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
-#include <thread>
-#include <mutex>
 #include <memory>
+#include "zlib.h"
+#include "threads.hpp"
 #include "nanoflann.hpp"
 #include "nanoflann_utils.h"
 
 class Pts2Tiles {
 public:
-    Pts2Tiles(int32_t nthreads, const std::string& inFile, std::string& tmpdir, const std::string& outPref, int32_t tileSize, int32_t icol_x, int32_t icol_y, int32_t icol_g = -1, std::vector<int32_t> icol_ints = {}, int32_t nskip = 0, int32_t buff = 1000) : nThreads(nthreads),
-    inFile(inFile), tmpDir(tmpdir), outPref(outPref), tileSize(tileSize),
-    icol_x(icol_x), icol_y(icol_y), icol_feature(icol_g), icol_ints(icol_ints),
-    nskip(nskip), tileBuffer(buff) {
+    Pts2Tiles(int32_t nthreads,
+        const std::string& _inFile, std::string& _tmpDir,
+        const std::string& _outPref, int32_t _tileSize,
+        int32_t icol_x, int32_t icol_y, int32_t icol_g = -1, std::vector<int32_t> icol_ints = {}, int32_t _nskip = 0,
+        bool _streamingMode = false,
+        int32_t _tileBuffer = 1000, int32_t _batchSize = 10000) :
+        nThreads(nthreads),
+        inFile(_inFile), tmpDir(_tmpDir),
+        outPref(_outPref), tileSize(_tileSize),
+        icol_x(icol_x), icol_y(icol_y), icol_feature(icol_g),
+        icol_ints(icol_ints), nskip(_nskip),
+        streamingMode(_streamingMode),
+        tileBuffer(_tileBuffer), batchSize(_batchSize) {
         minX = std::numeric_limits<double>::infinity();
         minY = std::numeric_limits<double>::infinity();
         maxX = -std::numeric_limits<double>::infinity();
@@ -30,17 +39,31 @@ public:
         ntokens += 1;
         notice("Created temporary directory: %s", tmpDir.path.string().c_str());
     }
-    virtual ~Pts2Tiles() {}
+    virtual ~Pts2Tiles() {
+        if (gz) {
+            gzclose(gz);
+        }
+        if (inPtr && inPtr != &std::cin) {
+            delete inPtr;
+        }
+    }
 
     const std::unordered_map<uint64_t, uint64_t>& getGlobalTiles() const {
         return globalTiles;
     }
 
     bool run() {
-        notice("Launching %d worker threads", nThreads);
-        if (!launchWorkerThreads()) {
-            error("Error launching worker threads");
+        if (!streamingMode) {
+            if (!launchWorkerThreads()) {
+                error("Error launching worker threads");
+            }
+        } else {
+            openInput();
+            for (int i = 0; i < nThreads; ++i) {
+                threads.emplace_back(&Pts2Tiles::streamingWorker, this, i);
+            }
         }
+        notice("Launched %d worker threads", nThreads);
         if (!joinWorkerThreads()) {
             error("Error joining worker threads");
         }
@@ -59,11 +82,12 @@ protected:
     int32_t nThreads;
     std::string inFile, outPref;
     ScopedTempDir tmpDir;
-    int32_t tileBuffer, nskip;
+    int32_t tileBuffer, batchSize;
     int32_t tileSize;
     int32_t icol_x, icol_y, icol_feature;
     std::vector<int32_t> icol_ints;
     int32_t ntokens;
+    int32_t nskip, nskipped = 0;
 
     double minX, minY, maxX, maxY;
     std::unordered_map<std::string, std::vector<int32_t>> featureCounts;
@@ -73,6 +97,10 @@ protected:
     std::unordered_map<uint64_t, uint64_t> globalTiles;
 
     std::vector<std::thread> threads;
+    bool streamingMode;
+    gzFile         gz    = nullptr;
+    std::istream*  inPtr = nullptr;
+    std::mutex readMutex;
 
     struct PtRecord {
         double x, y;
@@ -80,7 +108,26 @@ protected:
         std::vector<int32_t> vals;
     };
 
-    virtual uint64_t parse(std::string& line, PtRecord& pt) {
+    void openInput() {
+        if (inFile == "-") {
+            inPtr = &std::cin;
+        }
+        else if (ends_with(inFile, ".gz")) {
+            gz = gzopen(inFile.c_str(), "rb");
+            if (gz == Z_NULL) {
+                error("Error opening gzipped input file: %s", inFile.c_str());
+            }
+        }
+        else {
+            warning("%s: the input is not stdin or gzipped file but the streaming mode is used, assuming a plain tsv file", __FUNCTION__);
+            inPtr = new std::ifstream(inFile);
+            if (!inPtr || !static_cast<std::ifstream*>(inPtr)->is_open()) {
+                error("Error opening input file: %s", inFile.c_str());
+            }
+        }
+    }
+
+    virtual uint64_t parse(const std::string& line, PtRecord& pt) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < ntokens) {
@@ -104,7 +151,7 @@ protected:
         return ((static_cast<uint64_t>(row) << 32) | col);
     }
 
-    virtual uint64_t parse(std::string& line, double& x, double& y) {
+    virtual uint64_t parse(const std::string& line, double& x, double& y) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < ntokens) {
@@ -117,100 +164,183 @@ protected:
         return ((static_cast<uint64_t>(row) << 32) | col);
     }
 
+    void consumeLine(int threadId, std::string &line,
+            std::unordered_map<uint64_t, std::vector<std::string>> &buffers,
+            double &localMinX,  double &localMaxX,
+            double &localMinY,  double &localMaxY,
+            std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
+        PtRecord pt;
+        uint64_t tileId = parse(line, pt);
+        if (tileId == uint64_t(-1)) return;
+
+        // feature counts
+        if (icol_feature >= 0) {
+            auto &v = localCounts[pt.feature];
+            if (v.empty()) v = pt.vals;
+            else for (size_t i = 0; i < pt.vals.size(); ++i)
+                    v[i] += pt.vals[i];
+        }
+
+        // min/max
+        localMinX = std::min(localMinX, pt.x);
+        localMaxX = std::max(localMaxX, pt.x);
+        localMinY = std::min(localMinY, pt.y);
+        localMaxY = std::max(localMaxY, pt.y);
+
+        // buffer + flush
+        auto &buf = buffers[tileId];
+        buf.push_back(line);
+        if (buf.size() >= static_cast<size_t>(tileBuffer))
+            flushBuffer(threadId, tileId, buf);
+    }
+
+    void flushBuffer(int threadId, uint64_t tileId,
+                     std::vector<std::string> &buf) {
+        {
+            std::lock_guard lk(globalTilesMutex);
+            globalTiles[tileId] += buf.size();
+        }
+        auto fn = tmpDir.path / (std::to_string(tileId) + "_"
+                                + std::to_string(threadId) + ".tsv");
+        std::ofstream out(fn, std::ios::app);
+        for (auto &l : buf) out << l << "\n";
+        out.close();
+        buf.clear();
+    }
+
+    void flushAll(int threadId,
+            std::unordered_map<uint64_t,std::vector<std::string>> &buffers) {
+        for (auto &p : buffers)
+        if (!p.second.empty())
+            flushBuffer(threadId, p.first, p.second);
+    }
+
+    void mergeLocalStats(double localMinX, double localMaxX,
+                         double localMinY, double localMaxY,
+            std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
+        std::lock_guard lk(minmaxMutex);
+        minX = std::min(minX, localMinX);
+        maxX = std::max(maxX, localMaxX);
+        minY = std::min(minY, localMinY);
+        maxY = std::max(maxY, localMaxY);
+        for (auto &p : localCounts) {
+            auto &glob = featureCounts[p.first];
+            if (glob.empty()) {
+                glob = std::move(p.second);
+            } else {
+                for (size_t i = 0; i < glob.size(); ++i) {
+                    glob[i] += p.second[i];}
+            }
+        }
+    }
+
     // Worker thread function
     virtual void worker(int threadId, std::streampos start, std::streampos end) {
+        // Map: tile id -> vector of lines (buffer)
+        std::unordered_map<uint64_t,std::vector<std::string>> buffers;
+        std::unordered_map<std::string,std::vector<int32_t>> localCounts;
+        double localMinX = +INFINITY, localMaxX = -INFINITY;
+        double localMinY = +INFINITY, localMaxY = -INFINITY;
+
         std::ifstream file(inFile);
         if (!file) {
             error("Thread %d: Error opening file input file", threadId);
         }
         file.seekg(start);
         std::string line;
-        // Map: tile id -> vector of lines (buffer)
-        std::unordered_map<uint64_t, std::vector<std::string>> buffers;
-        double localMinX = std::numeric_limits<double>::infinity();
-        double localMinY = std::numeric_limits<double>::infinity();
-        double localMaxX = -std::numeric_limits<double>::infinity();
-        double localMaxY = -std::numeric_limits<double>::infinity();
-        std::unordered_map<std::string, std::vector<int32_t>> localCounts;
-        while (file.tellg() < end && std::getline(file, line)) {
-            PtRecord pt;
-            uint64_t tileId = parse(line, pt);
-            if (tileId == -1) {
-                continue;
-            }
-            if (icol_feature >= 0) {
-                auto it = localCounts.find(pt.feature);
-                if (it == localCounts.end()) {
-                    localCounts[pt.feature] = pt.vals;
-                } else {
-                    for (size_t i = 0; i < icol_ints.size(); ++i) {
-                        it->second[i] += pt.vals[i];
-                    }
-                }
-            }
-            localMinX = std::min(localMinX, pt.x);
-            localMaxX = std::max(localMaxX, pt.x);
-            localMinY = std::min(localMinY, pt.y);
-            localMaxY = std::max(localMaxY, pt.y);
-            buffers[tileId].push_back(line);
-            // Flush if the buffer is large enough.
-            if (buffers[tileId].size() >= tileBuffer) {
-                { // update globalTiles
-                    std::lock_guard<std::mutex> lock(globalTilesMutex);
-                    uint64_t npt = buffers[tileId].size();
-                    if (globalTiles.find(tileId) == globalTiles.end()) {
-                        globalTiles[tileId] = npt;
-                    } else {
-                        globalTiles[tileId] += npt;
-                    }
-                }
-                auto tmpFilename = tmpDir.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv");
-                std::ofstream out(tmpFilename, std::ios::app);
-                for (const auto& bufferedLine : buffers[tileId]) {
-                    out << bufferedLine << "\n";
-                }
-                out.close();
-                buffers[tileId].clear();
-            }
-        }
 
-        // Flush any remaining data in the buffers.
-        for (auto& pair : buffers) {
-            if (!pair.second.empty()) {
-                { // update globalTiles
-                    std::lock_guard<std::mutex> lock(globalTilesMutex);
-                    uint64_t npt = pair.second.size();
-                    if (globalTiles.find(pair.first) == globalTiles.end()) {
-                        globalTiles[pair.first] = npt;
-                    } else {
-                        globalTiles[pair.first] += npt;
-                    }
-                }
-                auto tmpFilename = tmpDir.path / (std::to_string(pair.first) + "_" + std::to_string(threadId) + ".tsv");
-                std::ofstream out(tmpFilename, std::ios::app);
-                for (const auto& bufferedLine : pair.second) {
-                    out << bufferedLine << "\n";
-                }
-                out.close();
-            }
+        while (file.tellg() < end && std::getline(file, line)) {
+            consumeLine(threadId, line,
+                        buffers,
+                        localMinX, localMaxX,
+                        localMinY, localMaxY,
+                        localCounts);
         }
+        flushAll(threadId, buffers);
+        mergeLocalStats(localMinX, localMaxX,
+                        localMinY, localMaxY,
+                        localCounts);
+    }
+
+    void streamingWorker(int threadId) {
+        std::unordered_map<uint64_t,std::vector<std::string>> buffers;
+        std::unordered_map<std::string,std::vector<int32_t>> localCounts;
+        double localMinX = +INFINITY, localMaxX = -INFINITY;
+        double localMinY = +INFINITY, localMaxY = -INFINITY;
+
+        std::vector<std::string> batch;
+        batch.reserve(batchSize);
+
         {
-            std::lock_guard<std::mutex> lock(minmaxMutex);
-            minX = std::min(minX, localMinX);
-            maxX = std::max(maxX, localMaxX);
-            minY = std::min(minY, localMinY);
-            maxY = std::max(maxY, localMaxY);
-            for (const auto& pair : localCounts) {
-                auto it = featureCounts.find(pair.first);
-                if (it == featureCounts.end()) {
-                    featureCounts[pair.first] = pair.second;
+            std::lock_guard lk(readMutex);
+            if (nskipped < nskip) { // Skip initial lines
+                if (gz) {
+                    char buf[1<<16];
+                    while (nskipped < nskip && gzgets(gz, buf, sizeof(buf))) {
+                        nskipped++;
+                    }
                 } else {
-                    for (size_t i = 0; i < icol_ints.size(); ++i) {
-                        it->second[i] += pair.second[i];
+                    std::string line;
+                    while (nskipped < nskip && std::getline(*inPtr, line)) {
+                        nskipped++;
                     }
                 }
             }
         }
+        while (true) {
+            batch.clear();
+            { // —— fill one batch under lock ——
+                std::lock_guard lk(readMutex);
+                if (gz) {
+                    for (int i = 0; i < batchSize; ++i) {
+                        char buf[1<<16];
+                        if (!gzgets(gz, buf, sizeof(buf))) break;
+                        size_t len = strlen(buf);
+                        if (len > 0 && buf[len-1] == '\n') {
+                            buf[--len] = '\0';
+                            if (len > 0 && buf[len-1] == '\r')
+                                buf[--len] = '\0';
+                            batch.emplace_back(buf);
+                        } else {
+                            // Continue reading
+                            std::string line(buf, len);
+                            while (true) {
+                                if (!gzgets(gz, buf, sizeof(buf))) break;
+                                size_t chunkLen = strlen(buf);
+                                bool gotNL = chunkLen > 0 && buf[chunkLen-1] == '\n';
+                                // append without the trailing '\n'
+                                line.append(buf, gotNL ? chunkLen-1 : chunkLen);
+                                if (gotNL) break;
+                            }
+                            // strip a final '\r' if present
+                            if (!line.empty() && line.back() == '\r')
+                                line.pop_back();
+                            batch.push_back(std::move(line));
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < batchSize; ++i) {
+                        std::string line;
+                        if (!std::getline(*inPtr, line)) break;
+                        if (!line.empty() && line.back()=='\r')
+                            line.pop_back();
+                        batch.push_back(std::move(line));
+                    }
+                }
+            }
+            if (batch.empty()) break;
+            for (auto &ln : batch) {
+                consumeLine(threadId, ln,
+                            buffers,
+                            localMinX, localMaxX,
+                            localMinY, localMaxY,
+                            localCounts);
+            }
+            flushAll(threadId, buffers);
+        }
+        mergeLocalStats(localMinX, localMaxX,
+                        localMinY, localMaxY,
+                        localCounts);
     }
 
     bool launchWorkerThreads() {
@@ -437,7 +567,8 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
 
     std::string inTsv, outPref, tmpDir;
     int nThreads0 = 1, tileSize = -1;
-    int debug = 0, tileBuffer = 1000, verbose = 1000000;
+    int tileBuffer = 1000, batchSize = 10000;
+    int debug = 0, verbose = 1000000;
     int icol_x, icol_y, nskip = 0;
     int icol_feature = -1;
     std::vector<int32_t> icol_ints;
@@ -453,6 +584,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
       .add_option("temp-dir", "Directory to store temporary files", tmpDir)
       .add_option("tile-size", "Tile size (in the same unit as the input coordinates)", tileSize)
       .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
+      .add_option("batch-size", "(Only used if the input is gzipped or a stdin stream.) Batch size in terms of the number of lines (default: 10000)", batchSize)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads0);
     // Output Options
     pl.add_option("out-prefix", "Output TSV file", outPref)
@@ -479,7 +611,13 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     }
     notice("Using %u threads for processing", nThreads);
 
-    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, tileBuffer);
+    // Determine the input type and thus the streaming mode
+    bool streaming = false;
+    if (inTsv == "-" ||
+        (inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0))
+    streaming = true;
+
+    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, streaming, tileBuffer, batchSize);
     if (!pts2Tiles.run()) {
         return 1;
     }
