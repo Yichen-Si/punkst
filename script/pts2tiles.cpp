@@ -282,9 +282,7 @@ protected:
     }
 
     bool writeAuxiliaryFiles() {
-        size_t pos = outPref.find_last_of("/\\");
-        std::string outDir = (pos == std::string::npos) ? "" : outPref.substr(0, pos + 1);
-        std::string outFile = outDir + "coord_range.tsv";
+        std::string outFile = outPref + ".coord_range.tsv";
         std::ofstream out(outFile);
         if (!out) {
             warning("Error opening output file for writing: %s", outFile.c_str());
@@ -296,7 +294,7 @@ protected:
             << "ymax\t" << maxY << "\n";
         out.close();
         if (icol_feature >= 0) {
-            std::string outFile = outDir + "features.tsv";
+            std::string outFile = outPref + ".features.tsv";
             out.open(outFile);
             if (!out) {
                 warning("Error opening output file for writing: %s", outFile.c_str());

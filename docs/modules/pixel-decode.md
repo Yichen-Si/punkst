@@ -110,10 +110,5 @@ punkst pixel-decode --model model.tsv --in-tsv data.tsv --in-index data.index --
 
 ### With Data Annotations
 ```bash
-punkst pixel-decode --model model.tsv --in-tsv data.tsv --in-index data.index --temp-dir /tmp --out-pref results --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 500 --n-moves 4 --ext-col-ints "4:celltype 5:cluster" --ext-col-strs "6:sample_id:20" --output-original
-```
-
-### High-Resolution Analysis
-```bash
-punkst pixel-decode --model model.tsv --in-tsv data.tsv --in-index data.index --temp-dir /tmp --out-pref results --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 200 --n-moves 8 --pixel-res 0.5 --min-init-count 5 --top-k 5 --threads 16
+punkst pixel-decode --model model.tsv --in-tsv data.tsv --in-index data.index --temp-dir /tmp --out-pref results --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 --hex-grid-dist 500 --n-moves 4 --ext-col-ints 4:celltype 5:cluster --ext-col-strs 6:sample_id:20 --output-original
 ```

@@ -22,8 +22,8 @@ SCALE        := {SCALE}
 PUNKST       := $(GITPATH)/bin/punkst
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
-COORD_RANGE  := $(DATADIR)/coord_range.tsv
-FEATURES     := $(DATADIR)/features.tsv
+COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv
+FEATURES     := $(DATADIR)/transcripts.tiled.features.tsv
 
 # ─── Compute the full list of final report files ──────────────────────────
 REPORTS := \

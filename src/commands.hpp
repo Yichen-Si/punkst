@@ -113,8 +113,8 @@ public:
             return add_option(name, description, callback, getter, required);
         } else {
             Callback callback = [&variable, name](int i, int argc, char** argv) -> int {
-                if (i + 1 >= argc) {
-                    throw std::runtime_error("Missing value for option --" + name);
+                if (i + 1 >= argc || std::string(argv[i+1]).rfind("--",0) == 0) {
+                    return -1;
                 }
                 if constexpr (std::is_same_v<T, std::string>) {
                     variable = argv[i + 1];
@@ -136,8 +136,7 @@ public:
         }
     }
 
-    // Overload for vector types to support multi-value options such as "--key 1 2 3"
-    // Added parameter "required" (default false)
+    // Overload for vector types to support multi-value options "--key 1 2 3"
     template <typename T>
     ParamList& add_option(const std::string &name,
                             const std::string &description, std::vector<T> &variable, bool required = false) {
@@ -162,7 +161,7 @@ public:
                 ++count;
             }
             if (count == 0) {
-                throw std::runtime_error("No value provided for multi-value option --" + name);
+                return -1;
             }
             return count;
         };
@@ -198,10 +197,12 @@ public:
                 if (it == options_.end()) {
                     throw std::runtime_error("Unknown option: --" + name);
                 }
+                int consumed = it->second.callback(i, argc, argv);
+                if (consumed < 0) {
+                    continue;
+                }
                 // Mark the option as provided.
                 it->second.provided = true;
-                // Call the registered callback and advance the index by the number of consumed arguments.
-                int consumed = it->second.callback(i, argc, argv);
                 i += consumed;
             } else {
                 throw std::runtime_error("Unexpected argument: " + arg);
