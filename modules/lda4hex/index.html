@@ -968,8 +968,8 @@
 <h4 id="feature-filtering">Feature Filtering<a class="headerlink" href="#feature-filtering" title="Permanent link">&para;</a></h4>
 <p><code>--features</code> - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene.</p>
 <p><code>--min-count-per-feature</code> - Minimum total count for features to be included. Require <code>--features</code> to be specified. Default: 1.</p>
-<p><code>--include-feature-regex</code> - Regular expression (POSIX extended) to include only features matching this pattern. Default: include all features.</p>
-<p><code>--exclude-feature-regex</code> - Regular expression (POSIX extended) to exclude features matching this pattern. Default: exclude no features.</p>
+<p><code>--include-feature-regex</code> - Regular expression (<a href="https://en.cppreference.com/w/cpp/regex/ecmascript">modified ECMAScript grammar</a>) to include only features matching this pattern. Default: include all features.</p>
+<p><code>--exclude-feature-regex</code> - Regular expression (modified ECMAScript) to exclude features matching this pattern. Default: exclude no features.</p>
 <p><strong>Feature Selection Logic:</strong> the above three filters are applied jointly, so only genes with at least the minimum count, matching the include regex (if provided), and not matching the exclude regex (if provided) will be included in the model.</p>
 <h4 id="feature-weighting">Feature Weighting<a class="headerlink" href="#feature-weighting" title="Permanent link">&para;</a></h4>
 <p><code>--feature-weights</code> - Path to a file containing a weight for each gene. Format should be gene name (first column) and weight (second column). If the json metadata file does not contain a dictionary, the first column should be the gene index (0-based) instead.</p>

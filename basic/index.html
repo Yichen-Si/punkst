@@ -909,20 +909,11 @@
 <p>This example demonstrates how to perform pixel level factor analysis with punkst, achieving similar results to FICTURE (2024) with improved efficiency.</p>
 <p>We will explain how to generate a full workflow using a template Makefile, then explains the steps taken inside the workflow.</p>
 <h2 id="generic-input-format-and-example-data">Generic input format and example data<a class="headerlink" href="#generic-input-format-and-example-data" title="Permanent link">&para;</a></h2>
-<p>There is a small example data in <code>punkst/examples/data</code>. Decompress the the data to your local directory <code>tar xvzf example_data.tar.gz -C /path/to/parent/dir</code>.</p>
+<p>There is a small example data <code>transcripts.tsv.gz</code> in <code>punkst/examples/data</code>.</p>
 <p>See <a href="../input/">Input</a> for details on starting from raw data from different platforms.</p>
-<p>We need three pieces of information:</p>
-<ul>
-<li>
-<p>The main input file is a TSV file with X coordinate, Y coordinate, feature, and count columns. (<code>example_data/transcripts.tsv</code>) It can have other columns (which will be ignored), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.</p>
-</li>
-<li>
-<p>A file containing a list of genes to use, one per line. If your file contains multiple columns, the first column delimited by any whitespace will be used. (<code>example_data/features.txt</code>)</p>
-</li>
-<li>
-<p>The coordinate range: xmin, xmax, ymin, ymax. (For the example data you can find them in <code>example_data/coordinate_minmax.tsv</code>)</p>
-</li>
-</ul>
+<p>We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (<code>example_data/transcripts.tsv.gz</code>)</p>
+<p>It can be gzipped or uncompressed.
+It can have other columns (which will be ignored in analysis but can be optionally carried over to the pixel level output), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.</p>
 <h2 id="use-the-example-makefile-template">Use the example Makefile template<a class="headerlink" href="#use-the-example-makefile-template" title="Permanent link">&para;</a></h2>
 <p>We provide a template Makefile and config file in <code>punkst/examples</code> to generate the full workflow of FICTURE.</p>
 <p>You can copy <code>punkst/examples/basic/generic/config.json</code> to your own directory modify the data path and parameters, then use <code>punkst/ext/py/generate_workflow.py</code> to generate a data-specific Makefile for your task.</p>
@@ -952,13 +943,13 @@
 <p>Specify the 0-based column indices in "transcripts" for X coordinate, Y coordinate, feature, and count: <code>"icol_x"</code>, <code>"icol_y"</code>, <code>"icol_feature"</code>, and <code>"icol_count"</code>. If the input file contains headers, set "skip" to the number of lines to skip.</p>
 </li>
 <li>
-<p><code>"features"</code>: a file that contains a list of genes to use. Rows in the transcripts file where the gene name on the column specified by <code>icol_feature</code> does not match any names in this file will be ignored. (If your feature list contains multiple columns, the first column delimited by any whitespace will be used.)</p>
+<p><code>"exclude_feature_regex"</code>: a regular expression to exclude features from the analysis. For example, to exclude negative control probes and/or mitochondrial genes.</p>
 </li>
 <li>
 <p><code>"tilesize"</code>: we store and process data by square tiles, this parameter specifies the size length of the tiles in the same unit as your coordinates. Tile sizes affect the memory usage and (perhaps less so) run time, we've been using 500<span class="arithmatex">\(\mu\)</span>m for all of our experiments.</p>
 </li>
 <li>
-<p><code>"hexgrids"</code> (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using 12~18<span class="arithmatex">\(\mu\)</span>m, but you might want to use a larger value if your data has very low transcript density.</p>
+<p><code>"hexgrids"</code> (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using <span class="arithmatex">\(12\sim 18\mu m\)</span> for most dataset, but you might want to use a larger value if your data has very low transcript density.</p>
 </li>
 <li>
 <p><code>"topics"</code> (list): the number of topics (factors) to learn.</p>
@@ -976,9 +967,6 @@
 <p><code>"scale"</code>: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want <span class="arithmatex">\(0.5 \mu m\)</span> to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is <span class="arithmatex">\(2 \mu m\)</span>, you probably want to set scale to 2.</p>
 </li>
 <li>
-<p><code>"xmin", "xmax", "ymin", "ymax"</code>: the range of coordinates.</p>
-</li>
-<li>
 <p>Section <code>"job"</code>: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".</p>
 </li>
 </ul>
@@ -991,8 +979,8 @@
 </span></code></pre></div>
 <h3 id="step-1-group-pixels-to-tiles">Step 1: Group pixels to tiles<a class="headerlink" href="#step-1-group-pixels-to-tiles" title="Permanent link">&para;</a></h3>
 <p>Group pixels into non-overlapping square tiles for faster processing:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span>--in-tsv<span class="w"> </span>transcripts.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled
@@ -1006,10 +994,10 @@
 <p>Group pixels into non-overlapping hexagons:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/features.txt<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.features.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--min-count<span class="w"> </span><span class="m">20</span><span class="w"> </span>--hex-size<span class="w"> </span><span class="m">7</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
 </span></code></pre></div>
 <p>Key parameters:
@@ -1017,17 +1005,17 @@
 - <code>--hex-size</code>: Side length of the hexagons
 - <code>--min-count</code>: Minimum count for a hexagon to be included</p>
 <p>Shuffle the output for training:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sort<span class="w"> </span>-k1,1<span class="w"> </span>--parallel<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span>&gt;<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.randomized.txt
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>rm<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sort<span class="w"> </span>-k1,1<span class="w"> </span>--parallel<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt<span class="w"> </span>&gt;<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>rm<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt
 </span></code></pre></div></p>
 <p><a href="../modules/tiles2hex/">Detailed documentation for tiles2hex</a></p>
 <h3 id="step-3-run-lda-on-hexagon-data">Step 3: Run LDA on hexagon data<a class="headerlink" href="#step-3-run-lda-on-hexagon-data" title="Permanent link">&para;</a></h3>
 <p>Perform Latent Dirichlet Allocation on the hexagon data:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>lda4hex<span class="w"> </span>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.randomized.txt<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--in-meta<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.json<span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>lda4hex<span class="w"> </span>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--in-meta<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.json<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--n-topics<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--n-epochs<span class="w"> </span><span class="m">2</span><span class="w"> </span>--min-count-train<span class="w"> </span><span class="m">50</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.lda<span class="w"> </span>--transform<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12<span class="w"> </span>--transform<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <p>Key parameters:
@@ -1036,7 +1024,7 @@
 <p><a href="../modules/lda4hex/">Detailed documentation for lda4hex</a></p>
 <h3 id="step-4-decode-pixels-with-the-model">Step 4: Decode pixels with the model<a class="headerlink" href="#step-4-decode-pixels-with-the-model" title="Permanent link">&para;</a></h3>
 <p>Annotate each pixel with top factors and their probabilities:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.lda.model.tsv<span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.model.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
@@ -1056,7 +1044,7 @@
 <h3 id="step-5-visualize-the-results">Step 5: Visualize the results<a class="headerlink" href="#step-5-visualize-the-results" title="Permanent link">&para;</a></h3>
 <p>Visualize the pixel decoding results:</p>
 <p>Optional: choose a color table based on the intermediate results. Otherwise, you need to create a RGB table with the following columns: R, G, B (including the header). So each row represents the RGB color for a factor, with integer values from 0 to 255. (Python dependency: <a href="https://pypi.org/project/Jinja2/">jinja2</a>, pandas, matplotlib.)</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>python<span class="w"> </span>punkst/ext/py/color_helper.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.lda.results.tsv<span class="w"> </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>python<span class="w"> </span>punkst/ext/py/color_helper.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.results.tsv<span class="w"> </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color
 </span></code></pre></div>
 <p>Generate an image for the pixel level factor assignment
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>punkst<span class="w"> </span>draw-pixel-factors<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode.tsv<span class="w"> </span><span class="se">\</span>
@@ -1068,7 +1056,7 @@
 <p>Key parameters:
 - <code>--in-color</code>: TSV file with RGB colors for each factor
 - <code>--scale</code>: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel)
-- <code>--xmin</code>, <code>--xmax</code>, <code>--ymin</code>, <code>--ymax</code>: Range of coordinates to visualize</p>
+- <code>--xmin</code>, <code>--xmax</code>, <code>--ymin</code>, <code>--ymax</code>: Range of coordinates to visualize. If you specified <code>--icol-feature</code> and <code>--icol-int</code> in <code>pts2tiles</code>, you can either find the range in the <code>transcripts.tiled.coord_range.tsv</code> file or pass it directly with <code>--range transcripts.tiled.coord_range.tsv</code>.</p>
 <p><a href="../modules/visualization/">Detailed documentation for visualization</a></p>
 
 

@@ -793,16 +793,16 @@
 <p><code>pts2tiles</code> creates a plain tsv file that reorders the lines in the input file so that coordinates are grouped into non-overlapping square tiles. The ordering of lines within a tile is not guaranteed. It also creates an index file storing the offset of each tile to support fast access.</p>
 <p>Example usage
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">0</span><span class="w"> </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">0</span><span class="w"> </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled<span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
 </span></code></pre></div></p>
 <h3 id="required-parameters">Required Parameters<a class="headerlink" href="#required-parameters" title="Permanent link">&para;</a></h3>
-<p><code>--in-tsv</code> - The input TSV file containing spatial data points.</p>
+<p><code>--in-tsv</code> - The input TSV file containing spatial data points. It could be a gzipped file ending with <code>.gz</code>. If the input is a stream from stdin, use <code>-</code> as the filename.</p>
 <p><code>--icol-x</code>, <code>--icol-y</code> - The column indices for X and Y coordinates (0-based).</p>
 <p><code>--tile-size</code> - The size (side length) of the square tiles. The unit is the same as the coordinates in the input file.</p>
-<p><code>--out-prefix</code> - The prefix for the output files.</p>
+<p><code>--out-prefix</code> - The prefix for all output files.</p>
 <p><code>--temp-dir</code> - The directory for storing temporary files during processing.</p>
-<p><code>--icol-feature</code> - The column index for feature names/IDs (0-based). If provided, the module will generate a feature counts file. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features.)</p>
+<p><code>--icol-feature</code> - The column index for feature names/IDs (0-based). If provided, the module will generate a file including feature names and counts. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features.)</p>
 <p><code>--icol-int</code> - Column indices for integer values to aggregate per feature. Can be specified multiple times to track multiple integer columns. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features, preferably excluding the extremely low count features.)</p>
 <h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--skip</code> - The number of lines to skip in the input file (if your input file contains headers, set it to the number of header lines). Default: 0.</p>
@@ -812,10 +812,10 @@
 <p><code>--debug</code> - Enables additional debug output.</p>
 <h4 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h4>
 <ul>
-<li><code>${path}/transcripts.tiled.tsv</code>: the tiled tsv file.</li>
-<li><code>${path}/transcripts.tiled.index</code>: an index file that stores the offsets of each tile in the tiled tsv file. This will be used for fast access.</li>
-<li><code>${path}/coord_range.tsv</code>: a text file that contains the range of coordinates (xmin, xmax, ymin, ymax).</li>
-<li><code>${path}/features.tsv</code>: a tsv file containing the feature names and their aggregated values. This file is only generated if <code>--icol-feature</code> is specified.</li>
+<li><code>prefix.tsv</code>: the tiled tsv file.</li>
+<li><code>prefix.index</code>: an index file that stores the offsets of each tile in the tiled tsv file. This will be used for fast access.</li>
+<li><code>prefix.coord_range.tsv</code>: a text file that contains the range of coordinates (xmin, xmax, ymin, ymax).</li>
+<li><code>prefix.features.tsv</code>: a tsv file containing the feature names and their aggregated values. This file is only generated if <code>--icol-feature</code> is specified.</li>
 </ul>
 
 
