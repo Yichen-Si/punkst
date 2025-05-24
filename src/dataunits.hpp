@@ -135,11 +135,22 @@ public:
         }
     }
     void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap) {
-        idx_remap = std::move(_idx_remap);
-        remap = true;
-        nFeatures = idx_remap.size();
+        if (remap) {
+            std::unordered_map<uint32_t, uint32_t> new_idx_remap;
+            for (const auto& pair : idx_remap) {
+                auto it = _idx_remap.find(pair.second);
+                if (it != _idx_remap.end()) {
+                    new_idx_remap[pair.first] = it->second;
+                }
+            }
+            idx_remap = std::move(new_idx_remap);
+        } else {
+            idx_remap = _idx_remap;
+            remap = true;
+        }
+        nFeatures = _idx_remap.size();
         std::vector<std::string> new_features(nFeatures);
-        for (const auto& pair : idx_remap) {
+        for (const auto& pair : _idx_remap) {
             new_features[pair.second] = features[pair.first];
         }
         features = std::move(new_features);
