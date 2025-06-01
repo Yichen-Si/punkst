@@ -57,6 +57,8 @@ set(SOURCE_FILES
     src/dataunits.hpp
     src/dataunits.cpp
     src/lda.hpp
+    src/lda_svb.cpp
+    src/lda_scvb0.cpp
     src/numerical_utils.hpp
     src/numerical_utils.cpp
     script/pts2tiles.cpp

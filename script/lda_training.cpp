@@ -45,6 +45,7 @@ public:
                 if (!(iss >> feature >> count)) {
                     error("Error reading feature file at line: %s", line.c_str());
                 }
+                idx0++;
                 if (count < minCount) {
                     continue;
                 }
@@ -143,57 +144,41 @@ public:
         weightFeatures = true;
     }
 
-    void initialize(int32_t nTopics, int32_t seed = -1,
+    void initialize_scvb0(int32_t nTopics, int32_t seed = -1,
         int32_t nThreads = 0, int32_t verbose = 0,
         double alpha = -1., double eta = -1.,
-        int32_t maxIter = 100, double mDelta = -1.,
-        double kappa = 0.7, double tau0 = 10.0, int32_t totalDocCount = 1000000,
-        const std::string& priorFile = "", double priorScale = 1.) {
-
+        double kappa = 0.9, double tau0 = 1000.,
+        int32_t totalDocCount = 1000000,
+        const std::string& priorFile = "", double priorScale = 1.,
+        double s_beta = 1, double s_theta = 1, double kappa_theta = 0.7, double tau_theta = 10.0, int32_t burnin = 1) {
         std::optional<MatrixXd> priorMatrix = std::nullopt;
-
-        // Handle prior model feature mapping if needed
-        if (!priorFile.empty()) {
-            // Read prior model file
-            std::vector<std::string> priorFeatureNames;
-            std::vector<std::uint32_t> kept_indices;
-            MatrixXd fullPriorMatrix;
-            readModelFromTsv(priorFile, priorFeatureNames, fullPriorMatrix);
-
-            // Setup feature mapping between input data and prior model
-            setupPriorMapping(priorFeatureNames, kept_indices);
-
-            // Create subset matrix for only the intersected features
-            priorMatrix = MatrixXd(K_, M_);
-            // Map columns from full prior matrix to subset matrix
-            for (size_t i = 0; i < kept_indices.size(); ++i) {
-                priorMatrix->col(i) = fullPriorMatrix.col(kept_indices[i]);
-            }
-            // Apply scaling if specified
-            if (priorScale > 0. && priorScale != 1.) {
-                *priorMatrix *= priorScale;
-            }
-
-            notice("Created subset prior matrix: %d topics x %d features (from original %d features)",
-                    (int)priorMatrix->rows(), (int)priorMatrix->cols(), (int)priorFeatureNames.size());
-        } else {
-            K_ = nTopics;
-            if (reader.features.size() != M_) {
-                notice("%s: no valid feature names are set, will use 0-based indices in the output model file", __FUNCTION__);
-                featureNames.resize(M_);
-                for (int i = 0; i < M_; ++i) {
-                    featureNames[i] = std::to_string(i);
-                }
-            } else {
-                featureNames = reader.features;
-            }
-        }
-
-        // Create the LDA object with correct dimensions and subset prior matrix
+        initialize(nTopics, priorFile, priorMatrix, priorScale);
         lda = std::make_unique<LatentDirichletAllocation>(
-            K_, M_, seed, nThreads, verbose, alpha, eta, maxIter, mDelta,
-            kappa, tau0, totalDocCount, std::nullopt, priorMatrix, -1.);
+            K_, M_, seed, nThreads, verbose,
+            InferenceType::SCVB0,
+            alpha, eta,
+            kappa, tau0, totalDocCount,
+            std::nullopt, priorMatrix, -1.);
+        lda->set_scvb0_parameters(s_beta, s_theta, tau_theta, kappa_theta, burnin);
+        initialized = true;
+    }
 
+    void initialize_svb(int32_t nTopics, int32_t seed = -1,
+        int32_t nThreads = 0, int32_t verbose = 0,
+        double alpha = -1., double eta = -1.,
+        double kappa = 0.7, double tau0 = 10.0,
+        int32_t totalDocCount = 1000000,
+        const std::string& priorFile = "", double priorScale = 1.,
+        int32_t maxIter = 100, double mDelta = -1.) {
+        std::optional<MatrixXd> priorMatrix = std::nullopt;
+        initialize(nTopics, priorFile, priorMatrix, priorScale);
+        lda = std::make_unique<LatentDirichletAllocation>(
+            K_, M_, seed, nThreads, verbose,
+            InferenceType::SVB,
+            alpha, eta,
+            kappa, tau0, totalDocCount,
+            std::nullopt, priorMatrix, -1.);
+        lda->set_svb_parameters(maxIter, mDelta);
         initialized = true;
     }
 
@@ -339,6 +324,44 @@ private:
 
     std::vector<Document> minibatch;
     int32_t batchSize;
+
+    void initialize(int32_t nTopics, const std::string& priorFile = "", std::optional<MatrixXd> priorMatrix = std::nullopt, double priorScale = 1) {
+        if (priorFile.empty()) {
+            K_ = nTopics;
+            if (reader.features.size() != M_) {
+                notice("%s: no valid feature names are set, will use 0-based indices in the output model file", __FUNCTION__);
+                featureNames.resize(M_);
+                for (int i = 0; i < M_; ++i) {
+                    featureNames[i] = std::to_string(i);
+                }
+            } else {
+                featureNames = reader.features;
+            }
+            return;
+        }
+        // Read prior model file
+        std::vector<std::string> priorFeatureNames;
+        std::vector<std::uint32_t> kept_indices;
+        MatrixXd fullPriorMatrix;
+        readModelFromTsv(priorFile, priorFeatureNames, fullPriorMatrix);
+
+        // Setup feature mapping between input data and prior model
+        setupPriorMapping(priorFeatureNames, kept_indices);
+
+        // Create subset matrix for only the intersected features
+        priorMatrix = MatrixXd(K_, M_);
+        // Map columns from full prior matrix to subset matrix
+        for (size_t i = 0; i < kept_indices.size(); ++i) {
+            priorMatrix->col(i) = fullPriorMatrix.col(kept_indices[i]);
+        }
+        // Apply scaling if specified
+        if (priorScale > 0. && priorScale != 1.) {
+            *priorMatrix *= priorScale;
+        }
+
+        notice("Created subset prior matrix: %d topics x %d features (from original %d features)",
+                (int)priorMatrix->rows(), (int)priorMatrix->cols(), (int)priorFeatureNames.size());
+    }
 
     void readModelFromTsv(const std::string& modelFile, std::vector<std::string>& featureNames, MatrixXd& modelMatrix) {
         std::ifstream modelIn(modelFile, std::ios::in);
@@ -526,19 +549,24 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
     std::string exclude_ftr_regex;
     int32_t nTopics = 0;
     int32_t seed = -1;
-    int32_t nEpochs = 1, batchSize = 512;
+    int32_t nEpochs = 1, batchSize = 128;
     int32_t verbose = 0;
-    int32_t maxIter = 100;
     int32_t nThreads = 0;
     int32_t modal = 0;
     int32_t minCountTrain = 20, minCountFeature = 1;
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1., eta = -1.;
-    double mDelta = 1e-3;
     double defaultWeight = 1.;
     double priorScale = 1.;
     bool transform = false;
     bool projection_only = false;
+    bool useSCVB0 = false;
+    // SVB specific parameters
+    int32_t maxIter = 100;
+    double mDelta = 1e-3;
+    // SCVB0 specific parameters
+    int32_t z_burnin = 10;
+    double s_beta = 10, s_theta = 1, kappa_theta = 0.9, tau_theta = 10;
 
     ParamList pl;
     // Input Options
@@ -556,14 +584,20 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
       .add_option("include-feature-regex", "Include features that match this regex (grammar: Modified ECMAScript) (default: all features)", include_ftr_regex)
       .add_option("exclude-feature-regex", "Exclude features that match this regex (grammar: Modified ECMAScript) (default: none)", exclude_ftr_regex);
     // Model training options
-      pl.add_option("kappa", "Learning decay (default: 0.7)", kappa)
+    pl.add_option("scvb0", "Use SCVB0 instead of SVB", useSCVB0)
+      .add_option("kappa", "Learning decay (default: 0.7)", kappa)
       .add_option("tau0", "Learning offset (default: 10.0)", tau0)
       .add_option("max-iter", "Maximum number of iterations for each document (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("n-epochs", "Number of epochs (default: 1)", nEpochs)
-      .add_option("minibatch-size", "Minibatch size (default: 512)", batchSize)
+      .add_option("minibatch-size", "Minibatch size (default: 128)", batchSize)
       .add_option("alpha", "Document-topic prior (default: 1/K)", alpha)
-      .add_option("eta", "Topic-word prior (default: 1/K)", eta);
+      .add_option("eta", "Topic-word prior (default: 1/K)", eta)
+      .add_option("s-beta", "(SCVB0 only) s in step size schedular for global parameters (default: 10)", s_beta)
+      .add_option("s-theta", "(SCVB0 only) s in step size schedular for local parameters (default: 1)", s_theta)
+      .add_option("kappa-theta", "(SCVB0 only) kappa in step size schedular for local parameters (default: 0.9)", kappa_theta)
+      .add_option("tau-theta", "(SCVB0 only) tau in step size schedular for local parameters (default: 10)", tau_theta)
+      .add_option("z-burnin", "(SCVB0 only) Number of burn-in iterations for latent variables (default: 1)", z_burnin);
     // Start from a prior model
     pl.add_option("model-prior", "File that contains the initial model matrix. Caution: you may need to set model training parameters --kappa (learning decay) and --tau0 (learning offset) carefully to get the desired performance in terms of the balance between the prior and your data", priorFile)
       .add_option("prior-scale", "Scale the initial model matrix uniformly by this value (default: use the matrix as it is)", priorScale);
@@ -592,8 +626,8 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
         seed = std::random_device{}();
     }
     if (batchSize <= 0) {
-        batchSize = 512;
-        warning("Minibatch size must be greater than 0, using default value of 128");
+        batchSize = 128;
+        warning("Minibatch size must be greater than 0, using default value of %d", batchSize);
     }
     if (nEpochs <= 0) {
         nEpochs = 1;
@@ -618,10 +652,15 @@ int32_t cmdLDA4Hex(int argc, char** argv) {
         lda4hex.setFeatures(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
 
-    // Initialize the LDA object (handles feature name mapping internally)
-    lda4hex.initialize(nTopics, seed, nThreads, verbose,
-        alpha, eta, maxIter, mDelta, kappa, tau0, lda4hex.nUnits() * nEpochs,
-        priorFile, priorScale);
+    if (useSCVB0) {
+        lda4hex.initialize_scvb0(nTopics, seed, nThreads, verbose,
+            alpha, eta, kappa, tau0, lda4hex.nUnits() * nEpochs,
+            priorFile, priorScale, s_beta, s_theta, kappa_theta, tau_theta, z_burnin);
+    } else {
+        lda4hex.initialize_svb(nTopics, seed, nThreads, verbose,
+            alpha, eta, kappa, tau0, lda4hex.nUnits() * nEpochs,
+            priorFile, priorScale, maxIter, mDelta);
+    }
 
     if (!weightFile.empty()) {
         lda4hex.setWeights(weightFile, defaultWeight);

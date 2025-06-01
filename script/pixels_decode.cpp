@@ -8,7 +8,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     int icol_x, icol_y, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
     double radius = -1, anchorDist = -1;
-    double mDelta = 1e-3;
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
     double pixelResolution = 1, defaultWeight = 0.;
     bool outputOritinalData = false;
@@ -17,6 +16,10 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool useTicketSystem = false;
     int32_t floatCoordDigits = 4, probDigits = 4;
     std::vector<std::string> annoInts, annoFloats, annoStrs;
+    bool useSCVB0 = false;
+    // SVB specific parameters
+    int32_t maxIter = 100;
+    double mDelta = 1e-3;
 
     ParamList pl;
     // Input Options
@@ -36,6 +39,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("hex-size", "Hexagon size (side length)", hexSize)
       .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
       .add_option("anchor-dist", "Distance between adjacent anchors", anchorDist)
+      .add_option("scvb0", "Use SCVB0 instead of SVB", useSCVB0)
+      .add_option("max-iter", "Maximum number of iterations for each document (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("radius", "Radius", radius)
       .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
@@ -93,7 +98,11 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         notice("Using random seed %d", seed);
     }
 
-    LatentDirichletAllocation lda(modelFile, seed, 1, 0);
+    InferenceType algo = useSCVB0 ? InferenceType::SCVB0 : InferenceType::SVB;
+    LatentDirichletAllocation lda(modelFile, seed, 1, 0, algo);
+    if (algo == InferenceType::SVB) {
+        lda.set_svb_parameters(maxIter, mDelta);
+    }
     auto& featureNames = lda.feature_names_;
     int32_t nFeatures = lda.get_n_features();
     notice("Initialized anchor model with %d features and %d factors", nFeatures, lda.get_n_topics());
