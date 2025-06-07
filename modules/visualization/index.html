@@ -643,9 +643,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#draw-pixel-factors" class="md-nav__link">
+  <a href="#high-resolution-image-of-pixel-level-factorization-results" class="md-nav__link">
     <span class="md-ellipsis">
-      draw-pixel-factors
+      High resolution image of pixel level factorization results
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pseudobulk-differential-expression-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pseudobulk differential expression analysis
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#html-report-for-factor-weights-and-top-genes" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTML report for factor weights and top genes
     </span>
   </a>
   
@@ -694,9 +712,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#draw-pixel-factors" class="md-nav__link">
+  <a href="#high-resolution-image-of-pixel-level-factorization-results" class="md-nav__link">
     <span class="md-ellipsis">
-      draw-pixel-factors
+      High resolution image of pixel level factorization results
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pseudobulk-differential-expression-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pseudobulk differential expression analysis
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#html-report-for-factor-weights-and-top-genes" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTML report for factor weights and top genes
     </span>
   </a>
   
@@ -721,7 +757,7 @@
 
 
 <h1 id="visualization">Visualization<a class="headerlink" href="#visualization" title="Permanent link">&para;</a></h1>
-<h2 id="draw-pixel-factors">draw-pixel-factors<a class="headerlink" href="#draw-pixel-factors" title="Permanent link">&para;</a></h2>
+<h2 id="high-resolution-image-of-pixel-level-factorization-results">High resolution image of pixel level factorization results<a class="headerlink" href="#high-resolution-image-of-pixel-level-factorization-results" title="Permanent link">&para;</a></h2>
 <p><strong><code>draw-pixel-factors</code> visualizes the results of <code>pixel-decode</code></strong></p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>draw-pixel-factors<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode.tsv<span class="w"> </span>--header-json<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode.json<span class="w"> </span>--in-color<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color.rgb.tsv<span class="w"> </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.png<span class="w"> </span>--scale<span class="w"> </span><span class="m">100</span><span class="w"> </span>--xmin<span class="w"> </span><span class="si">${</span><span class="nv">xmin</span><span class="si">}</span><span class="w"> </span>--xmax<span class="w"> </span><span class="si">${</span><span class="nv">xmax</span><span class="si">}</span><span class="w"> </span>--ymin<span class="w"> </span><span class="si">${</span><span class="nv">ymin</span><span class="si">}</span><span class="w"> </span>--ymax<span class="w"> </span><span class="si">${</span><span class="nv">ymax</span><span class="si">}</span>
 </span></code></pre></div>
@@ -734,6 +770,38 @@
 <p>If your specified <code>--transform</code> in <code>lda4hex</code>, one way to create the color table is to use the helper python script
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>python<span class="w"> </span>punkst/ext/py/color_helper.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/prefix.results.tsv<span class="w"> </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color
 </span></code></pre></div></p>
+<h2 id="pseudobulk-differential-expression-analysis">Pseudobulk differential expression analysis<a class="headerlink" href="#pseudobulk-differential-expression-analysis" title="Permanent link">&para;</a></h2>
+<p><strong><code>de_bulk.py</code> performs naive differential expression analysis on pseudobulk count data</strong></p>
+<p>The script performs chi-square tests to identify genes that are significantly enriched in each factor compared to the background, outputting results with fold changes, p-values, and chi-square statistics.</p>
+<p>Note that the statistics are not calibrated when the pseudobulk table is generated by <code>punkst pixel-decode</code>, it is only meant for exploratory analysis.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>python<span class="w"> </span>ext/py/de_bulk.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pseudobulk.tsv<span class="w"> </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/de_bulk.tsv<span class="w"> </span>--feature_label<span class="w"> </span>Feature<span class="w"> </span>--thread<span class="w"> </span><span class="m">4</span>
+</span></code></pre></div>
+<p><code>--input</code> specifies the input pseudobulk count table with genes as rows and factors as columns. <code>punkst pixel-decode</code> generates one such file with suffix <code>pseudobulk.tsv</code>. This file has to have a header row with column names. It has to have one column with gene names and one column for each factor.</p>
+<p><code>--output</code> specifies the output file for differential expression results.</p>
+<p><code>--feature_label</code> specifies the column name for feature names (default: "Feature").</p>
+<p><code>--min_ct_per_feature</code> minimum total count for a feature to be included in analysis (default: 50).</p>
+<p><code>--max_pval_output</code> maximum p-value threshold for output (default: 1e-3).</p>
+<p><code>--min_fold_output</code> minimum fold change threshold for output (default: 1.5).</p>
+<p><code>--min_output_per_factor</code> minimum number of top genes to output per factor even if not significant (default: 10).</p>
+<p><code>--thread</code> number of threads for parallel processing (default: 1).</p>
+<p><code>--use_input_header</code> if specified, all columns except for the column named <code>--feature_label</code> will be viewed as factors and the column names will be preserved as factor IDs in the output. Otherwise (default), only the columns where the column names contain integers will be considered as factors and the numbers will be extracted to be used as factor IDs.</p>
+<p><code>--feature</code> optional file with features to restrict analysis to. The column containing feature names should have the column name as specified by <code>--feature_label</code>.</p>
+<h2 id="html-report-for-factor-weights-and-top-genes">HTML report for factor weights and top genes<a class="headerlink" href="#html-report-for-factor-weights-and-top-genes" title="Permanent link">&para;</a></h2>
+<p><strong><code>factor_report.py</code> generates HTML reports summarizing factor characteristics and top genes</strong></p>
+<p>The script generates an interactive HTML report (<code>${output_pref}.factor.info.html</code>) and a TSV summary (<code>${output_pref}.factor.info.tsv</code>) containing factor weights, top differentially expressed genes, and visualization colors.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>python<span class="w"> </span>ext/py/factor_report.py<span class="w"> </span>--de<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/de_bulk.tsv<span class="w"> </span>--pseudobulk<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pseudobulk.tsv<span class="w"> </span>--color_table<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color.rgb.tsv<span class="w"> </span>--output_pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/report
+</span></code></pre></div>
+<p><code>--de</code> specifies the differential expression results file from <code>de_bulk.py</code>.</p>
+<p><code>--pseudobulk</code> specifies the pseudobulk count table.</p>
+<p><code>--color_table</code> specifies the RGB color table for factors. This probably should be the same file as that used for <code>punkst draw-pixel-factors</code>.</p>
+<p><code>--output_pref</code> specifies the output prefix for generated files.</p>
+<p><code>--feature_label</code> specifies the column name for features (default: "Feature").</p>
+<p><code>--n_top_gene</code> maximum number of top genes to include in report (default: 20).</p>
+<p><code>--min_top_gene</code> minimum number of top genes to show per factor (default: 10).</p>
+<p><code>--max_pval</code> maximum p-value threshold for significant genes (default: 0.001).</p>
+<p><code>--min_fc</code> minimum fold change threshold for significant genes (default: 1.5).</p>
+<p><code>--annotation</code> optional file with factor annotations to display instead of the factor IDs. It is a tsv file where the first column contains factor IDs as appear in the header of the pseudobulk table, and the second column contains the annotation.</p>
+<p><code>--anchor</code> optional file with anchor genes chosen to represent each factor. It is a tsv file where the first column contains factor IDs as appear in the header of the pseudobulk table, and the second column contains the anchor gene names (separated by things other than tabs).</p>
 
 
 
