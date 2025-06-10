@@ -254,16 +254,19 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="../../basic/" class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../workflows/" class="md-tabs__link">
+          
   
     
   
   Quickstart
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -403,16 +406,84 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../basic/" class="md-nav__link">
+    
+    
+      
         
+          
+        
+      
+        
+      
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../workflows/" class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Quickstart
   </span>
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Quickstart
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/multisample/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Multisample
+  </span>
+  
+
       </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -693,6 +764,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#process-multiple-samples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Process multiple samples
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#output-files" class="md-nav__link">
     <span class="md-ellipsis">
       Output Files
@@ -724,6 +804,15 @@
   <a href="#with-data-annotations" class="md-nav__link">
     <span class="md-ellipsis">
       With Data Annotations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#with-multiple-input-created-by-punkst-multisample-prepare" class="md-nav__link">
+    <span class="md-ellipsis">
+      With multiple input created by punkst multisample-prepare
     </span>
   </a>
   
@@ -867,6 +956,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#process-multiple-samples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Process multiple samples
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#output-files" class="md-nav__link">
     <span class="md-ellipsis">
       Output Files
@@ -898,6 +996,15 @@
   <a href="#with-data-annotations" class="md-nav__link">
     <span class="md-ellipsis">
       With Data Annotations
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#with-multiple-input-created-by-punkst-multisample-prepare" class="md-nav__link">
+    <span class="md-ellipsis">
+      With multiple input created by punkst multisample-prepare
     </span>
   </a>
   
@@ -946,14 +1053,14 @@
 <p><code>--model</code> - Specifies the model file where the first column contains feature names and the subsequent columns contain the parameters for each factor. The format should match that created by <code>lda4hex</code>.</p>
 <p><code>--temp-dir</code> - Specifies the directory to store temporary files.</p>
 <p><strong>Output specification</strong> - One of these must be provided:
-- <code>--out</code> - Specifies the output file (for backward compatibility).
-- <code>--out-pref</code> - Specifies the output prefix for all output files.</p>
+<code>--out-pref</code> - Specifies the output prefix for all output files.</p>
+<p><code>--out</code> - (Deprecated, for backward compatibility) Specifies the output file.</p>
 <p><strong>Hexagon grid parameters</strong> - One of these must be provided:
-- <code>--hex-size</code> - Specifies the size (side length) of the hexagons for initializing anchors.
-- <code>--hex-grid-dist</code> - Specifies center-to-center distance in the axial coordinate system used to place anchors. Equals <code>hex-size * sqrt(3)</code>.</p>
+<code>--hex-size</code> - Specifies the size (side length) of the hexagons for initializing anchors.</p>
+<p><code>--hex-grid-dist</code> - Specifies center-to-center distance in the axial coordinate system used to place anchors. Equals <code>hex-size * sqrt(3)</code>.</p>
 <p><strong>Anchor spacing parameters</strong> - One of these must be provided:
-- <code>--anchor-dist</code> - Specifies the distance between adjacent anchors.
-- <code>--n-moves</code> - Specifies the number of sliding moves in each axis to generate the anchors. If <code>--n-moves</code> is <code>n</code>, <code>anchor-dist</code> equals <code>hex-grid-dist</code> / <code>n</code>.</p>
+<code>--anchor-dist</code> - Specifies the distance between adjacent anchors.</p>
+<p><code>--n-moves</code> - Specifies the number of sliding moves in each axis to generate the anchors. If <code>--n-moves</code> is <code>n</code>, <code>anchor-dist</code> equals <code>hex-grid-dist</code> / <code>n</code>.</p>
 <h2 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h2>
 <h3 id="input-parameters">Input Parameters<a class="headerlink" href="#input-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--coords-are-int</code> - If set, indicates that the coordinates are integers; otherwise, they are treated as floating point values.</p>
@@ -980,16 +1087,38 @@
 <p><code>--output-prob-digits</code> - Number of decimal digits to output for probabilities. Default: 4.</p>
 <p><code>--verbose</code> - Increase verbosity of output messages.</p>
 <p><code>--debug</code> - Enable debug mode for additional diagnostic information.</p>
+<h2 id="process-multiple-samples">Process multiple samples<a class="headerlink" href="#process-multiple-samples" title="Permanent link">&para;</a></h2>
+<p>If you want to project the same model onto multiple datasets/samples, you can use <code>--sample-list</code> to pass a tsv file containing all samples' information. (In this case, <code>--in-tsv</code> and <code>--in-index</code> are ignored.)
+Note: all other parameters are shared across samples, so the input files should have the same structure.</p>
+<p>If your multi-sample data are generated by <code>punkst multisample-prepare</code>, it has created a file named <code>*.persample_file_list.tsv</code>. You can just pass this file to <code>--sample-list</code> and optionally use <code>--out-pref</code> to specify an identifier (e.g., the model information) to add to each output file name.</p>
+<p>If you created the input file for each sample manually, you can create a tsv file with at least three columns:
+sample_id, path to the transcript file created by <code>pts2tiles</code>, path to the index file created by <code>pts2tiles</code>.</p>
+<p>Optional fourth column: output prefix.</p>
+<p>Optional fifth column: anchor file path.</p>
+<p>If there are headers, all header lines should start with "#".</p>
 <h2 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h2>
-<p>When using <code>--out-pref</code>, the following files are generated:
-- <code>&lt;prefix&gt;.tsv</code> - Main output file with pixel-level factor assignments
-- <code>&lt;prefix&gt;.pseudobulk.tsv</code> - Gene-by-factor matrix showing feature distribution across topics</p>
+<p>The following files are generated (with prefix specified by <code>--out-pref</code>):</p>
+<p><code>&lt;prefix&gt;.tsv</code> - Main output file with pixel-level factor assignments</p>
+<p><code>&lt;prefix&gt;.pseudobulk.tsv</code> - Gene-by-factor matrix showing feature distribution across topics</p>
 <h2 id="example-usage-scenarios">Example Usage Scenarios<a class="headerlink" href="#example-usage-scenarios" title="Permanent link">&para;</a></h2>
 <h3 id="basic-usage">Basic Usage<a class="headerlink" href="#basic-usage" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--in-tsv<span class="w"> </span>data.tsv<span class="w"> </span>--in-index<span class="w"> </span>data.index<span class="w"> </span>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">500</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">4</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--in-tsv<span class="w"> </span>data.tsv<span class="w"> </span>--in-index<span class="w"> </span>data.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div>
 <h3 id="with-data-annotations">With Data Annotations<a class="headerlink" href="#with-data-annotations" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--in-tsv<span class="w"> </span>data.tsv<span class="w"> </span>--in-index<span class="w"> </span>data.index<span class="w"> </span>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">500</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">4</span><span class="w"> </span>--ext-col-ints<span class="w"> </span><span class="m">4</span>:celltype<span class="w"> </span><span class="m">5</span>:cluster<span class="w"> </span>--ext-col-strs<span class="w"> </span><span class="m">6</span>:sample_id:20<span class="w"> </span>--output-original
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--in-tsv<span class="w"> </span>data.tsv<span class="w"> </span>--in-index<span class="w"> </span>data.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>--ext-col-ints<span class="w"> </span><span class="m">4</span>:celltype<span class="w"> </span><span class="m">5</span>:cluster<span class="w"> </span>--ext-col-strs<span class="w"> </span><span class="m">6</span>:sample_id:20<span class="w"> </span>--output-original
+</span></code></pre></div>
+<h3 id="with-multiple-input-created-by-punkst-multisample-prepare">With multiple input created by <code>punkst multisample-prepare</code><a class="headerlink" href="#with-multiple-input-created-by-punkst-multisample-prepare" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--sample-list<span class="w"> </span>multi.persample_file_list.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div>
 
 

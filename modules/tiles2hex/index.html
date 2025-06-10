@@ -254,16 +254,19 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="../../basic/" class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../workflows/" class="md-tabs__link">
+          
   
     
   
   Quickstart
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -403,16 +406,84 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../basic/" class="md-nav__link">
+    
+    
+      
         
+          
+        
+      
+        
+      
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../workflows/" class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Quickstart
   </span>
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Quickstart
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/multisample/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Multisample
+  </span>
+  
+
       </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -874,13 +945,15 @@
 <h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--feature-dict</code> specifies a file with the names of features, one per line. It is used only if the values in <code>--icol-feature</code> are to be interpreted as feature names not indices. Features not present in the file will be ignored. (If the input file contains feature indices instead of names, all features will be included in the output)</p>
 <p><code>--min-count</code> specifies the minimum count for a hexagon to be included in the output.</p>
+<p><code>--randomize</code> if set, the order of hexagons in the output will be randomized.</p>
 <p><code>--temp-dir</code> specifies the directory for temporary files.</p>
 <p><code>--threads</code> specifies the number of threads to use.</p>
 <h2 id="output-format">Output Format<a class="headerlink" href="#output-format" title="Permanent link">&para;</a></h2>
 <p>The output is a plain tab-delimited text file. It is not a table: each line contains data for one unit and lines have different number of tokens.</p>
-<p>The first element in each line of the output is a random key, which can be used to shuffle the data before model training (if you use <code>lda4hex</code> you should always do this):</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sort<span class="w"> </span>-k1,1<span class="w"> </span>--parallel<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>-S<span class="w"> </span>1G<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span>&gt;<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.randomized.txt
+<p>The first element in each line of the output is a random key, which can be used to shuffle the data before model training. When <code>--randomize</code> is not set when you run <code>tiles2hex</code>, you can do the following
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sort<span class="w"> </span>-k1,1<span class="w"> </span>--parallel<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>-S<span class="w"> </span>1G<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span>-o<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt
 </span></code></pre></div>
+If you use <code>lda4hex</code>, you should always shuffle the ordering in the hexagon file.</p>
 <p>The remaining of each line is structured as follows:</p>
 <p>In the basic case, the next two integers after the random key are coordinates (horizontal and vertical) in the axial hexagonal coordinate system.</p>
 <p>The next 2K tokens (K pairs of non-negative integers) are the number of unique features (<span class="arithmatex">\(M_k\)</span>) and the total count (<span class="arithmatex">\(C_k\)</span>) for each modality. The number of modalities (K) is the same as the number of column indices specified in <code>--icol-int</code>.</p>

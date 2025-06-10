@@ -254,16 +254,19 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="basic/" class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="workflows/" class="md-tabs__link">
+          
   
     
   
   Quickstart
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -465,16 +468,84 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="basic/" class="md-nav__link">
+    
+    
+      
         
+          
+        
+      
+        
+      
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="workflows/" class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Quickstart
   </span>
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Quickstart
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="workflows/multisample/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Multisample
+  </span>
+  
+
       </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -750,7 +821,7 @@
 <h1 id="punkst">punkst<a class="headerlink" href="#punkst" title="Permanent link">&para;</a></h1>
 <h2 id="pixel-level-factor-analysis">Pixel level factor analysis<a class="headerlink" href="#pixel-level-factor-analysis" title="Permanent link">&para;</a></h2>
 <p>The punkst toolkit provides a pipeline for efficient pixel level factor analysis, which achieves the same result as<a href="https://doi.org/10.1038/s41592-024-02415-2"> FICTURE (2024)</a> with improved efficiency. (<a href="https://github.com/seqscope/ficture">Previous python package</a> is still functioning.)</p>
-<p>Check <a href="basic/">the quick start page</a> for help on generating the full workflow using Makefile or running each command step by step.</p>
+<p>Check <a href="workflows/">the quick start page</a> for help on generating the full workflow using Makefile or running each command step by step.</p>
 <p>Check the <a href="input/">Input</a> for help on preparing your data. Current we have worked exampled for 10X Genomics Visium HD, Xenium, NanoString CosMx SMI, and Vizgen MERSCOPE data. We've also applied punkst to Seq-scope and Stereo-seq data, we are working on providing more information.</p>
 <h3 id="workflow-overview">Workflow Overview<a class="headerlink" href="#workflow-overview" title="Permanent link">&para;</a></h3>
 <ol>

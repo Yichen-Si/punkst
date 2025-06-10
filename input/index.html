@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://Yichen-Si.github.io/punkst/input/">
       
       
-        <link rel="prev" href="../basic/">
+        <link rel="prev" href="../workflows/multisample/">
       
       
         <link rel="next" href="../modules/">
@@ -254,16 +254,19 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="../basic/" class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="../workflows/" class="md-tabs__link">
+          
   
     
   
   Quickstart
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -403,16 +406,84 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../basic/" class="md-nav__link">
+    
+    
+      
         
+          
+        
+      
+        
+      
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../workflows/" class="md-nav__link ">
+              
   
   <span class="md-ellipsis">
     Quickstart
   </span>
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Quickstart
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../workflows/multisample/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Multisample
+  </span>
+  
+
       </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -781,7 +852,7 @@
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>-c<span class="w"> </span>config_prepare.json<span class="w"> </span>-m<span class="w"> </span>Makefile
 </span></code></pre></div>
 then run <code>make</code>.</p>
-<p>After the conversion, you can follow the standard workflow as described in <a href="../basic/">the quick start page</a> to run the pipeline (and specify all coordinate/size related parameters in microns). For platforms that provide cell coordinates, we also extracted the cell centers and you can try the experimental workflow in <code>examples/with_cell_centers</code>.</p>
+<p>After the conversion, you can follow the standard workflow as described in <a href="../workflows/">the quick start page</a> to run the pipeline (and specify all coordinate/size related parameters in microns). For platforms that provide cell coordinates, we also extracted the cell centers and you can try the experimental workflow in <code>examples/with_cell_centers</code>.</p>
 <h2 id="visium-hd">Visium HD<a class="headerlink" href="#visium-hd" title="Permanent link">&para;</a></h2>
 <p>First we need to locate the "binned output" directory and the subdirectory with the original resolution. For the data downloaded from 10X website it is called <code>binned_outputs/square_002um</code>. Let's call it <code>RAWDIR</code>. In this directory, you should find the subdirecotries, <code>spatial</code> and <code>filtered_feature_bc_matrix</code> (I guess you could also use data in <code>raw_feature_bc_matrix</code> but I've not tried it yet).</p>
 <p>In the <code>spatial</code> directory, you should have a json file that contains the scaling factor of the coordinates, named as <code>scalefactors_json.json</code>.
@@ -900,7 +971,7 @@ Set <code>"datadir"</code> to the output directory.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../basic/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Quickstart">
+          <a href="../workflows/multisample/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Multisample">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -910,7 +981,7 @@ Set <code>"datadir"</code> to the output directory.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Quickstart
+                Multisample
               </div>
             </div>
           </a>
