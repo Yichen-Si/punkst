@@ -9,7 +9,7 @@ def factor_report(_args):
     parser = argparse.ArgumentParser(prog="factor_report")
     parser.add_argument('--de', type=str, help='')
     parser.add_argument('--pseudobulk', type=str, help='')
-    parser.add_argument('--feature_label', type=str, default="gene", help='')
+    parser.add_argument('--feature_label', type=str, default="Feature", help='')
     parser.add_argument('--color_table', type=str, default='', help='')
     parser.add_argument('--n_top_gene', type=int, default=20, help='')
     parser.add_argument('--min_top_gene', type=int, default=10, help='')

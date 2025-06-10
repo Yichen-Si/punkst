@@ -1,15 +1,12 @@
 #pragma once
 
-#include "punkst.h"
+#include "utils_sys.hpp"
 #include <tuple>
 #include <functional>
 #include <random>
-#include <iostream>
-#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
-#include <filesystem>
 #include <chrono>
 #include <optional>
 #include <charconv>
@@ -123,9 +120,21 @@ bool set_rgb(const char *s_color, std::array<int32_t, 3>& rgb);
 // base16 encoding
 std::string uint32toHex(uint32_t num);
 uint32_t hexToUint32(const std::string& hex);
+// hash a tuple of three integers
+struct Tuple3Hash {
+    std::size_t operator()(const std::tuple<int32_t, int32_t, int32_t>& key) const {
+        // Get individual hash values for each element.
+        auto h1 = std::hash<int32_t>{}(std::get<0>(key));
+        auto h2 = std::hash<int32_t>{}(std::get<1>(key));
+        auto h3 = std::hash<int32_t>{}(std::get<2>(key));
 
-// compute block boundaries for processing a plain text file in parallel
-void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& blocks, const std::string& inFile, int32_t nThreads, int32_t nskip = 0);
+        // Combine them using a hash combining formula.
+        std::size_t seed = h1;
+        seed ^= h2 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        seed ^= h3 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};
 
 // compute percentiles (results are sorted)
 template <typename T>
@@ -176,6 +185,7 @@ void compute_percentile(std::vector<T>& results, std::vector<T>& values, std::ve
 void percentile(std::vector<uchar>& results, const cv::Mat& mat, std::vector<double>& percentiles);
 
 // Shape related
+
 template <typename T>
 struct Rectangle {
     T xmin, ymin, xmax, ymax;
@@ -265,61 +275,3 @@ cv::Point_<T> centroidOfPolygon(const std::vector<cv::Point_<T>>& poly) {
 
 // Sutherland–Hodgman polygon clipping algorithm
 std::vector<cv::Point2f> clipPolygonToRect(const std::vector<cv::Point2f>& poly, const cv::Rect2f& rect);
-
-// File handling related
-bool createDirectory(const std::string& dir);
-bool checkOutputWritable(const std::string& outFile, bool newFile = true);
-std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t maxTries = 100);
-struct ScopedTempDir {
-    std::filesystem::path path;
-    explicit ScopedTempDir(const std::filesystem::path& parent)
-      : path(makeTempDir(parent)) {}
-    ~ScopedTempDir() { std::error_code ec; std::filesystem::remove_all(path, ec); }
-};
-
-// Iterator for lines
-class BoundedReadline {
-public:
-    BoundedReadline(const std::string &filename, std::streampos start, std::streampos end)
-        : startOffset(start), endOffset(end)
-    {
-        file = std::make_unique<std::ifstream>(filename, std::ios::binary);
-        if (!file || !file->is_open()) {
-            throw std::runtime_error("Failed to open file: " + filename);
-        }
-        file->seekg(startOffset);
-    }
-
-    // Returns true and sets 'line' if a line is successfully read and within the tile's range.
-    bool next(std::string &line) {
-        // Check that we haven't passed the tile's end.
-        if (!file || file->tellg() >= endOffset) {
-            return false;
-        }
-        std::streampos before = file->tellg();
-        if (!std::getline(*file, line)) {
-            return false;
-        }
-        return true;
-    }
-
-private:
-    std::unique_ptr<std::ifstream> file;
-    std::streampos startOffset;
-    std::streampos endOffset;
-};
-
-struct Tuple3Hash {
-    std::size_t operator()(const std::tuple<int32_t, int32_t, int32_t>& key) const {
-        // Get individual hash values for each element.
-        auto h1 = std::hash<int32_t>{}(std::get<0>(key));
-        auto h2 = std::hash<int32_t>{}(std::get<1>(key));
-        auto h3 = std::hash<int32_t>{}(std::get<2>(key));
-
-        // Combine them using a hash combining formula.
-        std::size_t seed = h1;
-        seed ^= h2 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
-        seed ^= h3 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
-        return seed;
-    }
-};

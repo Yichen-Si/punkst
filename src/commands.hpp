@@ -21,11 +21,10 @@ public:
 
     // Adds a new command
     CommandList& add_command(const std::string &name,
-                                const std::string &description,
                                 const std::string &help,
                                 const CommandFunc &func)
     {
-        commands_[name] = { description, help, func };
+        commands_[name] = { help, func };
         order_.push_back(name);
         return *this;
     }
@@ -69,7 +68,6 @@ public:
 
 private:
     struct Command {
-        std::string description;
         std::string help;
         CommandFunc func;
     };

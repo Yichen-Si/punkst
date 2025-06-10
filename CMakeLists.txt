@@ -49,6 +49,8 @@ set(SOURCE_FILES
     src/punkst.cpp
     src/utils.h
     src/utils.cpp
+    src/utils_sys.hpp
+    src/utils_sys.cpp
     src/hexgrid.h
     src/threads.hpp
     src/tilereader.hpp
@@ -59,8 +61,13 @@ set(SOURCE_FILES
     src/lda.hpp
     src/lda_svb.cpp
     src/lda_scvb0.cpp
+    src/hdp.hpp
+    src/hdp.cpp
+    src/topic_svb.hpp
+    src/topic_svb.cpp
     src/numerical_utils.hpp
     src/numerical_utils.cpp
+    src/pts2tiles.hpp
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
@@ -75,6 +82,8 @@ set(SOURCE_FILES
     src/markerselection.hpp
     script/coloc2markers.cpp
     script/convert_dge.cpp
+    script/multisample_pipeline.cpp
+    script/merge_units.cpp
     )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

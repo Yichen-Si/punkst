@@ -3,7 +3,8 @@
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
-    std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDirPath, dictFile, weightFile;
+    std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDirPath, weightFile;
+    std::string sampleList; // for multi-sample
     int nThreads = 1, seed = -1, debug = 0, verbose = 0;
     int icol_x, icol_y, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
@@ -23,10 +24,11 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     ParamList pl;
     // Input Options
-    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv, true)
-      .add_option("in-index", "Input index file", inIndex, true)
-      .add_option("model", "Model file", modelFile, true)
+    pl.add_option("model", "Model file", modelFile, true)
+      .add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
+      .add_option("in-index", "Input index file", inIndex)
       .add_option("anchor", "Anchor file", anchorFile)
+      .add_option("sample-list", "A tsv file containing input and output information for multiple samples. The columns should be sample_id, input_tsv, input_index, output_prefix, (input_anchor)", sampleList)
       .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x, true)
       .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y, true)
       .add_option("coords-are-int", "If the coordinates are integers, otherwise assume they are floats", coordsAreInt)
@@ -70,8 +72,19 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         pl.print_help();
         return 1;
     }
-    if (outFile.empty() && outPref.empty()) {
-        error("--out-pref or --out must be specified");
+    if (sampleList.empty()) {
+        if (outFile.empty() && outPref.empty())
+            error("For single sample analysis either --out-pref or --out must be specified");
+        if (inTsv.empty() || inIndex.empty())
+            error("For single sample analysis both --in-tsv and --in-index must be specified");
+        if (outPref.empty()) {
+            size_t pos = outFile.find_last_of(".");
+            if (pos != std::string::npos) {
+                outPref = outFile.substr(0, pos);
+            } else {
+                outPref = outFile;
+            }
+        }
     }
 
     if (hexSize <= 0) {
@@ -108,11 +121,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     notice("Initialized anchor model with %d features and %d factors", nFeatures, lda.get_n_topics());
 
     HexGrid hexGrid(hexSize);
-    TileReader tileReader(inTsv, inIndex, nullptr, -1, coordsAreInt);
-    if (!tileReader.isValid()) {
-        error("Error in input tiles: %s", inTsv.c_str());
-    }
-    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val);
     if (!featureIsIndex) {
         for (size_t i = 0; i < featureNames.size(); ++i) {
             parser.featureDict[featureNames[i]] = i;
@@ -157,37 +166,91 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     parser.isExtended = !parser.icol_ints.empty() || !parser.icol_floats.empty() || !parser.icol_strs.empty();
     notice("Initialized tile reader");
 
-    if (outPref.empty()) {
-        size_t pos = outFile.find_last_of(".");
-        if (pos != std::string::npos) {
-            outPref = outFile.substr(0, pos);
-        } else {
-            outPref = outFile;
+    struct dataset {
+        std::string sampleId;
+        std::string inTsv;
+        std::string inIndex;
+        std::string outPref;
+        std::string anchorFile;
+    };
+    std::vector<dataset> datasets;
+    if (!sampleList.empty()) {
+        std::ifstream rf(sampleList);
+        if (!rf) {
+            error("Error opening sample list file: %s", sampleList.c_str());
         }
+        std::string line;
+        while (std::getline(rf, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::vector<std::string> tokens;
+            split(tokens, "\t", line);
+            if (tokens.size() < 3) {
+                error("Invalid line in sample list: %s", line.c_str());
+            }
+            dataset ds(tokens[0], tokens[1], tokens[2]);
+            if (tokens.size() > 3) {
+                ds.outPref = tokens[3];
+                if (tokens.size() > 4) {
+                    ds.anchorFile = tokens[4];
+                }
+            } else {
+                size_t pos = ds.inTsv.find_last_of("/\\");
+                if (pos != std::string::npos) {
+                    ds.outPref = ds.inTsv.substr(0, pos+1) + ds.sampleId;
+                } else {
+                    ds.outPref = ds.sampleId;
+                }
+                if (!outPref.empty()) {
+                    ds.outPref += "." + outPref;
+                }
+            }
+            datasets.push_back(ds);
+        }
+    } else {
+        dataset ds("", inTsv, inIndex, outPref);
+        ds.anchorFile = anchorFile;
+        datasets.push_back(ds);
     }
 
-    if (coordsAreInt) {
-        Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
-        tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
-        tiles2minibatch.setFeatureNames(featureNames);
-        tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
-        tiles2minibatch.setOutputProbDigits(probDigits);
-        if (!anchorFile.empty()) {
-            int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
-            notice("Loaded %d valid anchors", nAnchors);
+    if (datasets.empty()) {
+        error("No valid datasets found in sample list or input parameters");
+    }
+    for (const auto& ds : datasets) {
+        inTsv = ds.inTsv;
+        inIndex = ds.inIndex;
+        outPref = ds.outPref;
+        anchorFile = ds.anchorFile;
+        if (!ds.sampleId.empty()) {
+            notice("Processing sample %s\n", ds.sampleId.c_str());
         }
-        tiles2minibatch.run();
-    } else {
-        Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
-        tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
-        tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
-        tiles2minibatch.setOutputProbDigits(probDigits);
-        tiles2minibatch.setFeatureNames(featureNames);
-        if (!anchorFile.empty()) {
-            int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
-            notice("Loaded %d valid anchors", nAnchors);
+
+        TileReader tileReader(inTsv, inIndex, nullptr, -1, coordsAreInt);
+        if (!tileReader.isValid()) {
+            error("Error in input tiles: %s", inTsv.c_str());
         }
-        tiles2minibatch.run();
+        if (coordsAreInt) {
+            Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+            tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
+            tiles2minibatch.setFeatureNames(featureNames);
+            tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
+            tiles2minibatch.setOutputProbDigits(probDigits);
+            if (!anchorFile.empty()) {
+                int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
+                notice("Loaded %d valid anchors", nAnchors);
+            }
+            tiles2minibatch.run();
+        } else {
+            Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+            tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
+            tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
+            tiles2minibatch.setOutputProbDigits(probDigits);
+            tiles2minibatch.setFeatureNames(featureNames);
+            if (!anchorFile.empty()) {
+                int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
+                notice("Loaded %d valid anchors", nAnchors);
+            }
+            tiles2minibatch.run();
+        }
     }
 
     return 0;

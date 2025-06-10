@@ -33,6 +33,9 @@ auto mean_max_row_change(const Eigen::MatrixBase<Derived>& arr1,
 // Psi (digamma) function (not optimized for maximum accuracy)
 double psi(double x);
 
+Eigen::VectorXd expect_log_sticks(const Eigen::VectorXd& alpha,
+                                  const Eigen::VectorXd& beta);
+
 // exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 // = exp(psi(\alpha_k) - psi(\alpha_0))
 void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset = 0);

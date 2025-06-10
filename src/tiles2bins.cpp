@@ -30,7 +30,7 @@ void Tiles2Hex::writeMetadata() {
     if (pos != std::string::npos) {
         metaFile = outFile.substr(0, pos) + ".json";
     } else {
-        metaFile = outFile + ".meat.json";
+        metaFile = outFile + ".json";
     }
     std::ofstream metaOut(metaFile);
     if (!metaOut) {

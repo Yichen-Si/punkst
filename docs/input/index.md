@@ -10,7 +10,7 @@ python /path/to/punkst/ext/py/generate_workflow.py \
 ```
 then run `make`.
 
-After the conversion, you can follow the standard workflow as described in [the quick start page](../basic.md) to run the pipeline (and specify all coordinate/size related parameters in microns). For platforms that provide cell coordinates, we also extracted the cell centers and you can try the experimental workflow in `examples/with_cell_centers`.
+After the conversion, you can follow the standard workflow as described in [the quick start page](../workflows/index.md) to run the pipeline (and specify all coordinate/size related parameters in microns). For platforms that provide cell coordinates, we also extracted the cell centers and you can try the experimental workflow in `examples/with_cell_centers`.
 
 ## Visium HD
 

@@ -163,42 +163,6 @@ uint32_t hexToUint32(const std::string& hex) {
     return num;
 }
 
-bool createDirectory(const std::string& dir) {
-    if (std::filesystem::exists(dir)) {
-        if (std::filesystem::is_directory(dir) && std::filesystem::is_empty(dir)) {
-            return true;
-        }
-        return false;
-    }
-    std::filesystem::create_directories(dir);
-    return true;
-}
-
-std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t maxTries) {
-    std::filesystem::create_directories(parent);
-
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
-    std::uniform_int_distribution<uint64_t> dist;
-
-    auto now = [] {
-      return std::chrono::steady_clock::now()
-             .time_since_epoch()
-             .count();
-    };
-
-    for (size_t i = 0; i < maxTries; ++i) {
-      // combine timestamp_random
-      std::ostringstream name;
-      name << "t" << now() << '_' << std::hex << dist(gen);
-      std::filesystem::path candidate = parent / name.str();
-      if (std::filesystem::create_directory(candidate))
-        return candidate;
-    }
-    throw std::runtime_error("Could not create unique temp dir under "
-                              + parent.string());
-}
-
 std::vector<int> computeLPSArray(const std::string& pattern) {
     int M = pattern.size();
     std::vector<int> lps(M, 0);
@@ -387,81 +351,6 @@ void percentile(std::vector<uchar>& results, const cv::Mat& mat, std::vector<dou
         }
     }
     compute_percentile<uchar>(results, values, percentiles);
-}
-
-void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& blocks, const std::string& inFile, int32_t nThreads, int32_t nskip) {
-    std::ifstream infile(inFile, std::ios::binary);
-    if (!infile) {
-        error("Error opening input file: %s", inFile.c_str());
-    }
-    std::string line;
-    for (int i = 0; i < nskip; ++i) {
-        std::getline(infile, line);
-    }
-    std::streampos start_offset = infile.tellg();
-    infile.seekg(0, std::ios::end);
-    std::streampos fileSize = infile.tellg();
-    size_t blockSize = fileSize / nThreads;
-
-    std::streampos current = start_offset;
-    blocks.clear();
-    for (int i = 0; i < nThreads; ++i) {
-        std::streampos end = current + static_cast<std::streamoff>(blockSize);
-        if (end > fileSize || i == nThreads - 1) {
-            end = fileSize;
-        } else {
-            infile.seekg(end);
-            std::getline(infile, line);
-            end = infile.tellg();
-            if (end == -1) {
-                end = fileSize;
-            }
-        }
-        blocks.emplace_back(current, end);
-        current = end;
-        if (current >= fileSize) {
-            break;
-        }
-    }
-    infile.close();
-    notice("Partitioned input file into %zu blocks of size ~ %zu", blocks.size(), blockSize);
-}
-
-bool checkOutputWritable(const std::string& outFile, bool newFile) {
-    std::filesystem::path outPath(outFile);
-    if (!newFile && std::filesystem::exists(outPath)) {
-        if (!std::filesystem::is_regular_file(outPath)) {
-            std::cerr << "Error: " << outFile << " is not a regular file." << std::endl;
-            return false;
-        }
-        std::ofstream ofs(outFile, std::ios::app);
-        if (!ofs) {
-            std::cerr << "Error: Cannot open " << outFile << " for appending." << std::endl;
-            return false;
-        }
-        ofs.close();
-        return true;
-    }
-    if (outPath.has_parent_path()) {
-        std::filesystem::path parent = outPath.parent_path();
-        if (!std::filesystem::exists(parent)) {
-            std::cerr << "Error: Output directory " << parent.string() << " does not exist." << std::endl;
-            return false;
-        }
-        if (!std::filesystem::is_directory(parent)) {
-            std::cerr << "Error: " << parent.string() << " is not a directory." << std::endl;
-            return false;
-        }
-    }
-    // Try opening the file for writing.
-    std::ofstream ofs(outFile, std::ios::binary | std::ios::out);
-    if (!ofs) {
-        std::cerr << "Error: Cannot open " << outFile << " for writing." << std::endl;
-        return false;
-    }
-    ofs.close();
-    std::remove(outFile.c_str());
-    return true;
 }
 
 cv::Point2d centroidOfPolygonTriangulation(const std::vector<cv::Point2d>& poly) {

@@ -41,7 +41,9 @@ theme:
 nav:
   - Home: index.md
   - Install: install.md
-  - Quickstart: basic.md
+  - Quickstart:
+    - Quickstart: workflows/index.md
+    - Multisample: workflows/multisample.md
   - Input: input/index.md
   - Modules:
     - Overview: modules/index.md

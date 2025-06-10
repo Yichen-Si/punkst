@@ -80,14 +80,14 @@ struct lineParser {
     bool isExtended = false;
 
     lineParser() {isFeatureDict = false; weighted = false;}
-    lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
+    lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, const std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
         weighted = false;
         if (_rects != nullptr && !_rects->empty()) {
             rects = *_rects;
         }
         init(_ix, _iy, _iz, _ivals, _dfile);
     }
-    void init(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, std::string& _dfile) {
+    void init(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, const std::string& _dfile) {
         icol_x = _ix;
         icol_y = _iy;
         icol_feature = _iz;
@@ -110,6 +110,7 @@ struct lineParser {
             std::string line;
             uint32_t nfeature = 0;
             while (std::getline(dictFile, line)) {
+                if (line.empty() || line[0] == '#') continue;
                 size_t pos = line.find_first_of(" \t");
                 if (pos != std::string::npos) {
                     line = line.substr(0, pos);
@@ -280,7 +281,7 @@ struct lineParser {
 struct lineParserUnival : public lineParser {
     size_t icol_val;
     lineParserUnival() {}
-    lineParserUnival(size_t _ix, size_t _iy, size_t _iz, size_t _ival, std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
+    lineParserUnival(size_t _ix, size_t _iy, size_t _iz, size_t _ival, const std::string& _dfile = "", std::vector<Rectangle<double>>* _rects = nullptr) {
         if (_rects != nullptr && !_rects->empty()) {
             rects = *_rects;
         }

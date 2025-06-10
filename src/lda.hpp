@@ -101,6 +101,36 @@ public:
             weights[k] /= total;
         }
     }
+    void sort_topics() {
+        // sort topics by decreasing total weight
+        VectorXd topic_weights = components_.rowwise().sum();
+        std::vector<int> indices(n_topics_);
+        std::iota(indices.begin(), indices.end(), 0);
+        std::sort(indices.begin(), indices.end(),
+                  [&topic_weights](int a, int b) {
+            return topic_weights[a] > topic_weights[b];
+        });
+        // update components_, exp_Elog_beta_, or Nk_
+        MatrixXd sorted_components(n_topics_, n_features_);
+        for (int i = 0; i < n_topics_; i++) {
+            sorted_components.row(i) = components_.row(indices[i]);
+        }
+        components_ = std::move(sorted_components);
+        if (algo_ == InferenceType::SCVB0) {
+            Nk_ = components_.rowwise().sum();
+        } else if (algo_ == InferenceType::SVB) {
+            exp_Elog_beta_ = dirichlet_expectation_2d(sorted_components);
+        }
+        // topic_names_
+        if (!topic_names_.empty()) {
+            std::vector<std::string> sorted_topic_names(n_topics_);
+            for (int i = 0; i < n_topics_; i++) {
+                sorted_topic_names[i] = topic_names_[indices[i]];
+            }
+            topic_names_ = std::move(sorted_topic_names);
+        }
+    }
+
     void set_nthreads(int nThreads) {
         nThreads_ = nThreads;
         if (nThreads_ > 0) {

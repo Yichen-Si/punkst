@@ -36,7 +36,7 @@ def de_bulk(_args):
     parser.add_argument('--input', type=str, help='')
     parser.add_argument('--output', type=str, help='')
     parser.add_argument('--feature', type=str, default='', help='')
-    parser.add_argument('--feature_label', type=str, default = "gene", help='')
+    parser.add_argument('--feature_label', type=str, default = "Feature", help='')
     parser.add_argument('--min_ct_per_feature', default=50, type=int, help='')
     parser.add_argument('--max_pval_output', default=1e-3, type=float, help='')
     parser.add_argument('--min_fold_output', default=1.5, type=float, help='')

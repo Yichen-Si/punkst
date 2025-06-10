@@ -33,6 +33,35 @@ double psi(double x) {
     return result;
 }
 
+Eigen::VectorXd expect_log_sticks(const Eigen::VectorXd& alpha,
+                                  const Eigen::VectorXd& beta) {
+    assert(alpha.size() == beta.size() && "alpha and beta must have same length");
+    int K = alpha.size();
+    int N = K + 1;
+
+    // ψ(α_j + β_j)
+    Eigen::VectorXd dig_sum(K);
+    for (int j = 0; j < K; ++j) {
+        dig_sum[j] = psi(alpha[j] + beta[j]);
+    }
+    // ElogW_j    = ψ(α_j) - ψ(α_j + β_j)
+    // Elog1_W_j  = ψ(β_j) - ψ(α_j + β_j)
+    Eigen::VectorXd ElogW(K), Elog1_W(K);
+    for (int j = 0; j < K; ++j) {
+        ElogW[j]    = psi(alpha[j]) - dig_sum[j];
+        Elog1_W[j]  = psi(beta[j])  - dig_sum[j];
+    }
+    // ElogSigma_k = ElogW_k + \sum_{l=1}^{k-1} Elog1_W_l
+    Eigen::VectorXd result = ElogW;
+    // accumulate Elog1_W into positions 1…K
+    double running = 0.0;
+    for (int j = 0; j < K - 1; ++j) {
+        running += Elog1_W[j];
+        result[j+1] += running;
+    }
+    return result;
+}
+
 // exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 // = exp(psi(\alpha_k) - psi(\alpha_0))
 void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset) {

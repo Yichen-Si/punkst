@@ -131,7 +131,6 @@ def assign_color_from_table(
     mtx: np.ndarray,
     color_df: pd.DataFrame,
     weight: np.ndarray = None,
-    seed: int = None,
     two_opt: bool = True
 ) -> np.ndarray:
     """
@@ -266,6 +265,13 @@ def choose_color(_args):
     K = len(factor_header)
     N = df.shape[0]
 
+    if K == 0:
+        print("Input file does not contain any factors")
+        return
+    if N < 2:
+        print("Input file does not contain enough data")
+        return
+
     # Factor abundance (want top factors to have more distinct colors)
     if args.even_space:
         weight=None
@@ -276,29 +282,37 @@ def choose_color(_args):
         weight = np.clip(weight, .5/K, 4/K)
         weight /= weight.sum()
 
-    # Find neearest neighbors
-    bt = sklearn.neighbors.BallTree(df.loc[:, ["x", "y"]])
-    dist, indx = bt.query(df.loc[:, ["x", "y"]], k = 7, return_distance=True)
-    r_indx = np.array([i for i,v in enumerate(indx) for y in range(len(v))], dtype=int)
-    c_indx = indx.reshape(-1)
-    dist = dist.reshape(-1)
-    nn = dist[dist > 0].min()
-    mask = (dist < nn + .5)
-    r_indx = r_indx[mask]
-    c_indx = c_indx[mask]
-    # Compute spatial similarity
-    Sig = coo_array((np.ones(len(r_indx)), (r_indx, c_indx)), shape=(N, N)).tocsr()
-    W = np.array(df.loc[:, factor_header])
-    mtx = W.T @ Sig @ W + 1e-6
-    # set diagonal to 0
-    np.fill_diagonal(mtx, 0)
-    # row normalize
-    mtx = mtx / np.sqrt(np.sum(mtx, axis=1, keepdims=True))
-    # take the element-wise max of mtx and mtx.T
-    mtx = np.maximum(mtx, mtx.T)
-    # Large values in mtx indicate close proximity, to be mapped to distinct colors
+    # Create a similarity matrix among factors
 
-    if not args.color_table and not args.color_table and K <= 48:
+    if "x" not in header or "y" not in header:
+        print("Input file does not seem to contain spatial units (no spatial coordinates are found)")
+        # compute cosine similarity among the columns
+        from sklearn.metrics.pairwise import cosine_similarity
+        mtx = cosine_similarity(df.loc[:, factor_header].values.T)
+    else:
+        # Find neearest neighbors
+        bt = sklearn.neighbors.BallTree(df.loc[:, ["x", "y"]])
+        dist, indx = bt.query(df.loc[:, ["x", "y"]], k = 7, return_distance=True)
+        r_indx = np.array([i for i,v in enumerate(indx) for y in range(len(v))], dtype=int)
+        c_indx = indx.reshape(-1)
+        dist = dist.reshape(-1)
+        nn = dist[dist > 0].min()
+        mask = (dist < nn + .5)
+        r_indx = r_indx[mask]
+        c_indx = c_indx[mask]
+        # Compute spatial similarity
+        Sig = coo_array((np.ones(len(r_indx)), (r_indx, c_indx)), shape=(N, N)).tocsr()
+        W = np.array(df.loc[:, factor_header])
+        mtx = W.T @ Sig @ W + 1e-6
+        # set diagonal to 0
+        np.fill_diagonal(mtx, 0)
+        # row normalize
+        mtx = mtx / np.sqrt(np.sum(mtx, axis=1, keepdims=True))
+        # take the element-wise max of mtx and mtx.T
+        mtx = np.maximum(mtx, mtx.T)
+        # Large values in mtx indicate close proximity, to be mapped to distinct colors
+
+    if not args.color_table and K <= 48:
         # use default colortable
         # get path to the current script
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -310,7 +324,6 @@ def choose_color(_args):
         cmtx = assign_color_from_table (
             mtx, ct,
             weight=weight,
-            seed=seed,
             two_opt=True
         )
     else:

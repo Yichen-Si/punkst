@@ -41,31 +41,31 @@ Then `make -f Makefile` exectutes the workflow.
 
 (The parameters in the example config file works for the example data, where the coordinates are in microns.)
 
-- `"datadir"`: the path to store all output
+`"datadir"`: the path to store all output
 
-- `"tmpdir"`: the path to store temporary files (those files will be deleted automatically by the program). This directory must be empty or creatable.
+`"tmpdir"`: the path to store temporary files (those files will be deleted automatically by the program). This directory must be empty or creatable.
 
-- `"transcripts"`: a tsv file with X coordinate, Y coordinate, gene/transcript name, and count columns. There could be other columns but they will be ignored.
+`"transcripts"`: a tsv file with X coordinate, Y coordinate, gene/transcript name, and count columns. There could be other columns but they will be ignored.
 
-- Specify the 0-based column indices in "transcripts" for X coordinate, Y coordinate, feature, and count: `"icol_x"`, `"icol_y"`, `"icol_feature"`, and `"icol_count"`. If the input file contains headers, set "skip" to the number of lines to skip.
+Specify the 0-based column indices in "transcripts" for X coordinate, Y coordinate, feature, and count: `"icol_x"`, `"icol_y"`, `"icol_feature"`, and `"icol_count"`. If the input file contains headers, set "skip" to the number of lines to skip.
 
-- `"exclude_feature_regex"`: a regular expression to exclude features from the analysis. For example, to exclude negative control probes and/or mitochondrial genes.
+`"exclude_feature_regex"`: a regular expression to exclude features from the analysis. For example, to exclude negative control probes and/or mitochondrial genes.
 
-- `"tilesize"`: we store and process data by square tiles, this parameter specifies the size length of the tiles in the same unit as your coordinates. Tile sizes affect the memory usage and (perhaps less so) run time, we've been using 500$\mu$m for all of our experiments.
+`"tilesize"`: we store and process data by square tiles, this parameter specifies the size length of the tiles in the same unit as your coordinates. Tile sizes affect the memory usage and (perhaps less so) run time, we've been using 500$\mu$m for all of our experiments.
 
-- `"hexgrids"` (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using $12\sim 18\mu m$ for most dataset, but you might want to use a larger value if your data has very low transcript density.
+`"hexgrids"` (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using $12\sim 18\mu m$ for most dataset, but you might want to use a larger value if your data has very low transcript density.
 
-- `"topics"` (list): the number of topics (factors) to learn.
+`"topics"` (list): the number of topics (factors) to learn.
 
-- `"pixhex"`: often set to be the same as "hexgrids" or slightly smaller.
+`"pixhex"`: often set to be the same as "hexgrids" or slightly smaller.
 
-- `"nmove"`: "pixhex" divided by "nmove" is the distance between adjacent anchor points in the algorithm. We recommend pixhex/nmove to be around $4~6\mu m$ for high resolution results.
+`"nmove"`: "pixhex" divided by "nmove" is the distance between adjacent anchor points in the algorithm. We recommend pixhex/nmove to be around $4~6\mu m$ for high resolution results.
 
-- `"res"`: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using $0.5\mu m$.
+`"res"`: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using $0.5\mu m$.
 
-- `"scale"`: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want $0.5 \mu m$ to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is $2 \mu m$, you probably want to set scale to 2.
+`"scale"`: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want $0.5 \mu m$ to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is $2 \mu m$, you probably want to set scale to 2.
 
-- Section `"job"`: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".
+Section `"job"`: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".
 
 
 ## Step by step
@@ -93,9 +93,12 @@ punkst pts2tiles --in-tsv transcripts.tsv \
 ```
 
 Key parameters:
-- `--icol-x`, `--icol-y`: Column indices for X and Y coordinates (0-based)
-- If your input file has a header, use `--skip 1` to skip the first (or more) lines
-- `--tile-size`: Size (side length) of the square tiles
+
+`--icol-x`, `--icol-y`: Column indices for X and Y coordinates (0-based)
+
+`--skip`: If your input file has a header, use `--skip 1` to skip the first (or more) lines
+
+`--tile-size`: Size (side length) of the square tiles
 
 [Detailed documentation for pts2tiles](./modules/pts2tiles.md)
 
@@ -114,9 +117,12 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv \
 ```
 
 Key parameters:
-- `--icol-feature`, `--icol-int`: Column indices for feature and count(s)
-- `--hex-size`: Side length of the hexagons
-- `--min-count`: Minimum count for a hexagon to be included
+
+`--icol-feature`, `--icol-int`: Column indices for feature and count(s)
+
+`--hex-size`: Side length of the hexagons
+
+`--min-count`: Minimum count for a hexagon to be included
 
 Shuffle the output for training:
 ```bash
@@ -140,8 +146,10 @@ punkst lda4hex --in-data ${path}/hex_12.randomized.txt \
 ```
 
 Key parameters:
-- `--n-topics`: Number of topics (factors) to learn
-- `--transform`: Generate transform results after model fitting
+
+`--n-topics`: Number of topics (factors) to learn
+
+`--transform`: Generate transform results after model fitting
 
 [Detailed documentation for lda4hex](./modules/lda4hex.md)
 
@@ -162,11 +170,16 @@ punkst pixel-decode --model ${path}/hex_12.model.tsv \
 ```
 
 Key parameters:
-- `--model`: Model file created by lda4hex
-- `--hex-grid-dist`: Center-to-center distance of the hexagonal grid
-- `--n-moves`: Number of sliding moves to generate anchors
-- `--pixel-res`: Resolution for the analysis (in the same unit as coordinates)
-- `--output-original`: Write each transcript/input pixel as a separate line in the output. This will be slower and generates a bigger file, so only use it if matching the inference with the original input is useful. (Excluding this flag for Visium HD data is more sensible)
+
+`--model`: Model file created by lda4hex
+
+`--hex-grid-dist`: Center-to-center distance of the hexagonal grid
+
+`--n-moves`: Number of sliding moves to generate anchors
+
+`--pixel-res`: Resolution for the analysis (in the same unit as coordinates)
+
+`--output-original`: Write each transcript/input pixel as a separate line in the output. This will be slower and generates a bigger file, so only use it if matching the inference with the original input is useful. (Excluding this flag for Visium HD data is more sensible)
 
 [Detailed documentation for pixel-decode](./modules/pixel-decode.md)
 
@@ -180,7 +193,7 @@ Optional: choose a color table based on the intermediate results. Otherwise, you
 python punkst/ext/py/color_helper.py --input ${path}/hex_12.results.tsv --output ${path}/color
 ```
 
-Generate an image for the pixel level factor assignment
+**Generate an image** for the pixel level factor assignment
 ```bash
 punkst draw-pixel-factors --in-tsv ${path}/pixel.decode.tsv \
   --in-color ${path}/color.rgb.tsv \
@@ -190,8 +203,26 @@ punkst draw-pixel-factors --in-tsv ${path}/pixel.decode.tsv \
 ```
 
 Key parameters:
-- `--in-color`: TSV file with RGB colors for each factor
-- `--scale`: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel)
-- `--xmin`, `--xmax`, `--ymin`, `--ymax`: Range of coordinates to visualize. If you specified `--icol-feature` and `--icol-int` in `pts2tiles`, you can either find the range in the `transcripts.tiled.coord_range.tsv` file or pass it directly with `--range transcripts.tiled.coord_range.tsv`.
+
+`--in-color`: TSV file with RGB colors for each factor
+
+`--scale`: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel in the image). If the coordinates are in microns, 1 or 0.5 is suitable for high resolution data (imaging-based, Stereo-seq, Seq-scope, etc.); 2 is suitable for Visium HD.
+
+`--xmin`, `--xmax`, `--ymin`, `--ymax`: Range of coordinates to visualize. If you specified `--icol-feature` and `--icol-int` in `pts2tiles`, you can either find the range in the `transcripts.tiled.coord_range.tsv` file or pass it directly with `--range transcripts.tiled.coord_range.tsv`.
+
+
+Compute **naive differential expression** statistics
+```bash
+python punkst/ext/py/de_bulk.py --input ${path}/pixel.decode.pseudobulk.tsv \
+  --output ${path}/de_bulk.tsv --thread ${threads}
+```
+
+**Generate a html** to display the color and top enriched genes for each factor
+```bash
+python punkst/ext/py/factor_report.py --de ${path}/de_bulk.tsv \
+  --pseudobulk ${path}/pixel.decode.pseudobulk.tsv \
+  --color_table ${path}/color.rgb.tsv \
+  --output_pref ${path}/report
+```
 
 [Detailed documentation for visualization](./modules/visualization.md)

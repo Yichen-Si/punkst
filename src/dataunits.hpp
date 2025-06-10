@@ -36,7 +36,7 @@ struct UnitValues {
     int32_t nPixel;
     int32_t x, y;
     int32_t label;
-    std::vector<std::unordered_map<uint32_t, uint32_t>> vals;
+    std::vector<std::map<uint32_t, uint32_t>> vals;
     std::vector<uint32_t> valsums;
     UnitValues(int32_t hx, int32_t hy, int32_t n = 0, int32_t l = -1) : nPixel(0), x(hx), y(hy), label(l) {
         if (n > 0) {
@@ -125,6 +125,9 @@ public:
     int32_t getNlayer() const {
         return nLayer;
     }
+    int32_t getOffset() const {
+        return offset_data;
+    }
     void getInfoHeaderStr(std::string &header) const {
         header.clear();
         for (size_t i = 0; i < header_info.size(); ++i) {
@@ -133,6 +136,14 @@ public:
                 header += "\t";
             }
         }
+    }
+    int32_t getIndex(const std::string &colname) const {
+        for (size_t i = 0; i < header_info.size(); ++i) {
+            if (header_info[i] == colname) {
+                return static_cast<int32_t>(i);
+            }
+        }
+        return -1; // Not found
     }
     void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap) {
         if (remap) {
