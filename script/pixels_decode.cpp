@@ -187,7 +187,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             if (tokens.size() < 3) {
                 error("Invalid line in sample list: %s", line.c_str());
             }
-            dataset ds(tokens[0], tokens[1], tokens[2]);
+            dataset ds{tokens[0], tokens[1], tokens[2]};
             if (tokens.size() > 3) {
                 ds.outPref = tokens[3];
                 if (tokens.size() > 4) {
@@ -207,7 +207,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             datasets.push_back(ds);
         }
     } else {
-        dataset ds("", inTsv, inIndex, outPref);
+        dataset ds{"", inTsv, inIndex, outPref};
         ds.anchorFile = anchorFile;
         datasets.push_back(ds);
     }

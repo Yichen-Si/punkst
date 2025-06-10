@@ -1,6 +1,7 @@
 #include "punkst.h"
 #include "pts2tiles.hpp"
 #include "tiles2bins.hpp"
+#include <regex>
 
 int32_t cmdMultiSample(int32_t argc, char** argv) {
     std::string inTsvListFile, tmpDir, outDir;
@@ -19,6 +20,8 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     float radius = -1.0f;
     bool noBackground = false;
     int32_t minCtPerUnit;
+    std::string include_ftr_regex;
+    std::string exclude_ftr_regex;
 
     bool overwrite = false;
 
@@ -30,14 +33,16 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, true)
         .add_option("icol-int", "Column index for integer value (0-based)", icol_int, true)
         .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
-        .add_option("threads", "Number of threads to use (default: 1)", nThreads0);
+        .add_option("threads", "Number of threads to use (default: 1)", nThreads0)
+        .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
+        .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex)
+        .add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample);
     // pts2tiles Options
     pl.add_option("tile-size", "Tile size (in the same unit as the input coordinates)", tileSize, true)
         .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
         .add_option("batch-size", "(Only used if the input is gzipped or a stdin stream.) Batch size in terms of the number of lines (default: 10000)", batchSize);
     // tiles2hex Options
-    pl.add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample)
-        .add_option("hex-size", "Hexagon size (size length)", hexSize)
+    pl.add_option("hex-size", "Hexagon size (size length)", hexSize)
         .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
         .add_option("anchor-files", "Anchor files (one for each sample)", anchorList)
         .add_option("anchor-files-list", "A file containing the path to the anchor file for each sample", anchorListFile)
@@ -70,7 +75,10 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     if (!outDir.empty() && (outDir.back() == '/' || outDir.back() == '\\')) {
         outDir.pop_back();
     }
-
+    bool check_include = !include_ftr_regex.empty();
+    bool check_exclude = !exclude_ftr_regex.empty();
+    std::regex regex_include(include_ftr_regex);
+    std::regex regex_exclude(exclude_ftr_regex);
 
     std::vector<std::string> samples, outDirs;
     std::unordered_map<std::string, uint32_t> sampleIdx;
@@ -114,8 +122,12 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         }
     }
     // Create sample-specific output directories
+    std::filesystem::path sampleDirBase = std::filesystem::path(outDir) / "samples";
+    if (!std::filesystem::exists(sampleDirBase)) {
+        std::filesystem::create_directories(sampleDirBase);
+    }
     for (auto& sn : samples) {
-        std::filesystem::path sampleDir = std::filesystem::path(outDir) / sn;
+        std::filesystem::path sampleDir = sampleDirBase / sn;
         if (!std::filesystem::exists(sampleDir)) {
             std::filesystem::create_directories(sampleDir);
         }
@@ -188,6 +200,7 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
             continue;
         }
         bool streaming = inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0;
+        notice("[multisample] Running pts2tiles for sample %s", sn.c_str());
         Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, streaming, tileBuffer, batchSize);
         if (!pts2Tiles.run()) {
             return 1;
@@ -209,7 +222,22 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         if (!fin) error("Cannot open feature file: %s", featFile.c_str());
         std::string feature;
         uint64_t cnt;
-        while (fin >> feature >> cnt) {
+        std::string line;
+        std::vector<std::string> tokens;
+        while (std::getline(fin, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            split(tokens, "\t", line);
+            if (tokens.size() < 2) continue; // Skip invalid lines
+            if (!str2num<uint64_t>(tokens[1], cnt)) {
+                warning("Skip invalid feature line: %s", line.c_str());
+                continue;
+            }
+            feature = tokens[0];
+            bool include = !check_include || std::regex_match(feature, regex_include);
+            bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
+            if (!include || exclude) { // Skip features based on regex filters
+                continue;
+            }
             auto it = featCounts.find(feature);
             if (it == featCounts.end()) {
                 // first time seeing this feature → init vector<S+2> with zeros

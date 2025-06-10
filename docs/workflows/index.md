@@ -8,7 +8,7 @@ We will explain how to generate a full workflow using a template Makefile, then 
 
 There is a small example data `transcripts.tsv.gz` in `punkst/examples/data`.
 
-See [Input](./input/index.md) for details on starting from raw data from different platforms.
+See [Input](../input/index.md) for details on starting from raw data from different platforms.
 
 We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (`example_data/transcripts.tsv.gz`)
 
@@ -100,7 +100,7 @@ Key parameters:
 
 `--tile-size`: Size (side length) of the square tiles
 
-[Detailed documentation for pts2tiles](./modules/pts2tiles.md)
+[Detailed documentation for pts2tiles](../modules/pts2tiles.md)
 
 ### Step 2: Create hexagonal units
 
@@ -130,7 +130,7 @@ sort -k1,1 --parallel ${threads} ${path}/hex_12.txt > ${path}/hex_12.randomized.
 rm ${path}/hex_12.txt
 ```
 
-[Detailed documentation for tiles2hex](./modules/tiles2hex.md)
+[Detailed documentation for tiles2hex](../modules/tiles2hex.md)
 
 ### Step 3: Run LDA on hexagon data
 
@@ -151,7 +151,7 @@ Key parameters:
 
 `--transform`: Generate transform results after model fitting
 
-[Detailed documentation for lda4hex](./modules/lda4hex.md)
+[Detailed documentation for lda4hex](../modules/lda4hex.md)
 
 ### Step 4: Decode pixels with the model
 
@@ -181,7 +181,7 @@ Key parameters:
 
 `--output-original`: Write each transcript/input pixel as a separate line in the output. This will be slower and generates a bigger file, so only use it if matching the inference with the original input is useful. (Excluding this flag for Visium HD data is more sensible)
 
-[Detailed documentation for pixel-decode](./modules/pixel-decode.md)
+[Detailed documentation for pixel-decode](../modules/pixel-decode.md)
 
 ### Step 5: Visualize the results
 
@@ -225,4 +225,4 @@ python punkst/ext/py/factor_report.py --de ${path}/de_bulk.tsv \
   --output_pref ${path}/report
 ```
 
-[Detailed documentation for visualization](./modules/visualization.md)
+[Detailed documentation for visualization](../modules/visualization.md)

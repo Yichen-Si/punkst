@@ -7,9 +7,11 @@
 #include "json.hpp"
 #include <algorithm>
 #include <unordered_map>
+#include <thread>
+#include <atomic>
 
 /**
- * @brief Represents the input data and options for a single sample.
+ * Represents the input data and options for a single sample.
  */
 struct SampleInput {
     std::string id;
@@ -33,9 +35,8 @@ struct SampleInput {
 };
 
 /**
- * @brief Parses a comma-separated string of non-negative integers into a vector.
- * @param s The string to parse.
- * @return A vector of integers. Invalid entries are skipped.
+ * Parses a comma-separated string of non-negative integers into a vector.
+ * Return A vector of integers. Invalid entries are skipped.
  */
 std::vector<uint32_t> parseIntList(std::string& s) {
     std::vector<uint32_t> result;
@@ -56,12 +57,122 @@ std::vector<uint32_t> parseIntList(std::string& s) {
 }
 
 /**
- * @brief Merges multiple datasets with a shared feature dictionary
+ * Worker function to process samples in parallel.
+ * Each worker thread pulls a sample index, processes the entire sample,
+ * and writes its output to a dedicated temporary file.
+ */
+void merge_worker_to_tempfile(
+    uint32_t thread_id,
+    std::filesystem::path temp_file_path,
+    std::atomic<size_t>& sample_idx_atomic,
+    const std::vector<SampleInput>& samples,
+    const std::unordered_map<std::string, uint32_t>& shared_feature_dict,
+    std::atomic<int32_t>& nUnits_atomic,
+    int minCtPerUnit,
+    bool hasInfoCols)
+{
+    // Open a dedicated temporary file for this thread's output
+    std::ofstream temp_out(temp_file_path);
+    if (!temp_out) {
+        // Can't use error() here as it calls exit().
+        warning("Worker thread %d could not open temporary file: %s", thread_id, temp_file_path.c_str());
+        return;
+    }
+
+    // Each thread gets its own random number generator, seeded for uniqueness
+    std::mt19937 rng(std::random_device{}() + thread_id);
+    std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
+
+    size_t s;
+    // Atomically fetch the next sample index to process
+    while ((s = sample_idx_atomic.fetch_add(1)) < samples.size()) {
+        const auto& currentSample = samples[s];
+
+        HexReader reader(currentSample.metaFile);
+        std::unordered_map<uint32_t, uint32_t> idx_remap;
+        for (size_t i = 0; i < reader.features.size(); ++i) {
+            auto it = shared_feature_dict.find(reader.features[i]);
+            if (it != shared_feature_dict.end()) {
+                idx_remap[i] = it->second;
+            }
+        }
+
+        std::ifstream inFileStream(currentSample.hexFile);
+        if (!inFileStream) {
+            warning("Worker thread %d could not open hexagon file: %s", thread_id, currentSample.hexFile.c_str());
+            continue;
+        }
+
+        int32_t offset_data = reader.getOffset();
+        if (offset_data < 0) {
+            warning("offset_data not in metadata for %s", currentSample.id.c_str());
+            continue;
+        }
+
+        int32_t minTokens = std::max((int32_t) currentSample.maxIndex(), offset_data + 2);
+        int32_t nModal = reader.getNmodal();
+        int32_t keyCol = currentSample.keyCol == -2 ? reader.getIndex("random_key") : currentSample.keyCol;
+
+        std::string line;
+        while (std::getline(inFileStream, line)) {
+            std::vector<std::string> tokens;
+            split(tokens, "\t", line);
+            if (tokens.size() < minTokens) continue;
+
+            std::string key_str = (keyCol >= 0) ? tokens[keyCol] : uint32toHex(rdUnif(rng));
+
+            std::stringstream ss_info;
+            if (hasInfoCols) {
+                if (currentSample.infoCols.empty()) {
+                    ss_info << ".";
+                } else {
+                    ss_info << tokens[currentSample.infoCols[0]];
+                    for (size_t i = 1; i < currentSample.infoCols.size(); ++i) {
+                        ss_info << "," << tokens[currentSample.infoCols[i]];
+                    }
+                }
+            }
+
+            std::stringstream ss_remapped;
+            int32_t n_new_features = 0;
+            uint32_t total_new_count = 0;
+            int32_t data_start_idx = offset_data + (2 * nModal);
+
+            for (size_t i = data_start_idx; i < tokens.size(); ++i) {
+                std::vector<std::string> pair;
+                split(pair, " ", tokens[i]);
+                if (pair.size() != 2) continue;
+                try {
+                    uint32_t old_idx = std::stoul(pair[0]);
+                    uint32_t count = std::stoul(pair[1]);
+                    auto it = idx_remap.find(old_idx);
+                    if (it != idx_remap.end()) {
+                        ss_remapped << "\t" << it->second << " " << count;
+                        n_new_features++;
+                        total_new_count += count;
+                    }
+                } catch(...) { continue; }
+            }
+            if (total_new_count < minCtPerUnit) continue;
+
+            temp_out << key_str << "\t" << s << "\t";
+            if (hasInfoCols) {
+                temp_out << ss_info.str() << "\t";
+            }
+            temp_out << n_new_features << "\t" << total_new_count << ss_remapped.str() << "\n";
+            nUnits_atomic.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    temp_out.close();
+}
+
+/**
+ * Merges multiple datasets with a shared feature dictionary
  * This function reads a list of samples, determines a set of features, and
  * creates a single merged data file with unified feature indices and metadata.
  */
 int32_t cmdMergeUnits(int32_t argc, char** argv) {
-    std::string inListFile, outPref;
+    std::string inListFile, outPref, tmpDirPath;
     int minTotalCountPerSample = 1;
     int minCtPerUnit = 1;
     uint32_t nThreads = 1;
@@ -70,6 +181,7 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
     ParamList pl;
     pl.add_option("in-list", "Input TSV file with sample info (ID, feature_path, hex_path. Optional: key_col_idx, info_col_indices)", inListFile, true)
         .add_option("out-pref", "Prefix for output files", outPref, true)
+        .add_option("temp-dir", "Directory to store temporary files", tmpDirPath, true)
         .add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample)
         .add_option("min-count-per-unit", "Minimum total count per unit to be included in merged output", minCtPerUnit)
         .add_option("threads", "Number of threads for sorting", nThreads);
@@ -133,13 +245,23 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
         if (!fin) error("Cannot open feature file: %s", samples[s].featureFile.c_str());
         std::string feature;
         uint64_t cnt;
-        while (fin >> feature >> cnt) {
+        std::string line;
+        std::vector<std::string> tokens;
+        while (std::getline(fin, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            split(tokens, "\t", line);
+            if (tokens.size() < 2) continue; // Skip invalid lines
+            feature = tokens[0];
+            if (!str2num<uint64_t>(tokens[1], cnt)) {
+                warning("Skip invalid feature line: %s", line.c_str());
+                continue;
+            }
             auto it = featCounts.find(feature);
             if (it == featCounts.end()) {
                 std::vector<uint64_t> vec(S + 1, 0); // S samples + 1 for total
                 vec[s] = cnt;
                 vec[S] = cnt;
-                featCounts.emplace(feature, std::move(vec));
+                featCounts.emplace(feature, vec);
             } else {
                 it->second[s] = cnt;
                 it->second[S] += cnt;
@@ -196,103 +318,43 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
     size_t n_shared = shared_feature_dict.size();
     notice("Selected %zu features from a total of %zu union features.", n_shared, featCounts.size());
 
-    // 4. Merge hexagon files
-    std::string mergedFile = outPref + ".txt";
-    std::ofstream mergedOut(mergedFile);
-    if (!mergedOut) error("Cannot open merged output file: %s", mergedFile.c_str());
+    // 4. Merge hexagon files in parallel to temporary files
+    notice("Processing %zu samples with %u threads...", S, nThreads);
+    ScopedTempDir temp_dir(tmpDirPath);
+    notice("Using temporary directory: %s", temp_dir.path.c_str());
 
-    int32_t nUnits = 0;
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
+    std::vector<std::thread> workers;
+    std::atomic<size_t> sample_idx(0);
+    std::atomic<int32_t> nUnits(0);
+    std::vector<std::string> temp_files;
 
-    for (size_t s = 0; s < S; ++s) {
-        const auto& currentSample = samples[s];
-
-        HexReader reader(currentSample.metaFile);
-
-        // Create a map from this sample's original feature index to the new shared index
-        std::unordered_map<uint32_t, uint32_t> idx_remap;
-        for (size_t i = 0; i < reader.features.size(); ++i) {
-            auto it = shared_feature_dict.find(reader.features[i]);
-            if (it != shared_feature_dict.end()) {
-                idx_remap[i] = it->second;
-            }
-        }
-
-        std::ifstream inFileStream(currentSample.hexFile);
-        if (!inFileStream) error("Cannot open hexagon file: %s", currentSample.hexFile.c_str());
-
-        int32_t offset_data = reader.getOffset();
-        if (offset_data < 0) error("offset_data not in metadata for %s", currentSample.id.c_str());
-        int32_t minTokens = std::max((int32_t) currentSample.maxIndex(), offset_data + 2);
-
-        int32_t nModal = reader.getNmodal();
-        int32_t keyCol = currentSample.keyCol;
-        if (keyCol < -1) {
-            keyCol = reader.getIndex("random_key");
-        }
-        notice("Processing sample %s (%zu/%zu) (key col %d, %d info fields)...", samples[s].id.c_str(), s + 1, S, keyCol, currentSample.infoCols.size());
-
-        std::string line;
-        while (std::getline(inFileStream, line)) {
-            std::vector<std::string> tokens;
-            split(tokens, "\t", line);
-            if (tokens.size() < minTokens) continue;
-
-            // Get random key, either from file or by generating a new one
-            std::string key_str = (keyCol >= 0)
-                                ? tokens[keyCol] : uint32toHex(rdUnif(rng));
-
-            // Concatenate specified info fields
-            std::stringstream ss_info;
-            if (hasInfoCols) {
-                if (currentSample.infoCols.empty()) {
-                    ss_info << ".";
-                } else {
-                    ss_info << tokens[currentSample.infoCols[0]];
-                    for (size_t i = 1; i < currentSample.infoCols.size(); ++i) {
-                        int32_t col_idx = currentSample.infoCols[i];
-                        ss_info << "," << tokens[col_idx];
-                    }
-                }
-            }
-            // Remap feature indices and counts
-            std::stringstream ss_remapped;
-            int32_t n_new_features = 0;
-            uint32_t total_new_count = 0;
-            int32_t data_start_idx = offset_data + (2 * nModal);
-            for (size_t i = data_start_idx; i < tokens.size(); ++i) {
-                std::vector<std::string> pair;
-                split(pair, " ", tokens[i]);
-                if (pair.size() != 2) continue;
-                try {
-                    uint32_t old_idx = std::stoul(pair[0]);
-                    uint32_t count = std::stoul(pair[1]);
-                    auto it = idx_remap.find(old_idx);
-                    if (it != idx_remap.end()) {
-                        ss_remapped << "\t" << it->second << " " << count;
-                        n_new_features++;
-                        total_new_count += count;
-                    }
-                } catch(...) { continue; }
-            }
-            if (total_new_count < minCtPerUnit) continue;
-
-            // Write the unified line to the merged file
-            mergedOut << key_str << "\t" << s << "\t";
-            if (hasInfoCols) {
-                mergedOut << ss_info.str() << "\t";
-            }
-            mergedOut << n_new_features << "\t" << total_new_count
-                      << ss_remapped.str() << "\n";
-            nUnits++;
-        }
+    for (uint32_t i = 0; i < nThreads; ++i) {
+        std::filesystem::path temp_file_path = temp_dir.path / ("part_" + std::to_string(i));
+        workers.emplace_back(merge_worker_to_tempfile, i,
+                             temp_file_path,
+                             std::ref(sample_idx),
+                             std::cref(samples),
+                             std::cref(shared_feature_dict),
+                             std::ref(nUnits),
+                             minCtPerUnit,
+                             hasInfoCols);
+        temp_files.push_back(temp_file_path.string());
     }
-    mergedOut.close();
+
+    for (auto& t : workers) {
+        t.join();
+    }
+
+    notice("Concatenating and sorting %zu temporary files...", temp_files.size());
+    std::string mergedFile = outPref + ".txt";
+    if (pipe_cat_sort(temp_files, mergedFile, nThreads) != 0) {
+        return 1;
+    }
+    notice("Merged %d units across %zu samples.", nUnits.load(), S);
 
     // 5. Write merged JSON metadata
     nlohmann::json mergedMeta;
-    mergedMeta["n_units"] = nUnits;
+    mergedMeta["n_units"] = nUnits.load();
     mergedMeta["n_features"] = n_shared;
     mergedMeta["dictionary"] = shared_feature_dict;
     std::vector<std::string> header_info{"random_key", "sample_idx"};
@@ -303,12 +365,6 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
     std::ofstream mergedJsonOut(mergedJsonPath);
     mergedJsonOut << std::setw(4) << mergedMeta << std::endl;
     mergedJsonOut.close();
-
-    // 6. Sort the merged file for efficient downstream processing
-    notice("Sorting the merged file...");
-    if (sys_sort(mergedFile.c_str(), nullptr, {"-k1,1", "--parallel="+std::to_string(nThreads), "-o", mergedFile}) != 0) {
-        error("Error sorting the merged hexagon file: %s", mergedFile.c_str());
-    }
 
     notice("Finished merging. Output at: %s", mergedFile.c_str());
     return 0;
