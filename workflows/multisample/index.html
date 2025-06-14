@@ -617,6 +617,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#generate-sample-specific-and-merged-hexagons" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generate sample-specific and merged hexagons
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Generate sample-specific and merged hexagons">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#input-file-list-in-tsv-list_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input File List (--in-tsv-list)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -961,6 +994,39 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#generate-sample-specific-and-merged-hexagons" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generate sample-specific and merged hexagons
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Generate sample-specific and merged hexagons">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#input-file-list-in-tsv-list_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input File List (--in-tsv-list)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -981,12 +1047,13 @@
 
 <h1 id="multi-sample-analysis-utilities">Multi-Sample Analysis Utilities<a class="headerlink" href="#multi-sample-analysis-utilities" title="Permanent link">&para;</a></h1>
 <p>There are two main utilities for handling multiple transcriptomics inputs to help multi-sample analysis.</p>
-<p><code>multisample-prepare</code> processes raw data from multiple samples in a unified way. The output are ready for model training and later sample-specific pixel level projection.</p>
+<p><code>multisample-prepare</code> processes raw data from multiple samples in a unified way. The output are ready for model training and later sample-specific pixel level projection. You also have the option to run only the first or the second step of the pipeline, see below for details.</p>
 <p><code>merge-units</code> merges multiple binned datasets, for example single cells or hexagons, in our customized sparse matrix format to a single dataset while harmonizing the sample-specific feature lists.</p>
 <hr />
 <h2 id="processing-multiple-samples-from-raw-data">Processing multiple samples from raw data<a class="headerlink" href="#processing-multiple-samples-from-raw-data" title="Permanent link">&para;</a></h2>
 <p>The <code>multisample-prepare</code> command processes multiple raw spatial transcriptomics datasets into a merged hexagonal binned data suitable for joint model training (by <code>punkst topic-model</code>) and sample-specific tiled pixel level data for pixel level projection.</p>
 <p>It runs <a href="./modules/pts2tiles.md"><code>pts2tiles</code></a> and <a href="./modules/tiles2hex.md"><code>tiles2hex</code></a> for each sample then merge the binned level data.</p>
+<p>(if neither <code>--hex-grid-dist</code> nor <code>--hex-size</code> is provided, it only runs <code>pts2tiles</code>; if <code>--tiles2hex-only</code> is set (see the third section below) it only runs <code>tiles2hex</code> and merges the output files.)</p>
 <h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>multisample-prepare<span class="w"> </span>--in-tsv-list<span class="w"> </span>input_file_list.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
@@ -1020,7 +1087,7 @@ Each line should contain two tab-separated columns:
 <p><code>--skip</code>: If your input file has a header, use <code>--skip 1</code> to skip the first (or more) lines.</p>
 <p><code>--tile-size &lt;int&gt;</code>: (Required) The size of the square tiles for pre-processing. Should be big enough, say 500 microns.</p>
 <p><strong><code>tiles2hex</code> options:</strong></p>
-<p><code>--hex-grid-dist &lt;float&gt;</code>: The center-to-center distance for the hexagonal grid. Alternatively, provide <code>--hex-size &lt;float&gt;</code>, side length of the hexagons.</p>
+<p><code>--hex-grid-dist &lt;float&gt;</code>: The center-to-center distance for the hexagonal grid. Alternatively, provide <code>--hex-size &lt;float&gt;</code>, side length of the hexagons (exactly one of the two options must be provided). Multiple values can be provided, separated by spaces.</p>
 <p><code>--min-count &lt;int&gt;</code>: The minimum total count for a hexagon (unit) to be included in the output.</p>
 <h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
 <p>All outputs are under the specified <code>--out-dir</code></p>
@@ -1082,6 +1149,31 @@ It tells the tool to either use the existing random keys or generate new random 
 <p><code>[--out-pref].txt</code> and <code>.json</code>: The merged hexagon data file and its corresponding metadata, ready for <code>lda4hex</code>.</p>
 <p><code>[--out-pref].features.tsv</code>: The list of features and their total counts in the merged dataset.</p>
 <p><code>[--out-pref].union_features.tsv</code>: A list of all features found across all samples and their per-sample counts.</p>
+<hr />
+<h2 id="generate-sample-specific-and-merged-hexagons">Generate sample-specific and merged hexagons<a class="headerlink" href="#generate-sample-specific-and-merged-hexagons" title="Permanent link">&para;</a></h2>
+<p>The <code>multisample-prepare</code> command has another mode to only perform the second step: run <a href="./modules/tiles2hex.md"><code>tiles2hex</code></a> for each sample then merge the binned level data. This mode is activated by <code>--tiles2hex-only</code>, and a different input should be provided in <code>--in-tsv-list</code>.
+Most likely use case is when you have already run <code>pts2tiles</code> for each sample separately.</p>
+<h3 id="usage_2">Usage<a class="headerlink" href="#usage_2" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>multisample-prepare<span class="w"> </span>--in-tsv-list<span class="w"> </span>input_file_list.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span>--tiles2hex-only<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span>--min-total-count-per-sample<span class="w"> </span><span class="m">100</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--min-count-per-unit<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">    </span>--out-dir<span class="w"> </span>./out<span class="w"> </span>--out-joint-pref<span class="w"> </span>merged<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">    </span>--temp-dir<span class="w"> </span>./tmp<span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span></code></pre></div>
+<h3 id="input-file-list-in-tsv-list_1">Input File List (<code>--in-tsv-list</code>)<a class="headerlink" href="#input-file-list-in-tsv-list_1" title="Permanent link">&para;</a></h3>
+<p>The pipeline requires an input TSV file that lists the information for each sample to be processed.
+Each line should contain two tab-separated columns:
+1.  A unique Sample ID.
+2.  The path to the tiled transcript file for that sample.
+3.  The path to the corresponding index file.
+4.  The path to the per-sample feature count file.</p>
+<p>The three input files per sample should be in the same formats as those output by <a href="./modules/pts2tiles.md"><code>pts2tiles</code></a>.</p>
+<p><strong>Example <code>input_file_list.tsv</code>:</strong>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sample_A    /path/to/sample_A_transcripts.tiled.tsv /path/to/sample_A_transcripts.tiled.index   /path/to/sample_A.features.tsv
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>sample_B    /path/to/sample_B_transcripts.tiled.tsv /path/to/sample_B_transcripts.tiled.index   /path/to/sample_B.features.tsv
+</span></code></pre></div></p>
 
 
 
