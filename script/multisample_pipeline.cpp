@@ -1,6 +1,7 @@
 #include "punkst.h"
 #include "pts2tiles.hpp"
 #include "tiles2bins.hpp"
+#include <regex>
 
 int32_t cmdMultiSample(int32_t argc, char** argv) {
     std::string inTsvListFile, tmpDir, outDir;
@@ -21,6 +22,9 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     int32_t minCtPerUnit;
     bool tiles2hex_only = false;
     bool forceTileSize = false;
+    std::string include_ftr_regex;
+    std::string exclude_ftr_regex;
+
     bool overwrite = false;
 
     ParamList pl;
@@ -31,7 +35,10 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, true)
         .add_option("icol-int", "Column index for integer value (0-based)", icol_int, true)
         .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
-        .add_option("threads", "Number of threads to use (default: 1)", nThreads0);
+        .add_option("threads", "Number of threads to use (default: 1)", nThreads0)
+        .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
+        .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex)
+        .add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample);
     // pts2tiles Options
     pl.add_option("tile-size", "Tile size (in the same unit as the input coordinates)", tileSize)
         .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
@@ -116,7 +123,10 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     if (jointPref.back() != '.') {
         jointPref += ".";
     }
-
+    bool check_include = !include_ftr_regex.empty();
+    bool check_exclude = !exclude_ftr_regex.empty();
+    std::regex regex_include(include_ftr_regex);
+    std::regex regex_exclude(exclude_ftr_regex);
     std::vector<std::string> samples, outDirs, featureTsvs, tileTsvs, tileIndexes;
     std::unordered_map<std::string, uint32_t> sampleIdx;
     size_t S = 0;
@@ -169,8 +179,12 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         }
     }
     // Create sample-specific output directories
+    std::filesystem::path sampleDirBase = std::filesystem::path(outDir) / "samples";
+    if (!std::filesystem::exists(sampleDirBase)) {
+        std::filesystem::create_directories(sampleDirBase);
+    }
     for (auto& sn : samples) {
-        std::filesystem::path sampleDir = std::filesystem::path(outDir) / sn;
+        std::filesystem::path sampleDir = sampleDirBase / sn;
         if (!std::filesystem::exists(sampleDir)) {
             std::filesystem::create_directories(sampleDir);
         }
@@ -235,6 +249,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             continue;
         }
         bool streaming = inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0;
+        notice("[multisample] Running pts2tiles for sample %s", sn.c_str());
         Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, streaming, tileBuffer, batchSize);
         if (!pts2Tiles.run()) {
             return 1;
@@ -262,12 +277,16 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         while (std::getline(fin, line)) {
             if (line.empty() || line[0] == '#') continue;
             split(tokens, "\t", line);
-            if (tokens.size() < 2) {
-                error("Invalid line (less than 2 tokens) %s in feature file %s", line.c_str(), featFile.c_str());
+            if (tokens.size() < 2) continue; // Skip invalid lines
+            if (!str2num<uint64_t>(tokens[1], cnt)) {
+                warning("Skip invalid feature line: %s", line.c_str());
+                continue;
             }
             feature = tokens[0];
-            if (!str2num<uint64_t>(tokens[1], cnt)) {
-                error("Invalid count value %s (line %s) in feature file", tokens[1].c_str(), line.c_str());
+            bool include = !check_include || std::regex_match(feature, regex_include);
+            bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
+            if (!include || exclude) { // Skip features based on regex filters
+                continue;
             }
             auto it = featCounts.find(feature);
             if (it == featCounts.end()) {

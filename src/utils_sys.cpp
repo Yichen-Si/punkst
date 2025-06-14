@@ -116,6 +116,113 @@ int sys_sort(const char* infile, const char* outfile,
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+int pipe_cat_sort(const std::vector<std::string>& in_files, const std::string& out_file, uint32_t n_threads) {
+    int pipe_fds[2];
+    if (pipe(pipe_fds) == -1) {
+        perror("pipe failed");
+        return -1;
+    }
+
+    // --- Fork for the 'sort' process (the end of the pipe) ---
+    pid_t sort_pid = fork();
+    if (sort_pid < 0) {
+        perror("fork for sort failed");
+        return -1;
+    }
+
+    if (sort_pid == 0) { // Child process: sort
+        close(pipe_fds[1]); // sort only reads, so close the write-end of the pipe
+
+        // Redirect stdin to read from the pipe
+        if (dup2(pipe_fds[0], STDIN_FILENO) == -1) {
+            perror("dup2 for sort stdin failed");
+            _exit(127);
+        }
+        close(pipe_fds[0]);
+
+        // Build argv for sort
+        std::vector<std::string> args = {"sort", "-k1,1", "-o", out_file};
+        #if defined(__linux__)
+        args.push_back("--parallel=" + std::to_string(n_threads));
+        #else
+        // macOS/BSD sort doesn't have --parallel. We can optionally warn the user.
+        if (n_threads > 1) {
+          // This will be printed from the child, so it's a bit messy, but acceptable.
+          // fprintf(stderr, "Info: --parallel flag for sort is a GNU extension and not used on this OS.\n");
+        }
+        #endif
+
+        std::vector<char*> argv;
+        for (const auto& s : args) {
+            argv.push_back(const_cast<char*>(s.c_str()));
+        }
+        argv.push_back(nullptr);
+
+        execvp("sort", argv.data());
+        // If execvp returns, an error occurred
+        fprintf(stderr, "execvp for sort failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    // --- Fork for the 'cat' process (the start of the pipe) ---
+    pid_t cat_pid = fork();
+    if (cat_pid < 0) {
+        perror("fork for cat failed");
+        return -1;
+    }
+
+    if (cat_pid == 0) { // Child process: cat
+        close(pipe_fds[0]); // cat only writes, so close the read-end of the pipe
+
+        // Redirect stdout to write to the pipe
+        if (dup2(pipe_fds[1], STDOUT_FILENO) == -1) {
+            perror("dup2 for cat stdout failed");
+            _exit(127);
+        }
+        close(pipe_fds[1]);
+
+        // Build argv for cat
+        std::vector<std::string> args = {"cat"};
+        // check if each file exists
+        for (const auto& file : in_files) {
+            if (!std::filesystem::exists(file)) {
+                continue;
+            }
+            args.push_back(file);
+        }
+
+        std::vector<char*> argv;
+        for (const auto& s : args) {
+            argv.push_back(const_cast<char*>(s.c_str()));
+        }
+        argv.push_back(nullptr);
+
+        execvp("cat", argv.data());
+        // If execvp returns, an error occurred
+        fprintf(stderr, "execvp for cat failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    // --- Parent Process ---
+    // The parent doesn't use the pipe, so it must close both ends.
+    // This is CRITICAL. If a write-end is left open, the reader (sort) will never get EOF and will hang.
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+
+    // Wait for both children to finish and check their statuses
+    int status_cat, status_sort;
+    waitpid(cat_pid, &status_cat, 0);
+    waitpid(sort_pid, &status_sort, 0);
+
+    if (WIFEXITED(status_cat) && WEXITSTATUS(status_cat) == 0 &&
+        WIFEXITED(status_sort) && WEXITSTATUS(status_sort) == 0) {
+        return 0; // Success
+    }
+
+    error("Piped command failed. cat exit status: %d, sort exit status: %d", WEXITSTATUS(status_cat), WEXITSTATUS(status_sort));
+    return -1; // Indicate failure
+}
+
 void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& blocks, const std::string& inFile, int32_t nThreads, int32_t nskip) {
     std::ifstream infile(inFile, std::ios::binary);
     if (!infile) {
