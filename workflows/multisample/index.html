@@ -1052,7 +1052,7 @@
 <hr />
 <h2 id="processing-multiple-samples-from-raw-data">Processing multiple samples from raw data<a class="headerlink" href="#processing-multiple-samples-from-raw-data" title="Permanent link">&para;</a></h2>
 <p>The <code>multisample-prepare</code> command processes multiple raw spatial transcriptomics datasets into a merged hexagonal binned data suitable for joint model training (by <code>punkst topic-model</code>) and sample-specific tiled pixel level data for pixel level projection.</p>
-<p>It runs <a href="./modules/pts2tiles.md"><code>pts2tiles</code></a> and <a href="./modules/tiles2hex.md"><code>tiles2hex</code></a> for each sample then merge the binned level data.</p>
+<p>It runs <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a> and <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for each sample then merge the binned level data.</p>
 <p>(if neither <code>--hex-grid-dist</code> nor <code>--hex-size</code> is provided, it only runs <code>pts2tiles</code>; if <code>--tiles2hex-only</code> is set (see the third section below) it only runs <code>tiles2hex</code> and merges the output files.)</p>
 <h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>multisample-prepare<span class="w"> </span>--in-tsv-list<span class="w"> </span>input_file_list.tsv<span class="w"> </span><span class="se">\</span>
@@ -1068,13 +1068,13 @@
 Each line should contain two tab-separated columns:
 1.  A unique Sample ID.
 2.  The path to the raw transcript file for that sample.</p>
-<p>The raw transcript file should be in the format expected by <a href="./modules/pts2tiles.md"><code>pts2tiles</code></a>.</p>
+<p>The raw transcript file should be in the format expected by <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a>.</p>
 <p><strong>Example <code>input_file_list.tsv</code>:</strong>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sample_A    /path/to/sample_A_transcripts.tsv
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>sample_B    /path/to/sample_B_transcripts.tsv
 </span></code></pre></div></p>
 <h3 id="key-options">Key Options<a class="headerlink" href="#key-options" title="Permanent link">&para;</a></h3>
-<p>(Other options are available, see <a href="./modules/pts2tiles.md"><code>pts2tiles</code></a> and <a href="./modules/tiles2hex.md"><code>tiles2hex</code></a> for details.)</p>
+<p>(Other options are available, see <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a> and <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for details.)</p>
 <p><code>--in-tsv-list &lt;file&gt;</code>: (Required) Path to the input TSV file describing the samples.</p>
 <p><code>--min-total-count-per-sample &lt;int&gt;</code>: The minimum sample-specific total count a feature must have (across all samples) to be included in the merged file. Default: 1. Setting it to 0 to use the union of features across samples.</p>
 <p><code>--threads &lt;int&gt;</code>: Number of threads to use. [Default: 1]</p>
@@ -1104,7 +1104,7 @@ Each line should contain two tab-separated columns:
 <h2 id="merge-hexagon-units-from-pre-processed-samples">Merge hexagon units from pre-processed samples<a class="headerlink" href="#merge-hexagon-units-from-pre-processed-samples" title="Permanent link">&para;</a></h2>
 <p>The <code>merge-units</code> command merges multiple bin level data in the format of the output from <code>punkst tiles2hex</code>.</p>
 <p>The input files can have different extra information, as long as the metadata (<code>.json</code>) are recognized and includes a key <code>offset_data</code> indicating the starting index (0-based) of the sparsely coded count data.</p>
-<p>(In each row, tokens are separate by tabs. Starting from the index specified by <code>offset_data</code>, each row contains two integers for the number of unique features and the total count of all features, followed by feature_index and count (separated by a single space) pairs. See <a href="./modules/tiles2hex.md"><code>tiles2hex</code></a> for more details.)</p>
+<p>(In each row, tokens are separate by tabs. Starting from the index specified by <code>offset_data</code>, each row contains two integers for the number of unique features and the total count of all features, followed by feature_index and count (separated by a single space) pairs. See <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for more details.)</p>
 <h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
 <p>This example merges two pre-processed samples.</p>
 <p>Two optional input specifications are demonstrated:
@@ -1151,7 +1151,7 @@ It tells the tool to either use the existing random keys or generate new random 
 <p><code>[--out-pref].union_features.tsv</code>: A list of all features found across all samples and their per-sample counts.</p>
 <hr />
 <h2 id="generate-sample-specific-and-merged-hexagons">Generate sample-specific and merged hexagons<a class="headerlink" href="#generate-sample-specific-and-merged-hexagons" title="Permanent link">&para;</a></h2>
-<p>The <code>multisample-prepare</code> command has another mode to only perform the second step: run <a href="./modules/tiles2hex.md"><code>tiles2hex</code></a> for each sample then merge the binned level data. This mode is activated by <code>--tiles2hex-only</code>, and a different input should be provided in <code>--in-tsv-list</code>.
+<p>The <code>multisample-prepare</code> command has another mode to only perform the second step: run <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for each sample then merge the binned level data. This mode is activated by <code>--tiles2hex-only</code>, and a different input should be provided in <code>--in-tsv-list</code>.
 Most likely use case is when you have already run <code>pts2tiles</code> for each sample separately.</p>
 <h3 id="usage_2">Usage<a class="headerlink" href="#usage_2" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>multisample-prepare<span class="w"> </span>--in-tsv-list<span class="w"> </span>input_file_list.tsv<span class="w"> </span><span class="se">\</span>
@@ -1169,7 +1169,7 @@ Each line should contain two tab-separated columns:
 2.  The path to the tiled transcript file for that sample.
 3.  The path to the corresponding index file.
 4.  The path to the per-sample feature count file.</p>
-<p>The three input files per sample should be in the same formats as those output by <a href="./modules/pts2tiles.md"><code>pts2tiles</code></a>.</p>
+<p>The three input files per sample should be in the same formats as those output by <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a>.</p>
 <p><strong>Example <code>input_file_list.tsv</code>:</strong>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sample_A    /path/to/sample_A_transcripts.tiled.tsv /path/to/sample_A_transcripts.tiled.index   /path/to/sample_A.features.tsv
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>sample_B    /path/to/sample_B_transcripts.tiled.tsv /path/to/sample_B_transcripts.tiled.index   /path/to/sample_B.features.tsv

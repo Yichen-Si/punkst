@@ -842,7 +842,7 @@
 <p>We will explain how to generate a full workflow using a template Makefile, then explains the steps taken inside the workflow.</p>
 <h2 id="generic-input-format-and-example-data">Generic input format and example data<a class="headerlink" href="#generic-input-format-and-example-data" title="Permanent link">&para;</a></h2>
 <p>There is a small example data <code>transcripts.tsv.gz</code> in <code>punkst/examples/data</code>.</p>
-<p>See <a href="./input/index.md">Input</a> for details on starting from raw data from different platforms.</p>
+<p>See <a href="../input/">Input</a> for details on starting from raw data from different platforms.</p>
 <p>We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (<code>example_data/transcripts.tsv.gz</code>)</p>
 <p>It can be gzipped or uncompressed.
 It can have other columns (which will be ignored in analysis but can be optionally carried over to the pixel level output), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.</p>
@@ -893,7 +893,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p><code>--icol-x</code>, <code>--icol-y</code>: Column indices for X and Y coordinates (0-based)</p>
 <p><code>--skip</code>: If your input file has a header, use <code>--skip 1</code> to skip the first (or more) lines</p>
 <p><code>--tile-size</code>: Size (side length) of the square tiles</p>
-<p><a href="./modules/pts2tiles.md">Detailed documentation for pts2tiles</a></p>
+<p><a href="../modules/pts2tiles/">Detailed documentation for pts2tiles</a></p>
 <h3 id="step-2-create-hexagonal-units">Step 2: Create hexagonal units<a class="headerlink" href="#step-2-create-hexagonal-units" title="Permanent link">&para;</a></h3>
 <p>Group pixels into non-overlapping hexagons:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span><span class="se">\</span>
@@ -912,7 +912,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>sort<span class="w"> </span>-k1,1<span class="w"> </span>--parallel<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt<span class="w"> </span>&gt;<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>rm<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt
 </span></code></pre></div></p>
-<p><a href="./modules/tiles2hex.md">Detailed documentation for tiles2hex</a></p>
+<p><a href="../modules/tiles2hex/">Detailed documentation for tiles2hex</a></p>
 <h3 id="step-3-run-lda-on-hexagon-data">Step 3: Run LDA on hexagon data<a class="headerlink" href="#step-3-run-lda-on-hexagon-data" title="Permanent link">&para;</a></h3>
 <p>Perform Latent Dirichlet Allocation on the hexagon data:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>lda4hex<span class="w"> </span>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt<span class="w"> </span><span class="se">\</span>
@@ -925,7 +925,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p>Key parameters:</p>
 <p><code>--n-topics</code>: Number of topics (factors) to learn</p>
 <p><code>--transform</code>: Generate transform results after model fitting</p>
-<p><a href="./modules/lda4hex.md">Detailed documentation for lda4hex</a></p>
+<p><a href="../modules/lda4hex/">Detailed documentation for lda4hex</a></p>
 <h3 id="step-4-decode-pixels-with-the-model">Step 4: Decode pixels with the model<a class="headerlink" href="#step-4-decode-pixels-with-the-model" title="Permanent link">&para;</a></h3>
 <p>Annotate each pixel with top factors and their probabilities:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.model.tsv<span class="w"> </span><span class="se">\</span>
@@ -944,7 +944,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p><code>--n-moves</code>: Number of sliding moves to generate anchors</p>
 <p><code>--pixel-res</code>: Resolution for the analysis (in the same unit as coordinates)</p>
 <p><code>--output-original</code>: Write each transcript/input pixel as a separate line in the output. This will be slower and generates a bigger file, so only use it if matching the inference with the original input is useful. (Excluding this flag for Visium HD data is more sensible)</p>
-<p><a href="./modules/pixel-decode.md">Detailed documentation for pixel-decode</a></p>
+<p><a href="../modules/pixel-decode/">Detailed documentation for pixel-decode</a></p>
 <h3 id="step-5-visualize-the-results">Step 5: Visualize the results<a class="headerlink" href="#step-5-visualize-the-results" title="Permanent link">&para;</a></h3>
 <p>Visualize the pixel decoding results:</p>
 <p>Optional: choose a color table based on the intermediate results. Otherwise, you need to create a RGB table with the following columns: R, G, B (including the header). So each row represents the RGB color for a factor, with integer values from 0 to 255. (Python dependency: <a href="https://pypi.org/project/Jinja2/">jinja2</a>, pandas, matplotlib.)</p>
@@ -971,7 +971,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--color_table<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color.rgb.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--output_pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/report
 </span></code></pre></div></p>
-<p><a href="./modules/visualization.md">Detailed documentation for visualization</a></p>
+<p><a href="../modules/visualization/">Detailed documentation for visualization</a></p>
 
 
 
