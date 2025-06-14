@@ -2,7 +2,7 @@
 
 There are two main utilities for handling multiple transcriptomics inputs to help multi-sample analysis.
 
-`multisample-prepare` processes raw data from multiple samples in a unified way. The output are ready for model training and later sample-specific pixel level projection.
+`multisample-prepare` processes raw data from multiple samples in a unified way. The output are ready for model training and later sample-specific pixel level projection. You also have the option to run only the first or the second step of the pipeline, see below for details.
 
 `merge-units` merges multiple binned datasets, for example single cells or hexagons, in our customized sparse matrix format to a single dataset while harmonizing the sample-specific feature lists.
 
@@ -12,7 +12,9 @@ There are two main utilities for handling multiple transcriptomics inputs to hel
 
 The `multisample-prepare` command processes multiple raw spatial transcriptomics datasets into a merged hexagonal binned data suitable for joint model training (by `punkst topic-model`) and sample-specific tiled pixel level data for pixel level projection.
 
-It runs [`pts2tiles`](./modules/pts2tiles.md) and [`tiles2hex`](./modules/tiles2hex.md) for each sample then merge the binned level data.
+It runs [`pts2tiles`](../modules/pts2tiles.md) and [`tiles2hex`](../modules/tiles2hex.md) for each sample then merge the binned level data.
+
+(if neither `--hex-grid-dist` nor `--hex-size` is provided, it only runs `pts2tiles`; if `--tiles2hex-only` is set (see the third section below) it only runs `tiles2hex` and merges the output files.)
 
 ### Usage
 
@@ -33,7 +35,7 @@ Each line should contain two tab-separated columns:
 1.  A unique Sample ID.
 2.  The path to the raw transcript file for that sample.
 
-The raw transcript file should be in the format expected by [`pts2tiles`](./modules/pts2tiles.md).
+The raw transcript file should be in the format expected by [`pts2tiles`](../modules/pts2tiles.md).
 
 **Example `input_file_list.tsv`:**
 ```tsv
@@ -44,7 +46,7 @@ sample_B	/path/to/sample_B_transcripts.tsv
 
 ### Key Options
 
-(Other options are available, see [`pts2tiles`](./modules/pts2tiles.md) and [`tiles2hex`](./modules/tiles2hex.md) for details.)
+(Other options are available, see [`pts2tiles`](../modules/pts2tiles.md) and [`tiles2hex`](../modules/tiles2hex.md) for details.)
 
 `--in-tsv-list <file>`: (Required) Path to the input TSV file describing the samples.
 
@@ -70,7 +72,7 @@ sample_B	/path/to/sample_B_transcripts.tsv
 
 **`tiles2hex` options:**
 
-`--hex-grid-dist <float>`: The center-to-center distance for the hexagonal grid. Alternatively, provide `--hex-size <float>`, side length of the hexagons.
+`--hex-grid-dist <float>`: The center-to-center distance for the hexagonal grid. Alternatively, provide `--hex-size <float>`, side length of the hexagons (exactly one of the two options must be provided). Multiple values can be provided, separated by spaces.
 
 `--min-count <int>`: The minimum total count for a hexagon (unit) to be included in the output.
 
@@ -97,7 +99,7 @@ The `merge-units` command merges multiple bin level data in the format of the ou
 
 The input files can have different extra information, as long as the metadata (`.json`) are recognized and includes a key `offset_data` indicating the starting index (0-based) of the sparsely coded count data.
 
-(In each row, tokens are separate by tabs. Starting from the index specified by `offset_data`, each row contains two integers for the number of unique features and the total count of all features, followed by feature_index and count (separated by a single space) pairs. See [`tiles2hex`](./modules/tiles2hex.md) for more details.)
+(In each row, tokens are separate by tabs. Starting from the index specified by `offset_data`, each row contains two integers for the number of unique features and the total count of all features, followed by feature_index and count (separated by a single space) pairs. See [`tiles2hex`](../modules/tiles2hex.md) for more details.)
 
 
 ### Usage
@@ -159,3 +161,39 @@ The command requires a TSV file specifying the input for each sample. Each line 
 `[--out-pref].features.tsv`: The list of features and their total counts in the merged dataset.
 
 `[--out-pref].union_features.tsv`: A list of all features found across all samples and their per-sample counts.
+
+---
+
+## Generate sample-specific and merged hexagons
+
+The `multisample-prepare` command has another mode to only perform the second step: run [`tiles2hex`](../modules/tiles2hex.md) for each sample then merge the binned level data. This mode is activated by `--tiles2hex-only`, and a different input should be provided in `--in-tsv-list`.
+Most likely use case is when you have already run `pts2tiles` for each sample separately.
+
+### Usage
+
+```bash
+punkst multisample-prepare --in-tsv-list input_file_list.tsv \
+    --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
+    --tiles2hex-only \
+    --min-total-count-per-sample 100 \
+    --hex-grid-dist 12 --min-count-per-unit 10 \
+    --out-dir ./out --out-joint-pref merged \
+    --temp-dir ./tmp --threads ${threads} \
+```
+
+### Input File List (`--in-tsv-list`)
+
+The pipeline requires an input TSV file that lists the information for each sample to be processed.
+Each line should contain two tab-separated columns:
+1.  A unique Sample ID.
+2.  The path to the tiled transcript file for that sample.
+3.  The path to the corresponding index file.
+4.  The path to the per-sample feature count file.
+
+The three input files per sample should be in the same formats as those output by [`pts2tiles`](../modules/pts2tiles.md).
+
+**Example `input_file_list.tsv`:**
+```tsv
+sample_A	/path/to/sample_A_transcripts.tiled.tsv /path/to/sample_A_transcripts.tiled.index   /path/to/sample_A.features.tsv
+sample_B	/path/to/sample_B_transcripts.tiled.tsv /path/to/sample_B_transcripts.tiled.index   /path/to/sample_B.features.tsv
+```
