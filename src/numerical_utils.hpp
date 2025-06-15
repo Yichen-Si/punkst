@@ -38,15 +38,18 @@ Eigen::VectorXd expect_log_sticks(const Eigen::VectorXd& alpha,
 
 // exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 // = exp(psi(\alpha_k) - psi(\alpha_0))
-void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset = 0);
+void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset = -1);
 
 // Vector version
 template<typename Derived>
 Derived dirichlet_expectation_1d(const Eigen::MatrixBase<Derived>& alpha,
-                                 typename Derived::Scalar offset = Derived::Scalar(0))
+                                 typename Derived::Scalar offset = Derived::Scalar(-1))
 {
     using Scalar = typename Derived::Scalar;
     Derived tmp = alpha.derived();
+    if (offset < 1e-6) {
+        offset = 1e-6;
+    }
     tmp.array() += offset;
     Scalar total = tmp.sum();
     double psi_total = psi(static_cast<double>(total));
@@ -60,15 +63,16 @@ Derived dirichlet_expectation_1d(const Eigen::MatrixBase<Derived>& alpha,
 template<typename Derived>
 Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha)
 {
+    double eps = 1e-6;
     using Scalar = typename Derived::Scalar;
     Derived result(alpha.rows(), alpha.cols());
     for (int i = 0; i < alpha.rows(); ++i) {
         auto row = alpha.row(i);
         Scalar total = row.sum();
-        double psi_total = psi(static_cast<double>(total));
+        double psi_total = psi(static_cast<double>(total) + eps);
         for (int j = 0; j < alpha.cols(); ++j) {
             result(i,j) = Scalar(
-                std::exp(psi(static_cast<double>(alpha(i,j))) - psi_total)
+                std::exp(psi(static_cast<double>(alpha(i,j)) + eps) - psi_total)
             );
         }
     }
@@ -79,15 +83,17 @@ Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha)
 template<typename Derived>
 Derived dirichlet_entropy_2d(const Eigen::MatrixBase<Derived>& alpha)
 {
+    double eps = 1e-6;
     using Scalar = typename Derived::Scalar;
     Derived result(alpha.rows(), alpha.cols());
+    int32_t K = alpha.cols();
     for (int i = 0; i < alpha.rows(); ++i) {
         auto row = alpha.row(i);
         Scalar total = row.sum();
-        double psi_total = psi(static_cast<double>(total));
+        double psi_total = psi(static_cast<double>(total) + eps * K);
         for (int j = 0; j < alpha.cols(); ++j) {
             result(i,j) = Scalar(
-                psi(static_cast<double>(alpha(i,j))) - psi_total
+                psi(static_cast<double>(alpha(i,j)) + eps) - psi_total
             );
         }
     }

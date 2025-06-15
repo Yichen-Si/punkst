@@ -34,7 +34,7 @@ struct Minibatch {
 
 class OnlineSLDA {
 public:
-    int verbose_;
+    int verbose_, debug_;
     // Constructor
     OnlineSLDA() {}
     OnlineSLDA(int K, int M, int N,
@@ -42,15 +42,23 @@ public:
         VectorXf* alpha = nullptr, VectorXf* eta = nullptr,
         double tau0 = 9.0, double kappa = 0.7,
         int iter_inner = 50, double tol = 1e-4,
-        int verbose = 0) {
-        init(K, M, N, seed, alpha, eta, tau0, kappa, iter_inner, tol, verbose);
+        int verbose = 0, int debug = 0) {
+        init(K, M, N, seed, alpha, eta, tau0, kappa, iter_inner, tol, verbose, debug);
     }
+
+    const MatrixXf& get_lambda() const {
+        return lambda_;
+    }
+    const MatrixXf& get_Elog_beta() const {
+        return Elog_beta_;
+    }
+
     void init(int K, int M, int N,
         unsigned int seed = std::random_device{}(),
         VectorXf* alpha = nullptr, VectorXf* eta = nullptr,
         double tau0 = 9.0, double kappa = 0.7,
         int iter_inner = 50, double tol = 1e-4,
-        int verbose = 0) {
+        int verbose = 0, int debug = 0) {
         K_ = K;
         M_ = M;
         N_ = N;
@@ -61,6 +69,7 @@ public:
         max_iter_inner_ = iter_inner;
         tol_ = tol;
         verbose_ = verbose;
+        debug_ = debug;
         // Global alpha: expect a K-dimensional vector (K x 1)
         if (alpha && alpha->size() == K_) {
             alpha_ = (*alpha).transpose();

@@ -537,6 +537,28 @@ void Tiles2Minibatch<T>::processTile(TileData<T> &tileData, int threadId, int ti
     {
         std::lock_guard<std::mutex> lock(pseudobulkMutex);
         pseudobulk += smtx;
+        if (debug_) {
+            std::cout << "Thread " << threadId << " updated pseudobulk.\n";
+            std::cout << "    Peek: " << std::fixed << std::setprecision(0);
+            for (int32_t i = 0; i < std::min(3, K_); ++i) {
+                for (int32_t j = 0; j < std::min(5, M_); ++j) {
+                    std::cout << smtx(i, j) << " ";
+                }
+                std::cout << "\n    ";
+            }
+            std::cout << "    Current sums: ";
+            auto rowsums = pseudobulk.rowwise().sum();
+            // sort rowsums in descending order
+            std::vector<float> sortedRowsums(rowsums.size());
+            for (int32_t i = 0; i < rowsums.size(); ++i) {
+                sortedRowsums[i] = rowsums(i);
+            }
+            std::sort(sortedRowsums.begin(), sortedRowsums.end(), std::greater<float>());
+            for (int32_t i = 0; i < K_; ++i) {
+                std::cout << sortedRowsums[i] << " ";
+            }
+            std::cout << std::endl << std::flush;
+        }
     }
     if (debug_) {
         std::cout << "Thread " << threadId << " finished decoding" << std::endl << std::flush;

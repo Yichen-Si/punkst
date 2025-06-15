@@ -65,6 +65,9 @@ Eigen::VectorXd expect_log_sticks(const Eigen::VectorXd& alpha,
 // exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 // = exp(psi(\alpha_k) - psi(\alpha_0))
 void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset) {
+    if (offset < 1e-6) {
+        offset = 1e-6;
+    }
     size_t size = alpha.size();
     double total = 0.0;
     // Add the prior and compute total

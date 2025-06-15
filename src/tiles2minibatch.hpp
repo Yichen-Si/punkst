@@ -391,12 +391,30 @@ public:
         slda.init(K_, M_, N, seed);
         slda.init_global_parameter(lda.get_model());
         slda.verbose_ = verbose;
+        slda.debug_ = debug;
         if (featureNames.size() == 0) {
             featureNames.resize(M_);
             for (int32_t i = 0; i < M_; ++i) {
                 featureNames[i] = std::to_string(i);
             }
         }
+        if (debug_ > 0) {
+            std::cout << "Check model initialization\n" << std::fixed << std::setprecision(2);
+            const auto& lambda = slda.get_lambda();
+            const auto& Elog_beta = slda.get_Elog_beta();
+            for (int32_t i = 0; i < std::min(3, K_) ; ++i) {
+                std::cout << "\tLambda " << i << ": ";
+                for (int32_t j = 0; j < std::min(5, M_); ++j) {
+                    std::cout << lambda(i, j) << " ";
+                }
+                std::cout << "\n\tElog_beta: ";
+                for (int32_t j = 0; j < std::min(5, M_); ++j) {
+                    std::cout << Elog_beta(i, j) << " ";
+                }
+                std::cout << "\n";
+            }
+        }
+
         notice("Initialized Tiles2Minibatch");
     }
 
@@ -435,6 +453,9 @@ public:
         // Enqueue all tiles to the queue in a deterministic order
         for (const auto &tile : tileList) {
             tileQueue.push(std::make_pair(tile, ticket++));
+            if (debug_ > 0 && ticket >= debug_) {
+                break;
+            }
         }
         tileQueue.set_done();
         for (auto &t : workThreads) {
@@ -490,6 +511,7 @@ protected:
     int32_t nMoves;
     double anchorMinCount, distNu, distR;
     float pixelResolution;
+    double eps_;
     std::vector<std::string> featureNames;
     using vec2f_t = std::vector<std::vector<float>>;
     std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile; // we may need more than one set of pre-defined anchors in the future
