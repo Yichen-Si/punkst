@@ -85,10 +85,6 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     if (tiles2hex_only) {
         if (!inTsvList.empty())
             error("If --tiles2hex-only is set, --in-tsv is not allowed and --in-tsv-list is required. The file in --in-tsv-list should contain the following columns: sample ID, path to the tiled pixel level data, path to the corresponding index, path to the per-sample feature count file (all output from pts2tiles).");
-        if (tileSize <= 0) {
-            error("--tile-size must be specified and greater than 0 (500~1000 microns is a good choice for most datasets)");
-        }
-
     }
 
     std::vector<int32_t> icol_ints = {icol_int};
@@ -103,6 +99,9 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         }
     }
     if (!tiles2hex_only) {
+        if (tileSize <= 0) {
+            error("--tile-size must be specified and greater than 0 (500~1000 microns is a good choice for most datasets)");
+        }
         bool toosmall = false;
         if (!hexSizes.empty()) {
             double minHexSize = *std::min_element(hexSizes.begin(), hexSizes.end());
@@ -130,6 +129,7 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     std::vector<std::string> samples, outDirs, featureTsvs, tileTsvs, tileIndexes;
     std::unordered_map<std::string, uint32_t> sampleIdx;
     size_t S = 0;
+
 { // 0) Gather input files
     // population samples and sample-specific file paths
     if (!inTsvListFile.empty()) {
@@ -284,13 +284,13 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             }
             feature = tokens[0];
             bool include = !check_include || std::regex_match(feature, regex_include);
-            bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
+            bool exclude =  check_exclude && std::regex_match(feature, regex_exclude);
             if (!include || exclude) { // Skip features based on regex filters
                 continue;
             }
             auto it = featCounts.find(feature);
             if (it == featCounts.end()) {
-                // first time seeing this feature → init vector<S+2> with zeros
+                // first time seeing this feature → init vector<S+1> with zeros
                 std::vector<uint64_t> vec(S + 1, 0);
                 vec[s] = cnt;
                 vec[S] = cnt;
@@ -327,6 +327,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
     std::vector<std::ofstream> sampleOuts(S);
     for (size_t s = 0; s < S; ++s) {
         std::string featFile = outDirs[s] + "/" + samples[s] + ".features.tsv";
+        featureTsvs[s] = featFile;
         sampleOuts[s].open(featFile);
         if (!sampleOuts[s]) error("Cannot write feature file: %s", featFile.c_str());
     }
@@ -361,15 +362,21 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
     if (hexGridDists.empty() && hexSizes.empty()) {
         return 0;
     }
+    std::unordered_map<std::string, uint32_t> featureDict;
+    uint32_t nFeatures = 0;
+    for (auto & kv : unionFeatures) {
+        featureDict[kv.first] = nFeatures++;
+    }
 { // 2) Run tiles2hex
     for (auto &hexSize : hexSizes) {
         std::string hexIden = "hex_" + std::to_string(static_cast<int32_t>(std::round(hexSize * sqrt(3))));
         HexGrid hexGrid(hexSize);
+        std::string dfile;
         for (size_t s = 0; s < S; ++s) { // 2) Run tiles2hex on each sample
             std::string outFile = outDirs[s] + "/" + samples[s] + "." + hexIden + ".txt";
             std::string outJson = outDirs[s] + "/" + samples[s] + "." + hexIden + ".json";
             if (!overwrite && std::filesystem::exists(outFile) &&
-                            std::filesystem::exists(outJson)) {
+                              std::filesystem::exists(outJson)) {
                 notice("tiles2hex output is present for sample %s and size %.1f (%s).\nTo overwrite, add --overwrite", samples[s].c_str(), hexSize, outFile.c_str());
                 continue;
             }
@@ -377,7 +384,8 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             if (!tileReader.isValid()) {
                 error("Error opening input file: %s", tileTsvs[s].c_str());
             }
-            lineParser parser(icol_x, icol_y, icol_feature, icol_ints, featureTsvs[s]);
+            lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dfile);
+            parser.setFeatureDict(featureDict);
             if (anchorList.size() != S || anchorList[s].empty()) {
                 Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, {minCtPerUnit});
                 if (!tiles2Hex.run()) {
@@ -443,7 +451,8 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
                     std::vector<std::string> pair;
                     split(pair, " ", tokens[i]);
                     uint32_t u, v;
-                    if (str2uint32(pair[0], u) && u < n_shared && str2uint32(pair[1], v)) {
+                    if (str2uint32(pair[0], u) && u < n_shared &&
+                        str2uint32(pair[1], v)) {
                         ss2 << "\t" << tokens[i];
                         nFeatures++;
                         totCount += v;

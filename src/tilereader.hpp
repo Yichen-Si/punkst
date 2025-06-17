@@ -87,6 +87,7 @@ struct lineParser {
         }
         init(_ix, _iy, _iz, _ivals, _dfile);
     }
+
     void init(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, const std::string& _dfile) {
         icol_x = _ix;
         icol_y = _iy;
@@ -124,6 +125,7 @@ struct lineParser {
             notice("Read %zu features from dictionary file", featureDict.size());
         }
     }
+
     bool checkExtraColumns() {
         if (icol_strs.size() != str_lens.size()) {
             return false;
@@ -149,6 +151,11 @@ struct lineParser {
                 i++;
             }
         }
+    }
+
+    void setFeatureDict(const std::unordered_map<std::string, uint32_t>& dict) {
+        featureDict = dict;
+        isFeatureDict = true;
     }
 
     int32_t getFeatureList(std::vector<std::string>& featureList) {
