@@ -35,9 +35,10 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
         for (int j = 0; j < nfeatures[modal]; ++j) {
             std::vector<std::string> pair;
             split(pair, " ", token[i]);
-            uint32_t u, v;
+            uint32_t u;
+            double v;
             if (!str2uint32(pair[0], u)) {return -1;}
-            if (!str2uint32(pair[1], v)) {return -1;}
+            if (!str2double(pair[1], v)) {return -1;}
             auto it = idx_remap.find(u);
             if (it != idx_remap.end()) {
                 doc.ids.push_back(it->second);
