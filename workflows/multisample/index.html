@@ -1049,6 +1049,7 @@
 <p>There are two main utilities for handling multiple transcriptomics inputs to help multi-sample analysis.</p>
 <p><code>multisample-prepare</code> processes raw data from multiple samples in a unified way. The output are ready for model training and later sample-specific pixel level projection. You also have the option to run only the first or the second step of the pipeline, see below for details.</p>
 <p><code>merge-units</code> merges multiple binned datasets, for example single cells or hexagons, in our customized sparse matrix format to a single dataset while harmonizing the sample-specific feature lists.</p>
+<p>(<code>pixel-decode</code> also allows processing multiple samples using the same model and parameters (see option <code>--sample-list</code> in <a href="../../modules/pixel-decode/"><code>pixel-decode</code></a>) )</p>
 <hr />
 <h2 id="processing-multiple-samples-from-raw-data">Processing multiple samples from raw data<a class="headerlink" href="#processing-multiple-samples-from-raw-data" title="Permanent link">&para;</a></h2>
 <p>The <code>multisample-prepare</code> command processes multiple raw spatial transcriptomics datasets into a merged hexagonal binned data suitable for joint model training (by <code>punkst topic-model</code>) and sample-specific tiled pixel level data for pixel level projection.</p>
@@ -1059,27 +1060,31 @@
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span>--min-total-count-per-sample<span class="w"> </span><span class="m">100</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--min-count-per-unit<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span>--out-dir<span class="w"> </span>./out<span class="w"> </span>--out-joint-pref<span class="w"> </span>merged<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span>--temp-dir<span class="w"> </span>./tmp<span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span>--temp-dir<span class="w"> </span>./tmp<span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
 </span></code></pre></div>
 <h3 id="input-file-list-in-tsv-list">Input File List (<code>--in-tsv-list</code>)<a class="headerlink" href="#input-file-list-in-tsv-list" title="Permanent link">&para;</a></h3>
 <p>The pipeline requires an input TSV file that lists the information for each sample to be processed.
 Each line should contain two tab-separated columns:
 1.  A unique Sample ID.
 2.  The path to the raw transcript file for that sample.</p>
-<p>The raw transcript file should be in the format expected by <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a>.</p>
+<p>The raw transcript file should be in the format expected by <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a>.
+The raw transcript file should be in the format expected by <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a>.</p>
 <p><strong>Example <code>input_file_list.tsv</code>:</strong>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sample_A    /path/to/sample_A_transcripts.tsv
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>sample_B    /path/to/sample_B_transcripts.tsv
 </span></code></pre></div></p>
 <h3 id="key-options">Key Options<a class="headerlink" href="#key-options" title="Permanent link">&para;</a></h3>
-<p>(Other options are available, see <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a> and <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for details.)</p>
+<p>(Other options are available, see <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a> and <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for details.)
+(Other options are available, see <a href="../../modules/pts2tiles/"><code>pts2tiles</code></a> and <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for details.)</p>
 <p><code>--in-tsv-list &lt;file&gt;</code>: (Required) Path to the input TSV file describing the samples.</p>
 <p><code>--min-total-count-per-sample &lt;int&gt;</code>: The minimum sample-specific total count a feature must have (across all samples) to be included in the merged file. Default: 1. Setting it to 0 to use the union of features across samples.</p>
+<p><code>--exclude-feature-regex</code>: Regular expression (<a href="https://en.cppreference.com/w/cpp/regex/ecmascript">modified ECMAScript grammar</a>) to exclude features matching this pattern. Default: exclude no feature.</p>
+<p><code>--include-feature-regex</code>: Regular expression to include only features matching this pattern. Default: include all features. (e.g. to exclude features that contain "Unassigned" or "NegControl" as substrings in any part of the feature name, you can use <code>--exclude-feature-regex ".*(Unassigned|NegControl).*"</code>)</p>
 <p><code>--threads &lt;int&gt;</code>: Number of threads to use. [Default: 1]</p>
-<p><code>--out-dir &lt;dir&gt;</code>: (Required) The main output directory where all results will be stored.</p>
-<p><code>--out-joint-pref &lt;prefix&gt;</code>: (Required) A prefix for all merged output (e.g., the merged hexagon file and merged feature list).</p>
+<p><code>--out-dir &lt;dir&gt;</code>: (Required) The base output directory where all results will be stored. Merged outputs will be placed directly under this directory, sample-specific outputs will be in subdirectories named <code>samples/[sample_id]/</code>.</p>
+<p><code>--out-joint-pref &lt;prefix&gt;</code>: (Required) A prefix for all merged output (the merged hexagon file and merged feature list). For example, the</p>
 <p><code>--temp-dir &lt;dir&gt;</code>: (Required) A directory for storing temporary files (will be created if it doesn't exist).</p>
 <p><code>--overwrite</code>: If set, overwrite existing sample-specific output files.</p>
 <p><strong><code>pts2tiles</code> options:</strong></p>
@@ -1091,20 +1096,21 @@ Each line should contain two tab-separated columns:
 <p><code>--min-count &lt;int&gt;</code>: The minimum total count for a hexagon (unit) to be included in the output.</p>
 <h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
 <p>All outputs are under the specified <code>--out-dir</code></p>
-<p><strong>In the main output directory (<code>--out-dir</code>):</strong>
-    * <code>[--out-joint-pref].persample_file_list.tsv</code>: A list of paths to the tiled pixel level files for each sample. These are the input for <code>pixel-decode</code>.
-    * <code>[--out-joint-pref].union_features.tsv</code>: A list of all features found in any of the samples, with total and sample-specific counts.
-    * <code>[--out-joint-pref].features.tsv</code>: The final list of features used for the merged output.
-    * <code>[--out-joint-pref].hex_[dist].txt</code> and <code>.json</code>: The final merged hexagon data and its corresponding metadata file, ready for <code>lda4hex</code>.</p>
-<p><strong>In per-sample subdirectories (<code>--out-dir/[sample_id]/</code>):</strong>
-    * Intermediate tiled transcript files (<code>.tiled.tsv</code>, <code>.tiled.index</code>).
-    * Per-sample feature counts (<code>.tiled.features.tsv</code>).
-    * Per-sample randomized hexagon data (<code>.hex_[dist].txt</code>, <code>.hex_[dist].json</code>).</p>
+<p><strong>In the main output directory (<code>--out-dir</code>):</strong></p>
+<p><code>[--out-joint-pref].persample_file_list.tsv</code>: A list of paths to the tiled pixel level files for each sample. These are the input for <code>pixel-decode</code>.</p>
+<p><code>[--out-joint-pref].union_features.tsv</code>: A list of all features found in any of the samples, with total and sample-specific counts.</p>
+<p><code>[--out-joint-pref].features.tsv</code>: The final list of features used for the merged output.</p>
+<p><code>[--out-joint-pref].hex_[dist].txt</code> and <code>.json</code>: The final merged hexagon data and its corresponding metadata file, ready for <code>lda4hex</code>.</p>
+<p><strong>In per-sample subdirectories (<code>--out-dir/samples/[sample_id]/</code>):</strong></p>
+<p>Intermediate tiled transcript files (<code>.tiled.tsv</code>, <code>.tiled.index</code>).</p>
+<p>Per-sample feature counts (<code>.tiled.features.tsv</code>).</p>
+<p>Per-sample randomized hexagon data (<code>.hex_[dist].txt</code>, <code>.hex_[dist].json</code>).</p>
 <hr />
 <h2 id="merge-hexagon-units-from-pre-processed-samples">Merge hexagon units from pre-processed samples<a class="headerlink" href="#merge-hexagon-units-from-pre-processed-samples" title="Permanent link">&para;</a></h2>
 <p>The <code>merge-units</code> command merges multiple bin level data in the format of the output from <code>punkst tiles2hex</code>.</p>
 <p>The input files can have different extra information, as long as the metadata (<code>.json</code>) are recognized and includes a key <code>offset_data</code> indicating the starting index (0-based) of the sparsely coded count data.</p>
-<p>(In each row, tokens are separate by tabs. Starting from the index specified by <code>offset_data</code>, each row contains two integers for the number of unique features and the total count of all features, followed by feature_index and count (separated by a single space) pairs. See <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for more details.)</p>
+<p>(In each row, tokens are separate by tabs. Starting from the index specified by <code>offset_data</code>, each row contains two integers for the number of unique features and the total count of all features, followed by feature_index and count (separated by a single space) pairs. See <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for more details.)
+(In each row, tokens are separate by tabs. Starting from the index specified by <code>offset_data</code>, each row contains two integers for the number of unique features and the total count of all features, followed by feature_index and count (separated by a single space) pairs. See <a href="../../modules/tiles2hex/"><code>tiles2hex</code></a> for more details.)</p>
 <h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
 <p>This example merges two pre-processed samples.</p>
 <p>Two optional input specifications are demonstrated:
@@ -1118,22 +1124,41 @@ It tells the tool to either use the existing random keys or generate new random 
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>punkst<span class="w"> </span>merge-units<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span>--in-list<span class="w"> </span><span class="si">${</span><span class="nv">input_list</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span>--out-pref<span class="w"> </span>./merged.hex_12<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span>--min-total-count-per-sample<span class="w"> </span><span class="m">100</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span>--min-total-count-per-sample<span class="w"> </span><span class="m">100</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">    </span>--temp-dir<span class="w"> </span>./tmp<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <h3 id="input-file-in-list">Input File (<code>--in-list</code>)<a class="headerlink" href="#input-file-in-list" title="Permanent link">&para;</a></h3>
 <p>The command requires a TSV file specifying the input for each sample. Each line must contain at least four columns:</p>
 <ol>
-<li><strong>Sample ID</strong>: A unique identifier for the sample.</li>
-<li><strong>Features Path</strong>: Path to the sample-specific feature file (TSV with feature name and count, like that created by <code>pts2tiles</code>).</li>
-<li><strong>Hexagon Data Path</strong>: Path to the sample's hexagon data file (<code>.txt</code>).</li>
-<li><strong>Hexagon Metadata Path</strong>: Path to the sample's hexagon metadata file (<code>.json</code>).</li>
-<li><strong>Random Key Column Index (Optional)</strong>: An integer specifying how to handle the random key for each unit.<ul>
-<li><code>&gt;= 0</code>: The column index in the input hexagon file to use as the random key for shuffling the merged output.</li>
-<li><code>-1</code>: Generate a new random key for each unit.</li>
-<li><code>-2</code>: Try to find the key column from the metadata (<code>.json</code>) file first. (Default)</li>
+<li>
+<p><strong>Sample ID</strong>: A unique identifier for the sample.</p>
+</li>
+<li>
+<p><strong>Features Path</strong>: Path to the sample-specific feature file. (TSV with feature name and count, like that created by <code>pts2tiles</code>. We only read the first two columns; lines where the second token is not a non-negative integer are ignored.)</p>
+</li>
+<li>
+<p><strong>Hexagon Data Path</strong>: Path to the sample's hexagon data file (<code>.txt</code>).</p>
+</li>
+<li>
+<p><strong>Hexagon Metadata Path</strong>: Path to the sample's hexagon metadata file (<code>.json</code>).</p>
+</li>
+<li>
+<p><strong>Random Key Column Index (Optional)</strong>: An integer specifying how to handle the random key for each unit.</p>
+<ul>
+<li>
+<p><code>&gt;= 0</code>: The column index in the input hexagon file to use as the random key for shuffling the merged output.</p>
+</li>
+<li>
+<p><code>-1</code>: Generate a new random key for each unit.</p>
+</li>
+<li>
+<p><code>-2</code>: Try to find the key column from the metadata (<code>.json</code>) file first. (Default)</p>
+</li>
 </ul>
 </li>
-<li><strong>Info Columns (Optional)</strong>: A comma-delimited string of column indices (e.g., <code>2,5,6</code>) from the input hexagon file to carry over into a single "info" column in the merged output. Each sample can have different info columns. Put an "." to indicate no info columns to carry over for that sample.</li>
+<li>
+<p><strong>Info Columns (Optional)</strong>: A comma-delimited string of column indices (e.g., <code>2,5,6</code>) from the input hexagon file to carry over into a single "info" column in the merged output. Each sample can have different info columns. Put an "." to indicate no info columns to carry over for that sample.</p>
+</li>
 </ol>
 <p><strong>Example <code>input.tsv</code>:</strong>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>1   /path/to/1/1.tiled.features.tsv /path/to/1/1.hex_12.txt /path/to/1/1.hex_12.json    0   4
@@ -1142,9 +1167,10 @@ It tells the tool to either use the existing random keys or generate new random 
 <h3 id="options">Options<a class="headerlink" href="#options" title="Permanent link">&para;</a></h3>
 <p><code>--in-list &lt;file&gt;</code>: (Required) Path to the input TSV file listing the pre-processed samples.</p>
 <p><code>--out-pref &lt;prefix&gt;</code>: (Required) Prefix for all output files (e.g., <code>/path/to/output/merged</code>).</p>
+<p><code>--temp-dir &lt;dir&gt;</code>: (Required) A directory for storing temporary files (will try to create it if it doesn't exist).</p>
 <p><code>--min-total-count-per-sample &lt;int&gt;</code>: Minimum per-sample count a feature must have across all samples to be included in the final merged feature set. (Default: 1. Set to 0 to use the union of features).</p>
 <p><code>--min-count-per-unit &lt;int&gt;</code>: Minimum total count a unit/hexagon must have after feature filtering to be included in the merged output. [Default: 1]</p>
-<p><code>--threads &lt;int&gt;</code>: Number of threads used for sorting the final output file. [Default: 1]</p>
+<p><code>--threads &lt;int&gt;</code>: Number of threads. [Default: 1]</p>
 <h3 id="output-files_1">Output Files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
 <p><code>[--out-pref].txt</code> and <code>.json</code>: The merged hexagon data file and its corresponding metadata, ready for <code>lda4hex</code>.</p>
 <p><code>[--out-pref].features.tsv</code>: The list of features and their total counts in the merged dataset.</p>
