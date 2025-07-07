@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <random>
 
 #include "Eigen/Core"
 #include "Eigen/Dense"
@@ -29,6 +30,33 @@ auto mean_max_row_change(const Eigen::MatrixBase<Derived>& arr1,
     return total / arr1.rows();
 }
 
+template<class TIterator>
+void softmax(TIterator begin, TIterator end) {
+    float maximum = *std::max_element(begin, end);
+    for (auto it = begin; it != end; it++)
+        if (*it - maximum > -20) {
+            *it = expf(*it - maximum);
+        } else {
+            *it = 0;
+        }
+}
+
+template<class TIterator, class TGenerator>
+int discrete_sample(TIterator begin, TIterator end, TGenerator &generator) {
+    if (begin == end)
+        throw std::runtime_error("Incorrect range for discrete_sample");
+
+    double prob_sum = 0;
+    for (auto it = begin; it != end; it++) prob_sum += *it;
+    std::uniform_real_distribution<> unif(0.0, 1.0);
+    double u = unif(generator) * prob_sum;
+    for (auto it = begin; it != end; it++) {
+        u -= *it;
+        if (u <= 0)
+            return it - begin;
+    }
+    return (end - begin) - 1;
+};
 
 // Psi (digamma) function (not optimized for maximum accuracy)
 double psi(double x);
@@ -142,6 +170,12 @@ inline double logit(double x) {
         throw std::out_of_range("Input to logit must be in (0, 1)");
     }
     return std::log(x / (1.0 - x));
+}
+
+template<typename T>
+T logSum(T log_a, T log_b) {
+    if (log_a > log_b) std::swap(log_a, log_b);
+    return log_b + log(exp(log_a - log_b) + 1);
 }
 
 // Element-wise expit then row-normalize
