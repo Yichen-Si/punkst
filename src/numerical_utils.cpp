@@ -8,7 +8,7 @@ double mean_change(const std::vector<double>& arr1, const std::vector<double>& a
     double total = 0.0;
     size_t size = arr1.size();
     for (size_t i = 0; i < size; i++) {
-        total += std::fabs(arr1[i] - arr2[i]);
+        total += std::abs(arr1[i] - arr2[i]);
     }
     return total / size;
 }

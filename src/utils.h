@@ -142,7 +142,10 @@ struct xorshift {
     /* The state must be seeded so that it is not everywhere zero. */
     uint64_t s[2];
 
-    xorshift() { s[0] = 1234567; s[1] = 7654321; }
+    xorshift(uint64_t s1 = 1234567, uint64_t s2 = 7654321) {
+        s[0] = s1;
+        s[1] = s2;
+    }
     void seed(uint64_t s1, uint64_t s2) {
         s[0] = s1; s[1] = s2;
     }

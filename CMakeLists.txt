@@ -85,6 +85,7 @@ set(SOURCE_FILES
     script/multisample_pipeline.cpp
     script/merge_units.cpp
     src/concurrent_matrix.hpp
+    src/dynamic_matrix.hpp
     src/concurrent_tree.hpp
     src/concurrent_tree.cpp
     src/hlda.hpp

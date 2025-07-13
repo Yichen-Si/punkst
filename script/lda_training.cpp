@@ -62,7 +62,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("threads", "Number of threads", nThreads)
       .add_option("n-epochs", "Number of epochs", nEpochs)
       .add_option("minibatch-size", "Minibatch size", batchSize)
-      .add_option("min-count-train", "Minimum total feature count for a document to be trained", minCountTrain)
+      .add_option("min-count-train", "Minimum total count for a document to be included in model training", minCountTrain)
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("verbose", "Verbose level", verbose);
 

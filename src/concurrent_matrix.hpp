@@ -19,9 +19,244 @@ constexpr inline int bsr(uint64_t x) noexcept {
 #if defined(__GNUC__) || defined(__clang__)
     return 63 - __builtin_clzll(x);
 #else
-
+    int pos = -1;
+    while (x) { x >>= 1u; ++pos; }
+    return pos;
 #endif
 }
+
+inline uint64_t safe_left_shift(int shift) {
+    if (shift >= 63) throw std::overflow_error("ConcurrentColMatrix: shift overflow");
+    return uint64_t{1} << shift;
+}
+
+// Column-major matrix
+template<class T>
+class ConcurrentColMatrix {
+    static_assert(std::is_trivially_copyable<T>::value,
+                  "ConcurrentColMatrix requires POD / trivially-copyable T");
+    static_assert(sizeof(size_t) >= 8, "ConcurrentColMatrix assumes a 64-bit platform");
+
+    using Segment = std::unique_ptr<std::atomic<T>[]>;
+
+public:
+    ConcurrentColMatrix(size_t num_rows, int base_column_shift = 3)
+        : num_rows_(num_rows), row_capacity_(num_rows + 1),
+          base_column_shift_(base_column_shift), s_(sizeof(std::atomic<T>)) {
+        num_               = 1;
+        num_columns_       = 0;
+        column_capacity_   = uint64_t{1} << base_column_shift_;
+        const uint64_t seg_elems = column_capacity_ * row_capacity_;
+        data_[0].reset(new std::atomic<T>[seg_elems]);
+        std::memset(data_[0].get(), 0, s_ * seg_elems);
+    }
+
+    ConcurrentColMatrix(ConcurrentColMatrix&& other) noexcept
+        : num_(other.num_), row_capacity_(other.row_capacity_),
+          base_column_shift_(other.base_column_shift_),
+          num_rows_(other.num_rows_), num_columns_(other.num_columns_),
+          column_capacity_(other.column_capacity_),
+          data_(std::move(other.data_)), s_(other.s_) {
+        other.num_ = 0; other.num_columns_ = other.column_capacity_ = 0;
+    }
+    ConcurrentColMatrix& operator=(ConcurrentColMatrix&&) noexcept = default;
+    ConcurrentColMatrix(const ConcurrentColMatrix&)            = delete;
+    ConcurrentColMatrix& operator=(const ConcurrentColMatrix&) = delete;
+
+    size_t GetC()                   const noexcept { return num_columns_; }
+    size_t GetR()                   const noexcept { return num_rows_;    }
+
+    T Get(size_t r, size_t c)       const noexcept {
+        return At(r,c).load(std::memory_order_relaxed);}
+    T GetSum(size_t c)              const noexcept {
+        return At(num_rows_, c).load(std::memory_order_relaxed);}
+
+    void Set(size_t r, size_t c, T v)      noexcept {
+        At(r,c).store(v);}
+    void SetSum(size_t c, T v)             noexcept {
+        At(num_rows_, c).store(v);}
+
+    void Inc(size_t r, size_t c, T v = 1)  noexcept {
+        At(r,c)          += v;
+        At(num_rows_, c) += v;
+    }
+    void Dec(size_t r, size_t c, T v = 1)  noexcept {
+        At(r,c)          -= v;
+        At(num_rows_, c) -= v;
+    }
+
+    void Clear() noexcept {
+        for (int seg = 0; seg < num_; ++seg) {
+            const uint64_t seg_cols = uint64_t{1} << (base_column_shift_ + seg);
+            const uint64_t seg_elems = seg_cols * row_capacity_;
+            std::memset(data_[seg].get(), 0, s_ * seg_elems);
+        }
+    }
+
+    void ClearCol(size_t c) noexcept {
+        if (c >= num_columns_) return;
+        At(num_rows_, c).store(0, std::memory_order_relaxed);
+        std::memset(&At(0,c), 0, s_ * row_capacity_);
+    }
+
+    void Grow(size_t new_ncol) {
+        if (new_ncol <= num_columns_) return;
+
+        std::lock_guard<std::mutex> guard(mutex_);
+
+        while (new_ncol > column_capacity_) {
+            const uint64_t seg_cols = uint64_t{1} << (base_column_shift_ + num_);
+            const uint64_t seg_elems = seg_cols * row_capacity_;
+
+            std::cout << "ConcurrentColMatrix: Growing from "
+                        << column_capacity_ << " to ";
+            data_[num_].reset(new std::atomic<T>[seg_elems]);
+            std::memset(data_[num_].get(), 0, s_ * seg_elems);
+            column_capacity_ += seg_cols;
+            ++num_;
+            std::cout << column_capacity_ << " columns.\n";
+        }
+        num_columns_ = new_ncol;
+    }
+
+    // merge segments into one
+    void Consolidate() {
+        if (num_ == 1) return;
+        std::lock_guard<std::mutex> guard(mutex_);
+
+        // round capacity to next power-of-two
+        while (column_capacity_ != lowbit(column_capacity_))
+            column_capacity_ += lowbit(column_capacity_);
+
+        const uint64_t seg_elems = column_capacity_ * row_capacity_;
+        auto* new_data = new std::atomic<T>[seg_elems];
+        std::memset(new_data, 0, s_ * seg_elems);
+
+        size_t col_cursor = 0;
+        for (int seg = 0; seg < num_; ++seg) {
+            const uint64_t seg_cols = uint64_t{1} << (base_column_shift_ + seg);
+            const uint64_t seg_bytes = seg_cols * s_ * row_capacity_;
+            for (size_t col = 0; col < seg_cols; ++col) {
+                std::memcpy(new_data + (col_cursor + col) * row_capacity_,
+                            data_[seg].get() + col * row_capacity_,
+                            s_ * row_capacity_);
+            }
+            col_cursor += seg_cols;
+        }
+
+        data_[0].reset(new_data);
+        base_column_shift_ = bsr(column_capacity_);
+
+        for (int i = 1; i < 64; ++i) data_[i].reset(nullptr);
+        num_ = 1;
+
+        std::cout << "ConcurrentColMatrix: Consolidated into one segment ("
+                  << column_capacity_ << " columns, 2^"
+                  << base_column_shift_ << ").\n";
+    }
+
+    // copy a column
+    template<class InputIt>
+    void SetCol(size_t c, InputIt first, InputIt last) noexcept {
+        const size_t n = static_cast<size_t>(std::distance(first,last));
+        if (c >= num_columns_ || n == 0) return;
+        auto* base = &At(0,c); // pointer to row 0
+        size_t i   = 0;
+        T colsum = 0;
+        for (; first != last && i < num_rows_; ++first, ++i) {
+            base[i].store(static_cast<T>(*first), std::memory_order_relaxed);
+            colsum += static_cast<T>(*first);
+        }
+        for (; i < num_rows_; ++i)
+            base[i].store(0, std::memory_order_relaxed);
+        At(num_rows_, c).store(colsum, std::memory_order_relaxed);
+    }
+    void SetCol(size_t c, const T* src) noexcept {
+        if (c >= num_columns_) return;
+        std::memcpy(&At(0,c), src, s_ * num_rows_);
+        T colsum = 0;
+        for (size_t i = 0; i < num_rows_; ++i)
+            colsum += src[i];
+        At(num_rows_, c).store(colsum, std::memory_order_relaxed);
+    }
+
+    std::atomic<T>* ColPtrAtomic(std::size_t c) noexcept {
+        if (c >= num_columns_) return nullptr; // out of bounds
+        int bucket; std::size_t bucket_c;
+        find_bucket(c, bucket, bucket_c);
+        return data_[bucket].get() + bucket_c * row_capacity_;
+    }
+    const std::atomic<T>* ColPtrAtomic(std::size_t c) const noexcept {
+        if (c >= num_columns_) return nullptr; // out of bounds
+        int bucket; std::size_t bucket_c;
+        find_bucket(c, bucket, bucket_c);
+        return data_[bucket].get() + bucket_c * row_capacity_;
+    }
+
+    void Reset(size_t new_ncol) {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const uint64_t first_seg_cols = uint64_t{1} << base_column_shift_;
+        const uint64_t required_cols  = new_ncol;
+        // keep current first segment if it's large enough
+        if (first_seg_cols >= required_cols) {
+            for (int i = 1; i < 64; ++i) data_[i].reset(nullptr);
+            num_             = 1;
+            num_columns_     = new_ncol;
+            column_capacity_ = first_seg_cols;
+            std::memset(data_[0].get(), 0, s_ * first_seg_cols * row_capacity_);
+            return;
+        }
+        // otherwise allocate next power-of-two ≥ required_cols
+        int new_shift = base_column_shift_;
+        while ((uint64_t{1} << new_shift) < required_cols) ++new_shift;
+        const uint64_t new_cols   = uint64_t{1} << new_shift;
+        const uint64_t seg_elems  = new_cols * row_capacity_;
+        auto* new_data            = new std::atomic<T>[seg_elems];
+        std::memset(new_data, 0, s_ * seg_elems);
+        data_[0].reset(new_data);
+        for (int i = 1; i < 64; ++i) data_[i].reset(nullptr);
+        base_column_shift_ = new_shift;
+        column_capacity_   = new_cols;
+        num_columns_       = new_ncol;
+        num_               = 1;
+    }
+
+private:
+    /* ------------------------------------------------------------------
+     *  Address calculation helpers
+     * ---------------------------------------------------------------- */
+    inline void find_bucket(size_t c, int& bucket, size_t& bucket_c) const noexcept {
+        if (c < (uint64_t{1} << base_column_shift_)) {
+            bucket   = 0;
+            bucket_c = c;
+        } else {
+            bucket   = bsr((c >> base_column_shift_) + 1);
+            bucket_c = c - ((uint64_t{1} << bucket) - 1) *
+                           (uint64_t{1} << base_column_shift_);
+        }
+    }
+
+    std::atomic<T>& At(size_t r, size_t c) const noexcept {
+        int    bucket;
+        size_t bucket_c;
+        find_bucket(c, bucket, bucket_c);
+        return data_[bucket][bucket_c * row_capacity_ + r];
+    }
+
+    /* ------------------------------------------------------------------
+     *  data members
+     * ---------------------------------------------------------------- */
+    int                          num_ = 0; // # segments
+    const size_t                 row_capacity_; // rows+1
+    int                          base_column_shift_;
+    size_t                       num_rows_;
+    size_t                       num_columns_ = 0; // columns used
+    uint64_t                     column_capacity_; // allocated columns
+    std::array<Segment, 64>      data_{}; // up to 64 segments
+    mutable std::mutex           mutex_;  // guards layout ops
+    const size_t                 s_;      // sizeof(std::atomic<T>)
+};
+
 
 // A row-wise atomic matrix dynamic by column
 template <class T>
@@ -72,9 +307,21 @@ public:
         }
     }
 
+    void ClearRow(size_t r) {
+        if (r >= num_rows_) {
+            throw std::out_of_range("ConcurrentMatrix: row index out of range");
+        }
+        std::lock_guard<std::mutex> guard(mutex_);
+        // set row r to zero
+        for (int i = 0; i < num_; ++i) {
+            size_t rowsize = uint64_t{1} << (base_column_shift_ + i);
+            size_t offset = r * rowsize;
+            std::memset(data_[i].get() + offset, 0, s_ * rowsize);
+        }
+    }
+
     void Reset(size_t new_ncol) {
         std::lock_guard<std::mutex> guard(mutex_);
-
         const uint64_t first_seg_cols = uint64_t{1} << base_column_shift_;
         const size_t   n_rows_plus1   = num_rows_ + 1;
         if (first_seg_cols >= new_ncol) {
@@ -145,6 +392,8 @@ public:
             }
         }
         if (new_ncol > num_columns_) num_columns_ = new_ncol;
+std::cout << "ConcurrentMatrix: Grow to "
+                  << num_columns_ << " columns.\n";
     }
 
     // Move all current data to a single segment
@@ -188,11 +437,6 @@ public:
 
 private:
 
-    static inline uint64_t safe_left_shift(int shift) {
-        if (shift >= 63) throw std::overflow_error("ConcurrentMatrix: shift overflow");
-        return uint64_t{1} << shift;
-    }
-
     inline void find_bucket(size_t c, int& bucket, size_t& bucket_c) const noexcept {
         if (c < (uint64_t{1} << base_column_shift_)) {
             bucket = 0;
@@ -219,87 +463,4 @@ private:
     std::array<Segment, 64>  data_{}; // ptrs to segments
     mutable std::mutex mutex_; // guard memory layout changes
     size_t s_;
-};
-
-
-
-// A row-wise matrix
-template<class T>
-class Matrix {
-public:
-    Matrix(int R = 1, int C = 1) : R(R), C(C), data(R * C), Rcap(R), Ccap(C) {}
-
-    void SetR(int new_R, bool fit = false, bool fill = false) {
-        Resize(new_R, C, fit, fill);
-    }
-
-    void SetC(int new_C, bool fit = false, bool fill = false) {
-        Resize(R, new_C, fit, fill);
-    }
-
-    int GetR() { return R; }
-    int GetC() { return C; }
-    int GetRcap() { return Rcap; }
-    int GetCcap() { return Ccap; }
-    size_t GetSize() const {
-        return static_cast<size_t>(R) * Ccap;
-    }
-
-    void Resize(int new_R, int new_C, bool fit = false, bool fill = false) {
-        if (new_R <= Rcap && new_C <= Ccap) {
-            R = new_R;
-            C = new_C;
-            return;
-        }
-        int old_C = Ccap;
-        if (fit) {
-            Rcap = new_R;
-            Ccap = new_C;
-        } else {
-            while (Rcap < new_R) Rcap = Rcap * 2 + 1;
-            while (Ccap < new_C) Ccap = Ccap * 2 + 1;
-        }
-
-        std::vector<T> old_data = std::move(data);
-        data.resize(Rcap * Ccap);
-
-        for (int r = 0; r < R; r++) {
-            copy(old_data.begin() + r * old_C,
-                 old_data.begin() + (r + 1) * old_C,
-                 data.begin() + r * Ccap);
-            if (fill) {
-                std::fill(data.begin() + r * Ccap + old_C,
-                          data.begin() + (r + 1) * Ccap, 0);
-            }
-        }
-        if (fill) {
-            for (int r = R; r < Rcap; r++) {
-                std::fill(data.begin() + r * Ccap,
-                          data.begin() + (r + 1) * Ccap, 0);
-            }
-        }
-        R = new_R;
-        C = new_C;
-    }
-
-    T& operator()(int r, int c) {
-        return data[r * Ccap + c];
-    }
-
-    T* RowPtr(int r) {
-        return &data[r * Ccap];
-    }
-
-    T* Data() {
-        return data.data();
-    }
-
-    void SetZero() {
-        memset(data.data(), 0, sizeof(T) * R * C);
-    }
-
-private:
-    int R, Rcap;
-    int C, Ccap;
-    std::vector<T> data;
 };

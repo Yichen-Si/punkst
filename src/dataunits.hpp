@@ -173,6 +173,9 @@ public:
     }
     int32_t parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal = 0);
 
+    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0);
+    int32_t readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0);
+
 private:
 
     int32_t nModal;

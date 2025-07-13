@@ -1,38 +1,48 @@
-#include <iostream>
-#include <iomanip>
-#include <random>
 #include "punkst.h"
-#include "utils.h"
-#include "hexgrid.h"
-#include <opencv2/opencv.hpp>
-#include <opencv2/imgproc.hpp>
-#include "nanoflann.hpp"
-#include "nanoflann_utils.h"
-
-#include <tbb/parallel_for.h>
-#include <tbb/global_control.h>
-#include <iostream>
-#include <thread>
-
-// #include "json.hpp"
-// #include "variant.hpp"
-// #include "vector_tile_config.hpp"
-// #include "Eigen/Dense"
-
-using vec2f_t = std::vector<std::vector<float>>;
+#include "hlda.hpp"
 
 int32_t test(int32_t argc, char** argv) {
 
-	std::string intsv, outtsv;
-    int32_t debug = 0, verbose = 500000;
+	std::string inFile, metaFile, weightFile, outPrefix, featureFile;
+    int32_t seed = -1, nThreads = 1, debug = 0, verbose = 500000;
+    int32_t L = 4, max_k = 1024;
+    int32_t thr_heavy = 50, thr_prune = 0;
+    int32_t sMC = 5, nIter = 10, nMCiter = 5, nMBiter = 5, nInit = 1000;
+    int32_t bsize = 512, csize = 1024;
+    int32_t minCountTrain = 50;
+    std::vector<double> log_gamma = {};
+    double gem_m = 1, alpha = 0.2;
+    std::vector<double> eta = {1., .5, .25};
 
     ParamList pl;
     // Input Options
-    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", intsv);
+    pl.add_option("in-data", "Input hex file", inFile, true)
+      .add_option("in-meta", "Metadata file", metaFile, true)
+      .add_option("feature-weights", "Input weights file", weightFile)
+      .add_option("features", "Feature names and total counts file", featureFile);
+    pl.add_option("levels", "", L)
+      .add_option("max-nodes", "Max number of nodes", max_k)
+      .add_option("thr-heavy", "Threshold for use batch update for a topic", thr_heavy)
+      .add_option("thr-prune", "Threshold for pruning a topic", thr_prune)
+      .add_option("s-mc", "Number of samples for integrating out z in P(c|w)", sMC)
+      .add_option("n-iter", "Number of total iterations", nIter)
+      .add_option("n-mc-iter", "Number of iterations to sample from P(c|w) instead of P(c|w,z)", nMCiter)
+      .add_option("n-mb-iter", "Number of minibatch iterations", nMBiter)
+      .add_option("n-init", "Number of docs to for strict CGS initialization", nInit)
+      .add_option("minibatch-size", "Minibatch size", bsize)
+      .add_option("tree-prune-interval", "Consolidate tree every N docs", csize)
+      .add_option("min-count-train", "Minimum total count for a document to be included in model training", minCountTrain)
+      .add_option("log-gamma", "log(gamma) for gamma in CRP", log_gamma)
+      .add_option("alpha", "Dirichlet prior for c", alpha)
+      .add_option("gem-m", "m in GEM(alpha, m) prior for z", gem_m)
+      .add_option("eta", "Dirichlet prior for beta", eta)
+      .add_option("seed", "Random seed", seed)
+      .add_option("threads", "Number of threads", nThreads);
     // Output Options
-    pl.add_option("out-tsv", "Output TSV file", outtsv)
+    pl.add_option("out-prefix", "Output prefix", outPrefix, true)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug);
+
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -41,24 +51,44 @@ int32_t test(int32_t argc, char** argv) {
         pl.print_help();
         return 1;
     }
+    if (debug > 0) {
+        punkst::Logger::getInstance().setLevel(punkst::LogLevel::DEBUG);
+    }
+    if (log_gamma.size() == 0) {
+        log_gamma = std::vector<double>(L, -60);
+    }
 
-    // test tbb
+    HexReader reader(metaFile);
+    int32_t M = reader.nFeatures;
+std::cout << "M " << M << std::endl;
 
-    std::cout << "TBB max concurrency = "
-    << tbb::this_task_arena::max_concurrency()
-    << std::endl;
 
-    // 2) Cap threads explicitly (optional)
-    tbb::global_control ctl{tbb::global_control::max_allowed_parallelism, 4};
-    std::cout << "Capped to 4 threads, now = "
-        << tbb::this_task_arena::max_concurrency()
-        << std::endl;
+std::cout << "Constructor\n";
+    HLDA hlda(L, M, seed, nThreads, debug, verbose,
+        max_k, log_gamma, thr_heavy, thr_prune, sMC, eta, alpha, gem_m);
 
-    // 3) Simple parallel_for test
-    tbb::parallel_for(0, 8, [&](int i){
-    auto id = std::this_thread::get_id();
-    std::cout << "  Iter " << i << " on thread " << id << "\n";
-    });
+    std::ifstream inFileStream(inFile);
+    if (!inFileStream) {
+        error("%s: Error opening input file: %s", __func__, inFile.c_str());
+    }
+    std::vector<nCrpLeaf> docs;
+    std::string line, l;
+std::cout << "Reading input file" << std::endl;
+    while (std::getline(inFileStream, line)) {
+        Document doc;
+        int32_t ct = reader.parseLine(doc, l, line);
+        if (ct < 0) {
+            error("Error parsing line %s", line.c_str());
+        }
+        if (ct < minCountTrain) {
+            continue;
+        }
+        docs.emplace_back(doc);
+    }
+    inFileStream.close();
+    notice("Read %lu documents", docs.size());
+
+    hlda.fit(docs, nIter, nMCiter, nMBiter, bsize, csize, nInit);
 
     return 0;
 }

@@ -104,6 +104,51 @@ void HexReader::readMetadata(const std::string &metaFile) {
     hasCoordinates = (icol_x >= 0 && icol_y >= 0);
 }
 
+int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount, int32_t modal) {
+    std::ifstream inFileStream(inFile);
+    if (!inFileStream) {
+        error("%s: Error opening input file: %s", __func__, inFile.c_str());
+    }
+    std::string line, l;
+    int32_t n = 0;
+    while (std::getline(inFileStream, line)) {
+        Document doc;
+        int32_t ct = parseLine(doc, l, line, modal);
+        if (ct < 0) {
+            error("Error parsing line %s", line.c_str());
+        }
+        if (ct < minCount) {
+            continue;
+        }
+        docs.push_back(std::move(doc));
+        info.push_back(std::move(l));
+        n++;
+    }
+    return n;
+}
+
+int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount, int32_t modal) {
+    std::ifstream inFileStream(inFile);
+    if (!inFileStream) {
+        error("%s: Error opening input file: %s", __func__, inFile.c_str());
+    }
+    std::string line, l;
+    int32_t n = 0;
+    while (std::getline(inFileStream, line)) {
+        Document doc;
+        int32_t ct = parseLine(doc, l, line, modal);
+        if (ct < 0) {
+            error("Error parsing line %s", line.c_str());
+        }
+        if (ct < minCount) {
+            continue;
+        }
+        docs.push_back(std::move(doc));
+        n++;
+    }
+    return n;
+}
+
 bool UnitValues::readFromLine(const std::string& line, int32_t nModal, bool labeled) {
     std::istringstream iss(line);
     std::string hexKey;
