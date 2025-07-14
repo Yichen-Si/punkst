@@ -1,9 +1,10 @@
 #include "punkst.h"
 #include "markerselection.hpp"
 
+// TODO: run multiple experiments with different minCount after loading the mtx
 int32_t cmdQ2Markers(int32_t argc, char** argv) {
     std::string inFile, infoFile, outPref, outFile;
-    int32_t K, neighbors = 10;
+    int32_t K, neighbors = -1;
     int32_t valueBytes = 8;
     bool binaryInput = false;
     int32_t minCount = 1;
@@ -32,7 +33,7 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
         .add_option("weight-by-counts", "Weight factors by counts (default: false)", weightFactorsByCounts);
     pl.add_option("out", "Output prefix", outPref, true)
         .add_option("find-neighbors", "Find neighbors for each marker", findNeighbors)
-        .add_option("neighbor-max-rank-fraction", "Maximum fraction of rank to consider for (mutual) neighbors (default: 0.2)", maxRankFraction)
+        .add_option("neighbor-max-rank-fraction", "Maximum fraction of rank to consider for (mutual) neighbors (default: 0.1)", maxRankFraction)
         .add_option("verbose", "Verbose level (default: 0)", verbose);
 
     try {
@@ -54,8 +55,11 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
     }
     ofs.close();
 
-    if (findNeighbors) {
-      std::vector<MarkerSelector::markerSetInfo> neighborLists = selector.findNeighborsToAnchors(neighbors, maxRankFraction);
+    if (findNeighbors || neighbors > 0) {
+        if (neighbors <= 0) {
+            neighbors = 10;
+        }
+        std::vector<MarkerSelector::markerSetInfo> neighborLists = selector.findNeighborsToAnchors(neighbors, maxRankFraction);
 
         outFile = outPref + ".pairs.tsv";
         std::ofstream ofs(outFile);
@@ -84,7 +88,7 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
     if (!recoverFactors)
         return 0;
 
-    selector.conputeTopicDistribution(maxIter, tol, threads, weightFactorsByCounts);
+    selector.computeTopicDistribution(maxIter, tol, threads, weightFactorsByCounts);
     auto& features = selector.getFeatureInfo();
     outFile = outPref + ".factors.tsv";
     ofs.open(outFile);

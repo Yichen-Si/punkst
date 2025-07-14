@@ -166,7 +166,7 @@ public:
     }
 
     // Compute P(w=j|z=k) (or P(w=j,z=k))
-    void conputeTopicDistribution(int max_iter = 500, double tol = 1e-6, int threads = -1, bool weightByCounts = false) {
+    void computeTopicDistribution(int max_iter = 500, double tol = 1e-6, int threads = -1, bool weightByCounts = false) {
         if (anchors.empty()) {
             error("No anchors selected, please call selectMarkers(K, ...) first");
         }
@@ -422,7 +422,7 @@ private:
         std::string line;
         M_ = 0;
         while (std::getline(ifs, line)) {
-            if (line.empty()) continue;
+            if (line.empty() || line[0] == '#') continue;
             std::istringstream iss(line);
             uint32_t idx, ct;
             std::string name;

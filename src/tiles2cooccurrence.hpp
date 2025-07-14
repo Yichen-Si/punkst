@@ -16,15 +16,20 @@ public:
         const std::string& outPref,
         double radius, double halflife=-1,
         double localMin=0, bool binaryOutput = false,
-        int32_t minNeighbor = 1, bool weightByCount = false) :
+        int32_t minNeighbor = 1, bool weightByCount = false, int32_t debug = 0) :
         nThreads_(nThreads) , outPref_(outPref) , r2_(radius * radius)
         , halflife_(halflife), weightByDistance_(halflife > 0)
         , tileReader_(tileReader) , parser_(parser)
-        , localMin_(localMin), binaryOutput_(binaryOutput), minNeighbor_(minNeighbor), weightByCount_(weightByCount) {
+        , localMin_(localMin), binaryOutput_(binaryOutput), minNeighbor_(minNeighbor), weightByCount_(weightByCount), debug_(debug) {
         std::vector<TileKey> tiles;
         tileReader_.getTileList(tiles);
+        int32_t ntiles = 0;
         for (auto &t : tiles) {
             tileQueue_.push(t);
+            ntiles++;
+            if (debug_ && ntiles >= debug_) {
+                break;
+            }
         }
         tileQueue_.set_done();
         tau_ = (halflife_ > 0) ? log(2) / halflife_ / halflife_ : 0;
@@ -49,6 +54,7 @@ private:
     double localMin_;
     bool weightByDistance_, weightByCount_, binaryOutput_;
     int32_t minNeighbor_;
+    int32_t debug_;
 
     TileReader&   tileReader_;
     lineParserUnival&   parser_;
@@ -80,13 +86,16 @@ private:
                 cloud.pts.emplace_back(px.x, px.y);  // z=0
                 feats.push_back(px.idx);
                 if (weightByCount_) {
-                    counts.push_back(static_cast<uint8_t>(std::max(256u, px.ct)));
+                    counts.push_back(static_cast<uint8_t>(std::min(255u, px.ct)));
                 }
                 localMarginals[px.idx][0] += 1;
                 localMarginals[px.idx][1] += px.ct;
             }
             const size_t N = cloud.pts.size();
             if (N < 2) continue;
+            if (debug_) {
+                notice("Thread %d: processing tile (%d, %d) with %zu pixels.", threadId, tile.row, tile.col, N);
+            }
 
             // build local tree
             kd_tree_f2_t tree(2, cloud,
@@ -103,9 +112,9 @@ private:
                     nSkip++;
                     continue;
                 }
+                localMarginals[f1][2] += 1;
                 localMarginals[f1][3] += n;
                 if (weightByCount_) {
-                    localMarginals[f1][2] += counts[i];
                     for (uint32_t j = 0; j < n; ++j) {
                         auto &m = indices_dists[j];
                         uint32_t f2 = feats[m.first];
@@ -116,7 +125,6 @@ private:
                         }
                     }
                 } else {
-                    localMarginals[f1][2] += 1;
                     for (uint32_t j = 0; j < n; ++j) {
                         auto &m = indices_dists[j];
                         uint32_t f2 = feats[m.first];
@@ -150,6 +158,7 @@ private:
 
     void writeToFile() {
         // write marginals
+        // feature index, name, total counts, pixels, used pixels, counted neighbors
         std::string outFile = outPref_ + ".marginals.tsv";
         FILE* ofs = fopen(outFile.c_str(), "w");
         if (!ofs) {
@@ -158,15 +167,16 @@ private:
         std::vector<std::string> featureList;
         if (parser_.getFeatureList(featureList) < 0) {
             warning("Feature names are not found");
-            // feature name, used pixels, total uniq pixels, total counts, counted neighboring pixels
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%lu\t%lu\t%lu\t%lu\n", kv.first, kv.second[2],
-                    kv.second[0], kv.second[1], kv.second[3]);
+                fprintf(ofs, "%u\t%u\t%lu\t%lu\t%lu\t%lu\n",
+                    kv.first, kv.first,
+                    kv.second[1], kv.second[0], kv.second[2], kv.second[3]);
             }
         } else {
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%s\t%lu\t%lu\t%lu\t%lu\n", kv.first,
-                    featureList[kv.first].c_str(), kv.second[2], kv.second[0], kv.second[1], kv.second[3]);
+                fprintf(ofs, "%u\t%s\t%lu\t%lu\t%lu\t%lu\n",
+                    kv.first, featureList[kv.first].c_str(),
+                    kv.second[1], kv.second[0], kv.second[2], kv.second[3]);
             }
         }
         fclose(ofs);
