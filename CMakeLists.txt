@@ -67,6 +67,7 @@ set(SOURCE_FILES
     src/topic_svb.cpp
     src/numerical_utils.hpp
     src/numerical_utils.cpp
+    src/de_chisq.cpp
     src/pts2tiles.hpp
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp

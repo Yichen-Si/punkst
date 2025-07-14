@@ -248,3 +248,20 @@ void findTopK(
         }
     }
 }
+
+inline double chisq1_log10p(double chi2) {
+    const double LOG10_E = std::log10(std::exp(1.0));
+    return -0.5 * std::log(chi2) * LOG10_E - 0.5 * chi2 * LOG10_E + std::log10(2.0);
+}
+
+std::vector<std::vector<std::string>> chisq_from_matrix_marginal(
+    const Eigen::MatrixXd& mat,                    // features x samples
+    const std::vector<std::string>& feature_names, // same size as mat.rows()
+    const std::vector<std::string>& sample_names,  // same size as mat.cols()
+    const std::string& output_filename,
+    int top_k = 10,
+    int nThreads = 1,
+    double pseudocount = 0.5,
+    double min_count = 10.0,
+    double min_fc = 1.5,
+    double max_pval = 0.001);

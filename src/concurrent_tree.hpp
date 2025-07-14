@@ -3,8 +3,10 @@
 #include <array>
 #include <atomic>
 #include <iostream>
+#include <fstream>
 #include <mutex>
 #include <set>
+#include <unordered_map>
 #include <vector>
 #include <algorithm>
 #include <memory>
@@ -19,31 +21,29 @@ public:
         int pos = -1; // index within the level
         int depth = -1;
         std::atomic<int> n_docs {0};
+        std::atomic<int> n_children {0};
         double log_weight = 0;
 
         Node(int parent_id = -1, int pos = -1, int depth = -1, int n_docs = 0)
-            : parent_id(parent_id), pos(pos), depth(depth),
-              n_docs(n_docs) {}
+            : parent_id(parent_id), pos(pos), depth(depth), n_docs(n_docs), n_children(0) {}
         Node(Node&&) noexcept = default;
         Node(const Node& other)
-            : parent_id(other.parent_id),
-            pos(other.pos),
-            depth(other.depth),
-            n_docs(other.n_docs.load(std::memory_order_relaxed)),
-            log_weight(other.log_weight) {}
+            : parent_id(other.parent_id), pos(other.pos), depth(other.depth),
+              n_docs(other.n_docs.load(std::memory_order_relaxed)),
+              n_children(other.n_children.load(std::memory_order_relaxed)),
+              log_weight(other.log_weight) {}
         Node& operator=(Node&&) noexcept = default;
         Node& operator=(const Node& other) {
-            parent_id = other.parent_id;
-            pos = other.pos;
-            depth = other.depth;
+            parent_id = other.parent_id; pos = other.pos; depth = other.depth;
             n_docs.store(other.n_docs.load());
+            n_children.store(other.n_children.load());
             log_weight = other.log_weight;
             return *this;
         }
     };
 
     struct RetNode {
-        int parent_id, pos, depth, n_docs;
+        int parent_id, pos, depth, n_docs, n_children;
         double log_path_weight;
     };
 
@@ -69,8 +69,8 @@ public:
     void init();
 
     // Lock-free operations
-    bool IsLeaf(int node_id);
-    bool Exist(int node_id);
+    bool IsLeaf(int node_id) const;
+    bool Exist(int node_id) const;
         // Decrease the doc count by 1 for all nodes on node_id->root
     void DecNumDocs(int node_id);
         // Increase the doc count by delta for all nodes on node_id->root
@@ -78,7 +78,7 @@ public:
         // The returned path is always from root to a leaf (could be new)
     IncResult IncNumDocs(int node_id, int delta = 1);
         // Realize the tree with current nCRP probabilities
-    RetTree GetTree();
+    RetTree GetTree() const;
 
     // Lock operations
         // The only place where a new node can be added
@@ -107,6 +107,7 @@ public:
 
     std::vector<int> id_old_to_survived_anc;
     std::vector<std::vector<int>> pos_old2new;
+    std::unordered_map<int, std::vector<int>> leaf_to_path;
 
 private:
 
@@ -121,13 +122,17 @@ private:
     int max_n_nodes;
     std::mutex mutex;
     // For each level:
-    std::vector<double> log_gamma;
+    std::vector<double> log_gamma, gamma;
     std::vector<int> n_nodes; // num of nodes
     std::vector<int> n_heavy; // num of nodes with >thr_heavy count
     std::vector<std::vector<int>> node_ids;
     int debug_;
 };
 
-std::ostream& operator << (std::ostream &out, const ConcurrentTree::RetTree &tree);
-
 std::ostream& operator << (std::ostream &out, const ConcurrentTree::IncResult &tree);
+
+void printTree(const ConcurrentTree::RetTree &tree, std::ostream &out = std::cout, bool leaf_only = false, bool marginal = false);
+
+void WriteTreeAsDot(const ConcurrentTree::RetTree& tree, const std::string& filename, const std::vector<std::vector<std::string>>* extra_labels = nullptr, size_t words_per_line = 3, int max_depth = -1);
+
+void WriteTreeAsTSV(const ConcurrentTree::RetTree& tree, const std::string& outpref);

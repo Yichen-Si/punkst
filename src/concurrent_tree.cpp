@@ -13,6 +13,12 @@ ConcurrentTree::ConcurrentTree(int _L, std::vector<double> _log_gamma,
             log_gamma.push_back(log_gamma.back());
         }
     }
+    gamma = std::vector<double>(L, 0.0);
+    for (int l = 0; l < L; l++) {
+        if (log_gamma[l] > -10) {
+            gamma[l] = std::exp(log_gamma[l]);
+        }
+    }
     init();
     debug("%s: initialized", __func__);
 }
@@ -48,11 +54,11 @@ void ConcurrentTree::SetThreshold(int thr_heavy, int thr_prune) {
     this->thr_prune = thr_prune;
 }
 
-bool ConcurrentTree::IsLeaf(int node_id) {
+bool ConcurrentTree::IsLeaf(int node_id) const {
     return node_id >= 0 && node_id < max_id && nodes[node_id].depth + 1 == L;
 }
 
-bool ConcurrentTree::Exist(int node_id) {
+bool ConcurrentTree::Exist(int node_id) const {
     return (node_id >= 0 && node_id < max_id && nodes[node_id].depth >= 0);
 }
 
@@ -83,7 +89,7 @@ ConcurrentTree::IncResult ConcurrentTree::IncNumDocs(int node_id, int delta) {
     return result;
 }
 
-ConcurrentTree::RetTree ConcurrentTree::GetTree() {
+ConcurrentTree::RetTree ConcurrentTree::GetTree() const {
     // Copy nodes
     int current_max_id = max_id; // freeze
     RetTree ret;
@@ -92,7 +98,7 @@ ConcurrentTree::RetTree ConcurrentTree::GetTree() {
     std::fill(ret.n_nodes.begin(), ret.n_nodes.end(), 0);
     for (int i = 0; i < current_max_id; i++) {
         auto &node = nodes[i];
-        ret.nodes[i] = RetNode{node.parent_id, node.pos, node.depth, 0, 0};
+        ret.nodes[i] = RetNode{node.parent_id, node.pos, node.depth, 0, node.n_children.load(), 0};
         if (node.depth + 1 == L) // only collect the num of docs for leaves
             ret.nodes[i].n_docs =
                 node.n_docs.load(std::memory_order_relaxed);
@@ -105,21 +111,19 @@ ConcurrentTree::RetTree ConcurrentTree::GetTree() {
     }
     // Calculate log path weight for all nodes
     std::vector<float> log_num_docs(current_max_id, -1e9);
-    log_num_docs[0] = std::log(ret.nodes[0].n_docs);
+    log_num_docs[0] = std::log(ret.nodes[0].n_docs + gamma[0]);
     for (int i = 0; i < current_max_id; i++) { // top-down
         auto &node = ret.nodes[i];
         if (!Exist(i) || node.n_docs <= 0) {
             node.log_path_weight = -1e9; // A nonexistent node
         } else if (node.depth) {
             auto &parent = ret.nodes[node.parent_id];
-            log_num_docs[i] = std::log(node.n_docs);
+            log_num_docs[i] = std::log(node.n_docs + gamma[node.depth]);
             if (parent.n_docs > 0) {
                 node.log_path_weight = parent.log_path_weight +
-                    log_num_docs[i] - log_num_docs[node.parent_id];
+                    std::log(node.n_docs) - log_num_docs[node.parent_id];
             } else { // should not happen
-std::cout << node.depth << " " << node.pos << " " << parent.depth << " " << parent.pos << " " << node.n_docs << " " << parent.n_docs << std::endl;
                 error("%s: parent %d has no docs", __func__, node.parent_id);
-                // node.log_path_weight = -1e9;
             }
         } else {
             node.log_path_weight = 0;
@@ -168,7 +172,7 @@ bool ConcurrentTree::Consolidate(std::vector<NodeRemap>& pos_map) {
     const int old_max = max_id;
 
     id_old_to_survived_anc.resize(old_max);
-    std::fill(id_old_to_survived_anc.begin(), id_old_to_survived_anc.end(), -1);
+    std::fill(id_old_to_survived_anc.begin(), id_old_to_survived_anc.end(), 0);
     pos_old2new.resize(L);
     for (int l = 0; l < L; ++l) {
         pos_old2new[l].resize(n_nodes[l]);
@@ -192,6 +196,7 @@ bool ConcurrentTree::Consolidate(std::vector<NodeRemap>& pos_map) {
         int n_docs_kept = 0;
         while (i < children[u].size()) {
             int v = children[u][i];
+            // Leave at least one child so all leaves are on the same level
             if (i == 0 || nodes[v].n_docs > thr_prune) {
                 keep[v] = 1;
                 if (nodes[v].depth + 1 < L) {
@@ -203,6 +208,7 @@ bool ConcurrentTree::Consolidate(std::vector<NodeRemap>& pos_map) {
             }
             i++;
         }
+        // Re-distribute the pruned weights to the survived children
         int n_docs_pruned = nodes[u].n_docs - n_docs_kept;
         if (i == children[u].size() || n_docs_pruned <= 0) {
             continue;
@@ -224,13 +230,17 @@ bool ConcurrentTree::Consolidate(std::vector<NodeRemap>& pos_map) {
             i--;
         }
     }
-std::cout << "Consolidate: " << old_max << " nodes, keep " << std::count(keep.begin(), keep.end(), 1) << std::endl;
-
+if (debug_) {
+    std::cout << "Consolidate: " << old_max << " nodes, keep " << std::count(keep.begin(), keep.end(), 1) << std::endl;
+}
     for (int v = 1; v < old_max; ++v) {
         int u = v;
         if (!Exist(v) || nodes[v].n_docs == 0) {
             continue;
         }
+        // TODO: this caused a (small) problem later when we delete a doc
+        // re-assigned to an internal node, since we do not subtract from
+        // its descendants causing the total n_docs recorded in tree to grow
         while(!keep[u]) {
             u = nodes[u].parent_id;
         }
@@ -301,34 +311,46 @@ std::cout << "Consolidate: " << old_max << " nodes, keep " << std::count(keep.be
         n_nodes[l]  = static_cast<int>(n);
         n_heavy[l]  = heavy_cnt;
     }
+    // update n_children
+    for (auto& v : new_nodes) {
+        v.n_children.store(0, std::memory_order_relaxed);
+    }
+    for (const auto& v : new_nodes) {
+        if (v.parent_id >= 0) {
+            new_nodes[v.parent_id].n_children++;
+        }
+    }
+    // map node ids
     for (int i = 0; i < old_max; ++i) {
         if (id_old_to_survived_anc[i] != -1) {
             id_old_to_survived_anc[i] = id_old2new[id_old_to_survived_anc[i]];
         }
     }
 
-// if (debug_) {
-//     std::cout << "id_old_to_survived_anc: ";
-//     for (int i = 0; i < old_max; ++i) {
-//         if (id_old_to_survived_anc[i] != -1) {
-//             std::cout << i << "->" << id_old_to_survived_anc[i] << " ";
-//         }
-//     }
-//     std::cout << std::endl;
-//     std::cout << "pos_old2new:\n";
-//     for (int l = 0; l < L; ++l) {
-//         std::cout << l << ": ";
-//         for (int i = 0; i < pos_old2new[l].size(); ++i) {
-//             if (pos_old2new[l][i] != -1) {
-//                 std::cout << i << "->" << pos_old2new[l][i] << " ";
-//             }
-//         }
-//         std::cout << std::endl;
-//     }
-// }
-
+if (debug_) {
+    std::cout << "Consolidate: n_heavy/n_nodes ";
+    for (int l = 0; l < L; ++l) {
+        std::cout << n_heavy[l] << "/" << n_nodes[l] << " ";
+    }
+    std::cout << std::endl;
+}
     nodes = std::move(new_nodes);
     max_id = static_cast<int>(nodes.size());
+
+    leaf_to_path.clear();
+    for (int i = 0; i < max_id; ++i) {
+        if (IsLeaf(i)) {
+            int cur = i;
+            std::vector<int> path;
+            while (cur != -1) {
+                path.push_back(nodes[cur].pos);
+                cur = nodes[cur].parent_id;
+            }
+            std::reverse(path.begin(), path.end());
+            leaf_to_path[nodes[i].pos] = std::move(path);
+        }
+    }
+
     return remapped;
 }
 
@@ -389,38 +411,137 @@ int ConcurrentTree::AddChildren(int parent_id) {
     return max_id - 1;
 }
 
-std::ostream& operator << (std::ostream &out, const ConcurrentTree::RetTree &tree) {
-    // sort nodes by depth
-    std::vector<int> node_idx(tree.nodes.size());
-    std::vector<int> node_depth(tree.nodes.size());
-    for (size_t i = 0; i < tree.nodes.size(); i++) {
-        node_idx[i] = i;
-        node_depth[i] = tree.nodes[i].depth;
-    }
-    std::sort(node_idx.begin(), node_idx.end(),
-        [&](int a, int b) { return node_depth[a] < node_depth[b]; });
-    for (auto i : node_idx) {
-        if (node_depth[i] < tree.n_nodes.size() - 1) {
-            continue;
-        }
-        const auto &node = tree.nodes[i];
-        if (node.depth) {
-            out << "(" << tree.nodes[node.parent_id].depth << ", " << tree.nodes[node.parent_id].pos << ")";
-        } else {
-            out << "-1";
-        }
-        out << " -> (" << node.depth << ", " << node.pos
-            << ") n_docs: " << node.n_docs << std::endl;
-    }
-    for (size_t l = 0; l < tree.n_nodes.size(); l++) {
-        out << l << ": " << tree.n_nodes[l] << std::endl;
-    }
-    return out;
-}
-
 std::ostream& operator << (std::ostream &out, const ConcurrentTree::IncResult &tree) {
     out << "ID: " << tree.id << " pos ";
     for (auto k: tree.pos)
         out << ' ' << k;
     return out;
+}
+
+void printTree(const ConcurrentTree::RetTree &tree, std::ostream &out, bool leaf_only, bool marginal) {
+    const auto& nodes = tree.nodes;
+    const auto& n_nodes = tree.n_nodes;
+
+    std::vector<int> node_idx(nodes.size());
+    std::vector<int> node_depth(nodes.size());
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        node_idx[i] = static_cast<int>(i);
+        node_depth[i] = nodes[i].depth;
+    }
+    std::sort(node_idx.begin(), node_idx.end(), [&](int a, int b) {
+        return node_depth[a] < node_depth[b];
+    });
+
+    if (!marginal && !leaf_only) {
+        // Full tree print
+        for (int i : node_idx) {
+            const auto& node = nodes[i];
+            if (node.depth + 1 == static_cast<int>(n_nodes.size())) {
+                continue;
+            }
+            if (node.depth > 0) {
+                out << "(" << nodes[node.parent_id].depth << ", " << nodes[node.parent_id].pos << ", " << nodes[node.parent_id].n_children << ")";
+            } else {
+                out << "-1";
+            }
+            out << " -> (" << node.depth << ", " << node.pos
+                << ") n_docs: " << node.n_docs
+                << " o_dg: " << node.n_children
+                << " logPr: " << node.log_path_weight
+                << std::endl;
+        }
+    }
+    if (!marginal) {
+        // Print leaf node info only
+        for (int i : node_idx) {
+            const auto& node = nodes[i];
+            if (node.depth + 1 == static_cast<int>(n_nodes.size())) {
+                if (node.depth > 0) {
+                    out << "(" << nodes[node.parent_id].depth << ", " << nodes[node.parent_id].pos << ", " << nodes[node.parent_id].n_children << ")";
+                } else {
+                    out << "-1";
+                }
+                out << " -> (" << node.depth << ", " << node.pos
+                    << ") n_docs: " << node.n_docs
+                    << " logPr: " << node.log_path_weight
+                    << std::endl;
+            }
+        }
+    }
+    out << "# Per-level node counts and out-degrees\n";
+    for (size_t l = 0; l < n_nodes.size(); ++l) {
+        out << "Level " << l << ", " << n_nodes[l] << " nodes\n";
+        if (l < n_nodes.size()-1) {
+            out << "\t";
+            for (const auto& node : nodes) {
+                if (node.depth == static_cast<int>(l)) {
+                    out << " (" << node.pos << ", " << node.n_children << ")";
+                }
+            }
+            out << std::endl;
+        }
+    }
+}
+
+void WriteTreeAsDot(const ConcurrentTree::RetTree& tree, const std::string& filename, const std::vector<std::vector<std::string>>* extra_labels, size_t words_per_line, int max_depth) {
+    int L = tree.n_nodes.size();
+    std::vector<int> offsets(L + 1, 0);
+    for (int l = 0; l < L; ++l) {
+        offsets[l + 1] = offsets[l] + tree.n_nodes[l];
+    }
+    if (max_depth < 0) {
+        max_depth = L - 1;
+    }
+
+    std::ofstream out(filename);
+    out << "digraph G {\n";
+    for (size_t i = 0; i < tree.nodes.size(); ++i) {
+        const auto& node = tree.nodes[i];
+        if (node.depth > max_depth) {
+            continue;
+        }
+        std::ostringstream label;
+                label << node.depth << "_" << node.pos
+                    << " n_doc=" << node.n_docs;
+        if (node.depth < tree.n_nodes.size() - 1)
+            label << " n_child=" << node.n_children;
+        if (extra_labels) {
+            uint32_t idx = tree.nodes[i].pos + offsets[tree.nodes[i].depth];
+            const auto& extras = (*extra_labels)[idx];
+            label << "\\n";
+            for (size_t j = 0; j < extras.size(); ++j) {
+                label << extras[j];
+                if ((j + 1) % words_per_line == 0 && (j + 1) < extras.size()) {
+                    label << "\\n";
+                } else if (j + 1 < extras.size()) {
+                    label << ",";
+                }
+            }
+        }
+        out << "  n" << i << " [label=\"" << label.str() << "\"];\n";
+        if (node.parent_id >= 0) {
+            out << "  n" << node.parent_id << " -> n" << i << ";\n";
+        }
+    }
+    out << "}\n";
+}
+
+void WriteTreeAsTSV(const ConcurrentTree::RetTree& tree,
+                    const std::string& outpref) {
+
+    std::ofstream edge_out(outpref + ".edges.tsv");
+    std::ofstream node_out(outpref + ".nodes.tsv");
+
+    edge_out << "source\ttarget\n";
+    node_out << "node_id\tdepth\tpos\tn_docs\tn_children\n";
+
+    for (size_t i = 0; i < tree.nodes.size(); ++i) {
+        const auto& node = tree.nodes[i];
+        node_out << i << '\t' << node.depth << '\t' << node.pos << '\t'
+                 << node.n_docs << '\t' << node.n_children << '\n';
+
+        if (node.parent_id >= 0) {
+            edge_out << node.parent_id << '\t' << i << '\n';
+        }
+    }
 }
