@@ -20,9 +20,9 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
         .add_option("in-index", "Input index file", inIndex, true)
         .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x, true)
         .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y, true)
-        .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
+        .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, true)
         .add_option("feature-dict", "If feature column is not integer, provide a dictionary/list of all possible values", dictFile)
-        .add_option("icol-val", "Column index for the integer count (0-based)", icol_val)
+        .add_option("icol-val", "Column index for the integer count (0-based)", icol_val, true)
         .add_option("bounding-boxes", "Rectangular query regions (xmin ymin xmax ymax)*", boundingBoxes)
         .add_option("weight-by-count", "Weight co-occurrence by the product of the number of transcripts (default: false)", weightByCount)
         .add_option("radius", "Radius to count coocurrence", radius, true)
@@ -199,54 +199,6 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
             accumulate_file(filename, binaryInput, valueBytes, nRows, nCols, Q);
             nfiles++;
         }
-
-        // if (binaryInput) {
-        //     for (const auto& filename : inFiles) {
-        //         ifs.open(filename, std::ios::binary);
-        //         if (!ifs)
-        //             error("Cannot open matrix: %s", filename.c_str());
-        //         notice("Reading %s", filename.c_str());
-        //         size_t npairs = 0;
-        //         uint32_t f1, f2;
-        //         double val;
-        //         while (ifs.read(reinterpret_cast<char*>(&f1), sizeof(f1))) {
-        //             ifs.read(reinterpret_cast<char*>(&f2), sizeof(f2));
-        //             ifs.read(reinterpret_cast<char*>(&val), valueBytes);
-        //             if (f1 < nRows && f2 < nCols) {
-        //                 Q[f1 * nCols + f2] += val;
-        //             }
-        //             npairs++;
-        //             if (npairs % 1000000 == 0) {
-        //                 notice("Read %zu pairs", npairs);
-        //             }
-        //         }
-        //         ifs.close();
-        //         nfiles++;
-        //     }
-        // } else {
-        //     for (const auto& filename : inFiles) {
-        //         ifs.open(filename);
-        //         if (!ifs)
-        //             error("Cannot open matrix: %s", filename.c_str());
-        //         notice("Reading %s", filename.c_str());
-        //         size_t npairs = 0;
-        //         std::string line;
-        //         while (std::getline(ifs, line)) {
-        //             std::istringstream iss(line);
-        //             uint32_t f1, f2; double val;
-        //             if (!(iss >> f1 >> f2 >> val)) continue;
-        //             if (f1 < nRows && f2 < nCols) {
-        //                 Q[f1 * nCols + f2] += val;
-        //             }
-        //             npairs++;
-        //             if (npairs % 1000000 == 0) {
-        //                 notice("Read %zu pairs", npairs);
-        //             }
-        //         }
-        //         ifs.close();
-        //         nfiles++;
-        //     }
-        // }
         notice("Finished summing over %d files", nfiles);
     }
 
