@@ -3,7 +3,9 @@
 
 int32_t test(int32_t argc, char** argv) {
 
-	std::string inFile, metaFile, weightFile, outPrefix;
+	std::string inFile, metaFile, featureFile, outPrefix;
+    std::string include_ftr_regex;
+    std::string exclude_ftr_regex;
     int32_t seed = -1, nThreads = 1, debug = 0, verbose = 500000;
     int32_t L = 4, max_k = 1024;
     int32_t thr_heavy = 50, thr_prune = 0;
@@ -11,20 +13,22 @@ int32_t test(int32_t argc, char** argv) {
     int32_t sMC = 5, nIter = 10, nMCiter = 5, nMBiter = 5, nFixedIter = 3;
     int32_t bsize = 512, csize = 1024, nInit = 1000;
     int32_t minCountTrain = 50;
+    int32_t minCountFeature = 100;
     std::vector<double> log_gamma = {};
     double gem_m = 1, alpha = 0.2;
     std::vector<double> eta = {1., .5, .25};
     std::vector<int> max_outdg = {};
     bool transform = false;
+    bool forceDegree = false;
 
     ParamList pl;
     // Input Options
     pl.add_option("in-data", "Input hex file", inFile, true)
-      .add_option("in-meta", "Metadata file", metaFile, true)
-      .add_option("feature-weights", "Input weights file", weightFile);
+      .add_option("in-meta", "Metadata file", metaFile, true);
     pl.add_option("levels", "", L)
       .add_option("max-nodes", "Max number of nodes", max_k)
       .add_option("max-children", "Max number of children for each node on each layer", max_outdg)
+      .add_option("force-degree", "Force max children per node", forceDegree)
       .add_option("thr-heavy", "Threshold for use batch update for a topic", thr_heavy)
       .add_option("thr-prune", "Threshold for pruning a topic", thr_prune)
       .add_option("final-thr-prune", "Final threshold for pruning", final_thr_prune)
@@ -43,6 +47,11 @@ int32_t test(int32_t argc, char** argv) {
       .add_option("eta", "Dirichlet prior for beta", eta)
       .add_option("seed", "Random seed", seed)
       .add_option("threads", "Number of threads", nThreads);
+    // Feature Preprocessing Options
+    pl.add_option("features", "Feature names and total counts file", featureFile)
+      .add_option("min-count-per-feature", "Min count for features to be included (requires --features)", minCountFeature)
+      .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
+      .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
     // Output Options
     pl.add_option("out-prefix", "Output prefix", outPrefix, true)
       .add_option("transform", "Compute probabilistic path assignments", transform)
@@ -66,10 +75,16 @@ int32_t test(int32_t argc, char** argv) {
     final_thr_prune = (final_thr_prune < 0) ? thr_prune : final_thr_prune;
 
     HexReader reader(metaFile);
+    if (!featureFile.empty()) {
+        reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
+    }
     int32_t M = reader.nFeatures;
 
     HLDA hlda(L, M, seed, nThreads, debug, verbose,
         max_k, log_gamma, thr_heavy, thr_prune, sMC, eta, alpha, gem_m, max_outdg);
+    if (forceDegree) {
+        hlda.force_max_children();
+    }
 
     std::ifstream inFileStream(inFile);
     if (!inFileStream) {
@@ -128,7 +143,7 @@ int32_t test(int32_t argc, char** argv) {
     }
     while (l < L-1) {
         outf = outPrefix + ".top_" + std::to_string(l+1) + ".dot";
-        WriteTreeAsDot(tree, outf, &topgenes, l);
+        WriteTreeAsDot(tree, outf, &topgenes, 3, l);
         l++;
     }
     outf = outPrefix + ".dot";

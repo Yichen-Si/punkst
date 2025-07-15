@@ -12,6 +12,8 @@
 #include <memory>
 #include <cmath>
 #include <cstring>
+#include <cassert>
+#include <climits>
 
 class ConcurrentTree {
 public:
@@ -89,6 +91,11 @@ public:
     void SetGamma(std::vector<double> gamma);
     void SetLogGamma(std::vector<double> log_gamma);
     void SetThreshold(int thr_heavy, int thr_prune = 0);
+    void SetMaxChildren(std::vector<int> max_outdg) {
+        assert(max_outdg.size() == L);
+        this->max_outdg = std::move(max_outdg);
+        force_degree = true;
+    }
         // The only place where a node can be removed (prune empty/rare nodes)
         //                   or a node's within-level pos modified
     bool Consolidate(std::vector<NodeRemap>& pos_map);
@@ -127,6 +134,8 @@ private:
     std::vector<int> n_heavy; // num of nodes with >thr_heavy count
     std::vector<std::vector<int>> node_ids;
     int debug_;
+    std::vector<int> max_outdg;
+    bool force_degree;
 };
 
 std::ostream& operator << (std::ostream &out, const ConcurrentTree::IncResult &tree);

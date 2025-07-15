@@ -529,6 +529,7 @@ void HLDA::update_global_() {
     // Consolidate the tree
     std::vector<ConcurrentTree::NodeRemap> pos_map;
     bool node_remap  = tree_.Consolidate(pos_map);
+    node_remap |= n_nodes_ != tree_.GetNumNodesC();
     n_nodes_ = tree_.GetNumNodes();
     if (debug_) {
         ConcurrentTree::RetTree tree = tree_.GetTree();
@@ -694,7 +695,11 @@ void HLDA::write_model_to_file(const std::string& output, std::vector<std::strin
         throw std::runtime_error("HLDA::write_model_to_file: cannot open file " + output);
     }
     update_node_names();
-    assert(vocab.size() == n_features_ && nwk_global_.cols() == offsets_[L_]);
+    assert(vocab.size() == n_features_);
+    if (nwk_global_.cols() != offsets_[L_]) {
+        error("%s: matrix dimension mismatch: %d != %d", __func__,
+              nwk_global_.cols(), offsets_[L_]);
+    }
     ofs << "Feature";
     for (auto& v : node_names) {
         ofs << "\t" << v;

@@ -167,6 +167,8 @@ public:
         features = std::move(new_features);
     }
 
+    void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex);
+
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0) {
         std::string info;
         return parseLine(doc, info, line, modal);

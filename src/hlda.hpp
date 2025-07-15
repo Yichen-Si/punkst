@@ -160,6 +160,10 @@ public:
         tree_.SetThreshold(thr_heavy, thr_prune);
     }
 
+    void force_max_children() {
+        tree_.SetMaxChildren(max_outdg_);
+    }
+
     std::vector<std::string> node_names;
 
 private:

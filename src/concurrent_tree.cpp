@@ -19,6 +19,8 @@ ConcurrentTree::ConcurrentTree(int _L, std::vector<double> _log_gamma,
             gamma[l] = std::exp(log_gamma[l]);
         }
     }
+    max_outdg.resize(L, INT_MAX);
+    force_degree = false;
     init();
     debug("%s: initialized", __func__);
 }
@@ -192,12 +194,16 @@ bool ConcurrentTree::Consolidate(std::vector<NodeRemap>& pos_map) {
         std::sort(children[u].begin(), children[u].end(), [&](int a, int b) {
             return nodes[a].n_docs > nodes[b].n_docs;
         });
+        int l = nodes[u].depth;
         size_t i = 0;
         int n_docs_kept = 0;
         while (i < children[u].size()) {
             int v = children[u][i];
             // Leave at least one child so all leaves are on the same level
             if (i == 0 || nodes[v].n_docs > thr_prune) {
+                if (force_degree && i >= max_outdg[l]) {
+                    break;
+                }
                 keep[v] = 1;
                 if (nodes[v].depth + 1 < L) {
                     stack.push_back(v);
