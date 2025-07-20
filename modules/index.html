@@ -533,6 +533,8 @@
       
         
       
+        
+      
     
     
       
@@ -684,6 +686,27 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coexp/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Co-occurrence
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -761,7 +784,12 @@
 <li><a href="tiles2hex/">tiles2hex</a>: Groups pixels into non-overlapping hexagons for spot level analysis</li>
 <li><a href="lda4hex/">lda4hex</a>: Runs LDA on the spot level data</li>
 <li><a href="pixel-decode/">pixel-decode</a>: Annotates each pixel with the top factors and their probabilities</li>
-<li><a href="visualization/">Visualization</a>: Visualizes the pixel level analysis results</li>
+<li>
+<p><a href="visualization/">Visualization</a>: Visualizes the pixel level analysis results</p>
+</li>
+<li>
+<p><a href="coexp/">cooccurrence</a>: Computes gene co-occurrence and/or extract marker genes from the co-occurrence matrix.</p>
+</li>
 </ul>
 <h2 id="input-data-format">Input Data Format<a class="headerlink" href="#input-data-format" title="Permanent link">&para;</a></h2>
 <p>The input is a tsv file with the following columns: X, Y, feature, count. Whether the file contains headers or other columns is not relevant, as long as the above four columns are present.</p>

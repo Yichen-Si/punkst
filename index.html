@@ -421,9 +421,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#workflow-overview" class="md-nav__link">
+  <a href="#ficture-workflow-overview" class="md-nav__link">
     <span class="md-ellipsis">
-      Workflow Overview
+      FICTURE Workflow Overview
     </span>
   </a>
   
@@ -593,6 +593,8 @@
       
         
       
+        
+      
     
     
       
@@ -743,6 +745,27 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="modules/coexp/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Co-occurrence
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -787,9 +810,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#workflow-overview" class="md-nav__link">
+  <a href="#ficture-workflow-overview" class="md-nav__link">
     <span class="md-ellipsis">
-      Workflow Overview
+      FICTURE Workflow Overview
     </span>
   </a>
   
@@ -823,7 +846,7 @@
 <p>The punkst toolkit provides a pipeline for efficient pixel level factor analysis, which achieves the same result as<a href="https://doi.org/10.1038/s41592-024-02415-2"> FICTURE (2024)</a> with improved efficiency. (<a href="https://github.com/seqscope/ficture">Previous python package</a> is still functioning.)</p>
 <p>Check <a href="workflows/">the quick start page</a> for help on generating the full workflow using Makefile or running each command step by step.</p>
 <p>Check the <a href="input/">Input</a> for help on preparing your data. Current we have worked exampled for 10X Genomics Visium HD, Xenium, NanoString CosMx SMI, and Vizgen MERSCOPE data. We've also applied punkst to Seq-scope and Stereo-seq data, we are working on providing more information.</p>
-<h3 id="workflow-overview">Workflow Overview<a class="headerlink" href="#workflow-overview" title="Permanent link">&para;</a></h3>
+<h3 id="ficture-workflow-overview">FICTURE Workflow Overview<a class="headerlink" href="#ficture-workflow-overview" title="Permanent link">&para;</a></h3>
 <ol>
 <li><a href="modules/pts2tiles/">pts2tiles</a>: Group pixels to tiles for faster processing</li>
 <li><a href="modules/tiles2hex/">tiles2hex</a>: Group pixels into non-overlapping hexagons</li>
@@ -832,7 +855,7 @@
 <li><a href="modules/visualization/">Visualization</a>: Create a high resolution visualization of the results</li>
 </ol>
 <p>All analyses are parallelized and some steps need to write temporary files. Choose the number of threads and the temporary directory (must be empty or can be created) to match your system capabilities.</p>
-<p>Check the <a href="modules/">Modules</a> for detailed documentation of each command.</p>
+<p>Check the <a href="modules/">Modules</a> for detailed documentation of each command and additional tools.</p>
 
 
 

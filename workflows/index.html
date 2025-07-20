@@ -534,6 +534,8 @@
       
         
       
+        
+      
     
     
       
@@ -675,6 +677,27 @@
   
   <span class="md-ellipsis">
     Visualization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/coexp/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Co-occurrence
   </span>
   
 
@@ -848,12 +871,12 @@
 It can have other columns (which will be ignored in analysis but can be optionally carried over to the pixel level output), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.</p>
 <h2 id="use-the-example-makefile-template">Use the example Makefile template<a class="headerlink" href="#use-the-example-makefile-template" title="Permanent link">&para;</a></h2>
 <p>We provide a template Makefile and config file in <code>punkst/examples</code> to generate the full workflow of FICTURE.</p>
-<p>You can copy <code>punkst/examples/basic/config.json</code> to your own directory modify the data path and parameters, then use <code>punkst/ext/py/generate_workflow.py</code> to generate a data-specific Makefile for your task.</p>
+<p>You can copy <code>punkst/examples/basic/generic/config.json</code> to your own directory modify the data path and parameters, then use <code>punkst/ext/py/generate_workflow.py</code> to generate a data-specific Makefile for your task.</p>
 <p>The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the <code>-o</code> option.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># set repopath to the path of the punkst repo</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>python<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/ext/py/generate_workflow.py<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>-c<span class="w"> </span>config.json<span class="w"> </span>-o<span class="w"> </span>run.sh<span class="w"> </span>-m<span class="w"> </span>Makefile<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>-t<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/examples/basic/Makefile
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>-t<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/examples/basic/generic/Makefile
 </span></code></pre></div>
 <p>You can check the generated workflow before execution by
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>-f<span class="w"> </span>Makefile<span class="w"> </span>--dry-run

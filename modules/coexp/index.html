@@ -8,13 +8,11 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/lda4hex/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/coexp/">
       
       
-        <link rel="prev" href="../tiles2hex/">
+        <link rel="prev" href="../visualization/">
       
-      
-        <link rel="next" href="../pixel-decode/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +20,7 @@
     
     
       
-        <title>lda4hex - punkst</title>
+        <title>Co-occurrence - punkst</title>
       
     
     
@@ -74,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#lda4hex" class="md-skip">
+        <a href="#gene-cooccurrence-and-marker-selection" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              lda4hex
+              Co-occurrence
             
           </span>
         </div>
@@ -627,30 +625,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    lda4hex
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../lda4hex/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -659,143 +637,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#input-format" class="md-nav__link">
-    <span class="md-ellipsis">
-      Input format
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Input format">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      Required data
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#required-metadata" class="md-nav__link">
-    <span class="md-ellipsis">
-      Required metadata
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      Usage
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
-    <span class="md-ellipsis">
-      Required
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      Optional
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#feature-filtering" class="md-nav__link">
-    <span class="md-ellipsis">
-      Feature Filtering
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#feature-weighting" class="md-nav__link">
-    <span class="md-ellipsis">
-      Feature Weighting
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lda-training-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      LDA Training Parameters
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#model-initialization" class="md-nav__link">
-    <span class="md-ellipsis">
-      Model Initialization
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-control" class="md-nav__link">
-    <span class="md-ellipsis">
-      Output Control
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -847,10 +688,30 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../coexp/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Co-occurrence
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -859,6 +720,164 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#cooccurrence" class="md-nav__link">
+    <span class="md-ellipsis">
+      cooccurrence
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="cooccurrence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output files
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-up-multiple-matrices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Adding up multiple matrices
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coloc2markers" class="md-nav__link">
+    <span class="md-ellipsis">
+      coloc2markers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="coloc2markers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Optional">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recover-factors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recover factors
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output files
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -898,39 +917,16 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#input-format" class="md-nav__link">
+  <a href="#cooccurrence" class="md-nav__link">
     <span class="md-ellipsis">
-      Input format
+      cooccurrence
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Input format">
+    <nav class="md-nav" aria-label="cooccurrence">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      Required data
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#required-metadata" class="md-nav__link">
-    <span class="md-ellipsis">
-      Required metadata
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
       Usage
@@ -956,49 +952,26 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
         
           <li class="md-nav__item">
-  <a href="#feature-filtering" class="md-nav__link">
+  <a href="#output-files" class="md-nav__link">
     <span class="md-ellipsis">
-      Feature Filtering
+      Output files
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#feature-weighting" class="md-nav__link">
+  <a href="#adding-up-multiple-matrices" class="md-nav__link">
     <span class="md-ellipsis">
-      Feature Weighting
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lda-training-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      LDA Training Parameters
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#model-initialization" class="md-nav__link">
-    <span class="md-ellipsis">
-      Model Initialization
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-control" class="md-nav__link">
-    <span class="md-ellipsis">
-      Output Control
+      Adding up multiple matrices
     </span>
   </a>
   
@@ -1006,6 +979,73 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coloc2markers" class="md-nav__link">
+    <span class="md-ellipsis">
+      coloc2markers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="coloc2markers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Optional">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recover-factors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recover factors
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output files
+    </span>
+  </a>
   
 </li>
         
@@ -1032,63 +1072,96 @@
   
 
 
-<h1 id="lda4hex">lda4hex<a class="headerlink" href="#lda4hex" title="Permanent link">&para;</a></h1>
-<p><strong><code>lda4hex</code> runs LDA on the hexagon data.</strong></p>
-<h2 id="input-format">Input format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h2>
-<p>The input data is a plain text file where each line containing the sparse encoding of the gene counts for one unit (hexagon, cell, etc.). The orders of the units should be <strong>randomized</strong>.</p>
-<p>If generated hexagon data from <code>tiles2hex</code> you probably don't need to know the following details.</p>
-<h3 id="required-data">Required data<a class="headerlink" href="#required-data" title="Permanent link">&para;</a></h3>
-<p>The required structure of each line is as follows (entries are separated by tabs):
-- one integer (m) for the number of unique genes in this unit
-- one integer for the total count of all genes in this unit
-- followed by m pairs of integers, each pair consisting of a gene index (0-based) and the count of that gene in this unit (separated by a single space). In a cell-by-gene count matrix, the pairs are the (column, value) pairs of all non-zero entries in one row corresponding to a cell.</p>
-<p>There could be other fields in the input before the above required (m+2) fields, the number of data fields before the required fields should be specified under the key "offset_data" in the json metadata file.</p>
-<h3 id="required-metadata">Required metadata<a class="headerlink" href="#required-metadata" title="Permanent link">&para;</a></h3>
-<p>We require a json file with at least the following information:
-- "dictionary": a dictionary that contains key: value pairs where each key is a gene name and each value is the corresponding index of that gene in the sparse encoding in the input data file. (You could skip this dictionary if you provides all and only the present genes' information in the order consistent with the indices (the column names and column sums in a cell-by-gene matrix) by <code>--features</code> in <code>lda2hex</code> (see below))
-- "offset_data": an integer that specifies the number of fields before the required fields in the input data file.
-- "header_info": a list of size <code>offset_data</code> that contains the names of the fields before the required fields in the input data file. We will carry over these fields to the output files.</p>
-<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>lda4hex<span class="w"> </span>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt<span class="w"> </span>--in-meta<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--n-topics<span class="w"> </span><span class="m">12</span><span class="w"> </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12<span class="w"> </span>--transform<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--min-count-train<span class="w"> </span><span class="m">50</span><span class="w"> </span>--minibatch-size<span class="w"> </span><span class="m">512</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+<h1 id="gene-cooccurrence-and-marker-selection">Gene cooccurrence and marker selection<a class="headerlink" href="#gene-cooccurrence-and-marker-selection" title="Permanent link">&para;</a></h1>
+<p><strong><code>cooccurrence</code> computes gene co-occurrence within a specified radius and <code>coloc2markers</code> selects markers from the co-occurrence matrix.</strong></p>
+<h2 id="cooccurrence">cooccurrence<a class="headerlink" href="#cooccurrence" title="Permanent link">&para;</a></h2>
+<p>The <code>cooccurrence</code> command computes how frequently each pair of genes appear together within a specified radius, either as a binary relation or weighted by distance with exponential decay. (We also have a <code>merge-mtx</code> command in case you want to add up multiple co-occurrence matrices potentially computed from different datasets.)</p>
+<h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>cooccurrence<span class="w"> </span>--in-tsv<span class="w"> </span>tiles.tsv<span class="w"> </span>--in-index<span class="w"> </span>tiles.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--feature-dict<span class="w"> </span>features.tsv<span class="w"> </span>--out<span class="w"> </span>./out<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--radius<span class="w"> </span><span class="m">15</span><span class="w">  </span>--halflife<span class="w"> </span><span class="m">10</span><span class="w"> </span>--binary<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
-<h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
-<p><code>--in-data</code> - Specifies the input data file (created by <code>tiles2hex</code> then shuffled).</p>
-<p><code>--in-meta</code> - Specifies the metadata file created by <code>tiles2hex</code>.</p>
-<p><code>--n-topics</code> - Specifies the number of topics to learn.</p>
-<p><code>--out-prefix</code> - Specifies the prefix for the output files.</p>
-<h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
-<h4 id="feature-filtering">Feature Filtering<a class="headerlink" href="#feature-filtering" title="Permanent link">&para;</a></h4>
-<p><code>--features</code> - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene.</p>
-<p><code>--min-count-per-feature</code> - Minimum total count for features to be included. Require <code>--features</code> to be specified. Default: 1.</p>
-<p><code>--include-feature-regex</code> - Regular expression (<a href="https://en.cppreference.com/w/cpp/regex/ecmascript">modified ECMAScript grammar</a>) to include only features matching this pattern. Default: include all features.</p>
-<p><code>--exclude-feature-regex</code> - Regular expression (modified ECMAScript) to exclude features matching this pattern. Default: exclude no features.</p>
-<p><strong>Feature Selection Logic:</strong> the above three filters are applied jointly, so only genes with at least the minimum count, matching the include regex (if provided), and not matching the exclude regex (if provided) will be included in the model.</p>
-<h4 id="feature-weighting">Feature Weighting<a class="headerlink" href="#feature-weighting" title="Permanent link">&para;</a></h4>
-<p><code>--feature-weights</code> - Path to a file containing a weight for each gene. Format should be gene name (first column) and weight (second column). If the json metadata file does not contain a dictionary, the first column should be the gene index (0-based) instead.</p>
-<p><code>--default-weight</code> - Default weight for features not present in the weights file. Set to 0 to ignore features not in the weights file. Default: 1.0.</p>
-<!-- `--modal` - Modality to use (0-based). Default: 0. (Only if your input data is generated by `tiles2hex` in multi-modality mode.) -->
-
-<h4 id="lda-training-parameters">LDA Training Parameters<a class="headerlink" href="#lda-training-parameters" title="Permanent link">&para;</a></h4>
+<h4 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h4>
+<p><code>--in-tsv</code> - The tiled data created by <code>pts2tiles</code>.</p>
+<p><code>--in-index</code> The index file created by <code>pts2tiles</code>.</p>
+<p><code>--icol-x</code> - Column index for x coordinate (0-based).</p>
+<p><code>--icol-y</code> - Column index for y coordinate (0-based).</p>
+<p><code>--icol-feature</code> - Column index for feature list (0-based).</p>
+<p><code>--icol-val</code> - Column index for the integer count values (0-based).</p>
+<p><code>--radius</code> - Radius within which to count co-occurrence.</p>
+<p><code>--out</code> - Output prefix for generated files.</p>
+<p><code>--feature-dict</code> - If feature column contains non-integer values, provide a dictionary/list of all feature names.</p>
+<h4 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h4>
+<p><code>--bounding-boxes</code> - Rectangular query regions specified as <code>xmin ymin xmax ymax</code> coordinates (plain numbers separated by spaces, without parenthesis). A single co-occurrence matrix is created using pixels in the union of the regions. Can specify multiple regions by adding multiple 4-tuples. e.g. <code>--bounding-boxes 5040 2300 8830 4640 100 200 1500 1600</code> for two rectangles.</p>
+<p><code>--weight-by-count</code> - Weight co-occurrence by the product of transcript counts at each pixel. Default: false. (This is unlikely to have a noticeable impact unless for very dense sequencing data)</p>
+<p><code>--halflife</code> - Half-life (starting from 1 for zero distance, the distance where the weight is 0.5) for exponential decay weighting. Default: -1, unweighted by distance within the radius.</p>
+<p><code>--min-neighbor</code> - Minimum number of neighboring pixels within radius for a pixel to be included (meant to be used to reduce the influence from sparse/non-tissue regions). Default: 1.</p>
+<p><code>--local-min</code> - Minimum co-occurrence value within a tile to record. Default: 0.</p>
 <p><code>--threads</code> - Number of threads to use. Default: 1.</p>
-<p><code>--seed</code> - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.</p>
-<p><code>--minibatch-size</code> - Size of the minibatches to use during training. Default: 512.</p>
-<p><code>--min-count-train</code> - Minimum total count for a hexagon to be included in the training set. Default: 20.</p>
-<p><code>--n-epochs</code> - Number of epochs to train for. Default: 1.</p>
-<p><code>--mean-change-tol</code> - Tolerance for convergence in the e-step in terms of the mean absolute change in the topic proportions of a document. Default: 1e-3.</p>
-<p><code>--max-iter</code> - Maximum number of iterations for each document. Default: 100.</p>
-<p><code>--kappa</code> - Learning decay parameter for online LDA. Default: 0.7.</p>
-<p><code>--tau0</code> - Learning offset parameter for online LDA. Default: 10.0.</p>
-<p><code>--alpha</code> - Document-topic prior. Default: 1/K (where K is the number of topics).</p>
-<p><code>--eta</code> - Topic-word prior. Default: 1/K (where K is the number of topics).</p>
-<h4 id="model-initialization">Model Initialization<a class="headerlink" href="#model-initialization" title="Permanent link">&para;</a></h4>
-<p><code>--model-prior</code> - File that contains the initial model matrix.</p>
-<p><code>--prior-scale</code> - Scale the initial model matrix uniformly by this value. Default: use the matrix as is.</p>
-<h4 id="output-control">Output Control<a class="headerlink" href="#output-control" title="Permanent link">&para;</a></h4>
-<p><code>--transform</code> - Transform the data to the LDA space after training. If set, an output file <code>&lt;prefix&gt;.results.tsv</code> will be created.</p>
-<p><code>--projection-only</code> - Transform the data using the prior model without further training. Implies <code>--transform</code>.</p>
-<p><code>--verbose</code> - Control the verbosity level of output messages.</p>
+<p><code>--binary</code> - Output results in binary format. Default: false (TSV output). Using the binary format is more efficient especially if you were to run the
+<code>coloc2markers</code> command later.</p>
+<h3 id="output-files">Output files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p>Co-occurrence matrix named <code>{prefix}.mtx.bin</code> (if <code>--binary</code> is used) or <code>{prefix}.mtx.tsv</code> (otherwise).</p>
+</li>
+<li>
+<p>Marginal information per gene named <code>{prefix}.marginals.tsv</code>. The columns are feature index (corresponding to row \&amp; column index in the matrix), name, total counts, total number of pixels, used pixels, used neighbors.</p>
+</li>
+</ul>
+<h3 id="adding-up-multiple-matrices">Adding up multiple matrices<a class="headerlink" href="#adding-up-multiple-matrices" title="Permanent link">&para;</a></h3>
+<p>For convenience</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>merge-mtx<span class="w"> </span>--in-list<span class="w"> </span>mtx_list.txt<span class="w"> </span>--binary<span class="w"> </span>--binary-output<span class="w"> </span>--shared-nrows<span class="w"> </span><span class="nv">$M</span><span class="w"> </span>--out<span class="w"> </span>cooccur.merged
+</span></code></pre></div>
+<p>Just include the file paths of the input matrices in a file provided to <code>--in-list</code>.</p>
+<h2 id="coloc2markers">coloc2markers<a class="headerlink" href="#coloc2markers" title="Permanent link">&para;</a></h2>
+<p>The <code>coloc2markers</code> command selects optimal marker features from a co-occurrence matrix generated by the <code>cooccurrence</code> command. It can optionally find neighbors for selected or specified markers and recover the corresponding expression profiles.</p>
+<h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
+<p>Just finding markers:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span>
+</span></code></pre></div></p>
+<p>Recovering gene expression profiles around each set of markers:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span><span class="w"> </span>--recover-factors<span class="w"> </span>--weight-by-counts<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
+</span></code></pre></div></p>
+<h4 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h4>
+<p><code>--input</code> - Input co-occurrence matrix (binary or TSV format) from the <code>cooccurrence</code> command.</p>
+<p><code>--info</code> - Input gene/feature information file from the <code>cooccurrence</code> command.</p>
+<p><code>--K</code> - Number of markers to select. Note that marker selection is deterministic and sequential, so the set of markers generated with small <code>K</code> is almost certainly contained in the set generated with a larger <code>K</code>. Specifying a large <code>K</code> then trim down to the desired number is perhaps recommended.</p>
+<p><code>--out</code> - Output prefix for generated files.</p>
+<h4 id="optional_1">Optional<a class="headerlink" href="#optional_1" title="Permanent link">&para;</a></h4>
+<p><code>--binary</code> - Specify that input matrix is in binary format. Default: false (assumes TSV).</p>
+<p><code>--value-bytes</code> - Number of bytes per value in binary matrix. Default: 8, match with the output from <code>cooccurrence</code>. Only used with <code>--binary</code>.</p>
+<p><code>--min-count</code> - Minimum count for a feature to be considered as a marker. This should be a reaonably large number, otherwise the results are driven by rare genes.</p>
+<p><code>--fixed</code> - List of markers that must be included in the selection (strings, separated by spaces). Currently assume the input are distinct markers.</p>
+<p><code>--find-neighbors</code> - Find neighbors (often co-localized genes) for each selected marker.</p>
+<p><code>--neighbors</code> - Number of top neighbors to find for each marker. Default: 10. Can be used instead of flag <code>--find-neighbors</code>.</p>
+<p><code>--neighbor-max-rank-fraction</code> - Maximum rank (in terms of the quantile/fraction among all genes) to consider for mutual neighbors. Default: 0.1, meaning that if gene A is among the top 10% of genes to be around conditional on observing gene B, but gene B is not among the top 10%, say among the bottom 50% of genes to be observed around gene A, then they are not considered as neighbors.</p>
+<h5 id="recover-factors">Recover factors<a class="headerlink" href="#recover-factors" title="Permanent link">&para;</a></h5>
+<p><code>--recover-factors</code> - Recover underlying factors from the co-occurrence matrix after marker selection.</p>
+<p><code>--threads</code> - Number of threads to use for factor recovery. Default: -1 (auto). Only used with <code>--recover-factors</code>.</p>
+<p><code>--max-iter</code> - Maximum iterations for factor recovery. Default: 500.</p>
+<p><code>--tol</code> - Convergence tolerance for factor recovery. Default: 1e-6.</p>
+<p><code>--weight-by-counts</code> - Weight factors by gene counts. Default: false.</p>
+<p><code>--verbose</code> - Verbosity level for output messages. Default: 0.</p>
+<h3 id="output-files_1">Output files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><code>{prefix}.top.tsv</code> - List of selected markers</p>
+</li>
+<li>
+<p>if <code>--find-neighbors</code> or <code>--neighbors</code> is used:</p>
+<ul>
+<li><code>{prefix}.pairs.tsv</code> - Detailed pairwise relationships. Columns: index, name of gene 1, total count of gene 1, name of gene 2, total count of gene 2, (weighted) proportion of gene 2 in gene 1's neighbors, vice versa, rank of gene 2 as gene 1's neighbor, vice versa.</li>
+<li><code>{prefix}.short.txt</code> - Compact neighbor lists. The first gene on each line is the selected marker, followed by its neighbors.</li>
+</ul>
+</li>
+<li>
+<p>if <code>--recover-factors</code> is used: <code>{prefix}.factors.tsv</code> for recovered factor matrix.</p>
+</li>
+</ul>
 
 
 
@@ -1124,7 +1197,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../tiles2hex/" class="md-footer__link md-footer__link--prev" aria-label="Previous: tiles2hex">
+          <a href="../visualization/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Visualization">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1134,27 +1207,11 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                tiles2hex
+                Visualization
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../pixel-decode/" class="md-footer__link md-footer__link--next" aria-label="Next: pixel-decode">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                pixel-decode
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
         
       </nav>
     
