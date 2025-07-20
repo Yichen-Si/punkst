@@ -6,6 +6,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <memory>
+#include <array>
 #include "zlib.h"
 #include "threads.hpp"
 #include "nanoflann.hpp"
@@ -18,14 +19,15 @@ public:
         const std::string& _outPref, int32_t _tileSize,
         int32_t icol_x, int32_t icol_y, int32_t icol_g = -1, std::vector<int32_t> icol_ints = {}, int32_t _nskip = 0,
         bool _streamingMode = false,
-        int32_t _tileBuffer = 1000, int32_t _batchSize = 10000) :
+        int32_t _tileBuffer = 1000, int32_t _batchSize = 10000, double _scale = 0, int _digits=2) :
         nThreads(nthreads),
         inFile(_inFile), tmpDir(_tmpDir),
         outPref(_outPref), tileSize(_tileSize),
         icol_x(icol_x), icol_y(icol_y), icol_feature(icol_g),
         icol_ints(icol_ints), nskip(_nskip),
         streamingMode(_streamingMode),
-        tileBuffer(_tileBuffer), batchSize(_batchSize) {
+        tileBuffer(_tileBuffer), batchSize(_batchSize),
+        scale(_scale), digits(_digits) {
         minX = std::numeric_limits<double>::infinity();
         minY = std::numeric_limits<double>::infinity();
         maxX = -std::numeric_limits<double>::infinity();
@@ -37,6 +39,7 @@ public:
                 ntokens = std::max(ntokens, icol);
             }
         }
+        scaling = (std::abs(scale) > 1e-20);
         ntokens += 1;
         notice("Created temporary directory: %s", tmpDir.path.string().c_str());
     }
@@ -89,6 +92,9 @@ protected:
     std::vector<int32_t> icol_ints;
     int32_t ntokens;
     int32_t nskip, nskipped = 0;
+    double scale;
+    bool scaling;
+    int32_t digits;
 
     double minX, minY, maxX, maxY;
     std::unordered_map<std::string, std::vector<int32_t>> featureCounts;
@@ -128,7 +134,7 @@ protected:
         }
     }
 
-    virtual uint64_t parse(const std::string& line, PtRecord& pt) {
+    virtual uint64_t parse(std::string& line, PtRecord& pt) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < ntokens) {
@@ -136,6 +142,20 @@ protected:
         }
         pt.x = std::stod(tokens[icol_x]);
         pt.y = std::stod(tokens[icol_y]);
+        if (scaling) {
+            pt.x *= scale;
+            pt.y *= scale;
+            std::array<char, 32> buf;
+            {
+                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), pt.x, std::chars_format::fixed, digits);
+                tokens[icol_x] = std::string(buf.data(), ptr);
+            }
+            {
+                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), pt.y, std::chars_format::fixed, digits);
+                tokens[icol_y] = std::string(buf.data(), ptr);
+            }
+            line = join(tokens, "\t");
+        }
         if (icol_feature >= 0) {
             pt.feature = tokens[icol_feature];
             if (icol_ints.size() > 0) {
@@ -152,7 +172,7 @@ protected:
         return ((static_cast<uint64_t>(row) << 32) | col);
     }
 
-    virtual uint64_t parse(const std::string& line, double& x, double& y) {
+    virtual uint64_t parse(std::string& line, double& x, double& y) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < ntokens) {
@@ -160,6 +180,20 @@ protected:
         }
         x = std::stod(tokens[icol_x]);
         y = std::stod(tokens[icol_y]);
+        if (scaling) {
+            x *= scale;
+            y *= scale;
+            std::array<char, 32> buf;
+            {
+                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), x, std::chars_format::fixed, digits);
+                tokens[icol_x] = std::string(buf.data(), ptr);
+            }
+            {
+                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), y, std::chars_format::fixed, digits);
+                tokens[icol_y] = std::string(buf.data(), ptr);
+            }
+            line = join(tokens, "\t");
+        }
         uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));
         uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize));
         return ((static_cast<uint64_t>(row) << 32) | col);
@@ -444,6 +478,19 @@ protected:
     }
 };
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 // NOT TESTED YET
 class Pts2TilesAnno2D: public Pts2Tiles {
 public:
@@ -476,16 +523,26 @@ public:
 
 protected:
     uint64_t parse(std::string& line, float& x, float& y) {
-        std::istringstream iss(line);
-        std::string token;
-        int32_t i = 0;
-        while (std::getline(iss, token, '\t')) {
-            if (i == icol_x) {
-                x = std::stof(token);
-            } else if (i == icol_y) {
-                y = std::stof(token);
+        std::vector<std::string> tokens;
+        split(tokens, "\t", line);
+        if (tokens.size() < ntokens) {
+            error("Error parsing line: %s", line.c_str());
+        }
+        x = std::stod(tokens[icol_x]);
+        y = std::stod(tokens[icol_y]);
+        if (scaling) {
+            x *= scale;
+            y *= scale;
+            std::array<char, 32> buf;
+            {
+                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), x, std::chars_format::fixed, digits);
+                tokens[icol_x] = std::string(buf.data(), ptr);
             }
-            ++i;
+            {
+                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), y, std::chars_format::fixed, digits);
+                tokens[icol_y] = std::string(buf.data(), ptr);
+            }
+            line = join(tokens, "\t");
         }
         uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));
         uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize));

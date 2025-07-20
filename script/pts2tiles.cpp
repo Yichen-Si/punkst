@@ -9,6 +9,8 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     int debug = 0, verbose = 1000000;
     int icol_x, icol_y, nskip = 0;
     int icol_feature = -1;
+    double scale = 0;
+    int digits = 2;
     std::vector<int32_t> icol_ints;
 
     ParamList pl;
@@ -23,6 +25,8 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
       .add_option("tile-size", "Tile size (in the same unit as the input coordinates)", tileSize)
       .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
       .add_option("batch-size", "(Only used if the input is gzipped or a stdin stream.) Batch size in terms of the number of lines (default: 10000)", batchSize)
+      .add_option("scale", "Scale the coordinates by this factor. This may not be very efficient (default: no scaling)", scale)
+      .add_option("digits", "Precision for the output coordinates (only used when --scale is provided; default 2)", digits)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads0);
     // Output Options
     pl.add_option("out-prefix", "Output TSV file", outPref)
@@ -55,7 +59,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
         (inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0))
     streaming = true;
 
-    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, streaming, tileBuffer, batchSize);
+    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, streaming, tileBuffer, batchSize, scale, digits);
     if (!pts2Tiles.run()) {
         return 1;
     }

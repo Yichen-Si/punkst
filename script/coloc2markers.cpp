@@ -45,7 +45,7 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
         return 1;
     }
 
-    MarkerSelector selector(infoFile, inFile, binaryInput, valueBytes, minCount, verbose);
+    MarkerSelector selector(infoFile, inFile, binaryInput, valueBytes, minCount, verbose, &selectedMarkers);
     selector.selectMarkers(K, selectedMarkers);
 
     outFile = outPref + ".top.tsv";

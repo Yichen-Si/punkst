@@ -8,6 +8,7 @@
 #include <numeric>
 #include <string>
 #include <cstdint>
+#include <set>
 #include <unordered_set>
 #include "error.hpp"
 #include <tbb/parallel_for.h>
@@ -44,7 +45,10 @@ public:
     };
 
     // Construct with known matrix dimension M and weighting mode.
-    MarkerSelector(const std::string& featureFile, const std::string& mtxFile, bool binary, int valueBytes, int minCount = 1, int32_t verbose = 0) : verbose_(verbose) {
+    MarkerSelector(const std::string& featureFile, const std::string& mtxFile, bool binary, int valueBytes, int minCount = 1, int32_t verbose = 0, std::vector<std::string>* whilteList = nullptr) : verbose_(verbose) {
+        if (whilteList != nullptr) {
+            whiteList_.insert(whilteList->begin(), whilteList->end());
+        }
         loadGeneInfo(featureFile, minCount);
         loadCooccurrenceMatrix(mtxFile, binary, valueBytes);
     }
@@ -296,6 +300,7 @@ public:
             for (int j = 0; j < M_; ++j) {
                 if (j == i) continue;
                 int sc = std::max(rank[i][j], rank[j][i]);
+                if (sc > maxRank) continue;
                 cand.emplace_back(j, sc);
             }
             // partial sort to m
@@ -317,6 +322,7 @@ public:
             uint32_t kept = 0;
             for (auto &p : cand) {
                 if (p.second > maxRank) break;
+                if (Q_(i, p.first) == 0) continue;
                 res.neighbors.emplace_back(
                     features_[p.first].name,
                     features_[p.first].totalOcc,
@@ -354,6 +360,7 @@ private:
     std::vector<std::vector<uint32_t>> rank;
     int32_t verbose_;
     bool rankMatrixBuilt = false;
+    std::set<std::string> whiteList_;
 
     void buildRankMatrix() {
         for (int i = 0; i < M_; ++i) {
@@ -436,7 +443,10 @@ private:
             features_[idx] = {name, ct};
             if (ct > minUsedCount) {
                 validIndex_.push_back(idx);
+            } else if (whiteList_.count(name) > 0) {
+                validIndex_.push_back(idx);
             }
+
             nameToIdx_[name] = idx;
         }
         M_++;

@@ -11,7 +11,6 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
     int icol_x, icol_y, icol_feature, icol_val;
     bool binaryOutput = false, weightByCount = false;
     int minNeighbor = 1;
-    int minTotalCount = 1;
     std::vector<double> boundingBoxes;
 
     ParamList pl;
@@ -118,11 +117,13 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
     int32_t valueBytes = 8;
     bool binaryInput = false, binaryOutput = false;
     int nThreads = 1;
+    double eps = 1e-8;
 
     ParamList pl;
     pl.add_option("in-list", "List of co-occurrence files to merge", inList, true)
         .add_option("binary", "Input matrix is in binary format", binaryInput)
         .add_option("value-bytes", "Number of bytes for each value in the matrix (default: 8, only used for binary input)", valueBytes)
+        .add_option("eps", "Skip values below this threshold (default: 1e-8)", eps)
         .add_option("shared-nrows", "", nRows, true)
         .add_option("shared-ncols", "", nCols)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads);
@@ -211,6 +212,7 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
         }
         for (uint32_t r = 0; r < nRows; ++r) {
             for (uint32_t c = 0; c < nCols; ++c) {
+                if (Q[r * nCols + c] < eps) continue;
                 ofs.write(reinterpret_cast<const char*>(&r), idxBytes);
                 ofs.write(reinterpret_cast<const char*>(&c), idxBytes);
                 ofs.write(reinterpret_cast<const char*>(&Q[r*nCols+c]), outBytes);

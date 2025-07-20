@@ -132,7 +132,7 @@ punkst coloc2markers --input out.mtx.bin --binary --info out.marginals.tsv \
 - `{prefix}.top.tsv` - List of selected markers
 
 - if `--find-neighbors` or `--neighbors` is used:
-    - `{prefix}.pairs.tsv` - Detailed neighbor relationships
-    - `{prefix}.short.txt` - Compact neighbor lists
+    - `{prefix}.pairs.tsv` - Detailed pairwise relationships. Columns: index, name of gene 1, total count of gene 1, name of gene 2, total count of gene 2, (weighted) proportion of gene 2 in gene 1's neighbors, vice versa, rank of gene 2 as gene 1's neighbor, vice versa.
+    - `{prefix}.short.txt` - Compact neighbor lists. The first gene on each line is the selected marker, followed by its neighbors.
 
 - if `--recover-factors` is used: `{prefix}.factors.tsv` for recovered factor matrix.
