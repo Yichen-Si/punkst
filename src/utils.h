@@ -105,6 +105,21 @@ bool str2double(const std::string& str, double& value);
 bool str2float(const std::string& str, float& value);
 bool str2bool(const std::string& str, bool& value);
 
+// Float to string
+template<typename FP>
+std::string fp_to_string(FP x, int digits)
+{
+    char buf[64];
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    auto [ptr, ec] =
+        std::to_chars(buf, buf + sizeof buf,
+                      x, std::chars_format::fixed, digits);
+    if (ec == std::errc()) return {buf, ptr};
+#endif
+    std::snprintf(buf, sizeof buf, "%.*f", digits, static_cast<double>(x));
+    return buf;
+}
+
 // String search
 std::vector<int> computeLPSArray(const std::string& pattern);
 int32_t KMPSearch(const std::string& pattern, const std::string& text, std::vector<int>& idx, std::vector<int>& lps, int32_t n = 1);

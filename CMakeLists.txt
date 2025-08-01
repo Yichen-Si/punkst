@@ -84,6 +84,8 @@ set(SOURCE_FILES
     script/convert_dge.cpp
     script/multisample_pipeline.cpp
     script/merge_units.cpp
+    src/cndtest.hpp
+    script/multi_conditionalde.cpp
     )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

@@ -145,15 +145,8 @@ protected:
         if (scaling) {
             pt.x *= scale;
             pt.y *= scale;
-            std::array<char, 32> buf;
-            {
-                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), pt.x, std::chars_format::fixed, digits);
-                tokens[icol_x] = std::string(buf.data(), ptr);
-            }
-            {
-                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), pt.y, std::chars_format::fixed, digits);
-                tokens[icol_y] = std::string(buf.data(), ptr);
-            }
+            tokens[icol_x] = fp_to_string(pt.x, digits);
+            tokens[icol_y] = fp_to_string(pt.y, digits);
             line = join(tokens, "\t");
         }
         if (icol_feature >= 0) {
@@ -183,15 +176,8 @@ protected:
         if (scaling) {
             x *= scale;
             y *= scale;
-            std::array<char, 32> buf;
-            {
-                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), x, std::chars_format::fixed, digits);
-                tokens[icol_x] = std::string(buf.data(), ptr);
-            }
-            {
-                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), y, std::chars_format::fixed, digits);
-                tokens[icol_y] = std::string(buf.data(), ptr);
-            }
+            tokens[icol_x] = fp_to_string(x, digits);
+            tokens[icol_y] = fp_to_string(y, digits);
             line = join(tokens, "\t");
         }
         uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));
@@ -533,15 +519,8 @@ protected:
         if (scaling) {
             x *= scale;
             y *= scale;
-            std::array<char, 32> buf;
-            {
-                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), x, std::chars_format::fixed, digits);
-                tokens[icol_x] = std::string(buf.data(), ptr);
-            }
-            {
-                auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), y, std::chars_format::fixed, digits);
-                tokens[icol_y] = std::string(buf.data(), ptr);
-            }
+            tokens[icol_x] = fp_to_string(x, digits);
+            tokens[icol_y] = fp_to_string(y, digits);
             line = join(tokens, "\t");
         }
         uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <set>
 #include <unordered_set>
+#include <optional>
 #include "error.hpp"
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>

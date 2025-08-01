@@ -47,6 +47,9 @@ public:
     int32_t nFeatures() const { return M_; }
     void getTopicAbundance(std::vector<double>& topic_weights);
     virtual void filterTopics(double threshold, double coverage) {}
+    std::vector<std::string> getFeatureNames() const {
+        return featureNames.empty() ? reader.features : featureNames;
+    }
 
     // --- Pure Virtual Interface to be Implemented by Derived Classes ---
     virtual int32_t getNumTopics() const = 0;
@@ -75,7 +78,7 @@ protected:
     // 1. Current filtered features (from setFeatures)
     // 2. The input features
     // The output will follow the input's ordering
-    void setupPriorMapping(std::vector<std::string>& feature_names_, std::vector<std::uint32_t>& kept_indices);
+    virtual void setupPriorMapping(std::vector<std::string>& feature_names_, std::vector<std::uint32_t>& kept_indices);
 
     // --- Pure Virtual "Hooks" for the Template Methods ---
     virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
@@ -108,8 +111,8 @@ public:
         int32_t totalDocCount = 1000000,
         const std::string& priorFile = "", double priorScale = 1.,
         double s_beta = 1, double s_theta = 1, double kappa_theta = 0.7, double tau_theta = 10.0, int32_t burnin = 1) {
-        std::optional<MatrixXd> priorMatrix = std::nullopt;
-        initialize(nTopics, priorFile, priorMatrix, priorScale);
+        MatrixXd priorMatrix;
+        initialize(nTopics, priorMatrix, priorFile, priorScale);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
             InferenceType::SCVB0,
@@ -127,8 +130,8 @@ public:
         int32_t totalDocCount = 1000000,
         const std::string& priorFile = "", double priorScale = 1.,
         int32_t maxIter = 100, double mDelta = -1.) {
-        std::optional<MatrixXd> priorMatrix = std::nullopt;
-        initialize(nTopics, priorFile, priorMatrix, priorScale);
+        MatrixXd priorMatrix;
+        initialize(nTopics, priorMatrix, priorFile, priorScale);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
             InferenceType::SVB,
@@ -152,26 +155,29 @@ public:
         lda->get_topic_abundance(weights);
     }
 
-private:
+protected:
 
     int32_t K_;
     std::vector<std::string> topicNames;
-    std::vector<uint32_t> featureIdxUsed;
-    std::vector<int32_t> priorFeatureMapping;
     std::unique_ptr<LatentDirichletAllocation> lda;
 
-    void initialize(int32_t nTopics, const std::string& priorFile = "", std::optional<MatrixXd> priorMatrix = std::nullopt, double priorScale = 1) {
-        if (priorFile.empty()) {
-            K_ = nTopics;
-            if (reader.features.size() != M_) {
-                notice("%s: no valid feature names are set, will use 0-based indices in the output model file", __FUNCTION__);
-                featureNames.resize(M_);
-                for (int i = 0; i < M_; ++i) {
-                    featureNames[i] = std::to_string(i);
-                }
-            } else {
-                featureNames = reader.features;
+    void initialize(int32_t nTopics) {
+        K_ = nTopics;
+        if (reader.features.size() != M_) {
+            notice("%s: no valid feature names are set, will use 0-based indices in the output model file", __FUNCTION__);
+            featureNames.resize(M_);
+            for (int i = 0; i < M_; ++i) {
+                featureNames[i] = std::to_string(i);
             }
+        } else {
+            featureNames = reader.features;
+        }
+        return;
+    }
+
+    void initialize(int32_t nTopics, MatrixXd& priorMatrix, const std::string& priorFile, double priorScale = 1) {
+        if (priorFile.empty()) {
+            initialize(nTopics);
             return;
         }
         // Read prior model file
@@ -187,21 +193,21 @@ private:
         priorMatrix = MatrixXd(K_, M_);
         // Map columns from full prior matrix to subset matrix
         for (size_t i = 0; i < kept_indices.size(); ++i) {
-            priorMatrix->col(i) = fullPriorMatrix.col(kept_indices[i]);
+            priorMatrix.col(i) = fullPriorMatrix.col(kept_indices[i]);
         }
         // Apply scaling if specified
         if (priorScale > 0. && priorScale != 1.) {
-            *priorMatrix *= priorScale;
+            priorMatrix *= priorScale;
         }
 
         notice("Created subset prior matrix: %d topics x %d features (from original %d features)",
-                (int)priorMatrix->rows(), (int)priorMatrix->cols(), (int)priorFeatureNames.size());
+                (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
     }
 
     void readModelFromTsv(const std::string& modelFile, std::vector<std::string>& featureNames, MatrixXd& modelMatrix) {
         std::ifstream modelIn(modelFile, std::ios::in);
         if (!modelIn) {
-            error("Error opening model file: %s", modelFile.c_str());
+            error("Failed to open model file: %s", modelFile.c_str());
         }
 
         std::string line;
@@ -219,7 +225,7 @@ private:
         while (std::getline(modelIn, line)) {
             split(tokens, "\t", line);
             if (tokens.size() != K_ + 1) {
-                error("Error reading model file at line: %s", line.c_str());
+                error("Invalid line in model file: %s", line.c_str());
             }
             featureNames.push_back(tokens[0]);
             std::vector<double> values(K_);

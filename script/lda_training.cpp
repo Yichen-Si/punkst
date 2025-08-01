@@ -158,8 +158,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     if (!weightFile.empty()) {
         model_runner->setWeights(weightFile, defaultWeight);
     }
-    std::string outModel = outPrefix + ".model.tsv";
     if (!projection_only) {
+        std::string outModel = outPrefix + ".model.tsv";
         if (!priorFile.empty() && priorFile == outModel) {
             outModel = outPrefix + ".model.updated.tsv";
         }

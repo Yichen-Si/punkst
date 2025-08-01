@@ -93,15 +93,24 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
 int32_t LatentDirichletAllocation::svb_fit_one_document(
     VectorXd& doc_topic, VectorXd& exp_doc,
     const Document &doc, const std::optional<VectorXd>& doc_topic_) {
-
+    int n_ids = doc.ids.size();
     if (!doc_topic_) {
         doc_topic.resize(n_topics_);
-        std::gamma_distribution<double> gamma_dist(100.0, 0.01);
-        for (int k = 0; k < n_topics_; k++) {
-            doc_topic[k] = gamma_dist(random_engine_);
+        if (n_ids == 0) {
+            std::fill(doc_topic.data(), doc_topic.data() + n_topics_, doc_topic_prior_);
+        } else {
+            std::gamma_distribution<double> gamma_dist(100.0, 0.01);
+            for (int k = 0; k < n_topics_; k++) {
+                doc_topic[k] = gamma_dist(random_engine_);
+            }
         }
     } else {
         doc_topic = *doc_topic_;
+    }
+    if (n_ids == 0) {
+        exp_doc.resize(n_topics_);
+        exp_doc.setConstant(1.0 / n_topics_);
+        return 0;
     }
 
     exp_doc.resize(n_topics_); // exp(E[log(theta)])
@@ -111,7 +120,6 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
         exp_doc[k] = std::exp(psi(doc_topic[k]) - psi_total);
     }
     // Build a submatrix for the nonzero word indices in the document.
-    int n_ids = doc.ids.size();
     MatrixXd exp_topic_word(n_topics_, n_ids);
     for (int j = 0; j < n_ids; j++) {
         exp_topic_word.col(j) = exp_Elog_beta_.col(doc.ids[j]);
@@ -119,7 +127,7 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
     // Iterative update for the document.
     double diff = 1.;
     int iter = 0;
-    for (; iter < max_doc_update_iter_; iter++) {
+    while (iter < max_doc_update_iter_) {
         // VectorXd last_doc = doc_topic; // Save the previous state.
         VectorXd last_doc = doc_topic;
 
@@ -140,6 +148,8 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
 
         // Check convergence via mean absolute change.
         diff = (last_doc - doc_topic).cwiseAbs().sum() / n_topics_;
+
+        iter++;
         if (diff < mean_change_tol_) {
             break;
         }

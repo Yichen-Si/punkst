@@ -66,6 +66,16 @@ public:
         set_model_from_tsv(modelFile);
         init();
     }
+    LatentDirichletAllocation(
+        MatrixXd& modelMtx,
+        int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
+        InferenceType algo = InferenceType::SVB) : seed_(seed),
+        nThreads_(nThreads), verbose_(verbose), algo_(algo),
+        total_doc_count_(-1), update_count_(0) {
+        set_nthreads(nThreads);
+        init_model(modelMtx);
+        init();
+    }
 
     const MatrixXd& get_model() const {
         return components_;
@@ -284,7 +294,7 @@ public:
 private:
 
     InferenceType algo_;
-    int n_topics_, n_features_;
+    int n_topics_ = -1, n_features_ = -1;
     int seed_;
     int total_doc_count_;
     int nThreads_;
@@ -321,8 +331,11 @@ private:
     void scvb0_fit_one_document(VectorXd& hatNk, const Document& doc);
 
     void init_model(const std::optional<MatrixXd>& topic_word_distr = std::nullopt, double scalar = -1.) {
-        if (topic_word_distr) {
+        if (topic_word_distr && topic_word_distr->rows() > 0
+                             && topic_word_distr->cols() > 0) {
             components_ = *topic_word_distr;
+            n_topics_ = components_.rows();
+            n_features_ = components_.cols();
             if (scalar > 0.) {
                 components_ *= scalar;
             }
@@ -370,7 +383,7 @@ private:
             }
         } else {
             if (mean_change_tol_ <= 0) {
-                mean_change_tol_ = 0.001 / n_topics_;
+                mean_change_tol_ = 0.001;
             }
             if (max_doc_update_iter_ <= 0) {
                 max_doc_update_iter_ = 100;

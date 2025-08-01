@@ -5,6 +5,7 @@
 #include <cassert>
 #include <stdexcept>
 #include <atomic>
+#include <tuple>
 #include "error.hpp"
 #include "json.hpp"
 #include "nanoflann.hpp"
@@ -354,7 +355,8 @@ public:
         int32_t verbose = 0, int32_t debug = 0) :
         Tiles2MinibatchBase(nThreads, r + hexGrid.size, _outPref, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug),
         outputOriginalData(false), useExtended_(lineParser.isExtended),
-        useTicketSystem(false), currentTicket(0) {
+        resultQueue(static_cast<size_t>(std::max(1, nThreads))),
+        useTicketSystem(false) {
         // check type consistency
         if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
             assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
@@ -398,6 +400,7 @@ public:
                 featureNames[i] = std::to_string(i);
             }
         }
+
         if (debug_ > 0) {
             std::cout << "Check model initialization\n" << std::fixed << std::setprecision(2);
             const auto& lambda = slda.get_lambda();
@@ -442,13 +445,15 @@ public:
         setupOutput();
         // Phase 1: Process tiles
         notice("Phase 1 Launching %d worker threads", nThreads);
+
+        std::thread writer(&Tiles2Minibatch::writerWorker, this);
+
         for (int i = 0; i < nThreads; ++i) {
             workThreads.push_back(std::thread(&Tiles2Minibatch::tileWorker, this, i));
         }
         std::vector<TileKey> tileList;
         tileReader.getTileList(tileList);
         std::sort(tileList.begin(), tileList.end());
-        currentTicket.store(0);
         int32_t ticket = 0;
         // Enqueue all tiles to the queue in a deterministic order
         for (const auto &tile : tileList) {
@@ -474,8 +479,6 @@ public:
             [](auto const &A, auto const &B){
                 return A->key < B->key;
         });
-        currentTicket.store(0);
-        ticket = 0;
         // Enqueue all boundary buffers from the global map.
         for (auto &bufferPtr : buffers) {
             bufferQueue.push(std::make_pair(bufferPtr, ticket++));
@@ -487,6 +490,9 @@ public:
         for (auto &t : workThreads) {
             t.join();
         }
+
+        resultQueue.set_done();
+        writer.join();
         mainOut.close();
         indexOut.close();
         writeHeaderToJson();
@@ -498,9 +504,6 @@ protected:
     int32_t M_, K_, topk_;
     bool weighted, outputOriginalData;
     bool useTicketSystem;
-    std::atomic<int> currentTicket;
-    std::mutex ticketMutex;
-    std::condition_variable ticketCondition;
     bool useExtended_;
     size_t recordSize_ = 0;
     std::vector<FieldDef> schema_;
@@ -523,6 +526,20 @@ protected:
     MatrixXf pseudobulk; // K x M
     std::mutex pseudobulkMutex; // Protects pseudobulk
 
+    // buffer output results for one tile
+    struct ProcessedResult {
+        int32_t ticket;
+        float xmin, xmax, ymin, ymax;
+        std::vector<std::string> outputLines;
+        uint32_t npts;
+        ProcessedResult(int32_t t = 0, float _xmin = 0, float _xmax = 0, float _ymin = 0, float _ymax = 0)
+        : ticket(t), npts(0), xmin(_xmin), xmax(_xmax), ymin(_ymin), ymax(_ymax) {}
+        bool operator>(const ProcessedResult& other) const {
+            return ticket > other.ticket;
+        }
+    };
+    ThreadSafeQueue<ProcessedResult> resultQueue;
+
     // Parse pixels from one tile
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
     // Parse a binary temporary file (written by BoundaryBuffer)
@@ -533,9 +550,9 @@ protected:
     int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
     int32_t makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
 
-    // Write the results of internal points
-    int32_t outputOriginalDataWithPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds);
-    int32_t outputPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds);
+    // Prepare results of internal points
+    ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
+    ProcessedResult formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
 
     // Process one tile or one boundary buffer
     void processTile(TileData<T> &tileData, int threadId=0, int ticket = 0, vec2f_t* anchorPtr = nullptr);
@@ -585,7 +602,6 @@ protected:
             int32_t ret = parseOneTile(tileData, tile);
             notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __FUNCTION__, threadId, ticket, tile.row, tile.col, ret);
             if (ret <= 10) {
-                waitToAdvanceTicket(ticket);
                 continue;
             }
             vec2f_t* anchorPtr = nullptr;
@@ -613,7 +629,6 @@ protected:
             notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __FUNCTION__, threadId, ticket, bufferPtr->key, ret);
             if (ret <= 10) {
                 std::remove(bufferPtr->tmpFile.c_str());
-                waitToAdvanceTicket(ticket);
                 continue;
             }
             vec2f_t* anchorPtr = nullptr;
@@ -622,6 +637,36 @@ protected:
             }
             processTile(tileData, threadId, ticket, anchorPtr);
             std::remove(bufferPtr->tmpFile.c_str());
+        }
+    }
+
+    void writerWorker() {
+        // A priority queue to buffer out-of-order results
+        std::priority_queue<ProcessedResult, std::vector<ProcessedResult>, std::greater<ProcessedResult>> outOfOrderBuffer;
+        int nextTicketToWrite = 0;
+        ProcessedResult result;
+        // Loop until the queue is marked as done and is empty
+        while (resultQueue.pop(result)) {
+            outOfOrderBuffer.push(std::move(result));
+            // Write all results that are now ready in sequential order
+            while (!outOfOrderBuffer.empty() &&
+                   (!useTicketSystem ||
+                    outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
+                const auto& readyToWrite = outOfOrderBuffer.top();
+                if (readyToWrite.npts > 0) {
+                    for (const auto& line : readyToWrite.outputLines) {
+                        mainOut.write(line.c_str(), line.length());
+                    }
+                    size_t endPos = mainOut.tellp();
+                    IndexEntry<float> e{outputSize, endPos, readyToWrite.npts,
+                        readyToWrite.xmin, readyToWrite.xmax,
+                        readyToWrite.ymin, readyToWrite.ymax};
+                    indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
+                    outputSize = endPos;
+                }
+                outOfOrderBuffer.pop();
+                nextTicketToWrite++;
+            }
         }
     }
 
@@ -661,24 +706,6 @@ protected:
             error("Error opening index output file: %s", indexFile.c_str());
         }
         indexOut << std::fixed << std::setprecision(floatCoordDigits);
-    }
-
-    void advanceTicket() {
-        if (!useTicketSystem) {
-            return;
-        }
-        currentTicket.fetch_add(1, std::memory_order_release);
-        ticketCondition.notify_all();
-    }
-    void waitToAdvanceTicket(int ticket) {
-        if (!useTicketSystem) {
-            return;
-        }
-        std::unique_lock<std::mutex> lock(ticketMutex);
-        ticketCondition.wait(lock, [this, ticket]() {
-            return ticket == currentTicket.load(std::memory_order_acquire);
-        });
-        advanceTicket();
     }
 
 };
