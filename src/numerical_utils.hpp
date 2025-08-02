@@ -11,7 +11,18 @@
 #include "Eigen/Sparse"
 
 // Calculate the mean absolute difference between two arrays.
-double mean_change(const std::vector<double>& arr1, const std::vector<double>& arr2);
+template<typename T>
+T mean_change(const std::vector<T>& arr1, const std::vector<T>& arr2) {
+    if (arr1.size() != arr2.size()) {
+        return std::numeric_limits<T>::max();
+    }
+    T total = 0.0;
+    size_t size = arr1.size();
+    for (size_t i = 0; i < size; i++) {
+        total += std::fabs(arr1[i] - arr2[i]);
+    }
+    return total / size;
+}
 
 template<typename Derived>
 auto mean_max_row_change(const Eigen::MatrixBase<Derived>& arr1,
@@ -31,55 +42,97 @@ auto mean_max_row_change(const Eigen::MatrixBase<Derived>& arr1,
 
 
 // Psi (digamma) function (not optimized for maximum accuracy)
-double psi(double x);
-float psi(float x);
+template<typename T>
+T psi(T x) {
+    const T EULER = 0.577215664901532860606512090082402431;
+    if (x <= 1e-6) {
+        // psi(x) ~ -EULER - 1/x when x is very small
+        return -EULER - 1.0 / x;
+    }
+    T result = 0.0;
+    // Increment x until it is large enough
+    while (x < 6) {
+        result -= 1.0 / x;
+        x += 1;
+    }
+    T r = 1.0 / x;
+    result += std::log(x) - 0.5 * r;
+    r = r * r;
+    result -= r * ((1.0/12.0) - r * ((1.0/120.0) - r * (1.0/252.0)));
+    return result;
+}
 
-Eigen::VectorXd expect_log_sticks(const Eigen::VectorXd& alpha,
-                                  const Eigen::VectorXd& beta);
-Eigen::VectorXf expect_log_sticks(const Eigen::VectorXf& alpha,
-                                  const Eigen::VectorXf& beta);
+template<typename VectorType>
+VectorType expect_log_sticks(const VectorType& alpha, const VectorType& beta) {
+    assert(alpha.size() == beta.size() && "alpha and beta must have same length");
+    using Scalar = typename VectorType::Scalar;
+    const int K = alpha.size();
+    // psi(alpha + beta)
+    VectorType dig_sum = (alpha.array() + beta.array())
+        .unaryExpr([](Scalar s){ return psi(s); });
+    // ElogW_j    = psi(α_j) - psi(α_j + β_j)
+    // Elog1_W_j  = psi(β_j) - psi(α_j + β_j)
+    VectorType ElogW = alpha.array()
+        .unaryExpr([](Scalar s){ return psi(s); }) - dig_sum.array();
+    VectorType Elog1_W = beta.array()
+        .unaryExpr([](Scalar s){ return psi(s); }) - dig_sum.array();
+    // ElogSigma_k = ElogW_k + \sum_{l=1}^{k-1} Elog1_W_l
+    VectorType result = ElogW;
+    Scalar running_sum = 0;
+    for (int j = 0; j < K - 1; ++j) {
+        running_sum += Elog1_W(j);
+        result(j + 1) += running_sum;
+    }
+    return result;
+}
 
 // exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 // = exp(psi(\alpha_k) - psi(\alpha_0))
-void dirichlet_expectation_1d(std::vector<double>& alpha, std::vector<double>& out, double offset = -1);
+template<typename T>
+void dirichlet_expectation_1d(std::vector<T>& alpha, std::vector<T>& out, T offset = -1) {
+    if (offset < 1e-6) {
+        offset = 1e-6;
+    }
+    size_t size = alpha.size();
+    T total = 0.0;
+    // Add the prior and compute total
+    for (size_t i = 0; i < size; i++) {
+        alpha[i] += offset;
+        total += alpha[i];
+    }
+    T psi_total = psi(total);
+    // Compute the exponentiated psi differences.
+    for (size_t i = 0; i < size; i++) {
+        out[i] = std::exp(psi(alpha[i]) - psi_total);
+    }
+}
 
 // Vector version
 template<typename Derived>
 Derived dirichlet_expectation_1d(const Eigen::MatrixBase<Derived>& alpha,
-                                 typename Derived::Scalar offset = Derived::Scalar(-1))
-{
+                                 typename Derived::Scalar offset = Derived::Scalar(-1)) {
     using Scalar = typename Derived::Scalar;
-    Derived tmp = alpha.derived();
-    if (offset < 1e-6) {
+    if (offset < 0) {
         offset = 1e-6;
     }
-    tmp.array() += offset;
-    Scalar total = tmp.sum();
-    double psi_total = psi(static_cast<double>(total));
-    for (int i = 0; i < tmp.size(); ++i) {
-        tmp(i) = Scalar(std::exp(psi(static_cast<double>(tmp(i))) - psi_total));
-    }
-    return tmp;
+    Derived tmp = alpha.array() + offset;
+    Scalar psi_total = psi(tmp.sum());
+    tmp = tmp.unaryExpr([](Scalar x) {return psi(x);});
+    return (tmp.array() - psi_total).exp();
 }
 
 // row-wise exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 template<typename Derived>
-Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha)
-{
+Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha) {
     double eps = 1e-6;
     using Scalar = typename Derived::Scalar;
-    Derived result(alpha.rows(), alpha.cols());
-    for (int i = 0; i < alpha.rows(); ++i) {
-        auto row = alpha.row(i);
-        Scalar total = row.sum();
-        double psi_total = psi(static_cast<double>(total) + eps);
-        for (int j = 0; j < alpha.cols(); ++j) {
-            result(i,j) = Scalar(
-                std::exp(psi(static_cast<double>(alpha(i,j)) + eps) - psi_total)
-            );
-        }
-    }
-    return result;
+    int32_t K = alpha.cols();
+    auto psi_totals = (alpha.rowwise().sum().array() + eps * K)
+            .unaryExpr([](Scalar x){ return psi(x); }).matrix();
+    Derived result = (alpha.array() + eps)
+            .unaryExpr([](Scalar x){ return psi(x); });
+    result.colwise() -= psi_totals;
+    return result.array().exp();
 }
 
 // row-wise E[log X] for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
@@ -88,52 +141,24 @@ Derived dirichlet_entropy_2d(const Eigen::MatrixBase<Derived>& alpha)
 {
     double eps = 1e-6;
     using Scalar = typename Derived::Scalar;
-    Derived result(alpha.rows(), alpha.cols());
     int32_t K = alpha.cols();
-    for (int i = 0; i < alpha.rows(); ++i) {
-        auto row = alpha.row(i);
-        Scalar total = row.sum();
-        double psi_total = psi(static_cast<double>(total) + eps * K);
-        for (int j = 0; j < alpha.cols(); ++j) {
-            result(i,j) = Scalar(
-                psi(static_cast<double>(alpha(i,j)) + eps) - psi_total
-            );
-        }
-    }
+    auto psi_totals = (alpha.rowwise().sum().array() + eps * K)
+            .unaryExpr([](Scalar x){ return psi(x); }).matrix();
+    Derived result = (alpha.array() + eps)
+            .unaryExpr([](Scalar x){ return psi(x); });
+    result.colwise() -= psi_totals;
     return result;
 }
 
-// If b is provided, it must be of the same size as a.
 template<typename Derived>
-std::pair<typename Derived::Scalar, typename Derived::Scalar>
-logsumexp(const Eigen::MatrixBase<Derived>& a,
-          const Eigen::MatrixBase<Derived>* b = nullptr)
+void rowwiseSoftmax(Eigen::MatrixBase<Derived>& mat)
 {
     using Scalar = typename Derived::Scalar;
-    if (a.size() == 0) {
-        return { -std::numeric_limits<Scalar>::infinity(), Scalar(0) };
-    }
-    Scalar maxVal = a.maxCoeff();
-    if (!std::isfinite(maxVal)) {
-        return { -std::numeric_limits<Scalar>::infinity(), Scalar(0) };
-    }
-    Scalar sumExp = Scalar(0);
-    Scalar sign = Scalar(0);
-    if (!b) {
-        for (int i = 0; i < a.size(); ++i) {
-            sumExp += std::exp(a(i) - maxVal);
-        }
-        sign = Scalar(1);
-    } else {
-        for (int i = 0; i < a.size(); ++i) {
-            auto term = (*b)(i) * std::exp(a(i) - maxVal);
-            sumExp += term;
-        }
-        sign = sumExp > 0 ? Scalar(1) : (sumExp < 0 ? Scalar(-1) : Scalar(0));
-        sumExp = std::abs(sumExp);
-    }
-    Scalar lse = maxVal + std::log(sumExp);
-    return { lse, sign };
+    Eigen::Matrix<Scalar, Eigen::Dynamic, 1> maxCoeffs = mat.rowwise().maxCoeff();
+    mat.colwise() -= maxCoeffs;
+    mat = mat.array().exp();
+    Eigen::Matrix<Scalar, Eigen::Dynamic, 1> row_sums = mat.rowwise().sum();
+    mat.array().colwise() /= row_sums.array();
 }
 
 inline double expit(double x) {

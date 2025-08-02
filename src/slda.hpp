@@ -16,6 +16,7 @@ using Eigen::MatrixXf;
 using Eigen::VectorXf;
 using Eigen::RowVectorXf;
 using Eigen::SparseMatrix;
+using RowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 // Structure holding a minibatch
 struct Minibatch {
@@ -25,10 +26,10 @@ struct Minibatch {
     int M;        // number of features
     SparseMatrix<float> mtx;  // (N x M); observed data matrix
     SparseMatrix<float, Eigen::RowMajor> logitwij; // (N x n); d_psi E_q[log P(Cij)]
-    MatrixXf gamma; // (n x K); ~P(k|j)
+    RowMajorMatrixXf gamma; // (n x K); ~P(k|j)
     // Does not need to be initialized:
     SparseMatrix<float, Eigen::RowMajor> psi; // (N x n); ~P(j|i)
-    MatrixXf phi;   // (N x K); ~P(k|i)
+    RowMajorMatrixXf phi;   // (N x K); ~P(k|i)
     double ll;      // Log-likelihood value computed during the E-step
 };
 
@@ -46,10 +47,10 @@ public:
         init(K, M, N, seed, alpha, eta, tau0, kappa, iter_inner, tol, verbose, debug);
     }
 
-    const MatrixXf& get_lambda() const {
+    const RowMajorMatrixXf& get_lambda() const {
         return lambda_;
     }
-    const MatrixXf& get_Elog_beta() const {
+    const RowMajorMatrixXf& get_Elog_beta() const {
         return Elog_beta_;
     }
 
@@ -120,9 +121,9 @@ public:
     // Perform the E-step for a given minibatch.
     // Returns sufficient statistics (K x M) computed from the minibatch.
     // Single-threaded, supposed to be run in parallel in spatial patches
-    MatrixXf do_e_step(Minibatch& batch, bool return_ss = true) {
+    RowMajorMatrixXf do_e_step(Minibatch& batch, bool return_ss = true) {
         // (N x M) * (M x K) = (N x K)
-        MatrixXf Xb = batch.mtx * Elog_beta_.transpose();
+        RowMajorMatrixXf Xb = batch.mtx * Elog_beta_.transpose();
         // If gamma is not set, randomly initialize
         if (batch.gamma.size() == 0) {
             batch.gamma.resize(batch.n, K_);
@@ -134,8 +135,8 @@ public:
             }
         }
 
-        MatrixXf gamma_old = batch.gamma;
-        MatrixXf phi_old = batch.phi;
+        RowMajorMatrixXf gamma_old = batch.gamma;
+        RowMajorMatrixXf phi_old = batch.phi;
         if (batch.psi.size() == 0) {
             batch.psi = batch.logitwij; // (N x n)
             expitAndRowNormalize(batch.psi);
@@ -144,7 +145,7 @@ public:
             approx_ll(batch);
             printf("Initialize E-step, E_q[ll] %.4e\n", batch.ll);
         }
-        MatrixXf Elog_theta; // (n x K)
+        RowMajorMatrixXf Elog_theta; // (n x K)
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
@@ -155,22 +156,18 @@ public:
             // psi: (N x n) * Elog_theta (n x K) → phi: (N x K)
             batch.phi = batch.psi * Elog_theta + Xb;
             // exponentiate and row-normalize
-            VectorXf lse(batch.phi.rows());
-            for (int i = 0; i < batch.phi.rows(); ++i) {
-                lse(i) = logsumexp(batch.phi.row(i)).first;
-            }
-            batch.phi = (batch.phi.colwise() - lse).array().exp();
+            rowwiseSoftmax(batch.phi);
             // Update psi.
             // (psi has the same sparsity pattern as logitwij)
+            VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
             for (int i = 0; i < batch.psi.rows(); ++i) { // could parallelize
-                float extra = (batch.phi.row(i).array() * Xb.row(i).array()).sum();
                 // Iterate over the nonzero entries
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.logitwij, i); it1 && it2; ++it1, ++it2) {
                     int j = it1.col();
                     // dot product or i-th row of phi with j-th column of Elog_theta
                     float sum_val = batch.phi.row(i).dot(Elog_theta.row(j));
                     // Updated value at (i,j)
-                    batch.psi.coeffRef(i, j) = it2.value() + sum_val + extra;
+                    batch.psi.coeffRef(i, j) = it2.value() + sum_val + extra(i);
                 }
             }
             expitAndRowNormalize(batch.psi);
@@ -194,29 +191,28 @@ public:
 
         if (return_ss) {
             // Compute sufficient statistics: sstats = phi^T * mtx → (K x M)
-            MatrixXf sstats = batch.phi.transpose() * batch.mtx;
+            RowMajorMatrixXf sstats = batch.phi.transpose() * batch.mtx;
             return sstats;
         } else {
             // Return an empty matrix
-            return MatrixXf::Zero(0, 0);
+            return RowMajorMatrixXf::Zero(0, 0);
         }
     }
 
     void approx_ll(Minibatch& batch) {
         // Compute the log-likelihood for a minibatch.
-        MatrixXf Xb = batch.mtx * Elog_beta_.transpose(); // (N x K)
-        MatrixXf ll_mat = batch.psi.transpose() * Xb;
-        double ll_tot = 0.0;
-        for (int i = 0; i < ll_mat.rows(); i++) {
-            double lse = logsumexp(ll_mat.row(i)).first;
-            ll_tot += (ll_mat.row(i).array() - lse).sum();
-        }
-        batch.ll = ll_tot / batch.n;
+        RowMajorMatrixXf Xb = batch.mtx * Elog_beta_.transpose(); // (N x K)
+        RowMajorMatrixXf ll_mat = batch.psi.transpose() * Xb; // (n x K)
+        // log-sum-exp
+        VectorXf maxCoeffs = ll_mat.rowwise().maxCoeff();
+        ll_mat.colwise() -= maxCoeffs;
+        VectorXf lse = ll_mat.array().exp().rowwise().sum().log() + maxCoeffs.array();
+        batch.ll = (ll_mat.colwise() - lse).sum() / batch.n;
     }
 
     // Update the global lambda parameter with one minibatch.
     void update_lambda(Minibatch& batch) {
-        MatrixXf sstats = do_e_step(batch);
+        RowMajorMatrixXf sstats = do_e_step(batch);
         if (verbose_ > 0) {
             auto scores = approx_score(batch);
             printf("%d-th global update. Scores: %.4e, %.4e, %.4e, %.4e, %.4e\n", updatect_, std::get<0>(scores), std::get<1>(scores), std::get<2>(scores), std::get<3>(scores), std::get<4>(scores));
@@ -234,12 +230,12 @@ public:
     // Compute approximate scores for monitoring progress.
     std::tuple<double, double, double, double, double> approx_score(Minibatch& batch) {
         // Score for pixels: sum( φ .* (mtx * Elog_beta_.transpose())/batch.N )
-        MatrixXf X = batch.mtx * Elog_beta_.transpose();
+        RowMajorMatrixXf X = batch.mtx * Elog_beta_.transpose();
         double score_pixel = (batch.phi.array() * (X.array() / batch.N)).sum();
         double score_patch = batch.ll;
 
         // Score for gamma: E[log p(θ | α) - log q(θ | γ)]
-        MatrixXf Elog_theta = dirichlet_entropy_2d(batch.gamma);
+        RowMajorMatrixXf Elog_theta = dirichlet_entropy_2d(batch.gamma);
         double score_gamma = ((alpha_.replicate(batch.n, 1) - batch.gamma).array() * Elog_theta.array()).sum();
         for (int i = 0; i < batch.gamma.rows(); i++) {
             double row_sum = batch.gamma.row(i).sum();
@@ -273,9 +269,9 @@ private:
     int max_iter_inner_;
     double tol_;
 
-    MatrixXf Elog_beta_; // K x M: expectation of log β
-    MatrixXf lambda_;    // K x M: variational parameter for β
-    RowVectorXf alpha_;     // 1 X K: global prior for θ
-    MatrixXf eta_;       // 1 x M: prior for β (stored as a row vector)
+    RowMajorMatrixXf Elog_beta_; // K x M: expectation of log β
+    RowMajorMatrixXf lambda_;    // K x M: variational parameter for β
+    RowVectorXf alpha_;  // 1 X K: global prior for θ
+    RowVectorXf eta_;    // 1 x M: prior for β (stored as a row vector)
     std::mt19937 rng_;
 };

@@ -59,6 +59,7 @@ set(SOURCE_FILES
     src/dataunits.hpp
     src/dataunits.cpp
     src/lda.hpp
+    src/lda.cpp
     src/lda_svb.cpp
     src/lda_scvb0.cpp
     src/hdp.hpp
@@ -66,7 +67,6 @@ set(SOURCE_FILES
     src/topic_svb.hpp
     src/topic_svb.cpp
     src/numerical_utils.hpp
-    src/numerical_utils.cpp
     src/pts2tiles.hpp
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp

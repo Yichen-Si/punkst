@@ -1,6 +1,5 @@
 #include "lda.hpp"
 
-// process a mini-batch of documents to update the global topic-word distribution.
 void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& docs) {
     int minibatch_size = docs.size();
     MatrixXf doc_topic_distr = MatrixXf::Zero(minibatch_size, n_topics_);
@@ -20,28 +19,18 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
         VectorXf phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
             // document level variational parameters.
+            const auto& doc = docs[d];
+            int n_ids = doc.ids.size();
             VectorXf doc_topic, exp_doc;
             int iter = svb_fit_one_document(doc_topic, exp_doc, docs[d]);
             doc_topic_distr.row(d) = doc_topic.transpose();
             local_nits.push_back(iter);
-            const auto& doc = docs[d];
-            int n_ids = doc.ids.size();
             // update sufficient statistics.
             for (int j = 0; j < n_ids; j++) {
                 int word_id = doc.ids[j];
-                double count = doc.cnts[j];
                 phi_k = exp_doc.array() * exp_Elog_beta_.col(word_id).array();
-                double norm_phi = phi_k.sum() + eps_;
-                phi_k /= norm_phi;
-                local_ss.col(word_id) += phi_k * count;
-                // double norm_phi =eps_;
-                // for (int k = 0; k < n_topics_; k++) {
-                //     norm_phi += exp_doc[k] * exp_Elog_beta_(k, word_id);
-                // }
-                // for (int k = 0; k < n_topics_; k++) {
-                //     double phi = (exp_doc[k] * exp_Elog_beta_(k, word_id)) / norm_phi;
-                //     local_ss(k, word_id) += count * phi;
-                // }
+                phi_k /= (phi_k.sum() + eps_);
+                local_ss.col(word_id) += phi_k * doc.cnts[j];
             }
         }
     }, ap);
@@ -111,23 +100,20 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
     } else {
         doc_topic = *doc_topic_;
     }
+
     if (n_ids == 0) {
         exp_doc.resize(n_topics_);
         exp_doc.setConstant(1.0 / n_topics_);
         return 0;
     }
 
-    exp_doc.resize(n_topics_); // exp(E[log(theta)])
-    double sum = doc_topic.sum();
-    double psi_total = psi(sum);
-    for (int k = 0; k < n_topics_; k++) {
-        exp_doc[k] = std::exp(psi(doc_topic[k]) - psi_total);
-    }
+    exp_doc = dirichlet_expectation_1d(doc_topic, 0);
     // Build a submatrix for the nonzero word indices in the document.
     MatrixXf exp_topic_word(n_topics_, n_ids);
     for (int j = 0; j < n_ids; j++) {
         exp_topic_word.col(j) = exp_Elog_beta_.col(doc.ids[j]);
     }
+    Eigen::Map<const Eigen::VectorXf> doc_counts(doc.cnts.data(), n_ids);
     // Iterative update for the document.
     double diff = 1.;
     int iter = 0;
@@ -141,10 +127,7 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
         VectorXf norm_phi = exp_topic_word.transpose() * exp_doc;
         norm_phi.array() += eps_; // Avoid division by zero.
 
-        VectorXf ratio(n_ids);
-        for (int j = 0; j < n_ids; j++) {
-            ratio[j] = doc.cnts[j] / norm_phi[j];
-        }
+        VectorXf ratio = doc_counts.array() / norm_phi.array();
         VectorXf new_vector = exp_topic_word * ratio; // K x 1
         doc_topic = exp_doc.array() * new_vector.array();
         exp_doc = dirichlet_expectation_1d(doc_topic, doc_topic_prior_);
@@ -171,7 +154,6 @@ void LatentDirichletAllocation::set_svb_parameters(int32_t max_iter, double tol)
     }
 }
 
-// Compute the approximate variational bound
 std::vector<double> LatentDirichletAllocation::approx_bound(
     const std::vector<Document>& docs, const MatrixXf& doc_topic_distr, bool sub_sampling) {
     const int n_docs     = static_cast<int>(docs.size());
@@ -270,4 +252,20 @@ std::vector<double> LatentDirichletAllocation::approx_bound(
     );
 
     return { score1, score2, score3 };
+}
+
+double LatentDirichletAllocation::_perplexity_precomp_distr(const std::vector<Document>& docs, const MatrixXf& doc_topic_distr, bool sub_sampling) {
+    std::vector<double> scores = approx_bound(docs, doc_topic_distr, sub_sampling);
+    double bound = scores[0] + scores[1] + scores[2];
+    double word_cnt = 0.0;
+    for (const auto& doc : docs) {
+        for (double cnt : doc.cnts) {
+            word_cnt += cnt;
+        }
+    }
+    if (sub_sampling) {
+        word_cnt *= static_cast<double>(total_doc_count_) / docs.size();
+    }
+    double perword_bound = bound / word_cnt;
+    return std::exp(-perword_bound);
 }
