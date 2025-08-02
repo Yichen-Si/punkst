@@ -103,7 +103,7 @@ public:
         Elog_beta_ = dirichlet_entropy_2d(lambda_);
     }
     // If a matrix pointer is provided, use it; otherwise initialize randomly.
-    void init_global_parameter(const MatrixXd* m_lambda = nullptr) {
+    void init_global_parameter(const RowMajorMatrixXf* m_lambda = nullptr) {
         if (m_lambda == nullptr) {
             lambda_.resize(K_, M_);
             std::gamma_distribution<float> gamma_dist(100.0, 1.0/100.0);

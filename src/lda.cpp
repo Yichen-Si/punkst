@@ -207,8 +207,9 @@ void LatentDirichletAllocation::set_nthreads(int nThreads) {
             tbb::global_control::max_allowed_parallelism,
             std::size_t(nThreads_));
     } else {
-    tbb_ctrl_.reset();
+        tbb_ctrl_.reset();
     }
-    nThreads_ = int( tbb::this_task_arena::max_concurrency() );
-    notice("Actual number of threads: %d", nThreads_);
+    nThreads_ = int( tbb::global_control::active_value(
+             tbb::global_control::max_allowed_parallelism) );
+    notice("Requested %d threads, actual number of threads: %d", nThreads, nThreads_);
 }

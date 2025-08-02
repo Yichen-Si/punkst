@@ -44,9 +44,9 @@ test/*
 
 .idea
 cmake-build-debug/
-build
-htslib
-bin
+build/
+bin/
+app/
 
 .DS_Store
 .vscode
@@ -59,3 +59,4 @@ venv
 zz/
 
 claude_log/
+.claude/

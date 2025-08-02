@@ -22,6 +22,7 @@ using Eigen::VectorXf;
 using Eigen::RowVectorXf;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+using RowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 class HDP {
 public:
@@ -47,10 +48,10 @@ public:
         init();
     }
 
-    const MatrixXf& get_model() const {
+    const RowMajorMatrixXf& get_model() const {
         return lambda_;
     }
-    MatrixXf copy_model() const {
+    RowMajorMatrixXf copy_model() const {
         return lambda_;
     }
     int32_t get_K() const {
@@ -110,7 +111,7 @@ private:
     double alpha_; // for local breaking probabilities (pi~Beta(1, alpha))
     double omega_; // for global breaking probabilities (nu~Beta(1, omega))
     // Global VB parameters
-    MatrixXf lambda_; // K x M, for beta (topic-word)
+    RowMajorMatrixXf lambda_; // K x M, for beta (topic-word)
     MatrixXf Elog_beta_; // exp(E[log beta])
     VectorXf aK_, bK_; // K x 1, for nu (breaking prob)
     VectorXf Elog_sigma_K_; // E[log sigma(nu)], K x 1

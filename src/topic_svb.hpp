@@ -83,8 +83,8 @@ protected:
     // --- Pure Virtual "Hooks" for the Template Methods ---
     virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
     virtual MatrixXf do_transform(const std::vector<Document>& batch) = 0;
-    virtual const MatrixXf& get_model_matrix() const = 0;
-    virtual MatrixXf copy_model_matrix() const = 0;
+    virtual const RowMajorMatrixXf& get_model_matrix() const = 0;
+    virtual RowMajorMatrixXf copy_model_matrix() const = 0;
     virtual const std::vector<std::string>& get_topic_names() = 0;
 };
 
@@ -253,10 +253,10 @@ protected:
     MatrixXf do_transform(const std::vector<Document>& batch) override {
         return lda->transform(batch);
     }
-    const MatrixXf& get_model_matrix() const override {
+    const RowMajorMatrixXf& get_model_matrix() const override {
         return lda->get_model();
     }
-    MatrixXf copy_model_matrix() const override {
+    RowMajorMatrixXf copy_model_matrix() const override {
         return lda->get_model();
     }
     const std::vector<std::string>& get_topic_names() override {
@@ -369,10 +369,10 @@ protected:
     MatrixXf do_transform(const std::vector<Document>& batch) override {
         return hdp->transform(batch);
     }
-    const MatrixXf& get_model_matrix() const override {
+    const RowMajorMatrixXf& get_model_matrix() const override {
         return hdp->get_model();
     }
-    MatrixXf copy_model_matrix() const override {
+    RowMajorMatrixXf copy_model_matrix() const override {
         // If no filtering has been applied, return the full model.
         if (num_topics_to_output_ < 0 || num_topics_to_output_ >= K_) {
             return hdp->get_model();

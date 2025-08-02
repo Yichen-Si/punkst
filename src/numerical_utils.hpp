@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <cassert>
 
 #include "Eigen/Core"
 #include "Eigen/Dense"

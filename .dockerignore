@@ -1,0 +1,6 @@
+# Ignore the local build directory
+build/
+
+.git/
+.claude/
+claude_log/

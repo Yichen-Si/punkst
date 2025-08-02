@@ -10,6 +10,8 @@ See more details in [install page](https://yichen-si.github.io/punkst/install/).
 If you are having difficulty installing, let us known (by opening an issue), and meanwhile you can fall back to the [python package](https://github.com/seqscope/ficture) if you just want to test FICTURE or run a small dataset.
 
 
+### Building from Source
+
 **Prerequisites**
 
 - Git
@@ -50,7 +52,7 @@ cmake .. \
 
 The `punkst` binary will be placed in `bin/` under the project root.
 
-Verifying the Build
+Verify the Build
 
 ```bash
 punkst/bin/punkst --help
@@ -60,4 +62,18 @@ You should see a message starting with
 ```
 Available Commands
 The following commands are available:
+```
+
+### Using Docker
+
+**Prerequisite:** [Docker](https://docs.docker.com/get-docker/)
+
+```bash
+docker pull philo1984/punkst:latest
+```
+
+Viirfy the installation:
+
+```bash
+docker run --rm philo1984/punkst:latest punkst --help
 ```

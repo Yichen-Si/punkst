@@ -105,7 +105,7 @@ find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
 find_package(LibLZMA)
 
-target_compile_options(${APP_EXE} PRIVATE -O3 -pthread -march=native)
+target_compile_options(${APP_EXE} PRIVATE -O3 -pthread)
 
 target_link_libraries(${APP_EXE} PRIVATE
     ${OpenCV_LIBRARIES}

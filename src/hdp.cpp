@@ -203,7 +203,7 @@ void HDP::init() {
     }
     // Randomly initialize topic-word counts lambda_
     std::gamma_distribution<double> gd(100.0, 0.01);
-    lambda_ = MatrixXf(K_, M_);
+    lambda_ = RowMajorMatrixXf(K_, M_);
     for (int k = 0; k < K_; ++k) {
         for (int m = 0; m < M_; ++m) {
             lambda_(k, m) = gd(random_engine_);

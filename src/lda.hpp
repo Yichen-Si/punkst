@@ -126,9 +126,9 @@ public:
 
     // Transform: compute document-topic distributions for a list of documents
     // For transform, we do not compute or return sufficient statistics.
-    MatrixXf transform(const std::vector<Document>& docs) {
+    RowMajorMatrixXf transform(const std::vector<Document>& docs) {
         int n_docs = docs.size();
-        MatrixXf doc_topic_distr(n_docs, n_topics_);
+        RowMajorMatrixXf doc_topic_distr(n_docs, n_topics_);
         if (nThreads_ == 1) {
             if (algo_ == InferenceType::SCVB0) {
                 for (int d = 0; d < n_docs; ++d) {
