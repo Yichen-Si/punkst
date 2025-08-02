@@ -1,52 +1,52 @@
 #include "hdp.hpp"
 
 
-VectorXd HDP::fit_one_document(MatrixXd& zeta, MatrixXd& phi, const Document &doc) {
+VectorXf HDP::fit_one_document(MatrixXf& zeta, MatrixXf& phi, const Document &doc) {
     uint32_t m = doc.ids.size();
-    VectorXd xvec(m);
+    VectorXf xvec(m);
     zeta.resize(T_, K_);
     phi.resize(m, T_);
 
     // Create a submatrix from Elog_beta_ for the words present in the document
-    MatrixXd local_Elog_beta(K_, m);
+    MatrixXf local_Elog_beta(K_, m);
     for (size_t j = 0; j < m; j++) {
         xvec(j) = doc.cnts[j];
         local_Elog_beta.col(j) = Elog_beta_.col(doc.ids[j]);
     }
 
     // Initialization (numerically stable)
-    MatrixXd log_zeta0 = (local_Elog_beta * xvec).transpose().replicate(T_, 1); // T x K
+    MatrixXf log_zeta0 = (local_Elog_beta * xvec).transpose().replicate(T_, 1); // T x K
     for (int t = 0; t < T_; ++t) {
-        double max_val = log_zeta0.row(t).maxCoeff();
+        float max_val = log_zeta0.row(t).maxCoeff();
         zeta.row(t) = (log_zeta0.row(t).array() - max_val).exp();
         zeta.row(t) /= zeta.row(t).sum();
     }
 
-    MatrixXd log_phi_init = (zeta * local_Elog_beta).transpose(); // m x T
+    MatrixXf log_phi_init = (zeta * local_Elog_beta).transpose(); // m x T
     for (int j = 0; j < m; ++j) {
-        double max_val = log_phi_init.row(j).maxCoeff();
+        float max_val = log_phi_init.row(j).maxCoeff();
         phi.row(j) = (log_phi_init.row(j).array() - max_val).exp();
         phi.row(j) /= phi.row(j).sum();
     }
 
     // Iterative Updates
-    MatrixXd upperT = MatrixXd::Zero(T_, T_);
+    MatrixXf upperT = MatrixXf::Zero(T_, T_);
     for (uint32_t i = 0; i < T_ - 1; i++) {
         for (uint32_t j = i + 1; j < T_; j++) {
             upperT(i, j) = 1;
         }
     }
 
-    double diff = 1.0;
+    float diff = 1.0;
     int iter = 0;
-    VectorXd gamma1(T_), gamma2(T_);
-    RowVectorXd Elog_sigma_T(T_);
-    VectorXd onesT = VectorXd::Ones(T_);
-    RowVectorXd doc_topic = xvec.transpose() * phi * zeta;
+    VectorXf gamma1(T_), gamma2(T_);
+    RowVectorXf Elog_sigma_T(T_);
+    VectorXf onesT = VectorXf::Ones(T_);
+    RowVectorXf doc_topic = xvec.transpose() * phi * zeta;
 
     for (; iter < max_doc_update_iter_ && diff > mean_change_tol_; iter++) {
-        RowVectorXd last_doc_topic = doc_topic;
-        VectorXd phiTx = phi.transpose() * xvec;
+        RowVectorXf last_doc_topic = doc_topic;
+        VectorXf phiTx = phi.transpose() * xvec;
 
         // Update local stick-breaking parameters (gamma)
         gamma1 = onesT + phiTx;
@@ -55,7 +55,7 @@ VectorXd HDP::fit_one_document(MatrixXd& zeta, MatrixXd& phi, const Document &do
 
         // --- CORRECTED STABLE ZETA UPDATE ---
         // Pre-scale Elog_beta by word counts for efficiency
-        MatrixXd scaled_Elog_beta = local_Elog_beta;
+        MatrixXf scaled_Elog_beta = local_Elog_beta;
         for(int j=0; j<m; ++j) {
             scaled_Elog_beta.col(j) *= xvec(j);
         }
@@ -63,20 +63,20 @@ VectorXd HDP::fit_one_document(MatrixXd& zeta, MatrixXd& phi, const Document &do
         for (int t = 0; t < T_; ++t) {
             // The term sum_j(phi_jt * x_j * E[log B_kj]) for all k
             // is a (K x m) * (m x 1) matrix-vector product.
-            VectorXd sum_term = scaled_Elog_beta * phi.col(t); // Result is K x 1
+            VectorXf sum_term = scaled_Elog_beta * phi.col(t); // Result is K x 1
 
             // Add global stick expectations and apply Log-Sum-Exp
-            VectorXd log_zeta_row = Elog_sigma_K_ + sum_term;
-            double max_val = log_zeta_row.maxCoeff();
+            VectorXf log_zeta_row = Elog_sigma_K_ + sum_term;
+            float max_val = log_zeta_row.maxCoeff();
             zeta.row(t) = (log_zeta_row.array() - max_val).exp().transpose();
             zeta.row(t) /= zeta.row(t).sum();
         }
 
         // STABLE PHI UPDATE (This part was already correct)
-        MatrixXd log_phi_update = Elog_sigma_T.replicate(m, 1);
+        MatrixXf log_phi_update = Elog_sigma_T.replicate(m, 1);
         log_phi_update += (zeta * local_Elog_beta).transpose();
         for (int j = 0; j < m; ++j) {
-            double max_val = log_phi_update.row(j).maxCoeff();
+            float max_val = log_phi_update.row(j).maxCoeff();
             phi.row(j) = (log_phi_update.row(j).array() - max_val).exp();
             phi.row(j) /= phi.row(j).sum();
         }
@@ -96,9 +96,9 @@ void HDP::partial_fit(const std::vector<Document>& docs) {
     int minibatch_size = static_cast<int>(docs.size());
 
     // Thread-local accumulators for topic-word counts and stick statistics
-    tbb::combinable<MatrixXd> ss_acc{[&]{ return MatrixXd::Zero(K_, M_); }};
-    tbb::combinable<VectorXd> a_acc{[&]{ return VectorXd::Zero(K_); }};
-    tbb::combinable<VectorXd> b_acc{[&]{ return VectorXd::Zero(K_); }};
+    tbb::combinable<MatrixXf> ss_acc{[&]{ return MatrixXf::Zero(K_, M_); }};
+    tbb::combinable<VectorXf> a_acc{[&]{ return VectorXf::Zero(K_); }};
+    tbb::combinable<VectorXf> b_acc{[&]{ return VectorXf::Zero(K_); }};
 
     // Parallel processing of documents
     tbb::parallel_for(
@@ -109,21 +109,21 @@ void HDP::partial_fit(const std::vector<Document>& docs) {
             auto& local_b  = b_acc.local();
             for (int d = range.begin(); d < range.end(); ++d) {
                 const Document& doc = docs[d];
-                MatrixXd zeta, phi;
+                MatrixXf zeta, phi;
                 // Fit local variational parameters
-                VectorXd doc_topic = fit_one_document(zeta, phi, doc);
+                VectorXf doc_topic = fit_one_document(zeta, phi, doc);
 
                 // Compute expected word-topic sufficient statistics
                 int m = static_cast<int>(doc.ids.size());
-                Eigen::Map<const VectorXd> xvec(doc.cnts.data(), m);
-                MatrixXd pjk = phi * zeta; // (m x T) * (T x K) -> m x K
+                Eigen::Map<const VectorXf> xvec(doc.cnts.data(), m);
+                MatrixXf pjk = phi * zeta; // (m x T) * (T x K) -> m x K
                 for (int j = 0; j < m; ++j) {
                     int word_id = doc.ids[j];
                     local_ss.col(word_id) += xvec(j) * pjk.row(j).transpose();
                 }
 
                 // Accumulate global stick sufficient statistics
-                VectorXd sum_zeta = zeta.colwise().sum(); // K x 1
+                VectorXf sum_zeta = zeta.colwise().sum(); // K x 1
                 for (int k = 0; k < K_; ++k) {
                     local_a[k] += sum_zeta[k];
                     double tail = 0.0;
@@ -134,9 +134,9 @@ void HDP::partial_fit(const std::vector<Document>& docs) {
         });
 
     // Combine thread-local accumulators
-    MatrixXd ss = ss_acc.combine([](const MatrixXd& A, const MatrixXd& B){ return A + B; });
-    VectorXd a_sum = a_acc.combine([](const VectorXd& A, const VectorXd& B){ return A + B; });
-    VectorXd b_sum = b_acc.combine([](const VectorXd& A, const VectorXd& B){ return A + B; });
+    MatrixXf ss = ss_acc.combine([](const MatrixXf& A, const MatrixXf& B){ return A + B; });
+    VectorXf a_sum = a_acc.combine([](const VectorXf& A, const VectorXf& B){ return A + B; });
+    VectorXf b_sum = b_acc.combine([](const VectorXf& A, const VectorXf& B){ return A + B; });
 
     // Compute learning rate
     ++update_count_;
@@ -144,9 +144,9 @@ void HDP::partial_fit(const std::vector<Document>& docs) {
 
     // Scale sufficient statistics for full corpus
     double scale = static_cast<double>(total_doc_count_) / minibatch_size;
-    MatrixXd lambda_hat = MatrixXd::Constant(K_, M_, eta_) + scale * ss;
-    VectorXd a_hat = VectorXd::Ones(K_) + scale * a_sum;
-    VectorXd b_hat = VectorXd::Constant(K_, omega_) + scale * b_sum;
+    MatrixXf lambda_hat = MatrixXf::Constant(K_, M_, eta_) + scale * ss;
+    VectorXf a_hat = VectorXf::Ones(K_) + scale * a_sum;
+    VectorXf b_hat = VectorXf::Constant(K_, omega_) + scale * b_sum;
 
     // Update global parameters
     lambda_ = (1.0 - rho) * lambda_ + rho * lambda_hat;
@@ -158,12 +158,12 @@ void HDP::partial_fit(const std::vector<Document>& docs) {
     Elog_sigma_K_ = expect_log_sticks(aK_, bK_);
 }
 
-MatrixXd HDP::transform(const std::vector<Document>& docs) {
+MatrixXf HDP::transform(const std::vector<Document>& docs) {
     int n_docs = docs.size();
-    MatrixXd doc_topic_distr(n_docs, K_);
+    MatrixXf doc_topic_distr(n_docs, K_);
     // Parallel update: process each document independently
     tbb::parallel_for(0, n_docs, [&](int d) {
-        MatrixXd zeta, phi;
+        MatrixXf zeta, phi;
         doc_topic_distr.row(d) = fit_one_document(zeta, phi, docs[d]).transpose();
     });
     return doc_topic_distr;
@@ -203,15 +203,15 @@ void HDP::init() {
     }
     // Randomly initialize topic-word counts lambda_
     std::gamma_distribution<double> gd(100.0, 0.01);
-    lambda_ = MatrixXd(K_, M_);
+    lambda_ = MatrixXf(K_, M_);
     for (int k = 0; k < K_; ++k) {
         for (int m = 0; m < M_; ++m) {
             lambda_(k, m) = gd(random_engine_);
         }
     }
     // Initialize stick-breaking parameters
-    aK_ = VectorXd::Ones(K_);
-    bK_ = VectorXd::Constant(K_, omega_);
+    aK_ = VectorXf::Ones(K_);
+    bK_ = VectorXf::Constant(K_, omega_);
     // Precompute expectations
     Elog_beta_    = dirichlet_entropy_2d(lambda_);
     Elog_sigma_K_ = expect_log_sticks(aK_, bK_);
@@ -223,7 +223,7 @@ void HDP::init() {
 
 std::vector<int32_t> HDP::sort_topics() {
     // 1. Calculate raw topic weights (sum of lambda rows)
-    VectorXd topic_weights = lambda_.rowwise().sum();
+    VectorXf topic_weights = lambda_.rowwise().sum();
 
     // 2. Create a vector of topic sorted_indices_ to sort
     sorted_indices_.resize(K_);

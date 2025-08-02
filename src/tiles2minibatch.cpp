@@ -238,7 +238,7 @@ int32_t Tiles2Minibatch<T>::initAnchors(TileData<T>& tileData, std::vector<cv::P
     if (documents.empty()) {
         return 0;
     }
-    minibatch.gamma = lda.transform(documents).template cast<float>();
+    minibatch.gamma = lda.transform(documents);
     // TODO: need to test if scaling/normalizing gamma is better
     // scale each row so that the mean is 1
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
@@ -735,7 +735,7 @@ int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector
     if (docs.empty()) return 0;
 
     anchors = std::move(finalAnchors);
-    minibatch.gamma = lda.transform(docs).template cast<float>();
+    minibatch.gamma = lda.transform(docs);
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
         float sum = minibatch.gamma.row(i).sum();
         if (sum > 0) {

@@ -64,7 +64,7 @@ int32_t cmdMultiConditionTest(int argc, char** argv) {
 
     int32_t r = 0;
     while (r < nSplit) {
-        std::vector<Eigen::VectorXd> scores = obj.processAll();
+        std::vector<Eigen::VectorXf> scores = obj.processAll();
         for (int j = 0; j < M; ++j) {
             fprintf(wf, "%d\t%s", r, featureNames[j].c_str());
             for (int32_t c = 0; c < nContrast; ++c) {

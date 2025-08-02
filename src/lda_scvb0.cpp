@@ -4,8 +4,8 @@ void LatentDirichletAllocation::scvb0_partial_fit(
         const std::vector<Document>& docs)
 {
     const int n_docs = docs.size();
-    tbb::combinable<MatrixXd> hatNkw_acc {
-        [&] { return MatrixXd::Zero(n_topics_, n_features_); }
+    tbb::combinable<MatrixXf> hatNkw_acc {
+        [&] { return MatrixXf::Zero(n_topics_, n_features_); }
     };
 
     tbb::parallel_for(
@@ -19,12 +19,12 @@ void LatentDirichletAllocation::scvb0_partial_fit(
             }
         });
     // Combine
-    MatrixXd hatNkw = hatNkw_acc.combine(
-        [](const MatrixXd& A, const MatrixXd& B) {
+    MatrixXf hatNkw = hatNkw_acc.combine(
+        [](const MatrixXf& A, const MatrixXf& B) {
             return A + B;
         }
     );
-    VectorXd hatNk = hatNkw.rowwise().sum();
+    VectorXf hatNk = hatNkw.rowwise().sum();
 
     // Update global statistics (Eq. 7 & 8)
     double rho = s_beta_ * std::pow(learning_offset_ + ++update_count_, -learning_decay_);
@@ -34,11 +34,11 @@ void LatentDirichletAllocation::scvb0_partial_fit(
 }
 
 void LatentDirichletAllocation::scvb0_fit_one_document(
-        MatrixXd& hatNkw, const Document& doc)
+        MatrixXf& hatNkw, const Document& doc)
 {
     int Cj = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0);
-    VectorXd NTheta = VectorXd::Constant(n_topics_, doc_topic_prior_);
-    VectorXd phi(n_topics_);
+    VectorXf NTheta = VectorXf::Constant(n_topics_, doc_topic_prior_);
+    VectorXf phi(n_topics_);
     int t = 0;
     // generate a random order of words to process
     std::vector<int> word_order(doc.ids.size());
@@ -63,13 +63,13 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
 
 // for transform (don't need sufficient statistics for global update)
 void LatentDirichletAllocation::scvb0_fit_one_document(
-        VectorXd& hatNk, const Document& doc)
+        VectorXf& hatNk, const Document& doc)
 {
     hatNk.resize(n_topics_);
     hatNk.setZero();
     int Cj = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0);
-    VectorXd NTheta = VectorXd::Constant(n_topics_, doc_topic_prior_);
-    VectorXd phi(n_topics_);
+    VectorXf NTheta = VectorXf::Constant(n_topics_, doc_topic_prior_);
+    VectorXf phi(n_topics_);
     int t = 0;
     // generate a random order of words to process
     std::vector<int> word_order(doc.ids.size());

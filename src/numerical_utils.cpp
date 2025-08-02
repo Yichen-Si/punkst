@@ -33,6 +33,26 @@ double psi(double x) {
     return result;
 }
 
+// Float version of psi function
+float psi(float x) {
+    const float EULER = 0.577215664901532860606512090082402431f;
+    if (x <= 1e-6f) {
+        // psi(x) ~ -EULER - 1/x when x is very small
+        return -EULER - 1.0f / x;
+    }
+    float result = 0.0f;
+    // Increment x until it is large enough
+    while (x < 6.0f) {
+        result -= 1.0f / x;
+        x += 1.0f;
+    }
+    float r = 1.0f / x;
+    result += std::log(x) - 0.5f * r;
+    r = r * r;
+    result -= r * ((1.0f/12.0f) - r * ((1.0f/120.0f) - r * (1.0f/252.0f)));
+    return result;
+}
+
 Eigen::VectorXd expect_log_sticks(const Eigen::VectorXd& alpha,
                                   const Eigen::VectorXd& beta) {
     assert(alpha.size() == beta.size() && "alpha and beta must have same length");
@@ -55,6 +75,35 @@ Eigen::VectorXd expect_log_sticks(const Eigen::VectorXd& alpha,
     Eigen::VectorXd result = ElogW;
     // accumulate Elog1_W into positions 1…K
     double running = 0.0;
+    for (int j = 0; j < K - 1; ++j) {
+        running += Elog1_W[j];
+        result[j+1] += running;
+    }
+    return result;
+}
+
+// Float version of expect_log_sticks
+Eigen::VectorXf expect_log_sticks(const Eigen::VectorXf& alpha,
+                                  const Eigen::VectorXf& beta) {
+    assert(alpha.size() == beta.size() && "alpha and beta must have same length");
+    int K = alpha.size();
+    int N = K + 1;
+    // ψ(α_j + β_j)
+    Eigen::VectorXf dig_sum(K);
+    for (int j = 0; j < K; ++j) {
+        dig_sum[j] = psi(alpha[j] + beta[j]);
+    }
+    // E[log w_j] = ψ(α_j) - ψ(α_j + β_j)
+    // E[log (1-w_j)] = ψ(β_j) - ψ(α_j + β_j)
+    Eigen::VectorXf ElogW(K), Elog1_W(K);
+    for (int j = 0; j < K; ++j) {
+        ElogW[j]    = psi(alpha[j]) - dig_sum[j];
+        Elog1_W[j]  = psi(beta[j])  - dig_sum[j];
+    }
+    // ElogSigma_k = ElogW_k + \sum_{l=1}^{k-1} Elog1_W_l
+    Eigen::VectorXf result = ElogW;
+    // accumulate Elog1_W into positions 1…K
+    float running = 0.0f;
     for (int j = 0; j < K - 1; ++j) {
         running += Elog1_W[j];
         result[j+1] += running;

@@ -17,9 +17,11 @@
 #include <tbb/global_control.h>
 
 #include "Eigen/Dense"
+using Eigen::MatrixXf;
+using Eigen::VectorXf;
+using Eigen::RowVectorXf;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
-using Eigen::RowVectorXd;
 
 enum class InferenceType { SVB, SCVB0 };
 
@@ -39,7 +41,7 @@ public:
                               double learning_offset = -1., // tau
                               int total_doc_count = 1000000,
             std::optional<std::reference_wrapper<std::string>> mfileptr = std::nullopt,
-            const std::optional<MatrixXd>& topic_word_distr = std::nullopt, double pariorScale = -1.)
+            const std::optional<MatrixXf>& topic_word_distr = std::nullopt, double pariorScale = -1.)
         : n_topics_(n_topics), n_features_(n_features), seed_(seed),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
         doc_topic_prior_(doc_topic_prior),
@@ -67,7 +69,7 @@ public:
         init();
     }
     LatentDirichletAllocation(
-        MatrixXd& modelMtx,
+        MatrixXf& modelMtx,
         int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
         InferenceType algo = InferenceType::SVB) : seed_(seed),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
@@ -77,10 +79,10 @@ public:
         init();
     }
 
-    const MatrixXd& get_model() const {
+    const MatrixXf& get_model() const {
         return components_;
     }
-    MatrixXd copy_model() const {
+    MatrixXf copy_model() const {
         return components_;
     }
     int32_t get_n_topics() const {
@@ -113,7 +115,7 @@ public:
     }
     void sort_topics() {
         // sort topics by decreasing total weight
-        VectorXd topic_weights = components_.rowwise().sum();
+        VectorXf topic_weights = components_.rowwise().sum();
         std::vector<int> indices(n_topics_);
         std::iota(indices.begin(), indices.end(), 0);
         std::sort(indices.begin(), indices.end(),
@@ -121,7 +123,7 @@ public:
             return topic_weights[a] > topic_weights[b];
         });
         // update components_, exp_Elog_beta_, or Nk_
-        MatrixXd sorted_components(n_topics_, n_features_);
+        MatrixXf sorted_components(n_topics_, n_features_);
         for (int i = 0; i < n_topics_; i++) {
             sorted_components.row(i) = components_.row(indices[i]);
         }
@@ -176,7 +178,7 @@ public:
             exp_Elog_beta_ = dirichlet_expectation_2d(components_);
         }
     }
-    void set_model_from_matrix(MatrixXd& lambda) {
+    void set_model_from_matrix(MatrixXf& lambda) {
         if (lambda.rows() != n_topics_ || lambda.cols() != n_features_) {
             warning("Model matrix size mismatch, reset according to the provided global parameters. (%d x %d) -> (%d x %d)", n_topics_, n_features_, lambda.rows(), lambda.cols());
             n_topics_ = lambda.rows();
@@ -254,21 +256,21 @@ public:
 
     // Transform: compute document-topic distributions for a list of documents
     // For transform, we do not compute or return sufficient statistics.
-    MatrixXd transform(const std::vector<Document>& docs) {
+    MatrixXf transform(const std::vector<Document>& docs) {
         int n_docs = docs.size();
-        MatrixXd doc_topic_distr(n_docs, n_topics_);
+        MatrixXf doc_topic_distr(n_docs, n_topics_);
         // Parallel update: process each document independently
         if (algo_ == InferenceType::SCVB0) {
             tbb::parallel_for(0, n_docs, [&](int d) {
                 // Update document d using the helper function.
-                VectorXd hatNk;
+                VectorXf hatNk;
                 scvb0_fit_one_document(hatNk, docs[d]);
                 doc_topic_distr.row(d) = hatNk.transpose();
             });
         } else {
             tbb::parallel_for(0, n_docs, [&](int d) {
                 // Update document d using the helper function.
-                VectorXd updated_doc, exp_doc;
+                VectorXf updated_doc, exp_doc;
                 int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d]);
                 doc_topic_distr.row(d) = updated_doc.transpose();
             });
@@ -281,13 +283,13 @@ public:
     std::vector<double> score(const std::vector<Document>& docs) {
         assert(algo_ == InferenceType::SVB);
         // Compute document-topic distributions using your transform() method.
-        MatrixXd doc_topic_distr = transform(docs);
+        MatrixXf doc_topic_distr = transform(docs);
         return approx_bound(docs, doc_topic_distr, false);
     }
     // Compute perplexity for a set of documents.
     double perplexity(const std::vector<Document>& docs, bool sub_sampling = false) {
         assert(algo_ == InferenceType::SVB);
-        MatrixXd doc_topic_distr = transform(docs);
+        MatrixXf doc_topic_distr = transform(docs);
         return _perplexity_precomp_distr(docs, doc_topic_distr, sub_sampling);
     }
 
@@ -298,7 +300,7 @@ private:
     int seed_;
     int total_doc_count_;
     int nThreads_;
-    MatrixXd components_; // lambda in SVB or N_kw in SCVB, K x M
+    MatrixXf components_; // lambda in SVB or N_kw in SCVB, K x M
     double doc_topic_prior_  = -1; // alpha
     double topic_word_prior_ = -1; // eta
     double eps_;
@@ -310,7 +312,7 @@ private:
     std::unique_ptr<tbb::global_control> tbb_ctrl_;
 
     // SVB specific parameters
-    MatrixXd exp_Elog_beta_; // exp(E[log beta])
+    MatrixXf exp_Elog_beta_; // exp(E[log beta])
     int max_doc_update_iter_ = -1; // for per document inner loop
     double mean_change_tol_  = -1; // for per document inner loop
 
@@ -318,19 +320,19 @@ private:
     double s_beta_ = 1, s_theta_ = 1;
     double tau_theta_ = 10, kappa_theta_ = 0.9;
     int32_t burn_in_ = 10;
-    VectorXd Nk_;
+    VectorXf Nk_;
 
     // Update a single document's topic distribution.
     // doc: sparse representation of the document.
     // doc_topic: current/prior document-topic vector (K x 1).
     // Returns the updated document-topic vectors (K x 1).
-    int32_t svb_fit_one_document(VectorXd& doc_topic, VectorXd& exp_doc,
+    int32_t svb_fit_one_document(VectorXf& doc_topic, VectorXf& exp_doc,
         const Document &doc,
-        const std::optional<VectorXd>& doc_topic_ = std::nullopt);
-    void scvb0_fit_one_document(MatrixXd& hatNkw, const Document& doc);
-    void scvb0_fit_one_document(VectorXd& hatNk, const Document& doc);
+        const std::optional<VectorXf>& doc_topic_ = std::nullopt);
+    void scvb0_fit_one_document(MatrixXf& hatNkw, const Document& doc);
+    void scvb0_fit_one_document(VectorXf& hatNk, const Document& doc);
 
-    void init_model(const std::optional<MatrixXd>& topic_word_distr = std::nullopt, double scalar = -1.) {
+    void init_model(const std::optional<MatrixXf>& topic_word_distr = std::nullopt, double scalar = -1.) {
         if (topic_word_distr && topic_word_distr->rows() > 0
                              && topic_word_distr->cols() > 0) {
             components_ = *topic_word_distr;
@@ -397,9 +399,9 @@ private:
     // SCVB0 specific
     // SCVB0 latent variable update (Eq. 5 for gamma_{ijk} in the paper)
     inline void scvb0_one_word(
-            const uint32_t w, const VectorXd& NTheta_j, VectorXd& phi) const {
+            const uint32_t w, const VectorXf& NTheta_j, VectorXf& phi) const {
         // (β_kw + η) / (n_k + M*η) * (N_jk + α)
-        VectorXd model = (components_.col(w).array() + topic_word_prior_) / (Nk_.array() + n_features_ * topic_word_prior_);
+        VectorXf model = (components_.col(w).array() + topic_word_prior_) / (Nk_.array() + n_features_ * topic_word_prior_);
         phi = (components_.col(w).array() + topic_word_prior_)
               * (NTheta_j.array() + doc_topic_prior_)
               / (Nk_.array() + n_features_ * topic_word_prior_);
@@ -409,10 +411,10 @@ private:
     // SVB specific
     // Compute the approximate variational bound
     std::vector<double> approx_bound(const std::vector<Document>& docs,
-        const MatrixXd& doc_topic_distr, bool sub_sampling);
+        const MatrixXf& doc_topic_distr, bool sub_sampling);
     // Compute perplexity from precomputed document-topic distributions.
     double _perplexity_precomp_distr(const std::vector<Document>& docs,
-        const MatrixXd& doc_topic_distr, bool sub_sampling) {
+        const MatrixXf& doc_topic_distr, bool sub_sampling) {
         std::vector<double> scores = approx_bound(docs, doc_topic_distr, sub_sampling);
         double bound = scores[0] + scores[1] + scores[2];
         double word_cnt = 0.0;

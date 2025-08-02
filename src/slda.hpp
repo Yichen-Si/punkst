@@ -135,7 +135,6 @@ public:
 
         MatrixXf gamma_old = batch.gamma;
         MatrixXf phi_old = batch.phi;
-        MatrixXf Elog_theta = dirichlet_entropy_2d(batch.gamma); // (n x K)
         if (batch.psi.size() == 0) {
             batch.psi = batch.logitwij; // (N x n)
             expitAndRowNormalize(batch.psi);
@@ -144,23 +143,25 @@ public:
             approx_ll(batch);
             printf("Initialize E-step, E_q[ll] %.4e\n", batch.ll);
         }
-
+        MatrixXf Elog_theta; // (n x K)
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
         while (it < max_iter_inner_ && meanchange > tol_) {
             it++;
+            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             // Update phi.
             // psi: (N x n) * Elog_theta (n x K) → phi: (N x K)
             batch.phi = batch.psi * Elog_theta + Xb;
             // exponentiate and row-normalize
-            for (int i = 0; i < batch.phi.rows(); i++) {
-                batch.phi.row(i) = (batch.phi.row(i).array() - logsumexp(batch.phi.row(i)).first).exp();
+            VectorXf lse(batch.phi.rows());
+            for (int i = 0; i < batch.phi.rows(); ++i) {
+                lse(i) = logsumexp(batch.phi.row(i)).first;
             }
-            // Update psi. (psi always has the same sparsity pattern as logitwij)
-            // we could parallelize the row-wise computation
-            // #pragma omp parallel for schedule(dynamic)
-            for (int i = 0; i < batch.psi.rows(); ++i) {
+            batch.phi = (batch.phi.colwise() - lse).array().exp();
+            // Update psi.
+            // (psi has the same sparsity pattern as logitwij)
+            for (int i = 0; i < batch.psi.rows(); ++i) { // could parallelize
                 float extra = (batch.phi.row(i).array() * Xb.row(i).array()).sum();
                 // Iterate over the nonzero entries
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.logitwij, i); it1 && it2; ++it1, ++it2) {
@@ -174,11 +175,8 @@ public:
             expitAndRowNormalize(batch.psi);
             // Update gamma: gamma = alpha + psi^T * phi.
             // psi^T: (n x N), phi: (N x K) → gamma: (n x K)
-            // broadcast alpha_
             batch.gamma = batch.psi.transpose() * batch.phi;
-            batch.gamma += alpha_.replicate(batch.n, 1);
-            // Update E[log θ] using the new gamma.
-            Elog_theta = dirichlet_entropy_2d(batch.gamma);
+            batch.gamma += alpha_.replicate(batch.n, 1); // broadcast alpha_
             // Check convergence
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = batch.gamma;
@@ -224,10 +222,10 @@ public:
 
         }
         double rhot = std::pow(tau0_ + updatect_, -kappa_);
-        // Update rule: λ = (1 - rhot) * λ + rhot * ((N / batch.N) * (η + sstats))
+        // λ = (1 - rhot) * λ + rhot * ((N / batch.N) * (η + sstats))
         double scale = static_cast<double>(N_) / batch.N;
-        // We assume η is stored as a row vector; replicate it to match λ’s dimensions.
-        lambda_ = (1 - rhot) * lambda_ + rhot * ((eta_.replicate(K_, 1) + sstats) * scale);
+        lambda_ = (1 - rhot) * lambda_ +
+                  rhot * ((eta_.replicate(K_, 1) + sstats) * scale);
         Elog_beta_ = dirichlet_entropy_2d(lambda_);
         updatect_++;
     }

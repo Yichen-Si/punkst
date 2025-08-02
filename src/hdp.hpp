@@ -17,9 +17,11 @@
 #include <tbb/global_control.h>
 
 #include "Eigen/Dense"
+using Eigen::MatrixXf;
+using Eigen::VectorXf;
+using Eigen::RowVectorXf;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
-using Eigen::RowVectorXd;
 
 class HDP {
 public:
@@ -45,10 +47,10 @@ public:
         init();
     }
 
-    const MatrixXd& get_model() const {
+    const MatrixXf& get_model() const {
         return lambda_;
     }
-    MatrixXd copy_model() const {
+    MatrixXf copy_model() const {
         return lambda_;
     }
     int32_t get_K() const {
@@ -77,7 +79,7 @@ public:
     std::vector<int32_t> sort_topics();
 
     // Transform: compute document-topic distributions for a list of documents
-    MatrixXd transform(const std::vector<Document>& docs);
+    MatrixXf transform(const std::vector<Document>& docs);
 
     void set_nthreads(int nThreads) {
         nThreads_ = nThreads;
@@ -108,10 +110,10 @@ private:
     double alpha_; // for local breaking probabilities (pi~Beta(1, alpha))
     double omega_; // for global breaking probabilities (nu~Beta(1, omega))
     // Global VB parameters
-    MatrixXd lambda_; // K x M, for beta (topic-word)
-    MatrixXd Elog_beta_; // exp(E[log beta])
-    VectorXd aK_, bK_; // K x 1, for nu (breaking prob)
-    VectorXd Elog_sigma_K_; // E[log sigma(nu)], K x 1
+    MatrixXf lambda_; // K x M, for beta (topic-word)
+    MatrixXf Elog_beta_; // exp(E[log beta])
+    VectorXf aK_, bK_; // K x 1, for nu (breaking prob)
+    VectorXf Elog_sigma_K_; // E[log sigma(nu)], K x 1
     // Online learning parameters
     int total_doc_count_;    // expected total number of documents
     double learning_decay_ ; // kappa
@@ -127,6 +129,6 @@ private:
     // Update a single document's topic distribution (sparse version)
     // doc: sparse representation of the document
     // Return zeta: T x K; phi: M' x T
-    VectorXd fit_one_document(MatrixXd& zeta, MatrixXd& phi, const Document &doc);
+    VectorXf fit_one_document(MatrixXf& zeta, MatrixXf& phi, const Document &doc);
 
 };
