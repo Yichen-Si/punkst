@@ -149,9 +149,11 @@ public:
             tbb_ctrl_ = std::make_unique<tbb::global_control>(
                tbb::global_control::max_allowed_parallelism,
                std::size_t(nThreads_));
-          } else {
-            tbb_ctrl_.reset();
-          }
+        } else {
+        tbb_ctrl_.reset();
+        }
+        nThreads_ = int( tbb::this_task_arena::max_concurrency() );
+        notice("Actual number of threads: %d", nThreads_);
     }
 
     // Set engine specific parameters
@@ -259,17 +261,30 @@ public:
     MatrixXf transform(const std::vector<Document>& docs) {
         int n_docs = docs.size();
         MatrixXf doc_topic_distr(n_docs, n_topics_);
-        // Parallel update: process each document independently
+        if (nThreads_ == 1) {
+            if (algo_ == InferenceType::SCVB0) {
+                for (int d = 0; d < n_docs; ++d) {
+                    VectorXf hatNk;
+                    scvb0_fit_one_document(hatNk, docs[d]);
+                    doc_topic_distr.row(d) = hatNk.transpose();
+                }
+            } else {
+                for (int d = 0; d < n_docs; ++d) {
+                    VectorXf updated_doc, exp_doc;
+                    int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d]);
+                    doc_topic_distr.row(d) = updated_doc.transpose();
+                }
+            }
+            return doc_topic_distr;
+        }
         if (algo_ == InferenceType::SCVB0) {
             tbb::parallel_for(0, n_docs, [&](int d) {
-                // Update document d using the helper function.
                 VectorXf hatNk;
                 scvb0_fit_one_document(hatNk, docs[d]);
                 doc_topic_distr.row(d) = hatNk.transpose();
             });
         } else {
             tbb::parallel_for(0, n_docs, [&](int d) {
-                // Update document d using the helper function.
                 VectorXf updated_doc, exp_doc;
                 int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d]);
                 doc_topic_distr.row(d) = updated_doc.transpose();

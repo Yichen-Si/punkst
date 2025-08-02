@@ -38,20 +38,15 @@ git submodule update --init
 
 If TBB is not found, you can install it by `sudo apt-get install libtbb-dev` or `yum install tbb-devel` on linux and `brew install tbb` on macOS.
 
-If you don't have root access on linux, you can `git clone` from [oneTBB](https://github.com/uxlfoundation/oneTBB) then build locally. Alternatively, you can add a flag `cmake .. -DFETCH_TBB=ON` to let cmake fetch and build it from [oneTBB](https://github.com/uxlfoundation/oneTBB?tab=readme-ov-file). Building TBB from source takes a significant amount of time, and cmake will build it in a subdirectory of your build directory. It might be better to build TBB yourself once.
-```bash
-git clone https://github.com/oneapi-src/oneTBB.git
-mkdir oneTBB/build && cd oneTBB/build
-cmake ..  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local
-make -j$(nproc) && make install
-```
+If you don't have root access on linux, you can [install oneTBB](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md) locally.
 
 If you installed some dependencies locally, you may need to specify their paths like
 ```bash
 cmake .. \
   -DOpenCV_DIR=$HOME/.local/lib/cmake/opencv4 \
+  -DTBB_DIR=$HOME/user/opt/tbb/lib/cmake/tbb \
   -DCMAKE_PREFIX_PATH="$HOME/.local"
-  ```
+```
 
 The `punkst` binary will be placed in `bin/` under the project root.
 

@@ -23,11 +23,11 @@ struct Minibatch {
     int n;        // number of anchors
     int N;        // number of pixels
     int M;        // number of features
-    SparseMatrix<float> mtx;  // (N x M) observed data matrix
-    SparseMatrix<float, Eigen::RowMajor> logitwij;  // (N x n); d_psi E_q[log P(Cij)]
+    SparseMatrix<float> mtx;  // (N x M); observed data matrix
+    SparseMatrix<float, Eigen::RowMajor> logitwij; // (N x n); d_psi E_q[log P(Cij)]
     MatrixXf gamma; // (n x K); ~P(k|j)
     // Does not need to be initialized:
-    SparseMatrix<float, Eigen::RowMajor> psi;   // (N x n); ~P(j|i)
+    SparseMatrix<float, Eigen::RowMajor> psi; // (N x n); ~P(j|i)
     MatrixXf phi;   // (N x K); ~P(k|i)
     double ll;      // Log-likelihood value computed during the E-step
 };
@@ -119,6 +119,7 @@ public:
 
     // Perform the E-step for a given minibatch.
     // Returns sufficient statistics (K x M) computed from the minibatch.
+    // Single-threaded, supposed to be run in parallel in spatial patches
     MatrixXf do_e_step(Minibatch& batch, bool return_ss = true) {
         // (N x M) * (M x K) = (N x K)
         MatrixXf Xb = batch.mtx * Elog_beta_.transpose();

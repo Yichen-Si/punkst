@@ -32,14 +32,15 @@ If you did not clone the submodule (Eigen) initially, you can do
 git submodule update --init
 ```
 
-If TBB is not found, you can either install it yourself (see below) or add a flag `cmake .. -DFETCH_TBB=ON` to let cmake fetch and build it from [oneTBB](https://github.com/uxlfoundation/oneTBB?tab=readme-ov-file) (which will take a while).
+If an error occurs due to TBB not found, see below for installation options.
 
 If you installed some dependencies locally, you may need to specify their paths like
 ```bash
 cmake .. \
   -DOpenCV_DIR=$HOME/.local/lib/cmake/opencv4 \
+  -DTBB_DIR=$HOME/user/opt/tbb/lib/cmake/tbb \
   -DCMAKE_PREFIX_PATH="$HOME/.local"
-  ```
+```
 (On mac, if CMake fails to locate OpenCV (installed with brew), pass: `-DOpenCV_DIR=$(brew --prefix opencv)/lib/cmake/opencv4` or wherever OpenCV is installed.)
 
 The `punkst` binary will be placed in `bin/` under the project root.
@@ -62,7 +63,16 @@ The following commands are available:
 
 System: `sudo apt-get install libtbb-dev` or `yum install tbb-devel` on linux and `brew install tbb` on macOS.
 
-Local: `git clone` from [oneTBB](https://github.com/uxlfoundation/oneTBB) then build locally.
+Local: [install oneTBB](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md) (or find more information [here](https://www.intel.com/content/www/us/en/docs/onetbb/get-started-guide/2022-2/overview.html)).
+
+<!-- Local: `git clone` from [oneTBB](https://github.com/uxlfoundation/oneTBB) then build locally. -->
+<!-- (Building TBB from source takes a significant amount of time)
+```bash
+git clone https://github.com/oneapi-src/oneTBB.git
+mkdir oneTBB/build && cd oneTBB/build
+cmake ..  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local
+make -j$(nproc) && make install
+``` -->
 
 - **OpenCV**
 

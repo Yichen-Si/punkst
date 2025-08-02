@@ -17,26 +17,31 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
         [&](const tbb::blocked_range<int>& range) {
         auto& local_ss   = ss_acc.local();
         auto& local_nits = niters_acc.local();
+        VectorXf phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
-            // Use the shared routine to get the document's variational parameters.
+            // document level variational parameters.
             VectorXf doc_topic, exp_doc;
             int iter = svb_fit_one_document(doc_topic, exp_doc, docs[d]);
             doc_topic_distr.row(d) = doc_topic.transpose();
             local_nits.push_back(iter);
             const auto& doc = docs[d];
             int n_ids = doc.ids.size();
-            // For each nonzero word in the document, update sufficient statistics.
+            // update sufficient statistics.
             for (int j = 0; j < n_ids; j++) {
                 int word_id = doc.ids[j];
                 double count = doc.cnts[j];
-                double norm_phi =eps_;
-                for (int k = 0; k < n_topics_; k++) {
-                    norm_phi += exp_doc[k] * exp_Elog_beta_(k, word_id);
-                }
-                for (int k = 0; k < n_topics_; k++) {
-                    double phi = (exp_doc[k] * exp_Elog_beta_(k, word_id)) / norm_phi;
-                    local_ss(k, word_id) += count * phi;
-                }
+                phi_k = exp_doc.array() * exp_Elog_beta_.col(word_id).array();
+                double norm_phi = phi_k.sum() + eps_;
+                phi_k /= norm_phi;
+                local_ss.col(word_id) += phi_k * count;
+                // double norm_phi =eps_;
+                // for (int k = 0; k < n_topics_; k++) {
+                //     norm_phi += exp_doc[k] * exp_Elog_beta_(k, word_id);
+                // }
+                // for (int k = 0; k < n_topics_; k++) {
+                //     double phi = (exp_doc[k] * exp_Elog_beta_(k, word_id)) / norm_phi;
+                //     local_ss(k, word_id) += count * phi;
+                // }
             }
         }
     }, ap);

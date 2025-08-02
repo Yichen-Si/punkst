@@ -11,8 +11,8 @@ if (NOT TBB_FOUND)
   if (NOT FETCH_TBB)
     message(FATAL_ERROR
       "TBB was not found on your system.\n"
-      "Either install TBB (e.g. libtbb-dev / brew install tbb),\n"
-      "or re-run CMake with -DFETCH_TBB=ON to automatically download and build oneTBB."
+      "Please install TBB (e.g. libtbb-dev / brew install tbb) and/or provide the path using -DTBB_DIR or -DCMAKE_PREFIX_PATH (see README.md or docs/install.md).\n"
+      "Not recommended slow option: re-run CMake with -DFETCH_TBB=ON to download and build oneTBB from source."
     )
   endif()
   # Only reached when FETCH_TBB=ON
@@ -105,7 +105,7 @@ find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
 find_package(LibLZMA)
 
-target_compile_options(${APP_EXE} PRIVATE -O3 -pthread)
+target_compile_options(${APP_EXE} PRIVATE -O3 -pthread -march=native)
 
 target_link_libraries(${APP_EXE} PRIVATE
     ${OpenCV_LIBRARIES}
