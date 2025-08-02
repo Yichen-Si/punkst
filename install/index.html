@@ -882,31 +882,37 @@
 <p>If you did not clone the submodule (Eigen) initially, you can do
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init
 </span></code></pre></div></p>
-<p>If TBB is not found, you can either install it yourself (see below) or add a flag <code>cmake .. -DFETCH_TBB=ON</code> to let cmake fetch and build it from <a href="https://github.com/uxlfoundation/oneTBB?tab=readme-ov-file">oneTBB</a> (which will take a while).</p>
+<p>If an error occurs due to TBB not found, see below for installation options.</p>
 <p>If you installed some dependencies locally, you may need to specify their paths like
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cmake<span class="w"> </span>..<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-DOpenCV_DIR<span class="o">=</span><span class="nv">$HOME</span>/.local/lib/cmake/opencv4<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-DCMAKE_PREFIX_PATH<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/.local&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="sb">```</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="o">(</span>On<span class="w"> </span>mac,<span class="w"> </span><span class="k">if</span><span class="w"> </span>CMake<span class="w"> </span>fails<span class="w"> </span>to<span class="w"> </span>locate<span class="w"> </span>OpenCV<span class="w"> </span><span class="o">(</span>installed<span class="w"> </span>with<span class="w"> </span>brew<span class="o">)</span>,<span class="w"> </span>pass:<span class="w"> </span><span class="sb">`</span>-DOpenCV_DIR<span class="o">=</span><span class="k">$(</span>brew<span class="w"> </span>--prefix<span class="w"> </span>opencv<span class="k">)</span>/lib/cmake/opencv4<span class="sb">`</span><span class="w"> </span>or<span class="w"> </span>wherever<span class="w"> </span>OpenCV<span class="w"> </span>is<span class="w"> </span>installed.<span class="o">)</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>The<span class="w"> </span><span class="sb">`</span>punkst<span class="sb">`</span><span class="w"> </span>binary<span class="w"> </span>will<span class="w"> </span>be<span class="w"> </span>placed<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="sb">`</span>bin/<span class="sb">`</span><span class="w"> </span>under<span class="w"> </span>the<span class="w"> </span>project<span class="w"> </span>root.
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>Verifying<span class="w"> </span>the<span class="w"> </span>Build
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="sb">```</span>bash
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>punkst/bin/punkst<span class="w"> </span>--help
-</span></code></pre></div></p>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-DTBB_DIR<span class="o">=</span><span class="nv">$HOME</span>/user/opt/tbb/lib/cmake/tbb<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-DCMAKE_PREFIX_PATH<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/.local&quot;</span>
+</span></code></pre></div>
+(On mac, if CMake fails to locate OpenCV (installed with brew), pass: <code>-DOpenCV_DIR=$(brew --prefix opencv)/lib/cmake/opencv4</code> or wherever OpenCV is installed.)</p>
+<p>The <code>punkst</code> binary will be placed in <code>bin/</code> under the project root.</p>
+<p>Verifying the Build</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst/bin/punkst<span class="w"> </span>--help
+</span></code></pre></div>
 <p>You should see a message starting with
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Available Commands
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>The following commands are available:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Available Commands
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>The following commands are available:
 </span></code></pre></div></p>
 <h3 id="required-libraries">Required Libraries<a class="headerlink" href="#required-libraries" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>TBB</strong></li>
 </ul>
 <p>System: <code>sudo apt-get install libtbb-dev</code> or <code>yum install tbb-devel</code> on linux and <code>brew install tbb</code> on macOS.</p>
-<p>Local: <code>git clone</code> from <a href="https://github.com/uxlfoundation/oneTBB">oneTBB</a> then build locally.</p>
+<p>Local: <a href="https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md">install oneTBB</a> (or find more information <a href="https://www.intel.com/content/www/us/en/docs/onetbb/get-started-guide/2022-2/overview.html">here</a>).</p>
+<!-- Local: `git clone` from [oneTBB](https://github.com/uxlfoundation/oneTBB) then build locally. -->
+<!-- (Building TBB from source takes a significant amount of time)
+```bash
+git clone https://github.com/oneapi-src/oneTBB.git
+mkdir oneTBB/build && cd oneTBB/build
+cmake ..  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local
+make -j$(nproc) && make install
+``` -->
+
 <ul>
 <li><strong>OpenCV</strong></li>
 </ul>
