@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <atomic>
 #include <tuple>
+#include <variant>
 #include "error.hpp"
 #include "json.hpp"
 #include "nanoflann.hpp"
@@ -56,20 +57,43 @@ struct TileData {
     }
 };
 
+struct IBoundaryStorage {
+    virtual ~IBoundaryStorage() = default;
+};
+
+template<typename T>
+struct InMemoryStorageStandard : public IBoundaryStorage {
+    std::vector<RecordT<T>> data;
+};
+
+template<typename T>
+struct InMemoryStorageExtended : public IBoundaryStorage {
+    std::vector<RecordExtendedT<T>> dataExtended;
+};
+
 // manage one temporary buffer
 struct BoundaryBuffer {
     uint32_t key; // row|col|isVertical
-    std::string tmpFile;
     uint8_t nTiles;
     std::shared_ptr<std::mutex> mutex;
-    BoundaryBuffer(uint32_t _key, const std::string& _tmpFile) : key(_key), tmpFile(_tmpFile), nTiles(0) {
+    // either a temporary file path or an in-memory storage
+    std::variant<std::string, std::unique_ptr<IBoundaryStorage>> storage;
+
+    BoundaryBuffer(uint32_t _key,
+        std::optional<std::reference_wrapper<std::string>> tmpFilePtr = std::nullopt) : key(_key), nTiles(0) {
         mutex = std::make_shared<std::mutex>();
-        std::ofstream ofs(tmpFile, std::ios::binary);
-        if (!ofs) {
-            throw std::runtime_error("Error creating temporary file: " + tmpFile);
+        if (tmpFilePtr && !(tmpFilePtr->get()).empty()) {
+            storage = tmpFilePtr->get();
+            std::ofstream ofs(tmpFilePtr->get(), std::ios::binary);
+            if (!ofs) {
+                throw std::runtime_error("Error creating temporary file: " + tmpFilePtr->get());
+            }
+            ofs.close();
+        } else {
+            storage = std::unique_ptr<IBoundaryStorage>(nullptr);
         }
-        ofs.close();
     }
+
     bool finished() {
         if ((key & 0x1) && nTiles == 2) { // Vertical buffer
             return true;
@@ -81,63 +105,92 @@ struct BoundaryBuffer {
     }
 
     template<typename T>
-    void writeToFile(const std::vector<RecordT<T>>& records) {
+    void addRecords(const std::vector<RecordT<T>>& recs) {
+        if (recs.empty()) return;
         std::lock_guard<std::mutex> lock(*mutex);
-        std::ofstream ofs(tmpFile, std::ios::binary | std::ios::app);
-        if (!ofs) {
-            error("%s: error opening temporary file %s", __FUNCTION__, tmpFile.c_str());
+
+        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&storage)) {
+            // In-memory
+            if (!*storagePtr) { // First write, create the correct storage object
+                *storagePtr = std::make_unique<InMemoryStorageStandard<T>>();
+            }
+            // Cast to the concrete type and append data
+            if (auto* memStore = dynamic_cast<InMemoryStorageStandard<T>*>(storagePtr->get())) {
+                memStore->data.insert(memStore->data.end(), recs.begin(), recs.end());
+            } else {
+                throw std::runtime_error("Mismatched storage type in BoundaryBuffer::addRecords");
+            }
+
+        } else if (auto* tmpFile = std::get_if<std::string>(&storage)) {
+            std::ofstream ofs(*tmpFile, std::ios::binary | std::ios::app);
+            if (!ofs) {
+                error("%s: error opening temporary file %s", __FUNCTION__, tmpFile->c_str());
+            }
+            ofs.write(reinterpret_cast<const char*>(recs.data()), recs.size() * sizeof(RecordT<T>));
+            ofs.close();
         }
-        ofs.write(reinterpret_cast<const char*>(records.data()), records.size() * sizeof(RecordT<T>));
-        ofs.close();
         nTiles++;
     }
 
     template<typename T>
-    void writeToFileExtended(
+    void addRecordsExtended(
         const std::vector<RecordExtendedT<T>>& recs,
         const std::vector<FieldDef>&           schema,
         size_t                                 recordSize
     ) {
         if (recs.empty()) return;
         std::lock_guard<std::mutex> lock(*mutex);
-        // pack into one big byte‐array
-        std::vector<uint8_t> buf;
-        buf.reserve(recs.size() * recordSize);
-        for (auto &r : recs) {
-            size_t baseOff = buf.size();
-            buf.resize(buf.size() + recordSize);
-            // 1) the base blob
-            std::memcpy(buf.data() + baseOff, &r.recBase, sizeof(r.recBase));
-            // 2) each extra field by schema
-            uint32_t i_int = 0, i_flt = 0, i_str = 0;
-            for (size_t fi = 0; fi < schema.size(); ++fi) {
-                auto const &f = schema[fi];
-                auto dst = buf.data() + baseOff + f.offset;
-                switch (f.type) {
-                    case FieldType::INT32: {
-                        int32_t v = r.intvals[i_int++];
-                        std::memcpy(dst, &v, sizeof(v));
-                    } break;
-                    case FieldType::FLOAT: {
-                        float v = r.floatvals[i_flt++];
-                        std::memcpy(dst, &v, sizeof(v));
-                    } break;
-                    case FieldType::STRING: {
-                        auto &s = r.strvals[i_str++];
-                        std::memcpy(dst, s.data(), std::min(s.size(), f.size));
-                        if (s.size() < f.size) {
-                            std::memset(dst + s.size(), 0, f.size - s.size());
-                        }
-                    } break;
+
+        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&storage)) {
+            // In-memory
+            if (!*storagePtr) { // First write, create the correct storage object
+                *storagePtr = std::make_unique<InMemoryStorageExtended<T>>();
+            }
+            // Cast to the concrete type and append data
+            if (auto* memStore = dynamic_cast<InMemoryStorageExtended<T>*>(storagePtr->get())) {
+                memStore->dataExtended.insert(memStore->dataExtended.end(), recs.begin(), recs.end());
+            } else {
+                throw std::runtime_error("Mismatched storage type in BoundaryBuffer::addRecords (Extended)");
+            }
+        } else if (auto* filePath = std::get_if<std::string>(&storage)) {
+            std::vector<uint8_t> buf;
+            buf.reserve(recs.size() * recordSize);
+            for (auto &r : recs) {
+                size_t baseOff = buf.size();
+                buf.resize(buf.size() + recordSize);
+                // 1) the base blob
+                std::memcpy(buf.data() + baseOff, &r.recBase, sizeof(r.recBase));
+                // 2) each extra field by schema
+                uint32_t i_int = 0, i_flt = 0, i_str = 0;
+                for (size_t fi = 0; fi < schema.size(); ++fi) {
+                    auto const &f = schema[fi];
+                    auto dst = buf.data() + baseOff + f.offset;
+                    switch (f.type) {
+                        case FieldType::INT32: {
+                            int32_t v = r.intvals[i_int++];
+                            std::memcpy(dst, &v, sizeof(v));
+                        } break;
+                        case FieldType::FLOAT: {
+                            float v = r.floatvals[i_flt++];
+                            std::memcpy(dst, &v, sizeof(v));
+                        } break;
+                        case FieldType::STRING: {
+                            auto &s = r.strvals[i_str++];
+                            std::memcpy(dst, s.data(), std::min(s.size(), f.size));
+                            if (s.size() < f.size) {
+                                std::memset(dst + s.size(), 0, f.size - s.size());
+                            }
+                        } break;
+                    }
                 }
             }
+            std::ofstream ofs(*filePath, std::ios::binary | std::ios::app);
+            if (!ofs) {
+                error("%s: error opening temporary file %s", __FUNCTION__, filePath->c_str());
+            }
+            ofs.write(reinterpret_cast<const char*>(buf.data()), buf.size());
+            ofs.close();
         }
-        std::ofstream ofs(tmpFile, std::ios::binary | std::ios::app);
-        if (!ofs) {
-            error("%s: error opening temporary file %s", __FUNCTION__, tmpFile.c_str());
-        }
-        ofs.write(reinterpret_cast<const char*>(buf.data()), buf.size());
-        ofs.close();
         nTiles++;
     }
 };
@@ -147,8 +200,8 @@ class Tiles2MinibatchBase {
 
 public:
 
-    Tiles2MinibatchBase(int nThreads, double r, const std::string& _outPref, const std::string& _tmpDirPath, TileReader& tileReader)
-    : nThreads(nThreads), r(r), outPref(_outPref), tmpDir(_tmpDirPath), tileReader(tileReader) {
+    Tiles2MinibatchBase(int nThreads, double r, TileReader& tileReader, const std::string& _outPref, const std::string* opt = nullptr)
+    : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref) {
         std::string outputFile = outPref + ".tsv";
         mainOut.open(outputFile, std::ios::out);
         if (!mainOut) {
@@ -156,7 +209,13 @@ public:
         } // Assume tileSize is provided by the TileReader.
         mainOut.close();
         tileSize = tileReader.getTileSize();
-        notice("Created temporary directory: %s", tmpDir.path.string().c_str());
+        if (opt && !(*opt).empty()) {
+            useMemoryBuffer_ = false;
+            tmpDir.init(*opt);
+            notice("Created temporary directory: %s", tmpDir.path.string().c_str());
+        } else {
+            useMemoryBuffer_ = true;
+        }
     }
 
     ~Tiles2MinibatchBase() {
@@ -173,8 +232,9 @@ protected:
     int tileSize; // Tile size (square)
     double r;     // Processing radius (padding width)
     std::string outPref;
-    ScopedTempDir tmpDir;
     TileReader& tileReader;
+    ScopedTempDir tmpDir;
+    bool useMemoryBuffer_;
 
     std::ofstream mainOut;
     std::mutex mainOutMutex;  // Protects writing to mainOut
@@ -188,8 +248,11 @@ protected:
         std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
         auto it = boundaryBuffers.find(key);
         if (it == boundaryBuffers.end()) {
-            auto tmpFile = tmpDir.path / std::to_string(key);
-            auto buffer = std::make_shared<BoundaryBuffer>(key, tmpFile.string());
+            std::string tmpFile;
+            if (!useMemoryBuffer_) {
+                tmpFile = (tmpDir.path / std::to_string(key)).string();
+            }
+            auto buffer = std::make_shared<BoundaryBuffer>(key, tmpFile);
             boundaryBuffers[key] = buffer;
             return buffer;
         }
@@ -353,7 +416,7 @@ public:
         double c = 20, double h = 0.7, double res = 1,
         int32_t M = 0, int32_t N = 0, int32_t k = 3,
         int32_t verbose = 0, int32_t debug = 0) :
-        Tiles2MinibatchBase(nThreads, r + hexGrid.size, _outPref, _tmpDir, tileReader), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug),
+        Tiles2MinibatchBase(nThreads, r + hexGrid.size, tileReader, _outPref, &_tmpDir), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug),
         outputOriginalData(false), useExtended_(lineParser.isExtended),
         resultQueue(static_cast<size_t>(std::max(1, nThreads))),
         useTicketSystem(false) {
@@ -363,8 +426,7 @@ public:
         } else if constexpr (std::is_same_v<T, int32_t>) {
             assert(tileReader.getCoordType() == CoordType::INTEGER && "Template type does not match with TileReader coordinate type");
         } else {
-            // static_assert(false, "Unsupported coordinate type"); // need newer gcc
-            error("Unsupported coordinate type");
+            error("%s: Unsupported coordinate type", __func__);
         }
         if (pixelResolution <= 0) {
             pixelResolution = 1;
@@ -545,6 +607,11 @@ protected:
     // Parse a binary temporary file (written by BoundaryBuffer)
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    // Parse bufferred boundary data in memory
+    int32_t parseBoundaryMemoryStandard(TileData<T>& tileData,
+        InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
+    int32_t parseBoundaryMemoryExtended(TileData<T>& tileData,
+        InMemoryStorageExtended<T>* memStore, uint32_t bufferKey);
 
     int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
     int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
@@ -563,149 +630,14 @@ protected:
     void writePseudobulkToTsv();
 
     // Call *before* run()
-    void setExtendedSchema() {
-        if (!lineParser.isExtended) {
-            useExtended_ = false;
-            return;
-        }
-        useExtended_ = true;
-        schema_.clear();
-        size_t offset = sizeof(RecordT<T>);
-        size_t n_ints = lineParser.icol_ints.size();
-        size_t n_floats = lineParser.icol_floats.size();
-        size_t n_strs = lineParser.icol_strs.size();
-        for (size_t i = 0; i < n_ints; ++i) {
-            schema_.push_back({FieldType::INT32, sizeof(int32_t), 0});
-        }
-        for (size_t i = 0; i < n_floats; ++i) {
-            schema_.push_back({FieldType::FLOAT, sizeof(float), 0});
-        }
-        for (size_t i = 0; i < n_strs; ++i) {
-            schema_.push_back({FieldType::STRING, lineParser.str_lens[i], 0});
-        }
-        // now fix up offsets and total size
-        for (auto &f : schema_) {
-            f.offset = offset;
-            offset  += f.size;
-        }
-        recordSize_ = offset;
-    }
+    void setExtendedSchema();
 
-    void tileWorker(int threadId) override {
-        std::pair<TileKey, int32_t> tileTicket;
-        TileKey tile;
-        int32_t ticket;
-        while (tileQueue.pop(tileTicket)) {
-            tile = tileTicket.first;
-            ticket = tileTicket.second;
-            TileData<T> tileData;
-            int32_t ret = parseOneTile(tileData, tile);
-            notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __FUNCTION__, threadId, ticket, tile.row, tile.col, ret);
-            if (ret <= 10) {
-                continue;
-            }
-            vec2f_t* anchorPtr = nullptr;
-            if (fixedAnchorForTile.find(tile) != fixedAnchorForTile.end()) {
-                anchorPtr = &fixedAnchorForTile[tile];
-            }
-            processTile(tileData, threadId, ticket, anchorPtr);
-        }
-    }
+    void tileWorker(int threadId) override;
 
-    void boundaryWorker(int threadId) override {
-        std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
-        std::shared_ptr<BoundaryBuffer> bufferPtr;
-        int32_t ticket;
-        while (bufferQueue.pop(bufferTicket)) {
-            bufferPtr = bufferTicket.first;
-            ticket = bufferTicket.second;
-            TileData<T> tileData;
-            int32_t ret;
-            if (useExtended_) {
-                ret = parseBoundaryFileExtended(tileData, bufferPtr);
-            } else {
-                ret = parseBoundaryFile(tileData, bufferPtr);
-            }
-            notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __FUNCTION__, threadId, ticket, bufferPtr->key, ret);
-            if (ret <= 10) {
-                std::remove(bufferPtr->tmpFile.c_str());
-                continue;
-            }
-            vec2f_t* anchorPtr = nullptr;
-            if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
-                anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];
-            }
-            processTile(tileData, threadId, ticket, anchorPtr);
-            std::remove(bufferPtr->tmpFile.c_str());
-        }
-    }
+    void boundaryWorker(int threadId) override;
 
-    void writerWorker() {
-        // A priority queue to buffer out-of-order results
-        std::priority_queue<ProcessedResult, std::vector<ProcessedResult>, std::greater<ProcessedResult>> outOfOrderBuffer;
-        int nextTicketToWrite = 0;
-        ProcessedResult result;
-        // Loop until the queue is marked as done and is empty
-        while (resultQueue.pop(result)) {
-            outOfOrderBuffer.push(std::move(result));
-            // Write all results that are now ready in sequential order
-            while (!outOfOrderBuffer.empty() &&
-                   (!useTicketSystem ||
-                    outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
-                const auto& readyToWrite = outOfOrderBuffer.top();
-                if (readyToWrite.npts > 0) {
-                    for (const auto& line : readyToWrite.outputLines) {
-                        mainOut.write(line.c_str(), line.length());
-                    }
-                    size_t endPos = mainOut.tellp();
-                    IndexEntry<float> e{outputSize, endPos, readyToWrite.npts,
-                        readyToWrite.xmin, readyToWrite.xmax,
-                        readyToWrite.ymin, readyToWrite.ymax};
-                    indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
-                    outputSize = endPos;
-                }
-                outOfOrderBuffer.pop();
-                nextTicketToWrite++;
-            }
-        }
-    }
+    void writerWorker();
 
-    void setupOutput() {
-        std::string outputFile = outPref + ".tsv";
-        mainOut.open(outputFile, std::ios::out);
-        if (!mainOut) {
-            error("Error opening main output file: %s", outputFile.c_str());
-        }
-        // write header
-        if (outputOriginalData) {
-            mainOut << "#x\ty\tfeature\tct";
-        } else {
-            mainOut << "#x\ty";
-        }
-        for (int32_t i = 0; i < topk_; ++i) {
-            mainOut << "\tK" << i+1;
-        }
-        for (int32_t i = 0; i < topk_; ++i) {
-            mainOut << "\tP" << i+1;
-        }
-        if (useExtended_) {
-            for (const auto &v : lineParser.name_ints) {
-                mainOut << "\t" << v;
-            }
-            for (const auto &v : lineParser.name_floats) {
-                mainOut << "\t" << v;
-            }
-            for (const auto &v : lineParser.name_strs) {
-                mainOut << "\t" << v;
-            }
-        }
-        mainOut << "\n";
-        std::string indexFile = outPref + ".index";
-        indexOut.open(indexFile, std::ios::out | std::ios::binary);
-        if (!indexOut) {
-            error("Error opening index output file: %s", indexFile.c_str());
-        }
-        indexOut << std::fixed << std::setprecision(floatCoordDigits);
-    }
+    void setupOutput();
 
 };

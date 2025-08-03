@@ -75,7 +75,7 @@ int32_t Tiles2Minibatch<T>::parseOneTile(TileData<T>& tileData, TileKey tile) {
         }
         for (const auto& entry : tileData.extBuffers) {
             auto buffer = getBoundaryBuffer(entry.first);
-            buffer->writeToFileExtended(entry.second, schema_, recordSize_);
+            buffer->addRecordsExtended(entry.second, schema_, recordSize_);
         }
         tileData.extBuffers.clear();
     } else {
@@ -101,7 +101,7 @@ int32_t Tiles2Minibatch<T>::parseOneTile(TileData<T>& tileData, TileKey tile) {
         // write buffered records to temporary files
         for (const auto& entry : tileData.buffers) {
             auto buffer = getBoundaryBuffer(entry.first);
-            buffer->writeToFile(entry.second);
+            buffer->addRecords(entry.second);
         }
         tileData.buffers.clear();
     }
@@ -111,10 +111,15 @@ int32_t Tiles2Minibatch<T>::parseOneTile(TileData<T>& tileData, TileKey tile) {
 template<typename T>
 int32_t Tiles2Minibatch<T>::parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
     std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
-    std::ifstream ifs(bufferPtr->tmpFile, std::ios::binary);
-    if (!ifs) {
-        warning("%s: Error opening temporary file %s", __func__, (bufferPtr->tmpFile).c_str());
-        return -1;
+    std::ifstream ifs;
+    if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
+        ifs.open(*tmpFile, std::ios::binary);
+        if (!ifs) {
+            warning("%s: Failed to open temporary file %s", __func__, tmpFile->c_str());
+            return -1;
+        }
+    } else {
+        error("%s cannot be called when buffer is in memory", __func__);
     }
     int npt = 0;
     tileData.clear();
@@ -135,10 +140,15 @@ int32_t Tiles2Minibatch<T>::parseBoundaryFile(TileData<T>& tileData, std::shared
 template<typename T>
 int32_t Tiles2Minibatch<T>::parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
     std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
-    std::ifstream ifs(bufferPtr->tmpFile, std::ios::binary);
-    if (!ifs) {
-        warning("%s: Error opening temporary file %s", __func__, (bufferPtr->tmpFile).c_str());
-        return -1;
+    std::ifstream ifs;
+    if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
+        ifs.open(*tmpFile, std::ios::binary);
+        if (!ifs) {
+            warning("%s: Failed to open temporary file %s", __func__, tmpFile->c_str());
+            return -1;
+        }
+    } else {
+        error("%s cannot be called when buffer is in memory", __func__);
     }
     int npt = 0;
     tileData.clear();
@@ -176,6 +186,38 @@ int32_t Tiles2Minibatch<T>::parseBoundaryFileExtended(TileData<T>& tileData, std
         }
         tileData.extPts.push_back(std::move(r));
         if (isInternalToBuffer(r.recBase.x, r.recBase.y, bufferPtr->key)) {
+            tileData.idxinternal.push_back(npt);
+        }
+        npt++;
+    }
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
+int32_t Tiles2Minibatch<T>::parseBoundaryMemoryStandard(TileData<T>& tileData, InMemoryStorageStandard<T>* memStore, uint32_t bufferKey) {
+    tileData.clear();
+    bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    // Directly copy the data from the in-memory vector.
+    tileData.pts = std::move(memStore->data);
+    // Mark internal points (for output)
+    int npt = 0;
+    for(const auto& rec : tileData.pts) {
+        if (isInternalToBuffer(rec.x, rec.y, bufferKey)) {
+            tileData.idxinternal.push_back(npt);
+        }
+        npt++;
+    }
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
+int32_t Tiles2Minibatch<T>::parseBoundaryMemoryExtended(TileData<T>& tileData, InMemoryStorageExtended<T>* memStore, uint32_t bufferKey) {
+    tileData.clear();
+    bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    tileData.extPts = std::move(memStore->dataExtended);
+    int npt = 0;
+    for(const auto& rec : tileData.extPts) {
+        if (isInternalToBuffer(rec.recBase.x, rec.recBase.y, bufferKey)) {
             tileData.idxinternal.push_back(npt);
         }
         npt++;
@@ -745,6 +787,164 @@ int32_t Tiles2Minibatch<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector
     minibatch.n = docs.size();
     minibatch.M = M_;
     return anchors.size();
+}
+
+template<typename T>
+void Tiles2Minibatch<T>::tileWorker(int threadId) {
+    std::pair<TileKey, int32_t> tileTicket;
+    TileKey tile;
+    int32_t ticket;
+    while (tileQueue.pop(tileTicket)) {
+        tile = tileTicket.first;
+        ticket = tileTicket.second;
+        TileData<T> tileData;
+        int32_t ret = parseOneTile(tileData, tile);
+        notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __FUNCTION__, threadId, ticket, tile.row, tile.col, ret);
+        if (ret <= 10) {
+            continue;
+        }
+        vec2f_t* anchorPtr = nullptr;
+        if (fixedAnchorForTile.find(tile) != fixedAnchorForTile.end()) {
+            anchorPtr = &fixedAnchorForTile[tile];
+        }
+        processTile(tileData, threadId, ticket, anchorPtr);
+    }
+}
+
+template<typename T>
+void Tiles2Minibatch<T>::boundaryWorker(int threadId) {
+    std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
+    std::shared_ptr<BoundaryBuffer> bufferPtr;
+    int32_t ticket;
+    while (bufferQueue.pop(bufferTicket)) {
+        bufferPtr = bufferTicket.first;
+        ticket = bufferTicket.second;
+        TileData<T> tileData;
+        int32_t ret = 0;
+
+        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&(bufferPtr->storage))) {
+            // --- IN-MEMORY PATH ---
+            if (auto* extStore = dynamic_cast<InMemoryStorageExtended<T>*>(storagePtr->get())) {
+                ret = parseBoundaryMemoryExtended(tileData, extStore, bufferPtr->key);
+            } else if (auto* stdStore = dynamic_cast<InMemoryStorageStandard<T>*>(storagePtr->get())) {
+                ret = parseBoundaryMemoryStandard(tileData, stdStore, bufferPtr->key);
+            }
+        } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
+            // --- DISK I/O PATH ---
+            if (useExtended_) {
+                ret = parseBoundaryFileExtended(tileData, bufferPtr);
+            } else {
+                ret = parseBoundaryFile(tileData, bufferPtr);
+            }
+            // Clean up the temporary file
+            std::remove(filePath->c_str());
+        }
+        notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __FUNCTION__, threadId, ticket, bufferPtr->key, ret);
+        vec2f_t* anchorPtr = nullptr;
+        if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
+            anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];
+        }
+        processTile(tileData, threadId, ticket, anchorPtr);
+    }
+}
+
+template<typename T>
+void Tiles2Minibatch<T>::writerWorker() {
+    // A priority queue to buffer out-of-order results
+    std::priority_queue<ProcessedResult, std::vector<ProcessedResult>, std::greater<ProcessedResult>> outOfOrderBuffer;
+    int nextTicketToWrite = 0;
+    ProcessedResult result;
+    // Loop until the queue is marked as done and is empty
+    while (resultQueue.pop(result)) {
+        outOfOrderBuffer.push(std::move(result));
+        // Write all results that are now ready in sequential order
+        while (!outOfOrderBuffer.empty() &&
+               (!useTicketSystem ||
+                outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
+            const auto& readyToWrite = outOfOrderBuffer.top();
+            if (readyToWrite.npts > 0) {
+                for (const auto& line : readyToWrite.outputLines) {
+                    mainOut.write(line.c_str(), line.length());
+                }
+                size_t endPos = mainOut.tellp();
+                IndexEntry<float> e{outputSize, endPos, readyToWrite.npts,
+                    readyToWrite.xmin, readyToWrite.xmax,
+                    readyToWrite.ymin, readyToWrite.ymax};
+                indexOut.write(reinterpret_cast<char*>(&e), sizeof(e));
+                outputSize = endPos;
+            }
+            outOfOrderBuffer.pop();
+            nextTicketToWrite++;
+        }
+    }
+}
+
+template<typename T>
+void Tiles2Minibatch<T>::setExtendedSchema() {
+    if (!lineParser.isExtended) {
+        useExtended_ = false;
+        return;
+    }
+    useExtended_ = true;
+    schema_.clear();
+    size_t offset = sizeof(RecordT<T>);
+    size_t n_ints = lineParser.icol_ints.size();
+    size_t n_floats = lineParser.icol_floats.size();
+    size_t n_strs = lineParser.icol_strs.size();
+    for (size_t i = 0; i < n_ints; ++i) {
+        schema_.push_back({FieldType::INT32, sizeof(int32_t), 0});
+    }
+    for (size_t i = 0; i < n_floats; ++i) {
+        schema_.push_back({FieldType::FLOAT, sizeof(float), 0});
+    }
+    for (size_t i = 0; i < n_strs; ++i) {
+        schema_.push_back({FieldType::STRING, lineParser.str_lens[i], 0});
+    }
+    // now fix up offsets and total size
+    for (auto &f : schema_) {
+        f.offset = offset;
+        offset  += f.size;
+    }
+    recordSize_ = offset;
+}
+
+template<typename T>
+void Tiles2Minibatch<T>::setupOutput() {
+    std::string outputFile = outPref + ".tsv";
+    mainOut.open(outputFile, std::ios::out);
+    if (!mainOut) {
+        error("Error opening main output file: %s", outputFile.c_str());
+    }
+    // write header
+    if (outputOriginalData) {
+        mainOut << "#x\ty\tfeature\tct";
+    } else {
+        mainOut << "#x\ty";
+    }
+    for (int32_t i = 0; i < topk_; ++i) {
+        mainOut << "\tK" << i+1;
+    }
+    for (int32_t i = 0; i < topk_; ++i) {
+        mainOut << "\tP" << i+1;
+    }
+    if (useExtended_) {
+        for (const auto &v : lineParser.name_ints) {
+            mainOut << "\t" << v;
+        }
+        for (const auto &v : lineParser.name_floats) {
+            mainOut << "\t" << v;
+        }
+        for (const auto &v : lineParser.name_strs) {
+            mainOut << "\t" << v;
+        }
+    }
+    mainOut << "\n";
+    std::string indexFile = outPref + ".index";
+    indexOut.open(indexFile, std::ios::out | std::ios::binary);
+    if (!indexOut) {
+        error("Error opening index output file: %s", indexFile.c_str());
+    }
+    indexOut << std::fixed << std::setprecision(floatCoordDigits);
 }
 
 template class Tiles2Minibatch<int32_t>;

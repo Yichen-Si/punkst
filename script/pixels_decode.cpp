@@ -11,6 +11,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double radius = -1, anchorDist = -1;
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
     double pixelResolution = 1, defaultWeight = 0.;
+    bool inMemory = false;
     bool outputOritinalData = false;
     bool featureIsIndex = false;
     bool coordsAreInt = false;
@@ -56,7 +57,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("ext-col-floats", "Additional float columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoFloats)
       .add_option("ext-col-strs", "Additional string columns to carry over to output file, in the form of \"idx1:name1:len1 idx2:name2:len2 ...\" where 'idx' are 0-based column indices and 'len' are maximum lengths of strings", annoStrs)
       .add_option("use-ticket-system", "Use ticket system to ensure predictable output order", useTicketSystem)
-      .add_option("temp-dir", "Directory to store temporary files", tmpDirPath, true)
+      .add_option("temp-dir", "Directory to store temporary files", tmpDirPath)
+      .add_option("in-memory", "Keep boundary buffers in memory instead of writing to temporary files", inMemory)
       .add_option("top-k", "Top K factors to output", topK)
       .add_option("min-init-count", "Minimum", minInitCount)
       .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used if input coordinates are float or --output-original is not set)", floatCoordDigits)
@@ -86,7 +88,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             }
         }
     }
-
+    if (!inMemory && tmpDirPath.empty()) {
+        error("If --in-memory is not set, --temp-dir is required");
+    }
     if (hexSize <= 0) {
         if (hexGridDist <= 0) {
             error("Hexagon size or hexagon grid distance must be provided");

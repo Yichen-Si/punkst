@@ -16,18 +16,25 @@ std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t ma
 
 struct ScopedTempDir {
     std::filesystem::path path;
-    bool enabled = true;
+    bool enabled;
 
+    ScopedTempDir() : enabled(false) {}
     explicit ScopedTempDir(const std::filesystem::path& parent)
-      : path(makeTempDir(parent)) {}
+      : path(makeTempDir(parent)), enabled(true) {}
 
     // Move constructor to allow returning from functions
-    ScopedTempDir(ScopedTempDir&& other) noexcept : path(std::move(other.path)){
+    ScopedTempDir(ScopedTempDir&& other) noexcept
+        : path(std::move(other.path)), enabled(true) {
         other.enabled = false; // Prevent the moved-from object from deleting the directory
     }
     // Disable copy constructor and assignment
     ScopedTempDir(const ScopedTempDir&) = delete;
     ScopedTempDir& operator=(const ScopedTempDir&) = delete;
+
+    void init(const std::filesystem::path& parent) {
+        path = makeTempDir(parent);
+        enabled = true;
+    }
 
     ~ScopedTempDir() {
         if (enabled) {

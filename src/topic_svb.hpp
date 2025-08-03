@@ -118,7 +118,7 @@ public:
             InferenceType::SCVB0,
             alpha, eta,
             kappa, tau0, totalDocCount,
-            std::nullopt, priorMatrix, -1.);
+            nullptr, priorMatrix, -1.);
         lda->set_scvb0_parameters(s_beta, s_theta, tau_theta, kappa_theta, burnin);
         initialized = true;
     }
@@ -137,7 +137,7 @@ public:
             InferenceType::SVB,
             alpha, eta,
             kappa, tau0, totalDocCount,
-            std::nullopt, priorMatrix, -1.);
+            nullptr, priorMatrix, -1.);
         lda->set_svb_parameters(maxIter, mDelta);
         initialized = true;
     }

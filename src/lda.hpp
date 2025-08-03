@@ -42,7 +42,7 @@ public:
                               double learning_decay = -1., // kappa
                               double learning_offset = -1., // tau
                               int total_doc_count = 1000000,
-            std::optional<std::reference_wrapper<std::string>> mfileptr = std::nullopt,
+            const std::string* mfile = nullptr,
             const std::optional<MatrixXf>& topic_word_distr = std::nullopt, double pariorScale = -1.)
         : n_topics_(n_topics), n_features_(n_features), seed_(seed),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
@@ -51,8 +51,8 @@ public:
         learning_decay_(learning_decay), learning_offset_(learning_offset),
         total_doc_count_(total_doc_count),
         update_count_(0) {
-        if (mfileptr && !(mfileptr->get()).empty()) {
-            set_model_from_tsv(mfileptr->get(), pariorScale);
+        if (mfile && !(*mfile).empty()) {
+            set_model_from_tsv(*mfile, pariorScale);
         } else {
             init_model(topic_word_distr);
         }
