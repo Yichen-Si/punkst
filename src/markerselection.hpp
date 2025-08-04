@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Eigen/Core>
 #include <Eigen/Dense>
 #include <fstream>
 #include <sstream>
@@ -45,18 +46,20 @@ public:
         markerSetInfo(const std::string& name, uint64_t count) : name(name), count(count) {};
     };
 
-    // Construct with known matrix dimension M and weighting mode.
-    MarkerSelector(const std::string& featureFile, const std::string& mtxFile, bool binary, int valueBytes, int minCount = 1, int32_t verbose = 0, std::vector<std::string>* whilteList = nullptr) : verbose_(verbose) {
+    MarkerSelector(const std::string& featureFile, const std::string& mtxFile, bool binary, bool dense, int valueBytes, int minCount = 1, int32_t verbose = 0, std::vector<std::string>* whilteList = nullptr) : verbose_(verbose) {
         if (whilteList != nullptr) {
             whiteList_.insert(whilteList->begin(), whilteList->end());
         }
         loadGeneInfo(featureFile, minCount);
-        loadCooccurrenceMatrix(mtxFile, binary, valueBytes);
+        if (dense) {
+            loadDenseCooccurrenceMatrix(mtxFile, binary, valueBytes);
+        } else {
+            loadCooccurrenceMatrix(mtxFile, binary, valueBytes);
+        }
     }
 
     // Select K anchors, optionally fixing a subset
     void selectMarkers(int K, std::vector<std::string>& selectedAnchors) {
-
         if (Q_.rows() < K) {
             error("Number of markers %d is larger than the number of features %d", K, Q_.rows());
         }
@@ -75,95 +78,100 @@ public:
             }
         }
         int F = (int)anchors.size();
-        // Build basis from the fixed anchors
-        std::vector<Eigen::VectorXd> basis;
-        for (int k = 0; k < F; ++k) {
-            Eigen::VectorXd v = Q_.row(anchors[k]);
-            for (auto &b : basis) {
-                v -= b.dot(v) * b;
-            }
-            if (v.norm() > 1e-8) {
-                basis.push_back(v.normalized());
-            }
+        if (F >= K) {
+            selectedAnchors.resize(K);
+             for (int i = 0; i < K; ++i)
+                selectedAnchors[i] = features_[anchors[i]].name;
+            warning("%s: >= %d (%d) fixed anchors are provided", __func__, K, F);
+            return; // All anchors were fixed
         }
-        F = (int)basis.size();
-        if (F > 0)
-            notice("Received %d valid fixed anchors", F);
-        if (F >= K)
-            error("More than K fixed anchors provided");
+        notice("%s: received %d fixed anchors", __func__, F);
 
-        // Greedy select K anchors
+        // Build basis from the fixed anchors using QR
+        Eigen::MatrixXd basis(M_, F);
+        for(int k=0; k<F; ++k)
+            basis.col(k) = Q_.row(anchors[k]);
+        Eigen::HouseholderQR<Eigen::MatrixXd> qr(basis);
+        Eigen::MatrixXd B = qr.householderQ() * Eigen::MatrixXd::Identity(M_, F);
+        // Greedy
         for (int k = F; k < K; ++k) {
             double bestD2 = -1;
             int    bestIdx = -1;
+            // Project onto the orthogonal complement of the current basis
             for (auto i : validIndex_) {
-                if (!validGene_[i] || fixedSet.count(i)) continue;
-                Eigen::VectorXd r = Q_.row(i).transpose();
-                // project r onto span(basis):
-                Eigen::VectorXd proj = Eigen::VectorXd::Zero(r.size());
-                for (auto &b : basis) {
-                    proj.noalias() += b.dot(r) * b;
+                if (fixedSet.count(i)) continue;
+                Eigen::VectorXd r = Q_.row(i);
+                double d2;
+                if (k > 0) { // If there's a basis to project onto
+                    Eigen::VectorXd temp_proj = B.transpose() * r;
+                    Eigen::VectorXd proj = B * temp_proj;
+                    d2 = (r - proj).squaredNorm();
+                } else {
+                    d2 = r.squaredNorm();
                 }
-                double d2 = (r - proj).squaredNorm();
-                if (d2 > bestD2) {
+                if (d2 > bestD2) { // find the largest residual
                     bestD2 = d2;
                     bestIdx = i;
                 }
             }
             anchors.push_back(bestIdx);
             fixedSet.insert(bestIdx);
-            Eigen::VectorXd v = Q_.row(bestIdx).transpose();
-            for (auto &b : basis) {
-                v.noalias() -= b.dot(v) * b;
+
+            // Update the basis with the new anchor
+            Eigen::VectorXd new_vec = Q_.row(bestIdx);
+            if (k > 0) {
+                new_vec -= B * (B.transpose() * new_vec);
             }
-            if (v.norm() > 1e-8) {
-                basis.push_back(v.normalized());
-            } else {
-                warning("The matrix may have rank < %d", K);
-            }
+            B.conservativeResize(Eigen::NoChange, k + 1);
+            B.col(k) = new_vec.normalized();
             if (verbose_ > 0) {
-                notice("Selected %d-th anchor: %s (%d)", k, features_[bestIdx].name.c_str(), features_[bestIdx].totalOcc);
+                notice("Selected %d-th anchor: %s (%d)", k+1, features_[bestIdx].name.c_str(), features_[bestIdx].totalOcc);
             }
         }
 
         // Refine
+        Eigen::MatrixXd A(M_, K);
+        for (int i = 0; i < K; ++i)
+            A.col(i) = Q_.row(anchors[i]);
+        Eigen::HouseholderQR<Eigen::MatrixXd> full_qr(A);
+        Eigen::MatrixXd Q_basis = full_qr.householderQ() * Eigen::MatrixXd::Identity(M_, K);
         for (int t = F; t < K; ++t) {
             fixedSet.clear();
-            // Build basis excluding anchors[t]
-            std::vector<Eigen::VectorXd> vecs;
-            for (int j = 0; j < K; ++j) if (j != t) {
-                Eigen::VectorXd v = Q_.row(anchors[j]).transpose();
-                for (auto &b : vecs) {
-                    v.noalias() -= b.dot(v) * b;
-                }
-                if (v.norm() > 1e-8) {
-                    vecs.push_back(v.normalized());
-                } else {
-                    vecs.push_back(Eigen::VectorXd::Zero(M_));
-                }
-                fixedSet.insert(anchors[j]);
+            for (int j = 0; j < K; ++j) {
+                if (j != t) fixedSet.insert(anchors[j]);
             }
-            // Find farthest eligible gene
+            // Create a basis of the K-1 other vectors
+            Eigen::MatrixXd B_others(M_, K - 1);
+            int col_idx = 0;
+            for(int j=0; j < K; ++j) {
+                if (j != t) {
+                    B_others.col(col_idx++) = Q_basis.col(j);
+                }
+            }
             double bestD2 = -1.0;
             int bestI = anchors[t];
             for (auto i : validIndex_) {
-                if (!validGene_[i] || fixedSet.count(i)) continue;
-                Eigen::VectorXd qi = Q_.row(i).transpose();
-                Eigen::VectorXd proj = Eigen::VectorXd::Zero(M_);
-                for (auto &b : vecs) {
-                    proj.noalias() += b.dot(qi) * b;
-                }
-                double d2 = (qi - proj).squaredNorm();
+                if (fixedSet.count(i)) continue;
+                Eigen::VectorXd qi = Q_.row(i);
+                Eigen::VectorXd proj_others = B_others * (B_others.transpose() * qi);
+                double d2 = (qi - proj_others).squaredNorm();
                 if (d2 > bestD2) {
                     bestD2 = d2;
                     bestI = i;
                 }
             }
-            if (verbose_ > 0 && bestI != anchors[t]) {
-                notice("Replaced %d-th anchor %s with %s", t, features_[anchors[t]].name.c_str(), features_[bestI].name.c_str());
+            if (bestI != anchors[t]) {
+                if (verbose_ > 0) {
+                    notice("Replaced %d-th anchor %s with %s", t, features_[anchors[t]].name.c_str(), features_[bestI].name.c_str());
+                }
+                anchors[t] = bestI;
+                // Update the basis for the next refinement iteration
+                A.col(t) = Q_.row(bestI);
+                full_qr.compute(A);
+                Q_basis = full_qr.householderQ() * Eigen::MatrixXd::Identity(M_, K);
             }
-            anchors[t] = bestI;
         }
+
         selectedAnchors.resize(K);
         for (int i = 0; i < K; ++i) {
             selectedAnchors[i] = features_[anchors[i]].name;
@@ -184,67 +192,43 @@ public:
         betas.resize(M, K);
 
         // Pre‐extract the K anchor rows
-        std::vector<std::vector<double>> Qs(K, std::vector<double>(M));
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> Qs(K, M);
         for (int k = 0; k < K; ++k) {
-            int idx = anchors[k];
-            const double* src = Q_.data() + idx * M;
-            std::copy(src, src + M, Qs[k].begin());
+            Qs.row(k) = Q_.row(anchors[k]);
         }
 
         // Marginal probabilities
-        tbb::combinable<Eigen::RowVectorXd> pk_acc{
-            [&]{ return Eigen::RowVectorXd::Zero(K); }
+        tbb::combinable<Eigen::VectorXd> pk_acc{
+            [&]{ return Eigen::VectorXd::Zero(K); }
         };
 
         tbb::parallel_for(
             tbb::blocked_range<int>(0, M),
             [&](const tbb::blocked_range<int>& range) {
 
-            std::vector<double> c(K), c_new(K), g(K), r(M);
+            Eigen::VectorXd c(K), c_new(K), g(K);
+            Eigen::RowVectorXd r(M);
             auto& local_pk = pk_acc.local();
 
             for (int i = range.begin(); i < range.end(); ++i) {
-                const double* q = Q_.data() + i * M;  // Q_.row(i)
-
+                Eigen::RowVectorXd q = Q_.row(i);
                 // Initialize weights uniformly
-                for (int k = 0; k < K; ++k)
-                    c[k] = 1.0 / K;
-
+                c.setConstant(1.0 / K);
                 // Iterative multiplicative‐updates
                 int iter = 0;
                 double diff = 0;
                 for (; iter < max_iter; ++iter) {
                     // r_j = ∑_k c_k * Qs[k][j]
-                    for (int j = 0; j < M; ++j) {
-                        double sum = 0;
-                        for (int k = 0; k < K; ++k)
-                            sum += c[k] * Qs[k][j];
-                        r[j] = sum;
-                    }
+                    r = c.transpose() * Qs;
                     // g_k = ∑_j p_j * Qs[k][j] / r_j
-                    std::fill(g.begin(), g.end(), 0.0);
-                    for (int j = 0; j < M; ++j) {
-                        double rij = r[j];
-                        if (rij > 0) {
-                            double inv = q[j] / rij;
-                            for (int k = 0; k < K; ++k)
-                                g[k] += inv * Qs[k][j];
-                        }
-                    }
+                    g = Qs * (q.array() / r.array()).matrix().transpose();
                     // Update and renormalize
-                    double norm = 0;
-                    for (int k = 0; k < K; ++k) {
-                        c_new[k] = c[k] * g[k];
-                        norm    += c_new[k];
-                    }
+                    c_new = c.array() * g.array();
+                    double norm = c_new.sum();
                     if (norm <= 0) break;
-                    for (int k = 0; k < K; ++k)
-                        c_new[k] /= norm;
-
+                    c_new /= norm;
                     // Convergence check
-                    diff = 0;
-                    for (int k = 0; k < K; ++k)
-                        diff = std::max(diff, std::abs(c_new[k] - c[k]));
+                    diff = (c_new - c).cwiseAbs().maxCoeff();
                     c.swap(c_new);
                     if (diff < tol) break;
                     if (verbose_ > 2 && iter % 100 == 0) {
@@ -255,25 +239,22 @@ public:
                     notice("%s: solved %d-th feature in %d iterations, final max abs diff %.3e", __FUNCTION__, i, iter, diff);
                 }
                 // Store result
-                double* out = betas.data() + i * K;
-                for (int k = 0; k < K; ++k)
-                    out[k] = c[k] * rowWeights_(i);
-
+                betas.row(i) = c * rowWeights_(i);
                 if (weightByCounts) {
-                    #pragma omp critical
-                    for (int k = 0; k < K; ++k) {
-                        local_pk[k] += c[k] * features_[i].totalOcc;
-                    }
+                    local_pk = local_pk.array() + c.array() * features_[i].totalOcc;
                 }
             }
         });
         // column normalize betas
         Eigen::RowVectorXd colsums = betas.colwise().sum();
-        betas.array().rowwise() /= (colsums.array() + 1e-8);
+        for (int k = 0; k < K; ++k) {
+            if (colsums(k) > 1e-8) {
+                betas.col(k) /= colsums(k);
+            }
+        }
         if (weightByCounts) {
-            // combine per-thread
             Eigen::RowVectorXd pk(K);
-            pk = pk_acc.combine([](auto &a, auto &b){ return a + b; });
+            pk = (pk_acc.combine([](auto &a, auto &b){ return a + b; })).transpose();
             betas.array().rowwise() *= pk.array();
         }
     }
@@ -282,7 +263,11 @@ public:
         return features_;
     }
 
-    std::vector<markerSetInfo> findNeighborsToAnchors(int32_t m, double maxRankFraction = -1) {
+    std::vector<markerSetInfo> findNeighborsToAnchors(int32_t m, int threads = -1, double maxRankFraction = -1) {
+        std::optional<tbb::global_control> gc;
+        if (threads > 0) {
+            gc.emplace(tbb::global_control::max_allowed_parallelism, threads);
+        }
         if (!rankMatrixBuilt) {
             buildRankMatrix();
         }
@@ -293,14 +278,13 @@ public:
             maxRank = (uint32_t)(maxRankFraction * M_);
         }
         std::vector<markerSetInfo> result;
-        uint32_t k = 0;
         for (int i : anchors) {
             // collect (feature, score)
             std::vector<std::pair<int,int>> cand;
             cand.reserve(M_);
             for (int j = 0; j < M_; ++j) {
                 if (j == i) continue;
-                int sc = std::max(rank[i][j], rank[j][i]);
+                int sc = std::max(ranks_(i, j), ranks_(j, i));
                 if (sc > maxRank) continue;
                 cand.emplace_back(j, sc);
             }
@@ -319,18 +303,13 @@ public:
             );
 
             markerSetInfo res(features_[i].name, features_[i].totalOcc);
-
             uint32_t kept = 0;
             for (auto &p : cand) {
-                if (p.second > maxRank) break;
-                if (Q_(i, p.first) == 0) continue;
+                int j = p.first;
+                if (Q_(i, j) == 0) continue;
                 res.neighbors.emplace_back(
-                    features_[p.first].name,
-                    features_[p.first].totalOcc,
-                    Q_(i, p.first),
-                    Q_(p.first, i),
-                    rank[i][p.first],
-                    rank[p.first][i]
+                    features_[j].name, features_[j].totalOcc,
+                    Q_(i, j), Q_(j, i), ranks_(i, j), ranks_(j, i)
                 );
                 kept++;
             }
@@ -342,7 +321,6 @@ public:
                 }
                 notice("Neighbors of %s: %s", features_[i].name.c_str(), ss.str().c_str());
             }
-            k++;
             result.push_back(std::move(res));
         }
         return result;
@@ -358,27 +336,39 @@ private:
     std::vector<bool> validGene_;
     std::unordered_map<std::string, int> nameToIdx_;
     std::vector<int> anchors;
-    std::vector<std::vector<uint32_t>> rank;
-    int32_t verbose_;
-    bool rankMatrixBuilt = false;
     std::set<std::string> whiteList_;
+    int32_t verbose_;
+    Eigen::Matrix<uint32_t, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor> ranks_;
+    bool rankMatrixBuilt = false;
+
+    Eigen::Matrix<uint32_t, Eigen::Dynamic, 1> compute_col_ranks(int col_idx) const {
+        std::vector<uint32_t> indices(M_);
+        std::iota(indices.begin(), indices.end(), 0);
+        const auto& col = Q_.col(col_idx);
+        std::sort(indices.begin(), indices.end(),
+            [&](uint32_t a, uint32_t b) { return col(a) > col(b); });
+        Eigen::Matrix<uint32_t, Eigen::Dynamic, 1> rank_lookup(M_);
+        for (uint32_t rank = 0; rank < M_; ++rank) {
+            rank_lookup(indices[rank]) = rank;
+        }
+        return rank_lookup;
+    }
 
     void buildRankMatrix() {
-        for (int i = 0; i < M_; ++i) {
-            std::vector<uint32_t> ranki(M_);
-            std::iota(ranki.begin(), ranki.end(), 0);
-            std::sort(ranki.begin(), ranki.end(),
-                [this, i](int a, int b) { return Q_(i, a) > Q_(i, b); });
-            if (verbose_ > 1 || (verbose_ > 0 && i % 1000 == 0)) {
-                notice("Ranked %d-th feature %s", i, features_[i].name.c_str());
+        ranks_.resize(M_, M_);
+        tbb::parallel_for(
+            tbb::blocked_range<int>(0, M_),
+            [&](const tbb::blocked_range<int>& range) {
+                for (int j = range.begin(); j < range.end(); ++j) {
+                    ranks_.col(j) = compute_col_ranks(j);
+                }
             }
-            rank.emplace_back(std::move(ranki));
-        }
+        );
         rankMatrixBuilt = true;
         notice("Rank matrix built");
     }
 
-    // Load co-occurrence counts (binary or TSV) into Q_.
+    // Load co-occurrence counts (sparse) into Q_.
     void loadCooccurrenceMatrix(const std::string& filename, bool binary, uint32_t valueBytes = 8) {
         Q_.resize(M_, M_);
         Q_.setZero();
@@ -421,6 +411,78 @@ private:
         normalizeRows();
         rankMatrixBuilt = false;
         notice("Loaded co-occurrence matrix");
+    }
+
+    void loadDenseCooccurrenceMatrix(const std::string& filename, bool binary, uint32_t valueBytes = 8) {
+        notice("Loading dense matrix from %s", filename.c_str());
+        if (binary) {
+            std::ifstream ifs(filename, std::ios::binary);
+            if (!ifs)
+                error("Cannot open dense matrix: %s", filename.c_str());
+            uint32_t M_from_file;
+            ifs.read(reinterpret_cast<char*>(&M_from_file), sizeof(M_from_file));
+            if (!ifs || M_from_file == 0) {
+                notice("Matrix dimension from file is 0 or unreadable. Nothing to load.");
+                Q_.resize(0, 0);
+                return;
+            }
+            M_ = M_from_file; // Set the class member M_
+            Q_.resize(M_, M_);
+
+            std::streamsize bytesToRead = static_cast<std::streamsize>(M_) * M_ * valueBytes;
+            ifs.read(reinterpret_cast<char*>(Q_.data()), bytesToRead);
+            if (ifs.gcount() != bytesToRead) {
+                warning("Could not read the expected amount of data from dense binary matrix file: %s. Read %lld, expected %lld",
+                    filename.c_str(), ifs.gcount(), bytesToRead);
+            }
+        } else { // TSV format
+            std::ifstream ifs(filename);
+            if (!ifs)
+                error("Cannot open dense matrix: %s", filename.c_str());
+            std::string line;
+            std::vector<std::vector<double>> data;
+            size_t M_from_file = 0;
+            while (std::getline(ifs, line)) {
+                std::istringstream iss(line);
+                std::vector<double> row;
+                double val;
+                while (iss >> val) {
+                    row.push_back(val);
+                }
+                if (!row.empty()) {
+                    if (M_from_file == 0) {
+                        M_from_file = row.size();
+                    } else if (row.size() != M_from_file) {
+                        warning("Inconsistent number of columns in dense TSV file: %s. Expected %zu, got %zu on line %zu.",
+                            filename.c_str(), M_from_file, row.size(), data.size() + 1);
+                    }
+                    data.push_back(row);
+                }
+            }
+            if (data.empty()) {
+                notice("Dense TSV matrix file is empty: %s", filename.c_str());
+                Q_.resize(0, 0);
+                return;
+            }
+            if (data.size() != M_from_file) {
+                warning("Number of rows (%zu) does not match number of columns (%zu) in dense TSV file: %s",
+                    data.size(), M_from_file, filename.c_str());
+            }
+            M_ = M_from_file;
+            Q_.resize(M_, M_);
+            for (Eigen::Index i = 0; i < M_; ++i) {
+                for (Eigen::Index j = 0; j < M_; ++j) {
+                    if (i < data.size() && j < data[i].size()) {
+                       Q_(i, j) = data[i][j];
+                    } else {
+                       Q_(i, j) = 0;
+                    }
+                }
+            }
+        }
+        normalizeRows();
+        rankMatrixBuilt = false;
+        notice("Loaded dense co-occurrence matrix of size %u x %u", M_, M_);
     }
 
     void loadGeneInfo(const std::string& filename, int minUsedCount) {

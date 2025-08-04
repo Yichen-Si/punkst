@@ -11,7 +11,7 @@
 #include <ctime>
 #include <memory>
 
-namespace punkst {
+namespace logger {
 
 enum class LogLevel {
     ERROR,
@@ -157,25 +157,25 @@ inline void debug(const char* format, Args... args) {
     Logger::getInstance().log(LogLevel::DEBUG, format, args...);
 }
 
-} // namespace punkst
+} // namespace logger
 
 // For backward compatibility, expose the logging functions in the global namespace
 template<typename... Args>
 inline void error(const char* format, Args... args) {
-    punkst::error(format, args...);
+    logger::error(format, args...);
 }
 
 template<typename... Args>
 inline void warning(const char* format, Args... args) {
-    punkst::warning(format, args...);
+    logger::warning(format, args...);
 }
 
 template<typename... Args>
 inline void notice(const char* format, Args... args) {
-    punkst::notice(format, args...);
+    logger::notice(format, args...);
 }
 
 template<typename... Args>
 inline void debug(const char* format, Args... args) {
-    punkst::debug(format, args...);
+    logger::debug(format, args...);
 }

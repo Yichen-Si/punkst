@@ -60,3 +60,5 @@ zz/
 
 claude_log/
 .claude/
+
+.cache/

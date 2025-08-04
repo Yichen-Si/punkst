@@ -6,7 +6,7 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
     std::string inFile, infoFile, outPref, outFile;
     int32_t K, neighbors = -1;
     int32_t valueBytes = 8;
-    bool binaryInput = false;
+    bool binaryInput = false, denseInput = false;
     int32_t minCount = 1;
     std::vector<std::string> selectedMarkers;
     double maxRankFraction = 0.1;
@@ -23,11 +23,12 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
         .add_option("K", "Total number of markers to select", K, true)
         .add_option("neighbors", "Number of top neighbors to find for each marker (default: 10)", neighbors)
         .add_option("binary", "Input matrix is in binary format", binaryInput)
+        .add_option("dense", "Input matrix is dense", denseInput)
         .add_option("value-bytes", "Number of bytes for each value in the matrix (default: 8, only used for binary input)", valueBytes)
         .add_option("fixed", "Fixed markers", selectedMarkers)
         .add_option("min-count", "Minimum count for a feature to be considered as a marker (default: 1)", minCount);
     pl.add_option("recover-factors", "Recover factors from the co-occurrence matrix after selecting markers", recoverFactors)
-        .add_option("threads", "Number of threads to use (only used if --recover-factors is set. Default: -1, auto)", threads)
+        .add_option("threads", "Number of threads to use (only used if --neighbors > 0 or --recover-factors is set. Default: -1, auto)", threads)
         .add_option("max-iter", "Maximum number of iterations for factor recovery (default: 500)", maxIter)
         .add_option("tol", "Tolerance for convergence (default: 1e-6)", tol)
         .add_option("weight-by-counts", "Weight factors by counts (default: false)", weightFactorsByCounts);
@@ -45,7 +46,7 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
         return 1;
     }
 
-    MarkerSelector selector(infoFile, inFile, binaryInput, valueBytes, minCount, verbose, &selectedMarkers);
+    MarkerSelector selector(infoFile, inFile, binaryInput, denseInput, valueBytes, minCount, verbose, &selectedMarkers);
     selector.selectMarkers(K, selectedMarkers);
 
     outFile = outPref + ".top.tsv";
@@ -59,7 +60,7 @@ int32_t cmdQ2Markers(int32_t argc, char** argv) {
         if (neighbors <= 0) {
             neighbors = 10;
         }
-        std::vector<MarkerSelector::markerSetInfo> neighborLists = selector.findNeighborsToAnchors(neighbors, maxRankFraction);
+        std::vector<MarkerSelector::markerSetInfo> neighborLists = selector.findNeighborsToAnchors(neighbors, threads, maxRankFraction);
 
         outFile = outPref + ".pairs.tsv";
         std::ofstream ofs(outFile);

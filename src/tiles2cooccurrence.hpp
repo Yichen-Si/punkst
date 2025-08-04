@@ -16,11 +16,13 @@ public:
         const std::string& outPref,
         double radius, double halflife=-1,
         double localMin=0, bool binaryOutput = false,
-        int32_t minNeighbor = 1, bool weightByCount = false, int32_t debug = 0) :
-        nThreads_(nThreads) , outPref_(outPref) , r2_(radius * radius)
-        , halflife_(halflife), weightByDistance_(halflife > 0)
-        , tileReader_(tileReader) , parser_(parser)
-        , localMin_(localMin), binaryOutput_(binaryOutput), minNeighbor_(minNeighbor), weightByCount_(weightByCount), debug_(debug) {
+        int32_t minNeighbor = 1, bool weightByCount = false, double sparsityThreshold = 0.4, int32_t debug = 0) :
+        nThreads_(nThreads) , outPref_(outPref) , r2_(radius * radius),
+        halflife_(halflife), weightByDistance_(halflife > 0),
+        tileReader_(tileReader) , parser_(parser), localMin_(localMin),
+        binaryOutput_(binaryOutput),
+        minNeighbor_(minNeighbor), weightByCount_(weightByCount),
+        sparsityThreshold_(sparsityThreshold), debug_(debug) {
         std::vector<TileKey> tiles;
         tileReader_.getTileList(tiles);
         int32_t ntiles = 0;
@@ -54,6 +56,7 @@ private:
     double localMin_;
     bool weightByDistance_, weightByCount_, binaryOutput_;
     int32_t minNeighbor_;
+    double sparsityThreshold_;
     int32_t debug_;
 
     TileReader&   tileReader_;
@@ -66,6 +69,19 @@ private:
     std::unordered_map<uint32_t, std::array<uint64_t, 4> > globalMargianls_;
 
     std::mutex globalMtx_;
+
+    uint32_t getMatrixDimension() {
+        if (globalMargianls_.empty()) {
+            return 0;
+        }
+        uint32_t max_id = 0;
+        for (const auto& kv : globalMargianls_) {
+            if (kv.first > max_id) {
+                max_id = kv.first;
+            }
+        }
+        return max_id + 1;
+    }
 
     void worker(int threadId) {
         TileKey tile;
@@ -93,14 +109,13 @@ private:
             }
             const size_t N = cloud.pts.size();
             if (N < 2) continue;
-            if (debug_) {
-                notice("Thread %d: processing tile (%d, %d) with %zu pixels.", threadId, tile.row, tile.col, N);
-            }
+            debug("Thread %d: processing tile (%d, %d) with %zu pixels.", threadId, tile.row, tile.col, N);
 
             // build local tree
             kd_tree_f2_t tree(2, cloud,
                 nanoflann::KDTreeSingleIndexAdaptorParams(10));
             std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
+            debug("Thread %d: built tree.", threadId);
 
             // count co‑occurrences
             size_t nSkip = 0;
@@ -182,6 +197,27 @@ private:
         fclose(ofs);
 
         // write matrix
+        uint32_t M = getMatrixDimension();
+        size_t nnz = 0;
+        for (const auto& row_pair : globalCounts_) {
+            nnz += row_pair.second.size();
+        }
+        if (nnz == 0) {
+            notice("Matrix is empty");
+            return;
+        }
+        double density = static_cast<double>(nnz) / M / M;
+        notice("Co-occurrence matrix density: %.3f (%zu non-zero entries, %ux%u matrix)", density, nnz, M, M);
+        if (density > sparsityThreshold_) {
+            notice("Matrix is dense (density > %.2f). Writing in dense format.", sparsityThreshold_);
+            writeDenseToFile(M);
+        } else {
+            notice("Matrix is sparse (density <= %.2f). Writing in sparse triplet format.", sparsityThreshold_);
+            writeSparseToFile();
+        }
+    }
+
+    void writeSparseToFile() {
         if (binaryOutput_) {
             std::string outFile = outPref_ + ".mtx.bin";
             std::ofstream ofs(outFile, std::ios::binary);
@@ -225,4 +261,78 @@ private:
             fclose(ofs);
         }
     }
+
+    void writeDenseToFile(uint32_t M) {
+        // Use a different extension for dense files to make format explicit
+        std::string extension = binaryOutput_ ? ".dense.bin" : ".dense.tsv";
+        std::string outFile = outPref_ + extension;
+
+        if (binaryOutput_) {
+            std::ofstream ofs(outFile, std::ios::binary);
+            if (!ofs) {
+                error("Cannot open output: %s", outFile.c_str());
+            }
+            // Write dimension M first
+            ofs.write(reinterpret_cast<const char*>(&M), sizeof(M));
+            // Create a flat dense matrix in memory
+            if (weightByDistance_) {
+                std::vector<double> denseMatrix(static_cast<size_t>(M) * M, 0.0);
+                for (const auto& row_pair : globalCounts_) {
+                    uint32_t f1 = row_pair.first;
+                    for (const auto& col_pair : row_pair.second) {
+                        uint32_t f2 = col_pair.first;
+                        denseMatrix[static_cast<size_t>(f1) * M + f2] = col_pair.second;
+                    }
+                }
+                ofs.write(reinterpret_cast<const char*>(denseMatrix.data()), denseMatrix.size() * sizeof(double));
+            } else {
+                std::vector<int64_t> denseMatrix(static_cast<size_t>(M) * M, 0);
+                for (const auto& row_pair : globalCounts_) {
+                    uint32_t f1 = row_pair.first;
+                    for (const auto& col_pair : row_pair.second) {
+                        uint32_t f2 = col_pair.first;
+                        denseMatrix[static_cast<size_t>(f1) * M + f2] = static_cast<int64_t>(col_pair.second);
+                    }
+                }
+                ofs.write(reinterpret_cast<const char*>(denseMatrix.data()), denseMatrix.size() * sizeof(int64_t));
+            }
+        } else { // TSV output
+            FILE* ofs = fopen(outFile.c_str(), "w");
+            if (!ofs) {
+                error("Cannot open output: %s", outFile.c_str());
+            }
+            // Create a full matrix in memory and write row by row
+            if (weightByDistance_) {
+                std::vector<double> denseMatrix(static_cast<size_t>(M) * M, 0.0);
+                for (const auto& row_pair : globalCounts_) {
+                    uint32_t f1 = row_pair.first;
+                    for (const auto& col_pair : row_pair.second) {
+                        uint32_t f2 = col_pair.first;
+                        denseMatrix[static_cast<size_t>(f1) * M + f2] = col_pair.second;
+                    }
+                }
+                for (uint32_t i = 0; i < M; ++i) {
+                    for (uint32_t j = 0; j < M; ++j) {
+                        fprintf(ofs, "%.2f%c", denseMatrix[static_cast<size_t>(i) * M + j], (j == M - 1) ? '\n' : '\t');
+                    }
+                }
+            } else {
+                std::vector<int64_t> denseMatrix(static_cast<size_t>(M) * M, 0);
+                 for (const auto& row_pair : globalCounts_) {
+                    uint32_t f1 = row_pair.first;
+                    for (const auto& col_pair : row_pair.second) {
+                        uint32_t f2 = col_pair.first;
+                        denseMatrix[static_cast<size_t>(f1) * M + f2] = static_cast<int64_t>(col_pair.second);
+                    }
+                }
+                for (uint32_t i = 0; i < M; ++i) {
+                    for (uint32_t j = 0; j < M; ++j) {
+                        fprintf(ofs, "%ld%c", denseMatrix[static_cast<size_t>(i) * M + j], (j == M - 1) ? '\n' : '\t');
+                    }
+                }
+            }
+            fclose(ofs);
+        }
+    }
+
 };

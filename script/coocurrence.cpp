@@ -1,12 +1,10 @@
 #include "tiles2cooccurrence.hpp"
 #include <thread>
-#include <future>
-#include <atomic>
-#include <numeric>
 
 int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
     std::string inTsv, inIndex, outPref, dictFile;
     double radius, halflife = -1, localMin = 0;
+    double sparseThr = 0.4;
     int nThreads = 1, debug = 0;
     int icol_x, icol_y, icol_feature, icol_val;
     bool binaryOutput = false, weightByCount = false;
@@ -32,6 +30,7 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
     // Output Options
     pl.add_option("out", "Output prefix", outPref, true)
         .add_option("binary", "Output in binary format (default: false)", binaryOutput)
+        .add_option("sparsity-threshold", "Threshold to decide between sparse or dense output", sparseThr)
         .add_option("debug", "Debug", debug);
 
     try {
@@ -41,6 +40,9 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
         pl.print_help();
         return 1;
+    }
+    if (debug > 0) {
+        logger::Logger::getInstance().setLevel(logger::LogLevel::DEBUG);
     }
 
     std::vector<Rectangle<double>> rects;
@@ -59,7 +61,7 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
     }
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile, &rects);
 
-    Tiles2FeatureCooccurrence cooccurrence(nThreads, tileReader, parser, outPref, radius, halflife, localMin, binaryOutput, minNeighbor, weightByCount, debug);
+    Tiles2FeatureCooccurrence cooccurrence(nThreads, tileReader, parser, outPref, radius, halflife, localMin, binaryOutput, minNeighbor, weightByCount, sparseThr, debug);
 
     cooccurrence.run();
 
@@ -72,63 +74,97 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
 // TODO: allow input to have different sets of features
 // Add up multiple co-occurrence matrices
 static void accumulate_file(const std::string& fname,
-                            bool binary, int valueBytes,
-                            uint32_t nRows, uint32_t nCols,
+                            bool binary, bool dense,
+                            int valueBytes, uint32_t nRows, uint32_t nCols,
                             std::vector<double>& localQ) {
     std::ifstream ifs;
     if (binary)  ifs.open(fname, std::ios::binary);
     else         ifs.open(fname);
-
     if (!ifs)  {
         warning("Cannot open matrix: %s", fname.c_str());
         return;
     }
 
-    size_t npairs = 0;
-    if (binary) {
-        uint32_t f1, f2;  double val;
-        while (ifs.read(reinterpret_cast<char*>(&f1), sizeof(f1))) {
-            ifs.read(reinterpret_cast<char*>(&f2), sizeof(f2));
-            ifs.read(reinterpret_cast<char*>(&val), valueBytes);
-            if (f1 < nRows && f2 < nCols)
-                localQ[f1 * nCols + f2] += val;
-
-            if (++npairs % 5'000'000 == 0)
-                notice("[thread] %s : %zu pairs", fname.c_str(), npairs);
+    if (dense) {
+        if (binary) {
+            uint32_t M;
+            ifs.read(reinterpret_cast<char*>(&M), sizeof(M));
+            if (!ifs || (M != nRows || M != nCols)) {
+                warning("Matrix %s has dimension %u, but expected %u. Skipping.", fname.c_str(), M, nRows);
+                return;
+            }
+            std::vector<double> buffer(nRows * nCols);
+            ifs.read(reinterpret_cast<char*>(buffer.data()), nRows * nCols * valueBytes);
+            if (ifs.gcount() != static_cast<std::streamsize>(nRows * nCols * valueBytes)) {
+                warning("Incomplete read from dense binary file: %s. Skipping.", fname.c_str());
+                return;
+            }
+            for (size_t i = 0; i < localQ.size(); ++i) {
+                localQ[i] += buffer[i];
+            }
+        } else {
+            for (uint32_t r = 0; r < nRows; ++r) {
+                std::string line;
+                if (!std::getline(ifs, line)) break;
+                std::istringstream iss(line);
+                for (uint32_t c = 0; c < nCols; ++c) {
+                    double val;
+                    if (!(iss >> val)) break;
+                    localQ[r * nCols + c] += val;
+                }
+            }
         }
     } else {
-        std::string line;
-        while (std::getline(ifs, line)) {
+        size_t npairs = 0;
+        if (binary) {
             uint32_t f1, f2;  double val;
-            std::istringstream iss(line);
-            if (!(iss >> f1 >> f2 >> val)) continue;
-            if (f1 < nRows && f2 < nCols)
-                localQ[f1 * nCols + f2] += val;
+            while (ifs.read(reinterpret_cast<char*>(&f1), sizeof(f1))) {
+                ifs.read(reinterpret_cast<char*>(&f2), sizeof(f2));
+                ifs.read(reinterpret_cast<char*>(&val), valueBytes);
+                if (f1 < nRows && f2 < nCols)
+                    localQ[f1 * nCols + f2] += val;
 
-            if (++npairs % 5'000'000 == 0)
-                notice("[thread] %s : %zu pairs", fname.c_str(), npairs);
+                if (++npairs % 5'000'000 == 0)
+                    notice("[thread] %s : %zu pairs", fname.c_str(), npairs);
+            }
+        } else {
+            std::string line;
+            while (std::getline(ifs, line)) {
+                uint32_t f1, f2;  double val;
+                std::istringstream iss(line);
+                if (!(iss >> f1 >> f2 >> val)) continue;
+                if (f1 < nRows && f2 < nCols)
+                    localQ[f1 * nCols + f2] += val;
+
+                if (++npairs % 5'000'000 == 0)
+                    notice("[thread] %s : %zu pairs", fname.c_str(), npairs);
+            }
         }
     }
 }
 
 int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
-    std::string inList, outPref;
+    std::string inList, outPref, outFile;
     int32_t nRows = -1, nCols = -1;
+    uint32_t idxBytes = 4;
     int32_t valueBytes = 8;
     bool binaryInput = false, binaryOutput = false;
+    bool denseInput = false, denseOutput = false;
     int nThreads = 1;
     double eps = 1e-8;
 
     ParamList pl;
     pl.add_option("in-list", "List of co-occurrence files to merge", inList, true)
         .add_option("binary", "Input matrix is in binary format", binaryInput)
+        .add_option("dense", "Input are dense matricies", denseInput)
         .add_option("value-bytes", "Number of bytes for each value in the matrix (default: 8, only used for binary input)", valueBytes)
         .add_option("eps", "Skip values below this threshold (default: 1e-8)", eps)
         .add_option("shared-nrows", "", nRows, true)
         .add_option("shared-ncols", "", nCols)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads);
     pl.add_option("out", "Output prefix", outPref, true)
-        .add_option("binary-output", "Output matrix in binary format (default: false)", binaryOutput);
+        .add_option("binary-output", "Output matrix in binary format", binaryOutput)
+        .add_option("dense-output", "Output dense matrix", denseOutput);
 
     try {
         pl.readArgs(argc, argv);
@@ -145,6 +181,7 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
     if (nCols <= 0) {
         nCols = nRows;
     }
+    denseOutput |= denseInput;
 
     std::vector<std::string> inFiles;
     std::ifstream ifs(inList);
@@ -171,16 +208,14 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
 
     if (nThreads > 1) {
         std::vector<std::vector<double>> partialQ(nThreads,
-                                                std::vector<double>(nRows * nCols, 0.0));
+                std::vector<double>(nRows * nCols, 0.0));
         std::vector<std::thread> workers;
         // Launch reader threads
         for (unsigned t = 0; t < nThreads; ++t) {
             workers.emplace_back([&, t] {
                 for (size_t idx = t; idx < inFiles.size(); idx += nThreads) {
-                    accumulate_file(inFiles[idx],
-                                    binaryInput, valueBytes,
-                                    nRows, nCols,
-                                    partialQ[t]);
+                    accumulate_file(inFiles[idx], binaryInput, denseInput,
+                                    valueBytes, nRows, nCols, partialQ[t]);
                 }
             });
         }
@@ -197,15 +232,36 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
         int32_t nfiles = 0;
         for (const auto& filename : inFiles) {
             notice("Reading %s", filename.c_str());
-            accumulate_file(filename, binaryInput, valueBytes, nRows, nCols, Q);
+            accumulate_file(filename, binaryInput, denseInput, valueBytes, nRows, nCols, Q);
             nfiles++;
         }
         notice("Finished summing over %d files", nfiles);
     }
 
-    uint32_t outBytes = 8, idxBytes = 4;
+    if (denseOutput) {
+        if (binaryOutput) {
+            outFile = outPref + ".dense.bin";
+            std::ofstream ofs(outFile, std::ios::binary);
+            if (!ofs) error("Cannot open output: %s", outFile.c_str());
+            ofs.write(reinterpret_cast<const char*>(&nRows), sizeof(nRows));
+            ofs.write(reinterpret_cast<const char*>(Q.data()), Q.size() * valueBytes);
+        } else {
+            outFile = outPref + ".dense.tsv";
+            FILE* ofs = fopen(outFile.c_str(), "w");
+            if (!ofs) error("Cannot open output: %s", outFile.c_str());
+            for (uint32_t r = 0; r < nRows; ++r) {
+                for (uint32_t c = 0; c < nCols; ++c) {
+                    fprintf(ofs, "%.6f%c", Q[r * nCols + c], (c == nCols - 1) ? '\n' : '\t');
+                }
+            }
+            fclose(ofs);
+        }
+        notice("Wrote output to %s", outFile.c_str());
+        return 0;
+    }
+
     if (binaryOutput) {
-        std::string outFile = outPref + ".mtx.bin";
+        outFile = outPref + ".mtx.bin";
         std::ofstream ofs(outFile, std::ios::binary);
         if (!ofs) {
             error("Cannot open output: %s", outFile.c_str());
@@ -215,11 +271,11 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
                 if (Q[r * nCols + c] < eps) continue;
                 ofs.write(reinterpret_cast<const char*>(&r), idxBytes);
                 ofs.write(reinterpret_cast<const char*>(&c), idxBytes);
-                ofs.write(reinterpret_cast<const char*>(&Q[r*nCols+c]), outBytes);
+                ofs.write(reinterpret_cast<const char*>(&Q[r*nCols+c]), valueBytes);
             }
         }
     } else {
-        std::string outFile = outPref + ".mtx.tsv";
+        outFile = outPref + ".mtx.tsv";
         FILE* ofs = fopen(outFile.c_str(), "w");
         if (!ofs) {
             error("Cannot open output: %s", outFile.c_str());
@@ -231,7 +287,6 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
         }
         fclose(ofs);
     }
-    notice("Finished writing output");
-
+    notice("Wrote output to %s", outFile.c_str());
     return 0;
 }
