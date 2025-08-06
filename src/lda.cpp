@@ -2,7 +2,7 @@
 
 void LatentDirichletAllocation::sort_topics() {
     // sort topics by decreasing total weight
-    VectorXf topic_weights = components_.rowwise().sum();
+    VectorXd topic_weights = components_.rowwise().sum();
     std::vector<int> indices(n_topics_);
     std::iota(indices.begin(), indices.end(), 0);
     std::sort(indices.begin(), indices.end(),
@@ -10,7 +10,7 @@ void LatentDirichletAllocation::sort_topics() {
         return topic_weights[a] > topic_weights[b];
     });
     // update components_, exp_Elog_beta_, or Nk_
-    MatrixXf sorted_components(n_topics_, n_features_);
+    MatrixXd sorted_components(n_topics_, n_features_);
     for (int i = 0; i < n_topics_; i++) {
         sorted_components.row(i) = components_.row(indices[i]);
     }
@@ -50,7 +50,7 @@ void LatentDirichletAllocation::set_model_from_matrix(std::vector<std::vector<do
     }
 }
 
-void LatentDirichletAllocation::set_model_from_matrix(const RowMajorMatrixXf& lambda) {
+void LatentDirichletAllocation::set_model_from_matrix(const RowMajorMatrixXd& lambda) {
     if (lambda.rows() != n_topics_ || lambda.cols() != n_features_) {
         warning("Model matrix size mismatch, reset according to the provided global parameters. (%d x %d) -> (%d x %d)", n_topics_, n_features_, lambda.rows(), lambda.cols());
         n_topics_ = lambda.rows();
@@ -115,7 +115,7 @@ void LatentDirichletAllocation::set_model_from_tsv(const std::string& modelFile,
     }
 }
 
-void LatentDirichletAllocation::init_model(const std::optional<MatrixXf>& topic_word_distr, double scalar) {
+void LatentDirichletAllocation::init_model(const std::optional<MatrixXd>& topic_word_distr, double scalar) {
     if (topic_word_distr && topic_word_distr->rows() > 0
                             && topic_word_distr->cols() > 0) {
         components_ = *topic_word_distr;

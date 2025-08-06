@@ -36,9 +36,9 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
             std::vector<std::string> pair;
             split(pair, " ", token[i]);
             uint32_t u;
-            float v;
+            double v;
             if (!str2uint32(pair[0], u)) {return -1;}
-            if (!str2float(pair[1], v)) {return -1;}
+            if (!str2double(pair[1], v)) {return -1;}
             auto it = idx_remap.find(u);
             if (it != idx_remap.end()) {
                 doc.ids.push_back(it->second);
@@ -53,7 +53,7 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
             std::vector<std::string> pair;
             split(pair, " ", token[i]);
             if (!str2uint32(pair[0], doc.ids[j])) {return -1;}
-            if (!str2float(pair[1], doc.cnts[j])) {return -1;}
+            if (!str2double(pair[1], doc.cnts[j])) {return -1;}
             i += 1;
         }
     }

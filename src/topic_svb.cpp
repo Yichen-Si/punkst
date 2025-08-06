@@ -133,7 +133,7 @@ void TopicModelWrapper::writeModelToFile(const std::string& outFile) {
     std::ofstream outFileStream(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
 
-    MatrixXf model = copy_model_matrix(); // Virtual dispatch
+    MatrixXd model = copy_model_matrix(); // Virtual dispatch
     const auto& t_names = get_topic_names(); // Virtual dispatch
     int32_t nTopics = getNumTopics();
     outFileStream << "Feature";
@@ -176,10 +176,10 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
         fileopen = readMinibatch(inFileStream, idens, reader.getNlayer() > 1);
         if (minibatch.empty()) break;
 
-        Eigen::MatrixXf doc_topic = do_transform(minibatch); // Virtual dispatch
+        Eigen::MatrixXd doc_topic = do_transform(minibatch); // Virtual dispatch
         // Normalize and write results
         for (int i = 0; i < doc_topic.rows(); ++i) {
-            float sum = doc_topic.row(i).sum();
+            double sum = doc_topic.row(i).sum();
             if (sum > 0) doc_topic.row(i) /= sum;
         }
         for (int i = 0; i < minibatch.size(); ++i) {
@@ -328,7 +328,7 @@ void TopicModelWrapper::setupPriorMapping(std::vector<std::string>& feature_name
 
 void TopicModelWrapper::getTopicAbundance(std::vector<double>& topic_weights) {
     if (!initialized) error("%s: Model is not initialized", __FUNCTION__);
-    const MatrixXf& model = get_model_matrix();
+    const MatrixXd& model = get_model_matrix();
     topic_weights.resize(getNumTopics());
     for (int k = 0; k < getNumTopics(); k++) {
         topic_weights[k] = model.row(k).sum();

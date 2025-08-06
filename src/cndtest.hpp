@@ -17,7 +17,7 @@ public:
         initialize(0, priorMatrix_, modelFile, 1.0);
         beta_ = priorMatrix_;
         for (int32_t i = 0; i < beta_.rows(); ++i) {
-            float row_sum = beta_.row(i).sum();
+            double row_sum = beta_.row(i).sum();
             if (row_sum > 0) {
                 beta_.row(i) /= row_sum;
             }
@@ -41,20 +41,20 @@ public:
         makeSplits();
         for (int32_t k = 0; k < nFold_; ++k) {
             int32_t M = static_cast<int32_t>(trainIdx_[k].size());
-            MatrixXf modelMatrix = priorMatrix_(Eigen::placeholders::all, Eigen::ArrayXi::Map(trainIdx_[k].data(), M));
+            MatrixXd modelMatrix = priorMatrix_(Eigen::placeholders::all, Eigen::ArrayXi::Map(trainIdx_[k].data(), M));
             modelList_[k].reset();
             modelList_[k] = std::make_unique<LatentDirichletAllocation>(
                                 modelMatrix, seed_, nThreads_);
             modelList_[k]->set_svb_parameters(maxIter_, mDelta_);
         }
         l_sum.clear(); x_sum.clear(); yx.clear(); yl.clear();
-        l_sum.resize(nContrast_, Eigen::VectorXf::Zero(M_));
-        x_sum.resize(nContrast_, Eigen::VectorXf::Zero(M_));
-        yx.resize(nContrast_, Eigen::VectorXf::Zero(M_));
-        yl.resize(nContrast_, Eigen::VectorXf::Zero(M_));
+        l_sum.resize(nContrast_, Eigen::VectorXd::Zero(M_));
+        x_sum.resize(nContrast_, Eigen::VectorXd::Zero(M_));
+        yx.resize(nContrast_, Eigen::VectorXd::Zero(M_));
+        yl.resize(nContrast_, Eigen::VectorXd::Zero(M_));
     }
 
-    std::vector<Eigen::VectorXf> processAll() {
+    std::vector<Eigen::VectorXd> processAll() {
         int32_t v = 0, ntot = 0;
         while (fileopen) {
             int32_t n = processMinibatch();
@@ -95,11 +95,11 @@ public:
         return nDocs;
     }
 
-    std::vector<Eigen::VectorXf> computeScores() {
-        std::vector<Eigen::VectorXf> scores(nContrast_);
+    std::vector<Eigen::VectorXd> computeScores() {
+        std::vector<Eigen::VectorXd> scores(nContrast_);
         for (int r = 0; r < nContrast_; ++r) {
-            VectorXf I = yl[r].array() * x_sum[r].array() / (l_sum[r].array() + 0.5);
-            VectorXf U = yx[r].array() - I.array();
+            VectorXd I = yl[r].array() * x_sum[r].array() / (l_sum[r].array() + 0.5);
+            VectorXd U = yx[r].array() - I.array();
 if (debug_ % 2 == 1) {
     std::cout << r << "l_sum:\n  ";
     std::cout << l_sum[r].transpose() << "\n";
@@ -129,7 +129,7 @@ private:
     int32_t nContrast_;
     int32_t maxIter_;
     double mDelta_;
-    MatrixXf priorMatrix_, beta_; // K x M
+    MatrixXd priorMatrix_, beta_; // K x M
     int32_t seed_, debug_, verbose_;
     std::mt19937 rng_;
 
@@ -142,7 +142,7 @@ private:
     std::vector<std::vector<int32_t>> trainIdx_, heldoutIdx_;
 
     std::vector<Eigen::VectorXi> masks_, contrasts_;
-    std::vector<Eigen::VectorXf> l_sum, x_sum, yx, yl;
+    std::vector<Eigen::VectorXd> l_sum, x_sum, yx, yl;
 
     void makeSplits() {
         assert(M_  > 0);
@@ -208,8 +208,8 @@ private:
         int32_t nDocs = static_cast<int32_t>(minibatch.size());
         if (nDocs == 0) {return;}
         std::vector<Document> docs; docs.reserve(nDocs);
-        std::vector<float> xsum; xsum.reserve(nDocs);
-        std::vector<float> yvec; yvec.reserve(nDocs);
+        std::vector<double> xsum; xsum.reserve(nDocs);
+        std::vector<double> yvec; yvec.reserve(nDocs);
         for (int i = 0; i < nDocs; ++i) {
             if (!masks_[r][i]) {
                 continue;
@@ -226,8 +226,8 @@ private:
                     yx[r][doc.ids[j]] += doc.cnts[j];
                 }
             }
-            xsum.push_back(std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0f));
-            yvec.push_back((float) contrasts_[r][i]);
+            xsum.push_back(std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0));
+            yvec.push_back((double) contrasts_[r][i]);
             Document newDoc;
             for (size_t j = 0; j < n; ++j) {
                 int32_t idx = featureIdxMaps_[r][doc.ids[j]];
@@ -239,21 +239,21 @@ private:
             }
             docs.push_back(std::move(newDoc));
         }
-        MatrixXf doc_topic = modelList_[r]->transform(docs); // n x K
+        MatrixXd doc_topic = modelList_[r]->transform(docs); // n x K
         for (int i = 0; i < doc_topic.rows(); ++i) {
-            float sum = doc_topic.row(i).sum();
+            double sum = doc_topic.row(i).sum();
             if (sum > 0) doc_topic.row(i) /= sum;
         }
         auto colIdx = Eigen::ArrayXi::Map(heldoutIdx_[r].data(), heldoutIdx_[r].size());
-        VectorXf s = Eigen::Map<VectorXf>(xsum.data(), xsum.size());
-        Eigen::VectorXf y = Eigen::Map<Eigen::VectorXf>(yvec.data(), yvec.size());
-        MatrixXf lambda = doc_topic * beta_(Eigen::placeholders::all, colIdx);
+        VectorXd s = Eigen::Map<VectorXd>(xsum.data(), xsum.size());
+        Eigen::VectorXd y = Eigen::Map<Eigen::VectorXd>(yvec.data(), yvec.size());
+        MatrixXd lambda = doc_topic * beta_(Eigen::placeholders::all, colIdx);
         lambda.array().colwise() *= s.array();
         l_sum[r](colIdx) += lambda.colwise().sum();
         yl[r](colIdx) += lambda.transpose() * y;
 
 if (debug_ % 2 == 1) {
-    VectorXf max_lambda = lambda.rowwise().maxCoeff();
+    VectorXd max_lambda = lambda.rowwise().maxCoeff();
     std::cout << r << " lambda * s:\n  ";
     for (int i = 0; i < 10; ++i) {
         std::cout << i << " " << max_lambda(i) << ", ";

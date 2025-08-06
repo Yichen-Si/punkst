@@ -2,26 +2,26 @@
 
 void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& docs) {
     int minibatch_size = docs.size();
-    MatrixXf doc_topic_distr = MatrixXf::Zero(minibatch_size, n_topics_);
+    MatrixXd doc_topic_distr = MatrixXd::Zero(minibatch_size, n_topics_);
 
-    tbb::enumerable_thread_specific<MatrixXf> ss_acc{
-        [&]{ return MatrixXf::Zero(n_topics_, n_features_); }
+    tbb::combinable<MatrixXd> ss_acc{
+        [&]{ return MatrixXd::Zero(n_topics_, n_features_); }
     };
-    tbb::enumerable_thread_specific<std::vector<int32_t>> niters_acc{
+    tbb::combinable<std::vector<int32_t>> niters_acc{
         []{ return std::vector<int32_t>(); }
     };
-    tbb::affinity_partitioner ap;
+
     tbb::parallel_for(
         tbb::blocked_range<int>(0, minibatch_size),
         [&](const tbb::blocked_range<int>& range) {
         auto& local_ss   = ss_acc.local();
         auto& local_nits = niters_acc.local();
-        VectorXf phi_k(n_topics_);
+        VectorXd phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
             // document level variational parameters.
             const auto& doc = docs[d];
             int n_ids = doc.ids.size();
-            VectorXf doc_topic, exp_doc;
+            VectorXd doc_topic, exp_doc;
             int iter = svb_fit_one_document(doc_topic, exp_doc, docs[d]);
             doc_topic_distr.row(d) = doc_topic.transpose();
             local_nits.push_back(iter);
@@ -33,21 +33,22 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
                 local_ss.col(word_id) += phi_k * doc.cnts[j];
             }
         }
-    }, ap);
+    });
 
-    MatrixXf ss = ss_acc.combine(
-        [](const MatrixXf &A, const MatrixXf &B) {
-            return A + B;
-        }
-    );
-    std::vector<int32_t> niters = niters_acc.combine(
-        [](const std::vector<int32_t> &a,
-            const std::vector<int32_t> &b) {
-            std::vector<int32_t> out = a;
-            out.insert(out.end(), b.begin(), b.end());
-            return out;
-        }
-    );
+        // 4) Merge thread‐local ss and niters into the global buffers
+        MatrixXd ss = ss_acc.combine(
+            [](const MatrixXd &A, const MatrixXd &B) {
+                return A + B;
+            }
+        );
+        std::vector<int32_t> niters = niters_acc.combine(
+            [](const std::vector<int32_t> &a,
+                const std::vector<int32_t> &b) {
+                std::vector<int32_t> out = a;
+                out.insert(out.end(), b.begin(), b.end());
+                return out;
+            }
+        );
 
     if (verbose_ > 0) {
         int32_t fail_converge = 0;
@@ -76,16 +77,16 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
     // Update the global parameters using an online learning rate.
     update_count_++;
     double rho = std::pow(learning_offset_ + update_count_, -learning_decay_);
-    MatrixXf update_val =
-            MatrixXf::Constant(n_topics_, n_features_, topic_word_prior_) +
+    MatrixXd update_val =
+            MatrixXd::Constant(n_topics_, n_features_, topic_word_prior_) +
             (static_cast<double>(total_doc_count_) / minibatch_size) * ss;
     components_ = (1 - rho) * components_ + rho * update_val;
     exp_Elog_beta_ = dirichlet_expectation_2d(components_);
 }
 
 int32_t LatentDirichletAllocation::svb_fit_one_document(
-    VectorXf& doc_topic, VectorXf& exp_doc,
-    const Document &doc, const std::optional<VectorXf>& doc_topic_) {
+    VectorXd& doc_topic, VectorXd& exp_doc,
+    const Document &doc, const std::optional<VectorXd>& doc_topic_) {
     int n_ids = doc.ids.size();
     if (!doc_topic_) {
         doc_topic.resize(n_topics_);
@@ -109,31 +110,32 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
 
     exp_doc = dirichlet_expectation_1d(doc_topic, 0);
     // Build a submatrix for the nonzero word indices in the document.
-    MatrixXf exp_topic_word(n_topics_, n_ids);
+    MatrixXd exp_topic_word(n_topics_, n_ids);
     for (int j = 0; j < n_ids; j++) {
         exp_topic_word.col(j) = exp_Elog_beta_.col(doc.ids[j]);
     }
-    Eigen::Map<const Eigen::VectorXf> doc_counts(doc.cnts.data(), n_ids);
+    Eigen::Map<const Eigen::VectorXd> doc_counts(doc.cnts.data(), n_ids);
     // Iterative update for the document.
     double diff = 1.;
     int iter = 0;
-    VectorXf last_doc(n_topics_);
-    VectorXf norm_phi(n_ids);
     while (iter < max_doc_update_iter_) {
-        // VectorXf last_doc = doc_topic; // Save the previous state.
-        last_doc = doc_topic;
+        // VectorXd last_doc = doc_topic; // Save the previous state.
+        VectorXd last_doc = doc_topic;
 
         // norm_phi = exp_doc^T * exp_topic_word (|ids| x 1).
-        VectorXf norm_phi = exp_topic_word.transpose() * exp_doc;
+        VectorXd norm_phi = exp_topic_word.transpose() * exp_doc;
         norm_phi.array() += eps_; // Avoid division by zero.
 
-        VectorXf ratio = doc_counts.array() / norm_phi.array();
-        VectorXf new_vector = exp_topic_word * ratio; // K x 1
+        VectorXd ratio = doc_counts.array() / norm_phi.array();
+        VectorXd new_vector = exp_topic_word * ratio; // K x 1
         doc_topic = exp_doc.array() * new_vector.array();
+        // Dirichlet expectation update:
+        // Add the prior and update exp_doc.
         exp_doc = dirichlet_expectation_1d(doc_topic, doc_topic_prior_);
 
         // Check convergence via mean absolute change.
         diff = (last_doc - doc_topic).cwiseAbs().sum() / n_topics_;
+
         iter++;
         if (diff < mean_change_tol_) {
             break;
@@ -155,7 +157,7 @@ void LatentDirichletAllocation::set_svb_parameters(int32_t max_iter, double tol)
 }
 
 std::vector<double> LatentDirichletAllocation::approx_bound(
-    const std::vector<Document>& docs, const MatrixXf& doc_topic_distr, bool sub_sampling) {
+    const std::vector<Document>& docs, const MatrixXd& doc_topic_distr, bool sub_sampling) {
     const int n_docs     = static_cast<int>(docs.size());
     const int n_topics   = n_topics_;
     const int n_features = n_features_;
@@ -200,7 +202,7 @@ std::vector<double> LatentDirichletAllocation::approx_bound(
         tbb::blocked_range<int>(0, n_docs), 0.0,
         [&](const tbb::blocked_range<int>& range, double local_sum) {
             for (int d = range.begin(); d != range.end(); ++d) {
-                Eigen::VectorXf gamma = doc_topic_distr.row(d).transpose();
+                Eigen::VectorXd gamma = doc_topic_distr.row(d).transpose();
                 double sum_gamma  = gamma.sum();
                 double psi_sum    = psi(sum_gamma);
                 double doc_score  = 0.0;
@@ -254,7 +256,7 @@ std::vector<double> LatentDirichletAllocation::approx_bound(
     return { score1, score2, score3 };
 }
 
-double LatentDirichletAllocation::_perplexity_precomp_distr(const std::vector<Document>& docs, const MatrixXf& doc_topic_distr, bool sub_sampling) {
+double LatentDirichletAllocation::_perplexity_precomp_distr(const std::vector<Document>& docs, const MatrixXd& doc_topic_distr, bool sub_sampling) {
     std::vector<double> scores = approx_bound(docs, doc_topic_distr, sub_sampling);
     double bound = scores[0] + scores[1] + scores[2];
     double word_cnt = 0.0;

@@ -82,9 +82,9 @@ protected:
 
     // --- Pure Virtual "Hooks" for the Template Methods ---
     virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
-    virtual MatrixXf do_transform(const std::vector<Document>& batch) = 0;
-    virtual const RowMajorMatrixXf& get_model_matrix() const = 0;
-    virtual RowMajorMatrixXf copy_model_matrix() const = 0;
+    virtual MatrixXd do_transform(const std::vector<Document>& batch) = 0;
+    virtual const RowMajorMatrixXd& get_model_matrix() const = 0;
+    virtual RowMajorMatrixXd copy_model_matrix() const = 0;
     virtual const std::vector<std::string>& get_topic_names() = 0;
 };
 
@@ -111,7 +111,7 @@ public:
         int32_t totalDocCount = 1000000,
         const std::string& priorFile = "", double priorScale = 1.,
         double s_beta = 1, double s_theta = 1, double kappa_theta = 0.7, double tau_theta = 10.0, int32_t burnin = 1) {
-        MatrixXf priorMatrix;
+        MatrixXd priorMatrix;
         initialize(nTopics, priorMatrix, priorFile, priorScale);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
@@ -130,7 +130,7 @@ public:
         int32_t totalDocCount = 1000000,
         const std::string& priorFile = "", double priorScale = 1.,
         int32_t maxIter = 100, double mDelta = -1.) {
-        MatrixXf priorMatrix;
+        MatrixXd priorMatrix;
         initialize(nTopics, priorMatrix, priorFile, priorScale);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
@@ -175,7 +175,7 @@ protected:
         return;
     }
 
-    void initialize(int32_t nTopics, MatrixXf& priorMatrix, const std::string& priorFile, double priorScale = 1) {
+    void initialize(int32_t nTopics, MatrixXd& priorMatrix, const std::string& priorFile, double priorScale = 1) {
         if (priorFile.empty()) {
             initialize(nTopics);
             return;
@@ -183,14 +183,14 @@ protected:
         // Read prior model file
         std::vector<std::string> priorFeatureNames;
         std::vector<std::uint32_t> kept_indices;
-        MatrixXf fullPriorMatrix;
+        MatrixXd fullPriorMatrix;
         readModelFromTsv(priorFile, priorFeatureNames, fullPriorMatrix);
 
         // Setup feature mapping between input data and prior model
         setupPriorMapping(priorFeatureNames, kept_indices);
 
         // Create subset matrix for only the intersected features
-        priorMatrix = MatrixXf(K_, M_);
+        priorMatrix = MatrixXd(K_, M_);
         // Map columns from full prior matrix to subset matrix
         for (size_t i = 0; i < kept_indices.size(); ++i) {
             priorMatrix.col(i) = fullPriorMatrix.col(kept_indices[i]);
@@ -204,7 +204,7 @@ protected:
                 (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
     }
 
-    void readModelFromTsv(const std::string& modelFile, std::vector<std::string>& featureNames, MatrixXf& modelMatrix) {
+    void readModelFromTsv(const std::string& modelFile, std::vector<std::string>& featureNames, MatrixXd& modelMatrix) {
         std::ifstream modelIn(modelFile, std::ios::in);
         if (!modelIn) {
             error("Failed to open model file: %s", modelFile.c_str());
@@ -250,13 +250,13 @@ protected:
     void do_partial_fit(const std::vector<Document>& batch) override {
         lda->partial_fit(batch);
     }
-    MatrixXf do_transform(const std::vector<Document>& batch) override {
+    MatrixXd do_transform(const std::vector<Document>& batch) override {
         return lda->transform(batch);
     }
-    const RowMajorMatrixXf& get_model_matrix() const override {
+    const RowMajorMatrixXd& get_model_matrix() const override {
         return lda->get_model();
     }
-    RowMajorMatrixXf copy_model_matrix() const override {
+    RowMajorMatrixXd copy_model_matrix() const override {
         return lda->get_model();
     }
     const std::vector<std::string>& get_topic_names() override {
@@ -366,19 +366,19 @@ protected:
     void do_partial_fit(const std::vector<Document>& batch) override {
         hdp->partial_fit(batch);
     }
-    MatrixXf do_transform(const std::vector<Document>& batch) override {
+    MatrixXd do_transform(const std::vector<Document>& batch) override {
         return hdp->transform(batch);
     }
-    const RowMajorMatrixXf& get_model_matrix() const override {
+    const RowMajorMatrixXd& get_model_matrix() const override {
         return hdp->get_model();
     }
-    RowMajorMatrixXf copy_model_matrix() const override {
+    RowMajorMatrixXd copy_model_matrix() const override {
         // If no filtering has been applied, return the full model.
         if (num_topics_to_output_ < 0 || num_topics_to_output_ >= K_) {
             return hdp->get_model();
         }
-        const MatrixXf& fullModel = hdp->get_model();
-        MatrixXf truncatedModel(num_topics_to_output_, M_);
+        const MatrixXd& fullModel = hdp->get_model();
+        MatrixXd truncatedModel(num_topics_to_output_, M_);
         for (int32_t i = 0; i < num_topics_to_output_; ++i) {
             truncatedModel.row(i) = fullModel.row(sorted_indices_[i]);
         }

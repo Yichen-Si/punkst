@@ -14,7 +14,7 @@ struct IndexEntry {
 
 struct Document {
     std::vector<uint32_t> ids; // Length: number of nonzero words in the doc
-    std::vector<float> cnts;
+    std::vector<double> cnts;
 };
 
 struct PixelValues {
