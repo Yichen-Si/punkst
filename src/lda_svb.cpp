@@ -22,7 +22,7 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
             const auto& doc = docs[d];
             int n_ids = doc.ids.size();
             VectorXd doc_topic, exp_doc;
-            int iter = svb_fit_one_document(doc_topic, exp_doc, docs[d]);
+            int iter = svb_fit_one_document(doc_topic, exp_doc, doc);
             doc_topic_distr.row(d) = doc_topic.transpose();
             local_nits.push_back(iter);
             // update sufficient statistics.
@@ -35,20 +35,20 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
         }
     });
 
-        // 4) Merge thread‐local ss and niters into the global buffers
-        MatrixXd ss = ss_acc.combine(
-            [](const MatrixXd &A, const MatrixXd &B) {
-                return A + B;
-            }
-        );
-        std::vector<int32_t> niters = niters_acc.combine(
-            [](const std::vector<int32_t> &a,
-                const std::vector<int32_t> &b) {
-                std::vector<int32_t> out = a;
-                out.insert(out.end(), b.begin(), b.end());
-                return out;
-            }
-        );
+    // 4) Merge thread‐local ss and niters into the global buffers
+    MatrixXd ss = ss_acc.combine(
+        [](const MatrixXd &A, const MatrixXd &B) {
+            return A + B;
+        }
+    );
+    std::vector<int32_t> niters = niters_acc.combine(
+        [](const std::vector<int32_t> &a,
+            const std::vector<int32_t> &b) {
+            std::vector<int32_t> out = a;
+            out.insert(out.end(), b.begin(), b.end());
+            return out;
+        }
+    );
 
     if (verbose_ > 0) {
         int32_t fail_converge = 0;

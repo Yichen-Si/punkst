@@ -151,6 +151,7 @@ public:
         int it = 0;
         while (it < max_iter_inner_ && meanchange > tol_) {
             it++;
+            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             // Update phi.
             // psi: (N x n) * Elog_theta (n x K) → phi: (N x K)
             batch.phi = batch.psi * Elog_theta + Xb;
@@ -175,8 +176,6 @@ public:
             // broadcast alpha_
             batch.gamma = batch.psi.transpose() * batch.phi;
             batch.gamma += alpha_.replicate(batch.n, 1);
-            // Update E[log θ] using the new gamma.
-            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             // Check convergence
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = batch.gamma;
