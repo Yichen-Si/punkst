@@ -1,4 +1,5 @@
 #include "dataunits.hpp"
+#include <regex>
 
 int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal) {
     assert(modal < nModal && "Modal out of range");
@@ -102,6 +103,102 @@ void HexReader::readMetadata(const std::string &metaFile) {
     }
     mintokens = offset_data + 2 * nModal;
     hasCoordinates = (icol_x >= 0 && icol_y >= 0);
+}
+
+void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex) {
+    bool check_include = !include_ftr_regex.empty();
+    bool check_exclude = !exclude_ftr_regex.empty();
+    std::regex regex_include(include_ftr_regex);
+    std::regex regex_exclude(exclude_ftr_regex);
+    std::ifstream inFeature(featureFile);
+    if (!inFeature) {
+        error("Error opening features file: %s", featureFile.c_str());
+    }
+    std::string line;
+    uint32_t idx0 = 0, idx1 = 0;
+    std::unordered_map<uint32_t, uint32_t> idx_remap;
+    std::unordered_map<std::string, uint32_t> dict;
+    std::stringstream ss;
+    bool has_dict = featureDict(dict);
+    std::unordered_set<std::string> kept_features; // avoid duplicates
+    while (std::getline(inFeature, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream iss(line);
+        std::string feature;
+        int32_t count;
+        if (!(iss >> feature >> count)) {
+            error("Error reading feature file at line: %s", line.c_str());
+        }
+        uint32_t idx_prev = idx0;
+        idx0++;
+        if (count < minCount) {
+            continue;
+        }
+        if (has_dict) {
+            auto it = dict.find(feature);
+            if (it == dict.end()) {
+                continue;
+            }
+            idx_prev = it->second;
+        }
+        bool include = !check_include || std::regex_match(feature, regex_include);
+        bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
+        if (include && !exclude &&
+            kept_features.find(feature) == kept_features.end()) {
+            idx_remap[idx_prev] = idx1++;
+            kept_features.insert(feature);
+        } else {
+            ss << " " << feature;
+        }
+    }
+    notice("%s: %d features are kept out of %d", __FUNCTION__, idx1, idx0);
+    std::cout << "Excluded due to regex:" << ss.str() << std::endl;
+    setFeatureIndexRemap(idx_remap);
+}
+
+int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount, int32_t modal) {
+    std::ifstream inFileStream(inFile);
+    if (!inFileStream) {
+        error("%s: Error opening input file: %s", __func__, inFile.c_str());
+    }
+    std::string line, l;
+    int32_t n = 0;
+    while (std::getline(inFileStream, line)) {
+        Document doc;
+        int32_t ct = parseLine(doc, l, line, modal);
+        if (ct < 0) {
+            error("Error parsing line %s", line.c_str());
+        }
+        if (ct < minCount) {
+            continue;
+        }
+        docs.push_back(std::move(doc));
+        info.push_back(std::move(l));
+        n++;
+    }
+    return n;
+}
+
+int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount, int32_t modal) {
+    std::ifstream inFileStream(inFile);
+    if (!inFileStream) {
+        error("%s: Error opening input file: %s", __func__, inFile.c_str());
+    }
+    std::string line, l;
+    int32_t n = 0;
+    while (std::getline(inFileStream, line)) {
+        Document doc;
+        int32_t ct = parseLine(doc, l, line, modal);
+        if (ct < 0) {
+            error("Error parsing line %s", line.c_str());
+        }
+        if (ct < minCount) {
+            continue;
+        }
+        docs.push_back(std::move(doc));
+        n++;
+    }
+    return n;
 }
 
 bool UnitValues::readFromLine(const std::string& line, int32_t nModal, bool labeled) {

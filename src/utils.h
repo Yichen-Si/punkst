@@ -13,6 +13,8 @@
 #include <locale>
 #include <stdexcept>
 #include <opencv2/opencv.hpp>
+#include <Eigen/Dense>
+
 // extern "C" {
 //     #include "htslib/hts.h"
 //     #include "htslib/bgzf.h"
@@ -118,6 +120,37 @@ std::string fp_to_string(FP x, int digits)
 #endif
     std::snprintf(buf, sizeof buf, "%.*f", digits, static_cast<double>(x));
     return buf;
+}
+
+// Write matrix to tsv
+template <typename Scalar>
+void write_matrix_to_file(const std::string& output,
+        const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>& mat,
+        int digits, bool scientific,
+        const std::vector<std::string>& rnames,
+        const std::string& c0name) {
+    if (mat.rows() != static_cast<Eigen::Index>(rnames.size())) {
+        throw std::runtime_error("Dimension mismatch: Matrix rows and row names count differ.");
+    }
+    std::ofstream ofs(output);
+    if (!ofs.is_open()) {
+        throw std::runtime_error("Cannot open file for writing: " + output);
+    }
+    const static Eigen::IOFormat TSVFormat(Eigen::StreamPrecision, Eigen::DontAlignCols, "\t", "");
+    ofs << c0name;
+    for (int k = 0; k < mat.cols(); ++k) {
+        ofs << "\t" << k;
+    }
+    ofs << "\n";
+    ofs << std::setprecision(digits);
+    if (scientific) {
+        ofs << std::scientific;
+    } else {
+        ofs << std::fixed;
+    }
+    for (int i = 0; i < mat.rows(); ++i) {
+        ofs << rnames[i] << "\t" << mat.row(i).format(TSVFormat) << "\n";
+    }
 }
 
 // String search

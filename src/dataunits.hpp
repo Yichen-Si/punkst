@@ -4,6 +4,7 @@
 #include "utils.h"
 #include "json.hpp"
 #include "assert.h"
+#include <unordered_set>
 
 template<typename T>
 struct IndexEntry {
@@ -167,11 +168,16 @@ public:
         features = std::move(new_features);
     }
 
+    void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex);
+
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0) {
         std::string info;
         return parseLine(doc, info, line, modal);
     }
     int32_t parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal = 0);
+
+    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0);
+    int32_t readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0);
 
 private:
 

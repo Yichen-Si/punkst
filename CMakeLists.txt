@@ -88,6 +88,8 @@ set(SOURCE_FILES
     script/multi_conditionalde.cpp
     src/poisreg.hpp
     src/poisnmf.hpp
+    src/poisnmf.cpp
+    script/fit_nmf.cpp
     )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})
