@@ -86,6 +86,8 @@ set(SOURCE_FILES
     script/merge_units.cpp
     src/cndtest.hpp
     script/multi_conditionalde.cpp
+    src/poisreg.hpp
+    src/poisnmf.hpp
     )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

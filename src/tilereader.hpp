@@ -151,6 +151,7 @@ struct lineParser {
                 i++;
             }
         }
+        return true;
     }
 
     void setFeatureDict(const std::unordered_map<std::string, uint32_t>& dict) {
