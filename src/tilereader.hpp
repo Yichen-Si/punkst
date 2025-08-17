@@ -299,7 +299,7 @@ struct lineParserUnival : public lineParser {
     }
 
     template<typename T>
-    int32_t parse(RecordT<T>& rec, std::string& line, bool checkBounds = false) {
+    int32_t parse(RecordT<T>& rec, std::string& line, bool checkBounds = false) const {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < n_tokens) {
@@ -334,7 +334,7 @@ struct lineParserUnival : public lineParser {
     }
 
     template<typename T>
-    int32_t parse( RecordExtendedT<T>& rec, std::string &line ) {
+    int32_t parse( RecordExtendedT<T>& rec, std::string &line ) const {
         int32_t base_idx = parse(rec.recBase, line);
         if (base_idx < 0) return base_idx;
         std::vector<std::string> tokens;

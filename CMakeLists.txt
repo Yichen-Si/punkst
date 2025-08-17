@@ -90,6 +90,7 @@ set(SOURCE_FILES
     src/poisnmf.hpp
     src/poisnmf.cpp
     script/fit_nmf.cpp
+    script/draw_pixel_genes.cpp
     )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

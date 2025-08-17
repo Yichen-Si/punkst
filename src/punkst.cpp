@@ -15,6 +15,7 @@ int32_t cmdMultiSample(int32_t argc, char** argv);
 int32_t cmdMergeUnits(int32_t argc, char** argv);
 int32_t cmdMultiConditionTest(int argc, char** argv);
 int32_t cmdNmfPoisLog1p(int32_t argc, char** argv);
+int32_t cmdDrawPixelFeatures(int32_t argc, char** argv);
 
 int32_t main(int32_t argc, char** argv) {
 
@@ -34,7 +35,8 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("multisample-prepare", "Process multisample data", cmdMultiSample)
         .add_command("merge-units", "Merge multiple single cell/hexagon files into a single file", cmdMergeUnits)
         .add_command("multi-conditional-test", "Multi-sample conditional DE test", cmdMultiConditionTest)
-        .add_command("nmf-pois-log1p", "Fit Poisson log1p NMF", cmdNmfPoisLog1p);
+        .add_command("nmf-pois-log1p", "Fit Poisson log1p NMF", cmdNmfPoisLog1p)
+        .add_command("draw-pixel-features", "Draw pixel level features/genes", cmdDrawPixelFeatures);
 
     if (argc < 2) {
         std::cerr << "Licensed under the CC BY-NC 4.0 https://creativecommons.org/licenses/by-nc/4.0/\n\n";

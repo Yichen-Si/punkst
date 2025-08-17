@@ -1,4 +1,5 @@
 #include "pixresultreader.hpp"
+#include "dataunits.hpp"
 #include <opencv2/opencv.hpp>
 
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
@@ -22,8 +23,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
       .add_option("ymin", "Minimum y coordinate", ymin)
       .add_option("ymax", "Maximum y coordinate", ymax)
       .add_option("filter", "Access only the queried region using the index", filter)
-      .add_option("channel-list", "Comma-separated channel IDs to draw", channelListStr)
-      .add_option("color-list", "Comma-separated hex colors (#RRGGBB)", colorListStr);
+      .add_option("channel-list", "A list of channel IDs to draw", channelListStr)
+      .add_option("color-list", "A list of colors for channels in hex code (#RRGGBB)", colorListStr);
     // Output
     pl.add_option("out", "Output image file", outFile, true)
       .add_option("verbose", "Verbose", verbose);
@@ -44,29 +45,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         error("Output file is not writable: %s", outFile.c_str());
 
     if (!rangeFile.empty()) {
-        std::ifstream in(rangeFile);
-        if (!in.is_open())
-            error("Error opening range file: %s", rangeFile.c_str());
-        std::array<bool,4> seen = {false, false, false, false};
-        std::string key;
-        double value;
-        while (in >> key >> value) {
-            if      (key == "xmin") { xmin = value; seen[0] = true; }
-            else if (key == "xmax") { xmax = value; seen[1] = true; }
-            else if (key == "ymin") { ymin = value; seen[2] = true; }
-            else if (key == "ymax") { ymax = value; seen[3] = true; }
-            else {
-                std::cerr << "Warning: unrecognized key '" << key << "' in "
-                        << rangeFile << "\n";
-            }
-        }
-        // Verify that we found them all
-        static constexpr const char* names[4] = {"xmin","xmax","ymin","ymax"};
-        for (int i = 0; i < 4; ++i) {
-            if (!seen[i]) {
-                error("Missing %s in range file: %s", names[i], rangeFile.c_str());
-            }
-        }
+       readCoordRange(rangeFile, xmin, xmax, ymin, ymax);
     }
     if (xmin >= xmax || ymin >= ymax)
         error("Invalid range: xmin >= xmax or ymin >= ymax");

@@ -192,3 +192,30 @@ private:
 
     void readMetadata(const std::string &metaFile);
 };
+
+template<typename T>
+void readCoordRange(const std::string& rangeFile, T& xmin, T& xmax, T& ymin, T& ymax) {
+    std::ifstream in(rangeFile);
+    if (!in.is_open())
+        error("Cannot open range file: %s", rangeFile.c_str());
+    std::array<bool,4> seen = {false, false, false, false};
+    std::string key;
+    T value;
+    while (in >> key >> value) {
+        if      (key == "xmin") { xmin = value; seen[0] = true; }
+        else if (key == "xmax") { xmax = value; seen[1] = true; }
+        else if (key == "ymin") { ymin = value; seen[2] = true; }
+        else if (key == "ymax") { ymax = value; seen[3] = true; }
+        else {
+            std::cerr << "Warning: unrecognized key '" << key << "' in "
+                      << rangeFile << "\n";
+        }
+    }
+    // Verify that we found them all
+    static constexpr const char* names[4] = {"xmin","xmax","ymin","ymax"};
+    for (int i = 0; i < 4; ++i) {
+        if (!seen[i]) {
+            error("Missing %s in range file: %s", names[i], rangeFile.c_str());
+        }
+    }
+}
