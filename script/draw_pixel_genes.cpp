@@ -53,7 +53,7 @@ void draw_worker(
         std::string line;
         while (iter->next(line)) {
             RecordT<double> rec;
-            if (parser.parse(rec, line) < 0) continue;
+            if (parser.parse(rec, line) < 0 || rec.ct <= 0) continue;
 
             int xpix = static_cast<int>((rec.x - xmin) / scale) - left;
             int ypix = static_cast<int>((rec.y - ymin) / scale) - top;
@@ -103,16 +103,16 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
     double scale = 1.0;
     double xmin = 0, xmax = -1, ymin = 0, ymax = -1;
     int32_t verbose = 1000000;
-    int icol_x = 0, icol_y = 1, icol_feature = 2, icol_val = 3;
+    int icol_x, icol_y, icol_feature, icol_val;
     int n_threads = 1;
 
     ParamList pl;
     pl.add_option("in-tsv", "Input TSV file from pts2tiles.", dataFile, true)
       .add_option("in-index", "Index file for the TSV.", indexFile, true)
-      .add_option("icol-x", "0-based column for x-coordinate.", icol_x)
-      .add_option("icol-y", "0-based column for y-coordinate.", icol_y)
-      .add_option("icol-feature", "0-based column for feature ID/name.", icol_feature)
-      .add_option("icol-val", "0-based column for feature value.", icol_val)
+      .add_option("icol-x", "0-based column for x-coordinate.", icol_x, true)
+      .add_option("icol-y", "0-based column for y-coordinate.", icol_y, true)
+      .add_option("icol-feature", "0-based column for feature ID/name.", icol_feature, true)
+      .add_option("icol-val", "0-based column for feature value.", icol_val, true)
       .add_option("feature-dict", "Dictionary file to map feature names to integer IDs.", dictFile)
       .add_option("feature-color-map", "TSV file with feature names and hex colors.", featureColorFile)
       .add_option("feature-list", "A list of feature names to draw.", featureListStr)
@@ -259,12 +259,12 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
             float total_weight = global_weight_accumulator(y, x);
             if (total_weight > 0) {
                 cv::Vec3f avg_color = global_color_accumulator(y, x) / total_weight;
-                float intensity = (global_median_weight > 0) ? std::min(1.0f, total_weight / global_median_weight) : 1.0f;
+                float intensity = (global_median_weight > 0) ? std::min(1.0f, total_weight / global_median_weight) : 0.0f;
                 cv::Vec3f final_color = avg_color * intensity;
                 out_image.at<cv::Vec3b>(y, x) = cv::Vec3b(
-                    cv::saturate_cast<uchar>(final_color[0]), // B
+                    cv::saturate_cast<uchar>(final_color[2]), // B
                     cv::saturate_cast<uchar>(final_color[1]), // G
-                    cv::saturate_cast<uchar>(final_color[2])  // R
+                    cv::saturate_cast<uchar>(final_color[0])  // R
                 );
             }
         }
