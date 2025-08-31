@@ -14,70 +14,164 @@ void PoissonLog1pNMF::set_nthreads(int nThreads) {
     notice("Requested %d threads, actual number of threads: %d", nThreads, nThreads_);
 }
 
-void PoissonLog1pNMF::fit(const std::vector<Document>& docs, const MLEOptions mle_opts, int max_iter, double tol) {
+void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
+    MLEOptions mle_opts, int max_iter, double tol,
+    double covar_coef_min, double covar_coef_max) {
     size_t N = docs.size();
     if (N == 0) {
         warning("%s: Empty input", __func__);
         return;
     }
-    std::vector<Document> mtx_t = transpose_data(docs);
-    // std::uniform_real_distribution<double> dist(0.1, 1.0);
+    VectorXd cvec;
+    P_ = (int) docs[0].covar.size();
+    std::vector<Document> mtx_t = transpose_data(docs, cvec);
+    RowMajorMatrixXd X;
     std::gamma_distribution<double> dist(100.0, 0.01);
     theta_ = RowMajorMatrixXd::Zero(N, K_);
     beta_  = RowMajorMatrixXd::Zero(M_,K_);
-    for(int k=0; k<K_; ++k) for(int j=0; j<M_; ++j) beta_(j,k) = dist(rng_);
+    for(int k=0; k<K_; ++k) { // Initialize beta
+        for(int j=0; j<M_; ++j)
+            beta_(j,k) = dist(rng_);
+    }
+    MLEOptions mle_opts_bcov = mle_opts;
+    mle_opts.set_bounds(0.0, std::numeric_limits<double>::infinity(), K_);
+    std::vector<double> offset;
+    double objective_old = std::numeric_limits<double>::max()-1;
+    if (P_ > 0) {
+        Bcov_.resize(M_, P_);
+        X.resize(N, P_); // covariate matrix
+        for (int i = 0; i < N; ++i) {
+            X.row(i) = docs[i].covar.transpose();
+        }
+        mle_opts_bcov.set_bounds(covar_coef_min, covar_coef_max, P_);
+        // Do one round of regression for covariates only, with a mean offset
+        notice("Fit initial regressions for covariates");
+        objective_old = tbb::parallel_reduce(
+            tbb::blocked_range<int>(0, M_), 0.0,
+            [&](const tbb::blocked_range<int>& r, double local_sum) {
+            MLEStats stats{};
+            for (int j = r.begin(); j != r.end(); ++j) {
+                const auto& colj = mtx_t[j];
+                if (colj.ids.empty()) {
+                    Bcov_.row(j).setZero();
+                    continue;
+                }
+                double mu_j = 0.0;
+                for (size_t i = 0; i < colj.ids.size(); ++i) {
+                    mu_j += std::log1p(colj.cnts[i] / cvec[colj.ids[i]]);
+                }
+                mu_j /= N;
+                VectorXd o = VectorXd::Constant(N, mu_j);
+                VectorXd bj; // empty
+                if (exact_) {
+                    local_sum += pois_log1p_mle_exact(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats);
+                } else {
+                    local_sum += pois_log1p_mle(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats);
+                }
+                Bcov_.row(j) = bj.transpose();
+            }
+            return local_sum;
+        }, std::plus<double>());
+        objective_old /= N;
+    }
 
-    double objective_old = std::numeric_limits<double>::max();
+    notice("%s: Starting fit %d x %d matrix with K=%d, (P=%d)", __func__, N, M_, K_, P_);
     int convergence_counter = 0;
-
-    notice("%s: Starting fit %d x %d matrix with K=%d, c=%.2f", __func__, N, M_, K_, c_);
     std::vector<int32_t> niters_reg_theta(N, 0);
     std::vector<int32_t> niters_reg_beta(M_, 0);
+    std::vector<int32_t> niters_reg_bcov(M_, 0);
     for (int iter = 0; iter < max_iter; ++iter) {
-        // --- Update theta (document-topic matrix) holding beta fixed ---
+        // --- Update theta (document-topic matrix) ---
         double objective_current, rel_change;
-        int32_t niters_theta, niters_beta;
+        int32_t niters_theta, niters_beta, niters_bcov;
         objective_current = tbb::parallel_reduce(
             tbb::blocked_range<int>(0, N), 0.0,
             [&](const tbb::blocked_range<int>& r, double local_sum) {
             MLEStats stats;
+            VectorXd cM(M_), oM;
+            if (P_ > 0) oM.resize(M_);
             for (int i = r.begin(); i != r.end(); ++i) {
+                cM.setConstant(docs[i].c);
+                VectorXd* oM_ptr = nullptr;
+                if (P_ > 0) { // Calculate offsets if covariates are present
+                    oM.noalias() = Bcov_ * docs[i].covar;
+                    oM_ptr = &oM;
+                }
                 VectorXd b;
                 if (iter > 0) {
                     b = theta_.row(i).transpose();
                 }
-                local_sum += pois_log1p_mle(beta_, docs[i], c_, mle_opts, b, stats);
+                if (exact_) {
+                    local_sum += pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+                } else {
+                    local_sum += pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+                }
                 theta_.row(i) = b.transpose();
                 niters_reg_theta[i] += stats.niters;
             }
             return local_sum;
         }, std::plus<double>());
-        objective_current /= M_;
+        objective_current /= N;
         niters_theta = std::accumulate(niters_reg_theta.begin(), niters_reg_theta.end(), 0) / N;
 
         rel_change = std::abs(objective_current - objective_old) / (std::abs(objective_old) + 1e-9);
         notice("Iteration %d, update theta: Objective = %.3e, Rel. Change = %.6e, avg niters = %d", iter + 1, objective_current, rel_change, niters_theta);
         objective_old = objective_current;
 
-        // --- Update beta (topic-word matrix) holding theta fixed ---
+        // --- Update beta and bcov holding theta fixed ---
         objective_current = tbb::parallel_reduce(
             tbb::blocked_range<int>(0, M_), 0.0,
             [&](const tbb::blocked_range<int>& r, double local_sum) {
-                MLEStats stats;
+                MLEStats stats_b{}, stats_beta{};
+                VectorXd oN(N); // offset (Xb for beta, \theta \beta for b)
                 for (int j = r.begin(); j != r.end(); ++j) {
-                    VectorXd b = beta_.row(j);
-                    local_sum += pois_log1p_mle(theta_, mtx_t[j], c_, mle_opts, b, stats);
-                    beta_.row(j) = b.transpose();
-                    niters_reg_beta[j] += stats.niters;
+                    // (a) update b_j with A = X, offset = theta * beta_j
+                    if (P_ > 0) {
+                        oN.noalias() = theta_ * beta_.row(j).transpose(); // N
+                        VectorXd bj = Bcov_.row(j).transpose();
+                        double fval;
+                        if (exact_) {
+                            fval = pois_log1p_mle_exact(
+                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b);
+                        } else {
+                            fval = pois_log1p_mle(
+                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b);
+                        }
+                        Bcov_.row(j) = bj.transpose();
+                        niters_reg_bcov[j] += stats_b.niters;
+                    }
+                    // (b) update beta_j with A = theta, offset = X * b_j
+                    VectorXd beta_j = beta_.row(j).transpose();
+                    const VectorXd* off_ptr = nullptr;
+                    if (P_ > 0) {
+                        oN.noalias() = X * Bcov_.row(j).transpose(); // N
+                        off_ptr = &oN;
+                    }
+                    if (exact_) {
+                        local_sum += pois_log1p_mle_exact(
+                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta);
+                    } else {
+                        local_sum += pois_log1p_mle(
+                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta);
+                    }
+                    beta_.row(j) = beta_j.transpose();
+                    niters_reg_beta[j] += stats_beta.niters;
                 }
-            return local_sum;
+                return local_sum;
         }, std::plus<double>());
-        objective_current /= M_;
+
+        objective_current /= N;
         niters_beta = std::accumulate(niters_reg_beta.begin(), niters_reg_beta.end(), 0) / M_;
 
         // --- Check for convergence ---
         rel_change = std::abs(objective_current - objective_old) / (std::abs(objective_old) + 1e-9);
-        notice("Iteration %d, update beta: Objective = %.3e, Rel. Change = %.6e, avg niters = %d", iter + 1, objective_current, rel_change, niters_beta);
+        if (P_ > 0) {
+            niters_bcov = std::accumulate(niters_reg_bcov.begin(), niters_reg_bcov.end(), 0) / M_;
+            notice("Iteration %d, update beta:  Objective = %.3e, Rel. Change = %.6e, avg niters(beta) = %d, avg niters(b) = %d", iter + 1, objective_current, rel_change, niters_beta, niters_bcov);
+            std::fill(niters_reg_bcov.begin(), niters_reg_bcov.end(), 0);
+        } else {
+            notice("Iteration %d, update beta:  Objective = %.3e, Rel. Change = %.6e, avg niters = %d", iter + 1, objective_current, rel_change, niters_beta);
+        }
 
         if (rel_change < tol) {
             convergence_counter++;
@@ -97,7 +191,7 @@ void PoissonLog1pNMF::fit(const std::vector<Document>& docs, const MLEOptions ml
     }
 }
 
-RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<Document>& docs, const MLEOptions mle_opts) {
+RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<SparseObs>& docs, const MLEOptions mle_opts) {
     int N = docs.size();
     if (N == 0) return RowMajorMatrixXd(0, K_);
     if (beta_.rows() != M_ || beta_.cols() != K_) {
@@ -107,43 +201,62 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<Document>& docs, c
     RowMajorMatrixXd new_theta(N, K_);
     tbb::parallel_for(tbb::blocked_range<int>(0, N), [&](const tbb::blocked_range<int>& r) {
         MLEStats stats;
+        Eigen::VectorXd cM(M_);
+        Eigen::VectorXd oM; if (Bcov_.size() > 0) oM.resize(M_);
+        VectorXd* oM_ptr = (Bcov_.size() > 0) ? &oM : nullptr;
         for (int i = r.begin(); i != r.end(); ++i) {
+            cM.setConstant(docs[i].c);
+            if (Bcov_.size() > 0) {
+                oM.noalias() = Bcov_ * docs[i].covar;
+            }
             VectorXd b;
-            double obj = pois_log1p_mle(beta_, docs[i], c_, mle_opts, b, stats);
+            double obj;
+            if (exact_) {
+                obj = pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+            } else {
+                obj = pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+            }
             new_theta.row(i) = b.transpose();
         }
     });
     return new_theta;
 }
 
-std::vector<Document> PoissonLog1pNMF::transpose_data(const std::vector<Document>& docs) {
+std::vector<Document> PoissonLog1pNMF::transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec) {
+    cvec.resize(docs.size());
     std::vector<Document> mtx_t(M_, Document{});
     size_t N = docs.size();
     for (int i = 0; i < N; ++i) {
-        for (size_t k = 0; k < docs[i].ids.size(); ++k) {
-            int j = docs[i].ids[k];
+        const auto& doc = docs[i].doc;
+        cvec(i) = docs[i].c;
+        for (size_t k = 0; k < doc.ids.size(); ++k) {
+            int j = doc.ids[k];
             if (j < M_) {
                 mtx_t[j].ids.push_back(i);
-                mtx_t[j].cnts.push_back(docs[i].cnts[k]);
+                mtx_t[j].cnts.push_back(doc.cnts[k]);
             }
         }
     }
     return mtx_t;
 }
 
-double PoissonLog1pNMF::calculate_global_objective(const std::vector<Document>& docs) {
+double PoissonLog1pNMF::calculate_global_objective(const std::vector<SparseObs>& docs, RowMajorMatrixXd* Xptr) {
     size_t N = docs.size();
     if (N == 0) return 0.0;
     auto objective_part = tbb::parallel_reduce(
         tbb::blocked_range<int>(0, N), 0.0,
         [&](const tbb::blocked_range<int>& r, double local_sum) {
             for (int i = r.begin(); i != r.end(); ++i) {
-                for (size_t k = 0; k < docs[i].ids.size(); ++k) {
-                    int j = docs[i].ids[k];
+                const auto& doc = docs[i].doc;
+                for (size_t k = 0; k < doc.ids.size(); ++k) {
+                    int j = doc.ids[k];
                     double eta = theta_.row(i).dot(beta_.row(j));
-                    double lambda = c_ * (std::exp(eta) - 1.0);
-                    lambda = std::max(lambda, 1e-8);
-                    local_sum += -(docs[i].cnts[k] * std::log(lambda) - lambda);
+                    if (P_ > 0) {
+                        eta += Xptr->row(i).dot(Bcov_.row(j));
+                    }
+                    double lambda = docs[i].c * (std::exp(eta) - 1.0);
+                    lambda = std::max(lambda, 1e-12);
+                    local_sum += -(doc.cnts[k] * std::log(lambda) - lambda);
                 }
             }
             return local_sum;

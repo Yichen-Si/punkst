@@ -128,9 +128,13 @@ void write_matrix_to_file(const std::string& output,
         const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>& mat,
         int digits, bool scientific,
         const std::vector<std::string>& rnames,
-        const std::string& c0name) {
+        const std::string& c0name,
+        const std::vector<std::string>* cnames = nullptr) {
     if (mat.rows() != static_cast<Eigen::Index>(rnames.size())) {
         throw std::runtime_error("Dimension mismatch: Matrix rows and row names count differ.");
+    }
+    if (cnames && mat.cols() != static_cast<Eigen::Index>(cnames->size())) {
+        throw std::runtime_error("Matrix cols and column names count differ.");
     }
     std::ofstream ofs(output);
     if (!ofs.is_open()) {
@@ -138,8 +142,14 @@ void write_matrix_to_file(const std::string& output,
     }
     const static Eigen::IOFormat TSVFormat(Eigen::StreamPrecision, Eigen::DontAlignCols, "\t", "");
     ofs << c0name;
-    for (int k = 0; k < mat.cols(); ++k) {
-        ofs << "\t" << k;
+    if (cnames) {
+        for (const auto& cname : *cnames) {
+            ofs << "\t" << cname;
+        }
+    } else {
+        for (int k = 0; k < mat.cols(); ++k) {
+            ofs << "\t" << k;
+        }
     }
     ofs << "\n";
     ofs << std::setprecision(digits);

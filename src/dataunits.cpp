@@ -152,7 +152,8 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
         }
     }
     notice("%s: %d features are kept out of %d", __FUNCTION__, idx1, idx0);
-    std::cout << "Excluded due to regex:" << ss.str() << std::endl;
+    if (ss.str().length() > 0)
+        std::cout << "Excluded due to regex:" << ss.str() << std::endl;
     setFeatureIndexRemap(idx_remap);
 }
 

@@ -87,6 +87,8 @@ set(SOURCE_FILES
     src/cndtest.hpp
     script/multi_conditionalde.cpp
     src/poisreg.hpp
+    src/poisreg.cpp
+    src/newtons.hpp
     src/poisnmf.hpp
     src/poisnmf.cpp
     script/fit_nmf.cpp

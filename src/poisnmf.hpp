@@ -7,42 +7,53 @@
 #include <tbb/combinable.h>
 #include <tbb/global_control.h>
 
+struct SparseObs {
+    Document doc;
+    double c;
+    Eigen::VectorXd covar; // covariates
+};
+
 class PoissonLog1pNMF {
 public:
 
-    PoissonLog1pNMF(int K, int M, double c, int nThreads = -1, int seed = std::random_device{}()) : K_(K), M_(M), c_(c), seed_(seed) {
+    PoissonLog1pNMF(int K, int M, int nThreads = -1,
+        int seed = std::random_device{}(), bool exact = true) :
+        K_(K), M_(M), seed_(seed), exact_(exact) {
         set_nthreads(nThreads);
         rng_.seed(seed_);
     }
 
-    void fit(const std::vector<Document>& docs,
-        const MLEOptions mle_opts,
-        int max_iter = 100, double tol = 1e-6);
+    void fit(const std::vector<SparseObs>& docs,
+        MLEOptions mle_opts,
+        int max_iter = 100, double tol = 1e-4,
+        double covar_coef_min = -1e6, double covar_coef_max = 1e6);
 
-    RowMajorMatrixXd transform(const std::vector<Document>& docs,
+    RowMajorMatrixXd transform(const std::vector<SparseObs>& docs,
         const MLEOptions mle_opts);
 
     const RowMajorMatrixXd& get_model() const { return beta_; }
     const RowMajorMatrixXd& get_theta() const { return theta_; }
+    const RowMajorMatrixXd& get_covar_coef() const { return Bcov_; }
     void set_nthreads(int nThreads);
     void rescale_beta_to_unit_sum();
     void rescale_theta_to_unit_sum();
     RowMajorMatrixXd convert_to_factor_loading();
 
 private:
-    int K_, M_;
+    int K_, M_, P_ = 0;
     int seed_;
     int nThreads_;
-    double c_;
+    bool exact_;
     RowMajorMatrixXd beta_;  // M x K
     RowMajorMatrixXd theta_; // N x K
+    RowMajorMatrixXd Bcov_;  // M x P (per-feature covariate coefficients)
     std::mt19937 rng_;
     std::unique_ptr<tbb::global_control> tbb_ctrl_;
 
     // transpose sparse representation
-    std::vector<Document> transpose_data(const std::vector<Document>& docs);
+    std::vector<Document> transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec);
     // negative log-likelihood
-    double calculate_global_objective(const std::vector<Document>& docs);
+    double calculate_global_objective(const std::vector<SparseObs>& docs, RowMajorMatrixXd* Xptr = nullptr);
     // rescales theta and beta to improve numerical stability
     void rescale_matrices();
 
