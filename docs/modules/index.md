@@ -11,6 +11,7 @@ Punkst provides several command-line tools for analyzing high resolution spatial
 - [Visualization](visualization.md): Visualizes the pixel level analysis results
 
 - [cooccurrence](coexp.md): Computes gene co-occurrence and/or extract marker genes from the co-occurrence matrix.
+<!-- - [nmf-pois-log1p](poisnmf.md): Fits a Poisson NMF model with a log(1+x) link. -->
 
 ## Input Data Format
 

@@ -17,8 +17,8 @@ class PoissonLog1pNMF {
 public:
 
     PoissonLog1pNMF(int K, int M, int nThreads = -1,
-        int seed = std::random_device{}(), bool exact = true) :
-        K_(K), M_(M), seed_(seed), exact_(exact) {
+        int seed = std::random_device{}(), bool exact = true, int debug = 0) :
+        K_(K), M_(M), seed_(seed), exact_(exact), debug_(debug) {
         set_nthreads(nThreads);
         rng_.seed(seed_);
     }
@@ -49,6 +49,7 @@ private:
     RowMajorMatrixXd Bcov_;  // M x P (per-feature covariate coefficients)
     std::mt19937 rng_;
     std::unique_ptr<tbb::global_control> tbb_ctrl_;
+    int debug_;
 
     // transpose sparse representation
     std::vector<Document> transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec);

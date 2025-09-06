@@ -43,10 +43,12 @@ public:
         for (size_t j = 0; j < y.ids.size(); ++j) {
             yvec[y.ids[j]] = y.cnts[j];
         }
-        double min_o = o->minCoeff();
         double min_lower_bound = 0;
         if (opt.b_min) min_lower_bound = opt.b_min->minCoeff();
-        nonnegative = (min_o >= 0.0) && (min_lower_bound >= 0.0);
+        nonnegative = min_lower_bound >= 0.0;
+        if (has_offset) {
+            nonnegative = nonnegative && (o->minCoeff() >= 0.0);
+        }
     }
 
     void eval(const VectorXd& bvec,
@@ -140,10 +142,12 @@ public:
         }
 
         // Check if we need safe/heuristic to enforce non-negativity
-        double min_o = o->minCoeff();
         double min_lower_bound = 0;
         if (opt.b_min) min_lower_bound = opt.b_min->minCoeff();
-        nonnegative = (min_o >= 0.0) && (min_lower_bound >= 0.0);
+        nonnegative = min_lower_bound >= 0.0;
+        if (has_offset) {
+            nonnegative = nonnegative && (o->minCoeff() >= 0.0);
+        }
     }
 
     void eval(const VectorXd& bvec,

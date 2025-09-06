@@ -160,7 +160,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     inFileStream.close();
     notice("Read %lu documents with %d features", docs.size(), M);
 
-    PoissonLog1pNMF nmf(K, M, nThreads, seed, exact);
+    PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
 
     // Set up MLE options (for subproblems)
     MLEOptions opts{};

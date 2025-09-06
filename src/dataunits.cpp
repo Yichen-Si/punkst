@@ -119,20 +119,26 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     std::unordered_map<uint32_t, uint32_t> idx_remap;
     std::unordered_map<std::string, uint32_t> dict;
     std::stringstream ss;
+    std::vector<std::string> token;
     bool has_dict = featureDict(dict);
     std::unordered_set<std::string> kept_features; // avoid duplicates
     while (std::getline(inFeature, line)) {
         if (line.empty() || line[0] == '#') continue;
-        std::istringstream iss(line);
-        std::string feature;
-        int32_t count;
-        if (!(iss >> feature >> count)) {
+        split(token, "\t ", line);
+        if (token.size() < 1) {
             error("Error reading feature file at line: %s", line.c_str());
         }
         uint32_t idx_prev = idx0;
         idx0++;
-        if (count < minCount) {
-            continue;
+        std::string& feature = token[0];
+        if (token.size() > 1) {
+            int32_t count;
+            if (!str2int32(token[1], count)) {
+                warning("%s: Non-integer value on the second column is ignored: %s", __func__, line.c_str());
+            }
+            if (count < minCount) {
+                continue;
+            }
         }
         if (has_dict) {
             auto it = dict.find(feature);

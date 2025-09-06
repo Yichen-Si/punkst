@@ -64,9 +64,9 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                 VectorXd o = VectorXd::Constant(N, mu_j);
                 VectorXd bj; // empty
                 if (exact_) {
-                    local_sum += pois_log1p_mle_exact(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats);
+                    local_sum += pois_log1p_mle_exact(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats, debug_);
                 } else {
-                    local_sum += pois_log1p_mle(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats);
+                    local_sum += pois_log1p_mle(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats, debug_);
                 }
                 Bcov_.row(j) = bj.transpose();
             }
@@ -102,9 +102,9 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                     b = theta_.row(i).transpose();
                 }
                 if (exact_) {
-                    local_sum += pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+                    local_sum += pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
                 } else {
-                    local_sum += pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+                    local_sum += pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
                 }
                 theta_.row(i) = b.transpose();
                 niters_reg_theta[i] += stats.niters;
@@ -132,10 +132,10 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                         double fval;
                         if (exact_) {
                             fval = pois_log1p_mle_exact(
-                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b);
+                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b, debug_);
                         } else {
                             fval = pois_log1p_mle(
-                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b);
+                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b, debug_);
                         }
                         Bcov_.row(j) = bj.transpose();
                         niters_reg_bcov[j] += stats_b.niters;
@@ -149,10 +149,10 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                     }
                     if (exact_) {
                         local_sum += pois_log1p_mle_exact(
-                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta);
+                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta, debug_);
                     } else {
                         local_sum += pois_log1p_mle(
-                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta);
+                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta, debug_);
                     }
                     beta_.row(j) = beta_j.transpose();
                     niters_reg_beta[j] += stats_beta.niters;
@@ -212,9 +212,9 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<SparseObs>& docs, 
             VectorXd b;
             double obj;
             if (exact_) {
-                obj = pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+                obj = pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
             } else {
-                obj = pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats);
+                obj = pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
             }
             new_theta.row(i) = b.transpose();
         }
