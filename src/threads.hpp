@@ -4,6 +4,8 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
 
 // Thread-safe queue
 template <typename T>
@@ -51,4 +53,14 @@ private:
     std::condition_variable cv_not_empty_, cv_not_full_;
     bool done_ = false;
     size_t cap_;
+};
+
+
+struct Threads {
+    std::unique_ptr<tbb::global_control> ctrl;
+    Threads(int n) {
+        if (n > 0)
+            ctrl = std::make_unique<tbb::global_control>(
+                tbb::global_control::max_allowed_parallelism, (std::size_t)n);
+    }
 };

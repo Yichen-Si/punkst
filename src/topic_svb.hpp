@@ -28,7 +28,10 @@ public:
     // --- Common Public Methods ---
 
     // Sets features by filtering based on count and regex
-    void setFeatures(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex);
+    void setFeatures(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex) {
+        reader.setFeatureFilter(featureFile, minCount, include_ftr_regex, exclude_ftr_regex);
+        M_ = reader.nFeatures;
+    }
 
     // Sets feature weights from a file
     void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0);

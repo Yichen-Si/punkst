@@ -15,13 +15,16 @@ void PoissonLog1pNMF::set_nthreads(int nThreads) {
 }
 
 void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
-    MLEOptions mle_opts, int max_iter, double tol,
+    const MLEOptions mle_opts, int max_iter, double tol,
     double covar_coef_min, double covar_coef_max) {
     size_t N = docs.size();
     if (N == 0) {
         warning("%s: Empty input", __func__);
         return;
     }
+    auto t0 = std::chrono::steady_clock::now();
+    size_t grainsize_n = std::min(64, std::max(1, int(N / (2 * nThreads_))) );
+    size_t grainsize_m = std::min(64, std::max(1, int(M_/ (2 * nThreads_))) );
     VectorXd cvec;
     P_ = (int) docs[0].covar.size();
     std::vector<Document> mtx_t = transpose_data(docs, cvec);
@@ -34,7 +37,6 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
             beta_(j,k) = dist(rng_);
     }
     MLEOptions mle_opts_bcov = mle_opts;
-    mle_opts.set_bounds(0.0, std::numeric_limits<double>::infinity(), K_);
     std::vector<double> offset;
     double objective_old = std::numeric_limits<double>::max()-1;
     if (P_ > 0) {
@@ -47,7 +49,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         // Do one round of regression for covariates only, with a mean offset
         notice("Fit initial regressions for covariates");
         objective_old = tbb::parallel_reduce(
-            tbb::blocked_range<int>(0, M_), 0.0,
+            tbb::blocked_range<int>(0, M_, grainsize_m), 0.0,
             [&](const tbb::blocked_range<int>& r, double local_sum) {
             MLEStats stats{};
             for (int j = r.begin(); j != r.end(); ++j) {
@@ -85,7 +87,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         double objective_current, rel_change;
         int32_t niters_theta, niters_beta, niters_bcov;
         objective_current = tbb::parallel_reduce(
-            tbb::blocked_range<int>(0, N), 0.0,
+            tbb::blocked_range<int>(0, N, grainsize_n), 0.0,
             [&](const tbb::blocked_range<int>& r, double local_sum) {
             MLEStats stats;
             VectorXd cM(M_), oM;
@@ -120,7 +122,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
 
         // --- Update beta and bcov holding theta fixed ---
         objective_current = tbb::parallel_reduce(
-            tbb::blocked_range<int>(0, M_), 0.0,
+            tbb::blocked_range<int>(0, M_, grainsize_m), 0.0,
             [&](const tbb::blocked_range<int>& r, double local_sum) {
                 MLEStats stats_b{}, stats_beta{};
                 VectorXd oN(N); // offset (Xb for beta, \theta \beta for b)
@@ -189,6 +191,46 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         // --- Rescale factors for numerical stability ---
         rescale_matrices();
     }
+    auto t1 = std::chrono::steady_clock::now();
+    double sec = std::chrono::duration<double, std::milli>(t1 - t0).count() / 1000.0;
+    int32_t minutes = static_cast<int32_t>(sec / 60.0);
+    notice("%s: Model fitting took %.3f seconds (%dmin %.3fs)", __func__, sec, minutes, sec - minutes * 60);
+
+    if (mle_opts.se_flag == 0) {
+        return;
+    }
+
+    t0 = std::chrono::steady_clock::now();
+    notice("%s: Computing standard errors for beta ...", __func__);
+    rescale_theta_to_sumN(); // \sum_i \theta_{ik} = N/K so \beta_k's are comparable
+    se_fisher_.clear(); se_robust_.clear();
+    cov_fisher_.clear(); cov_robust_.clear();
+    se_fisher_.resize(M_); se_robust_.resize(M_);
+    if (mle_opts.store_cov) {
+        cov_fisher_.resize(M_); cov_robust_.resize(M_);
+    }
+    tbb::parallel_for(0, M_, [&](int j) {
+        VectorXd beta_j = beta_.row(j).transpose();
+        VectorXd oN; VectorXd* off_ptr = nullptr;
+        if (P_ > 0) {
+            oN.noalias() = X * Bcov_.row(j).transpose(); // N
+            off_ptr = &oN;
+        }
+        MLEStats st;
+        pois_log1p_compute_se(theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, st);
+        se_fisher_[j] = std::move(st.se_fisher);
+        se_robust_[j] = std::move(st.se_robust);
+        if (mle_opts.store_cov) {
+            cov_fisher_[j] = std::move(st.cov_fisher);
+            cov_robust_[j] = std::move(st.cov_robust);
+        }
+    });
+    t1 = std::chrono::steady_clock::now();
+    sec = std::chrono::duration<double, std::milli>(t1 - t0).count() / 1000.0;
+    minutes = static_cast<int32_t>(sec / 60.0);
+    notice("%s: Computing Cov/SE took %.3f seconds (%dmin %.3fs)", __func__, sec, minutes, sec - minutes * 60);
+
+    notice("%s: Done", __func__);
 }
 
 RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<SparseObs>& docs, const MLEOptions mle_opts) {
@@ -198,11 +240,12 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<SparseObs>& docs, 
         error("%s: Model not fitted yet, call fit() first.", __func__);
         return RowMajorMatrixXd(N, K_);
     }
+    size_t grainsize = std::min(64, std::max(1, int(N / (2 * nThreads_))) );
     RowMajorMatrixXd new_theta(N, K_);
-    tbb::parallel_for(tbb::blocked_range<int>(0, N), [&](const tbb::blocked_range<int>& r) {
+    tbb::parallel_for(tbb::blocked_range<int>(0, N, grainsize), [&](const tbb::blocked_range<int>& r) {
         MLEStats stats;
-        Eigen::VectorXd cM(M_);
-        Eigen::VectorXd oM; if (Bcov_.size() > 0) oM.resize(M_);
+        VectorXd cM(M_);
+        VectorXd oM; if (Bcov_.size() > 0) oM.resize(M_);
         VectorXd* oM_ptr = (Bcov_.size() > 0) ? &oM : nullptr;
         for (int i = r.begin(); i != r.end(); ++i) {
             cM.setConstant(docs[i].c);
@@ -222,6 +265,81 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<SparseObs>& docs, 
     return new_theta;
 }
 
+
+std::vector<TestResult>
+PoissonLog1pNMF::test_beta_vs_null(int flag) {
+    if (!(flag == 1 || flag == 2)) {
+        warning("%s: flag must be 1 (Fisher) or 2 (robust).", __func__);
+        return {};
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    const bool use_fisher = (flag == 1);
+    const auto& C = use_fisher ? cov_fisher_ : cov_robust_;
+    if (C.empty() || C.size() != (size_t)M_ || C[0].size() == 0) {
+        warning("%s: requested covariance (%s) not available; store_cov in MLEOptions provided to fit() must have store_cov=true.", __func__, use_fisher ? "Fisher" : "robust");
+        return {};
+    }
+    const double eps = 1e-12;
+
+    tbb::combinable<std::vector<TestResult>> tls;
+    const int grainsize = std::max(1, std::min(64, M_ / std::max(1, 2 * nThreads_)));
+
+    tbb::parallel_for(tbb::blocked_range<int>(0, M_, grainsize),
+        [&](const tbb::blocked_range<int>& r) {
+            auto& out = tls.local();
+            VectorXd ones = VectorXd::Ones(K_);
+            for (int m = r.begin(); m != r.end(); ++m) {
+                if (feature_sums_[m] < min_ct_) continue;
+                const MatrixXd& V = C[m];
+                const VectorXd  b = beta_.row(m).transpose();
+                // --- GLS weights w = V^{-1}1 / (1^T V^{-1}1)
+                Eigen::LDLT<MatrixXd> ldlt(V);
+                if (ldlt.info() != Eigen::Success) {
+                    MatrixXd Vr = V;
+                    Vr.diagonal().array() += eps * (V.trace() / K_ + 1.0);
+                    ldlt.compute(Vr);
+                }
+                if (ldlt.info() != Eigen::Success) continue;
+                VectorXd Vinv1 = ldlt.solve(ones);
+                double denom = ones.dot(Vinv1);
+                if (denom < eps) {
+                    Vinv1 = ones;
+                    denom = static_cast<double>(K_);
+                }
+                VectorXd w = Vinv1 / denom;
+                double beta0 = w.dot(b);
+                // Precompute V*w and w^T V w
+                VectorXd Vw = V * w;
+                double wVw = w.dot(Vw);
+                for (int k = 0; k < K_; ++k) {
+                    const double est = beta_(m, k) - beta0;
+                    if (est < 0) {continue;}
+                    double fc = (std::exp(beta_(m, k))-1)/(std::exp(beta0)-1);
+                    if (fc < min_fc_) {continue;}
+                    // contrast c = e_k - w
+                    // var = c_k^T V c_k = V_kk - 2(Vw)_k + w^T V w
+                    double var = V(k,k) - 2.0 * Vw(k) + wVw;
+                    if (var <= 0) continue;
+                    double se = std::sqrt(var);
+                    double p  = normal_log10sf(est / se);
+                    if (p > max_log10p_) continue;
+                    out.push_back(TestResult{m, k, -1, est, p, fc});
+                }
+            }
+        });
+
+    auto t1 = std::chrono::steady_clock::now();
+    double sec = std::chrono::duration<double, std::milli>(t1 - t0).count() / 1000.0;
+    int32_t minutes = static_cast<int32_t>(sec / 60.0);
+    std::string method = use_fisher ? "Fisher" : "robust";
+    notice("%s: Computing 1 vs avg DE stats (%s) took %.3f seconds (%dmin %.3fs)", __func__, method.c_str(), sec, minutes, sec - minutes * 60);
+
+    std::vector<TestResult> res;
+    tls.combine_each([&](const std::vector<TestResult>& v){ res.insert(res.end(), v.begin(), v.end()); });
+    return res;
+}
+
+
 std::vector<Document> PoissonLog1pNMF::transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec) {
     cvec.resize(docs.size());
     std::vector<Document> mtx_t(M_, Document{});
@@ -231,10 +349,10 @@ std::vector<Document> PoissonLog1pNMF::transpose_data(const std::vector<SparseOb
         cvec(i) = docs[i].c;
         for (size_t k = 0; k < doc.ids.size(); ++k) {
             int j = doc.ids[k];
-            if (j < M_) {
-                mtx_t[j].ids.push_back(i);
-                mtx_t[j].cnts.push_back(doc.cnts[k]);
-            }
+            if (j >= M_) {continue;}
+            feature_sums_[j] += doc.cnts[k];
+            mtx_t[j].ids.push_back(i);
+            mtx_t[j].cnts.push_back(doc.cnts[k]);
         }
     }
     return mtx_t;
@@ -243,8 +361,9 @@ std::vector<Document> PoissonLog1pNMF::transpose_data(const std::vector<SparseOb
 double PoissonLog1pNMF::calculate_global_objective(const std::vector<SparseObs>& docs, RowMajorMatrixXd* Xptr) {
     size_t N = docs.size();
     if (N == 0) return 0.0;
+    size_t grainsize = std::min(64, std::max(1, int(N / (2 * nThreads_))) );
     auto objective_part = tbb::parallel_reduce(
-        tbb::blocked_range<int>(0, N), 0.0,
+        tbb::blocked_range<int>(0, N, grainsize), 0.0,
         [&](const tbb::blocked_range<int>& r, double local_sum) {
             for (int i = r.begin(); i != r.end(); ++i) {
                 const auto& doc = docs[i].doc;
@@ -283,19 +402,19 @@ void PoissonLog1pNMF::rescale_matrices() {
     }
 }
 
-void PoissonLog1pNMF::rescale_beta_to_unit_sum() {
-    VectorXd beta_col_means = beta_.colwise().sum();
+void PoissonLog1pNMF::rescale_beta_to_const_sum(double c) {
+    VectorXd scale = beta_.colwise().sum() / c;
     for (int k = 0; k < K_; ++k) {
-        theta_.col(k) *= beta_col_means(k);
-        beta_.col(k) /= beta_col_means(k);
+        theta_.col(k) *= scale(k);
+        beta_.col(k) /= scale(k);
     }
 }
 
-void PoissonLog1pNMF::rescale_theta_to_unit_sum() {
-    VectorXd theta_col_means = theta_.colwise().sum();
+void PoissonLog1pNMF::rescale_theta_to_const_sum(double c) {
+    VectorXd scale = theta_.colwise().sum() / c;
     for (int k = 0; k < K_; ++k) {
-        beta_.col(k) *= theta_col_means(k);
-        theta_.col(k) /= theta_col_means(k);
+        beta_.col(k) *= scale(k);
+        theta_.col(k) /= scale(k);
     }
 }
 
@@ -304,4 +423,86 @@ RowMajorMatrixXd PoissonLog1pNMF::convert_to_factor_loading() {
     RowMajorMatrixXd wik = theta_.array().rowwise() * wk;
     wik = wik.array().colwise() / wik.rowwise().sum().array();
     return wik;
+}
+
+void PoissonLog1pNMF::rescale_theta_to_sumN() {
+    int N = theta_.rows();
+    int K = theta_.cols();
+    rescale_theta_to_const_sum(double(N) / K);
+}
+
+void PoissonLog1pNMF::set_de_parameters(double min_ct, double min_fc, double max_p) {
+    min_ct_ = min_ct; min_fc_ = min_fc; max_p_ = max_p;
+    if (max_p <= 0) {
+        warning("%s: max_p must be positive, replacing %.4f with 0.05", __func__, max_p);
+        max_p_ = 0.05;
+    }
+    if (min_fc < 1) {
+        warning("%s: min_fc must be >= 1, replacing %.4f with 1.5", __func__, min_fc);
+        min_fc_ = 1.5;
+    }
+    min_logfc_ = std::abs(std::log(min_fc_));
+    max_log10p_ = std::log10(max_p_);
+}
+
+
+// TODO: not evaluated yet
+std::vector<TestResult>
+PoissonLog1pNMF::test_beta_pairwise(int flag, std::pair<int,int> kpair) {
+    const int k1 = kpair.first, k2 = kpair.second;
+    if (k1 < 0 || k1 >= K_ || k2 < 0 || k2 >= K_ || k1 == k2) {
+        warning("%s: invalid factor indices (%d,%d).", __func__, k1, k2);
+        return {};
+    }
+    const auto& C = (flag == 1) ? cov_fisher_ : cov_robust_;
+    ArrayXd fc = (beta_.col(k1).array().exp() - 1.0).cwiseMax(1e-12) /
+                 (beta_.col(k2).array().exp() - 1.0).cwiseMax(1e-12);
+    ArrayXd abslogfc = fc.log().abs();
+    ArrayXd est = beta_.col(k1).array() - beta_.col(k2).array();
+
+    tbb::combinable<std::vector<TestResult>> tls;
+    const int grainsize = std::max(1, std::min(64, M_ / std::max(1, 2 * nThreads_)));
+    tbb::parallel_for(tbb::blocked_range<int>(0, M_, grainsize),
+        [&](const tbb::blocked_range<int>& r) {
+            auto& out = tls.local();
+            for (int m = r.begin(); m != r.end(); ++m) {
+                if (feature_sums_[m] < min_ct_ || abslogfc(m) < min_logfc_) continue;
+                const MatrixXd& V = C[m];
+                double var = V(k1,k1) + V(k2,k2) - 2.0 * V(k1,k2);
+                if (var <= 0) continue;
+                double se = std::sqrt(var);
+                double p  = log10_twosided_p_from_z(est(m) / se);
+                if (p > max_log10p_) continue;
+                out.push_back(TestResult{m, k1, k2, est(m), p, fc(m)});
+            }
+        });
+
+    std::vector<TestResult> res;
+    tls.combine_each([&](const std::vector<TestResult>& v){ res.insert(res.end(), v.begin(), v.end()); });
+    return res;
+}
+
+std::vector<TestResult>
+PoissonLog1pNMF::test_beta_pairwise(int flag) {
+    if (!(flag == 1 || flag == 2)) {
+        warning("%s: flag must be 1 (Fisher) or 2 (robust).", __func__);
+        return {};
+    }
+    const bool use_fisher = (flag == 1);
+    const auto& C = use_fisher ? cov_fisher_ : cov_robust_;
+    if (C.empty() || C.size() != (size_t)M_ || C[0].size() == 0) {
+        warning("%s: requested covariance (%s) not available; rerun fit() with store_cov=true.", __func__, use_fisher ? "Fisher" : "robust");
+        return {};
+    }
+    std::vector<TestResult> all;
+    all.reserve(std::max(0, M_ * K_ * (K_ - 1) / 4)); // rough prealloc
+    for (int k1 = 0; k1 < K_; ++k1) {
+        for (int k2 = k1 + 1; k2 < K_; ++k2) {
+            auto part = test_beta_pairwise(flag, {k1, k2});
+            all.insert(all.end(),
+                       std::make_move_iterator(part.begin()),
+                       std::make_move_iterator(part.end()));
+        }
+    }
+    return all;
 }

@@ -5,6 +5,7 @@
 #include "json.hpp"
 #include "assert.h"
 #include <unordered_set>
+#include "Eigen/Dense"
 
 template<typename T>
 struct IndexEntry {
@@ -16,6 +17,13 @@ struct IndexEntry {
 struct Document {
     std::vector<uint32_t> ids; // Length: number of nonzero words in the doc
     std::vector<double> cnts;
+
+    inline void to_dense(const int n, Eigen::VectorXd& y_dense) const {
+        y_dense.setZero(n);
+        for (size_t t = 0; t < ids.size(); ++t) {
+            y_dense[ids[t]] = cnts[t];
+        }
+    }
 };
 
 struct PixelValues {

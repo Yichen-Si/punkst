@@ -206,3 +206,8 @@ double pois_log1p_mle(
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A, const Document& y, double c,
     const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_ = 0);
+
+// Compute Fisher and/or robust SE for Poisson with log1p link.
+void pois_log1p_compute_se(
+    const RowMajorMatrixXd& X, const Document& y, const VectorXd* c,
+    const VectorXd* o, const MLEOptions& opt, VectorXd& b, MLEStats& stats);

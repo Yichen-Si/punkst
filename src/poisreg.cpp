@@ -273,3 +273,83 @@ double pois_log1p_mle(
 
     return final_obj;
 }
+
+void pois_log1p_compute_se(
+    const RowMajorMatrixXd& X, const Document& y, const VectorXd* c,
+    const VectorXd* o, const MLEOptions& opt, VectorXd& b, MLEStats& stats) {
+    if (opt.se_flag == 0) return;
+    const int n = static_cast<int>(X.rows());
+    const int p = static_cast<int>(X.cols());
+    // 1) η, μ, ∂μ/∂η
+    ArrayXd eta = (X * b).array();
+    if (o) eta += o->array();
+    ArrayXd u   = eta.exp();                // e^{η}
+    ArrayXd um1 = (u - 1.0).max(opt.eps);   // (e^{η}-1)
+    ArrayXd mu  = c->array() * um1;         // μ = c*(e^{η}-1)
+    ArrayXd dmu = c->array() + mu;          // ∂μ/∂η = c*e^{η} = c + μ
+    // 2) A = X'WX with W = (dμ/dη)^2 / V(μ) = (dmu^2) / μ
+    ArrayXd w_fisher = (dmu.square() / mu.max(opt.eps));
+    // Scale X[i,:] by \sqrt(w_i)
+    VectorXd sqrt_w = w_fisher.sqrt().matrix();
+    RowMajorMatrixXd Xw = X;
+    for (int j = 0; j < p; ++j) {
+        Xw.col(j).array() *= sqrt_w.array();
+    }
+    MatrixXd XtWX = Xw.transpose() * Xw;
+    XtWX.diagonal().array() += opt.ridge;
+    // Invert
+    Eigen::LDLT<MatrixXd> ldlt(XtWX);
+    if (ldlt.info() != Eigen::Success) {
+        error("%s: LDLT failed on XtWX", __func__);
+    }
+    MatrixXd XtWX_inv = ldlt.solve(MatrixXd::Identity(p, p));
+
+    if (opt.se_flag & 0x1) { // Fisher
+        stats.se_fisher = XtWX_inv.diagonal().array().sqrt().matrix();
+    } else {
+        stats.se_fisher.resize(0);
+    }
+
+    if (opt.se_flag & 0x2) { // Sandwich robust
+        // 3) B = X' diag(s^2) X with s = (y-μ)*(dμ/dη)/μ
+        VectorXd y_dense;
+        y.to_dense(n, y_dense);
+        ArrayXd s = (y_dense.array() - mu) * (dmu / mu.max(opt.eps));
+        if (opt.hc_type == 1) {
+            if (n > p) {
+                s *= std::sqrt(double(n) / double(n - p));
+            }
+        } else if (opt.hc_type >= 2) {
+            Eigen::MatrixXd Z = Xw * XtWX_inv;
+            Eigen::VectorXd h = (Z.cwiseProduct(Xw)).rowwise().sum();
+            if (opt.hc_type == 2) {
+                s /= ((1.0 - h.array()).max(opt.eps)).sqrt();
+            } else {
+                s /= (1.0 - h.array()).max(opt.eps);
+            }
+        }
+        VectorXd abs_s = s.abs().matrix();
+        RowMajorMatrixXd Xs = X;
+        for (int j = 0; j < p; ++j) {
+            Xs.col(j).array() *= abs_s.array(); // row-scale by |s|
+        }
+        MatrixXd B = Xs.transpose() * Xs;    // X' diag(s^2) X
+        // Var(β̂)_robust ≈ (X'WX)^{-1} * B * (X'WX)^{-1}
+        MatrixXd Vrob = XtWX_inv * B * XtWX_inv;
+        stats.se_robust = Vrob.diagonal().array().sqrt().matrix();
+        if (opt.store_cov) {
+            stats.cov_robust = std::move(Vrob);
+        }
+    } else {
+        stats.se_robust.resize(0);
+        stats.cov_robust.resize(0,0);
+    }
+
+    if (opt.se_flag & 0x1) {
+        if (opt.store_cov) {
+            stats.cov_fisher = std::move(XtWX_inv);
+        } else {
+            stats.cov_fisher.resize(0,0);
+        }
+    }
+}

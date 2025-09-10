@@ -1,57 +1,5 @@
 #include "topic_svb.hpp"
 
-void TopicModelWrapper::setFeatures(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex) {
-    if (usePriorMapping) {
-        warning("setFeatures should be called before initialization. The feature filtering will not be applied");
-        return;
-    }
-    bool check_include = !include_ftr_regex.empty();
-    bool check_exclude = !exclude_ftr_regex.empty();
-    std::regex regex_include(include_ftr_regex);
-    std::regex regex_exclude(exclude_ftr_regex);
-    std::ifstream inFeature(featureFile);
-    if (!inFeature) {
-        error("Error opening features file: %s", featureFile.c_str());
-    }
-    std::string line;
-    uint32_t idx0 = 0, idx1 = 0;
-    std::unordered_map<uint32_t, uint32_t> idx_remap;
-    std::unordered_map<std::string, uint32_t> featureDict;
-    featureNames.clear();
-    while (std::getline(inFeature, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        std::istringstream iss(line);
-        std::string feature;
-        int32_t count;
-        if (!(iss >> feature >> count)) {
-            error("Error reading feature file at line: %s", line.c_str());
-        }
-        uint32_t idx_prev = idx0;
-        idx0++;
-        if (count < minCount) {
-            continue;
-        }
-        if (reader.featureDict(featureDict)) {
-            auto it = featureDict.find(feature);
-            if (it == featureDict.end()) {
-                continue;
-            }
-            idx_prev = it->second;
-        }
-        bool include = !check_include || std::regex_match(feature, regex_include);
-        bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
-        if (include && !exclude) {
-            idx_remap[idx_prev] = idx1++;
-            featureNames.push_back(feature);
-        } else {
-            std::cout << "Exclude " << feature << std::endl;
-        }
-    }
-    M_ = idx_remap.size();
-    notice("%s: %d features are kept out of %d", __FUNCTION__, idx1, idx0);
-    reader.setFeatureIndexRemap(idx_remap);
-}
-
 void TopicModelWrapper::setWeights(const std::string& weightFile, double defaultWeight_) {
     std::ifstream inWeight(weightFile);
     if (!inWeight) {

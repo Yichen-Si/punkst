@@ -83,6 +83,15 @@ punkst nmf-pois-log1p --in-data hex_data.txt --in-meta hex_meta.json \
 --in-covar covars.tsv --icol-covar 1 3 5
 ```
 
+#### Experimental: compute DE statistics from Cov($\hat \beta$)
+`--detest-vs-avg` - Compute DE statistics for each factor vs the average, for each feature. Set to `1` to use Fisher's information based covariance, `2` to use the robust sandwich estimator, or `3` to compute both. Default: 0 (skip covariance computation so no DE output).
+
+`--min-fc` - Minimum approximated fold change to report. Note: due to the nonlinear link, we don't have an exact fold change interpretation, the reported value is $(\exp(\beta_{km})-1)/(\exp(\beta^0_{m})-1)$ where $\beta^0_m$ is a weighted average of $\beta_m$ across factors and $\theta$ is scaled to have column sums equal to $N/K$. Default: 1.5.
+
+`--max-p` - Maximum p-value to report. Default: 0.05.
+
+`--min-ct` - Minimum total count for a feature to be included in DE testing. Default: 100.
+
 ### Output files
 
 - `{prefix}.{model_name}.model.tsv`: The feature-factor matrix ($\beta$), where rows are features (genes) and columns are factors.

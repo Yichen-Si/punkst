@@ -13,14 +13,16 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     std::string include_ftr_regex, exclude_ftr_regex;
     std::vector<uint32_t> covar_idx;
     int32_t K;
-    int32_t seed = -1, nThreads = 1, debug_ = 0, verbose = 500000;
+    int32_t seed = -1, nThreads = 1, debug_ = 0, debug_N = 0, verbose = 500000;
     int32_t minCountTrain = 50, minCountFeature = 100;
-    int32_t max_iter_outer = 50, max_iter_inner = 20;
+    int32_t max_iter_outer = 20, max_iter_inner = 20;
     double covar_coef_min = -1e6, covar_coef_max = 1e6;
-    double tol_outer = 1e-5, tol_inner = 1e-6;
+    double tol_outer = 1e-4, tol_inner = 1e-6;
     double size_factor = 10000, c = -1;
     bool allow_na = false;
     bool exact = false;
+    int32_t test_beta_vs_null = 0; // 0: no test, 1: fisher, 2: robust, 3: both
+    double min_ct_de = 100, min_fc = 1.5, max_p = 0.05;
     int32_t mode = 1;
 
     ParamList pl;
@@ -48,9 +50,15 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex)
       .add_option("min-count-train", "Minimum total count per doc", minCountTrain);
+    // DE test options
+    pl.add_option("detest-vs-avg", "For each factor, test if each feature is  enriched compared to the average of the whole sample", test_beta_vs_null)
+      .add_option("min-fc", "Minimum fold-change for tests", min_fc)
+      .add_option("max-p", "Maximum p-value for tests", max_p)
+      .add_option("min-ct", "Minimum total count for a feature to be tested", min_ct_de);
     // Output Options
     pl.add_option("out-prefix", "Output prefix", outPrefix, true)
       .add_option("verbose", "Verbose", verbose)
+      .add_option("debug-N", "Debug with the first N units", debug_N)
       .add_option("debug", "Debug", debug_);
 
     try {
@@ -153,7 +161,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         }
         docs.push_back(std::move(obs));
         rnames.emplace_back(std::to_string(idx-1));
-        if (debug_ > 0 && idx > debug_) {
+        if (debug_N > 0 && idx > debug_N) {
             break;
         }
     }
@@ -178,20 +186,43 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         model_name = "DiagLS";
     }
     outPrefix += "." + model_name;
+    if (test_beta_vs_null >= 1) {
+        opts.store_cov = true;
+        opts.se_flag = test_beta_vs_null;
+        nmf.set_de_parameters(min_ct_de, min_fc, max_p);
+    }
 
     // Fit the model
-    auto t0 = std::chrono::steady_clock::now();
     nmf.fit(docs, opts, max_iter_outer, tol_outer);
-    auto t1 = std::chrono::steady_clock::now();
-    double sec = std::chrono::duration<double, std::milli>(t1 - t0).count() / 1000.0;
-    int32_t minutes = static_cast<int32_t>(sec / 60.0);
-    notice("Approximate %s took %.3f seconds (%dmin %.2fs)", model_name.c_str(), sec, minutes, sec - minutes * 60);
+
+    // Compute DE stats
+    if (test_beta_vs_null >= 1) {
+        for (uint32_t flag = 1; flag <= 2; flag++) {
+            if ((test_beta_vs_null & flag) == 0) {
+                continue;
+            }
+            auto results = nmf.test_beta_vs_null(flag);
+            std::string outf = outPrefix + (flag == 1 ? ".detest.fisher.tsv" : ".detest.robust.tsv");
+            std::ofstream ofs(outf);
+            if (!ofs) {
+                error("Cannot open output file %s", outf.c_str());
+            }
+            ofs << "Feature\tFactor\tDiff\tlog10Pval\tApproxFC\n";
+            for (const auto& r : results) {
+                ofs << reader.features[r.m] << "\t" << r.k1 << "\t"
+                    << std::setprecision(6) << r.est << "\t"
+                    << std::setprecision(4) << -r.log10p << "\t"
+                    << std::setprecision(4) << r.fc << "\n";
+            }
+            ofs.close();
+            notice("Wrote DE test results to %s", outf.c_str());
+        }
+    }
 
     std::string outf;
     outf = outPrefix + ".model.tsv";
-    std::vector<std::string> vocab = reader.features;
     const auto& mat = nmf.get_model();
-    write_matrix_to_file(outf, mat, 4, false, vocab, "Feature");
+    write_matrix_to_file(outf, mat, 4, false, reader.features, "Feature");
     notice("Wrote model to %s", outf.c_str());
 
     outf = outPrefix + ".theta.tsv";
@@ -207,7 +238,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     if (n_covar > 0) {
         const auto& bcov = nmf.get_covar_coef(); // M x P
         std::string outf = outPrefix + ".covar.tsv";
-        write_matrix_to_file(outf, bcov, 6, false, vocab, "Feature", &covar_names);
+        write_matrix_to_file(outf, bcov, 6, false, reader.features, "Feature", &covar_names);
         notice("Wrote covariate coefficients to %s", outf.c_str());
     }
 

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <vector>
 #include <cmath>
 #include <cstdlib>
@@ -5,6 +7,7 @@
 
 #include <Eigen/Core>
 #include "Eigen/Dense"
+using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using Eigen::ArrayXd;
 
@@ -41,6 +44,10 @@ struct MLEOptions {
 	double eps       = 1e-12;
 	bool use_agd     = false;
 	double soft_tau  = 1e-3;    // for softplus if needed
+	uint32_t se_flag = 0;       // 0: none, 1: fisher, 2: robust, 3: both
+	uint32_t hc_type = 1;
+	bool store_cov   = false;   // Store covariance matrices for estimates
+	// Optimization options
 	LineSearchOptions ls{};
 	ACGOptions acg{};
 	TrustRegionOptions tron{};
@@ -64,6 +71,11 @@ struct MLEStats {
 	int niters = 0;
 	double obj, diff_obj;
 	double diff_b, rel_diff_b;
+	// Optional standard errors and/or covariance
+	VectorXd se_fisher;
+	VectorXd se_robust;
+	MatrixXd cov_fisher;
+    MatrixXd cov_robust;
 };
 
 inline void project_to_box(VectorXd& b, const MLEOptions& opt) {
