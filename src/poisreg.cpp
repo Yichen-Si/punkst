@@ -12,7 +12,7 @@ void PoisRegExactProblem::eval(const VectorXd& bvec, double* f_out,
     ArrayXd u = (A * bvec).array();
     if (has_offset) u += o->array();
     u = u.exp(); // exp(Ab+o)
-    ArrayXd um1 = (u - 1.0).max(opt.eps); // \lambda / c
+    ArrayXd um1 = (u - 1.0).max(opt.optim.eps); // \lambda / c
 
     if (f_out) {
         ArrayXd lam = um1 * c.array();
@@ -38,7 +38,7 @@ void PoisRegExactProblem::eval_safe(const VectorXd& bvec, double* f_out,
     if (has_offset) u += o->array();
     u = u.exp(); // exp(Ab+o)
     ArrayXd s = u - 1.0;
-    double eps = opt.eps;
+    double eps = opt.optim.eps;
     double tau = opt.soft_tau;
 
     ArrayXd z = (s - eps) / tau;
@@ -76,6 +76,21 @@ void PoisRegExactProblem::eval_safe(const VectorXd& bvec, double* f_out,
     }
 }
 
+ArrayXd PoisRegExactProblem::residual(const VectorXd& bvec) const {
+    ArrayXd mu = (A * bvec).array();
+    if (o) mu += o->array();
+    mu = (mu.exp() - 1.0).max(opt.optim.eps) * c.array();
+    return (yvec.array() - mu).square() / mu;
+}
+
+ArrayXd pois_log1p_residual(
+    const RowMajorMatrixXd& X, const VectorXd& y, const VectorXd& c,
+    const VectorXd* o, const Eigen::Ref<const VectorXd>& b) {
+    ArrayXd mu = (X * b).array();
+    if (o) mu += o->array();
+    mu = (mu.exp() - 1.0).max(1e-12) * c.array();
+    return (y.array() - mu).square() / mu;
+}
 
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A, const Document& y, double c,
@@ -83,15 +98,15 @@ double pois_log1p_mle_exact(
 {
     if (c <= 0.0) error("%s: c must be positive", __func__);
     VectorXd cvec = VectorXd::Constant((int)A.rows(), c);
-    return pois_log1p_mle_exact(A, y, &cvec, nullptr, opt, b, stats, debug_);
+    return pois_log1p_mle_exact(A, y, cvec, nullptr, opt, b, stats, debug_);
 }
 
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A, const Document& y,
-    const VectorXd* c, const VectorXd* o,
+    const VectorXd& c, const VectorXd* o,
     const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_)
 {
-    if (!c || c->size() != A.rows())
+    if (c.size() != A.rows())
         error("%s: c is missing or has wrong size", __func__);
     if (o && o->size() != A.rows())
         error("%s: o has wrong size", __func__);
@@ -100,11 +115,11 @@ double pois_log1p_mle_exact(
     }
 
     const int K = static_cast<int>(A.cols());
-    PoisRegExactProblem P(A, y, *c, o, opt);
+    PoisRegExactProblem P(A, y, c, o, opt);
 
     // Initialization
     if (b.size() != K) {
-        double numer = (P.yvec.array() / c->array() + 1.0).log().sum();
+        double numer = (P.yvec.array() / c.array() + 1.0).log().sum();
         if (o) {
             numer -= o->sum();
         }
@@ -123,17 +138,26 @@ double pois_log1p_mle_exact(
     }
 
     double final_obj;
-    if (opt.tron.enabled) {
-        final_obj = tron_solve(P, b, opt, stats, debug_);
-    } else if (opt.acg.enabled) {
-        final_obj = acg_solve(P, b, opt, stats, debug_);
+    if (opt.optim.tron.enabled) {
+        final_obj = tron_solve(P, b, opt.optim, stats.optim, debug_);
+    } else if (opt.optim.acg.enabled) {
+        final_obj = acg_solve(P, b, opt.optim, stats.optim, debug_);
     } else {
-        final_obj = newton_solve(P, b, opt, stats, debug_);
+        final_obj = newton_solve(P, b, opt.optim, stats.optim, debug_);
     }
 
     if (debug_ > 0) {
-        std::cout << "Finished in " << stats.niters << " iterations" << std::endl;
+        std::cout << "Finished in " << stats.optim.niters << " iterations" << std::endl;
         std::cout << "Final b (" << b.size() << ", " << b.norm() << ") " << final_obj << std::endl;
+    }
+
+    stats.pll = -final_obj / P.yvec.sum();
+    if (opt.se_flag != 0) {
+        pois_log1p_compute_se(A, P.yvec, c, o, opt, b, stats);
+    }
+    if (opt.compute_residual) {
+        ArrayXd res = P.residual(b);
+        stats.residual = res.sum() / A.rows();
     }
 
     return final_obj;
@@ -151,7 +175,7 @@ void PoisRegSparseProblem::eval(const VectorXd& bvec, double* f_out,
     ArrayXd u = (Anz * bvec).array();
     if (has_offset) u += oS.array();
     u = u.exp();
-    ArrayXd um1 = (u - 1.0).max(opt.eps);
+    ArrayXd um1 = (u - 1.0).max(opt.optim.eps);
 
     if (f_out) {
         ArrayXd lam = cS.array() * um1;
@@ -181,7 +205,7 @@ void PoisRegSparseProblem::eval_safe(const VectorXd& bvec, double* f_out,
     if (has_offset) u += oS.array();
     u = u.exp();
     ArrayXd s = u - 1.0;
-    double eps = opt.eps;
+    double eps = opt.optim.eps;
     double tau = opt.soft_tau;
 
     ArrayXd z = (s - eps) / tau;
@@ -216,21 +240,45 @@ void PoisRegSparseProblem::eval_safe(const VectorXd& bvec, double* f_out,
     }
 }
 
+ArrayXd PoisRegSparseProblem::residual(const VectorXd& bvec) const {
+    ArrayXd mu = (A * bvec).array();
+    if (o) mu += o->array();
+    mu = (mu.exp() - 1.0).max(opt.optim.eps) * c.array();
+    Eigen::Map<const Eigen::Array<uint32_t, Eigen::Dynamic, 1>> ids_map(y.ids.data(), n);
+    Eigen::ArrayXd mu_nz = mu(ids_map.cast<Eigen::Index>());
+    mu(ids_map.cast<Eigen::Index>()) = (yvec.array() - mu_nz).square() / mu_nz;
+    return mu;
+}
+
+ArrayXd pois_log1p_residual(
+    const RowMajorMatrixXd& X, const Document& y,
+    const VectorXd& c, const VectorXd* o, const Eigen::Ref<const VectorXd>& b) {
+    ArrayXd mu = (X * b).array();
+    if (o) mu += o->array();
+    mu = (mu.exp() - 1.0).max(1e-12) * c.array();
+    size_t n = y.ids.size();
+    Eigen::Map<const Eigen::Array<uint32_t, Eigen::Dynamic, 1>> ids_map(y.ids.data(), n);
+    Eigen::ArrayXd mu_nz = mu(ids_map.cast<Eigen::Index>());
+    Eigen::Map<const VectorXd> yvec(y.cnts.data(), n);
+    mu(ids_map.cast<Eigen::Index>()) = (yvec.array() - mu_nz).square() / mu_nz;
+    return mu;
+}
+
 double pois_log1p_mle(
     const RowMajorMatrixXd& A, const Document& y, double c,
     const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_)
 {
     if (c <= 0.0) error("%s: c must be positive", __func__);
     VectorXd cvec = VectorXd::Constant((int)A.rows(), c);
-    return pois_log1p_mle(A, y, &cvec, nullptr, opt, b, stats, debug_);
+    return pois_log1p_mle(A, y, cvec, nullptr, opt, b, stats, debug_);
 }
 
 double pois_log1p_mle(
     const RowMajorMatrixXd& A, const Document& y,
-    const VectorXd* c, const VectorXd* o,
+    const VectorXd& c, const VectorXd* o,
     const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_)
 {
-    if (!c || c->size() != A.rows())
+    if (c.size() != A.rows())
         error("%s: c is missing or has wrong size", __func__);
     if (o && o->size() != A.rows())
         error("%s: o has wrong size", __func__);
@@ -239,7 +287,7 @@ double pois_log1p_mle(
     }
 
     const int K = static_cast<int>(A.cols());
-    PoisRegSparseProblem P(A, y, *c, o, opt);
+    PoisRegSparseProblem P(A, y, c, o, opt);
 
     // Initialization
     if (b.size() != K) {
@@ -258,25 +306,44 @@ double pois_log1p_mle(
     }
 
     double final_obj;
-    if (opt.tron.enabled) {
-        final_obj = tron_solve(P, b, opt, stats, debug_);
-    } else if (opt.acg.enabled) {
-        final_obj = acg_solve(P, b, opt, stats, debug_);
+    if (opt.optim.tron.enabled) {
+        final_obj = tron_solve(P, b, opt.optim, stats.optim, debug_);
+    } else if (opt.optim.acg.enabled) {
+        final_obj = acg_solve(P, b, opt.optim, stats.optim, debug_);
     } else {
-        final_obj = newton_solve(P, b, opt, stats, debug_);
+        final_obj = newton_solve(P, b, opt.optim, stats.optim, debug_);
     }
 
     if (debug_ > 0) {
-        std::cout << "Finished in " << stats.niters << " iterations" << std::endl;
+        std::cout << "Finished in " << stats.optim.niters << " iterations" << std::endl;
         std::cout << "Final b (" << b.size() << ", " << b.norm() << ") " << final_obj << std::endl;
+    }
+
+    stats.pll = -final_obj / P.yvec.sum();
+    if (opt.se_flag != 0) {
+        pois_log1p_compute_se(A, y, c, o, opt, b, stats);
+    }
+    if (opt.compute_residual) {
+        ArrayXd res = P.residual(b);
+        stats.residual = res.sum() / A.rows();
     }
 
     return final_obj;
 }
 
 void pois_log1p_compute_se(
-    const RowMajorMatrixXd& X, const Document& y, const VectorXd* c,
-    const VectorXd* o, const MLEOptions& opt, VectorXd& b, MLEStats& stats) {
+    const RowMajorMatrixXd& X, const Document& y, const VectorXd& c,
+    const VectorXd* o, const MLEOptions& opt, const Eigen::Ref<const VectorXd>& b, MLEStats& stats) {
+    VectorXd y_dense;
+    if (opt.se_flag & 0x2) {
+        y_dense = y.to_dense(X.rows());
+    }
+    pois_log1p_compute_se(X, y_dense, c, o, opt, b, stats);
+}
+
+void pois_log1p_compute_se(
+    const RowMajorMatrixXd& X, const VectorXd& y, const VectorXd& c,
+    const VectorXd* o, const MLEOptions& opt, const Eigen::Ref<const VectorXd>& b, MLEStats& stats) {
     if (opt.se_flag == 0) return;
     const int n = static_cast<int>(X.rows());
     const int p = static_cast<int>(X.cols());
@@ -284,11 +351,11 @@ void pois_log1p_compute_se(
     ArrayXd eta = (X * b).array();
     if (o) eta += o->array();
     ArrayXd u   = eta.exp();                // e^{η}
-    ArrayXd um1 = (u - 1.0).max(opt.eps);   // (e^{η}-1)
-    ArrayXd mu  = c->array() * um1;         // μ = c*(e^{η}-1)
-    ArrayXd dmu = c->array() + mu;          // ∂μ/∂η = c*e^{η} = c + μ
+    ArrayXd um1 = (u - 1.0).max(opt.optim.eps);   // (e^{η}-1)
+    ArrayXd mu  = c.array() * um1;         // μ = c*(e^{η}-1)
+    ArrayXd dmu = c.array() + mu;          // ∂μ/∂η = c*e^{η} = c + μ
     // 2) A = X'WX with W = (dμ/dη)^2 / V(μ) = (dmu^2) / μ
-    ArrayXd w_fisher = (dmu.square() / mu.max(opt.eps));
+    ArrayXd w_fisher = (dmu.square() / mu.max(opt.optim.eps));
     // Scale X[i,:] by \sqrt(w_i)
     VectorXd sqrt_w = w_fisher.sqrt().matrix();
     RowMajorMatrixXd Xw = X;
@@ -303,18 +370,15 @@ void pois_log1p_compute_se(
         error("%s: LDLT failed on XtWX", __func__);
     }
     MatrixXd XtWX_inv = ldlt.solve(MatrixXd::Identity(p, p));
-
+    MatrixXd Vrob;
     if (opt.se_flag & 0x1) { // Fisher
         stats.se_fisher = XtWX_inv.diagonal().array().sqrt().matrix();
     } else {
         stats.se_fisher.resize(0);
     }
-
     if (opt.se_flag & 0x2) { // Sandwich robust
         // 3) B = X' diag(s^2) X with s = (y-μ)*(dμ/dη)/μ
-        VectorXd y_dense;
-        y.to_dense(n, y_dense);
-        ArrayXd s = (y_dense.array() - mu) * (dmu / mu.max(opt.eps));
+        ArrayXd s = (y.array() - mu) * (dmu / mu.max(opt.optim.eps));
         if (opt.hc_type == 1) {
             if (n > p) {
                 s *= std::sqrt(double(n) / double(n - p));
@@ -323,9 +387,9 @@ void pois_log1p_compute_se(
             Eigen::MatrixXd Z = Xw * XtWX_inv;
             Eigen::VectorXd h = (Z.cwiseProduct(Xw)).rowwise().sum();
             if (opt.hc_type == 2) {
-                s /= ((1.0 - h.array()).max(opt.eps)).sqrt();
+                s /= ((1.0 - h.array()).max(opt.optim.eps)).sqrt();
             } else {
-                s /= (1.0 - h.array()).max(opt.eps);
+                s /= (1.0 - h.array()).max(opt.optim.eps);
             }
         }
         VectorXd abs_s = s.abs().matrix();
@@ -335,21 +399,36 @@ void pois_log1p_compute_se(
         }
         MatrixXd B = Xs.transpose() * Xs;    // X' diag(s^2) X
         // Var(β̂)_robust ≈ (X'WX)^{-1} * B * (X'WX)^{-1}
-        MatrixXd Vrob = XtWX_inv * B * XtWX_inv;
+        Vrob = XtWX_inv * B * XtWX_inv;
         stats.se_robust = Vrob.diagonal().array().sqrt().matrix();
-        if (opt.store_cov) {
+    } else {
+        stats.se_robust.resize(0);
+    }
+
+    // if (opt.compute_residual) {
+    //     ArrayXd var_eta = ArrayXd::Zero(n);
+    //     if (opt.se_flag & 0x2) {
+    //         for (int i = 0; i < n; ++i) {
+    //             var_eta[i] = X.row(i).dot(Vrob * X.row(i));
+    //         }
+    //     } else {
+    //         for (int i = 0; i < n; ++i) {
+    //             var_eta[i] = X.row(i).dot(XtWX_inv * X.row(i));
+    //         }
+    //     }
+    //     ArrayXd var_mu = (c.array().square()) * (var_eta.exp() - 1.) * (2 * eta + var_eta).exp();
+    //     stats.residual = ((y.array() - mu).square() / (mu + var_mu).max(opt.optim.eps)).sum() / n;
+    // }
+
+    if (opt.store_cov) {
+        if (opt.se_flag & 0x1) {
+            stats.cov_fisher = std::move(XtWX_inv);
+        }
+        if (opt.se_flag & 0x2) {
             stats.cov_robust = std::move(Vrob);
         }
     } else {
-        stats.se_robust.resize(0);
-        stats.cov_robust.resize(0,0);
-    }
-
-    if (opt.se_flag & 0x1) {
-        if (opt.store_cov) {
-            stats.cov_fisher = std::move(XtWX_inv);
-        } else {
-            stats.cov_fisher.resize(0,0);
-        }
+        stats.cov_fisher.resize(0,0);
+        stats.cov_fisher.resize(0,0);
     }
 }

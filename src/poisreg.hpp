@@ -23,6 +23,33 @@ using Eigen::RowVectorXd;
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 using Eigen::ArrayXd;
 
+struct MLEOptions {
+	OptimOptions optim;
+	bool  exact_zero = false;
+	double ridge     = 1e-12;
+	double soft_tau  = 1e-3;    // for softplus if needed
+	uint32_t se_flag = 0;       // 0: none, 1: fisher, 2: robust, 3: both
+	uint32_t hc_type = 1;
+	bool store_cov   = false;   // Store covariance matrices for estimates
+    bool compute_residual = false;
+    MLEOptions() = default;
+    MLEOptions(const OptimOptions& optim_) : optim(optim_) {}
+};
+
+struct MLEStats {
+	OptimStats optim;
+	// Optional standard errors and/or covariance
+	VectorXd se_fisher;
+	VectorXd se_robust;
+	MatrixXd cov_fisher;
+    MatrixXd cov_robust;
+	// Goodness-of-fit
+	double pll; // per-token log-likelihood
+	double residual;
+    MLEStats() = default;
+    MLEStats(const OptimStats& optim_) : optim(optim_) {}
+};
+
 // ---------------- Problem Definition for pois_log1p_mle_exact --------------
 class PoisRegExactProblem {
 public:
@@ -44,7 +71,7 @@ public:
             yvec[y.ids[j]] = y.cnts[j];
         }
         double min_lower_bound = 0;
-        if (opt.b_min) min_lower_bound = opt.b_min->minCoeff();
+        if (opt.optim.b_min) min_lower_bound = opt.optim.b_min->minCoeff();
         nonnegative = min_lower_bound >= 0.0;
         if (has_offset) {
             nonnegative = nonnegative && (o->minCoeff() >= 0.0);
@@ -52,9 +79,9 @@ public:
     }
 
     void eval(const VectorXd& bvec,
-              double* f_out = nullptr,
-              VectorXd* g_out = nullptr,
-              VectorXd* q_out = nullptr,
+              double* f_out = nullptr,   // f = -logP
+              VectorXd* g_out = nullptr, // df/db
+              VectorXd* q_out = nullptr, // d2f/db2 (diag)
               ArrayXd* w_out = nullptr) const;
     void eval_safe(const VectorXd& bvec,
               double* f_out = nullptr,
@@ -78,6 +105,9 @@ public:
             return A.transpose() * (w * Av.array()).matrix();
         };
     }
+
+    ArrayXd residual(const VectorXd& bvec) const;
+
 };
 
 // ---------------- Problem Definition for pois_log1p_mle (sparse) ----------
@@ -143,7 +173,7 @@ public:
 
         // Check if we need safe/heuristic to enforce non-negativity
         double min_lower_bound = 0;
-        if (opt.b_min) min_lower_bound = opt.b_min->minCoeff();
+        if (opt.optim.b_min) min_lower_bound = opt.optim.b_min->minCoeff();
         nonnegative = min_lower_bound >= 0.0;
         if (has_offset) {
             nonnegative = nonnegative && (o->minCoeff() >= 0.0);
@@ -178,13 +208,17 @@ public:
             return Hv_nz + zakl * v;
         };
     }
+
+    ArrayXd residual(const VectorXd& bvec) const;
 };
 
+// Poisson regression with log(1+λ/c) link
+// Return -logP (final objective)
 
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A,
     const Document& y,
-    const VectorXd* c,    // length N, scaling factors
+    const VectorXd& c,    // length N, scaling factors
     const VectorXd* o,    // length N, offset
     const MLEOptions& opt,
     VectorXd& b, MLEStats& stats, int32_t debug_ = 0);
@@ -193,7 +227,7 @@ double pois_log1p_mle_exact(
 double pois_log1p_mle(
     const RowMajorMatrixXd& A,
     const Document& y,
-    const VectorXd* c,
+    const VectorXd& c,
     const VectorXd* o,
     const MLEOptions& opt,
     VectorXd& b, MLEStats& stats, int32_t debug_ = 0);
@@ -209,5 +243,18 @@ double pois_log1p_mle_exact(
 
 // Compute Fisher and/or robust SE for Poisson with log1p link.
 void pois_log1p_compute_se(
-    const RowMajorMatrixXd& X, const Document& y, const VectorXd* c,
-    const VectorXd* o, const MLEOptions& opt, VectorXd& b, MLEStats& stats);
+    const RowMajorMatrixXd& X, const Document& y, const VectorXd& c,
+    const VectorXd* o, const MLEOptions& opt, const Eigen::Ref<const VectorXd>& b, MLEStats& stats);
+
+// (dense y is used only if opt.se_flag & 0x2)
+void pois_log1p_compute_se(
+    const RowMajorMatrixXd& X, const VectorXd& y, const VectorXd& c,
+    const VectorXd* o, const MLEOptions& opt, const Eigen::Ref<const VectorXd>& b, MLEStats& stats);
+
+ArrayXd pois_log1p_residual(
+    const RowMajorMatrixXd& X, const Document& y, const VectorXd& c,
+    const VectorXd* o, const Eigen::Ref<const VectorXd>& b);
+
+ArrayXd pois_log1p_residual(
+    const RowMajorMatrixXd& X, const VectorXd& y, const VectorXd& c,
+    const VectorXd* o, const Eigen::Ref<const VectorXd>& b);

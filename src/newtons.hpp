@@ -35,19 +35,12 @@ struct TrustRegionOptions {
 	int    cg_max_iter  = -1;      // default: 2*K
 };
 
-struct MLEOptions {
-	bool  exact_zero = false;
+struct OptimOptions {
 	int    max_iters = 50;
 	double tol       = 1e-6;
 	double alpha     = 1.0;     // initial step size
-	double ridge     = 1e-12;
 	double eps       = 1e-12;
 	bool use_agd     = false;
-	double soft_tau  = 1e-3;    // for softplus if needed
-	uint32_t se_flag = 0;       // 0: none, 1: fisher, 2: robust, 3: both
-	uint32_t hc_type = 1;
-	bool store_cov   = false;   // Store covariance matrices for estimates
-	// Optimization options
 	LineSearchOptions ls{};
 	ACGOptions acg{};
 	TrustRegionOptions tron{};
@@ -62,23 +55,15 @@ struct MLEOptions {
         b_min = std::make_shared<VectorXd>(min_vec);
         b_max = std::make_shared<VectorXd>(max_vec);
     }
-	inline void set_soft_floor(double tau) {
-    	soft_tau = tau;
-	}
 };
 
-struct MLEStats {
+struct OptimStats {
 	int niters = 0;
 	double obj, diff_obj;
 	double diff_b, rel_diff_b;
-	// Optional standard errors and/or covariance
-	VectorXd se_fisher;
-	VectorXd se_robust;
-	MatrixXd cov_fisher;
-    MatrixXd cov_robust;
 };
 
-inline void project_to_box(VectorXd& b, const MLEOptions& opt) {
+inline void project_to_box(VectorXd& b, const OptimOptions& opt) {
     if (opt.b_min && opt.b_max) {
         b = b.cwiseMax(*opt.b_min).cwiseMin(*opt.b_max);
     } else if (opt.b_min) { // Only lower bound provided
@@ -92,7 +77,7 @@ inline void project_to_box(VectorXd& b, const MLEOptions& opt) {
 
 // ---------------- TRON (trust-region Newton-CG) ----------------
 template <class Problem>
-double tron_solve(const Problem& P, VectorXd& b, const MLEOptions& opt, MLEStats& stats, int debug_ = 0) {
+double tron_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimStats& stats, int debug_ = 0) {
 	const int K = static_cast<int>(b.size());
 	VectorXd g(K), q(K);
 	ArrayXd w;
@@ -197,7 +182,7 @@ double tron_solve(const Problem& P, VectorXd& b, const MLEOptions& opt, MLEStats
 
 // ---------------- Monotone FISTA / ACG ----------------
 template <class Problem>
-double acg_solve(const Problem& P, VectorXd& b, const MLEOptions& opt, MLEStats& stats, int debug_ = 0) {
+double acg_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimStats& stats, int debug_ = 0) {
 	const int K = static_cast<int>(b.size());
 	VectorXd b_prev = b;
 	VectorXd yk = b;
@@ -286,7 +271,7 @@ double acg_solve(const Problem& P, VectorXd& b, const MLEOptions& opt, MLEStats&
 
 // ---------------- Diagonal Newton + optional line search ----------------
 template <class Problem>
-double newton_solve(const Problem& P, VectorXd& b, const MLEOptions& opt, MLEStats& stats, int debug_ = 0) {
+double newton_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimStats& stats, int debug_ = 0) {
 	double f_cur = P.f(b);
 	VectorXd g(b.size()), q(b.size());
 

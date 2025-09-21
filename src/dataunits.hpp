@@ -18,11 +18,12 @@ struct Document {
     std::vector<uint32_t> ids; // Length: number of nonzero words in the doc
     std::vector<double> cnts;
 
-    inline void to_dense(const int n, Eigen::VectorXd& y_dense) const {
-        y_dense.setZero(n);
+    inline Eigen::VectorXd to_dense(size_t n) const {
+        Eigen::VectorXd y_dense = Eigen::VectorXd::Zero(n);
         for (size_t t = 0; t < ids.size(); ++t) {
             y_dense[ids[t]] = cnts[t];
         }
+        return y_dense;
     }
 };
 

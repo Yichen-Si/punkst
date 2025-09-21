@@ -37,6 +37,11 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
             beta_(j,k) = dist(rng_);
     }
     MLEOptions mle_opts_bcov = mle_opts;
+    MLEOptions mle_opts_fit = mle_opts;
+    mle_opts_fit.se_flag = 0; // no SE during fitting
+    mle_opts_bcov.se_flag = 0;
+    mle_opts_fit.compute_residual = false;
+    mle_opts_bcov.compute_residual = false;
     std::vector<double> offset;
     double objective_old = std::numeric_limits<double>::max()-1;
     if (P_ > 0) {
@@ -45,7 +50,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         for (int i = 0; i < N; ++i) {
             X.row(i) = docs[i].covar.transpose();
         }
-        mle_opts_bcov.set_bounds(covar_coef_min, covar_coef_max, P_);
+        mle_opts_bcov.optim.set_bounds(covar_coef_min, covar_coef_max, P_);
         // Do one round of regression for covariates only, with a mean offset
         notice("Fit initial regressions for covariates");
         objective_old = tbb::parallel_reduce(
@@ -66,9 +71,9 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                 VectorXd o = VectorXd::Constant(N, mu_j);
                 VectorXd bj; // empty
                 if (exact_) {
-                    local_sum += pois_log1p_mle_exact(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats, debug_);
+                    local_sum += pois_log1p_mle_exact(X, mtx_t[j], cvec, &o, mle_opts_bcov, bj, stats, debug_);
                 } else {
-                    local_sum += pois_log1p_mle(X, mtx_t[j], &cvec, &o, mle_opts_bcov, bj, stats, debug_);
+                    local_sum += pois_log1p_mle(X, mtx_t[j], cvec, &o, mle_opts_bcov, bj, stats, debug_);
                 }
                 Bcov_.row(j) = bj.transpose();
             }
@@ -104,12 +109,12 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                     b = theta_.row(i).transpose();
                 }
                 if (exact_) {
-                    local_sum += pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
+                    local_sum += pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts_fit, b, stats, debug_);
                 } else {
-                    local_sum += pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
+                    local_sum += pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts_fit, b, stats, debug_);
                 }
                 theta_.row(i) = b.transpose();
-                niters_reg_theta[i] += stats.niters;
+                niters_reg_theta[i] += stats.optim.niters;
             }
             return local_sum;
         }, std::plus<double>());
@@ -134,13 +139,13 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                         double fval;
                         if (exact_) {
                             fval = pois_log1p_mle_exact(
-                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b, debug_);
+                            X, mtx_t[j], cvec, &oN, mle_opts_bcov, bj, stats_b, debug_);
                         } else {
                             fval = pois_log1p_mle(
-                            X, mtx_t[j], &cvec, &oN, mle_opts_bcov, bj, stats_b, debug_);
+                            X, mtx_t[j], cvec, &oN, mle_opts_bcov, bj, stats_b, debug_);
                         }
                         Bcov_.row(j) = bj.transpose();
-                        niters_reg_bcov[j] += stats_b.niters;
+                        niters_reg_bcov[j] += stats_b.optim.niters;
                     }
                     // (b) update beta_j with A = theta, offset = X * b_j
                     VectorXd beta_j = beta_.row(j).transpose();
@@ -151,13 +156,13 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                     }
                     if (exact_) {
                         local_sum += pois_log1p_mle_exact(
-                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta, debug_);
+                            theta_, mtx_t[j], cvec, off_ptr, mle_opts_fit, beta_j, stats_beta, debug_);
                     } else {
                         local_sum += pois_log1p_mle(
-                            theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, stats_beta, debug_);
+                            theta_, mtx_t[j], cvec, off_ptr, mle_opts_fit, beta_j, stats_beta, debug_);
                     }
                     beta_.row(j) = beta_j.transpose();
-                    niters_reg_beta[j] += stats_beta.niters;
+                    niters_reg_beta[j] += stats_beta.optim.niters;
                 }
                 return local_sum;
         }, std::plus<double>());
@@ -196,54 +201,71 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
     int32_t minutes = static_cast<int32_t>(sec / 60.0);
     notice("%s: Model fitting took %.3f seconds (%dmin %.3fs)", __func__, sec, minutes, sec - minutes * 60);
 
-    if (mle_opts.se_flag == 0) {
+    rescale_beta_to_const_sum(M_);
+
+    if (mle_opts.se_flag == 0 && !mle_opts.compute_residual) {
         return;
     }
 
     t0 = std::chrono::steady_clock::now();
-    notice("%s: Computing standard errors for beta ...", __func__);
-    rescale_theta_to_sumN(); // \sum_i \theta_{ik} = N/K so \beta_k's are comparable
-    se_fisher_.clear(); se_robust_.clear();
     cov_fisher_.clear(); cov_robust_.clear();
-    se_fisher_.resize(M_); se_robust_.resize(M_);
-    if (mle_opts.store_cov) {
-        cov_fisher_.resize(M_); cov_robust_.resize(M_);
+    if (mle_opts.se_flag & 0x1) {
+        se_fisher_.resize(M_, K_);
+        if (mle_opts.store_cov) cov_fisher_.resize(M_);
     }
+    if (mle_opts.se_flag & 0x2) {
+        se_robust_.resize(M_, K_);
+        if (mle_opts.store_cov) cov_robust_.resize(M_);
+    }
+    if (mle_opts.compute_residual) {
+        feature_residuals_.resize(M_);
+    }
+    notice("%s: Start computing Cov/SE/r2 for %d features", __func__, M_);
     tbb::parallel_for(0, M_, [&](int j) {
-        VectorXd beta_j = beta_.row(j).transpose();
+        const Eigen::Map<const Eigen::VectorXd> beta_j(beta_.row(j).data(), beta_.cols());
         VectorXd oN; VectorXd* off_ptr = nullptr;
         if (P_ > 0) {
             oN.noalias() = X * Bcov_.row(j).transpose(); // N
             off_ptr = &oN;
         }
-        MLEStats st;
-        pois_log1p_compute_se(theta_, mtx_t[j], &cvec, off_ptr, mle_opts, beta_j, st);
-        se_fisher_[j] = std::move(st.se_fisher);
-        se_robust_[j] = std::move(st.se_robust);
-        if (mle_opts.store_cov) {
-            cov_fisher_[j] = std::move(st.cov_fisher);
-            cov_robust_[j] = std::move(st.cov_robust);
+        if (mle_opts.compute_residual) {
+            feature_residuals_[j] = pois_log1p_residual(theta_, mtx_t[j], cvec, off_ptr, beta_j).sum();
+        }
+        if (mle_opts.se_flag) {
+            MLEStats st;
+            pois_log1p_compute_se(theta_, mtx_t[j], cvec, off_ptr, mle_opts, beta_j, st);
+            if (mle_opts.se_flag & 0x1)
+                se_fisher_.row(j) = st.se_fisher.transpose();
+            if (mle_opts.se_flag & 0x2)
+                se_robust_.row(j) = st.se_robust.transpose();
+            if (mle_opts.store_cov) {
+                if (mle_opts.se_flag & 0x1)
+                    cov_fisher_[j] = std::move(st.cov_fisher);
+                if (mle_opts.se_flag & 0x2)
+                    cov_robust_[j] = std::move(st.cov_robust);
+            }
         }
     });
     t1 = std::chrono::steady_clock::now();
     sec = std::chrono::duration<double, std::milli>(t1 - t0).count() / 1000.0;
     minutes = static_cast<int32_t>(sec / 60.0);
-    notice("%s: Computing Cov/SE took %.3f seconds (%dmin %.3fs)", __func__, sec, minutes, sec - minutes * 60);
+    notice("%s: Computing Cov/SE/r2 took %.3f seconds (%dmin %.3fs)", __func__, sec, minutes, sec - minutes * 60);
 
     notice("%s: Done", __func__);
 }
 
-RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<SparseObs>& docs, const MLEOptions mle_opts) {
+RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const MLEOptions mle_opts, std::vector<MLEStats>& res) {
     int N = docs.size();
     if (N == 0) return RowMajorMatrixXd(0, K_);
     if (beta_.rows() != M_ || beta_.cols() != K_) {
         error("%s: Model not fitted yet, call fit() first.", __func__);
         return RowMajorMatrixXd(N, K_);
     }
+    res.clear();
+    res.reserve(N);
     size_t grainsize = std::min(64, std::max(1, int(N / (2 * nThreads_))) );
     RowMajorMatrixXd new_theta(N, K_);
     tbb::parallel_for(tbb::blocked_range<int>(0, N, grainsize), [&](const tbb::blocked_range<int>& r) {
-        MLEStats stats;
         VectorXd cM(M_);
         VectorXd oM; if (Bcov_.size() > 0) oM.resize(M_);
         VectorXd* oM_ptr = (Bcov_.size() > 0) ? &oM : nullptr;
@@ -254,11 +276,13 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(const std::vector<SparseObs>& docs, 
             }
             VectorXd b;
             double obj;
+            MLEStats stats;
             if (exact_) {
-                obj = pois_log1p_mle_exact(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
+                obj = pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
             } else {
-                obj = pois_log1p_mle(beta_, docs[i].doc, &cM, oM_ptr, mle_opts, b, stats, debug_);
+                obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
             }
+            res.push_back(std::move(stats));
             new_theta.row(i) = b.transpose();
         }
     });
@@ -423,12 +447,6 @@ RowMajorMatrixXd PoissonLog1pNMF::convert_to_factor_loading() {
     RowMajorMatrixXd wik = theta_.array().rowwise() * wk;
     wik = wik.array().colwise() / wik.rowwise().sum().array();
     return wik;
-}
-
-void PoissonLog1pNMF::rescale_theta_to_sumN() {
-    int N = theta_.rows();
-    int K = theta_.cols();
-    rescale_theta_to_const_sum(double(N) / K);
 }
 
 void PoissonLog1pNMF::set_de_parameters(double min_ct, double min_fc, double max_p) {

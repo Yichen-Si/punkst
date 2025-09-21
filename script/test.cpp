@@ -248,9 +248,9 @@ int32_t test(int32_t argc, char** argv) {
     PoissonLog1pNMF model(K, M, threads, seed, exact);
 
     MLEOptions mle_opts;
-    mle_opts.max_iters = 15; // A few more iterations can help
-    mle_opts.tol = 1e-5;
-    mle_opts.tron.enabled = true;
+    mle_opts.optim.max_iters = 15; // A few more iterations can help
+    mle_opts.optim.tol = 1e-5;
+    mle_opts.optim.tron.enabled = true;
 
     std::cout << "\nFitting the model..." << std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();

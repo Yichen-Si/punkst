@@ -122,6 +122,43 @@ std::string fp_to_string(FP x, int digits)
     return buf;
 }
 
+// String to scalar
+template <typename Scalar>
+inline Scalar parse_scalar(const std::string& token) {
+    std::string t = token;
+    trim(t);
+    if constexpr (std::numeric_limits<Scalar>::has_quiet_NaN) {
+        if (t == "NA" || t == "NaN" || t == "nan") {
+            return std::numeric_limits<Scalar>::quiet_NaN();
+        }
+    }
+    if constexpr (std::is_integral<Scalar>::value) {
+        size_t idx = 0;
+        long long v = 0;
+        try {
+            v = std::stoll(t, &idx, 10);
+        } catch (...) {
+            throw std::runtime_error("Failed to parse integer value: '" + token + "'");
+        }
+        if (idx != t.size()) {
+            throw std::runtime_error("Trailing characters in integer value: '" + token + "'");
+        }
+        return static_cast<Scalar>(v);
+    } else {
+        size_t idx = 0;
+        double v = 0.0;
+        try {
+            v = std::stod(t, &idx);
+        } catch (...) {
+            throw std::runtime_error("Failed to parse floating value: '" + token + "'");
+        }
+        if (idx != t.size()) {
+            throw std::runtime_error("Trailing characters in floating value: '" + token + "'");
+        }
+        return static_cast<Scalar>(v);
+    }
+}
+
 // Write matrix to tsv
 template <typename Scalar>
 void write_matrix_to_file(const std::string& output,
@@ -163,6 +200,84 @@ void write_matrix_to_file(const std::string& output,
     }
 }
 
+template <typename Scalar>
+void read_matrix_from_file(
+    const std::string& input,
+    Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>& mat,
+    std::vector<std::string>* rnames = nullptr,
+    std::vector<std::string>* cnames = nullptr)
+{
+    std::ifstream ifs(input);
+    if (!ifs.is_open()) {
+        throw std::runtime_error("Cannot open file for reading: " + input);
+    }
+    std::string line;
+    std::vector<std::string> tokens;
+    size_t ncol, ntoken;
+    size_t line_no = 0, nrow = 0;
+    size_t offset = rnames ? 1 : 0;
+    if (!std::getline(ifs, line)) {
+        error("%s: Empty input file", __func__);
+    }
+    split(tokens, "\t", line, UINT_MAX, true, false, true);
+    ntoken = tokens.size();
+    if (ntoken < 1 + offset) {
+        error("%s: First line malformed", __func__);
+    }
+    ncol = ntoken;
+    if (rnames) {
+        rnames->clear();
+        rnames->reserve(1024);
+        ncol -= 1;
+    }
+    if (cnames) {
+        cnames->clear();
+        cnames->reserve(tokens.size() - offset);
+        for (size_t i = offset; i < tokens.size(); ++i) {
+            cnames->emplace_back(tokens[i]);
+        }
+        if (!std::getline(ifs, line)) {
+            mat.resize(0, ncol);
+            return;
+        }
+        split(tokens, "\t", line, UINT_MAX, true, false, true);
+        if (tokens.size() != ntoken) {
+            error("%s: %d-th line malformed", __func__, line_no);
+        }
+        line_no++;
+    }
+
+    std::vector<Scalar> values_linear; // will store row-major
+    values_linear.reserve(1024 * (ncol > 0 ? static_cast<size_t>(ncol) : 1));
+    // First pass: read all rows into temporary storage to know nrows
+    while (true) {
+        if (rnames) {rnames->emplace_back(tokens[0]);}
+        for (size_t j = offset; j < ntoken; ++j) {
+            values_linear.emplace_back(parse_scalar<Scalar>(tokens[j]));
+        }
+        nrow++;
+        if (!std::getline(ifs, line)) {
+            break;
+        }
+        split(tokens, "\t", line, UINT_MAX, true, false, true);
+        if (tokens.size() != ntoken) {
+            error("%s: %d-th line malformed", __func__, line_no);
+        }
+        line_no++;
+    }
+    if (nrow == 0) {
+        mat.resize(0, ncol);
+        return;
+    }
+    // Allocate and fill matrix (RowMajor)
+    if (values_linear.size() != nrow * ncol) {
+        error("%s: Flattened values size mismatch", __func__);
+    }
+    mat.resize(nrow, ncol);
+    // Copy in row-major order
+    std::copy(values_linear.begin(), values_linear.end(), mat.data());
+}
+
 // String search
 std::vector<int> computeLPSArray(const std::string& pattern);
 int32_t KMPSearch(const std::string& pattern, const std::string& text, std::vector<int>& idx, std::vector<int>& lps, int32_t n = 1);
@@ -180,14 +295,14 @@ std::string uint32toHex(uint32_t num);
 uint32_t hexToUint32(const std::string& hex);
 // hash a tuple of three integers
 struct Tuple3Hash {
-    std::size_t operator()(const std::tuple<int32_t, int32_t, int32_t>& key) const {
+    size_t operator()(const std::tuple<int32_t, int32_t, int32_t>& key) const {
         // Get individual hash values for each element.
         auto h1 = std::hash<int32_t>{}(std::get<0>(key));
         auto h2 = std::hash<int32_t>{}(std::get<1>(key));
         auto h3 = std::hash<int32_t>{}(std::get<2>(key));
 
         // Combine them using a hash combining formula.
-        std::size_t seed = h1;
+        size_t seed = h1;
         seed ^= h2 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
         seed ^= h3 + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
         return seed;

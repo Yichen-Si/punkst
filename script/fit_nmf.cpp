@@ -21,7 +21,10 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     double size_factor = 10000, c = -1;
     bool allow_na = false;
     bool exact = false;
-    int32_t test_beta_vs_null = 0; // 0: no test, 1: fisher, 2: robust, 3: both
+    bool write_se = false, compute_residual = false;
+    bool test_beta_vs_null = false;
+    bool transform = false;
+    int32_t se_method = 1; // 1: fisher, 2: robust, 3: both
     double min_ct_de = 100, min_fc = 1.5, max_p = 0.05;
     int32_t mode = 1;
 
@@ -52,11 +55,15 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("min-count-train", "Minimum total count per doc", minCountTrain);
     // DE test options
     pl.add_option("detest-vs-avg", "For each factor, test if each feature is  enriched compared to the average of the whole sample", test_beta_vs_null)
+      .add_option("se-method", "Method for calculating SE of beta: 1: Fisher, 2: robust, 3: both", se_method)
       .add_option("min-fc", "Minimum fold-change for tests", min_fc)
       .add_option("max-p", "Maximum p-value for tests", max_p)
       .add_option("min-ct", "Minimum total count for a feature to be tested", min_ct_de);
     // Output Options
     pl.add_option("out-prefix", "Output prefix", outPrefix, true)
+      .add_option("write-se", "Write standard errors for beta", write_se)
+      .add_option("feature-residuals", "Compute and write per-feature residuals", compute_residual)
+      .add_option("transform", "Transform the data after model fitting", transform)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug-N", "Debug with the first N units", debug_N)
       .add_option("debug", "Debug", debug_);
@@ -142,6 +149,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
             continue;
         }
         obs.c = per_doc_c ? ct / size_factor : c;
+        obs.ct_tot = ct;
         if (n_covar > 0) { // read covariates
             if (!std::getline(covarFileStream, line)) {
                 error("The number of lines in covariate file is less than that in data file");
@@ -166,39 +174,46 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         }
     }
     inFileStream.close();
-    notice("Read %lu documents with %d features", docs.size(), M);
+    size_t N = docs.size();
+    notice("Read %lu documents with %d features", N, M);
 
     PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
 
     // Set up MLE options (for subproblems)
     MLEOptions opts{};
-    opts.max_iters = max_iter_inner;
-    opts.tol = tol_inner;
+    opts.optim.max_iters = max_iter_inner;
+    opts.optim.tol = tol_inner;
     std::string model_name = "CD";
     if (mode == 1) {
-        opts.tron.enabled = true;
+        opts.optim.tron.enabled = true;
         model_name = "TRON";
     } else if (mode == 2) {
-        opts.acg.enabled = true;
+        opts.optim.acg.enabled = true;
         model_name = "FISTA";
     } else if (mode == 3) {
-        opts.ls.enabled = true;
+        opts.optim.ls.enabled = true;
         model_name = "DiagLS";
     }
     outPrefix += "." + model_name;
-    if (test_beta_vs_null >= 1) {
+    if (test_beta_vs_null) {
         opts.store_cov = true;
-        opts.se_flag = test_beta_vs_null;
+        if (se_method == 0) {
+            se_method = 1;
+        }
+        opts.se_flag = se_method;
         nmf.set_de_parameters(min_ct_de, min_fc, max_p);
+    } else if (write_se) {
+        opts.se_flag = se_method;
     }
+    opts.compute_residual = compute_residual;
 
     // Fit the model
     nmf.fit(docs, opts, max_iter_outer, tol_outer);
 
     // Compute DE stats
-    if (test_beta_vs_null >= 1) {
+    if (test_beta_vs_null) {
         for (uint32_t flag = 1; flag <= 2; flag++) {
-            if ((test_beta_vs_null & flag) == 0) {
+            if ((se_method & flag) == 0) {
                 continue;
             }
             auto results = nmf.test_beta_vs_null(flag);
@@ -224,16 +239,34 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     const auto& mat = nmf.get_model();
     write_matrix_to_file(outf, mat, 4, false, reader.features, "Feature");
     notice("Wrote model to %s", outf.c_str());
-
-    outf = outPrefix + ".theta.tsv";
-    const auto& theta = nmf.get_theta();
-    write_matrix_to_file(outf, theta, 4, false, rnames, "Index");
-    notice("Wrote theta to %s", outf.c_str());
-
-    outf = outPrefix + ".loadings.tsv";
-    auto loadings = nmf.convert_to_factor_loading();
-    write_matrix_to_file(outf, loadings, 4, true, rnames, "Index");
-    notice("Wrote scaled factor loadings to %s", outf.c_str());
+    if (write_se) {
+        for (uint32_t flag = 1; flag <= 2; flag++) {
+            if ((se_method & flag) == 0) {
+                continue;
+            }
+            outf = outPrefix + (flag == 1 ? ".model.se.fisher.tsv" : ".model.se.robust.tsv");
+            const auto& se_mat = nmf.get_se(flag == 2);
+            write_matrix_to_file(outf, se_mat, 4, false, reader.features, "Feature");
+            notice("Wrote standard errors of beta to %s", outf.c_str());
+        }
+    }
+    if (compute_residual) {
+        const auto& resids = nmf.get_feature_residuals();
+        const auto& sums = nmf.get_feature_sums();
+        outf = outPrefix + ".feature.residuals.tsv";
+        std::ofstream ofs(outf);
+        if (!ofs) {
+            error("Cannot open output file %s", outf.c_str());
+        }
+        ofs << "Feature\tTotalCount\tResidual\n";
+        for (int32_t i = 0; i < M; i++) {
+            ofs << reader.features[i] << "\t"
+             << std::setprecision(0) << sums[i] << "\t"
+            << std::setprecision(4) << std::fixed << resids[i]/N << "\n";
+        }
+        ofs.close();
+        notice("Wrote per-feature averaged residuals to %s", outf.c_str());
+    }
 
     if (n_covar > 0) {
         const auto& bcov = nmf.get_covar_coef(); // M x P
@@ -241,6 +274,35 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         write_matrix_to_file(outf, bcov, 6, false, reader.features, "Feature", &covar_names);
         notice("Wrote covariate coefficients to %s", outf.c_str());
     }
+
+    if (!transform) {
+        return 0;
+    }
+
+    opts.compute_residual = true;
+    opts.se_flag = 0;
+
+    std::vector<MLEStats> stats;
+    RowMajorMatrixXd theta = nmf.transform(docs, opts, stats);
+
+    outf = outPrefix + ".theta.tsv";
+    write_matrix_to_file(outf, theta, 4, false, rnames, "Index");
+    notice("Wrote theta to %s", outf.c_str());
+
+    outf = outPrefix + ".fit_stats.tsv";
+    std::ofstream ofs(outf);
+    if (!ofs) {
+        error("Cannot open output file %s", outf.c_str());
+    }
+    ofs << "Index\tTotalCount\tll\tResidual\n";
+    for (size_t i = 0; i < N; i++) {
+        ofs << rnames[i] << "\t"
+            << std::setprecision(2) << std::fixed << docs[i].ct_tot << "\t"
+            << std::setprecision(4) << stats[i].pll << "\t"
+            << std::setprecision(4) << stats[i].residual << "\n";
+    }
+    ofs.close();
+    notice("Wrote goodness of fit statistics to %s", outf.c_str());
 
     return 0;
 }
