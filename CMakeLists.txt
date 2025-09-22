@@ -92,6 +92,7 @@ set(SOURCE_FILES
     src/poisnmf.hpp
     src/poisnmf.cpp
     script/fit_nmf.cpp
+    script/transform_nmf.cpp
     script/draw_pixel_genes.cpp
     src/vst.hpp
     script/feature_selection.cpp

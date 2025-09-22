@@ -34,28 +34,23 @@ void split(std::vector<std::string>& vec, std::string_view delims, std::string_v
     size_t start = 0;
     while (start < str.size() && tokenCount < limit - 1) {
         size_t pos = str.find_first_of(delims, start);
-        if (pos == std::string_view::npos)
-            pos = str.size();
-
-        // Get the current token as a view
+        // Get the current token
         std::string_view token = str.substr(start, pos - start);
         if (strip)
             token = strip_str(token);
-
         // Only add token if not collapsing empty tokens
         if (!collapse || !token.empty()) {
             vec.emplace_back(token);
             ++tokenCount;
         }
-
-        start = pos;
-        // Skip delimiter if found
-        if (start < str.size() && delims.find(str[start]) != std::string_view::npos)
-            ++start;
+        if (pos == std::string_view::npos) {
+            start = str.size();
+            break;
+        }
+        start = pos + 1;
     }
-
     // Add the remaining part if any.
-    if (start <= str.size()) {
+    if (start < str.size() && vec.size() < limit) {
         std::string_view token = str.substr(start);
         if (strip)
             token = strip_str(token);
@@ -64,26 +59,23 @@ void split(std::vector<std::string>& vec, std::string_view delims, std::string_v
     }
 }
 
-std::string_view strip_str(std::string_view token) {
-    // Implement trimming logic if needed.
-    // For example, remove whitespace from both ends.
-    size_t start = token.find_first_not_of(" \t\n\r");
-    size_t end = token.find_last_not_of(" \t\n\r");
-    if (start == std::string_view::npos)
-        return {};
-    return token.substr(start, end - start + 1);
-}
-
-std::string trim(const std::string& str) {
+std::string_view strip_str(std::string_view str) {
     auto start = std::find_if_not(str.begin(), str.end(), [](unsigned char c) {
         return std::isspace(c);
     });
-
     auto end = std::find_if_not(str.rbegin(), str.rend(), [](unsigned char c) {
         return std::isspace(c);
     }).base();
+    if (start >= end) {
+        return {}; // Return an empty view for empty or all-whitespace strings
+    }
+    return {str.data() + std::distance(str.begin(), start),
+            static_cast<size_t>(std::distance(start, end))};
 
-    return (start < end) ? std::string(start, end) : std::string();
+}
+
+std::string trim(const std::string& str) {
+    return std::string(strip_str(str));
 }
 
 std::string to_lower(const std::string& str) {

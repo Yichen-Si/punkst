@@ -38,10 +38,8 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
     }
     MLEOptions mle_opts_bcov = mle_opts;
     MLEOptions mle_opts_fit = mle_opts;
-    mle_opts_fit.se_flag = 0; // no SE during fitting
-    mle_opts_bcov.se_flag = 0;
-    mle_opts_fit.compute_residual = false;
-    mle_opts_bcov.compute_residual = false;
+    mle_opts_fit.mle_only_mode();
+    mle_opts_bcov.mle_only_mode();
     std::vector<double> offset;
     double objective_old = std::numeric_limits<double>::max()-1;
     if (P_ > 0) {
@@ -254,7 +252,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
     notice("%s: Done", __func__);
 }
 
-RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const MLEOptions mle_opts, std::vector<MLEStats>& res) {
+RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const MLEOptions mle_opts, std::vector<MLEStats>& res, ArrayXd* fres_ptr) {
     int N = docs.size();
     if (N == 0) return RowMajorMatrixXd(0, K_);
     if (beta_.rows() != M_ || beta_.cols() != K_) {
@@ -265,10 +263,19 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const 
     res.reserve(N);
     size_t grainsize = std::min(64, std::max(1, int(N / (2 * nThreads_))) );
     RowMajorMatrixXd new_theta(N, K_);
+    ArrayXd feature_residuals;
+    if (fres_ptr) feature_residuals = ArrayXd::Zero(M_);
+    std::mutex mtx_residual_;
     tbb::parallel_for(tbb::blocked_range<int>(0, N, grainsize), [&](const tbb::blocked_range<int>& r) {
         VectorXd cM(M_);
         VectorXd oM; if (Bcov_.size() > 0) oM.resize(M_);
         VectorXd* oM_ptr = (Bcov_.size() > 0) ? &oM : nullptr;
+        ArrayXd local_residuals;
+        ArrayXd* local_fres_ptr = nullptr;
+        if (fres_ptr) {
+            local_residuals = ArrayXd::Zero(M_);
+            local_fres_ptr = &local_residuals;
+        }
         for (int i = r.begin(); i != r.end(); ++i) {
             cM.setConstant(docs[i].c);
             if (Bcov_.size() > 0) {
@@ -278,14 +285,22 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const 
             double obj;
             MLEStats stats;
             if (exact_) {
-                obj = pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
+                obj = pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_, local_fres_ptr);
             } else {
-                obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
+                obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_, local_fres_ptr);
             }
             res.push_back(std::move(stats));
             new_theta.row(i) = b.transpose();
         }
+        if (fres_ptr) {
+            std::lock_guard<std::mutex> lock(mtx_residual_);
+            feature_residuals += local_residuals;
+        }
     });
+    if (fres_ptr) {
+        *fres_ptr = std::move(feature_residuals);
+    }
+    notice("%s: Done", __func__);
     return new_theta;
 }
 
@@ -304,6 +319,7 @@ PoissonLog1pNMF::test_beta_vs_null(int flag) {
         return {};
     }
     const double eps = 1e-12;
+    bool sums_known = feature_sums_.size() == (size_t)M_;
 
     tbb::combinable<std::vector<TestResult>> tls;
     const int grainsize = std::max(1, std::min(64, M_ / std::max(1, 2 * nThreads_)));
@@ -313,7 +329,7 @@ PoissonLog1pNMF::test_beta_vs_null(int flag) {
             auto& out = tls.local();
             VectorXd ones = VectorXd::Ones(K_);
             for (int m = r.begin(); m != r.end(); ++m) {
-                if (feature_sums_[m] < min_ct_) continue;
+                if (sums_known && feature_sums_[m] < min_ct_) continue;
                 const MatrixXd& V = C[m];
                 const VectorXd  b = beta_.row(m).transpose();
                 // --- GLS weights w = V^{-1}1 / (1^T V^{-1}1)
@@ -365,6 +381,7 @@ PoissonLog1pNMF::test_beta_vs_null(int flag) {
 
 
 std::vector<Document> PoissonLog1pNMF::transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec) {
+    feature_sums_.assign(M_, 0.0);
     cvec.resize(docs.size());
     std::vector<Document> mtx_t(M_, Document{});
     size_t N = docs.size();
@@ -477,6 +494,7 @@ PoissonLog1pNMF::test_beta_pairwise(int flag, std::pair<int,int> kpair) {
                  (beta_.col(k2).array().exp() - 1.0).cwiseMax(1e-12);
     ArrayXd abslogfc = fc.log().abs();
     ArrayXd est = beta_.col(k1).array() - beta_.col(k2).array();
+    bool sums_known = feature_sums_.size() == (size_t)M_;
 
     tbb::combinable<std::vector<TestResult>> tls;
     const int grainsize = std::max(1, std::min(64, M_ / std::max(1, 2 * nThreads_)));
@@ -484,7 +502,8 @@ PoissonLog1pNMF::test_beta_pairwise(int flag, std::pair<int,int> kpair) {
         [&](const tbb::blocked_range<int>& r) {
             auto& out = tls.local();
             for (int m = r.begin(); m != r.end(); ++m) {
-                if (feature_sums_[m] < min_ct_ || abslogfc(m) < min_logfc_) continue;
+                if (sums_known &&
+                    (feature_sums_[m] < min_ct_ || abslogfc(m) < min_logfc_)) continue;
                 const MatrixXd& V = C[m];
                 double var = V(k1,k1) + V(k2,k2) - 2.0 * V(k1,k2);
                 if (var <= 0) continue;

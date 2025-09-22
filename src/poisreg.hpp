@@ -32,8 +32,15 @@ struct MLEOptions {
 	uint32_t hc_type = 1;
 	bool store_cov   = false;   // Store covariance matrices for estimates
     bool compute_residual = false;
+    bool compute_var_mu = false;
     MLEOptions() = default;
     MLEOptions(const OptimOptions& optim_) : optim(optim_) {}
+    void mle_only_mode() {
+        se_flag = 0;
+        store_cov = false;
+        compute_residual = false;
+        compute_var_mu = false;
+    }
 };
 
 struct MLEStats {
@@ -45,7 +52,7 @@ struct MLEStats {
     MatrixXd cov_robust;
 	// Goodness-of-fit
 	double pll; // per-token log-likelihood
-	double residual;
+	double residual, var_mu;
     MLEStats() = default;
     MLEStats(const OptimStats& optim_) : optim(optim_) {}
 };
@@ -221,7 +228,8 @@ double pois_log1p_mle_exact(
     const VectorXd& c,    // length N, scaling factors
     const VectorXd* o,    // length N, offset
     const MLEOptions& opt,
-    VectorXd& b, MLEStats& stats, int32_t debug_ = 0);
+    VectorXd& b, MLEStats& stats, int32_t debug_ = 0,
+    ArrayXd* res_ptr = nullptr);
 
 // With 2nd order approximation for zero-set speed up
 double pois_log1p_mle(
@@ -230,16 +238,17 @@ double pois_log1p_mle(
     const VectorXd& c,
     const VectorXd* o,
     const MLEOptions& opt,
-    VectorXd& b, MLEStats& stats, int32_t debug_ = 0);
+    VectorXd& b, MLEStats& stats, int32_t debug_ = 0,
+    ArrayXd* res_ptr = nullptr);
 
 // Wrappers for using a constant scaling factor
 double pois_log1p_mle(
     const RowMajorMatrixXd& A, const Document& y, double c,
-    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_ = 0);
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_ = 0, ArrayXd* res_ptr = nullptr);
 
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A, const Document& y, double c,
-    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_ = 0);
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_ = 0, ArrayXd* res_ptr = nullptr);
 
 // Compute Fisher and/or robust SE for Poisson with log1p link.
 void pois_log1p_compute_se(

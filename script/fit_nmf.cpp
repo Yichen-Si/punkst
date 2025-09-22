@@ -86,95 +86,13 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
     int32_t M = reader.nFeatures;
-
-    std::ifstream inFileStream(inFile);
-    if (!inFileStream) {
-        error("Fail to open input file: %s", inFile.c_str());
-    }
-    std::string line, tmp;
-    std::vector<std::string> tokens, covar_header;
-    std::ifstream covarFileStream;
-    int32_t n_covar = 0, n_tokens = 0;
-    std::vector<std::string> covar_names;
-    if (!covarFile.empty()) {
-        covarFileStream.open(covarFile);
-        if (!covarFileStream) {
-            error("Fail to covariate file: %s", covarFile.c_str());
-        }
-        // Read the header line
-        if (!std::getline(covarFileStream, line)) {
-            error("Fail to parse covariate file: %s", covarFile.c_str());
-        }
-        split(covar_header, "\t ", line, UINT_MAX, true, true, true);
-        n_tokens = static_cast<int32_t>(covar_header.size());
-        if (covar_idx.empty()) {
-            // Assuming use all columns except the first one
-            n_covar = covar_header.size() - 1;
-            for (int32_t i = 1; i < n_tokens; i++) {
-                covar_idx.push_back(i);
-                covar_names.push_back(covar_header[i]);
-            }
-        } else {
-            n_covar = (int32_t) covar_idx.size();
-            for (auto i : covar_idx) {
-                if (i < 0 || i >= n_tokens) {
-                    error("Covariate index %d is out of range [0,%lu)", i, covar_header.size());
-                }
-                covar_names.push_back(covar_header[i]);
-            }
-        }
-        if (n_covar < 1) {
-            error("The covariate file should have at least 2 columns");
-        }
-        notice("Covariate file has %d columns, using %d as covariates", n_tokens, n_covar);
-    }
-
     std::vector<SparseObs> docs;
-    if (reader.nUnits > 0) {
-        docs.reserve(reader.nUnits);
-    }
-    std::vector<std::string> rnames;
-    int32_t idx = 0;
-    while (std::getline(inFileStream, line)) {
-        idx++;
-        if (idx % 10000 == 0) {
-            notice("Read %d units...", idx);
-        }
-        SparseObs obs;
-        int32_t ct = reader.parseLine(obs.doc, tmp, line);
-        if (ct < 0) {
-            error("Error parsing line %s", line.c_str());
-        }
-        if (ct < minCountTrain) {
-            continue;
-        }
-        obs.c = per_doc_c ? ct / size_factor : c;
-        obs.ct_tot = ct;
-        if (n_covar > 0) { // read covariates
-            if (!std::getline(covarFileStream, line)) {
-                error("The number of lines in covariate file is less than that in data file");
-            }
-            obs.covar = VectorXd::Zero(n_covar);
-            split(tokens, "\t ", line, UINT_MAX, true, true, true);
-            if (tokens.size() != n_tokens) {
-                error("Number of columns (%lu) of line [%s] in covariate file does not match header (%d)", tokens.size(), line.c_str(), n_tokens);
-            }
-            for (int32_t i = 0; i < n_covar; i++) {
-                if (!str2double(tokens[covar_idx[i]], obs.covar(i))) {
-                    if (!allow_na)
-                        error("Invalid value for %d-th covariate %s.", i+1, tokens[covar_idx[i]].c_str());
-                    obs.covar(i) = 0;
-                }
-            }
-        }
-        docs.push_back(std::move(obs));
-        rnames.emplace_back(std::to_string(idx-1));
-        if (debug_N > 0 && idx > debug_N) {
-            break;
-        }
-    }
-    inFileStream.close();
-    size_t N = docs.size();
+    std::vector<std::string> rnames, covar_names;
+    size_t N = read_sparse_obs(inFile, reader, docs,
+        rnames, minCountTrain, size_factor, c,
+        &covarFile, &covar_idx, &covar_names,
+        allow_na, debug_N);
+    int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %lu documents with %d features", N, M);
 
     PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
@@ -183,18 +101,13 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     MLEOptions opts{};
     opts.optim.max_iters = max_iter_inner;
     opts.optim.tol = tol_inner;
-    std::string model_name = "CD";
     if (mode == 1) {
         opts.optim.tron.enabled = true;
-        model_name = "TRON";
     } else if (mode == 2) {
         opts.optim.acg.enabled = true;
-        model_name = "FISTA";
     } else if (mode == 3) {
         opts.optim.ls.enabled = true;
-        model_name = "DiagLS";
     }
-    outPrefix += "." + model_name;
     if (test_beta_vs_null) {
         opts.store_cov = true;
         if (se_method == 0) {
@@ -217,7 +130,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
                 continue;
             }
             auto results = nmf.test_beta_vs_null(flag);
-            std::string outf = outPrefix + (flag == 1 ? ".detest.fisher.tsv" : ".detest.robust.tsv");
+            std::string outf = outPrefix + (flag == 1 ? ".de.fisher.tsv" : ".de.robust.tsv");
             std::ofstream ofs(outf);
             if (!ofs) {
                 error("Cannot open output file %s", outf.c_str());
@@ -261,8 +174,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         ofs << "Feature\tTotalCount\tResidual\n";
         for (int32_t i = 0; i < M; i++) {
             ofs << reader.features[i] << "\t"
-             << std::setprecision(0) << sums[i] << "\t"
-            << std::setprecision(4) << std::fixed << resids[i]/N << "\n";
+            << std::setprecision(0) << std::fixed << sums[i] << "\t"
+            << std::setprecision(4) << std::defaultfloat << resids[i]/N << "\n";
         }
         ofs.close();
         notice("Wrote per-feature averaged residuals to %s", outf.c_str());
@@ -280,7 +193,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     }
 
     opts.compute_residual = true;
-    opts.se_flag = 0;
+    opts.compute_var_mu = true;
+    opts.se_flag = se_method > 1 ? 2 : 1;
 
     std::vector<MLEStats> stats;
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats);
@@ -294,12 +208,13 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     if (!ofs) {
         error("Cannot open output file %s", outf.c_str());
     }
-    ofs << "Index\tTotalCount\tll\tResidual\n";
+    ofs << "Index\tTotalCount\tll\tResidual\tVarMu\n";
     for (size_t i = 0; i < N; i++) {
         ofs << rnames[i] << "\t"
             << std::setprecision(2) << std::fixed << docs[i].ct_tot << "\t"
             << std::setprecision(4) << stats[i].pll << "\t"
-            << std::setprecision(4) << stats[i].residual << "\n";
+            << std::setprecision(4) << stats[i].residual << "\t"
+            << std::setprecision(4) << stats[i].var_mu << "\n";
     }
     ofs.close();
     notice("Wrote goodness of fit statistics to %s", outf.c_str());

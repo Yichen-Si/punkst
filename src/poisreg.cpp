@@ -79,8 +79,8 @@ void PoisRegExactProblem::eval_safe(const VectorXd& bvec, double* f_out,
 ArrayXd PoisRegExactProblem::residual(const VectorXd& bvec) const {
     ArrayXd mu = (A * bvec).array();
     if (o) mu += o->array();
-    mu = (mu.exp() - 1.0).max(opt.optim.eps) * c.array();
-    return (yvec.array() - mu).square() / mu;
+    mu = (mu.exp() - 1.0).max(0.) * c.array();
+    return (yvec.array() - mu).square() / mu.max(1e-5);
 }
 
 ArrayXd pois_log1p_residual(
@@ -88,30 +88,30 @@ ArrayXd pois_log1p_residual(
     const VectorXd* o, const Eigen::Ref<const VectorXd>& b) {
     ArrayXd mu = (X * b).array();
     if (o) mu += o->array();
-    mu = (mu.exp() - 1.0).max(1e-12) * c.array();
-    return (y.array() - mu).square() / mu;
+    mu = (mu.exp() - 1.0).max(0.) * c.array();
+    return (y.array() - mu).square() / mu.max(1e-5);
 }
 
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A, const Document& y, double c,
-    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_)
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_, ArrayXd* res_ptr)
 {
     if (c <= 0.0) error("%s: c must be positive", __func__);
     VectorXd cvec = VectorXd::Constant((int)A.rows(), c);
-    return pois_log1p_mle_exact(A, y, cvec, nullptr, opt, b, stats, debug_);
+    return pois_log1p_mle_exact(A, y, cvec, nullptr, opt, b, stats, debug_, res_ptr);
 }
 
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A, const Document& y,
     const VectorXd& c, const VectorXd* o,
-    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_)
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_, ArrayXd* res_ptr)
 {
     if (c.size() != A.rows())
         error("%s: c is missing or has wrong size", __func__);
     if (o && o->size() != A.rows())
         error("%s: o has wrong size", __func__);
     if (!opt.exact_zero) {
-        return pois_log1p_mle(A, y, c, o, opt, b, stats, debug_);
+        return pois_log1p_mle(A, y, c, o, opt, b, stats, debug_, res_ptr);
     }
 
     const int K = static_cast<int>(A.cols());
@@ -158,6 +158,8 @@ double pois_log1p_mle_exact(
     if (opt.compute_residual) {
         ArrayXd res = P.residual(b);
         stats.residual = res.sum() / A.rows();
+        if (res_ptr != nullptr && res_ptr->size() == res.size())
+            *res_ptr += res;
     }
 
     return final_obj;
@@ -243,10 +245,10 @@ void PoisRegSparseProblem::eval_safe(const VectorXd& bvec, double* f_out,
 ArrayXd PoisRegSparseProblem::residual(const VectorXd& bvec) const {
     ArrayXd mu = (A * bvec).array();
     if (o) mu += o->array();
-    mu = (mu.exp() - 1.0).max(opt.optim.eps) * c.array();
+    mu = ((mu.exp() - 1.0) * c.array()).max(0.);
     Eigen::Map<const Eigen::Array<uint32_t, Eigen::Dynamic, 1>> ids_map(y.ids.data(), n);
     Eigen::ArrayXd mu_nz = mu(ids_map.cast<Eigen::Index>());
-    mu(ids_map.cast<Eigen::Index>()) = (yvec.array() - mu_nz).square() / mu_nz;
+    mu(ids_map.cast<Eigen::Index>()) = (yvec.array() - mu_nz).square() / mu_nz.max(1e-5);
     return mu;
 }
 
@@ -255,35 +257,35 @@ ArrayXd pois_log1p_residual(
     const VectorXd& c, const VectorXd* o, const Eigen::Ref<const VectorXd>& b) {
     ArrayXd mu = (X * b).array();
     if (o) mu += o->array();
-    mu = (mu.exp() - 1.0).max(1e-12) * c.array();
+    mu = (mu.exp() - 1.0).max(0.) * c.array();
     size_t n = y.ids.size();
     Eigen::Map<const Eigen::Array<uint32_t, Eigen::Dynamic, 1>> ids_map(y.ids.data(), n);
     Eigen::ArrayXd mu_nz = mu(ids_map.cast<Eigen::Index>());
     Eigen::Map<const VectorXd> yvec(y.cnts.data(), n);
-    mu(ids_map.cast<Eigen::Index>()) = (yvec.array() - mu_nz).square() / mu_nz;
+    mu(ids_map.cast<Eigen::Index>()) = (yvec.array() - mu_nz).square() / mu_nz.max(1e-5);
     return mu;
 }
 
 double pois_log1p_mle(
     const RowMajorMatrixXd& A, const Document& y, double c,
-    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_)
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_, ArrayXd* res_ptr)
 {
     if (c <= 0.0) error("%s: c must be positive", __func__);
     VectorXd cvec = VectorXd::Constant((int)A.rows(), c);
-    return pois_log1p_mle(A, y, cvec, nullptr, opt, b, stats, debug_);
+    return pois_log1p_mle(A, y, cvec, nullptr, opt, b, stats, debug_, res_ptr);
 }
 
 double pois_log1p_mle(
     const RowMajorMatrixXd& A, const Document& y,
     const VectorXd& c, const VectorXd* o,
-    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_)
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats, int32_t debug_, ArrayXd* res_ptr)
 {
     if (c.size() != A.rows())
         error("%s: c is missing or has wrong size", __func__);
     if (o && o->size() != A.rows())
         error("%s: o has wrong size", __func__);
     if (opt.exact_zero) {
-        return pois_log1p_mle_exact(A, y, c, o, opt, b, stats, debug_);
+        return pois_log1p_mle_exact(A, y, c, o, opt, b, stats, debug_, res_ptr);
     }
 
     const int K = static_cast<int>(A.cols());
@@ -326,6 +328,8 @@ double pois_log1p_mle(
     if (opt.compute_residual) {
         ArrayXd res = P.residual(b);
         stats.residual = res.sum() / A.rows();
+        if (res_ptr != nullptr && res_ptr->size() == res.size())
+            *res_ptr += res;
     }
 
     return final_obj;
@@ -405,20 +409,21 @@ void pois_log1p_compute_se(
         stats.se_robust.resize(0);
     }
 
-    // if (opt.compute_residual) {
-    //     ArrayXd var_eta = ArrayXd::Zero(n);
-    //     if (opt.se_flag & 0x2) {
-    //         for (int i = 0; i < n; ++i) {
-    //             var_eta[i] = X.row(i).dot(Vrob * X.row(i));
-    //         }
-    //     } else {
-    //         for (int i = 0; i < n; ++i) {
-    //             var_eta[i] = X.row(i).dot(XtWX_inv * X.row(i));
-    //         }
-    //     }
-    //     ArrayXd var_mu = (c.array().square()) * (var_eta.exp() - 1.) * (2 * eta + var_eta).exp();
-    //     stats.residual = ((y.array() - mu).square() / (mu + var_mu).max(opt.optim.eps)).sum() / n;
-    // }
+    if (opt.compute_var_mu) {
+        ArrayXd var_eta = ArrayXd::Zero(n);
+        if (opt.se_flag & 0x2) {
+            for (int i = 0; i < n; ++i) {
+                var_eta[i] = X.row(i) * Vrob * X.row(i).transpose();
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                var_eta[i] = X.row(i) * XtWX_inv * X.row(i).transpose();
+            }
+        }
+        // ArrayXd var_mu = (c.array().square()) * (var_eta.exp() - 1.) * (2 * eta + var_eta).exp();
+        ArrayXd var_mu = dmu.square() * var_eta; // delta method
+        stats.var_mu = var_mu.sum();
+    }
 
     if (opt.store_cov) {
         if (opt.se_flag & 0x1) {

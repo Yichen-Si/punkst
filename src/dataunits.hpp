@@ -27,6 +27,21 @@ struct Document {
     }
 };
 
+struct SparseObs {
+    Document doc;
+    double c;
+    Eigen::VectorXd covar; // covariates
+    double ct_tot = -1;
+
+    double get_sum() {
+        if (ct_tot < 0) {
+            ct_tot = 0;
+            for (double v : doc.cnts) ct_tot += v;
+        }
+        return ct_tot;
+    }
+};
+
 struct PixelValues {
     double x, y;
     uint32_t feature;
@@ -155,38 +170,23 @@ public:
         }
         return -1; // Not found
     }
-    void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap) {
-        if (remap) {
-            std::unordered_map<uint32_t, uint32_t> new_idx_remap;
-            for (const auto& pair : idx_remap) {
-                auto it = _idx_remap.find(pair.second);
-                if (it != _idx_remap.end()) {
-                    new_idx_remap[pair.first] = it->second;
-                }
-            }
-            idx_remap = std::move(new_idx_remap);
-        } else {
-            idx_remap = _idx_remap;
-            remap = true;
-        }
-        nFeatures = _idx_remap.size();
-        std::vector<std::string> new_features(nFeatures);
-        for (const auto& pair : _idx_remap) {
-            new_features[pair.second] = features[pair.first];
-        }
-        features = std::move(new_features);
+    const std::vector<double>& getFeatureSums() const {
+        return feature_sums;
     }
 
-    void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex);
+    void setAccumulationStatus(bool v) { accumulate_sums = v; }
+    void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap);
+    void setFeatureIndexRemap(std::vector<std::string>& new_features);
+    void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums = true);
 
-    int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0) {
+    int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0, bool add2sums = true) {
         std::string info;
-        return parseLine(doc, info, line, modal);
+        return parseLine(doc, info, line, modal, add2sums);
     }
-    int32_t parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal = 0);
+    int32_t parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal = 0, bool add2sums = true);
 
-    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0);
-    int32_t readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0);
+    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
+    int32_t readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
 
 private:
 
@@ -195,12 +195,20 @@ private:
     int32_t offset_data;
     int32_t icol_layer, icol_x, icol_y;
     int32_t mintokens;
+    std::vector<double> feature_sums;
     std::vector<std::string> header_info;
     std::unordered_map<uint32_t, uint32_t> idx_remap;
     bool remap = false;
+    bool accumulate_sums = true;
 
     void readMetadata(const std::string &metaFile);
 };
+
+int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
+    std::vector<SparseObs> &docs, std::vector<std::string> &rnames,
+    int32_t minCountTrain = 1, double size_factor = 10000, double c = -1,
+    std::string* covarFile = nullptr, std::vector<uint32_t>* covar_idx = nullptr,
+    std::vector<std::string>* covar_names = nullptr, bool allow_na = false, int32_t debug_N = 0);
 
 template<typename T>
 void readCoordRange(const std::string& rangeFile, T& xmin, T& xmax, T& ymin, T& ymax) {
