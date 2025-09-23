@@ -151,7 +151,9 @@ double pois_log1p_mle_exact(
         std::cout << "Final b (" << b.size() << ", " << b.norm() << ") " << final_obj << std::endl;
     }
 
-    stats.pll = -final_obj / P.yvec.sum();
+    stats.pll = (-final_obj
+        - P.yvec.unaryExpr([](double n){ return log_factorial(n); }).sum()
+        ) / P.yvec.sum();
     if (opt.se_flag != 0) {
         pois_log1p_compute_se(A, P.yvec, c, o, opt, b, stats);
     }
@@ -321,7 +323,9 @@ double pois_log1p_mle(
         std::cout << "Final b (" << b.size() << ", " << b.norm() << ") " << final_obj << std::endl;
     }
 
-    stats.pll = -final_obj / P.yvec.sum();
+    stats.pll = (-final_obj
+        - P.yvec.unaryExpr([](double n){ return log_factorial(n); }).sum()
+        )/ P.yvec.sum();
     if (opt.se_flag != 0) {
         pois_log1p_compute_se(A, y, c, o, opt, b, stats);
     }

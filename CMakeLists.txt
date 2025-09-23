@@ -117,6 +117,23 @@ find_package(LibLZMA)
 
 target_compile_options(${APP_EXE} PRIVATE -O3 -pthread)
 
+option(USE_AVX2 "Detect system and specify AVX2 when possible" OFF)
+if (USE_AVX2)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      message(STATUS "Detected Linux (x86_64)")
+      target_compile_options(${APP_EXE} PRIVATE -march=x86-64-v3)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+      if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+          message(STATUS "Detected Apple Silicon (ARM64)")
+      else()
+          message(STATUS "Detected Intel Mac (x86_64)")
+          target_compile_options(${APP_EXE} PRIVATE -march=x86-64-v3)
+      endif()
+  else()
+      message(STATUS "System unknown")
+  endif()
+endif()
+
 target_link_libraries(${APP_EXE} PRIVATE
     ${OpenCV_LIBRARIES}
     Eigen3::Eigen

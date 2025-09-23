@@ -8,6 +8,7 @@
 #include <cassert>
 #include <algorithm>
 #include <numeric>
+#include <array>
 #include <tbb/tbb.h>
 #include <tbb/blocked_range.h>
 
@@ -396,4 +397,62 @@ inline int32_t loess_quadratic_tricube(const std::vector<double>& x,
     yhat.resize(n);
     for (int r = 0; r < n; ++r) yhat[ord[r]] = yhat_sorted[r];
     return 1;
+}
+
+template<typename T>
+long double factorial(T n) {
+    // Handle invalid input for which factorial is undefined.
+    if (n < 0) {
+        throw std::domain_error("Factorial is not defined for negative numbers.");
+    }
+
+    // --- Lookup Table (n <= 20) ---
+    constexpr int PRECOMPUTED_LIMIT = 21;
+    static const std::array<unsigned long long, PRECOMPUTED_LIMIT> small_factorials = {
+        1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800,
+        39916800, 479001600, 6227020800, 87178291200, 1307674368000,
+        20922789888000, 355687428096000, 6402373705728000,
+        121645100408832000, 2432902008176640000
+    };
+
+    if (n < PRECOMPUTED_LIMIT) {
+        return static_cast<long double>(small_factorials[(uint32_t) n]);
+    }
+
+    // --- Stirling-Ramanujan Approximation (n > 20) ---
+    // ln(n!) ≈ n*ln(n) - n + 0.5*ln(2*π*n) + 1/(12n)
+    long double n_ld = static_cast<long double>(n);
+    long double log_factorial = n_ld * std::log(n_ld) - n_ld +
+                                0.5L * std::log(2 * M_PI * n_ld) +
+                                1.0L / (12.0L * n_ld);
+
+    return std::exp(log_factorial);
+}
+
+template<typename T>
+long double log_factorial(T n) {
+    // Handle invalid input for which factorial is undefined.
+    if (n < 0) {
+        throw std::domain_error("Factorial is not defined for negative numbers.");
+    }
+
+    // --- Lookup Table (n <= 20) ---
+    constexpr int PRECOMPUTED_LIMIT = 21;
+    static const std::array<unsigned long long, PRECOMPUTED_LIMIT> small_factorials = {
+        1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800,
+        39916800, 479001600, 6227020800, 87178291200, 1307674368000,
+        20922789888000, 355687428096000, 6402373705728000,
+        121645100408832000, 2432902008176640000
+    };
+
+    if (n < PRECOMPUTED_LIMIT) {
+        return std::log(static_cast<long double>(small_factorials[(uint32_t) n]));
+    }
+
+    // --- Stirling-Ramanujan Approximation (n > 20) ---
+    // ln(n!) ≈ n*ln(n) - n + 0.5*ln(2*π*n) + 1/(12n)
+    long double n_ld = static_cast<long double>(n);
+    return n_ld * std::log(n_ld) - n_ld +
+           0.5L * std::log(2 * M_PI * n_ld) +
+           1.0L / (12.0L * n_ld);
 }

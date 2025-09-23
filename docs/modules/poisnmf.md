@@ -45,6 +45,8 @@ punkst nmf-pois-log1p --in-data hex_data.txt --in-meta hex_meta.json \
 
 `--c` - If specified, use a constant `c` for all units instead of calculating it from `size-factor`. Default: -1 (per-unit `c`).
 
+`--feature-residuals` - If set, output per-feature residuals for diagnosis.
+
 `--max-iter-outer` - Maximum number of outer loop iterations (alternating between updating $\theta$ and $\beta$). Default: 50, but it often approximates convergence in $\lt 10$ terations.
 
 `--max-iter-inner` - Maximum number of iterations for each Poisson regression optimization. Default: 20.
@@ -94,7 +96,14 @@ punkst nmf-pois-log1p --in-data hex_data.txt --in-meta hex_meta.json \
 
 ### Output files
 
-- `{prefix}.{model_name}.model.tsv`: The feature-factor matrix ($\beta$), where rows are features (genes) and columns are factors.
-- `{prefix}.{model_name}.theta.tsv`: The unit-factor matrix ($\theta$), where rows are units (cells/hexagons) and columns are factors.
-- `{prefix}.{model_name}.loadings.tsv`: Scaled factor loadings per unit, roughly representing the proportional contribution of each factor. It corresponds to a scaled $\tilde \beta$ where $\sum_m \tilde \beta_{km} = 1 \ \forall k$.
-- `{prefix}.{model_name}.covar.tsv`: (If covariates are used) The feature-covariate coefficient matrix containing $b_{jm}$ for each covariate $j$ and feature $m$.
+- `{prefix}.model.tsv`: The feature-factor matrix ($\beta$), where rows are features (genes) and columns are factors. It is scaled such that the column sums ($\sum_m \beta_{km}$ for each $k$) all equal to $M$, the number of features.
+
+- `{prefix}.theta.tsv`: The unit-factor matrix ($\theta$), where rows are units (cells/hexagons) and columns are factors. The relative magnitudes of values within each row are meaningful, and the total magnitude of each row is correlated with the total counts of that unit.
+
+- `{prefix}.fit_stats.tsv`: Per-unit (cell/hexagon) statistics including total counts, log-likelihood, residuals, and the approximated variance of the Poisson rate estimates.
+
+- `{prefix}.covar.tsv`: (If covariates are used) The feature-covariate coefficient matrix containing $b_{jm}$ for each covariate $j$ and feature $m$.
+
+- `{prefix}.de.{method}.tsv`: (If `--detest-vs-avg` is set) Differential expression statistics for each factor vs the average, for each feature. `{method}` is either `fisher`, `robust`, depending on `--se-method`.
+
+- `{prefix}.feature.residuals.tsv`: (If `--feature-residuals` is set) Per-feature total residual (averaged over all data points).
