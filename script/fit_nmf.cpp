@@ -10,6 +10,7 @@
 int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
 	std::string inFile, metaFile, featureFile, covarFile, outPrefix;
+    std::string modelFile;
     std::string include_ftr_regex, exclude_ftr_regex;
     std::vector<uint32_t> covar_idx;
     int32_t K;
@@ -34,7 +35,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("in-meta", "Metadata file", metaFile, true)
       .add_option("in-covar", "Covariate file", covarFile)
       .add_option("allow-na", "Replace non-numerical values in covariates with zero", allow_na)
-      .add_option("icol-covar", "Column indices (0-based) in --in-covar to use", covar_idx);
+      .add_option("icol-covar", "Column indices (0-based) in --in-covar to use", covar_idx)
+      .add_option("in-model", "Input model (beta) file", modelFile);
     pl.add_option("K", "K", K, true)
       .add_option("mode", "Algorithm", mode)
       .add_option("c", "Constant c in log(1+lambda/c)", c)
@@ -80,12 +82,48 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         error("Error: --size-factor must be positive (Seurat uses 10000)");
     }
     bool per_doc_c = c <= 0;
+    std::mt19937 rng(seed > 0 ? seed : std::random_device{}());
 
     HexReader reader(metaFile);
     if (!featureFile.empty()) {
         reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
     int32_t M = reader.nFeatures;
+    notice("Number of features: %d", M);
+
+    PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
+    if (!modelFile.empty()) {
+        RowMajorMatrixXd beta;
+        std::vector<std::string> model_features, covar_names_from_file;
+        std::vector<std::string> tokens;
+        read_matrix_from_file(modelFile, beta, &model_features, &tokens);
+        int32_t K1 = beta.cols();
+        if (K1 != K) {
+            error("Model has %d factors, but K=%d is specified.", K1, K);
+        }
+        int32_t M1 = beta.rows();
+        notice("Loaded model with %d features and %d factors", M1, K);
+        bool keep_unmapped = !featureFile.empty();
+        reader.setFeatureIndexRemap(model_features, keep_unmapped);
+        M = reader.nFeatures;
+        if (M != M1) {
+            RowMajorMatrixXd beta1 = RowMajorMatrixXd::Zero(M, K);
+            for (int32_t i = 0; i < M; i++) {
+                beta1.row(i) = beta.row(i);
+            }
+            std::gamma_distribution<double> dist(100.0, 0.01);
+            for (int32_t i = M1; i < M; i++) {
+                for (int k = 0; k < K; k++) {
+                    beta1(i, k) = dist(rng)/K;
+                }
+            }
+            nmf.set_beta(beta1);
+            notice("Filled in %d missing features with random initial values", M1 - M);
+        } else {
+            nmf.set_beta(beta);
+        }
+    }
+
     std::vector<SparseObs> docs;
     std::vector<std::string> rnames, covar_names;
     size_t N = read_sparse_obs(inFile, reader, docs,
@@ -94,8 +132,6 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         allow_na, debug_N);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %lu documents with %d features", N, M);
-
-    PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
 
     // Set up MLE options (for subproblems)
     MLEOptions opts{};

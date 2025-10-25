@@ -59,7 +59,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
 
     // --- 1. Load Model ---
     notice("Loading model...");
-    RowMajorMatrixXd beta, bcov, beta_se;
+    RowMajorMatrixXd beta, bcov;
     std::vector<std::string> model_features, covar_names_from_file;
     std::vector<std::string> tokens;
 

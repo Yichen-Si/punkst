@@ -26,7 +26,7 @@ public:
 
     void fit(const std::vector<SparseObs>& docs,
         const MLEOptions mle_opts, int max_iter = 100, double tol = 1e-4,
-        double covar_coef_min = -1e6, double covar_coef_max = 1e6);
+        double covar_coef_min = -1e6, double covar_coef_max = 1e6, bool reset = false);
 
     RowMajorMatrixXd transform(std::vector<SparseObs>& docs,
         const MLEOptions mle_opts, std::vector<MLEStats>& res, ArrayXd* fres_ptr = nullptr);

@@ -16,7 +16,7 @@ void PoissonLog1pNMF::set_nthreads(int nThreads) {
 
 void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
     const MLEOptions mle_opts, int max_iter, double tol,
-    double covar_coef_min, double covar_coef_max) {
+    double covar_coef_min, double covar_coef_max, bool reset) {
     size_t N = docs.size();
     if (N == 0) {
         warning("%s: Empty input", __func__);
@@ -31,10 +31,12 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
     RowMajorMatrixXd X;
     std::gamma_distribution<double> dist(100.0, 0.01);
     theta_ = RowMajorMatrixXd::Zero(N, K_);
-    beta_  = RowMajorMatrixXd::Zero(M_,K_);
-    for(int k=0; k<K_; ++k) { // Initialize beta
-        for(int j=0; j<M_; ++j)
-            beta_(j,k) = dist(rng_);
+    if (reset || beta_.rows() != M_ || beta_.cols() != K_) {
+        beta_  = RowMajorMatrixXd::Zero(M_,K_);
+        for(int k=0; k<K_; ++k) { // Initialize beta
+            for(int j=0; j<M_; ++j)
+                beta_(j,k) = dist(rng_);
+        }
     }
     MLEOptions mle_opts_bcov = mle_opts;
     MLEOptions mle_opts_fit = mle_opts;

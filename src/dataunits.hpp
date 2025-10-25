@@ -176,7 +176,7 @@ public:
 
     void setAccumulationStatus(bool v) { accumulate_sums = v; }
     void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap);
-    void setFeatureIndexRemap(std::vector<std::string>& new_features);
+    void setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped = false);
     void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums = true);
 
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0, bool add2sums = true) {

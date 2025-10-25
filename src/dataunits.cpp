@@ -273,22 +273,12 @@ void HexReader::setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _id
     features = std::move(new_features);
 }
 
-void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features) {
+void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped) {
     std::unordered_map<std::string, uint32_t> dict;
     if (!featureDict(dict)) {
         error("%s: feature names are not available", __func__);
     }
     int32_t n_new = new_features.size();
-    int32_t n = 0;
-    std::unordered_map<uint32_t, uint32_t> new_idx_remap;
-    for (size_t i = 0; i < new_features.size(); ++i) {
-        auto it = dict.find(new_features[i]);
-        if (it != dict.end()) {
-            new_idx_remap[it->second] = static_cast<uint32_t>(i);
-            n++;
-        }
-    }
-    notice("%s: %d features are kept out of %d, mapped to input set of size %d", __func__, n, nFeatures, n_new);
     bool changed = false;
     if (nFeatures == n_new) {
         // check if they are identical
@@ -301,13 +291,50 @@ void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features) {
     } else {
         changed = true;
     }
-    remap |= changed;
     if (!changed) {
         return;
     }
+
+    int32_t n = 0, n_unmap = 0;
+    std::unordered_map<uint32_t, uint32_t> new_idx_remap;
+    for (size_t i = 0; i < new_features.size(); ++i) {
+        auto it = dict.find(new_features[i]);
+        if (it != dict.end()) {
+            new_idx_remap[it->second] = static_cast<uint32_t>(i);
+            n++;
+        }
+    }
+    if (keep_unmapped) {
+        std::vector<std::string> features_ = features;
+        features = new_features;
+        for (int32_t i = 0; i < nFeatures; ++i) {
+            if (new_idx_remap.find(i) == new_idx_remap.end()) {
+                new_idx_remap[i] = static_cast<uint32_t>(n_new + n_unmap);
+                n_unmap++;
+                features.push_back(features_[i]);
+            }
+        }
+    } else {
+        features = new_features;
+    }
+
+    if (remap) {
+        std::unordered_map<uint32_t, uint32_t> final_idx_remap;
+        for (const auto& pair : idx_remap) {
+            auto it = new_idx_remap.find(pair.second);
+            if (it != new_idx_remap.end()) {
+                final_idx_remap[pair.first] = it->second;
+            }
+        }
+        new_idx_remap = std::move(final_idx_remap);
+    }
+    remap = true;
+
+    notice("%s: %d features are kept out of %d, %d mapped to input set of size %d", __func__, n+n_unmap, nFeatures, n, n_new);
+
     idx_remap = std::move(new_idx_remap);
-    nFeatures = new_features.size();
-    features = new_features;
+    nFeatures = features.size();
+
 }
 
 bool UnitValues::readFromLine(const std::string& line, int32_t nModal, bool labeled) {
