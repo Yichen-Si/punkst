@@ -1,12 +1,14 @@
-# lda4hex
+# topic-model
 
-**`lda4hex` runs LDA on the hexagon data.**
+**`topic-model` (alias for `lda4hex`) fits top model on the hexagon/spot/single cell data.**
 
 ## Input format
 
 The input data is a plain text file where each line containing the sparse encoding of the gene counts for one unit (hexagon, cell, etc.). The orders of the units should be **randomized**.
 
 If generated hexagon data from `tiles2hex` you probably don't need to know the following details.
+
+If you are converting from 10X single cell DGE, see [`convert-10X-SC`](../input/index.md) for details.
 
 ### Required data
 The required structure of each line is as follows (entries are separated by tabs):
@@ -25,7 +27,7 @@ We require a json file with at least the following information:
 ## Usage
 
 ```bash
-punkst lda4hex --in-data ${path}/hex_12.randomized.txt --in-meta ${path}/hex_12.json \
+punkst topic-model --in-data ${path}/hex_12.randomized.txt --in-meta ${path}/hex_12.json \
 --n-topics 12 --out-prefix ${path}/hex_12 --transform \
 --min-count-train 50 --minibatch-size 512 --threads ${threads} --seed 1
 ```

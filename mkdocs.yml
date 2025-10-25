@@ -49,7 +49,7 @@ nav:
     - Overview: modules/index.md
     - pts2tiles: modules/pts2tiles.md
     - tiles2hex: modules/tiles2hex.md
-    - lda4hex: modules/lda4hex.md
+    - topic-model: modules/lda4hex.md
     - pixel-decode: modules/pixel-decode.md
     - Visualization: modules/visualization.md
     - Co-occurrence: modules/coexp.md
