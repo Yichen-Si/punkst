@@ -129,3 +129,16 @@ zcat cells.csv.gz \
   | tail -n +2 \
   | awk -F',' -v OFS="\t" '{printf "%.4f\t%.4f\n", $1,$2;}' > cell_coordinates.tsv
 ```
+
+## 10X Single cell
+
+If you would like to apply topic modeling or matrix factorization to your single cell data, you can convert the 10X Genomics single-cell DGE files to files used by `punkst topic-model` and `nmf-pois-log1p` etc. by the following command:
+
+```bash
+punkst convert-10X-SC \
+--in-dge-dir /path/to/dge/folder --sorted-by-barcode \
+--out /path/to/output/prefix --randomize
+```
+The input folder should contain the standard 10X files: `barcodes.tsv.gz`, `features.tsv.gz`, and `matrix.mtx.gz` (gziped). Since normally the matrix is sorted by barcode indices, adding `--sorted-by-barcode` enables streaming mode but this is optional. Alternatively, you can specify each file directly by `--in-barcodes`, `--in-features`, and `--in-matrix`.
+
+The output includes three files: the pair `${out}.tsv`, `${out}.json` (the main count matrix) and `${out}.features.tsv`. Since the gene names are not necessarily unique in the 10X DGE (multiple Ensembl IDs may map to the same gene symbol), the program replace duplicate gene names with the Ensembl IDs while keeping the one with the highest total count as the gene symbol. So the first column in the output feature file contains unique feature names (mostly gene symbols). The second column contains the total counts.

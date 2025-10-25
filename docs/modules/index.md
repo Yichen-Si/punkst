@@ -6,7 +6,7 @@ Punkst provides several command-line tools for analyzing high resolution spatial
 
 - [pts2tiles](pts2tiles.md): Groups pixels to tiles for faster processing
 - [tiles2hex](tiles2hex.md): Groups pixels into non-overlapping hexagons for spot level analysis
-- [lda4hex](lda4hex.md): Runs LDA on the spot level data
+- [topic-model](lda4hex.md): Runs LDA on the spot level data
 - [pixel-decode](pixel-decode.md): Annotates each pixel with the top factors and their probabilities
 - [Visualization](visualization.md): Visualizes the pixel level analysis results
 
