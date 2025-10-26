@@ -16,18 +16,22 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     int32_t K;
     int32_t seed = -1, nThreads = 1, debug_ = 0, debug_N = 0, verbose = 500000;
     int32_t minCountTrain = 50, minCountFeature = 100;
-    int32_t max_iter_outer = 20, max_iter_inner = 20;
     double covar_coef_min = -1e6, covar_coef_max = 1e6;
-    double tol_outer = 1e-4, tol_inner = 1e-6;
     double size_factor = 10000, c = -1;
     bool allow_na = false;
     bool exact = false;
-    bool write_se = false, compute_residual = false;
+    bool write_se = false;
     bool test_beta_vs_null = false;
     bool transform = false;
     int32_t se_method = 1; // 1: fisher, 2: robust, 3: both
     double min_ct_de = 100, min_fc = 1.5, max_p = 0.05;
     int32_t mode = 1;
+    NmfFitOptions nmf_opts;
+    nmf_opts.max_iter = 20;
+    nmf_opts.tol = 1e-4;
+    MLEOptions opts;
+    opts.optim.max_iters = 50;
+    opts.optim.tol = 1e-6;
 
     ParamList pl;
     // Input Options
@@ -41,10 +45,14 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("mode", "Algorithm", mode)
       .add_option("c", "Constant c in log(1+lambda/c)", c)
       .add_option("size-factor", "L: c_i=y_i/L, g()=log(1+lambda/c_i)", size_factor)
-      .add_option("max-iter-outer", "Maximum outer iterations", max_iter_outer)
-      .add_option("max-iter-inner", "Maximum inner iterations", max_iter_inner)
-      .add_option("tol-outer", "Outer tolerance", tol_outer)
-      .add_option("tol-inner", "Inner tolerance", tol_inner)
+      .add_option("max-iter-outer", "Maximum outer iterations", nmf_opts.max_iter)
+      .add_option("tol-outer", "Outer tolerance", nmf_opts.tol)
+      .add_option("minibatch-epoch", "Number of minibatch epochs at the beginning", nmf_opts.n_mb_epoch)
+      .add_option("minibatch-size", "Minibatch size", nmf_opts.batch_size)
+      .add_option("t0", "Decay parameter t0 for minibatch", nmf_opts.t0)
+      .add_option("kappa", "Decay parameter kappa for minibatch", nmf_opts.kappa)
+      .add_option("max-iter-inner", "Maximum inner iterations", opts.optim.max_iters)
+      .add_option("tol-inner", "Inner tolerance", opts.optim.tol)
       .add_option("exact", "Exact, no approximation on zero terms", exact)
       .add_option("covar-coef-min", "Lower bound for covariate coefficients", covar_coef_min)
       .add_option("covar-coef-max", "Upperbound for covariate coefficients", covar_coef_max)
@@ -64,7 +72,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     // Output Options
     pl.add_option("out-prefix", "Output prefix", outPrefix, true)
       .add_option("write-se", "Write standard errors for beta", write_se)
-      .add_option("feature-residuals", "Compute and write per-feature residuals", compute_residual)
+      .add_option("feature-residuals", "Compute and write per-feature residuals", opts.compute_residual)
       .add_option("transform", "Transform the data after model fitting", transform)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug-N", "Debug with the first N units", debug_N)
@@ -134,9 +142,6 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     notice("Read %lu documents with %d features", N, M);
 
     // Set up MLE options (for subproblems)
-    MLEOptions opts{};
-    opts.optim.max_iters = max_iter_inner;
-    opts.optim.tol = tol_inner;
     if (mode == 1) {
         opts.optim.tron.enabled = true;
     } else if (mode == 2) {
@@ -154,10 +159,9 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     } else if (write_se) {
         opts.se_flag = se_method;
     }
-    opts.compute_residual = compute_residual;
 
     // Fit the model
-    nmf.fit(docs, opts, max_iter_outer, tol_outer);
+    nmf.fit(docs, opts, nmf_opts);
 
     // Compute DE stats
     if (test_beta_vs_null) {
@@ -199,7 +203,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
             notice("Wrote standard errors of beta to %s", outf.c_str());
         }
     }
-    if (compute_residual) {
+    if (opts.compute_residual) {
         const auto& resids = nmf.get_feature_residuals();
         const auto& sums = nmf.get_feature_sums();
         outf = outPrefix + ".feature.residuals.tsv";

@@ -141,6 +141,14 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
         }
         uint32_t idx_prev = idx0;
         idx0++;
+        std::string& feature = token[0];
+        if (has_dict) {
+            auto it = dict.find(feature);
+            if (it == dict.end()) {
+                continue;
+            }
+            idx_prev = it->second;
+        }
         double count = -1;
         if (read_sums) {
             if (idx0 == 1) {
@@ -160,14 +168,6 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
             if (count >= 0 && count < minCount) {
                 continue;
             }
-        }
-        std::string& feature = token[0];
-        if (has_dict) {
-            auto it = dict.find(feature);
-            if (it == dict.end()) {
-                continue;
-            }
-            idx_prev = it->second;
         }
         bool include = !check_include || std::regex_match(feature, regex_include);
         bool exclude = check_exclude && std::regex_match(feature, regex_exclude);

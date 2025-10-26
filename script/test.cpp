@@ -210,6 +210,7 @@ int32_t test(int32_t argc, char** argv) {
     int32_t seed, debug_ = 0;
     int32_t threads = 1;
     bool exact = false;
+    NmfFitOptions nmf_opts;
 
     ParamList pl;
     // Input / sim options
@@ -220,7 +221,11 @@ int32_t test(int32_t argc, char** argv) {
       .add_option("seed", "Random seed", seed, true)
       .add_option("threads", "Number of threads", threads)
       .add_option("exact", "", exact);
-
+    pl.add_option("minibatch-epoch", "Number of minibatch epochs at the beginning", nmf_opts.n_mb_epoch)
+      .add_option("minibatch-size", "Minibatch size", nmf_opts.batch_size)
+      .add_option("t0", "Decay parameter t0 for minibatch", nmf_opts.t0)
+      .add_option("kappa", "Decay parameter kappa for minibatch", nmf_opts.kappa)
+      .add_option("max-iter-outer", "Maximum outer iterations", nmf_opts.max_iter);
     // Output options
     pl.add_option("debug", "Debug", debug_);
 
@@ -248,16 +253,20 @@ int32_t test(int32_t argc, char** argv) {
     PoissonLog1pNMF model(K, M, threads, seed, exact);
 
     MLEOptions mle_opts;
-    mle_opts.optim.max_iters = 15; // A few more iterations can help
+    mle_opts.optim.max_iters = 15;
     mle_opts.optim.tol = 1e-5;
     mle_opts.optim.tron.enabled = true;
 
     std::cout << "\nFitting the model..." << std::endl;
     auto start_time = std::chrono::high_resolution_clock::now();
-    model.fit(docs, mle_opts, 50, 1e-4, -1e6, 1e6);
+
+    model.fit(docs, mle_opts, nmf_opts);
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> runtime = end_time - start_time;
     std::cout << "Fitting complete in " << runtime.count() << " ms." << std::endl;
+
+    std::vector<MLEStats> res;
+    model.transform(docs, mle_opts, res);
 
     // --- 3. Evaluate Results ---
     RowMajorMatrixXd theta_est = model.get_theta();
@@ -292,7 +301,7 @@ int32_t test(int32_t argc, char** argv) {
     double bcov_error = calculate_relative_error(Bcov_true, Bcov_est);
 
     std::cout << "\n--- Evaluation Results ---" << std::endl;
-    printf("Total Runtime: %.2f ms\n", runtime.count());
+    printf("Total Runtime: %.2f s\n", runtime.count()*1e-3);
     printf("------------------------------------------------\n");
     printf("Primary Metric (Invariant to Ambiguities):\n");
     printf("  - Linear Predictor (eta) MSE | %.6f\n", eta_error);

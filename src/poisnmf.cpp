@@ -15,8 +15,7 @@ void PoissonLog1pNMF::set_nthreads(int nThreads) {
 }
 
 void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
-    const MLEOptions mle_opts, int max_iter, double tol,
-    double covar_coef_min, double covar_coef_max, bool reset) {
+    const MLEOptions mle_opts, NmfFitOptions nmf_opts, bool reset) {
     size_t N = docs.size();
     if (N == 0) {
         warning("%s: Empty input", __func__);
@@ -50,7 +49,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         for (int i = 0; i < N; ++i) {
             X.row(i) = docs[i].covar.transpose();
         }
-        mle_opts_bcov.optim.set_bounds(covar_coef_min, covar_coef_max, P_);
+        mle_opts_bcov.optim.set_bounds(nmf_opts.covar_coef_min, nmf_opts.covar_coef_max, P_);
         // Do one round of regression for covariates only, with a mean offset
         notice("Fit initial regressions for covariates");
         objective_old = tbb::parallel_reduce(
@@ -83,11 +82,41 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
     }
 
     notice("%s: Starting fit %d x %d matrix with K=%d, (P=%d)", __func__, N, M_, K_, P_);
+    int epoch = 0;
+
+    if (nmf_opts.n_mb_epoch > 0) {
+        tr_delta_beta_.assign(M_, 1.0);
+        tr_delta_bcov_.assign(M_, 1.0);
+        size_t batch_size = (nmf_opts.batch_size < 1) ? 1024 : nmf_opts.batch_size;
+        if (nmf_opts.t0 < 0) {
+            nmf_opts.t0 = std::min(10., 2. * N / (double) batch_size);
+            notice("Set decay parameter t0 = %.1f", nmf_opts.t0);
+        }
+        std::vector<int> order(N);
+        std::iota(order.begin(), order.end(), 0);
+        size_t n_mb = 0;
+        for (; epoch < nmf_opts.n_mb_epoch; ++epoch) {
+            if (nmf_opts.shuffle) std::shuffle(order.begin(), order.end(), rng_);
+            for (size_t start = 0; start < N; start += batch_size) {
+                size_t end = std::min(N, start + batch_size);
+                std::vector<int> batch(order.begin() + start, order.begin() + end);
+                double rho_t = nmf_opts.use_decay ? std::pow(nmf_opts.t0 + n_mb, -nmf_opts.kappa) : -1.;
+                partial_fit(docs, mtx_t,
+                            mle_opts_fit, mle_opts_bcov,
+                            batch, rho_t, n_mb, epoch);
+                n_mb += 1;
+            }
+            if (epoch % nmf_opts.rescale_period == 0) {
+                rescale_matrices();
+            }
+        }
+    }
+
     int convergence_counter = 0;
     std::vector<int32_t> niters_reg_theta(N, 0);
     std::vector<int32_t> niters_reg_beta(M_, 0);
     std::vector<int32_t> niters_reg_bcov(M_, 0);
-    for (int iter = 0; iter < max_iter; ++iter) {
+    for (; epoch < nmf_opts.max_iter; ++epoch) {
         // --- Update theta (document-topic matrix) ---
         double objective_current, rel_change;
         int32_t niters_theta, niters_beta, niters_bcov;
@@ -105,7 +134,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                     oM_ptr = &oM;
                 }
                 VectorXd b;
-                if (iter > 0) {
+                if (epoch > 0) {
                     b = theta_.row(i).transpose();
                 }
                 if (exact_) {
@@ -122,7 +151,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         niters_theta = std::accumulate(niters_reg_theta.begin(), niters_reg_theta.end(), 0) / N;
 
         rel_change = std::abs(objective_current - objective_old) / (std::abs(objective_old) + 1e-9);
-        notice("Iteration %d, update theta: Objective = %.3e, Rel. Change = %.6e, avg niters = %d", iter + 1, objective_current, rel_change, niters_theta);
+        notice("Iteration %d, update theta: Objective = %.3e, Rel. Change = %.6e, avg niters = %d", epoch + 1, objective_current, rel_change, niters_theta);
         objective_old = objective_current;
 
         // --- Update beta and bcov holding theta fixed ---
@@ -174,19 +203,19 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         rel_change = std::abs(objective_current - objective_old) / (std::abs(objective_old) + 1e-9);
         if (P_ > 0) {
             niters_bcov = std::accumulate(niters_reg_bcov.begin(), niters_reg_bcov.end(), 0) / M_;
-            notice("Iteration %d, update beta:  Objective = %.3e, Rel. Change = %.6e, avg niters(beta) = %d, avg niters(b) = %d", iter + 1, objective_current, rel_change, niters_beta, niters_bcov);
+            notice("Iteration %d, update beta:  Objective = %.3e, Rel. Change = %.6e, avg niters(beta) = %d, avg niters(b) = %d", epoch + 1, objective_current, rel_change, niters_beta, niters_bcov);
             std::fill(niters_reg_bcov.begin(), niters_reg_bcov.end(), 0);
         } else {
-            notice("Iteration %d, update beta:  Objective = %.3e, Rel. Change = %.6e, avg niters = %d", iter + 1, objective_current, rel_change, niters_beta);
+            notice("Iteration %d, update beta:  Objective = %.3e, Rel. Change = %.6e, avg niters = %d", epoch + 1, objective_current, rel_change, niters_beta);
         }
 
-        if (rel_change < tol) {
+        if (rel_change < nmf_opts.tol) {
             convergence_counter++;
         } else {
             convergence_counter = 0;
         }
         if (convergence_counter >= 3) {
-            notice("Converged after %d iterations.", iter + 1);
+            notice("Converged after %d iterations.", epoch + 1);
             break;
         }
         objective_old = objective_current;
@@ -194,7 +223,9 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         std::fill(niters_reg_beta.begin(), niters_reg_beta.end(), 0);
 
         // --- Rescale factors for numerical stability ---
-        rescale_matrices();
+        if (epoch % nmf_opts.rescale_period == 0) {
+            rescale_matrices();
+        }
     }
     auto t1 = std::chrono::steady_clock::now();
     double sec = std::chrono::duration<double, std::milli>(t1 - t0).count() / 1000.0;
@@ -304,6 +335,136 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const 
     }
     notice("%s: Done", __func__);
     return new_theta;
+}
+
+void PoissonLog1pNMF::partial_fit(
+        const std::vector<SparseObs>& docs, const std::vector<Document>& mtx_t,
+        const MLEOptions mle_opts, const MLEOptions mle_opts_bcov,
+        const std::vector<int>& batch_indices, double rho_t,
+        int32_t mb_count, int32_t total_epoch) {
+    const int B = static_cast<int>(batch_indices.size());
+    if (B == 0) return;
+
+    // Build inverse map from global doc id -> local batch row
+    std::vector<int> inv_map(docs.size(), -1);
+    for (int r = 0; r < B; ++r) inv_map[ batch_indices[r] ] = r;
+
+    // Build local matrices
+    VectorXd cB(B);
+    RowMajorMatrixXd XB;
+    for (int r = 0; r < B; ++r) {
+        int i = batch_indices[r];
+        cB[r] = docs[i].c;
+    }
+    if (P_ > 0) {
+        XB.resize(B, P_);
+        for (int r = 0; r < B; ++r) {
+            XB.row(r) = docs[ batch_indices[r] ].covar.transpose();
+        }
+    }
+    // Update theta
+    int grainsize = std::min(64, std::max(1, int(B / (2 * nThreads_))) );
+    tbb::combinable<int> niters_local(0);
+    tbb::combinable<double> obj_local(0.0);
+    tbb::parallel_for(tbb::blocked_range<int>(0, B, grainsize),
+                    [&](const tbb::blocked_range<int>& r) {
+        VectorXd cM(M_), oM;
+        if (P_ > 0) oM.resize(M_);
+        for (int rr = r.begin(); rr != r.end(); ++rr) {
+            int i = batch_indices[rr];
+            // cM is M-length vector equal to c_i
+            cM.setConstant(docs[i].c);
+            VectorXd* oM_ptr = nullptr;
+            if (P_ > 0) {
+                oM.noalias() = Bcov_ * docs[i].covar;
+                oM_ptr = &oM;
+            }
+            VectorXd b;
+            if (total_epoch > 0) b = theta_.row(i).transpose();
+            MLEStats stats;
+            if (exact_) {
+                obj_local.local() += pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
+            } else {
+                obj_local.local() += pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
+            }
+            theta_.row(i) = b.transpose();
+            niters_local.local() += stats.optim.niters;
+        }
+    });
+    int niters_theta = niters_local.combine(std::plus<int>()) / B;
+    double obj1 = obj_local.combine(std::plus<double>()) / B;
+
+    OptimOptions beta_opts_mb = mle_opts.optim;
+    OptimOptions bcov_opts_mb = mle_opts_bcov.optim;
+    beta_opts_mb.max_iters = 1;
+    bcov_opts_mb.max_iters = 1;
+
+    auto subset_doc_to_batch = [&](const Document& full_col) {
+        Document out;
+        out.ids.reserve(full_col.ids.size());
+        out.cnts.reserve(full_col.cnts.size());
+        for (size_t t = 0; t < full_col.ids.size(); ++t) {
+            int gid = full_col.ids[t];
+            int lid = (gid >= 0 && gid < (int)inv_map.size()) ? inv_map[gid] : -1;
+            if (lid >= 0) {
+                out.ids.push_back(lid);
+                out.cnts.push_back(full_col.cnts[t]);
+            }
+        }
+        return out;
+    };
+    RowMajorMatrixXd ThetaB(B, K_);
+    for (int r = 0; r < B; ++r) {
+        ThetaB.row(r) = theta_.row(batch_indices[r]);
+    }
+
+    // Update beta and bcov
+    grainsize = std::min(64, std::max(1, int(M_ / (2 * nThreads_))) );
+    tbb::combinable<double> obj_local2(0.0);
+    tbb::parallel_for(tbb::blocked_range<int>(0, M_, grainsize),
+                    [&](const tbb::blocked_range<int>& r) {
+        OptimStats stats_b{}, stats_beta{};
+        VectorXd oN(B);
+        for (int j = r.begin(); j != r.end(); ++j) {
+            Document yB = subset_doc_to_batch(mtx_t[j]);
+            // (a) Update b_cov[j] first (A = X_B, offset = Θ_B * beta_j)
+            if (P_ > 0) {
+                oN.noalias() = ThetaB * beta_.row(j).transpose();
+                VectorXd bj = Bcov_.row(j).transpose();
+                double fval;
+                bcov_opts_mb.tron.delta_init = tr_delta_bcov_[j];
+                if (exact_) {
+                    PoisRegExactProblem P_b(XB, yB, cB, &oN, mle_opts_bcov);
+                    fval = tron_solve(P_b, bj, bcov_opts_mb, stats_b, debug_, &tr_delta_bcov_[j], rho_t);
+                } else {
+                    PoisRegSparseProblem P_b(XB, yB, cB, &oN, mle_opts_bcov);
+                    fval = tron_solve(P_b, bj, bcov_opts_mb, stats_b, debug_, &tr_delta_bcov_[j], rho_t);
+                }
+                (void)fval;
+                Bcov_.row(j) = bj.transpose();
+            }
+
+            // (b) Update beta_j (A = Θ_B, offset = X_B * b_cov[j])
+            VectorXd betaj = beta_.row(j).transpose();
+            VectorXd* off_ptr = nullptr;
+            beta_opts_mb.tron.delta_init = tr_delta_beta_[j];
+            if (P_ > 0) {
+                oN.noalias() = XB * Bcov_.row(j).transpose();
+                off_ptr = &oN;
+            }
+            if (exact_) {
+                PoisRegExactProblem P_beta(ThetaB, yB, cB, off_ptr, mle_opts);
+                obj_local2.local() += tron_solve(P_beta, betaj, beta_opts_mb, stats_beta, debug_, &tr_delta_beta_[j], rho_t);
+            } else {
+                PoisRegSparseProblem P_beta(ThetaB, yB, cB, off_ptr, mle_opts);
+                obj_local2.local() += tron_solve(P_beta, betaj, beta_opts_mb, stats_beta, debug_, &tr_delta_beta_[j], rho_t);
+            }
+            beta_.row(j) = betaj.transpose();
+        }
+    });
+    double obj2 = obj_local2.combine(std::plus<double>()) / B;
+    notice("Mini-batch %d, epoch %d: avg objective after theta update = %.3e, after beta update = %.3e, avg niters for theta = %d",
+        mb_count, total_epoch, obj1, obj2, niters_theta);
 }
 
 

@@ -14,6 +14,21 @@ struct TestResult {
   double fc;        // approximated fold-change
 };
 
+struct NmfFitOptions {
+    int    max_iter     = 50;
+    double tol          = 1e-4;
+    double covar_coef_min = -1e6;
+    double covar_coef_max =  1e6;
+    int    n_mb_epoch   = 0;
+    int    batch_size   = 1024;
+    bool   shuffle      = true;
+    bool   use_decay    = true;
+    double t0           = -1;  // decay warmup
+    double kappa        = 0.7;   // decay exponent
+    // How often to rescale beta & theta
+    int  rescale_period = 1;
+};
+
 class PoissonLog1pNMF {
 public:
 
@@ -25,8 +40,13 @@ public:
     }
 
     void fit(const std::vector<SparseObs>& docs,
-        const MLEOptions mle_opts, int max_iter = 100, double tol = 1e-4,
-        double covar_coef_min = -1e6, double covar_coef_max = 1e6, bool reset = false);
+        const MLEOptions mle_opts, NmfFitOptions nmf_opts, bool reset = false);
+
+    void partial_fit(
+        const std::vector<SparseObs>& docs, const std::vector<Document>& mtx_t,
+        const MLEOptions mle_opts, const MLEOptions mle_opts_bcov,
+        const std::vector<int>& batch_indices,
+        double rho_t, int32_t mb_count, int32_t total_epoch);
 
     RowMajorMatrixXd transform(std::vector<SparseObs>& docs,
         const MLEOptions mle_opts, std::vector<MLEStats>& res, ArrayXd* fres_ptr = nullptr);
@@ -83,6 +103,7 @@ private:
     std::vector<double> feature_residuals_;
     double min_ct_ = 100, min_fc_ = 1.5, max_p_ = 0.05; // for DE tests
     double min_logfc_ = 0.176, max_log10p_ = -1.3; // from above
+    std::vector<double> tr_delta_bcov_, tr_delta_beta_; // for minibatch
 
     // transpose sparse representation
     std::vector<Document> transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec);

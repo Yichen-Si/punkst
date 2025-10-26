@@ -77,7 +77,7 @@ inline void project_to_box(VectorXd& b, const OptimOptions& opt) {
 
 // ---------------- TRON (trust-region Newton-CG) ----------------
 template <class Problem>
-double tron_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimStats& stats, int debug_ = 0) {
+double tron_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimStats& stats, int debug_ = 0, double* delta_new = nullptr, double rho_t = -1) {
 	const int K = static_cast<int>(b.size());
 	VectorXd g(K), q(K);
 	ArrayXd w;
@@ -89,20 +89,31 @@ double tron_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimS
 		P.eval(b, nullptr, &g, &q, &w);
 
 		// Free set
-		Eigen::Array<bool, Eigen::Dynamic, 1> free_mask =
-			(b.array() > 0.0) || (g.array() < 0.0);
+		Eigen::Array<bool, Eigen::Dynamic, 1> free_mask = g.array() < 0.0;
+		// (b.array() > 0.0) || (g.array() < 0.0);
+		if (!opt.b_min && !opt.b_max) {
+			free_mask = free_mask || (b.array() > 0.0);
+		} else {
+			if (opt.b_min) {
+				free_mask = free_mask || (b.array() > opt.b_min->array());
+			}
+			if (opt.b_max) {
+				free_mask = free_mask || (b.array() < opt.b_max->array());
+			}
+		}
 
 		auto Hv = P.make_Hv(w);
 		VectorXd d = VectorXd::Zero(K), r = VectorXd::Zero(K);
 		VectorXd z = VectorXd::Zero(K), p = VectorXd::Zero(K);
 
 		double gF2 = 0.0;
-		for (int k = 0; k < K; ++k)
-		if (free_mask[k]) {
-			r[k] = g[k];
-			z[k] = r[k] / q[k];
-			p[k] = -z[k];
-			gF2 += g[k]*g[k];
+		for (int k = 0; k < K; ++k) {
+			if (free_mask[k]) {
+				r[k] = g[k];
+				z[k] = r[k] / q[k];
+				p[k] = -z[k];
+				gF2 += g[k]*g[k];
+			}
 		}
 		double rz = r.dot(z);
 		const double cg_tol = std::max(opt.eps, opt.tron.cg_tol * std::sqrt(std::max(0.0, rz)));
@@ -143,15 +154,18 @@ double tron_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimS
 			rz = rz_next;
 		}
 
-		VectorXd b_trial = (b + d);
+		VectorXd b_trial = d;
+		if (rho_t > 0) {b_trial *= rho_t;}
+		b_trial += b;
+
 		project_to_box(b_trial, opt);
 		VectorXd d_proj  = b_trial - b;
 
-		VectorXd Hdproj = P.make_Hv(w)(d_proj);
+		VectorXd Hdproj = Hv(d_proj);
 		const double m_pred   = g.dot(d_proj) + 0.5 * d_proj.dot(Hdproj);
 		const double pred_red = -m_pred;
 		const double f_new = P.f(b_trial);
-		const double act_red = f_cur - f_new;
+		const double act_red = f_cur - f_new; // actual reduction
 		const double rho = (pred_red > 0.0) ? (act_red / pred_red) : -std::numeric_limits<double>::infinity();
 
 		if (rho < 0.25) delta *= 0.25;
@@ -171,6 +185,9 @@ double tron_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimS
 		if (b_rel <= opt.tol) break;
 		if (std::sqrt(gF2) <= opt.tol) break;
 		if (delta < 1e-12) break;
+	}
+	if (delta_new) {
+		*delta_new = delta;
 	}
 	stats.niters = it + 1;
 	stats.obj = f_cur;
