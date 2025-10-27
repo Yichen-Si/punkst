@@ -1,4 +1,6 @@
 #include "utils_sys.hpp"
+#include <unistd.h>
+#include <cerrno>
 
 bool createDirectory(const std::string& dir) {
     if (std::filesystem::exists(dir)) {
@@ -34,6 +36,23 @@ std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t ma
     }
     throw std::runtime_error("Could not create unique temp dir under "
                               + parent.string());
+}
+
+bool write_all(int fd, const void* buf, size_t len) {
+    const uint8_t* p = static_cast<const uint8_t*>(buf);
+    size_t left = len;
+    while (left > 0) {
+        ssize_t n = ::write(fd, p, left);
+        if (n > 0) {
+            p += n;
+            left -= static_cast<size_t>(n);
+        } else if (n < 0 && (errno == EINTR || errno == EAGAIN)) {
+            continue; // retry
+        } else {
+            return false; // fatal
+        }
+    }
+    return true;
 }
 
 bool checkOutputWritable(const std::string& outFile, bool newFile) {

@@ -23,8 +23,8 @@ struct NmfFitOptions {
     int    batch_size   = 1024;
     bool   shuffle      = true;
     bool   use_decay    = true;
-    double t0           = -1;  // decay warmup
-    double kappa        = 0.7;   // decay exponent
+    double t0           = -1;  // decay offset
+    double kappa        = 0.7; // decay exponent
     // How often to rescale beta & theta
     int  rescale_period = 1;
 };

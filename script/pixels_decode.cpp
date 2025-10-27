@@ -1,5 +1,5 @@
 #include "punkst.h"
-#include "tiles2minibatch.hpp"
+#include "tiles2slda.hpp"
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
@@ -18,7 +18,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool useTicketSystem = false;
     int32_t floatCoordDigits = 4, probDigits = 4;
     std::vector<std::string> annoInts, annoFloats, annoStrs;
-    bool useSCVB0 = false;
+    // bool useSCVB0 = false;
     // SVB specific parameters
     int32_t maxIter = 100;
     double mDelta = 1e-3;
@@ -42,7 +42,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("hex-size", "Hexagon size (side length)", hexSize)
       .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
       .add_option("anchor-dist", "Distance between adjacent anchors", anchorDist)
-      .add_option("scvb0", "Use SCVB0 instead of SVB", useSCVB0)
+    //   .add_option("scvb0", "Use SCVB0 instead of SVB", useSCVB0)
       .add_option("max-iter", "Maximum number of iterations for each document (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("radius", "Radius", radius)
@@ -115,61 +115,36 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         notice("Using random seed %d", seed);
     }
 
-    InferenceType algo = useSCVB0 ? InferenceType::SCVB0 : InferenceType::SVB;
-    LatentDirichletAllocation lda(modelFile, seed, 1, 0, algo);
-    if (algo == InferenceType::SVB) {
-        lda.set_svb_parameters(maxIter, mDelta);
-    }
+    // Initialize LDA model
+    LatentDirichletAllocation lda(modelFile, seed, 1, 0);
+    lda.set_svb_parameters(maxIter, mDelta);
+
     auto& featureNames = lda.feature_names_;
     int32_t nFeatures = lda.get_n_features();
     notice("Initialized anchor model with %d features and %d factors", nFeatures, lda.get_n_topics());
 
+    // Set up input parser
     HexGrid hexGrid(hexSize);
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val);
     if (!featureIsIndex) {
-        for (size_t i = 0; i < featureNames.size(); ++i) {
-            parser.featureDict[featureNames[i]] = i;
-        }
-        parser.isFeatureDict = true;
+        parser.setFeatureDict(featureNames);
     }
     if (!weightFile.empty()) {
         parser.readWeights(weightFile, defaultWeight, nFeatures);
     }
-    // parse additional annotation columns
-    for (const auto& anno : annoInts) {
-        uint32_t idx;
-        std::vector<std::string> tokens;
-        split(tokens, ":", anno);
-        if (tokens.size() < 2 || !str2num<uint32_t>(tokens[0], idx)) {
-            error("Invalid value in --ext-col-ints: %s", anno.c_str());
-        }
-        parser.icol_ints.push_back(idx);
-        parser.name_ints.push_back(tokens[1]);
+    // parse additional annotation columns (to carry over to output)
+    if (!parser.addExtraInt(annoInts)) {
+        error("Invalid value in --ext-col-ints");
     }
-    for (const auto& anno : annoFloats) {
-        uint32_t idx;
-        std::vector<std::string> tokens;
-        split(tokens, ":", anno);
-        if (tokens.size() < 2 || !str2num<uint32_t>(tokens[0], idx)) {
-            error("Invalid value in --ext-col-floats: %s", anno.c_str());
-        }
-        parser.icol_floats.push_back(idx);
-        parser.name_floats.push_back(tokens[1]);
+    if (!parser.addExtraFloat(annoFloats)) {
+        error("Invalid value in --ext-col-floats");
     }
-    for (const auto& anno : annoStrs) {
-        uint32_t idx, len;
-        std::vector<std::string> tokens;
-        split(tokens, ":", anno);
-        if (tokens.size() < 3 || !str2num<uint32_t>(tokens[0], idx) || !str2num<uint32_t>(tokens[2], len)) {
-            error("Invalid value in --ext-col-strs: %s", anno.c_str());
-        }
-        parser.icol_strs.push_back(idx);
-        parser.name_strs.push_back(tokens[1]);
-        parser.str_lens.push_back(len);
+    if (!parser.addExtraStr(annoStrs)) {
+        error("Invalid value in --ext-col-strs");
     }
-    parser.isExtended = !parser.icol_ints.empty() || !parser.icol_floats.empty() || !parser.icol_strs.empty();
     notice("Initialized tile reader");
 
+    // Collect input data files
     struct dataset {
         std::string sampleId;
         std::string inTsv;
@@ -215,10 +190,11 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         ds.anchorFile = anchorFile;
         datasets.push_back(ds);
     }
-
     if (datasets.empty()) {
         error("No valid datasets found in sample list or input parameters");
     }
+
+    // Process each dataset
     for (const auto& ds : datasets) {
         inTsv = ds.inTsv;
         inIndex = ds.inIndex;
@@ -233,27 +209,27 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("Error in input tiles: %s", inTsv.c_str());
         }
         if (coordsAreInt) {
-            Tiles2Minibatch<int32_t> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
-            tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
-            tiles2minibatch.setFeatureNames(featureNames);
-            tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
-            tiles2minibatch.setOutputProbDigits(probDigits);
+            Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+            tiles2slda.setOutputOptions(outputOritinalData, useTicketSystem);
+            tiles2slda.setFeatureNames(featureNames);
+            tiles2slda.setOutputCoordDigits(floatCoordDigits);
+            tiles2slda.setOutputProbDigits(probDigits);
             if (!anchorFile.empty()) {
-                int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
+                int32_t nAnchors = tiles2slda.loadAnchors(anchorFile);
                 notice("Loaded %d valid anchors", nAnchors);
             }
-            tiles2minibatch.run();
+            tiles2slda.run();
         } else {
-            Tiles2Minibatch<float> tiles2minibatch(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
-            tiles2minibatch.setOutputOptions(outputOritinalData, useTicketSystem);
-            tiles2minibatch.setOutputCoordDigits(floatCoordDigits);
-            tiles2minibatch.setOutputProbDigits(probDigits);
-            tiles2minibatch.setFeatureNames(featureNames);
+            Tiles2SLDA<float> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+            tiles2slda.setOutputOptions(outputOritinalData, useTicketSystem);
+            tiles2slda.setOutputCoordDigits(floatCoordDigits);
+            tiles2slda.setOutputProbDigits(probDigits);
+            tiles2slda.setFeatureNames(featureNames);
             if (!anchorFile.empty()) {
-                int32_t nAnchors = tiles2minibatch.loadAnchors(anchorFile);
+                int32_t nAnchors = tiles2slda.loadAnchors(anchorFile);
                 notice("Loaded %d valid anchors", nAnchors);
             }
-            tiles2minibatch.run();
+            tiles2slda.run();
         }
     }
 

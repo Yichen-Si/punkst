@@ -9,6 +9,7 @@
 #include <iostream>
 #include <fstream>
 #include <memory>
+#include <cstdint>
 
 bool createDirectory(const std::string& dir);
 
@@ -53,6 +54,9 @@ bool checkOutputWritable(const std::string& outFile, bool newFile = true);
 int sys_sort(const char* infile, const char* outfile = nullptr,
              const std::vector<std::string>& flags = {});
 int pipe_cat_sort(const std::vector<std::string>& in_files, const std::string& out_file, uint32_t n_threads);
+
+// Robust write: write all bytes or return false on fatal error
+bool write_all(int fd, const void* buf, size_t len);
 
 // compute block boundaries for processing a plain text file in parallel
 void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& blocks, const std::string& inFile, int32_t nThreads, int32_t nskip = 0);

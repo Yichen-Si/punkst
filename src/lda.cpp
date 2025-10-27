@@ -211,5 +211,5 @@ void LatentDirichletAllocation::set_nthreads(int nThreads) {
     }
     nThreads_ = int( tbb::global_control::active_value(
              tbb::global_control::max_allowed_parallelism) );
-    notice("Requested %d threads, actual number of threads: %d", nThreads, nThreads_);
+    notice("LatentDirichletAllocation: Requested %d threads, actual number of threads: %d", nThreads, nThreads_);
 }

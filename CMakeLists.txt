@@ -75,6 +75,8 @@ set(SOURCE_FILES
     src/slda.hpp
     src/tiles2minibatch.hpp
     src/tiles2minibatch.cpp
+    src/tiles2slda.hpp
+    src/tiles2slda.cpp
     script/pixels_decode.cpp
     script/draw_pixel_factors.cpp
     src/tiles2cooccurrence.hpp

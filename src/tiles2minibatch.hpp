@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <algorithm>
 #include <random>
 #include <cassert>
 #include <stdexcept>
@@ -201,13 +202,9 @@ class Tiles2MinibatchBase {
 public:
 
     Tiles2MinibatchBase(int nThreads, double r, TileReader& tileReader, const std::string& _outPref, const std::string* opt = nullptr)
-    : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref) {
-        std::string outputFile = outPref + ".tsv";
-        mainOut.open(outputFile, std::ios::out);
-        if (!mainOut) {
-            error("Error opening main output file: %s", outputFile.c_str());
-        } // Assume tileSize is provided by the TileReader.
-        mainOut.close();
+    : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref),
+      useTicketSystem(false),
+      resultQueue(static_cast<size_t>(std::max(1, nThreads))) {
         tileSize = tileReader.getTileSize();
         if (opt && !(*opt).empty()) {
             useMemoryBuffer_ = false;
@@ -219,14 +216,27 @@ public:
     }
 
     ~Tiles2MinibatchBase() {
-        if (mainOut.is_open()) {
-            mainOut.close();
-        }
+        closeOutput();
     }
 
     virtual void run() = 0;
+    // Load fixed anchor points from a file and assign to tiles/boundaries
+    int32_t loadAnchors(const std::string& anchorFile);
 
 protected:
+
+    // buffer output results for one tile
+    struct ProcessedResult {
+        int32_t ticket;
+        float xmin, xmax, ymin, ymax;
+        std::vector<std::string> outputLines;
+        uint32_t npts;
+        ProcessedResult(int32_t t = 0, float _xmin = 0, float _xmax = 0, float _ymin = 0, float _ymax = 0)
+        : ticket(t), npts(0), xmin(_xmin), xmax(_xmax), ymin(_ymin), ymax(_ymax) {}
+        bool operator>(const ProcessedResult& other) const {
+            return ticket > other.ticket;
+        }
+    };
 
     int nThreads; // Number of worker threads
     int tileSize; // Tile size (square)
@@ -235,15 +245,36 @@ protected:
     TileReader& tileReader;
     ScopedTempDir tmpDir;
     bool useMemoryBuffer_;
+    bool useTicketSystem;
 
-    std::ofstream mainOut;
-    std::mutex mainOutMutex;  // Protects writing to mainOut
+    int fdMain = -1;
+    int fdIndex = -1;
+    size_t outputSize = 0;
+    size_t headerSize = 0;
     std::map<uint32_t, std::shared_ptr<BoundaryBuffer>> boundaryBuffers;
     std::mutex boundaryBuffersMapMutex; // Protects modifying boundaryBuffers
     ThreadSafeQueue<std::pair<TileKey, int32_t> > tileQueue;
     ThreadSafeQueue<std::pair<std::shared_ptr<BoundaryBuffer>, int32_t>> bufferQueue;
     std::vector<std::thread> workThreads;
+    ThreadSafeQueue<ProcessedResult> resultQueue;
+    // Anchors (optionally preloaded from files)
+    // (we may need more than one set of pre-defined anchors in the future)
+    using vec2f_t = std::vector<std::vector<float>>;
+    std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile;
+    std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
+    // Output/formatting related
+    bool outputOriginalData = false;
+    std::vector<std::string> featureNames;
+    int32_t floatCoordDigits = 4, probDigits = 4;
+    int32_t topk_ = 3;
+    bool useExtended_ = false;
+    lineParserUnival* lineParserPtr = nullptr; // set by derived
 
+    /* Worker */
+    virtual void tileWorker(int threadId) = 0;
+    virtual void boundaryWorker(int threadId) = 0;
+
+    /* Key logic */
     std::shared_ptr<BoundaryBuffer> getBoundaryBuffer(uint32_t key) {
         std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
         auto it = boundaryBuffers.find(key);
@@ -349,6 +380,7 @@ protected:
         tile.row = static_cast<int32_t>(std::floor(y / tileSize));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize));
     }
+
     template<typename T>
     void tile2bound(TileKey &tile, T& xmin, T& xmax, T& ymin, T& ymax) const {
         xmin = static_cast<T>(tile.col * tileSize);
@@ -377,6 +409,7 @@ protected:
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
         buffer2bound(isVertical, bufRow, bufCol, xmin, xmax, ymin, ymax);
     }
+
     template<typename T>
     bool isInternalToBuffer(T x, T y, uint32_t bufferId) {
         int32_t bufRow, bufCol;
@@ -399,245 +432,38 @@ protected:
         }
     }
 
-    virtual void tileWorker(int threadId) = 0;
-    virtual void boundaryWorker(int threadId) = 0;
-};
+    /* I/O */
 
-template<typename T>
-class Tiles2Minibatch : public Tiles2MinibatchBase {
+    // Writer thread to consume results and write to output/index
+    void writerWorker();
 
-public:
-    Tiles2Minibatch(int nThreads, double r,
-        const std::string& _outPref, const std::string& _tmpDir,
-        LatentDirichletAllocation& _lda,
-        TileReader& tileReader, lineParserUnival& lineParser,
-        HexGrid& hexGrid, int32_t nMoves,
-        unsigned int seed = std::random_device{}(),
-        double c = 20, double h = 0.7, double res = 1,
-        int32_t M = 0, int32_t N = 0, int32_t k = 3,
-        int32_t verbose = 0, int32_t debug = 0) :
-        Tiles2MinibatchBase(nThreads, r + hexGrid.size, tileReader, _outPref, &_tmpDir), distR(r), lda(_lda), lineParser(lineParser), hexGrid(hexGrid), nMoves(nMoves), anchorMinCount(c), pixelResolution(res), M_(M), topk_(k), debug_(debug),
-        outputOriginalData(false), useExtended_(lineParser.isExtended),
-        resultQueue(static_cast<size_t>(std::max(1, nThreads))),
-        useTicketSystem(false) {
-        // check type consistency
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
-            assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
-        } else if constexpr (std::is_same_v<T, int32_t>) {
-            assert(tileReader.getCoordType() == CoordType::INTEGER && "Template type does not match with TileReader coordinate type");
-        } else {
-            error("%s: Unsupported coordinate type", __func__);
-        }
-        if (pixelResolution <= 0) {
-            pixelResolution = 1;
-        }
-        if (useExtended_) {
-            setExtendedSchema();
-        }
-        weighted = lineParser.weighted;
-        M_ = lda.get_n_features();
-        if (lineParser.isFeatureDict) {
-            assert((M_ == lineParser.featureDict.size()) && "Feature number does not match");
-            featureNames.resize(M_);
-            for (const auto& entry : lineParser.featureDict) {
-                featureNames[entry.second] = entry.first;
-            }
-        } else if (lineParser.weighted) {
-            assert(M_ == lineParser.weights.size() && "Feature number does not match");
-        }
-        lda.set_nthreads(1); // because we parallelize by tile
-        K_ = lda.get_n_topics();
-        distNu = std::log(0.5) / std::log(h);
-        if (N <= 0) {
-            N = lda.get_N_global() * 100;
-        }
-        pseudobulk = MatrixXf::Zero(K_, M_);
-        slda.init(K_, M_, N, seed);
-        slda.init_global_parameter(lda.get_model());
-        slda.verbose_ = verbose;
-        slda.debug_ = debug;
-        if (featureNames.size() == 0) {
-            featureNames.resize(M_);
-            for (int32_t i = 0; i < M_; ++i) {
-                featureNames[i] = std::to_string(i);
-            }
-        }
-
-        if (debug_ > 0) {
-            std::cout << "Check model initialization\n" << std::fixed << std::setprecision(2);
-            const auto& lambda = slda.get_lambda();
-            const auto& Elog_beta = slda.get_Elog_beta();
-            for (int32_t i = 0; i < std::min(3, K_) ; ++i) {
-                std::cout << "\tLambda " << i << ": ";
-                for (int32_t j = 0; j < std::min(5, M_); ++j) {
-                    std::cout << lambda(i, j) << " ";
-                }
-                std::cout << "\n\tElog_beta: ";
-                for (int32_t j = 0; j < std::min(5, M_); ++j) {
-                    std::cout << Elog_beta(i, j) << " ";
-                }
-                std::cout << "\n";
-            }
-        }
-
-        notice("Initialized Tiles2Minibatch");
-    }
-
-    void setFeatureNames(const std::vector<std::string>& names) {
-        assert(names.size() == M_);
-        featureNames = names;
-    }
-    void setLloydIter(int32_t nIter) {
-        nLloydIter = nIter;
-    }
-    void setOutputCoordDigits(int32_t digits) {
-        floatCoordDigits = digits;
-    }
-    void setOutputProbDigits(int32_t digits) {
-        probDigits = digits;
-    }
-    void setOutputOptions(bool includeOrg, bool useTicket) {
-        outputOriginalData = includeOrg;
-        useTicketSystem = useTicket;
-    }
-
-    int32_t loadAnchors(const std::string& anchorFile);
-
-    void run() override {
-        setupOutput();
-        // Phase 1: Process tiles
-        notice("Phase 1 Launching %d worker threads", nThreads);
-
-        std::thread writer(&Tiles2Minibatch::writerWorker, this);
-
-        for (int i = 0; i < nThreads; ++i) {
-            workThreads.push_back(std::thread(&Tiles2Minibatch::tileWorker, this, i));
-        }
-        std::vector<TileKey> tileList;
-        tileReader.getTileList(tileList);
-        std::sort(tileList.begin(), tileList.end());
-        int32_t ticket = 0;
-        // Enqueue all tiles to the queue in a deterministic order
-        for (const auto &tile : tileList) {
-            tileQueue.push(std::make_pair(tile, ticket++));
-            if (debug_ > 0 && ticket >= debug_) {
-                break;
-            }
-        }
-        tileQueue.set_done();
-        for (auto &t : workThreads) {
-            t.join();
-        }
-        workThreads.clear();
-
-        // Phase 2: Process boundary buffers
-        notice("Phase 2 Launching %d worker threads", nThreads);
-        std::vector<std::shared_ptr<BoundaryBuffer>> buffers;
-        buffers.reserve(boundaryBuffers.size());
-        for (auto &kv : boundaryBuffers) {
-            buffers.push_back(kv.second);
-        }
-        std::sort(buffers.begin(), buffers.end(),
-            [](auto const &A, auto const &B){
-                return A->key < B->key;
-        });
-        // Enqueue all boundary buffers from the global map.
-        for (auto &bufferPtr : buffers) {
-            bufferQueue.push(std::make_pair(bufferPtr, ticket++));
-        }
-        bufferQueue.set_done();
-        for (int i = 0; i < nThreads; ++i) {
-            workThreads.push_back(std::thread(&Tiles2Minibatch::boundaryWorker, this, i));
-        }
-        for (auto &t : workThreads) {
-            t.join();
-        }
-
-        resultQueue.set_done();
-        writer.join();
-        mainOut.close();
-        indexOut.close();
-        writeHeaderToJson();
-        writePseudobulkToTsv();
-    }
-
-protected:
-    int32_t debug_;
-    int32_t M_, K_, topk_;
-    bool weighted, outputOriginalData;
-    bool useTicketSystem;
-    bool useExtended_;
-    size_t recordSize_ = 0;
-    std::vector<FieldDef> schema_;
-    LatentDirichletAllocation& lda;
-    OnlineSLDA slda;
-    lineParserUnival& lineParser;
-    HexGrid hexGrid;
-    int32_t nMoves;
-    double anchorMinCount, distNu, distR;
-    float pixelResolution;
-    double eps_;
-    std::vector<std::string> featureNames;
-    using vec2f_t = std::vector<std::vector<float>>;
-    std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile; // we may need more than one set of pre-defined anchors in the future
-    std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
-    int32_t nLloydIter = 1;
-    std::ofstream indexOut;
-    size_t outputSize = 0;
-    int32_t floatCoordDigits = 4, probDigits = 4;
-    MatrixXf pseudobulk; // K x M
-    std::mutex pseudobulkMutex; // Protects pseudobulk
-
-    // buffer output results for one tile
-    struct ProcessedResult {
-        int32_t ticket;
-        float xmin, xmax, ymin, ymax;
-        std::vector<std::string> outputLines;
-        uint32_t npts;
-        ProcessedResult(int32_t t = 0, float _xmin = 0, float _xmax = 0, float _ymin = 0, float _ymax = 0)
-        : ticket(t), npts(0), xmin(_xmin), xmax(_xmax), ymin(_ymin), ymax(_ymax) {}
-        bool operator>(const ProcessedResult& other) const {
-            return ticket > other.ticket;
-        }
-    };
-    ThreadSafeQueue<ProcessedResult> resultQueue;
-
-    // Parse pixels from one tile
-    int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
-    // Parse a binary temporary file (written by BoundaryBuffer)
+    // Parsing helpers (templated on coordinate type)
+    template<typename T>
+    int32_t parseOneTile(TileData<T>& tileData, TileKey tile,
+                         lineParserUnival& lineParser,
+                         int32_t M,
+                         bool useExtended,
+                         const std::vector<FieldDef>& schema,
+                         size_t recordSize);
+    template<typename T>
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
-    int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
-    // Parse bufferred boundary data in memory
+    template<typename T>
+    int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr,
+                                      const std::vector<FieldDef>& schema, size_t recordSize);
+    template<typename T>
     int32_t parseBoundaryMemoryStandard(TileData<T>& tileData,
         InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
+    template<typename T>
     int32_t parseBoundaryMemoryExtended(TileData<T>& tileData,
         InMemoryStorageExtended<T>* memStore, uint32_t bufferKey);
 
-    int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
-    int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
-    int32_t makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
-
-    // Prepare results of internal points
-    ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
-    ProcessedResult formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
-
-    // Process one tile or one boundary buffer
-    void processTile(TileData<T> &tileData, int threadId=0, int ticket = 0, vec2f_t* anchorPtr = nullptr);
-
-    // write output column info to a json file
-    void writeHeaderToJson();
-    // write posterior pseudobulk to a tsv file
-    void writePseudobulkToTsv();
-
-    // Call *before* run()
-    void setExtendedSchema();
-
-    void tileWorker(int threadId) override;
-
-    void boundaryWorker(int threadId) override;
-
-    void writerWorker();
-
+    // Output helpers
     void setupOutput();
+    void closeOutput();
+    void writeHeaderToJson();
+    template<typename T>
+    ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
+    template<typename T>
+    ProcessedResult formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
 
 };

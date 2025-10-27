@@ -126,6 +126,52 @@ struct lineParser {
         }
     }
 
+    bool addExtraInt(std::vector<std::string>& annoInts) {
+        for (const auto& anno : annoInts) {
+            uint32_t idx;
+            std::vector<std::string> tokens;
+            split(tokens, ":", anno);
+            if (tokens.size() < 2 || !str2num<uint32_t>(tokens[0], idx)) {
+                return false;
+            }
+            icol_ints.push_back(idx);
+            name_ints.push_back(tokens[1]);
+        }
+        isExtended |= !icol_ints.empty();
+        return true;
+    }
+
+    bool addExtraFloat(std::vector<std::string>& annoFloats) {
+        for (const auto& anno : annoFloats) {
+            uint32_t idx;
+            std::vector<std::string> tokens;
+            split(tokens, ":", anno);
+            if (tokens.size() < 2 || !str2num<uint32_t>(tokens[0], idx)) {
+                return false;
+            }
+            icol_floats.push_back(idx);
+            name_floats.push_back(tokens[1]);
+        }
+        isExtended |= !icol_floats.empty();
+        return true;
+    }
+
+    bool addExtraStr(std::vector<std::string>& annoStrs) {
+        for (const auto& anno : annoStrs) {
+            uint32_t idx, len;
+            std::vector<std::string> tokens;
+            split(tokens, ":", anno);
+            if (tokens.size() < 3 || !str2num<uint32_t>(tokens[0], idx) || !str2num<uint32_t>(tokens[2], len)) {
+                return false;
+            }
+            icol_strs.push_back(idx);
+            name_strs.push_back(tokens[1]);
+            str_lens.push_back(len);
+        }
+        isExtended |= !icol_strs.empty();
+        return true;
+    }
+
     bool checkExtraColumns() {
         if (icol_strs.size() != str_lens.size()) {
             return false;
@@ -156,6 +202,14 @@ struct lineParser {
 
     void setFeatureDict(const std::unordered_map<std::string, uint32_t>& dict) {
         featureDict = dict;
+        isFeatureDict = true;
+    }
+
+    void setFeatureDict(const std::vector<std::string>& featureList) {
+        featureDict.clear();
+        for (size_t i = 0; i < featureList.size(); ++i) {
+            featureDict[featureList[i]] = static_cast<uint32_t>(i);
+        }
         isFeatureDict = true;
     }
 

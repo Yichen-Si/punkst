@@ -11,7 +11,7 @@ void PoissonLog1pNMF::set_nthreads(int nThreads) {
     }
     nThreads_ = int( tbb::global_control::active_value(
             tbb::global_control::max_allowed_parallelism) );
-    notice("Requested %d threads, actual number of threads: %d", nThreads, nThreads_);
+    notice("PoissonLog1pNMF: Requested %d threads, actual number of threads: %d", nThreads, nThreads_);
 }
 
 void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
