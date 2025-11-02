@@ -1,4 +1,7 @@
 #include "tiles2minibatch.hpp"
+#include "pixdecode.hpp"
+#include <cmath>
+#include <numeric>
 #include <fcntl.h>
 
 int32_t Tiles2MinibatchBase::loadAnchors(const std::string& anchorFile) {
@@ -41,10 +44,64 @@ int32_t Tiles2MinibatchBase::loadAnchors(const std::string& anchorFile) {
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::parseOneTile(
-    TileData<T>& tileData, TileKey tile,
-    lineParserUnival& lineParser, int32_t M_, bool useExtended_,
-    const std::vector<FieldDef>& schema_, size_t recordSize_) {
+int32_t Tiles2MinibatchBase::buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, Minibatch& minibatch, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
+    anchors.clear();
+    documents.clear();
+
+    std::map<std::tuple<int32_t, int32_t, int32_t, int32_t>, std::unordered_map<uint32_t, float>> hexAggregation;
+    auto assign_pt = [&](const auto& pt) {
+        for (int32_t ir = 0; ir < nMoves_; ++ir) {
+            for (int32_t ic = 0; ic < nMoves_; ++ic) {
+                int32_t hx, hy;
+                hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1. / nMoves_, ir * 1. / nMoves_);
+                auto key = std::make_tuple(hx, hy, ic, ir);
+                hexAggregation[key][pt.idx] += pt.ct;
+            }
+        }
+    };
+    if (useExtended_) {
+        for (const auto& pt : tileData.extPts) {
+            assign_pt(pt.recBase);
+        }
+    } else {
+        for (const auto& pt : tileData.pts) {
+            assign_pt(pt);
+        }
+    }
+
+    for (auto& entry : hexAggregation) {
+        float sum = std::accumulate(entry.second.begin(), entry.second.end(), 0.0, [](float acc, const auto& p) { return acc + p.second; });
+        if (sum < minCount) {
+            continue;
+        }
+        SparseObs obs;
+        Document& doc = obs.doc;
+        obs.ct_tot = sum;
+        for (auto& featurePair : entry.second) {
+            doc.ids.push_back(featurePair.first);
+            doc.cnts.push_back(featurePair.second);
+        }
+        if (lineParserPtr->weighted) {
+            for (size_t i = 0; i < doc.ids.size(); ++i) {
+                doc.cnts[i] *= lineParserPtr->weights[doc.ids[i]];
+            }
+        }
+        documents.push_back(std::move(obs));
+        // Unpack the key to get hex coordinates and move indices
+        const auto& key = entry.first;
+        int32_t hx = std::get<0>(key);
+        int32_t hy = std::get<1>(key);
+        int32_t ic = std::get<2>(key);
+        int32_t ir = std::get<3>(key);
+        float x, y;
+        hexGrid_.axial_to_cart(x, y, hx, hy, ic * 1. / nMoves_, ir * 1. / nMoves_);
+        anchors.emplace_back(x, y);
+    }
+    return documents.size();
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase::parseOneTile(TileData<T>& tileData, TileKey tile) {
     std::unique_ptr<BoundedReadline> iter;
     try {
         iter = tileReader.get_tile_iterator(tile.row, tile.col);
@@ -54,13 +111,16 @@ int32_t Tiles2MinibatchBase::parseOneTile(
     }
     tileData.clear();
     tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    if (M_ == 0) {
+        M_ = lineParserPtr->featureDict.size();
+    }
 
     std::string line;
     int32_t npt = 0;
     if (useExtended_) {
         while (iter->next(line)) {
             RecordExtendedT<T> recExt;
-            int32_t idx = lineParser.parse(recExt, line);
+            int32_t idx = lineParserPtr->parse(recExt, line);
             if (idx < -1) {
                 error("Error parsing line: %s", line.c_str());
             }
@@ -85,7 +145,7 @@ int32_t Tiles2MinibatchBase::parseOneTile(
     } else {
         while (iter->next(line)) {
             RecordT<T> rec;
-            int32_t idx = lineParser.parse<T>(rec, line);
+            int32_t idx = lineParserPtr->parse<T>(rec, line);
             if (idx < -1) {
                 error("Error parsing line: %s", line.c_str());
             }
@@ -142,8 +202,7 @@ int32_t Tiles2MinibatchBase::parseBoundaryFile(TileData<T>& tileData, std::share
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr,
-    const std::vector<FieldDef>& schema_, size_t recordSize_) {
+int32_t Tiles2MinibatchBase::parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
     std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
     std::ifstream ifs;
     if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
@@ -386,6 +445,113 @@ Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResult(cons
     return result;
 }
 
+template<typename T>
+int32_t Tiles2MinibatchBase::buildMinibatchCore( TileData<T>& tileData,
+    std::vector<cv::Point2f>& anchors, Minibatch& minibatch,
+    double pixelResolution, double distR, double distNu) {
+
+    if (minibatch.n <= 0) {
+        return 0;
+    }
+    assert(distR > 0.0 && distNu > 0.0);
+
+    PointCloudCV<float> pc;
+    pc.pts = std::move(anchors);
+    kd_tree_cv2f_t kdtree(2, pc, {10});
+    std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
+
+    const float res = static_cast<float>(pixelResolution);
+    const float radius = static_cast<float>(distR);
+    const float l2radius = radius * radius;
+    const float nu = static_cast<float>(distNu);
+
+    std::vector<Eigen::Triplet<float>> tripletsMtx;
+    std::vector<Eigen::Triplet<float>> tripletsWij;
+    tripletsMtx.reserve(tileData.pts.size() + tileData.extPts.size());
+    tripletsWij.reserve(tileData.pts.size() + tileData.extPts.size());
+
+    tileData.coords.clear();
+
+    std::unordered_map<uint64_t, std::pair<std::unordered_map<uint32_t, float>, std::vector<uint32_t>>> pixAgg;
+    uint32_t idxOriginal = 0;
+
+    if (useExtended_) {
+        tileData.orgpts2pixel.assign(tileData.extPts.size(), -1);
+        for (const auto& pt : tileData.extPts) {
+            int32_t x = static_cast<int32_t>(pt.recBase.x / res);
+            int32_t y = static_cast<int32_t>(pt.recBase.y / res);
+            uint64_t key = (static_cast<uint64_t>(x) << 32) | static_cast<uint32_t>(y);
+            pixAgg[key].first[pt.recBase.idx] += pt.recBase.ct;
+            pixAgg[key].second.push_back(idxOriginal++);
+        }
+    } else {
+        tileData.orgpts2pixel.assign(tileData.pts.size(), -1);
+        for (const auto& pt : tileData.pts) {
+            int32_t x = static_cast<int32_t>(pt.x / res);
+            int32_t y = static_cast<int32_t>(pt.y / res);
+            uint64_t key = (static_cast<uint64_t>(x) << 32) | static_cast<uint32_t>(y);
+            pixAgg[key].first[pt.idx] += pt.ct;
+            pixAgg[key].second.push_back(idxOriginal++);
+        }
+    }
+
+    tileData.coords.reserve(pixAgg.size());
+
+    uint32_t npt = 0;
+    for (auto& kv : pixAgg) {
+        int32_t px = static_cast<int32_t>(kv.first >> 32);
+        int32_t py = static_cast<int32_t>(kv.first & 0xFFFFFFFFu);
+        float xy[2] = {px * res, py * res};
+        size_t n = kdtree.radiusSearch(xy, l2radius, indices_dists);
+        if (n == 0) {
+            continue;
+        }
+
+        if (lineParserPtr->weighted) {
+            for (auto& kv2 : kv.second.first) {
+                float val = kv2.second;
+                if (kv2.first < lineParserPtr->weights.size()) {
+                    val *= static_cast<float>(lineParserPtr->weights[kv2.first]);
+                }
+                tripletsMtx.emplace_back(npt, static_cast<int>(kv2.first), val);
+            }
+        } else {
+            for (auto& kv2 : kv.second.first) {
+                tripletsMtx.emplace_back(npt, static_cast<int>(kv2.first), kv2.second);
+            }
+        }
+
+        tileData.coords.emplace_back(static_cast<double>(xy[0]), static_cast<double>(xy[1]));
+        for (auto originalIdx : kv.second.second) {
+            tileData.orgpts2pixel[originalIdx] = static_cast<int32_t>(npt);
+        }
+
+        for (size_t i = 0; i < n; ++i) {
+            uint32_t anchorIdx = indices_dists[i].first;
+            float dist = indices_dists[i].second;
+            float weightVal = std::max(std::min(1.f - std::pow(dist / radius, nu), 0.95f), 0.05f);
+            tripletsWij.emplace_back(npt, static_cast<int>(anchorIdx), weightVal);
+        }
+
+        ++npt;
+    }
+
+    minibatch.N = static_cast<int32_t>(npt);
+    minibatch.M = M_;
+    minibatch.mtx.resize(npt, M_);
+    minibatch.mtx.setFromTriplets(tripletsMtx.begin(), tripletsMtx.end());
+    minibatch.mtx.makeCompressed();
+
+    minibatch.wij.resize(npt, minibatch.n);
+    minibatch.wij.setFromTriplets(tripletsWij.begin(), tripletsWij.end());
+    minibatch.wij.makeCompressed();
+
+    minibatch.psi = minibatch.wij;
+    rowNormalizeInPlace(minibatch.psi);
+
+    return minibatch.N;
+}
+
 void Tiles2MinibatchBase::writeHeaderToJson() {
     std::string jsonFile = outPref + ".json";
     std::ofstream jsonOut(jsonFile);
@@ -460,6 +626,27 @@ void Tiles2MinibatchBase::writerWorker() {
     }
 }
 
+void Tiles2MinibatchBase::setExtendedSchema(size_t offset) {
+    if (!lineParserPtr->isExtended) {
+        useExtended_ = false; return;
+    }
+    useExtended_ = true;
+    schema_.clear();
+    size_t n_ints = lineParserPtr->icol_ints.size();
+    size_t n_floats = lineParserPtr->icol_floats.size();
+    size_t n_strs = lineParserPtr->icol_strs.size();
+    for (size_t i = 0; i < n_ints; ++i)
+        schema_.push_back({FieldType::INT32, sizeof(int32_t), 0});
+    for (size_t i = 0; i < n_floats; ++i)
+        schema_.push_back({FieldType::FLOAT, sizeof(float), 0});
+    for (size_t i = 0; i < n_strs; ++i)
+        schema_.push_back({FieldType::STRING, lineParserPtr->str_lens[i], 0});
+    for (auto &f : schema_) {
+        f.offset = offset; offset += f.size;
+    }
+    recordSize_ = offset;
+}
+
 void Tiles2MinibatchBase::setupOutput() {
     #if !defined(_WIN32)
         // ensure includes present
@@ -498,14 +685,18 @@ void Tiles2MinibatchBase::closeOutput() {
 }
 
 // Explicit instantiations for base templated helpers
-template int32_t Tiles2MinibatchBase::parseOneTile<int32_t>(TileData<int32_t>&, TileKey, lineParserUnival&, int32_t, bool, const std::vector<FieldDef>&, size_t);
-template int32_t Tiles2MinibatchBase::parseOneTile<float>(TileData<float>&, TileKey, lineParserUnival&, int32_t, bool, const std::vector<FieldDef>&, size_t);
+
+template int32_t Tiles2MinibatchBase::buildAnchors<int32_t>(TileData<int32_t>&, std::vector<cv::Point2f>&, std::vector<SparseObs>&, Minibatch&, HexGrid&, int32_t, double);
+template int32_t Tiles2MinibatchBase::buildAnchors<float>(TileData<float>&, std::vector<cv::Point2f>&, std::vector<SparseObs>&, Minibatch&, HexGrid&, int32_t, double);
+
+template int32_t Tiles2MinibatchBase::parseOneTile<int32_t>(TileData<int32_t>&, TileKey);
+template int32_t Tiles2MinibatchBase::parseOneTile<float>(TileData<float>&, TileKey);
 
 template int32_t Tiles2MinibatchBase::parseBoundaryFile<int32_t>(TileData<int32_t>&, std::shared_ptr<BoundaryBuffer>);
 template int32_t Tiles2MinibatchBase::parseBoundaryFile<float>(TileData<float>&, std::shared_ptr<BoundaryBuffer>);
 
-template int32_t Tiles2MinibatchBase::parseBoundaryFileExtended<int32_t>(TileData<int32_t>&, std::shared_ptr<BoundaryBuffer>, const std::vector<FieldDef>&, size_t);
-template int32_t Tiles2MinibatchBase::parseBoundaryFileExtended<float>(TileData<float>&, std::shared_ptr<BoundaryBuffer>, const std::vector<FieldDef>&, size_t);
+template int32_t Tiles2MinibatchBase::parseBoundaryFileExtended<int32_t>(TileData<int32_t>&, std::shared_ptr<BoundaryBuffer>);
+template int32_t Tiles2MinibatchBase::parseBoundaryFileExtended<float>(TileData<float>&, std::shared_ptr<BoundaryBuffer>);
 
 template int32_t Tiles2MinibatchBase::parseBoundaryMemoryStandard<int32_t>(TileData<int32_t>&, InMemoryStorageStandard<int32_t>*, uint32_t);
 template int32_t Tiles2MinibatchBase::parseBoundaryMemoryStandard<float>(TileData<float>&, InMemoryStorageStandard<float>*, uint32_t);
@@ -518,3 +709,6 @@ template Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelRe
 
 template Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResult<int32_t>(const TileData<int32_t>&, const MatrixXf&, const Eigen::MatrixXi&, int);
 template Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResult<float>(const TileData<float>&, const MatrixXf&, const Eigen::MatrixXi&, int);
+
+template int32_t Tiles2MinibatchBase::buildMinibatchCore<int32_t>(TileData<int32_t>&, std::vector<cv::Point2f>&, Minibatch&, double, double, double);
+template int32_t Tiles2MinibatchBase::buildMinibatchCore<float>(TileData<float>&, std::vector<cv::Point2f>&, Minibatch&, double, double, double);

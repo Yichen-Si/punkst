@@ -159,6 +159,42 @@ public:
         }
         return doc_topic_distr;
     }
+    RowMajorMatrixXd transform(const std::vector<SparseObs>& docs) {
+        int n_docs = docs.size();
+        RowMajorMatrixXd doc_topic_distr(n_docs, n_topics_);
+        if (nThreads_ == 1) {
+            if (algo_ == InferenceType::SCVB0) {
+                for (int d = 0; d < n_docs; ++d) {
+                    VectorXd hatNk;
+                    scvb0_fit_one_document(hatNk, docs[d].doc);
+                    doc_topic_distr.row(d) = hatNk.transpose();
+                }
+            } else {
+                for (int d = 0; d < n_docs; ++d) {
+                    VectorXd updated_doc, exp_doc;
+                    int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d].doc);
+                    doc_topic_distr.row(d) = updated_doc.transpose();
+                }
+            }
+            return doc_topic_distr;
+        }
+        if (algo_ == InferenceType::SCVB0) {
+            tbb::parallel_for(0, n_docs, [&](int d) {
+                // Update document d using the helper function.
+                VectorXd hatNk;
+                scvb0_fit_one_document(hatNk, docs[d].doc);
+                doc_topic_distr.row(d) = hatNk.transpose();
+            });
+        } else {
+            tbb::parallel_for(0, n_docs, [&](int d) {
+                // Update document d using the helper function.
+                VectorXd updated_doc, exp_doc;
+                int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d].doc);
+                doc_topic_distr.row(d) = updated_doc.transpose();
+            });
+        }
+        return doc_topic_distr;
+    }
 
     // SVB only
     // Compute the score (variational bound) for the given documents

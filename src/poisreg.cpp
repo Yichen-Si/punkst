@@ -248,7 +248,7 @@ ArrayXd PoisRegSparseProblem::residual(const VectorXd& bvec) const {
     ArrayXd mu = (A * bvec).array();
     if (o) mu += o->array();
     mu = ((mu.exp() - 1.0) * c.array()).max(0.);
-    Eigen::Map<const Eigen::Array<uint32_t, Eigen::Dynamic, 1>> ids_map(y.ids.data(), n);
+    Eigen::Map<const Eigen::Array<uint32_t, Eigen::Dynamic, 1>> ids_map(ids.data(), n);
     Eigen::ArrayXd mu_nz = mu(ids_map.cast<Eigen::Index>());
     mu(ids_map.cast<Eigen::Index>()) = (yvec.array() - mu_nz).square() / mu_nz.max(1e-5);
     return mu;

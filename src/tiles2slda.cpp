@@ -1,22 +1,21 @@
 #include "tiles2slda.hpp"
+#include <algorithm>
 
 template<typename T>
 Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
-        const std::string& _outPref, const std::string& _tmpDir,
-        LatentDirichletAllocation& _lda,
-        TileReader& tileReader, lineParserUnival& _lineParser,
-        HexGrid& _hexGrid, int32_t _nMoves,
+        const std::string& outPref, const std::string& tmpDir,
+        LatentDirichletAllocation& lda,
+        TileReader& tileReader, lineParserUnival& lineParser,
+        HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed,
-        double c, double h, double res,
-        int32_t M, int32_t N, int32_t k,
+        double c, double h, double res, int32_t N, int32_t k,
         int32_t verbose, int32_t debug)
-    : Tiles2MinibatchBase(nThreads, r + _hexGrid.size, tileReader, _outPref, &_tmpDir),
-      distR(r), lda(_lda), lineParser(_lineParser), hexGrid(_hexGrid), nMoves(_nMoves), anchorMinCount(c), pixelResolution(res), M_(M), debug_(debug)
+    : Tiles2MinibatchBase(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir),
+      distR_(r), lda_(lda), lineParser_(lineParser), hexGrid_(hexGrid), nMoves_(nMoves), anchorMinCount_(c), pixelResolution_(res), debug_(debug)
 {
+    lineParserPtr = &lineParser_;
+    useExtended_ = lineParser_.isExtended;
     topk_ = k;
-    lineParserPtr = &this->lineParser;
-    useExtended_ = this->lineParser.isExtended;
-    outputOriginalData = false;
 
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
         assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
@@ -25,34 +24,33 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
     } else {
         error("%s: Unsupported coordinate type", __func__);
     }
-    if (pixelResolution <= 0) {
-        pixelResolution = 1;
+    if (pixelResolution_ <= 0) {
+        pixelResolution_ = 1;
     }
     if (useExtended_) {
-        setExtendedSchema();
+        Tiles2MinibatchBase::setExtendedSchema(sizeof(RecordT<T>));
     }
-    weighted = lineParser.weighted;
-    M_ = lda.get_n_features();
-    if (lineParser.isFeatureDict) {
-        assert((M_ == lineParser.featureDict.size()) && "Feature number does not match");
+    M_ = lda_.get_n_features();
+    if (lineParser_.isFeatureDict) {
+        assert((M_ == lineParser_.featureDict.size()) && "Feature number does not match");
         featureNames.resize(M_);
-        for (const auto& entry : lineParser.featureDict) {
+        for (const auto& entry : lineParser_.featureDict) {
             featureNames[entry.second] = entry.first;
         }
-    } else if (lineParser.weighted) {
-        assert(M_ == lineParser.weights.size() && "Feature number does not match");
+    } else if (lineParser_.weighted) {
+        assert(M_ == lineParser_.weights.size() && "Feature number does not match");
     }
-    lda.set_nthreads(1); // because we parallelize by tile
-    K_ = lda.get_n_topics();
-    distNu = std::log(0.5) / std::log(h);
+    lda_.set_nthreads(1); // because we parallelize by tile
+    K_ = lda_.get_n_topics();
+    distNu_ = std::log(0.5) / std::log(h);
     if (N <= 0) {
-        N = lda.get_N_global() * 100;
+        N = lda_.get_N_global() * 100;
     }
-    pseudobulk = MatrixXf::Zero(K_, M_);
-    slda.init(K_, M_, N, seed);
-    slda.init_global_parameter(lda.get_model());
-    slda.verbose_ = verbose;
-    slda.debug_ = debug;
+    pseudobulk_ = MatrixXf::Zero(K_, M_);
+    slda_.init(K_, M_, N, seed);
+    slda_.init_global_parameter(lda_.get_model());
+    slda_.verbose_ = verbose;
+    slda_.debug_ = debug;
     if (featureNames.size() == 0) {
         featureNames.resize(M_);
         for (int32_t i = 0; i < M_; ++i) {
@@ -62,8 +60,8 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
 
     if (debug_ > 0) {
         std::cout << "Check model initialization\n" << std::fixed << std::setprecision(2);
-        const auto& lambda = slda.get_lambda();
-        const auto& Elog_beta = slda.get_Elog_beta();
+        const auto& lambda = slda_.get_lambda();
+        const auto& Elog_beta = slda_.get_Elog_beta();
         for (int32_t i = 0; i < std::min(3, K_) ; ++i) {
             std::cout << "\tLambda " << i << ": ";
             for (int32_t j = 0; j < std::min(5, M_); ++j) {
@@ -131,7 +129,7 @@ void Tiles2SLDA<T>::run() {
     }
 
     resultQueue.set_done();
-notice("%s: all workers done, waiting for writer to finish", __func__);
+    notice("%s: all workers done, waiting for writer to finish", __func__);
 
     writer.join();
     closeOutput();
@@ -141,60 +139,13 @@ notice("%s: all workers done, waiting for writer to finish", __func__);
 
 template<typename T>
 int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
-     anchors.clear();
-    std::vector<Document> documents;
-    std::map<std::tuple<int32_t, int32_t, int32_t, int32_t>, std::unordered_map<uint32_t, float>> hexAggregation;
-    auto assign_pt = [&](const auto& pt) {
-        for (int32_t ir = 0; ir < nMoves; ++ir) {
-            for (int32_t ic = 0; ic < nMoves; ++ic) {
-                int32_t hx, hy;
-                hexGrid.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1. / nMoves, ir * 1. / nMoves);
-                auto key = std::make_tuple(hx, hy, ic, ir);
-                hexAggregation[key][pt.idx] += pt.ct;
-            }
-        }
-    };
-    if (useExtended_) {
-        for (const auto& pt : tileData.extPts) {
-            assign_pt(pt.recBase);
-        }
-    } else {
-        for (const auto& pt : tileData.pts) {
-            assign_pt(pt);
-        }
-    }
-
-    for (auto& entry : hexAggregation) {
-        float sum = std::accumulate(entry.second.begin(), entry.second.end(), 0.0, [](float acc, const auto& p) { return acc + p.second; });
-        if (sum < anchorMinCount) {
-            continue;
-        }
-        Document doc;
-        for (auto& featurePair : entry.second) {
-            doc.ids.push_back(featurePair.first);
-            doc.cnts.push_back(featurePair.second);
-        }
-        if (weighted) {
-            for (size_t i = 0; i < doc.ids.size(); ++i) {
-                doc.cnts[i] *= lineParser.weights[doc.ids[i]];
-            }
-        }
-        documents.push_back(std::move(doc));
-        // Unpack the key to get hex coordinates and move indices
-        const auto& key = entry.first;
-        int32_t hx = std::get<0>(key);
-        int32_t hy = std::get<1>(key);
-        int32_t ic = std::get<2>(key);
-        int32_t ir = std::get<3>(key);
-        float x, y;
-        hexGrid.axial_to_cart(x, y, hx, hy, ic * 1. / nMoves, ir * 1. / nMoves);
-        anchors.emplace_back(x, y);
-    }
-
+    std::vector<SparseObs> documents;
+    Tiles2MinibatchBase::buildAnchors(tileData, anchors, documents, minibatch, hexGrid_, nMoves_, anchorMinCount_);
     if (documents.empty()) {
         return 0;
     }
-    minibatch.gamma = lda.transform(documents).template cast<float>();
+
+    minibatch.gamma = lda_.transform(documents).template cast<float>();
     // TODO: need to test if scaling/normalizing gamma is better
     // scale each row so that the mean is 1
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
@@ -204,97 +155,22 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2
         }
     }
     minibatch.n = documents.size();
-    minibatch.M = M_;
     return anchors.size();
 }
 
 template<typename T>
 int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
+    int32_t nPixels = buildMinibatchCore(
+        tileData, anchors, minibatch,
+        pixelResolution_, distR_, distNu_);
 
-    PointCloudCV<float> pc;
-    pc.pts = std::move(anchors);
-    kd_tree_cv2f_t kdtree(2, pc, {10});
-    std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
+    if (nPixels <= 0) {
+        return nPixels;
+    }
 
-    float l2radius = distR * distR;
-    std::vector<Eigen::Triplet<float>> triplets4mtx;
-    std::vector<Eigen::Triplet<float>> triplets4wij;
-    std::vector<Eigen::Triplet<float>> triplets4psi;
-    uint32_t npt = 0;
-    std::unordered_map<uint64_t, std::pair<std::unordered_map<uint32_t, float>, std::vector<uint32_t>> > pixAgg;
-    uint32_t i = 0;
-    if (useExtended_) {
-        tileData.orgpts2pixel.resize(tileData.extPts.size(), -1);
-        for (const auto& pt : tileData.extPts) {
-            int32_t x = int32_t (pt.recBase.x / pixelResolution);
-            int32_t y = int32_t (pt.recBase.y / pixelResolution);
-            uint64_t key = (static_cast<uint64_t>(x) << 32) | (static_cast<uint32_t>(y));
-            pixAgg[key].first[pt.recBase.idx] += pt.recBase.ct;
-            pixAgg[key].second.push_back(i); // list of original points' indices
-            i++;
-        }
-    } else {
-        tileData.orgpts2pixel.resize(tileData.pts.size(), -1);
-        for (const auto& pt : tileData.pts) {
-            int32_t x = int32_t (pt.x / pixelResolution);
-            int32_t y = int32_t (pt.y / pixelResolution);
-            uint64_t key = (static_cast<uint64_t>(x) << 32) | (static_cast<uint32_t>(y));
-            pixAgg[key].first[pt.idx] += pt.ct;
-            pixAgg[key].second.push_back(i); // list of original points' indices
-            i++;
-        }
-    }
-    // vector of unique coordinates
-    tileData.coords.reserve(pixAgg.size());
-    for (auto & kv : pixAgg) {
-        int32_t x = static_cast<int32_t>(kv.first >> 32);
-        int32_t y = static_cast<int32_t>(kv.first & 0xFFFFFFFF);
-        float xy[2] = {x * pixelResolution, y * pixelResolution};
-        size_t n = kdtree.radiusSearch(xy, l2radius, indices_dists);
-        if (n == 0) {
-            continue;
-        }
-        if (weighted) {
-            for (auto & kv2 : kv.second.first) {
-                kv2.second *= lineParser.weights[kv2.first];
-                triplets4mtx.emplace_back(npt, kv2.first, kv2.second);
-            }
-        } else {
-            for (auto & kv2 : kv.second.first) {
-                triplets4mtx.emplace_back(npt, kv2.first, kv2.second);
-            }
-        }
-        tileData.coords.emplace_back(xy[0], xy[1]);
-        for (auto & v : kv.second.second) {
-            tileData.orgpts2pixel[v] = npt;
-        }
-        std::vector<float> dvec(n, 0);
-        for (size_t i = 0; i < n; ++i) {
-            uint32_t idx = indices_dists[i].first;
-            float dist = indices_dists[i].second;
-            dist = std::max(std::min(1. - pow(dist / distR, distNu), 0.95), 0.05);
-            dvec[i] = dist;
-            triplets4wij.emplace_back(npt, idx, logit(dist));
-        }
-        float rowsum = std::accumulate(dvec.begin(), dvec.end(), 0.0);
-        for (size_t i = 0; i < n; ++i) {
-            triplets4psi.emplace_back(npt, indices_dists[i].first, dvec[i] / rowsum);
-        }
-        npt++;
-    }
-    minibatch.N = npt;
-    minibatch.mtx.resize(npt, M_);
-    minibatch.mtx.setFromTriplets(triplets4mtx.begin(), triplets4mtx.end());
-    minibatch.mtx.makeCompressed();
-    triplets4mtx.clear();
-    minibatch.logitwij.resize(npt, minibatch.n);
-    minibatch.logitwij.setFromTriplets(triplets4wij.begin(), triplets4wij.end());
-    minibatch.logitwij.makeCompressed();
-    triplets4wij.clear();
-    minibatch.psi.resize(npt, minibatch.n);
-    minibatch.psi.setFromTriplets(triplets4psi.begin(), triplets4psi.end());
-    minibatch.psi.makeCompressed();
-    return npt;
+    minibatch.wij.unaryExpr([](float val) {return logit(val);});
+
+    return nPixels;
 }
 
 template<typename T>
@@ -313,7 +189,7 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
 
     // 1 Initialize hexagonal lattice
     vec2f_t lattice;
-    double gridDist = hexGrid.size/nMoves;
+    double gridDist = hexGrid_.size/nMoves_;
     double buff = gridDist / 4.;
     hex_grid_cart<float>(lattice, tileData.xmin + buff, tileData.xmax - buff, tileData.ymin + buff, tileData.ymax - buff, gridDist);
     // 2 Remove lattice points too close to any fixed anchors
@@ -338,7 +214,7 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
     std::vector<std::unordered_map<uint32_t, float>> docAgg;
 
     // 3 Iterative refinement (weighted Lloyd's / K-means)
-    for (int32_t t = 0; t < nLloydIter; ++t) {
+    for (int32_t t = 0; t < nLloydIter_; ++t) {
         // Build a k-d tree on the current anchor positions
         PointCloudCV<float> pc;
         pc.pts = anchors;
@@ -386,13 +262,13 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
         if (docAgg[j].empty()) continue;
         float sum = std::accumulate(docAgg[j].begin(), docAgg[j].end(), 0.0,
                                     [](float a, const auto& b) { return a + b.second; });
-        if (sum < anchorMinCount) continue;
+        if (sum < anchorMinCount_) continue;
         finalAnchors.push_back(anchors[j]);
         Document doc;
-        if (weighted) {
+        if (lineParser_.weighted) {
             for (const auto& item : docAgg[j]) {
                 doc.ids.push_back(item.first);
-                doc.cnts.push_back(item.second * lineParser.weights[item.first]);
+                doc.cnts.push_back(item.second * lineParser_.weights[item.first]);
             }
         } else {
             for (const auto& item : docAgg[j]) {
@@ -405,7 +281,7 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
     if (docs.empty()) return 0;
 
     anchors = std::move(finalAnchors);
-    minibatch.gamma = lda.transform(docs).template cast<float>();
+    minibatch.gamma = lda_.transform(docs).template cast<float>();
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
         float sum = minibatch.gamma.row(i).sum();
         if (sum > 0) {
@@ -426,8 +302,8 @@ void Tiles2SLDA<T>::tileWorker(int threadId) {
         tile = tileTicket.first;
         ticket = tileTicket.second;
         TileData<T> tileData;
-        int32_t ret = Tiles2MinibatchBase::parseOneTile<T>(tileData, tile, lineParser, M_, useExtended_, schema_, recordSize_);
-        notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __FUNCTION__, threadId, ticket, tile.row, tile.col, ret);
+        int32_t ret = Tiles2MinibatchBase::parseOneTile<T>(tileData, tile);
+        notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __func__, threadId, ticket, tile.row, tile.col, ret);
         if (ret <= 10) {
             continue;
         }
@@ -460,14 +336,14 @@ void Tiles2SLDA<T>::boundaryWorker(int threadId) {
         } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
             // --- DISK I/O PATH ---
             if (useExtended_) {
-                ret = Tiles2MinibatchBase::parseBoundaryFileExtended(tileData, bufferPtr, schema_, recordSize_);
+                ret = Tiles2MinibatchBase::parseBoundaryFileExtended(tileData, bufferPtr);
             } else {
                 ret = Tiles2MinibatchBase::parseBoundaryFile(tileData, bufferPtr);
             }
             // Clean up the temporary file
             std::remove(filePath->c_str());
         }
-        notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __FUNCTION__, threadId, ticket, bufferPtr->key, ret);
+        notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __func__, threadId, ticket, bufferPtr->key, ret);
         vec2f_t* anchorPtr = nullptr;
         if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
             anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];
@@ -498,10 +374,10 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     if (nPixels < 10) {
         return;
     }
-    auto smtx = slda.do_e_step(minibatch, true);
+    auto smtx = slda_.do_e_step(minibatch, true);
     {
-        std::lock_guard<std::mutex> lock(pseudobulkMutex);
-        pseudobulk += smtx;
+        std::lock_guard<std::mutex> lock(pseudobulkMutex_);
+        pseudobulk_ += smtx;
         if (debug_) {
             std::cout << "Thread " << threadId << " updated pseudobulk.\n";
             std::cout << "    Peek: " << std::fixed << std::setprecision(0);
@@ -512,7 +388,7 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
                 std::cout << "\n    ";
             }
             std::cout << "    Current sums: ";
-            auto rowsums = pseudobulk.rowwise().sum();
+            auto rowsums = pseudobulk_.rowwise().sum();
             // sort rowsums in descending order
             std::vector<float> sortedRowsums(rowsums.size());
             for (int32_t i = 0; i < rowsums.size(); ++i) {
@@ -552,27 +428,15 @@ void Tiles2SLDA<T>::writePseudobulkToTsv() {
     std::ofstream oss(pseudobulkFile, std::ios::out);
     if (!oss) error("Error opening pseudobulk output file: %s", pseudobulkFile.c_str());
     oss << "Feature";
-    const auto factorNames = lda.get_topic_names();
+    const auto factorNames = lda_.get_topic_names();
     for (int32_t i = 0; i < K_; ++i) oss << "\t" << factorNames[i];
     oss << "\n" << std::setprecision(probDigits) << std::fixed;
     for (int32_t i = 0; i < M_; ++i) {
         oss << featureNames[i];
-        for (int32_t j = 0; j < K_; ++j) oss << "\t" << pseudobulk(j, i);
+        for (int32_t j = 0; j < K_; ++j) oss << "\t" << pseudobulk_(j, i);
         oss << "\n";
     }
     oss.close();
-}
-
-template<typename T>
-void Tiles2SLDA<T>::setExtendedSchema() {
-    if (!lineParser.isExtended) { useExtended_ = false; return; }
-    useExtended_ = true; schema_.clear(); size_t offset = sizeof(RecordT<T>);
-    size_t n_ints = lineParser.icol_ints.size(); size_t n_floats = lineParser.icol_floats.size(); size_t n_strs = lineParser.icol_strs.size();
-    for (size_t i = 0; i < n_ints; ++i) schema_.push_back({FieldType::INT32, sizeof(int32_t), 0});
-    for (size_t i = 0; i < n_floats; ++i) schema_.push_back({FieldType::FLOAT, sizeof(float), 0});
-    for (size_t i = 0; i < n_strs; ++i) schema_.push_back({FieldType::STRING, lineParser.str_lens[i], 0});
-    for (auto &f : schema_) { f.offset = offset; offset += f.size; }
-    recordSize_ = offset;
 }
 
 // explicit instantiations

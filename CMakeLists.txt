@@ -72,7 +72,8 @@ set(SOURCE_FILES
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
     script/lda_training.cpp
-    src/slda.hpp
+    src/pixdecode.hpp
+    src/slda.cpp
     src/tiles2minibatch.hpp
     src/tiles2minibatch.cpp
     src/tiles2slda.hpp
@@ -98,6 +99,8 @@ set(SOURCE_FILES
     script/draw_pixel_genes.cpp
     src/vst.hpp
     script/feature_selection.cpp
+    src/tiles2nmf.hpp
+    src/tiles2nmf.cpp
     )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

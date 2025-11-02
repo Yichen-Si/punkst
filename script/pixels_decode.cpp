@@ -209,7 +209,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("Error in input tiles: %s", inTsv.c_str());
         }
         if (coordsAreInt) {
-            Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+            Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug);
             tiles2slda.setOutputOptions(outputOritinalData, useTicketSystem);
             tiles2slda.setFeatureNames(featureNames);
             tiles2slda.setOutputCoordDigits(floatCoordDigits);
@@ -220,7 +220,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             }
             tiles2slda.run();
         } else {
-            Tiles2SLDA<float> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, nFeatures, 0, topK, verbose, debug);
+            Tiles2SLDA<float> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug);
             tiles2slda.setOutputOptions(outputOritinalData, useTicketSystem);
             tiles2slda.setOutputCoordDigits(floatCoordDigits);
             tiles2slda.setOutputProbDigits(probDigits);

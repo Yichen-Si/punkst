@@ -293,7 +293,7 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const 
         return RowMajorMatrixXd(N, K_);
     }
     res.clear();
-    res.reserve(N);
+    res.resize(N);
     size_t grainsize = std::min(64, std::max(1, int(N / (2 * nThreads_))) );
     RowMajorMatrixXd new_theta(N, K_);
     ArrayXd feature_residuals;
@@ -316,13 +316,12 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const 
             }
             VectorXd b;
             double obj;
-            MLEStats stats;
+            MLEStats& stats = res[i];
             if (exact_) {
                 obj = pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_, local_fres_ptr);
             } else {
                 obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_, local_fres_ptr);
             }
-            res.push_back(std::move(stats));
             new_theta.row(i) = b.transpose();
         }
         if (fres_ptr) {

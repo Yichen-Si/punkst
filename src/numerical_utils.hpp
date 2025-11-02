@@ -170,12 +170,60 @@ void rowwiseSoftmax(Eigen::MatrixBase<Derived>& mat)
 inline double expit(double x) {
     return 1.0 / (1.0 + std::exp(-x));
 }
+inline float expit(float x) {
+    return 1.0f / (1.0f + std::exp(-x));
+}
 
 inline double logit(double x) {
     if (x <= 0.0 || x >= 1.0) {
         throw std::out_of_range("Input to logit must be in (0, 1)");
     }
     return std::log(x / (1.0 - x));
+}
+inline float logit(float x) {
+    if (x <= 0.0f || x >= 1.0f) {
+        throw std::out_of_range("Input to logit must be in (0, 1)");
+    }
+    return std::log(x / (1.0f - x));
+}
+
+template <typename Scalar>
+void colNormalizeInPlace(Eigen::SparseMatrix<Scalar, Eigen::RowMajor>& mat) {
+    // 1. Compute column sums: colSums = 1^T * mat
+    Eigen::Vector<Scalar, Eigen::Dynamic> ones = Eigen::Vector<Scalar, Eigen::Dynamic>::Ones(mat.rows());
+    Eigen::RowVector<Scalar, Eigen::Dynamic> colSums = ones.transpose() * mat;
+    // 2. Create a safe array of inverse column sums
+    Eigen::Array<Scalar, 1, Eigen::Dynamic> invColSums = colSums.array();
+    // Use static_cast to ensure literals match the template Scalar type
+    const Scalar zero = static_cast<Scalar>(0.0);
+    const Scalar one = static_cast<Scalar>(1.0);
+    invColSums = (invColSums == zero).select(
+        zero,            // Value to use if colSum == 0
+        one / invColSums // Value to use if colSum != 0
+    );
+    // 3. Iterate over all non-zero values and multiply in-place
+    for (int i = 0; i < mat.outerSize(); ++i) {
+        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
+            it.valueRef() *= invColSums(it.col());
+        }
+    }
+}
+
+template <typename Scalar>
+void rowNormalizeInPlace(Eigen::SparseMatrix<Scalar, Eigen::RowMajor>& mat) {
+    for (int i = 0; i < mat.rows(); ++i) {
+        Scalar rowSum = Scalar(0);
+        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
+            rowSum += it.value();
+        }
+        if (rowSum == Scalar(0)) {
+            continue;
+        }
+        Scalar rowSumInv = Scalar(1) / rowSum;
+        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
+            it.valueRef() *= rowSumInv;
+        }
+    }
 }
 
 // Element-wise expit then row-normalize

@@ -60,8 +60,7 @@ struct MLEStats {
 // ---------------- Problem Definition for pois_log1p_mle_exact --------------
 class PoisRegExactProblem {
 public:
-    const RowMajorMatrixXd& A;
-    const Document& y;
+    const RowMajorMatrixXd& A; // N x K
     const VectorXd& c;
     const VectorXd* o;
     const MLEOptions& opt;
@@ -69,13 +68,11 @@ public:
     bool nonnegative;
     VectorXd yvec;
 
-    PoisRegExactProblem(const RowMajorMatrixXd& A_, const Document& y_,
-                        const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
-        : A(A_), y(y_), c(c_), o(o_), opt(opt_), has_offset(o != nullptr)
-    {
+    void init(const std::vector<uint32_t>& ids_,
+             const std::vector<double>& cnts_) {
         yvec = VectorXd::Zero(A.rows());
-        for (size_t j = 0; j < y.ids.size(); ++j) {
-            yvec[y.ids[j]] = y.cnts[j];
+        for (size_t j = 0; j < ids_.size(); ++j) {
+            yvec[ids_[j]] = cnts_[j];
         }
         double min_lower_bound = 0;
         if (opt.optim.b_min) min_lower_bound = opt.optim.b_min->minCoeff();
@@ -83,6 +80,18 @@ public:
         if (has_offset) {
             nonnegative = nonnegative && (o->minCoeff() >= 0.0);
         }
+    }
+
+    PoisRegExactProblem(const RowMajorMatrixXd& A_,
+        const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
+        const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
+        : A(A_), c(c_), o(o_), opt(opt_), has_offset(o != nullptr) {
+        init(ids_, cnts_);
+    }
+    PoisRegExactProblem(const RowMajorMatrixXd& A_, const Document& y_,
+        const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
+        : A(A_), c(c_), o(o_), opt(opt_), has_offset(o != nullptr) {
+        init(y_.ids, y_.cnts);
     }
 
     void eval(const VectorXd& bvec,
@@ -122,7 +131,7 @@ class PoisRegSparseProblem {
 public:
     // Pointers to original data
     const RowMajorMatrixXd& A;
-    const Document& y;
+    const std::vector<uint32_t>& ids;
     const VectorXd& c;
     const VectorXd* o;
     const MLEOptions& opt;
@@ -141,26 +150,18 @@ public:
     VectorXd zoak;
     bool nonnegative;
 
-    PoisRegSparseProblem(const RowMajorMatrixXd& A_, const Document& y_,
-                         const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
-        : A(A_), y(y_), c(c_), o(o_), opt(opt_),
-          has_offset(o != nullptr),
-          n(y.ids.size()),
-          Anz(n, A.cols()),
-          yvec(y.cnts.data(), n),
-          cS(n)
-    {
+    void init() {
         const int K = static_cast<int>(A.cols());
 
         // Build submatrices for non-zero counts
         for (size_t j = 0; j < n; ++j) {
-            Anz.row(j) = A.row(y.ids[j]);
+            Anz.row(j) = A.row(ids[j]);
         }
         AsqnzT = Anz.array().square().matrix().transpose();
 
         if (has_offset) oS.resize(n);
         for (size_t t = 0; t < n; ++t) {
-            const int i = y.ids[t];
+            const int i = ids[t];
             cS[t] = c[i];
             if (has_offset) oS[t] = (*o)[i];
         }
@@ -168,7 +169,7 @@ public:
         // Precompute for zero-count contributions
         VectorXd zmask = c;
         for (size_t j = 0; j < n; ++j) {
-            zmask[y.ids[j]] = 0.0;
+            zmask[ids[j]] = 0.0;
         }
         zak = A.transpose() * zmask;
         zakl = A.transpose() * (zmask.asDiagonal() * A);
@@ -185,6 +186,20 @@ public:
         if (has_offset) {
             nonnegative = nonnegative && (o->minCoeff() >= 0.0);
         }
+    }
+
+    PoisRegSparseProblem(const RowMajorMatrixXd& A_, const Document& y_,
+        const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
+        : A(A_), ids(y_.ids), c(c_), o(o_), opt(opt_), has_offset(o != nullptr),
+          n(y_.ids.size()), Anz(n, A.cols()), yvec(y_.cnts.data(), n), cS(n) {
+        init();
+    }
+    PoisRegSparseProblem(const RowMajorMatrixXd& A_,
+        const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
+        const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
+        : A(A_), ids(ids_), c(c_), o(o_), opt(opt_), has_offset(o != nullptr),
+          n(ids.size()), Anz(n, A.cols()), yvec(cnts_.data(), n), cS(n) {
+        init();
     }
 
     void eval(const VectorXd& bvec,

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <tuple>
 #include <variant>
+#include <cassert>
 #include "error.hpp"
 #include "json.hpp"
 #include "nanoflann.hpp"
@@ -18,12 +19,27 @@
 #include "hexgrid.h"
 #include "utils.h"
 #include "threads.hpp"
-#include "lda.hpp"
-#include "slda.hpp"
 
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
 using Eigen::MatrixXf;
+using Eigen::SparseMatrix;
+using RowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+
+struct Minibatch {
+    // Required:
+    int n  = 0;    // number of anchors
+    int N  = 0;    // number of pixels
+    int M  = 0;    // number of features
+    SparseMatrix<float> mtx;  // (N x M); observed data matrix
+    SparseMatrix<float, Eigen::RowMajor> wij; // (N x n) for slda, (n x N) for em-nmf
+    RowMajorMatrixXf gamma; // (n x K); ~P(k|j)
+    RowMajorMatrixXf theta; // (n x K); only for em-nmf
+    // Does not need to be initialized:
+    SparseMatrix<float, Eigen::RowMajor> psi; // same shape as wij
+    RowMajorMatrixXf phi;   // (N x K); ~P(k|i)
+    double ll = 0.0;
+};
 
 enum class FieldType : uint8_t { INT32, FLOAT, STRING };
 struct FieldDef {
@@ -223,6 +239,18 @@ public:
     // Load fixed anchor points from a file and assign to tiles/boundaries
     int32_t loadAnchors(const std::string& anchorFile);
 
+    void setFeatureNames(const std::vector<std::string>& names) {
+        if (M_ > 0) {assert((int32_t) names.size() == M_);}
+        else {M_ = names.size();}
+        featureNames = names;
+    }
+    void setOutputOptions(bool includeOrg, bool useTicket) {
+        outputOriginalData = includeOrg;
+        useTicketSystem = useTicket;
+    }
+    void setOutputProbDigits(int32_t digits) { probDigits = digits; }
+    void setOutputCoordDigits(int32_t digits) { floatCoordDigits = digits; }
+
 protected:
 
     // buffer output results for one tile
@@ -269,10 +297,14 @@ protected:
     int32_t topk_ = 3;
     bool useExtended_ = false;
     lineParserUnival* lineParserPtr = nullptr; // set by derived
+    std::vector<FieldDef> schema_;
+    size_t recordSize_ = 0;
+    int32_t M_ = 0;
 
     /* Worker */
     virtual void tileWorker(int threadId) = 0;
     virtual void boundaryWorker(int threadId) = 0;
+    void writerWorker();
 
     /* Key logic */
     std::shared_ptr<BoundaryBuffer> getBoundaryBuffer(uint32_t key) {
@@ -433,23 +465,19 @@ protected:
     }
 
     /* I/O */
-
-    // Writer thread to consume results and write to output/index
-    void writerWorker();
-
+    template<typename T>
+    int32_t buildMinibatchCore(TileData<T>& tileData,
+        std::vector<cv::Point2f>& anchors, Minibatch& minibatch,
+        double pixelResolution, double distR, double distNu);
     // Parsing helpers (templated on coordinate type)
     template<typename T>
-    int32_t parseOneTile(TileData<T>& tileData, TileKey tile,
-                         lineParserUnival& lineParser,
-                         int32_t M,
-                         bool useExtended,
-                         const std::vector<FieldDef>& schema,
-                         size_t recordSize);
+    int32_t buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, Minibatch& minibatch, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
+    template<typename T>
+    int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
     template<typename T>
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     template<typename T>
-    int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr,
-                                      const std::vector<FieldDef>& schema, size_t recordSize);
+    int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     template<typename T>
     int32_t parseBoundaryMemoryStandard(TileData<T>& tileData,
         InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
@@ -458,6 +486,7 @@ protected:
         InMemoryStorageExtended<T>* memStore, uint32_t bufferKey);
 
     // Output helpers
+    void setExtendedSchema(size_t offset);
     void setupOutput();
     void closeOutput();
     void writeHeaderToJson();
