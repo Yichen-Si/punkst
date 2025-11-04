@@ -69,13 +69,13 @@ public:
         init();
     }
     LatentDirichletAllocation(
-        MatrixXd& modelMtx,
+        RowMajorMatrixXd& modelMtx,
         int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
         InferenceType algo = InferenceType::SVB) : seed_(seed),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
         total_doc_count_(-1), update_count_(0) {
         set_nthreads(nThreads);
-        init_model(modelMtx);
+        set_model_from_matrix(modelMtx);
         init();
     }
 
@@ -106,7 +106,7 @@ public:
 
     // Set the model matrix
     void set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals);
-    void set_model_from_matrix(const RowMajorMatrixXd& lambda);
+    void set_model_from_matrix(RowMajorMatrixXd& lambda);
     // Read a model matrix from file
     void set_model_from_tsv(const std::string& modelFile, double scalar = -1.);
 

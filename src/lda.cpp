@@ -32,7 +32,8 @@ void LatentDirichletAllocation::sort_topics() {
 
 void LatentDirichletAllocation::set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals) {
     if (lambdaVals.size() != n_topics_ || lambdaVals[0].size() != n_features_) {
-        warning("Model matrix size mismatch, reset according to the provided global parameters. (%d x %d) -> (%d x %d)", n_topics_, n_features_, lambdaVals.size(), lambdaVals[0].size());
+        if (n_topics_ > 0 && n_features_ > 0)
+            warning("Model matrix size mismatch, reset according to the provided global parameters. (%d x %d) -> (%d x %d)", n_topics_, n_features_, lambdaVals.size(), lambdaVals[0].size());
         n_topics_ = lambdaVals.size();
         n_features_ = lambdaVals[0].size();
     }
@@ -50,14 +51,15 @@ void LatentDirichletAllocation::set_model_from_matrix(std::vector<std::vector<do
     }
 }
 
-void LatentDirichletAllocation::set_model_from_matrix(const RowMajorMatrixXd& lambda) {
+void LatentDirichletAllocation::set_model_from_matrix(RowMajorMatrixXd& lambda) {
     if (lambda.rows() != n_topics_ || lambda.cols() != n_features_) {
-        warning("Model matrix size mismatch, reset according to the provided global parameters. (%d x %d) -> (%d x %d)", n_topics_, n_features_, lambda.rows(), lambda.cols());
+        if (n_topics_ > 0 && n_features_ > 0)
+            warning("Model matrix size mismatch, reset according to the provided global parameters. (%d x %d) -> (%d x %d)", n_topics_, n_features_, lambda.rows(), lambda.cols());
         n_topics_ = lambda.rows();
         n_features_ = lambda.cols();
     }
     notice("Global variational parameters are reset, but online training status (if any) is not. It is only safe for transform.");
-    components_ = lambda;
+    components_ = std::move(lambda);
     if (algo_ == InferenceType::SCVB0) {
         Nk_ = components_.rowwise().sum();
     } else {

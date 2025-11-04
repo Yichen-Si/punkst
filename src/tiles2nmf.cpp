@@ -8,22 +8,175 @@
 #include <utility>
 #include <unordered_map>
 
+void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double tol) const {
+    if (!mlr_initialized_) {
+        error("%s: not initialized, run init_global_parameter first", __func__);
+    }
+    if (batch.M != M_) {
+        error("%s: dimension M mismatch (%d vs %d)", __func__, batch.M, M_);
+    }
+    max_iter = (max_iter > 0) ? max_iter : max_iter_;
+    tol = (tol > 0) ? tol : tol_;
+
+    bool theta_init = true;
+    if (batch.theta.cols() != K_) {
+        batch.theta = RowMajorMatrixXf::Zero(batch.n, K_);
+        theta_init = false;
+    }
+    RowMajorMatrixXf theta_old = batch.theta;
+    RowMajorMatrixXf Xb = batch.mtx * logBeta_; // N x K
+    double meanchange_theta = tol + 1.0;
+    debug("%s: Starting EM", __func__);
+    int it = 0;
+    for (; it < max_iter; it++) {
+        SparseMatrix<float, Eigen::RowMajor> ymtx = batch.psi.transpose() * batch.mtx; // n x M
+        batch.theta = mlr_.predict(ymtx); // n x K
+        for (int j = 0; j < batch.N; ++j) {
+            float rowMax = -1;
+            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
+                int i = it1.col();
+                it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)) + it2.value();
+                if (it1.valueRef() > rowMax) {
+                    rowMax = it1.valueRef();
+                }
+            }
+            float rowSum = 0.0f;
+            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(batch.psi, j); it; ++it) {
+                it.valueRef() = std::exp(it.valueRef() - rowMax);
+                rowSum += it.valueRef();
+            }
+            if (rowSum > std::numeric_limits<float>::epsilon()) {
+                rowSum = 1.0f / rowSum;
+                for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(batch.psi, j); it; ++it) {
+                    it.valueRef() *= rowSum;
+                }
+            }
+        }
+
+        // check convergence
+        if (theta_init) {
+            meanchange_theta = mean_max_row_change(theta_old, batch.theta);
+        } else {
+            theta_init = true;
+        }
+        if (meanchange_theta < tol && it > 0) {
+            break;
+        }
+        theta_old = batch.theta;
+        debug("%s: EM iter %d, mean max change in theta: %.4e", __func__, it, meanchange_theta);
+    }
+    stats.niter = it;
+    stats.last_change = meanchange_theta;
+    batch.phi = batch.psi * batch.theta; // N x K
+    notice("%s: Finished EM with %d iterations. Final mean max change in theta: %.4e", __func__, it, meanchange_theta);
+}
+
+void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double tol) const {
+    if (!pnmf_initialized_) {
+        error("%s: not initialized, run init_global_parameter first", __func__);
+    }
+    if (batch.M != M_) {
+        error("%s: dimension M mismatch (%d vs %d)", __func__, batch.M, M_);
+    }
+    max_iter = (max_iter > 0) ? max_iter : max_iter_;
+    tol = (tol > 0) ? tol : tol_;
+
+    bool theta_init = true;
+    if (batch.theta.cols() != K_) {
+        batch.theta = RowMajorMatrixXf::Zero(batch.n, K_);
+        theta_init = false;
+    }
+    RowMajorMatrixXf theta_old = batch.theta;
+    double meanchange_theta = tol + 1.0;
+    double avg_iters = 0.0f;
+    // MatrixXf loglam = MatrixXf::Zero(M_, batch.n); // M x n
+    RowMajorMatrixXf Xb = batch.mtx * logBeta_; // N x K
+    debug("%s: Starting EM", __func__);
+    int it = 0;
+    for (; it < max_iter; it++) {
+        SparseMatrix<float, Eigen::RowMajor> ymtx = batch.psi.transpose() * batch.mtx; // n x M
+        std::vector<int32_t> niters(batch.n, 0);
+        float nkept = 0;
+        MLEStats stats;
+        for (int j = 0; j < batch.n; j++) { // solve for \theta_j
+            float rowsum = 0.0;
+            size_t nnz = ymtx.row(j).nonZeros();
+            Document y;
+            y.ids.reserve(nnz);
+            y.cnts.reserve(nnz);
+            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(ymtx, j); it; ++it) {
+                y.ids.push_back(it.col());
+                y.cnts.push_back(it.value());
+                rowsum += it.value();
+            }
+            if (rowsum <= min_ct_) {
+                continue;
+            }
+            nkept += 1;
+            double c = rowsum / size_factor_;
+            VectorXd b; // K
+            if (theta_init) {
+                b = batch.theta.row(j).transpose().cast<double>();
+            }
+            if (exact_) {
+                pois_log1p_mle_exact(beta_, y, c, mle_opts_, b, stats);
+            } else {
+                pois_log1p_mle(beta_, y, c, mle_opts_, b, stats);
+            }
+            niters[j] = stats.optim.niters;
+            batch.theta.row(j) = b.transpose().cast<float>();
+            // loglam.col(j) = (beta_ * b).cast<float>(); // M
+            // loglam.col(j) = (((loglam.col(j).array().exp() - 1.0)).max(mle_opts_.ridge) * c).log();
+        }
+
+        RowMajorMatrixXf theta_norm = rowNormalize(batch.theta);
+        for (int i = 0; i < batch.N; ++i) {
+            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
+                int j = it1.col();
+                // it1.valueRef() = batch.mtx.row(i).dot(loglam.col(j)) + it2.value();
+                it1.valueRef() = Xb.row(i).dot(theta_norm.row(j)) + it2.value();
+            }
+        }
+
+        int32_t total_iters = std::accumulate(niters.begin(), niters.end(), 0);
+        avg_iters = static_cast<double>(total_iters) / nkept;
+        int32_t nskip = (int32_t) (batch.n - nkept);
+        debug("%s: Completed %d-th EM iteration with %d anchors (skipped %d), average %.1f iterations per optim", __func__, it, batch.n, nskip, avg_iters);
+
+        rowSoftmaxInPlace(batch.psi);
+
+        if (theta_init) {
+            meanchange_theta = mean_max_row_change(theta_old, batch.theta);
+        } else {
+            theta_init = true;
+        }
+        if (meanchange_theta < tol && it > 0) {
+            break;
+        }
+        theta_old = batch.theta;
+        debug("%s: EM iter %d, mean max change in theta: %.4e", __func__, it, meanchange_theta);
+    }
+    stats.niter = it;
+    stats.last_avg_internal_niters = avg_iters;
+    stats.last_change = meanchange_theta;
+    rowNormalizeInPlace(batch.theta);
+    batch.phi = batch.psi * batch.theta; // N x K
+    debug("%s: Finished EM", __func__);
+
+}
+
 template<typename T>
 Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
         const std::string& outPref, const std::string& tmpDir,
-        PoissonLog1pNMF& nmf, EMPoisReg& empois,
-        TileReader& tileReader, lineParserUnival& lineParser,
-        HexGrid& hexGrid, int32_t nMoves,
-        unsigned int seed,
-        double c, double h, double res, int32_t topk,
+        const PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, HexGrid& hexGrid, int32_t nMoves,
+        unsigned int seed, double c, double h, double res, int32_t topk,
         int32_t verbose, int32_t debug)
-    : Tiles2MinibatchBase(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir), distR_(r),
-        nmf_(nmf), empois_(empois),
-        lineParser_(lineParser),
+    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir, debug), distR_(r),
+        empois_(empois), lineParser_(lineParser),
         hexGrid_(hexGrid), nMoves_(nMoves),
         seed_(seed), anchorMinCount_(c),
         pixelResolution_(static_cast<float>(res)),
-        debug_(debug), verbose_(verbose)
+        verbose_(verbose)
 {
     lineParserPtr = &lineParser_;
     useExtended_ = lineParser_.isExtended;
@@ -47,18 +200,14 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
     }
 
     if (useExtended_) {
-         Tiles2MinibatchBase::setExtendedSchema(sizeof(RecordT<T>));
+         Base::setExtendedSchema(sizeof(RecordT<T>));
     }
 
-    nmf_.set_nthreads(1);
-    const RowMajorMatrixXd& beta = nmf_.get_model();
-    M_ = static_cast<int32_t>(beta.rows());
-    K_ = static_cast<int32_t>(beta.cols());
+    M_ = empois_.get_M();
+    K_ = empois_.get_K();
     if (M_ <= 0 || K_ <= 0) {
         error("%s: Invalid beta dimensions (%d x %d)", __func__, M_, K_);
     }
-
-    empois_.init_global_parameter(beta);
 
     if (lineParser_.isFeatureDict) {
         if (static_cast<int32_t>(lineParser_.featureDict.size()) != M_) {
@@ -88,42 +237,61 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
 
 template<typename T>
 int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
-    int32_t nPixels = buildMinibatchCore(
+    int32_t nPixels = Base::buildMinibatchCore(
         tileData, anchors, minibatch,
         pixelResolution_, distR_, distNu_);
     if (nPixels <= 0) {
         return nPixels;
     }
 
-    minibatch.psi = minibatch.psi.transpose(); // n x N
-    minibatch.psi.makeCompressed();
-
     minibatch.wij.unaryExpr([](float val) {return log(val);});
-    minibatch.wij = minibatch.wij.transpose();
-    minibatch.wij.makeCompressed();
+
+    // minibatch.psi = minibatch.psi.transpose(); // n x N
+    // minibatch.psi.makeCompressed();
+    // minibatch.wij = minibatch.wij.transpose();
+    // minibatch.wij.makeCompressed();
 
     return nPixels;
 }
 
 template<typename T>
 int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
-    std::vector<SparseObs> documents;
-    Tiles2MinibatchBase::buildAnchors(tileData, anchors, documents, minibatch, hexGrid_, nMoves_, anchorMinCount_);
-    if (documents.empty()) {
-        return 0;
+    anchors.clear();
+    std::unordered_set<HexGrid::GridKey, HexGrid::GridKeyHash> GridPts;
+    auto assign_pt = [&](const auto& pt) {
+        for (int32_t ir = 0; ir < nMoves_; ++ir) {
+            for (int32_t ic = 0; ic < nMoves_; ++ic) {
+                int32_t hx, hy;
+                hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1. / nMoves_, ir * 1. / nMoves_);
+                GridPts.emplace(hx, hy, ic, ir);
+            }
+        }
+    };
+    if (useExtended_) {
+        for (const auto& pt : tileData.extPts) {
+            assign_pt(pt.recBase);
+        }
+    } else {
+        for (const auto& pt : tileData.pts) {
+            assign_pt(pt);
+        }
     }
-    for (auto& docObs : documents) {
-        docObs.c = docObs.ct_tot / empois_.size_factor_;
+    for (auto& key : GridPts) {
+        int32_t hx = std::get<0>(key);
+        int32_t hy = std::get<1>(key);
+        int32_t ic = std::get<2>(key);
+        int32_t ir = std::get<3>(key);
+        float x, y;
+        hexGrid_.axial_to_cart(x, y, hx, hy, ic * 1. / nMoves_, ir * 1. / nMoves_);
+        anchors.emplace_back(x, y);
     }
-
-    std::vector<MLEStats> stats;
-    minibatch.theta = nmf_.transform(documents, empois_.mle_opts_, stats).template cast<float>();
-    minibatch.n = documents.size();
+    minibatch.n = anchors.size();
     return anchors.size();
 }
 
 template<typename T>
-void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket) {
+void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
+    (void)anchorPtr;
     if (tileData.pts.empty() && tileData.extPts.empty()) {
         return;
     }
@@ -139,7 +307,8 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket) 
     if (nPixels < 10) {
         return;
     }
-    empois_.run_em(minibatch, max_iter_, tol_);
+    PixelEM::EMstats stats;
+    empois_.run_em(minibatch, stats);
     debug("%s: Thread %d (ticket %d) finished EM", __func__, threadId, ticket);
 
     MatrixXf topVals;
@@ -147,121 +316,13 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket) 
     findTopK(topVals, topIds, minibatch.phi, topk_);
     ProcessedResult result;
     if (outputOriginalData) {
-        result = Tiles2MinibatchBase::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
+        result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
     } else {
-        result = Tiles2MinibatchBase::formatPixelResult(tileData, topVals, topIds, ticket);
+        result = Base::formatPixelResult(tileData, topVals, topIds, ticket);
     }
-    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels", threadId, ticket, nAnchors, result.npts);
+    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in theta: %.1e (final averaged inner iterations %.1f)", threadId, ticket, nAnchors, result.npts, stats.niter, stats.last_change, stats.last_avg_internal_niters);
+
     resultQueue.push(std::move(result));
-}
-
-template<typename T>
-void Tiles2NMF<T>::tileWorker(int threadId) {
-    std::pair<TileKey, int32_t> tileTicket;
-    TileKey tile;
-    int32_t ticket;
-    while (tileQueue.pop(tileTicket)) {
-        tile = tileTicket.first;
-        ticket = tileTicket.second;
-        TileData<T> tileData;
-        int32_t ret = Tiles2MinibatchBase::parseOneTile<T>(tileData, tile);
-        notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __func__, threadId, ticket, tile.row, tile.col, ret);
-        if (ret <= 10) {
-            continue;
-        }
-        processTile(tileData, threadId, ticket);
-    }
-}
-
-template<typename T>
-void Tiles2NMF<T>::boundaryWorker(int threadId) {
-    std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
-    std::shared_ptr<BoundaryBuffer> bufferPtr;
-    int32_t ticket;
-    while (bufferQueue.pop(bufferTicket)) {
-        bufferPtr = bufferTicket.first;
-        ticket = bufferTicket.second;
-        TileData<T> tileData;
-        int32_t ret = 0;
-
-        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&(bufferPtr->storage))) {
-            // --- IN-MEMORY PATH ---
-            if (auto* extStore = dynamic_cast<InMemoryStorageExtended<T>*>(storagePtr->get())) {
-                ret = Tiles2MinibatchBase::parseBoundaryMemoryExtended(tileData, extStore, bufferPtr->key);
-            } else if (auto* stdStore = dynamic_cast<InMemoryStorageStandard<T>*>(storagePtr->get())) {
-                ret = Tiles2MinibatchBase::parseBoundaryMemoryStandard(tileData, stdStore, bufferPtr->key);
-            }
-        } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
-            // --- DISK I/O PATH ---
-            if (useExtended_) {
-                ret = Tiles2MinibatchBase::parseBoundaryFileExtended(tileData, bufferPtr);
-            } else {
-                ret = Tiles2MinibatchBase::parseBoundaryFile(tileData, bufferPtr);
-            }
-            // Clean up the temporary file
-            std::remove(filePath->c_str());
-        }
-        notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __func__, threadId, ticket, bufferPtr->key, ret);
-        processTile(tileData, threadId, ticket);
-    }
-}
-
-template<typename T>
-void Tiles2NMF<T>::run() {
-    setupOutput();
-    std::thread writer(&Tiles2NMF::writerWorker, this);
-
-    // Phase 1: Process tiles
-    notice("Phase 1 Launching %d worker threads", nThreads);
-    for (int i = 0; i < nThreads; ++i) {
-        workThreads.push_back(std::thread(&Tiles2NMF::tileWorker, this, i));
-    }
-    std::vector<TileKey> tileList;
-    tileReader.getTileList(tileList);
-    std::sort(tileList.begin(), tileList.end());
-    int32_t ticket = 0;
-    // Enqueue all tiles to the queue in a deterministic order
-    for (const auto &tile : tileList) {
-        tileQueue.push(std::make_pair(tile, ticket++));
-        if (debug_ > 0 && ticket >= debug_) {
-            break;
-        }
-    }
-    tileQueue.set_done();
-    for (auto &t : workThreads) {
-        t.join();
-    }
-    workThreads.clear();
-
-    // Phase 2: Process boundary buffers
-    notice("Phase 2 Launching %d worker threads", nThreads);
-    std::vector<std::shared_ptr<BoundaryBuffer>> buffers;
-    buffers.reserve(boundaryBuffers.size());
-    for (auto &kv : boundaryBuffers) {
-        buffers.push_back(kv.second);
-    }
-    std::sort(buffers.begin(), buffers.end(),
-        [](auto const &A, auto const &B){
-            return A->key < B->key;
-    });
-    // Enqueue all boundary buffers from the global map.
-    for (auto &bufferPtr : buffers) {
-        bufferQueue.push(std::make_pair(bufferPtr, ticket++));
-    }
-    bufferQueue.set_done();
-    for (int i = 0; i < nThreads; ++i) {
-        workThreads.push_back(std::thread(&Tiles2NMF::boundaryWorker, this, i));
-    }
-    for (auto &t : workThreads) {
-        t.join();
-    }
-
-    resultQueue.set_done();
-    notice("%s: all workers done, waiting for writer to finish", __func__);
-
-    writer.join();
-    closeOutput();
-    writeHeaderToJson();
 }
 
 // explicit instantiations

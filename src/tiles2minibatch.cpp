@@ -3,8 +3,124 @@
 #include <cmath>
 #include <numeric>
 #include <fcntl.h>
+#include <thread>
+#include <algorithm>
 
-int32_t Tiles2MinibatchBase::loadAnchors(const std::string& anchorFile) {
+template<typename T>
+void Tiles2MinibatchBase<T>::run() {
+    setupOutput();
+    std::thread writer(&Tiles2MinibatchBase<T>::writerWorker, this);
+
+    notice("Phase 1 Launching %d worker threads", nThreads);
+    workThreads.clear();
+    workThreads.reserve(static_cast<size_t>(nThreads));
+    for (int i = 0; i < nThreads; ++i) {
+        workThreads.emplace_back(&Tiles2MinibatchBase<T>::tileWorker, this, i);
+    }
+
+    std::vector<TileKey> tileList;
+    tileReader.getTileList(tileList);
+    std::sort(tileList.begin(), tileList.end());
+    int32_t ticket = 0;
+    for (const auto& tile : tileList) {
+        tileQueue.push(std::make_pair(tile, ticket++));
+        if (debug_ > 0 && ticket >= debug_) {
+            break;
+        }
+    }
+    tileQueue.set_done();
+    for (auto& t : workThreads) {
+        t.join();
+    }
+    workThreads.clear();
+
+    notice("Phase 2 Launching %d worker threads", nThreads);
+    std::vector<std::shared_ptr<BoundaryBuffer>> buffers;
+    buffers.reserve(boundaryBuffers.size());
+    for (auto &kv : boundaryBuffers) {
+        buffers.push_back(kv.second);
+    }
+    std::sort(buffers.begin(), buffers.end(),
+        [](const std::shared_ptr<BoundaryBuffer>& A,
+           const std::shared_ptr<BoundaryBuffer>& B) {
+            return A->key < B->key;
+        });
+    for (auto &bufferPtr : buffers) {
+        bufferQueue.push(std::make_pair(bufferPtr, ticket++));
+    }
+    bufferQueue.set_done();
+    workThreads.reserve(static_cast<size_t>(nThreads));
+    for (int i = 0; i < nThreads; ++i) {
+        workThreads.emplace_back(&Tiles2MinibatchBase<T>::boundaryWorker, this, i);
+    }
+    for (auto& t : workThreads) {
+        t.join();
+    }
+    workThreads.clear();
+
+    resultQueue.set_done();
+    notice("%s: all workers done, waiting for writer to finish", __func__);
+
+    writer.join();
+    closeOutput();
+    writeHeaderToJson();
+    postRun();
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::tileWorker(int threadId) {
+    std::pair<TileKey, int32_t> tileTicket;
+    TileKey tile;
+    int32_t ticket;
+    while (tileQueue.pop(tileTicket)) {
+        tile = tileTicket.first;
+        ticket = tileTicket.second;
+        TileData<T> tileData;
+        int32_t ret = parseOneTile(tileData, tile);
+        notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels",
+            __func__, threadId, ticket, tile.row, tile.col, ret);
+        if (ret <= 10) {
+            continue;
+        }
+        vec2f_t* anchorPtr = lookupTileAnchors(tile);
+        processTile(tileData, threadId, ticket, anchorPtr);
+    }
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::boundaryWorker(int threadId) {
+    std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
+    std::shared_ptr<BoundaryBuffer> bufferPtr;
+    int32_t ticket;
+    while (bufferQueue.pop(bufferTicket)) {
+        bufferPtr = bufferTicket.first;
+        ticket = bufferTicket.second;
+        TileData<T> tileData;
+        int32_t ret = 0;
+
+        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&(bufferPtr->storage))) {
+            if (auto* extStore = dynamic_cast<InMemoryStorageExtended<T>*>(storagePtr->get())) {
+                ret = parseBoundaryMemoryExtended(tileData, extStore, bufferPtr->key);
+            } else if (auto* stdStore = dynamic_cast<InMemoryStorageStandard<T>*>(storagePtr->get())) {
+                ret = parseBoundaryMemoryStandard(tileData, stdStore, bufferPtr->key);
+            }
+        } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
+            if (useExtended_) {
+                ret = parseBoundaryFileExtended(tileData, bufferPtr);
+            } else {
+                ret = parseBoundaryFile(tileData, bufferPtr);
+            }
+            std::remove(filePath->c_str());
+        }
+        notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels",
+            __func__, threadId, ticket, bufferPtr->key, ret);
+        vec2f_t* anchorPtr = lookupBoundaryAnchors(bufferPtr->key);
+        processTile(tileData, threadId, ticket, anchorPtr);
+    }
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
     std::ifstream inFile(anchorFile);
     if (!inFile) {
         error("Error opening anchors file: %s", anchorFile.c_str());
@@ -44,7 +160,7 @@ int32_t Tiles2MinibatchBase::loadAnchors(const std::string& anchorFile) {
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, Minibatch& minibatch, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
+int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
     anchors.clear();
     documents.clear();
 
@@ -101,7 +217,7 @@ int32_t Tiles2MinibatchBase::buildAnchors(TileData<T>& tileData, std::vector<cv:
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::parseOneTile(TileData<T>& tileData, TileKey tile) {
+int32_t Tiles2MinibatchBase<T>::parseOneTile(TileData<T>& tileData, TileKey tile) {
     std::unique_ptr<BoundedReadline> iter;
     try {
         iter = tileReader.get_tile_iterator(tile.row, tile.col);
@@ -173,7 +289,7 @@ int32_t Tiles2MinibatchBase::parseOneTile(TileData<T>& tileData, TileKey tile) {
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
+int32_t Tiles2MinibatchBase<T>::parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
     std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
     std::ifstream ifs;
     if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
@@ -202,7 +318,7 @@ int32_t Tiles2MinibatchBase::parseBoundaryFile(TileData<T>& tileData, std::share
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
+int32_t Tiles2MinibatchBase<T>::parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
     std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
     std::ifstream ifs;
     if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
@@ -258,7 +374,7 @@ int32_t Tiles2MinibatchBase::parseBoundaryFileExtended(TileData<T>& tileData, st
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::parseBoundaryMemoryStandard(TileData<T>& tileData, InMemoryStorageStandard<T>* memStore, uint32_t bufferKey) {
+int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandard(TileData<T>& tileData, InMemoryStorageStandard<T>* memStore, uint32_t bufferKey) {
     tileData.clear();
     bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     // Directly copy the data from the in-memory vector.
@@ -275,7 +391,7 @@ int32_t Tiles2MinibatchBase::parseBoundaryMemoryStandard(TileData<T>& tileData, 
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::parseBoundaryMemoryExtended(TileData<T>& tileData, InMemoryStorageExtended<T>* memStore, uint32_t bufferKey) {
+int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryExtended(TileData<T>& tileData, InMemoryStorageExtended<T>* memStore, uint32_t bufferKey) {
     tileData.clear();
     bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     tileData.extPts = std::move(memStore->dataExtended);
@@ -290,7 +406,7 @@ int32_t Tiles2MinibatchBase::parseBoundaryMemoryExtended(TileData<T>& tileData, 
 }
 
 template<typename T>
-Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket) {
+typename Tiles2MinibatchBase<T>::ProcessedResult Tiles2MinibatchBase<T>::formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket) {
     ProcessedResult result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     int32_t nrows = topVals.rows();
     char buf[65536];
@@ -388,7 +504,7 @@ Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResultWithO
 }
 
 template<typename T>
-Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket) {
+typename Tiles2MinibatchBase<T>::ProcessedResult Tiles2MinibatchBase<T>::formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket) {
     ProcessedResult result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     size_t N = tileData.coords.size();
     std::vector<bool> internal(N, 0);
@@ -446,7 +562,7 @@ Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResult(cons
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase::buildMinibatchCore( TileData<T>& tileData,
+int32_t Tiles2MinibatchBase<T>::buildMinibatchCore( TileData<T>& tileData,
     std::vector<cv::Point2f>& anchors, Minibatch& minibatch,
     double pixelResolution, double distR, double distNu) {
 
@@ -552,7 +668,8 @@ int32_t Tiles2MinibatchBase::buildMinibatchCore( TileData<T>& tileData,
     return minibatch.N;
 }
 
-void Tiles2MinibatchBase::writeHeaderToJson() {
+template<typename T>
+void Tiles2MinibatchBase<T>::writeHeaderToJson() {
     std::string jsonFile = outPref + ".json";
     std::ofstream jsonOut(jsonFile);
     if (!jsonOut) {
@@ -588,7 +705,8 @@ void Tiles2MinibatchBase::writeHeaderToJson() {
     jsonOut.close();
 }
 
-void Tiles2MinibatchBase::writerWorker() {
+template<typename T>
+void Tiles2MinibatchBase<T>::writerWorker() {
     // A priority queue to buffer out-of-order results
     std::priority_queue<ProcessedResult, std::vector<ProcessedResult>, std::greater<ProcessedResult>> outOfOrderBuffer;
     int nextTicketToWrite = 0;
@@ -626,7 +744,8 @@ void Tiles2MinibatchBase::writerWorker() {
     }
 }
 
-void Tiles2MinibatchBase::setExtendedSchema(size_t offset) {
+template<typename T>
+void Tiles2MinibatchBase<T>::setExtendedSchema(size_t offset) {
     if (!lineParserPtr->isExtended) {
         useExtended_ = false; return;
     }
@@ -647,7 +766,8 @@ void Tiles2MinibatchBase::setExtendedSchema(size_t offset) {
     recordSize_ = offset;
 }
 
-void Tiles2MinibatchBase::setupOutput() {
+template<typename T>
+void Tiles2MinibatchBase<T>::setupOutput() {
     #if !defined(_WIN32)
         // ensure includes present
     #endif
@@ -679,36 +799,11 @@ void Tiles2MinibatchBase::setupOutput() {
     }
 }
 
-void Tiles2MinibatchBase::closeOutput() {
+template<typename T>
+void Tiles2MinibatchBase<T>::closeOutput() {
     if (fdMain >= 0) { ::close(fdMain); fdMain = -1; }
     if (fdIndex >= 0) { ::close(fdIndex); fdIndex = -1; }
 }
 
-// Explicit instantiations for base templated helpers
-
-template int32_t Tiles2MinibatchBase::buildAnchors<int32_t>(TileData<int32_t>&, std::vector<cv::Point2f>&, std::vector<SparseObs>&, Minibatch&, HexGrid&, int32_t, double);
-template int32_t Tiles2MinibatchBase::buildAnchors<float>(TileData<float>&, std::vector<cv::Point2f>&, std::vector<SparseObs>&, Minibatch&, HexGrid&, int32_t, double);
-
-template int32_t Tiles2MinibatchBase::parseOneTile<int32_t>(TileData<int32_t>&, TileKey);
-template int32_t Tiles2MinibatchBase::parseOneTile<float>(TileData<float>&, TileKey);
-
-template int32_t Tiles2MinibatchBase::parseBoundaryFile<int32_t>(TileData<int32_t>&, std::shared_ptr<BoundaryBuffer>);
-template int32_t Tiles2MinibatchBase::parseBoundaryFile<float>(TileData<float>&, std::shared_ptr<BoundaryBuffer>);
-
-template int32_t Tiles2MinibatchBase::parseBoundaryFileExtended<int32_t>(TileData<int32_t>&, std::shared_ptr<BoundaryBuffer>);
-template int32_t Tiles2MinibatchBase::parseBoundaryFileExtended<float>(TileData<float>&, std::shared_ptr<BoundaryBuffer>);
-
-template int32_t Tiles2MinibatchBase::parseBoundaryMemoryStandard<int32_t>(TileData<int32_t>&, InMemoryStorageStandard<int32_t>*, uint32_t);
-template int32_t Tiles2MinibatchBase::parseBoundaryMemoryStandard<float>(TileData<float>&, InMemoryStorageStandard<float>*, uint32_t);
-
-template int32_t Tiles2MinibatchBase::parseBoundaryMemoryExtended<int32_t>(TileData<int32_t>&, InMemoryStorageExtended<int32_t>*, uint32_t);
-template int32_t Tiles2MinibatchBase::parseBoundaryMemoryExtended<float>(TileData<float>&, InMemoryStorageExtended<float>*, uint32_t);
-
-template Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResultWithOriginalData<int32_t>(const TileData<int32_t>&, const MatrixXf&, const Eigen::MatrixXi&, int);
-template Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResultWithOriginalData<float>(const TileData<float>&, const MatrixXf&, const Eigen::MatrixXi&, int);
-
-template Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResult<int32_t>(const TileData<int32_t>&, const MatrixXf&, const Eigen::MatrixXi&, int);
-template Tiles2MinibatchBase::ProcessedResult Tiles2MinibatchBase::formatPixelResult<float>(const TileData<float>&, const MatrixXf&, const Eigen::MatrixXi&, int);
-
-template int32_t Tiles2MinibatchBase::buildMinibatchCore<int32_t>(TileData<int32_t>&, std::vector<cv::Point2f>&, Minibatch&, double, double, double);
-template int32_t Tiles2MinibatchBase::buildMinibatchCore<float>(TileData<float>&, std::vector<cv::Point2f>&, Minibatch&, double, double, double);
+template class Tiles2MinibatchBase<int32_t>;
+template class Tiles2MinibatchBase<float>;

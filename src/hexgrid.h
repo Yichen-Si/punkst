@@ -17,6 +17,22 @@ public:
 
     typedef std::unordered_map<uint64_t, std::vector<uint32_t> > hex2idx_t;
 
+    using GridKey = std::tuple<int32_t, int32_t, int32_t, int32_t>;
+    struct GridKeyHash {
+        std::size_t operator()(const GridKey& key) const noexcept {
+            std::size_t seed = 0;
+            auto combine = [&seed](int32_t v) {
+                seed ^= std::hash<int32_t>{}(v) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+            };
+            const auto& [hx, hy, ic, ir] = key;
+            combine(hx);
+            combine(hy);
+            combine(ic);
+            combine(ir);
+            return seed;
+        }
+    };
+
     double size;
     bool pointy = true;
     double mtx_p2a[2][2];

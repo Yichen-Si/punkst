@@ -10,8 +10,8 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
         unsigned int seed,
         double c, double h, double res, int32_t N, int32_t k,
         int32_t verbose, int32_t debug)
-    : Tiles2MinibatchBase(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir),
-      distR_(r), lda_(lda), lineParser_(lineParser), hexGrid_(hexGrid), nMoves_(nMoves), anchorMinCount_(c), pixelResolution_(res), debug_(debug)
+    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir, debug),
+      distR_(r), lda_(lda), lineParser_(lineParser), hexGrid_(hexGrid), nMoves_(nMoves), anchorMinCount_(c), pixelResolution_(res)
 {
     lineParserPtr = &lineParser_;
     useExtended_ = lineParser_.isExtended;
@@ -28,7 +28,7 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
         pixelResolution_ = 1;
     }
     if (useExtended_) {
-        Tiles2MinibatchBase::setExtendedSchema(sizeof(RecordT<T>));
+        Base::setExtendedSchema(sizeof(RecordT<T>));
     }
     M_ = lda_.get_n_features();
     if (lineParser_.isFeatureDict) {
@@ -46,7 +46,7 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
     if (N <= 0) {
         N = lda_.get_N_global() * 100;
     }
-    pseudobulk_ = MatrixXf::Zero(K_, M_);
+    pseudobulk_ = MatrixXf::Zero(M_, K_);
     slda_.init(K_, M_, N, seed);
     slda_.init_global_parameter(lda_.get_model());
     slda_.verbose_ = verbose;
@@ -61,15 +61,15 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
     if (debug_ > 0) {
         std::cout << "Check model initialization\n" << std::fixed << std::setprecision(2);
         const auto& lambda = slda_.get_lambda();
-        const auto& Elog_beta = slda_.get_Elog_beta();
+        const auto& Elog_beta = slda_.get_Elog_beta(); // M x K
         for (int32_t i = 0; i < std::min(3, K_) ; ++i) {
             std::cout << "\tLambda " << i << ": ";
             for (int32_t j = 0; j < std::min(5, M_); ++j) {
-                std::cout << lambda(i, j) << " ";
+                std::cout << lambda(j, i) << " ";
             }
             std::cout << "\n\tElog_beta: ";
             for (int32_t j = 0; j < std::min(5, M_); ++j) {
-                std::cout << Elog_beta(i, j) << " ";
+                std::cout << Elog_beta(j, i) << " ";
             }
             std::cout << "\n";
         }
@@ -79,68 +79,9 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
 }
 
 template<typename T>
-void Tiles2SLDA<T>::run() {
-    setupOutput();
-    std::thread writer(&Tiles2SLDA::writerWorker, this);
-
-    // Phase 1: Process tiles
-    notice("Phase 1 Launching %d worker threads", nThreads);
-    for (int i = 0; i < nThreads; ++i) {
-        workThreads.push_back(std::thread(&Tiles2SLDA::tileWorker, this, i));
-    }
-    std::vector<TileKey> tileList;
-    tileReader.getTileList(tileList);
-    std::sort(tileList.begin(), tileList.end());
-    int32_t ticket = 0;
-    // Enqueue all tiles to the queue in a deterministic order
-    for (const auto &tile : tileList) {
-        tileQueue.push(std::make_pair(tile, ticket++));
-        if (debug_ > 0 && ticket >= debug_) {
-            break;
-        }
-    }
-    tileQueue.set_done();
-    for (auto &t : workThreads) {
-        t.join();
-    }
-    workThreads.clear();
-
-    // Phase 2: Process boundary buffers
-    notice("Phase 2 Launching %d worker threads", nThreads);
-    std::vector<std::shared_ptr<BoundaryBuffer>> buffers;
-    buffers.reserve(boundaryBuffers.size());
-    for (auto &kv : boundaryBuffers) {
-        buffers.push_back(kv.second);
-    }
-    std::sort(buffers.begin(), buffers.end(),
-        [](auto const &A, auto const &B){
-            return A->key < B->key;
-    });
-    // Enqueue all boundary buffers from the global map.
-    for (auto &bufferPtr : buffers) {
-        bufferQueue.push(std::make_pair(bufferPtr, ticket++));
-    }
-    bufferQueue.set_done();
-    for (int i = 0; i < nThreads; ++i) {
-        workThreads.push_back(std::thread(&Tiles2SLDA::boundaryWorker, this, i));
-    }
-    for (auto &t : workThreads) {
-        t.join();
-    }
-
-    resultQueue.set_done();
-    notice("%s: all workers done, waiting for writer to finish", __func__);
-
-    writer.join();
-    closeOutput();
-    writeHeaderToJson();
-    writePseudobulkToTsv();
-}
-
-template<typename T>
 int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
     std::vector<SparseObs> documents;
-    Tiles2MinibatchBase::buildAnchors(tileData, anchors, documents, minibatch, hexGrid_, nMoves_, anchorMinCount_);
+    Base::buildAnchors(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_);
     if (documents.empty()) {
         return 0;
     }
@@ -160,7 +101,7 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2
 
 template<typename T>
 int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
-    int32_t nPixels = buildMinibatchCore(
+    int32_t nPixels = Base::buildMinibatchCore(
         tileData, anchors, minibatch,
         pixelResolution_, distR_, distNu_);
 
@@ -237,10 +178,10 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
             newAnchorCoords[ret_index].y += pt.y * pt.ct;
             totalCounts[ret_index] += pt.ct;
         };
-        if (useExtended_) {
-            for (const auto& rec : tileData.extPts) {
-                assign_pt(rec.recBase);
-            }
+    if (useExtended_) {
+        for (const auto& rec : tileData.extPts) {
+            assign_pt(rec.recBase);
+        }
         } else {
             for (const auto& rec : tileData.pts) {
                 assign_pt(rec);
@@ -294,65 +235,6 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
 }
 
 template<typename T>
-void Tiles2SLDA<T>::tileWorker(int threadId) {
-    std::pair<TileKey, int32_t> tileTicket;
-    TileKey tile;
-    int32_t ticket;
-    while (tileQueue.pop(tileTicket)) {
-        tile = tileTicket.first;
-        ticket = tileTicket.second;
-        TileData<T> tileData;
-        int32_t ret = Tiles2MinibatchBase::parseOneTile<T>(tileData, tile);
-        notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels", __func__, threadId, ticket, tile.row, tile.col, ret);
-        if (ret <= 10) {
-            continue;
-        }
-        vec2f_t* anchorPtr = nullptr;
-        if (fixedAnchorForTile.find(tile) != fixedAnchorForTile.end()) {
-            anchorPtr = &fixedAnchorForTile[tile];
-        }
-        processTile(tileData, threadId, ticket, anchorPtr);
-    }
-}
-
-template<typename T>
-void Tiles2SLDA<T>::boundaryWorker(int threadId) {
-    std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
-    std::shared_ptr<BoundaryBuffer> bufferPtr;
-    int32_t ticket;
-    while (bufferQueue.pop(bufferTicket)) {
-        bufferPtr = bufferTicket.first;
-        ticket = bufferTicket.second;
-        TileData<T> tileData;
-        int32_t ret = 0;
-
-        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&(bufferPtr->storage))) {
-            // --- IN-MEMORY PATH ---
-            if (auto* extStore = dynamic_cast<InMemoryStorageExtended<T>*>(storagePtr->get())) {
-                ret = Tiles2MinibatchBase::parseBoundaryMemoryExtended(tileData, extStore, bufferPtr->key);
-            } else if (auto* stdStore = dynamic_cast<InMemoryStorageStandard<T>*>(storagePtr->get())) {
-                ret = Tiles2MinibatchBase::parseBoundaryMemoryStandard(tileData, stdStore, bufferPtr->key);
-            }
-        } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
-            // --- DISK I/O PATH ---
-            if (useExtended_) {
-                ret = Tiles2MinibatchBase::parseBoundaryFileExtended(tileData, bufferPtr);
-            } else {
-                ret = Tiles2MinibatchBase::parseBoundaryFile(tileData, bufferPtr);
-            }
-            // Clean up the temporary file
-            std::remove(filePath->c_str());
-        }
-        notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels", __func__, threadId, ticket, bufferPtr->key, ret);
-        vec2f_t* anchorPtr = nullptr;
-        if (fixedAnchorForBoundary.find(bufferPtr->key) != fixedAnchorForBoundary.end()) {
-            anchorPtr = &fixedAnchorForBoundary[bufferPtr->key];
-        }
-        processTile(tileData, threadId, ticket, anchorPtr);
-    }
-}
-
-template<typename T>
 void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     if (tileData.pts.empty() && tileData.extPts.empty()) {
         return;
@@ -374,7 +256,9 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     if (nPixels < 10) {
         return;
     }
-    auto smtx = slda_.do_e_step(minibatch, true);
+    int32_t n_iter = 0;
+    double delta = 0.0;
+    auto smtx = slda_.do_e_step(minibatch, true, &n_iter, &delta); // M x K
     {
         std::lock_guard<std::mutex> lock(pseudobulkMutex_);
         pseudobulk_ += smtx;
@@ -388,21 +272,18 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
                 std::cout << "\n    ";
             }
             std::cout << "    Current sums: ";
-            auto rowsums = pseudobulk_.rowwise().sum();
-            // sort rowsums in descending order
-            std::vector<float> sortedRowsums(rowsums.size());
-            for (int32_t i = 0; i < rowsums.size(); ++i) {
-                sortedRowsums[i] = rowsums(i);
+            auto colsums = pseudobulk_.colwise().sum();
+            // sort colsums in descending order
+            std::vector<float> sortedcolsums(colsums.size());
+            for (int32_t i = 0; i < colsums.size(); ++i) {
+                sortedcolsums[i] = colsums(i);
             }
-            std::sort(sortedRowsums.begin(), sortedRowsums.end(), std::greater<float>());
+            std::sort(sortedcolsums.begin(), sortedcolsums.end(), std::greater<float>());
             for (int32_t i = 0; i < K_; ++i) {
-                std::cout << sortedRowsums[i] << " ";
+                std::cout << sortedcolsums[i] << " ";
             }
             std::cout << std::endl << std::flush;
         }
-    }
-    if (debug_) {
-        std::cout << "Thread " << threadId << " finished decoding" << std::endl << std::flush;
     }
     MatrixXf topVals;
     Eigen::MatrixXi topIds;
@@ -413,13 +294,18 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
 
     ProcessedResult result;
     if (outputOriginalData) {
-        result = Tiles2MinibatchBase::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
+        result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
     } else {
-        result = Tiles2MinibatchBase::formatPixelResult(tileData, topVals, topIds, ticket);
+        result = Base::formatPixelResult(tileData, topVals, topIds, ticket);
     }
 
-    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels", threadId, ticket, nAnchors, result.npts);
+    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in phi: %.1e", threadId, ticket, nAnchors, result.npts, n_iter, delta);
     resultQueue.push(std::move(result));
+}
+
+template<typename T>
+void Tiles2SLDA<T>::postRun() {
+    writePseudobulkToTsv();
 }
 
 template<typename T>
@@ -433,7 +319,7 @@ void Tiles2SLDA<T>::writePseudobulkToTsv() {
     oss << "\n" << std::setprecision(probDigits) << std::fixed;
     for (int32_t i = 0; i < M_; ++i) {
         oss << featureNames[i];
-        for (int32_t j = 0; j < K_; ++j) oss << "\t" << pseudobulk_(j, i);
+        for (int32_t j = 0; j < K_; ++j) oss << "\t" << pseudobulk_(i, j);
         oss << "\n";
     }
     oss.close();

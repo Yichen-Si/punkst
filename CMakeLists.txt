@@ -54,6 +54,7 @@ set(SOURCE_FILES
     src/hexgrid.h
     src/threads.hpp
     src/tilereader.hpp
+    src/tilereader.cpp
     src/tiles2bins.hpp
     src/tiles2bins.cpp
     src/dataunits.hpp
@@ -72,8 +73,7 @@ set(SOURCE_FILES
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
     script/lda_training.cpp
-    src/pixdecode.hpp
-    src/slda.cpp
+    src/slda.hpp
     src/tiles2minibatch.hpp
     src/tiles2minibatch.cpp
     src/tiles2slda.hpp
@@ -101,7 +101,7 @@ set(SOURCE_FILES
     script/feature_selection.cpp
     src/tiles2nmf.hpp
     src/tiles2nmf.cpp
-    )
+  )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})
 

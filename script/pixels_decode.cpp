@@ -1,15 +1,17 @@
 #include "punkst.h"
 #include "tiles2slda.hpp"
+#include "tiles2nmf.hpp"
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDirPath, weightFile;
     std::string sampleList; // for multi-sample
-    int nThreads = 1, seed = -1, debug = 0, verbose = 0;
+    int nThreads = 1, seed = -1, debug_ = 0, verbose = 0;
     int icol_x, icol_y, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
     double radius = -1, anchorDist = -1;
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
+    double minCountAnchor = 5;
     double pixelResolution = 1, defaultWeight = 0.;
     bool inMemory = false;
     bool outputOritinalData = false;
@@ -18,14 +20,22 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool useTicketSystem = false;
     int32_t floatCoordDigits = 4, probDigits = 4;
     std::vector<std::string> annoInts, annoFloats, annoStrs;
-    // bool useSCVB0 = false;
-    // SVB specific parameters
-    int32_t maxIter = 100;
+    int32_t maxIter = 20;
     double mDelta = 1e-3;
+
+    std::string algo = "slda"; // or "nmf"
+
+    MLEOptions opts;
+    opts.mle_only_mode();
+    double sizeFactor = 1000.0;
+    bool exactMLE = false;
+    std::string mapBinFile;
 
     ParamList pl;
     // Input Options
-    pl.add_option("model", "Model file", modelFile, true)
+    pl.add_option("algo", "Decoding algorithm: \"slda\" or \"nmf\")", algo)
+      .add_option("model", "Model file", modelFile, true)
+      .add_option("model-bin", "", mapBinFile)
       .add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
       .add_option("in-index", "Input index file", inIndex)
       .add_option("anchor", "Anchor file", anchorFile)
@@ -42,13 +52,19 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("hex-size", "Hexagon size (side length)", hexSize)
       .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
       .add_option("anchor-dist", "Distance between adjacent anchors", anchorDist)
-    //   .add_option("scvb0", "Use SCVB0 instead of SVB", useSCVB0)
-      .add_option("max-iter", "Maximum number of iterations for each document (default: 100)", maxIter)
+      .add_option("max-iter", "Maximum number of iterations (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("radius", "Radius", radius)
       .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
       .add_option("seed", "Random seed", seed);
+    // EM-NMF specific options
+    pl.add_option("size-factor", "Size factor used for per-anchor EM updates", sizeFactor)
+      .add_option("exact", "Use exact Poisson updates (no log1p approximation)", exactMLE)
+      .add_option("max-iter-inner", "Maximum iterations of the inner MLE solver", opts.optim.max_iters)
+      .add_option("tol-inner", "Tolerance of the inner MLE solver", opts.optim.tol)
+      .add_option("weight-thres-anchor", "Minimum total weight for an anchor to be kept for next iteration", minCountAnchor)
+      .add_option("ridge", "Ridge stabilization parameter for MLE", opts.ridge);
     // Output Options
     pl.add_option("out", "Output TSV file (backward compatibility)", outFile)
       .add_option("out-pref", "Output prefix", outPref)
@@ -64,7 +80,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used if input coordinates are float or --output-original is not set)", floatCoordDigits)
       .add_option("output-prob-digits", "Number of decimal digits to output for probabilities", probDigits)
       .add_option("verbose", "Verbose", verbose)
-      .add_option("debug", "Debug", debug);
+      .add_option("debug", "Debug", debug_);
 
     try {
         pl.readArgs(argc, argv);
@@ -74,11 +90,24 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         pl.print_help();
         return 1;
     }
+    if (debug_ > 0) {
+        logger::Logger::getInstance().setLevel(logger::LogLevel::DEBUG);
+    }
+
+    if (algo != "slda" && algo != "nmf") {
+        error("Invalid --algo (%s). Must be either \"slda\" or \"nmf\"", algo.c_str());
+    }
+    if (!inMemory && tmpDirPath.empty()) {
+        error("If --in-memory is not set, --temp-dir is required");
+    }
+
+    // Collect input data files
+    std::vector<dataset> datasets;
     if (sampleList.empty()) {
-        if (outFile.empty() && outPref.empty())
-            error("For single sample analysis either --out-pref or --out must be specified");
         if (inTsv.empty() || inIndex.empty())
             error("For single sample analysis both --in-tsv and --in-index must be specified");
+        if (outFile.empty() && outPref.empty())
+            error("For single sample analysis either --out-pref or --out must be specified");
         if (outPref.empty()) {
             size_t pos = outFile.find_last_of(".");
             if (pos != std::string::npos) {
@@ -87,51 +116,57 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 outPref = outFile;
             }
         }
+        dataset ds{"", inTsv, inIndex, outPref};
+        ds.anchorFile = anchorFile;
+        datasets.push_back(ds);
+    } else {
+         datasets = parseSampleList(sampleList, &outPref);
     }
-    if (!inMemory && tmpDirPath.empty()) {
-        error("If --in-memory is not set, --temp-dir is required");
+    if (datasets.empty()) {
+        error("No valid datasets found in sample list or input parameters");
+    }
+
+    if (hexSize <= 0 && hexGridDist <= 0) {
+        error("Hexagon size (--hex-size) or hexagon grid distance (--hex-grid-dist) must be provided");
+    }
+    if (nMoves <= 0 && anchorDist <= 0) {
+        error("Number of grid shifts (--n-moves) or anchor distance (--anchor-dist) must be provided");
     }
     if (hexSize <= 0) {
-        if (hexGridDist <= 0) {
-            error("Hexagon size or hexagon grid distance must be provided");
-        }
-        hexSize = hexGridDist / sqrt(3);
+        hexSize = hexGridDist / std::sqrt(3.0);
     } else {
-        hexGridDist = hexSize * sqrt(3);
+        hexGridDist = hexSize * std::sqrt(3.0);
     }
+    HexGrid hexGrid(hexSize);
+
     if (nMoves <= 0) {
-        if (anchorDist <= 0) {
-            error("Anchor distance or number of moves must be provided");
-        }
-        nMoves = std::max((int32_t) std::ceil(hexGridDist / anchorDist), 1);
+        nMoves = std::max<int32_t>(static_cast<int32_t>(std::ceil(hexGridDist / anchorDist)), 1);
     } else {
         anchorDist = hexGridDist / nMoves;
     }
     if (radius <= 0) {
         radius = anchorDist * 1.2;
     }
+
     if (seed <= 0) {
         seed = std::random_device{}();
         notice("Using random seed %d", seed);
     }
 
-    // Initialize LDA model
-    LatentDirichletAllocation lda(modelFile, seed, 1, 0);
-    lda.set_svb_parameters(maxIter, mDelta);
 
-    auto& featureNames = lda.feature_names_;
-    int32_t nFeatures = lda.get_n_features();
-    notice("Initialized anchor model with %d features and %d factors", nFeatures, lda.get_n_topics());
+    RowMajorMatrixXd beta; // M x K
+    std::vector<std::string> featureNames;
+    std::vector<std::string> factorNames;
+    read_matrix_from_file(modelFile, beta, &featureNames, &factorNames);
+    if (featureNames.empty()) {
+        error("Model file %s must contain feature names", modelFile.c_str());
+    }
+    int32_t M_model = static_cast<int32_t>(beta.rows());
+    int32_t K_model = static_cast<int32_t>(beta.cols());
+    notice("Read model with %d features and %d factors", M_model, K_model);
 
     // Set up input parser
-    HexGrid hexGrid(hexSize);
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val);
-    if (!featureIsIndex) {
-        parser.setFeatureDict(featureNames);
-    }
-    if (!weightFile.empty()) {
-        parser.readWeights(weightFile, defaultWeight, nFeatures);
-    }
     // parse additional annotation columns (to carry over to output)
     if (!parser.addExtraInt(annoInts)) {
         error("Invalid value in --ext-col-ints");
@@ -142,93 +177,94 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (!parser.addExtraStr(annoStrs)) {
         error("Invalid value in --ext-col-strs");
     }
+    if (!featureIsIndex) {
+        parser.setFeatureDict(featureNames);
+    }
+    if (!weightFile.empty()) {
+        parser.readWeights(weightFile, defaultWeight, M_model);
+    }
     notice("Initialized tile reader");
 
-    // Collect input data files
-    struct dataset {
-        std::string sampleId;
-        std::string inTsv;
-        std::string inIndex;
-        std::string outPref;
-        std::string anchorFile;
+
+    auto configure_decoder = [&](auto& decoder, const std::string& anchorFile) {
+        decoder.setOutputOptions(outputOritinalData, useTicketSystem);
+        decoder.setOutputCoordDigits(floatCoordDigits);
+        decoder.setOutputProbDigits(probDigits);
+        if (!anchorFile.empty()) {
+            int32_t nAnchors = decoder.loadAnchors(anchorFile);
+            notice("Loaded %d valid anchors", nAnchors);
+        }
     };
-    std::vector<dataset> datasets;
-    if (!sampleList.empty()) {
-        std::ifstream rf(sampleList);
-        if (!rf) {
-            error("Error opening sample list file: %s", sampleList.c_str());
+
+    if (algo == "nmf") {
+        PixelEM emPois(debug_);
+        emPois.set_em_options(maxIter, mDelta, minCountAnchor);
+        if (!mapBinFile.empty()) {
+            emPois.init_mlr(mapBinFile, beta);
+        } else {
+            emPois.init_pnmf(beta, opts);
         }
-        std::string line;
-        while (std::getline(rf, line)) {
-            if (line.empty() || line[0] == '#') continue;
-            std::vector<std::string> tokens;
-            split(tokens, "\t", line);
-            if (tokens.size() < 3) {
-                error("Invalid line in sample list: %s", line.c_str());
+
+        M_model = emPois.get_M();
+        K_model = emPois.get_K();
+        if (!weightFile.empty()) {
+            parser.readWeights(weightFile, defaultWeight, M_model);
+        }
+
+        for (const auto& ds : datasets) {
+            if (!ds.sampleId.empty()) {
+                notice("Processing sample %s", ds.sampleId.c_str());
             }
-            dataset ds{tokens[0], tokens[1], tokens[2]};
-            if (tokens.size() > 3) {
-                ds.outPref = tokens[3];
-                if (tokens.size() > 4) {
-                    ds.anchorFile = tokens[4];
-                }
+
+            TileReader tileReader(ds.inTsv, ds.inIndex, nullptr, -1, coordsAreInt);
+            if (!tileReader.isValid()) {
+                error("Error in input tiles: %s", ds.inTsv.c_str());
+            }
+
+            if (coordsAreInt) {
+                Tiles2NMF<int32_t> decoder(
+                    nThreads, radius, ds.outPref, tmpDirPath,
+                    emPois, tileReader, parser, hexGrid, nMoves,
+                    seed, static_cast<double>(minInitCount), 0.7, pixelResolution,
+                    topK, verbose, debug_);
+                configure_decoder(decoder, ds.anchorFile);
+                decoder.run();
             } else {
-                size_t pos = ds.inTsv.find_last_of("/\\");
-                if (pos != std::string::npos) {
-                    ds.outPref = ds.inTsv.substr(0, pos+1) + ds.sampleId;
-                } else {
-                    ds.outPref = ds.sampleId;
-                }
-                if (!outPref.empty()) {
-                    ds.outPref += "." + outPref;
-                }
+                Tiles2NMF<float> decoder(
+                    nThreads, radius, ds.outPref, tmpDirPath,
+                    emPois, tileReader, parser, hexGrid, nMoves,
+                    seed, static_cast<double>(minInitCount), 0.7, pixelResolution,
+                    topK, verbose, debug_);
+                configure_decoder(decoder, ds.anchorFile);
+                decoder.run();
             }
-            datasets.push_back(ds);
         }
-    } else {
-        dataset ds{"", inTsv, inIndex, outPref};
-        ds.anchorFile = anchorFile;
-        datasets.push_back(ds);
-    }
-    if (datasets.empty()) {
-        error("No valid datasets found in sample list or input parameters");
+        return 0;
     }
 
+    RowMajorMatrixXd betaT = beta.transpose(); // K x M
+    LatentDirichletAllocation lda(betaT, seed, 1);
+    lda.set_svb_parameters(maxIter, mDelta);
     // Process each dataset
     for (const auto& ds : datasets) {
-        inTsv = ds.inTsv;
-        inIndex = ds.inIndex;
-        outPref = ds.outPref;
         anchorFile = ds.anchorFile;
         if (!ds.sampleId.empty()) {
             notice("Processing sample %s\n", ds.sampleId.c_str());
         }
 
-        TileReader tileReader(inTsv, inIndex, nullptr, -1, coordsAreInt);
+        TileReader tileReader(ds.inTsv, ds.inIndex, nullptr, -1, coordsAreInt);
         if (!tileReader.isValid()) {
-            error("Error in input tiles: %s", inTsv.c_str());
+            error("Error in input tiles: %s", ds.inTsv.c_str());
         }
         if (coordsAreInt) {
-            Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug);
-            tiles2slda.setOutputOptions(outputOritinalData, useTicketSystem);
+            Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
+            configure_decoder(tiles2slda, ds.anchorFile);
             tiles2slda.setFeatureNames(featureNames);
-            tiles2slda.setOutputCoordDigits(floatCoordDigits);
-            tiles2slda.setOutputProbDigits(probDigits);
-            if (!anchorFile.empty()) {
-                int32_t nAnchors = tiles2slda.loadAnchors(anchorFile);
-                notice("Loaded %d valid anchors", nAnchors);
-            }
             tiles2slda.run();
         } else {
-            Tiles2SLDA<float> tiles2slda(nThreads, radius, outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug);
-            tiles2slda.setOutputOptions(outputOritinalData, useTicketSystem);
-            tiles2slda.setOutputCoordDigits(floatCoordDigits);
-            tiles2slda.setOutputProbDigits(probDigits);
+            Tiles2SLDA<float> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
+            configure_decoder(tiles2slda, ds.anchorFile);
             tiles2slda.setFeatureNames(featureNames);
-            if (!anchorFile.empty()) {
-                int32_t nAnchors = tiles2slda.loadAnchors(anchorFile);
-                notice("Loaded %d valid anchors", nAnchors);
-            }
             tiles2slda.run();
         }
     }

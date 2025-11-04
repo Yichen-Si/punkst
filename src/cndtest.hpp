@@ -41,7 +41,7 @@ public:
         makeSplits();
         for (int32_t k = 0; k < nFold_; ++k) {
             int32_t M = static_cast<int32_t>(trainIdx_[k].size());
-            MatrixXd modelMatrix = priorMatrix_(Eigen::placeholders::all, Eigen::ArrayXi::Map(trainIdx_[k].data(), M));
+            RowMajorMatrixXd modelMatrix = priorMatrix_(Eigen::placeholders::all, Eigen::ArrayXi::Map(trainIdx_[k].data(), M));
             modelList_[k].reset();
             modelList_[k] = std::make_unique<LatentDirichletAllocation>(
                                 modelMatrix, seed_, nThreads_);

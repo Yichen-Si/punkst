@@ -9,12 +9,16 @@
 #include <algorithm>
 #include <numeric>
 #include <array>
+#include "error.hpp"
 #include <tbb/tbb.h>
 #include <tbb/blocked_range.h>
 
 #include "Eigen/Core"
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
+
+template<typename Scalar>
+using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
 
 // Calculate the mean absolute difference between two arrays.
 template<typename T>
@@ -127,11 +131,19 @@ Derived dirichlet_expectation_1d(const Eigen::MatrixBase<Derived>& alpha,
     return (tmp.array() - psi_total).exp();
 }
 
-// row-wise exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
+// exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 template<typename Derived>
-Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha) {
-    double eps = 1e-6;
+Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha, bool colwise = false, double eps = 1e-6) {
     using Scalar = typename Derived::Scalar;
+    if (colwise) {
+        int32_t K = alpha.rows();
+        auto psi_totals = (alpha.colwise().sum().array() + eps * K)
+                .unaryExpr([](Scalar x){ return psi(x); }).matrix();
+        Derived result = (alpha.array() + eps)
+                .unaryExpr([](Scalar x){ return psi(x); });
+        result.rowwise() -= psi_totals;
+        return result.array().exp();
+    }
     int32_t K = alpha.cols();
     auto psi_totals = (alpha.rowwise().sum().array() + eps * K)
             .unaryExpr([](Scalar x){ return psi(x); }).matrix();
@@ -141,12 +153,19 @@ Derived dirichlet_expectation_2d(const Eigen::MatrixBase<Derived>& alpha) {
     return result.array().exp();
 }
 
-// row-wise E[log X] for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
+// E[log X] for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 template<typename Derived>
-Derived dirichlet_entropy_2d(const Eigen::MatrixBase<Derived>& alpha)
-{
-    double eps = 1e-6;
+Derived dirichlet_entropy_2d(const Eigen::MatrixBase<Derived>& alpha, bool colwise = false, double eps = 1e-6) {
     using Scalar = typename Derived::Scalar;
+    if (colwise) {
+        int32_t K = alpha.rows();
+        auto psi_totals = (alpha.colwise().sum().array() + eps * K)
+                .unaryExpr([](Scalar x){ return psi(x); }).matrix();
+        Derived result = (alpha.array() + eps)
+                .unaryExpr([](Scalar x){ return psi(x); });
+        result.rowwise() -= psi_totals;
+        return result;
+    }
     int32_t K = alpha.cols();
     auto psi_totals = (alpha.rowwise().sum().array() + eps * K)
             .unaryExpr([](Scalar x){ return psi(x); }).matrix();
@@ -157,14 +176,36 @@ Derived dirichlet_entropy_2d(const Eigen::MatrixBase<Derived>& alpha)
 }
 
 template<typename Derived>
-void rowwiseSoftmax(Eigen::MatrixBase<Derived>& mat)
+void rowSoftmaxInPlace(Eigen::MatrixBase<Derived>& mat)
 {
     using Scalar = typename Derived::Scalar;
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> maxCoeffs = mat.rowwise().maxCoeff();
     mat.colwise() -= maxCoeffs;
     mat = mat.array().exp();
     Eigen::Matrix<Scalar, Eigen::Dynamic, 1> row_sums = mat.rowwise().sum();
-    mat.array().colwise() /= row_sums.array();
+    // safe inverse
+    for (int i = 0; i < row_sums.size(); ++i) {
+        if (row_sums(i) < std::numeric_limits<Scalar>::epsilon()) {
+            row_sums(i) = Scalar(1);
+        } else {
+            row_sums(i) = Scalar(1) / row_sums(i);
+        }
+    }
+    mat.array().colwise() *= row_sums.array();
+}
+
+template<typename Derived>
+void softmaxInPlace(Eigen::MatrixBase<Derived>& vec) {
+    using Scalar = typename Derived::Scalar;
+    Scalar maxCoeff = vec.maxCoeff();
+    vec.array() -= maxCoeff;
+    vec = vec.array().exp();
+    Scalar sum = vec.sum();
+    if (sum <= std::numeric_limits<Scalar>::epsilon()) {
+        vec.setConstant(Scalar(1) / vec.size());
+    } else {
+        vec /= sum;
+    }
 }
 
 inline double expit(double x) {
@@ -187,81 +228,228 @@ inline float logit(float x) {
     return std::log(x / (1.0f - x));
 }
 
-template <typename Scalar>
-void colNormalizeInPlace(Eigen::SparseMatrix<Scalar, Eigen::RowMajor>& mat) {
-    // 1. Compute column sums: colSums = 1^T * mat
-    Eigen::Vector<Scalar, Eigen::Dynamic> ones = Eigen::Vector<Scalar, Eigen::Dynamic>::Ones(mat.rows());
-    Eigen::RowVector<Scalar, Eigen::Dynamic> colSums = ones.transpose() * mat;
-    // 2. Create a safe array of inverse column sums
-    Eigen::Array<Scalar, 1, Eigen::Dynamic> invColSums = colSums.array();
-    // Use static_cast to ensure literals match the template Scalar type
-    const Scalar zero = static_cast<Scalar>(0.0);
-    const Scalar one = static_cast<Scalar>(1.0);
-    invColSums = (invColSums == zero).select(
-        zero,            // Value to use if colSum == 0
-        one / invColSums // Value to use if colSum != 0
-    );
-    // 3. Iterate over all non-zero values and multiply in-place
-    for (int i = 0; i < mat.outerSize(); ++i) {
-        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
-            it.valueRef() *= invColSums(it.col());
+template <typename Scalar, int StorageOrder>
+void rowNormalizeInPlace(Eigen::SparseMatrix<Scalar, StorageOrder>& mat, bool nonNeg = true) {
+    using Real = RealScalar<Scalar>;
+    if constexpr (StorageOrder == Eigen::RowMajor) {
+        for (int i = 0; i < mat.outerSize(); ++i) {
+            Real rowNormL1(0);
+            // First pass: compute L1 norm for row i
+            if (nonNeg) {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                    rowNormL1 += it.value();
+                }
+            } else {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                    rowNormL1 += std::abs(it.value());
+                }
+            }
+            if (rowNormL1 > std::numeric_limits<Real>::epsilon()) {
+                Real invRowNormL1 = Real(1) / rowNormL1;
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                    it.valueRef() *= invRowNormL1;
+                }
+            }
+        }
+    } else {
+        Eigen::Matrix<Real, Eigen::Dynamic, 1> rowNormsL1 = Eigen::Matrix<Real, Eigen::Dynamic, 1>::Zero(mat.rows());
+        if (nonNeg) {
+            for (int j = 0; j < mat.outerSize(); ++j) {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                    rowNormsL1(it.row()) += it.value();
+                }
+            }
+        } else {
+            for (int j = 0; j < mat.outerSize(); ++j) {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                    rowNormsL1(it.row()) += std::abs(it.value());
+                }
+            }
+        }
+        Eigen::Matrix<Real, Eigen::Dynamic, 1> invRowNormsL1 = Eigen::Matrix<Real, Eigen::Dynamic, 1>::Zero(mat.rows());
+        for (int i = 0; i < mat.rows(); ++i) {
+            if (rowNormsL1(i) > std::numeric_limits<Real>::epsilon()) {
+                invRowNormsL1(i) = Real(1) / rowNormsL1(i);
+            }
+        }
+        for (int j = 0; j < mat.outerSize(); ++j) {
+            for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                it.valueRef() *= invRowNormsL1(it.row());
+            }
         }
     }
 }
 
 template <typename Scalar>
-void rowNormalizeInPlace(Eigen::SparseMatrix<Scalar, Eigen::RowMajor>& mat) {
-    for (int i = 0; i < mat.rows(); ++i) {
-        Scalar rowSum = Scalar(0);
+void rowSoftmaxInPlace(Eigen::SparseMatrix<Scalar, Eigen::RowMajor>& mat) {
+    using Real = RealScalar<Scalar>;
+    for (int i = 0; i < mat.outerSize(); ++i) {
+        // First pass: find max for numerical stability
+        Real rowMax = -std::numeric_limits<Real>::infinity();
         for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
-            rowSum += it.value();
+            if (it.value() > rowMax) {
+                rowMax = it.value();
+            }
         }
-        if (rowSum == Scalar(0)) {
-            continue;
-        }
-        Scalar rowSumInv = Scalar(1) / rowSum;
+        // Second pass: compute exponentials and sum
+        Real rowSum(0);
         for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
-            it.valueRef() *= rowSumInv;
+            double expVal = std::exp(it.value() - rowMax);
+            it.valueRef() = Scalar(expVal);
+            rowSum += expVal;
+        }
+        // Third pass: normalize
+        if (rowSum > std::numeric_limits<Real>::epsilon()) {
+            Real invRowSum = Real(1) / rowSum;
+            for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
+                it.valueRef() *= invRowSum;
+            }
         }
     }
+}
+
+template <typename Derived>
+void rowNormalizeInPlace(Eigen::MatrixBase<Derived>& mat, bool nonNeg = true) {
+    using Real = RealScalar<typename Derived::Scalar>;
+    using RealVector = Eigen::Matrix<Real, Derived::RowsAtCompileTime, 1>;
+    RealVector rowNorms;
+    if (nonNeg) {
+        rowNorms = mat.rowwise().sum();
+    } else {
+        rowNorms = mat.rowwise().template lpNorm<1>();
+    }
+    RealVector invRowNorms = rowNorms.array().unaryExpr([](Real v) {
+        return (v > std::numeric_limits<Real>::epsilon()) ? (Real(1) / v) : Real(0);
+    });
+    mat.array().colwise() *= invRowNorms.array();
+}
+
+template <typename Derived>
+Eigen::Matrix<typename Derived::Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+rowNormalize(const Eigen::MatrixBase<Derived>& X)
+{
+    using Scalar = typename Derived::Scalar;
+    Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> out(X.rows(), X.cols());
+    for (Eigen::Index i = 0; i < X.rows(); ++i) {
+        Scalar s = X.row(i).sum();
+        if (s != Scalar(0)) {
+            out.row(i) = X.row(i) / s;
+        } else {
+            out.row(i).setZero();
+        }
+    }
+    return out;
+}
+
+
+template <typename Scalar, int StorageOrder>
+void colNormalizeInPlace(Eigen::SparseMatrix<Scalar, StorageOrder>& mat, bool nonNeg = true) {
+    using Real = RealScalar<Scalar>;
+    if constexpr (StorageOrder == Eigen::ColMajor) {
+        for (int j = 0; j < mat.outerSize(); ++j) {
+            Real colNormL1(0);
+            if (nonNeg) {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                    colNormL1 += it.value();
+                }
+            } else {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                    colNormL1 += std::abs(it.value());
+                }
+            }
+            if (colNormL1 > std::numeric_limits<Real>::epsilon()) {
+                Real invColNormL1 = Real(1) / colNormL1;
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                    it.valueRef() *= invColNormL1;
+                }
+            }
+        }
+    } else {
+        Eigen::Matrix<Real, 1, Eigen::Dynamic> invColNormsL1 = Eigen::Matrix<Real, 1, Eigen::Dynamic>::Zero(mat.cols());
+        if (nonNeg) {
+            for (int i = 0; i < mat.outerSize(); ++i) {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                    invColNormsL1(it.col()) += it.value();
+                }
+            }
+        } else {
+            for (int i = 0; i < mat.outerSize(); ++i) {
+                for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                    invColNormsL1(it.col()) += std::abs(it.value());
+                }
+            }
+        }
+        for (int j = 0; j < mat.cols(); ++j) {
+            if (invColNormsL1(j) > std::numeric_limits<Real>::epsilon()) {
+                invColNormsL1(j) = Real(1) / invColNormsL1(j);
+            } else {
+                invColNormsL1(j) = Real(0);
+            }
+        }
+        for (int i = 0; i < mat.outerSize(); ++i) {
+            for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                it.valueRef() *= invColNormsL1(it.col());
+            }
+        }
+    }
+}
+
+template <typename Derived>
+void colNormalizeInPlace(Eigen::MatrixBase<Derived>& mat, bool nonNeg = true) {
+    using Real = RealScalar<typename Derived::Scalar>;
+    using RealVector = Eigen::Matrix<Real, Derived::ColsAtCompileTime, 1>;
+    RealVector colNorms;
+    if (nonNeg) {
+        colNorms = mat.colwise().sum();
+    } else {
+        colNorms = mat.colwise().template lpNorm<1>();
+    }
+    RealVector invColNorms = colNorms.array().unaryExpr([](Real v) {
+        return (v > std::numeric_limits<Real>::epsilon()) ? (Real(1) / v) : Real(0);
+    });
+    mat.array().rowwise() *= invColNorms.transpose().array();
 }
 
 // Element-wise expit then row-normalize
-template<typename SparseMatrixType>
-void expitAndRowNormalize(SparseMatrixType& mat) {
-    static_assert(SparseMatrixType::IsRowMajor, "normalizeRows requires a row-major sparse matrix.");
-    using Scalar = typename SparseMatrixType::Scalar;
-    for (int i = 0; i < mat.rows(); ++i) {
-        Scalar rowSums = Scalar(0);
-        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
-            double transformed = expit(it.value());
-            it.valueRef() = Scalar(transformed);
-            rowSums += transformed;
+template <typename Scalar, int StorageOrder>
+void expitAndRowNormalize(Eigen::SparseMatrix<Scalar, StorageOrder>& mat) {
+    using Real = RealScalar<Scalar>;
+    if constexpr (StorageOrder == Eigen::RowMajor) {
+        for (int i = 0; i < mat.outerSize(); ++i) {
+            Real rowSum(0);
+            for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                double transformed = expit(it.value());
+                it.valueRef() = Scalar(transformed);
+                rowSum += transformed;
+            }
+            if (rowSum <= std::numeric_limits<Real>::epsilon()) {
+                continue;
+            }
+            Real invRowSum = Real(1.) / rowSum;
+            for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
+                it.valueRef() *= invRowSum;
+            }
         }
-        if (rowSums == Scalar(0)) {
-            continue;
+    } else {
+        debug("%s called on column-major sparse matrix", __func__);
+        Eigen::Matrix<Real, Eigen::Dynamic, 1> rowSum = Eigen::Matrix<Real, Eigen::Dynamic, 1>::Zero(mat.rows());
+        for (int j = 0; j < mat.outerSize(); ++j) {
+            for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                double transformed = expit(it.value());
+                it.valueRef() = Scalar(transformed);
+                rowSum(it.row()) += transformed;
+            }
         }
-        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
-            it.valueRef() /= rowSums;
+        Eigen::Matrix<Real, Eigen::Dynamic, 1> invRowSum = Eigen::Matrix<Real, Eigen::Dynamic, 1>::Zero(mat.rows());
+        for (int i = 0; i < mat.rows(); ++i) {
+            if (rowSum(i) > std::numeric_limits<Real>::epsilon()) {
+                invRowSum(i) = Real(1) / rowSum(i);
+            }
         }
-    }
-}
-
-// row-normalize
-template<typename SparseMatrixType>
-void rowNormalize(SparseMatrixType& mat) {
-    static_assert(SparseMatrixType::IsRowMajor, "normalizeRows requires a row-major sparse matrix.");
-    using Scalar = typename SparseMatrixType::Scalar;
-    for (int i = 0; i < mat.rows(); ++i) {
-        Scalar rowSum = Scalar(0);
-        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
-            rowSum += it.value();
-        }
-        if (rowSum == Scalar(0)) {
-            continue;
-        }
-        for (typename SparseMatrixType::InnerIterator it(mat, i); it; ++it) {
-            it.valueRef() /= rowSum;
+        for (int j = 0; j < mat.outerSize(); ++j) {
+            for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
+                it.valueRef() *= invRowSum(it.row());
+            }
         }
     }
 }

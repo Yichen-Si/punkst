@@ -1,12 +1,13 @@
 // Minibatch SLDA processor
 #pragma once
 
+#include "numerical_utils.hpp"
 #include "tiles2minibatch.hpp"
 #include "lda.hpp"
-#include "pixdecode.hpp"
+#include "slda.hpp"
 
 template<typename T>
-class Tiles2SLDA : public Tiles2MinibatchBase {
+class Tiles2SLDA : public Tiles2MinibatchBase<T> {
 
 public:
     Tiles2SLDA(int nThreads, double r,
@@ -21,12 +22,21 @@ public:
 
     void setLloydIter(int32_t nIter) { nLloydIter_ = nIter; }
 
-    void run() override;
-
 protected:
-    using vec2f_t = Tiles2MinibatchBase::vec2f_t;
+    using Base = Tiles2MinibatchBase<T>;
+    using Base::debug_;
+    using Base::lineParserPtr;
+    using Base::useExtended_;
+    using Base::topk_;
+    using Base::M_;
+    using Base::featureNames;
+    using Base::probDigits;
+    using Base::outPref;
+    using Base::resultQueue;
+    using Base::outputOriginalData;
+    using typename Base::ProcessedResult;
+    using vec2f_t = typename Base::vec2f_t;
 
-    int32_t debug_;
     int32_t K_;
     LatentDirichletAllocation& lda_;
     OnlineSLDA slda_;
@@ -44,10 +54,9 @@ protected:
     int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
     int32_t makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
 
-    void processTile(TileData<T> &tileData, int threadId=0, int ticket = 0, vec2f_t* anchorPtr = nullptr);
+    void processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) override;
+    void postRun() override;
 
     void writePseudobulkToTsv();
 
-    void tileWorker(int threadId) override;
-    void boundaryWorker(int threadId) override;
 };

@@ -31,12 +31,12 @@ struct Minibatch {
     int n  = 0;    // number of anchors
     int N  = 0;    // number of pixels
     int M  = 0;    // number of features
-    SparseMatrix<float> mtx;  // (N x M); observed data matrix
-    SparseMatrix<float, Eigen::RowMajor> wij; // (N x n) for slda, (n x N) for em-nmf
+    SparseMatrix<float, Eigen::RowMajor> mtx;  // (N x M); observed data matrix
+    SparseMatrix<float, Eigen::RowMajor> wij; // (N x n)
     RowMajorMatrixXf gamma; // (n x K); ~P(k|j)
     RowMajorMatrixXf theta; // (n x K); only for em-nmf
     // Does not need to be initialized:
-    SparseMatrix<float, Eigen::RowMajor> psi; // same shape as wij
+    SparseMatrix<float, Eigen::RowMajor> psi; // (N x n)
     RowMajorMatrixXf phi;   // (N x K); ~P(k|i)
     double ll = 0.0;
 };
@@ -213,13 +213,14 @@ struct BoundaryBuffer {
 };
 
 /* Implement the logic of processing tiles while resolving boundary issues */
+template<typename T>
 class Tiles2MinibatchBase {
 
 public:
 
-    Tiles2MinibatchBase(int nThreads, double r, TileReader& tileReader, const std::string& _outPref, const std::string* opt = nullptr)
+    Tiles2MinibatchBase(int nThreads, double r, TileReader& tileReader, const std::string& _outPref, const std::string* opt = nullptr, int32_t debug = 0)
     : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref),
-      useTicketSystem(false),
+      debug_(debug), useTicketSystem(false),
       resultQueue(static_cast<size_t>(std::max(1, nThreads))) {
         tileSize = tileReader.getTileSize();
         if (opt && !(*opt).empty()) {
@@ -231,11 +232,11 @@ public:
         }
     }
 
-    ~Tiles2MinibatchBase() {
+    virtual ~Tiles2MinibatchBase() {
         closeOutput();
     }
 
-    virtual void run() = 0;
+    void run();
     // Load fixed anchor points from a file and assign to tiles/boundaries
     int32_t loadAnchors(const std::string& anchorFile);
 
@@ -274,6 +275,7 @@ protected:
     ScopedTempDir tmpDir;
     bool useMemoryBuffer_;
     bool useTicketSystem;
+    int32_t debug_;
 
     int fdMain = -1;
     int fdIndex = -1;
@@ -302,8 +304,8 @@ protected:
     int32_t M_ = 0;
 
     /* Worker */
-    virtual void tileWorker(int threadId) = 0;
-    virtual void boundaryWorker(int threadId) = 0;
+    void tileWorker(int threadId);
+    void boundaryWorker(int threadId);
     void writerWorker();
 
     /* Key logic */
@@ -339,7 +341,6 @@ protected:
 
     // given (x, y) and its tile, compute all buffers it walls into
     // and whether it is "internal" to the tile
-    template<typename T>
     int32_t pt2buffer(std::vector<uint32_t>& bufferidx, T x0, T y0, TileKey tile) {
         // convert to local coordinates
         T x = x0 - tile.col * tileSize;
@@ -407,43 +408,38 @@ protected:
         return 0;
     }
 
-    template<typename T>
     void pt2tile(T x, T y, TileKey &tile) const {
         tile.row = static_cast<int32_t>(std::floor(y / tileSize));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize));
     }
 
-    template<typename T>
-    void tile2bound(TileKey &tile, T& xmin, T& xmax, T& ymin, T& ymax) const {
-        xmin = static_cast<T>(tile.col * tileSize);
-        xmax = static_cast<T>((tile.col + 1) * tileSize);
-        ymin = static_cast<T>(tile.row * tileSize);
-        ymax = static_cast<T>((tile.row + 1) * tileSize);
+    void tile2bound(TileKey &tile, float& xmin, float& xmax, float& ymin, float& ymax) const {
+        xmin = static_cast<float>(tile.col * tileSize);
+        xmax = static_cast<float>((tile.col + 1) * tileSize);
+        ymin = static_cast<float>(tile.row * tileSize);
+        ymax = static_cast<float>((tile.row + 1) * tileSize);
     }
 
-    template<typename T>
-    void buffer2bound(bool isVertical, int32_t& bufRow, int32_t& bufCol, T& xmin, T& xmax, T& ymin, T& ymax) {
+    void buffer2bound(bool isVertical, int32_t& bufRow, int32_t& bufCol, float& xmin, float& xmax, float& ymin, float& ymax) {
         if (isVertical) {
-            xmin = (bufCol + 1.) * tileSize - 2 * r;
-            xmax = (bufCol + 1.) * tileSize + 2 * r;
-            ymin = bufRow * tileSize;
-            ymax = bufRow * tileSize + tileSize;
+            xmin = static_cast<float>((bufCol + 1.) * tileSize - 2 * r);
+            xmax = static_cast<float>((bufCol + 1.) * tileSize + 2 * r);
+            ymin = static_cast<float>(bufRow * tileSize);
+            ymax = static_cast<float>(bufRow * tileSize + tileSize);
         } else {
-            xmin = bufCol * tileSize - r;
-            xmax = bufCol * tileSize + tileSize + r;
-            ymin = (bufRow + 1) * tileSize - 2 * r;
-            ymax = (bufRow + 1) * tileSize + 2 * r;
+            xmin = static_cast<float>(bufCol * tileSize - r);
+            xmax = static_cast<float>(bufCol * tileSize + tileSize + r);
+            ymin = static_cast<float>((bufRow + 1) * tileSize - 2 * r);
+            ymax = static_cast<float>((bufRow + 1) * tileSize + 2 * r);
         }
     }
-    template<typename T>
-    void bufferId2bound(uint32_t bufferId, T& xmin, T& xmax, T& ymin, T& ymax) {
+    void bufferId2bound(uint32_t bufferId, float& xmin, float& xmax, float& ymin, float& ymax) {
         int32_t bufRow, bufCol;
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
         buffer2bound(isVertical, bufRow, bufCol, xmin, xmax, ymin, ymax);
     }
 
-    template<typename T>
-    bool isInternalToBuffer(T x, T y, uint32_t bufferId) {
+    bool isInternalToBuffer(float x, float y, uint32_t bufferId) {
         int32_t bufRow, bufCol;
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
         if (isVertical) {
@@ -464,24 +460,36 @@ protected:
         }
     }
 
+    virtual void processTile(TileData<T>& tileData, int threadId, int ticket, vec2f_t* anchorPtr) = 0;
+    virtual void postRun() {}
+
+    vec2f_t* lookupTileAnchors(const TileKey& tile) {
+        auto it = fixedAnchorForTile.find(tile);
+        if (it == fixedAnchorForTile.end()) {
+            return nullptr;
+        }
+        return &it->second;
+    }
+
+    vec2f_t* lookupBoundaryAnchors(uint32_t key) {
+        auto it = fixedAnchorForBoundary.find(key);
+        if (it == fixedAnchorForBoundary.end()) {
+            return nullptr;
+        }
+        return &it->second;
+    }
+
     /* I/O */
-    template<typename T>
     int32_t buildMinibatchCore(TileData<T>& tileData,
         std::vector<cv::Point2f>& anchors, Minibatch& minibatch,
         double pixelResolution, double distR, double distNu);
     // Parsing helpers (templated on coordinate type)
-    template<typename T>
-    int32_t buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, Minibatch& minibatch, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
-    template<typename T>
+    int32_t buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
-    template<typename T>
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
-    template<typename T>
     int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
-    template<typename T>
     int32_t parseBoundaryMemoryStandard(TileData<T>& tileData,
         InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
-    template<typename T>
     int32_t parseBoundaryMemoryExtended(TileData<T>& tileData,
         InMemoryStorageExtended<T>* memStore, uint32_t bufferKey);
 
@@ -490,9 +498,7 @@ protected:
     void setupOutput();
     void closeOutput();
     void writeHeaderToJson();
-    template<typename T>
     ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
-    template<typename T>
     ProcessedResult formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
 
 };

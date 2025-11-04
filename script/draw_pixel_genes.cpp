@@ -52,7 +52,7 @@ void draw_worker(
 
         std::string line;
         while (iter->next(line)) {
-            RecordT<double> rec;
+            RecordT<float> rec;
             if (parser.parse(rec, line) < 0 || rec.ct <= 0) continue;
 
             int xpix = static_cast<int>((rec.x - xmin) / scale) - left;
