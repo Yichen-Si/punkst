@@ -20,7 +20,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool useTicketSystem = false;
     int32_t floatCoordDigits = 4, probDigits = 4;
     std::vector<std::string> annoInts, annoFloats, annoStrs;
-    int32_t maxIter = 20;
+    int32_t maxIter = 100;
     double mDelta = 1e-3;
 
     std::string algo = "slda"; // or "nmf"
@@ -202,7 +202,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         if (!mapBinFile.empty()) {
             emPois.init_mlr(mapBinFile, beta);
         } else {
-            emPois.init_pnmf(beta, opts);
+            emPois.init_pnmf(beta, opts, sizeFactor, exactMLE);
         }
 
         M_model = emPois.get_M();

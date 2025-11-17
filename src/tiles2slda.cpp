@@ -59,7 +59,7 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
     }
 
     if (debug_ > 0) {
-        std::cout << "Check model initialization\n" << std::fixed << std::setprecision(2);
+        std::cout << "Check model initialization\n" << std::fixed << std::setprecision(4);
         const auto& lambda = slda_.get_lambda();
         const auto& Elog_beta = slda_.get_Elog_beta(); // M x K
         for (int32_t i = 0; i < std::min(3, K_) ; ++i) {
@@ -109,7 +109,11 @@ int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Poin
         return nPixels;
     }
 
-    minibatch.wij.unaryExpr([](float val) {return logit(val);});
+    for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
+        for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+            it.valueRef() = logit(it.value());
+        }
+    }
 
     return nPixels;
 }
@@ -243,15 +247,21 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     Minibatch minibatch;
     int32_t nAnchors = initAnchorsHybrid(tileData, anchors, minibatch, anchorPtr);
 
-    if (debug_) {
-        std::cout << "Thread " << threadId << " initialized " << nAnchors << " anchors" << std::endl << std::flush;
-    }
     if (nAnchors == 0) {
         return;
     }
     int32_t nPixels = makeMinibatch(tileData, anchors, minibatch);
     if (debug_) {
-        std::cout << "Thread " << threadId << " made minibatch with " << nPixels << " pixels" << std::endl << std::flush;
+        std::cout << "Thread " << threadId << " made minibatch with " << nPixels << " pixels. ";
+        int32_t nnz = minibatch.wij.nonZeros();
+        std::cout << nnz << " " << (float) nnz / minibatch.n << std::endl << std::flush;
+        std::vector<float> colsums(minibatch.n, 0.0f);
+        for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
+            for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+                colsums[it.col()] += it.value();
+            }
+        }
+        std::cout << "  " << std::accumulate(colsums.begin(), colsums.end(), 0.0f) / minibatch.n << " " << std::max_element(colsums.begin(), colsums.end())[0] << std::endl << std::flush;
     }
     if (nPixels < 10) {
         return;
@@ -264,23 +274,17 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
         pseudobulk_ += smtx;
         if (debug_) {
             std::cout << "Thread " << threadId << " updated pseudobulk.\n";
-            std::cout << "    Peek: " << std::fixed << std::setprecision(0);
-            for (int32_t i = 0; i < std::min(3, K_); ++i) {
-                for (int32_t j = 0; j < std::min(5, M_); ++j) {
-                    std::cout << smtx(i, j) << " ";
-                }
-                std::cout << "\n    ";
-            }
+            // std::cout << "    Peek: " << std::fixed << std::setprecision(0);
+            // for (int32_t i = 0; i < std::min(3, K_); ++i) {
+            //     for (int32_t j = 0; j < std::min(5, M_); ++j) {
+            //         std::cout << smtx(i, j) << " ";
+            //     }
+            //     std::cout << "\n    ";
+            // }
             std::cout << "    Current sums: ";
             auto colsums = pseudobulk_.colwise().sum();
-            // sort colsums in descending order
-            std::vector<float> sortedcolsums(colsums.size());
-            for (int32_t i = 0; i < colsums.size(); ++i) {
-                sortedcolsums[i] = colsums(i);
-            }
-            std::sort(sortedcolsums.begin(), sortedcolsums.end(), std::greater<float>());
             for (int32_t i = 0; i < K_; ++i) {
-                std::cout << sortedcolsums[i] << " ";
+                std::cout << colsums(i) << " ";
             }
             std::cout << std::endl << std::flush;
         }

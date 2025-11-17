@@ -104,7 +104,7 @@ public:
                 }
             }
         }
-
+        RowMajorMatrixXf gamma_old = batch.gamma;
         RowMajorMatrixXf phi_old = batch.phi;
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
@@ -115,9 +115,10 @@ public:
             printf("Initialize E-step, E_q[ll] %.4e\n", batch.ll);
         }
         RowMajorMatrixXf Elog_theta; // (n x K)
+        double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
-        while (it < max_iter_inner_ && meanchange_phi > tol_) {
+        while (it < max_iter_inner_ && meanchange > tol_) {
             it++;
             Elog_theta = dirichlet_entropy_2d(batch.gamma);
             // Update phi.
@@ -132,7 +133,7 @@ public:
                 // Iterate over the nonzero entries
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                     int j = it1.col();
-                    // dot product or i-th row of phi with j-th column of Elog_theta
+                    // dot product of i-th row of phi with j-th row of Elog_theta
                     float sum_val = batch.phi.row(i).dot(Elog_theta.row(j));
                     // Updated value at (i,j)
                     batch.psi.coeffRef(i, j) = it2.value() + sum_val + extra(i);
@@ -145,13 +146,15 @@ public:
             batch.gamma = batch.psi.transpose() * batch.phi;
             batch.gamma += alpha_.replicate(batch.n, 1);
             // Check convergence
+            meanchange = mean_max_row_change(batch.gamma, gamma_old);
+            gamma_old = batch.gamma;
             meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
             if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
-                printf("E-step, iteration %d, mean change in phi: %.4e\n", it, meanchange_phi);
+                printf("E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);
             }
         }
-        debug("%s: E-step finished in %d iterations. Mean change in phi: %.4e", __func__, it, meanchange_phi);
+        debug("%s: E-step finished in %d iterations. Final mean change in gamma: %.4e, in phi: %.4e", __func__, it, meanchange, meanchange_phi);
         if (verbose_ > 1) {
             approx_ll(batch);
             printf("E-step finished in %d iterations. E_q[ll] %.4e\n", it, batch.ll);

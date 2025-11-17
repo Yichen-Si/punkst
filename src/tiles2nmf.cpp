@@ -32,9 +32,10 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
         SparseMatrix<float, Eigen::RowMajor> ymtx = batch.psi.transpose() * batch.mtx; // n x M
         batch.theta = mlr_.predict(ymtx); // n x K
         for (int j = 0; j < batch.N; ++j) {
-            float rowMax = -1;
+            float rowMax = -std::numeric_limits<float>::infinity();
             for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
                 int i = it1.col();
+                // \sum_m x_im log beta_mk + log w_ij
                 it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)) + it2.value();
                 if (it1.valueRef() > rowMax) {
                     rowMax = it1.valueRef();
@@ -244,7 +245,11 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point
         return nPixels;
     }
 
-    minibatch.wij.unaryExpr([](float val) {return log(val);});
+    for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
+        for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+            it.valueRef() = log(it.value());
+        }
+    }
 
     // minibatch.psi = minibatch.psi.transpose(); // n x N
     // minibatch.psi.makeCompressed();

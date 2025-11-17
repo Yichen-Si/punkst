@@ -586,8 +586,6 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore( TileData<T>& tileData,
     tripletsMtx.reserve(tileData.pts.size() + tileData.extPts.size());
     tripletsWij.reserve(tileData.pts.size() + tileData.extPts.size());
 
-    tileData.coords.clear();
-
     std::unordered_map<uint64_t, std::pair<std::unordered_map<uint32_t, float>, std::vector<uint32_t>>> pixAgg;
     uint32_t idxOriginal = 0;
 
@@ -611,8 +609,8 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore( TileData<T>& tileData,
         }
     }
 
+    tileData.coords.clear();
     tileData.coords.reserve(pixAgg.size());
-
     uint32_t npt = 0;
     for (auto& kv : pixAgg) {
         int32_t px = static_cast<int32_t>(kv.first >> 32);
@@ -625,11 +623,8 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore( TileData<T>& tileData,
 
         if (lineParserPtr->weighted) {
             for (auto& kv2 : kv.second.first) {
-                float val = kv2.second;
-                if (kv2.first < lineParserPtr->weights.size()) {
-                    val *= static_cast<float>(lineParserPtr->weights[kv2.first]);
-                }
-                tripletsMtx.emplace_back(npt, static_cast<int>(kv2.first), val);
+                kv2.second *= static_cast<float>(lineParserPtr->weights[kv2.first]);
+                tripletsMtx.emplace_back(npt, static_cast<int>(kv2.first), kv2.second);
             }
         } else {
             for (auto& kv2 : kv.second.first) {
@@ -638,15 +633,15 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore( TileData<T>& tileData,
         }
 
         tileData.coords.emplace_back(static_cast<double>(xy[0]), static_cast<double>(xy[1]));
-        for (auto originalIdx : kv.second.second) {
-            tileData.orgpts2pixel[originalIdx] = static_cast<int32_t>(npt);
+        for (auto v : kv.second.second) {
+            tileData.orgpts2pixel[v] = static_cast<int32_t>(npt);
         }
 
         for (size_t i = 0; i < n; ++i) {
-            uint32_t anchorIdx = indices_dists[i].first;
+            uint32_t idx = indices_dists[i].first;
             float dist = indices_dists[i].second;
-            float weightVal = std::max(std::min(1.f - std::pow(dist / radius, nu), 0.95f), 0.05f);
-            tripletsWij.emplace_back(npt, static_cast<int>(anchorIdx), weightVal);
+            dist = std::max(std::min(1.f - std::pow(dist / radius, nu), 0.95f), 0.05f);
+            tripletsWij.emplace_back(npt, static_cast<int>(idx), dist);
         }
 
         ++npt;
