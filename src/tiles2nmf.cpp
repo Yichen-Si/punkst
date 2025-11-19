@@ -35,8 +35,7 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
             float rowMax = -std::numeric_limits<float>::infinity();
             for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
                 int i = it1.col();
-                // \sum_m x_im log beta_mk + log w_ij
-                it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)) + it2.value();
+                it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)); // + it2.value();
                 if (it1.valueRef() > rowMax) {
                     rowMax = it1.valueRef();
                 }
@@ -135,7 +134,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
             for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                 int j = it1.col();
                 // it1.valueRef() = batch.mtx.row(i).dot(loglam.col(j)) + it2.value();
-                it1.valueRef() = Xb.row(i).dot(theta_norm.row(j)) + it2.value();
+                it1.valueRef() = Xb.row(i).dot(theta_norm.row(j)); //+ it2.value();
             }
         }
 
@@ -245,16 +244,11 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point
         return nPixels;
     }
 
-    for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
-        for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
-            it.valueRef() = log(it.value());
-        }
-    }
-
-    // minibatch.psi = minibatch.psi.transpose(); // n x N
-    // minibatch.psi.makeCompressed();
-    // minibatch.wij = minibatch.wij.transpose();
-    // minibatch.wij.makeCompressed();
+    // for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
+    //     for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+    //         it.valueRef() = log(it.value());
+    //     }
+    // }
 
     return nPixels;
 }
