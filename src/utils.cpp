@@ -26,13 +26,13 @@
 
 // Splits a line into a vector - one or more single character delimiters
 void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str,
-    uint32_t limit, bool clear, bool collapse, bool strip) {
+    uint32_t limit, bool clear, bool collapse, bool strip, bool keep_overflow) {
     if (clear)
         vec.clear();
 
     uint32_t tokenCount = 0;
     size_t start = 0;
-    while (start < str.size() && tokenCount < limit - 1) {
+    while (start < str.size() && tokenCount < limit) {
         size_t pos = str.find_first_of(delims, start);
         // Get the current token
         std::string_view token = str.substr(start, pos - start);
@@ -50,7 +50,7 @@ void split(std::vector<std::string>& vec, std::string_view delims, std::string_v
         start = pos + 1;
     }
     // Add the remaining part if any.
-    if (start < str.size() && vec.size() < limit) {
+    if (keep_overflow && start < str.size()) {
         std::string_view token = str.substr(start);
         if (strip)
             token = strip_str(token);

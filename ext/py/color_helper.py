@@ -236,7 +236,7 @@ def choose_color(_args):
     parser.add_argument('--color-table', type=str, help="TSV with R,G,B or Color_hex of candidate colors")
     parser.add_argument('--top-color', type=str, default="#fcd217", help="HEX color code for the top factor")
     parser.add_argument('--even-space', action='store_true', help="Evenly space the factors on the spectrum")
-    parser.add_argument("--skip-columns", type=str, action="append", default=["random_key", "layer"], help="Columns that are neither coordiante nor factor in the input file")
+    parser.add_argument("--skip-columns", type=str, action="append", default=["random_key", "layer", "#random_key"], help="Columns that are neither coordiante nor factor in the input file")
     parser.add_argument('--annotation', type=str, default = '', help='')
     parser.add_argument('--seed', type=int, default=-1, help='')
     args = parser.parse_args(_args)
@@ -312,13 +312,18 @@ def choose_color(_args):
         mtx = np.maximum(mtx, mtx.T)
         # Large values in mtx indicate close proximity, to be mapped to distinct colors
 
-    if not args.color_table and K <= 48:
+    if not args.color_table and (args.cmap_name or K > 48):
+        cmap_name = args.cmap_name
+        if args.cmap_name not in plt.colormaps():
+            cmap_name = "nipy_spectral"
+        print("Using colormap", cmap_name)
+        cmtx = assign_color_tsp(mtx, cmap_name=cmap_name, weight=weight, two_opt=True, spectral_offset=0.05, anchor_color=args.top_color)
+    else:
         # use default colortable
         # get path to the current script
         script_dir = os.path.dirname(os.path.abspath(__file__))
         args.color_table = os.path.join(script_dir, "cmap.48.tsv")
         print("Using default color table", args.color_table)
-
     if args.color_table:
         ct = pd.read_csv(args.color_table, sep='\t', header=0)
         cmtx = assign_color_from_table (
@@ -326,12 +331,6 @@ def choose_color(_args):
             weight=weight,
             two_opt=True
         )
-    else:
-        cmap_name = args.cmap_name
-        if args.cmap_name not in plt.colormaps():
-            cmap_name = "nipy_spectral"
-        print("Using colormap", cmap_name)
-        cmtx = assign_color_tsp(mtx, cmap_name=cmap_name, weight=weight, two_opt=True, spectral_offset=0.05, anchor_color=args.top_color)
 
     # translate RGB to 0-255
     cmtx_int = (cmtx * 255).astype(int) # K x 3

@@ -17,6 +17,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool outputOritinalData = false;
     bool featureIsIndex = false;
     bool coordsAreInt = false;
+    bool outputAnchor = false;
     bool useTicketSystem = false;
     int32_t floatCoordDigits = 4, probDigits = 4;
     std::vector<std::string> annoInts, annoFloats, annoStrs;
@@ -27,7 +28,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     MLEOptions opts;
     opts.mle_only_mode();
-    double sizeFactor = 1000.0;
+    opts.optim.tron.enabled = true;
+    double sizeFactor = 10000.0;
     bool exactMLE = false;
     std::string mapBinFile;
 
@@ -72,6 +74,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("ext-col-ints", "Additional integer columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoInts)
       .add_option("ext-col-floats", "Additional float columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoFloats)
       .add_option("ext-col-strs", "Additional string columns to carry over to output file, in the form of \"idx1:name1:len1 idx2:name2:len2 ...\" where 'idx' are 0-based column indices and 'len' are maximum lengths of strings", annoStrs)
+      .add_option("output-anchors", "Output anchor level info", outputAnchor)
       .add_option("use-ticket-system", "Use ticket system to ensure predictable output order", useTicketSystem)
       .add_option("temp-dir", "Directory to store temporary files", tmpDirPath)
       .add_option("in-memory", "Keep boundary buffers in memory instead of writing to temporary files", inMemory)
@@ -187,7 +190,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
 
     auto configure_decoder = [&](auto& decoder, const std::string& anchorFile) {
-        decoder.setOutputOptions(outputOritinalData, useTicketSystem);
+        decoder.setOutputOptions(outputOritinalData, outputAnchor, useTicketSystem);
         decoder.setOutputCoordDigits(floatCoordDigits);
         decoder.setOutputProbDigits(probDigits);
         if (!anchorFile.empty()) {

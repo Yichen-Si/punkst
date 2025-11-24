@@ -9,6 +9,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     double xmin = 0, xmax = -1, ymin = 0, ymax = -1;
     int32_t verbose = 1000000;
     bool filter = false;
+    bool topOnly = false;
 
     ParamList pl;
     // Input options
@@ -27,6 +28,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
       .add_option("color-list", "A list of colors for channels in hex code (#RRGGBB)", colorListStr);
     // Output
     pl.add_option("out", "Output image file", outFile, true)
+      .add_option("top-only", "Use only the top channel per pixel", topOnly)
       .add_option("verbose", "Verbose", verbose);
 
     try {
@@ -57,8 +59,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     std::vector<std::vector<int>> cmtx;
     std::unordered_map<int,std::vector<int32_t>> selectedMap;
     if (selected) { // parse selected channels
-        if (colorListStr.empty())
-            colorListStr = std::vector<std::string>{"144A74", "FF9900", "DD65E6", "FFEC11"}; // default colors
+        if (colorListStr.empty()) {
+            colorListStr = std::vector<std::string>{"144A74", "FF9900", "DD65E6", "FFEC11"};
+        }
         if (channelListStr.size()>colorListStr.size()) {
             error("--channel-list and --color-list must have same length");
         }
@@ -74,11 +77,12 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             error("Error opening color file: %s", colorFile.c_str());
         std::string line;
         while (std::getline(cs,line)) {
-            if (line.empty()) continue;
+            if (line.empty() || line[0] == '#' || line[0] == 'R') continue;
             std::istringstream iss(line);
             int r,g,b;
             if (iss>>r>>g>>b) cmtx.push_back({r,g,b});
         }
+        notice("Loaded %zu colors from %s", cmtx.size(), colorFile.c_str());
     }
 
     // set up reader
@@ -124,7 +128,32 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         if (countImg(ypix, xpix)>=255) { nskip++; continue; }
 
         float R=0,G=0,B=0;
+        if (topOnly || k==1) {
+            int ch = rec.ks[0];
+            if (selected) {
+                auto it = selectedMap.find(ch);
+                if (it == selectedMap.end()) { continue; }
+                auto& c = it->second;
+                R = c[0];
+                G = c[1];
+                B = c[2];
+            } else {
+                if (ch<0 && ch>=(int)cmtx.size()) {
+                    warning("Channel index out of range: %d", ch);
+                    continue;
+                }
+                R = cmtx[ch][0];
+                G = cmtx[ch][1];
+                B = cmtx[ch][2];
+            }
+            sumImg(ypix, xpix) += cv::Vec3f(R,G,B);
+            countImg(ypix, xpix) += 1;
+            ++nkept;
+            continue;
+        }
+
         bool valid=false;
+        double psum=0;
         for (int i=0;i<k;++i) {
             int ch = rec.ks[i];
             double p = rec.ps[i];
@@ -137,18 +166,21 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 B += c[2]*p;
                 valid = true;
             } else {
-                if (ch<0 || ch>= (int)cmtx.size()) { valid=false; break; }
+                if (ch<0 || ch>= (int)cmtx.size()) {
+                    warning("Channel index out of range: %d", ch);
+                    valid=false; break;
+                }
                 R += cmtx[ch][0]*p;
                 G += cmtx[ch][1]*p;
                 B += cmtx[ch][2]*p;
                 valid = true;
             }
+            psum += p;
         }
-        if (!valid) continue;
-
+        if (!valid || psum < 1e-3) continue;
+        R /= psum; G /= psum; B /= psum;
         sumImg(ypix, xpix) += cv::Vec3f(R,G,B);
         countImg(ypix, xpix) += 1;
-
         ++nkept;
     }
     notice("Finished reading input; building image");

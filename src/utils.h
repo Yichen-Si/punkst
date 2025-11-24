@@ -31,7 +31,7 @@
 // void hprintf(htsFile* fp, const char * msg, ...);
 
 // String manipulation functions
-void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str, uint32_t limit=UINT_MAX, bool clear=true, bool collapse=true, bool strip=false);
+void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str, uint32_t limit=UINT_MAX, bool clear=true, bool collapse=true, bool strip=false, bool keep_overflow=false);
 std::string_view strip_str(std::string_view token);
 std::string trim(const std::string& str);
 std::string to_lower(const std::string& str);

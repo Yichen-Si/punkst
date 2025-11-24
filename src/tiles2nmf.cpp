@@ -35,14 +35,14 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
             float rowMax = -std::numeric_limits<float>::infinity();
             for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
                 int i = it1.col();
-                it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)); // + it2.value();
+                it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)) + it2.value();
                 if (it1.valueRef() > rowMax) {
                     rowMax = it1.valueRef();
                 }
             }
             float rowSum = 0.0f;
             for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(batch.psi, j); it; ++it) {
-                it.valueRef() = std::exp(it.valueRef() - rowMax);
+                it.valueRef() = expit(it.valueRef() - rowMax);
                 rowSum += it.valueRef();
             }
             if (rowSum > std::numeric_limits<float>::epsilon()) {
@@ -86,11 +86,11 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
         batch.theta = RowMajorMatrixXf::Zero(batch.n, K_);
         theta_init = false;
     }
+    std::vector<bool> theta_valid(batch.n, theta_init);
     RowMajorMatrixXf theta_old = batch.theta;
     double meanchange_theta = tol + 1.0;
     double avg_iters = 0.0f;
-    // MatrixXf loglam = MatrixXf::Zero(M_, batch.n); // M x n
-    RowMajorMatrixXf Xb = batch.mtx * logBeta_; // N x K
+    // RowMajorMatrixXf Xb = batch.mtx * logBeta_; // N x K
     debug("%s: Starting EM", __func__);
     int it = 0;
     for (; it < max_iter; it++) {
@@ -105,17 +105,22 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
             y.ids.reserve(nnz);
             y.cnts.reserve(nnz);
             for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(ymtx, j); it; ++it) {
+                if (it.value() <= 0.f) {
+                    continue;
+                }
                 y.ids.push_back(it.col());
                 y.cnts.push_back(it.value());
                 rowsum += it.value();
             }
             if (rowsum <= min_ct_) {
+                batch.theta.row(j).setZero();
+                theta_valid[j] = false;
                 continue;
             }
             nkept += 1;
             double c = rowsum / size_factor_;
             VectorXd b; // K
-            if (theta_init) {
+            if (theta_valid[j]) {
                 b = batch.theta.row(j).transpose().cast<double>();
             }
             if (exact_) {
@@ -125,16 +130,21 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
             }
             niters[j] = stats.optim.niters;
             batch.theta.row(j) = b.transpose().cast<float>();
-            // loglam.col(j) = (beta_ * b).cast<float>(); // M
-            // loglam.col(j) = (((loglam.col(j).array().exp() - 1.0)).max(mle_opts_.ridge) * c).log();
+            if (batch.theta.row(j).minCoeff() > 1e-8)
+                theta_valid[j] = true;
         }
+        MatrixXf loglam = ((beta_f_ * batch.theta.transpose()).array().exp() - 1.0).max(1e-12).log(); // M x n
 
         RowMajorMatrixXf theta_norm = rowNormalize(batch.theta);
         for (int i = 0; i < batch.N; ++i) {
             for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                 int j = it1.col();
-                // it1.valueRef() = batch.mtx.row(i).dot(loglam.col(j)) + it2.value();
-                it1.valueRef() = Xb.row(i).dot(theta_norm.row(j)); //+ it2.value();
+                it1.valueRef() = batch.mtx.row(i).dot(loglam.col(j)) + it2.value();
+                // if (!theta_valid[j]) {
+                //     it1.valueRef() = -std::numeric_limits<float>::infinity();
+                //     continue;
+                // }
+                // it1.valueRef() = Xb.row(i).dot(theta_norm.row(j)); //+ it2.value();
             }
         }
 
@@ -143,7 +153,8 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
         int32_t nskip = (int32_t) (batch.n - nkept);
         debug("%s: Completed %d-th EM iteration with %d anchors (skipped %d), average %.1f iterations per optim", __func__, it, batch.n, nskip, avg_iters);
 
-        rowSoftmaxInPlace(batch.psi);
+        // rowSoftmaxInPlace(batch.psi);
+        expitAndRowNormalize(batch.psi);
 
         if (theta_init) {
             meanchange_theta = mean_max_row_change(theta_old, batch.theta);
@@ -244,11 +255,11 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point
         return nPixels;
     }
 
-    // for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
-    //     for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
-    //         it.valueRef() = log(it.value());
-    //     }
-    // }
+    for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
+        for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+            it.valueRef() = logit(it.value());
+        }
+    }
 
     return nPixels;
 }
@@ -256,13 +267,13 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point
 template<typename T>
 int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
     anchors.clear();
-    std::unordered_set<HexGrid::GridKey, HexGrid::GridKeyHash> GridPts;
+    std::unordered_map<HexGrid::GridKey, uint32_t, HexGrid::GridKeyHash> GridPts;
     auto assign_pt = [&](const auto& pt) {
         for (int32_t ir = 0; ir < nMoves_; ++ir) {
             for (int32_t ic = 0; ic < nMoves_; ++ic) {
                 int32_t hx, hy;
                 hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1. / nMoves_, ir * 1. / nMoves_);
-                GridPts.emplace(hx, hy, ic, ir);
+                GridPts[std::make_tuple(hx, hy, ic, ir)] += pt.ct;
             }
         }
     };
@@ -275,7 +286,11 @@ int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f
             assign_pt(pt);
         }
     }
-    for (auto& key : GridPts) {
+    for (auto& kv : GridPts) {
+        if (kv.second < anchorMinCount_) {
+            continue;
+        }
+        auto& key = kv.first;
         int32_t hx = std::get<0>(key);
         int32_t hy = std::get<1>(key);
         int32_t ic = std::get<2>(key);
@@ -314,14 +329,24 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     Eigen::MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
     ProcessedResult result;
-    if (outputOriginalData) {
+    if (outputOriginalData_) {
         result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
     } else {
         result = Base::formatPixelResult(tileData, topVals, topIds, ticket);
     }
+    resultQueue.push(std::move(result));
+    if (outputAnchor_) {
+        MatrixXf anchorTopVals;
+        Eigen::MatrixXi anchorTopIds;
+        findTopK(anchorTopVals, anchorTopIds, minibatch.theta, topk_);
+        auto anchorResult = Base::formatAnchorResult(
+            anchors, anchorTopVals, anchorTopIds, ticket,
+            tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+        anchorQueue.push(std::move(anchorResult));
+    }
+
     notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in theta: %.1e (final averaged inner iterations %.1f)", threadId, ticket, nAnchors, result.npts, stats.niter, stats.last_change, stats.last_avg_internal_niters);
 
-    resultQueue.push(std::move(result));
 }
 
 // explicit instantiations

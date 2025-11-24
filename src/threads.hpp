@@ -12,6 +12,10 @@ template <typename T>
 class ThreadSafeQueue {
 public:
     ThreadSafeQueue(size_t cap = INT_MAX) : cap_(cap) {}
+    void set_capacity(size_t cap) {
+        std::lock_guard lock(mtx_);
+        cap_ = cap;
+    }
     void push(const T& value) {
         std::unique_lock lock(mtx_);
         cv_not_full_.wait(lock, [&]{ return queue_.size() < cap_ || done_; });

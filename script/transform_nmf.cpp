@@ -102,7 +102,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     int32_t N = read_sparse_obs(inFile, reader, docs,
         rnames, minCount, size_factor, c,
         &covarFile, &covar_idx, &covar_names,
-        allow_na, debug_N);
+        allow_na, -1, nullptr, debug_N);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %d documents with %d features", N, M);
 
@@ -130,7 +130,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     notice("Wrote per-feature averaged residuals to %s", outf.c_str());
 
     outf = outPrefix + ".theta.tsv";
-    write_matrix_to_file(outf, theta, 4, false, rnames, "Index");
+    write_matrix_to_file(outf, theta, 4, false, rnames, "#Index");
     notice("Wrote theta to %s", outf.c_str());
 
     outf = outPrefix + ".fit_stats.tsv";
@@ -138,7 +138,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     if (!ofs) {
         error("Cannot open output file %s", outf.c_str());
     }
-    ofs << "Index\tTotalCount\tll\tResidual\tVarMu\n";
+    ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\n";
     for (size_t i = 0; i < N; i++) {
         ofs << rnames[i] << "\t"
             << std::setprecision(2) << std::fixed << docs[i].ct_tot << "\t"

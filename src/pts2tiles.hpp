@@ -551,7 +551,7 @@ protected:
                 std::vector<uint32_t> indices(1);
                 std::vector<float> dists(1);
                 trees[i]->knnSearch(pt, 1, &indices[0], &dists[0]);
-                oss << "\t" << dists[0];
+                oss << "\t" << std::pow(dists[0], 0.5f);
             }
             line += oss.str();
             buffers[tileId].push_back(line);

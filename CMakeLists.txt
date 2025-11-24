@@ -78,8 +78,9 @@ set(SOURCE_FILES
     src/tiles2minibatch.cpp
     src/tiles2slda.hpp
     src/tiles2slda.cpp
-    script/pixels_decode.cpp
+    script/pixel_decode.cpp
     script/draw_pixel_factors.cpp
+    script/draw_lowres_factors.cpp
     src/tiles2cooccurrence.hpp
     script/coocurrence.cpp
     src/markerselection.hpp

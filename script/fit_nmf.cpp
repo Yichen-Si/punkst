@@ -13,6 +13,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     std::string modelFile;
     std::string include_ftr_regex, exclude_ftr_regex;
     std::vector<uint32_t> covar_idx;
+    int32_t label_idx = -1;
     int32_t K;
     int32_t seed = -1, nThreads = 1, debug_ = 0, debug_N = 0, verbose = 500000;
     int32_t minCountTrain = 50, minCountFeature = 100;
@@ -23,6 +24,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     bool write_se = false;
     bool test_beta_vs_null = false;
     bool transform = false;
+    bool random_init_missing_features = false;
     int32_t se_method = 1; // 1: fisher, 2: robust, 3: both
     double min_ct_de = 100, min_fc = 1.5, max_p = 0.05;
     int32_t mode = 1;
@@ -40,7 +42,9 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("in-covar", "Covariate file", covarFile)
       .add_option("allow-na", "Replace non-numerical values in covariates with zero", allow_na)
       .add_option("icol-covar", "Column indices (0-based) in --in-covar to use", covar_idx)
-      .add_option("in-model", "Input model (beta) file", modelFile);
+      .add_option("icol-label", "Column index (0-based) in --in-covar for labels", label_idx)
+      .add_option("in-model", "Input model (beta) file", modelFile)
+      .add_option("random-init-missing", "Randomly initialize features missing from the model", random_init_missing_features);
     pl.add_option("K", "K", K, true)
       .add_option("mode", "Algorithm", mode)
       .add_option("c", "Constant c in log(1+lambda/c)", c)
@@ -100,46 +104,116 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     notice("Number of features: %d", M);
 
     PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
+
+    // Load model / warm start
+    std::vector<std::string> factor_names;
     if (!modelFile.empty()) {
         RowMajorMatrixXd beta;
         std::vector<std::string> model_features, covar_names_from_file;
-        std::vector<std::string> tokens;
-        read_matrix_from_file(modelFile, beta, &model_features, &tokens);
+        read_matrix_from_file(modelFile, beta, &model_features, &factor_names);
         int32_t K1 = beta.cols();
         if (K1 != K) {
             error("Model has %d factors, but K=%d is specified.", K1, K);
         }
         int32_t M1 = beta.rows();
         notice("Loaded model with %d features and %d factors", M1, K);
-        bool keep_unmapped = !featureFile.empty();
-        reader.setFeatureIndexRemap(model_features, keep_unmapped);
-        M = reader.nFeatures;
-        if (M != M1) {
-            RowMajorMatrixXd beta1 = RowMajorMatrixXd::Zero(M, K);
-            for (int32_t i = 0; i < M; i++) {
-                beta1.row(i) = beta.row(i);
+
+        std::unordered_map<std::string, uint32_t> data_features;
+        std::vector<std::string> kept_model_features;
+        reader.featureDict(data_features);
+        int32_t m = 0;
+        for (uint32_t i = 0; i < model_features.size(); i++) {
+            auto it = data_features.find(model_features[i]);
+            if (it != data_features.end()) {
+                kept_model_features.push_back(model_features[i]);
+                beta.row(m) = beta.row(i);
+                m++;
             }
+        }
+        M1 = m;
+        bool keep_unmapped = !featureFile.empty() && random_init_missing_features;
+        reader.setFeatureIndexRemap(kept_model_features, keep_unmapped);
+        M = reader.nFeatures;
+        RowMajorMatrixXd beta1 = RowMajorMatrixXd::Zero(M, K);
+        beta1.topRows(M1) = beta.topRows(M1);
+        if (M != M1) {
+            auto colmed = columnMedians(beta1.topRows(M1));
             std::gamma_distribution<double> dist(100.0, 0.01);
             for (int32_t i = M1; i < M; i++) {
                 for (int k = 0; k < K; k++) {
-                    beta1(i, k) = dist(rng)/K;
+                    beta1(i, k) = dist(rng) * colmed(k);
                 }
             }
-            nmf.set_beta(beta1);
-            notice("Filled in %d missing features with random initial values", M1 - M);
-        } else {
-            nmf.set_beta(beta);
+            notice("Filled in %d missing features with random initial values", M - M1);
         }
+        nmf.set_beta(beta1);
     }
 
+    // Load data
     std::vector<SparseObs> docs;
-    std::vector<std::string> rnames, covar_names;
+    std::vector<std::string> rnames, covar_names, labels;
     size_t N = read_sparse_obs(inFile, reader, docs,
         rnames, minCountTrain, size_factor, c,
         &covarFile, &covar_idx, &covar_names,
-        allow_na, debug_N);
+        allow_na, label_idx, &labels, debug_N);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %lu documents with %d features", N, M);
+
+    std::vector<int32_t> labels_idx;
+    if (labels.size() > 0) {
+        if (labels.size() != N) {
+            error("Number of labels (%lu) does not match number of units (%lu)", labels.size(), N);
+        }
+        std::unordered_map<std::string, int32_t> label_to_idx;
+        std::vector<int32_t> label_counts(K, 0);
+        if (!modelFile.empty()) {
+            for (int32_t i = 0; i < K; i++) {
+                label_to_idx[factor_names[i]] = i;
+            }
+        } else {
+            std::unordered_map<std::string, int32_t> label_to_ct;
+            for (const auto& lab : labels) {
+                auto it = label_to_ct.find(lab);
+                if (it != label_to_ct.end()) {
+                    it->second++;
+                } else {
+                    label_to_ct[lab] = 1;
+                }
+            }
+            if (label_to_ct.size() > K) {
+                warning("Number of unique labels (%lu) is greater than K=%d; only the top K labels by counts will be used.",
+                    label_to_ct.size(), K);
+                // pick the K labels with the highest counts
+                std::vector<std::pair<std::string, int32_t>> lab_ct_vec(label_to_ct.begin(), label_to_ct.end());
+                std::sort(lab_ct_vec.begin(), lab_ct_vec.end(),
+                    [](const auto& a, const auto& b) { return a.second > b.second; });
+                for (int32_t i = 0; i < K; i++) {
+                    label_to_idx[lab_ct_vec[i].first] = i;
+                }
+            } else {
+                int32_t idx = 0;
+                for (const auto& p : label_to_ct) {
+                    label_to_idx[p.first] = idx++;
+                }
+            }
+            factor_names.resize(K);
+            for (const auto& p : label_to_idx) {
+                factor_names[p.second] = p.first;
+            }
+        }
+        int32_t skipped = 0;
+        for (const auto& lab : labels) {
+            auto it = label_to_idx.find(lab);
+            if (it != label_to_idx.end()) {
+                labels_idx.push_back(it->second);
+                label_counts[it->second]++;
+            } else {
+                labels_idx.push_back(-1);
+                skipped++;
+            }
+        }
+        notice("Parsed labels for %lu units, skipped %d undefined labels", N, skipped);
+    }
 
     // Set up MLE options (for subproblems)
     if (mode == 1) {
@@ -161,7 +235,11 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     }
 
     // Fit the model
-    nmf.fit(docs, opts, nmf_opts);
+    std::vector<int32_t>* labels_ptr = nullptr;
+    if (labels_idx.size() == N) {
+        labels_ptr = &labels_idx;
+    }
+    nmf.fit(docs, opts, nmf_opts, false, labels_ptr);
 
     // Compute DE stats
     if (test_beta_vs_null) {
@@ -187,10 +265,15 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         }
     }
 
+    // Write output
     std::string outf;
     outf = outPrefix + ".model.tsv";
+    std::vector<std::string>* cnames_ptr = nullptr;
+    if ((int32_t) factor_names.size() == K) {
+        cnames_ptr = &factor_names;
+    }
     const auto& mat = nmf.get_model();
-    write_matrix_to_file(outf, mat, 4, false, reader.features, "Feature");
+    write_matrix_to_file(outf, mat, 4, false, reader.features, "Feature", cnames_ptr);
     notice("Wrote model to %s", outf.c_str());
     if (write_se) {
         for (uint32_t flag = 1; flag <= 2; flag++) {
@@ -240,7 +323,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats);
 
     outf = outPrefix + ".theta.tsv";
-    write_matrix_to_file(outf, theta, 4, false, rnames, "Index");
+    write_matrix_to_file(outf, theta, 4, false, rnames, "#Index");
     notice("Wrote theta to %s", outf.c_str());
 
     outf = outPrefix + ".fit_stats.tsv";
@@ -248,7 +331,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     if (!ofs) {
         error("Cannot open output file %s", outf.c_str());
     }
-    ofs << "Index\tTotalCount\tll\tResidual\tVarMu\n";
+    ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\n";
     for (size_t i = 0; i < N; i++) {
         ofs << rnames[i] << "\t"
             << std::setprecision(2) << std::fixed << docs[i].ct_tot << "\t"

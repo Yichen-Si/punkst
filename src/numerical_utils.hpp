@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <numeric>
 #include <array>
+#include <type_traits>
 #include "error.hpp"
 #include <tbb/tbb.h>
 #include <tbb/blocked_range.h>
@@ -489,6 +490,33 @@ void expitAndRowNormalize(Eigen::SparseMatrix<Scalar, StorageOrder>& mat) {
         using Real = RealScalar<decltype(x)>;
         return expit(static_cast<Real>(x));
     });
+}
+
+template <class Derived>
+Eigen::Matrix<typename Eigen::NumTraits<typename Derived::Scalar>::Real,
+    Eigen::Dynamic, 1> columnMedians(const Eigen::DenseBase<Derived>& X)
+{
+    using Scalar     = typename Derived::Scalar;
+    using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
+    using Index      = typename Eigen::Index;
+    // Reject complex types at compile time
+    static_assert(!Eigen::NumTraits<Scalar>::IsComplex,
+                  "columnMedians: complex types are not supported.");
+    const Index nRows = X.rows();
+    const Index nCols = X.cols();
+    Eigen::Matrix<RealScalar, Eigen::Dynamic, 1> medians(nCols);
+    Eigen::Matrix<Scalar, Eigen::Dynamic, 1> col(nRows);
+    for (Index j = 0; j < nCols; ++j) {
+        col = X.col(j);
+        std::sort(col.data(), col.data() + nRows);
+        if (nRows % 2 == 1) {
+            medians(j) = static_cast<RealScalar>(col(nRows / 2));
+        } else {
+            const Index k = nRows / 2;
+            medians(j) = RealScalar(0.5) * (static_cast<RealScalar>(col(k - 1)) + static_cast<RealScalar>(col(k)));
+        }
+    }
+    return medians;
 }
 
 // find largest values and indices

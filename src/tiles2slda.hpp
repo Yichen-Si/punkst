@@ -33,7 +33,9 @@ protected:
     using Base::probDigits;
     using Base::outPref;
     using Base::resultQueue;
-    using Base::outputOriginalData;
+    using Base::outputOriginalData_;
+    using Base::outputAnchor_;
+    using Base::anchorQueue;
     using typename Base::ProcessedResult;
     using vec2f_t = typename Base::vec2f_t;
 

@@ -1,5 +1,5 @@
 #include "tiles2minibatch.hpp"
-#include "pixdecode.hpp"
+#include "numerical_utils.hpp"
 #include <cmath>
 #include <numeric>
 #include <fcntl.h>
@@ -10,6 +10,10 @@ template<typename T>
 void Tiles2MinibatchBase<T>::run() {
     setupOutput();
     std::thread writer(&Tiles2MinibatchBase<T>::writerWorker, this);
+    std::thread anchorWriter;
+    if (outputAnchor_) {
+        anchorWriter = std::thread(&Tiles2MinibatchBase<T>::anchorWriterWorker, this);
+    }
 
     notice("Phase 1 Launching %d worker threads", nThreads);
     workThreads.clear();
@@ -59,9 +63,15 @@ void Tiles2MinibatchBase<T>::run() {
     workThreads.clear();
 
     resultQueue.set_done();
+    if (outputAnchor_) {
+        anchorQueue.set_done();
+    }
     notice("%s: all workers done, waiting for writer to finish", __func__);
 
     writer.join();
+    if (anchorWriter.joinable()) {
+        anchorWriter.join();
+    }
     closeOutput();
     writeHeaderToJson();
     postRun();
@@ -406,6 +416,60 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryExtended(TileData<T>& tileDat
 }
 
 template<typename T>
+typename Tiles2MinibatchBase<T>::ProcessedResult Tiles2MinibatchBase<T>::formatAnchorResult(const std::vector<cv::Point2f>& anchors, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax) {
+    size_t nrows = std::min((size_t) topVals.rows(), anchors.size());
+    if (topVals.rows() != nrows || topIds.rows() != nrows || anchors.size() != nrows) {
+        error("%s: size mismatch: topVals.rows()=%d, topIds.rows()=%d, anchors.size()=%d",
+            __func__, topVals.rows(), topIds.rows(), anchors.size());
+    }
+    ProcessedResult result(ticket, xmin, xmax, ymin, ymax);
+    char buf[512];
+    for (size_t i = 0; i < nrows; ++i) {
+        if (anchors[i].x < xmin + r || anchors[i].x >= xmax - r ||
+            anchors[i].y < ymin + r || anchors[i].y >= ymax - r) {
+            continue; // only write internal anchors
+        }
+        int len = std::snprintf(
+            buf, sizeof(buf),
+            "%.*f\t%.*f",
+            floatCoordDigits,
+            anchors[i].x,
+            floatCoordDigits,
+            anchors[i].y
+        );
+        for (int32_t k = 0; k < topk_; ++k) {
+            int n = std::snprintf(
+                buf + len,
+                sizeof(buf) - len,
+                "\t%d",
+                topIds(i, k)
+            );
+            if (n < 0 || n >= int(sizeof(buf) - len)) {
+                error("%s: error writing anchor output line", __func__);
+            }
+            len += n;
+        }
+        for (int32_t k = 0; k < topk_; ++k) {
+            int n = std::snprintf(
+                buf + len,
+                sizeof(buf) - len,
+                "\t%.*e",
+                probDigits,
+                topVals(i, k)
+            );
+            if (n < 0 || n >= int(sizeof(buf) - len)) {
+                error("%s: error writing anchor output line", __func__);
+            }
+            len += n;
+        }
+        buf[len++] = '\n';
+        result.outputLines.emplace_back(buf, len);
+    }
+    result.npts = result.outputLines.size();
+    return result;
+}
+
+template<typename T>
 typename Tiles2MinibatchBase<T>::ProcessedResult Tiles2MinibatchBase<T>::formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket) {
     ProcessedResult result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     int32_t nrows = topVals.rows();
@@ -639,13 +703,14 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore( TileData<T>& tileData,
 
         for (size_t i = 0; i < n; ++i) {
             uint32_t idx = indices_dists[i].first;
-            float dist = indices_dists[i].second;
+            float dist = std::pow(indices_dists[i].second, 0.5f);
             dist = std::max(std::min(1.f - std::pow(dist / radius, nu), 0.95f), 0.05f);
             tripletsWij.emplace_back(npt, static_cast<int>(idx), dist);
         }
 
         ++npt;
     }
+    anchors = std::move(pc.pts);
 
     minibatch.N = static_cast<int32_t>(npt);
     minibatch.M = M_;
@@ -674,7 +739,7 @@ void Tiles2MinibatchBase<T>::writeHeaderToJson() {
     header["x"] = 0;
     header["y"] = 1;
     int32_t idx = 2;
-    if (outputOriginalData) {
+    if (outputOriginalData_) {
         header["feature"] = 2;
         header["ct"] = 3;
         idx = 4;
@@ -711,7 +776,7 @@ void Tiles2MinibatchBase<T>::writerWorker() {
         outOfOrderBuffer.push(std::move(result));
         // Write all results that are now ready in sequential order
         while (!outOfOrderBuffer.empty() &&
-               (!useTicketSystem ||
+               (!useTicketSystem_ ||
                 outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
             const auto& readyToWrite = outOfOrderBuffer.top();
             if (readyToWrite.npts > 0) {
@@ -732,6 +797,37 @@ void Tiles2MinibatchBase<T>::writerWorker() {
                     error("Error writing to index output file");
                 }
                 outputSize = ed;
+            }
+            outOfOrderBuffer.pop();
+            nextTicketToWrite++;
+        }
+    }
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::anchorWriterWorker() {
+    if (fdAnchor < 0) return;
+    std::priority_queue<ProcessedResult, std::vector<ProcessedResult>, std::greater<ProcessedResult>> outOfOrderBuffer;
+    int nextTicketToWrite = 0;
+    ProcessedResult result;
+    while (anchorQueue.pop(result)) {
+        outOfOrderBuffer.push(std::move(result));
+        while (!outOfOrderBuffer.empty() &&
+               (!useTicketSystem_ ||
+                outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
+            const auto& readyToWrite = outOfOrderBuffer.top();
+            if (readyToWrite.npts > 0) {
+                size_t totalLen = 0;
+                for (const auto& line : readyToWrite.outputLines) {
+                    if (!write_all(fdAnchor, line.data(), line.size())) {
+                        error("Error writing to anchor output file");
+                    }
+                    totalLen += line.size();
+                }
+                if (totalLen > 0 && anchorHeaderSize > 0 && anchorOutputSize == 0) {
+                    anchorOutputSize += anchorHeaderSize;
+                }
+                anchorOutputSize += totalLen;
             }
             outOfOrderBuffer.pop();
             nextTicketToWrite++;
@@ -773,7 +869,7 @@ void Tiles2MinibatchBase<T>::setupOutput() {
     }
     // compose header
     std::string header;
-    if (outputOriginalData) header = "#x\ty\tfeature\tct";
+    if (outputOriginalData_) header = "#x\ty\tfeature\tct";
     else header = "#x\ty";
     for (int32_t i = 0; i < topk_; ++i) header += "\tK" + std::to_string(i+1);
     for (int32_t i = 0; i < topk_; ++i) header += "\tP" + std::to_string(i+1);
@@ -792,12 +888,28 @@ void Tiles2MinibatchBase<T>::setupOutput() {
     if (fdIndex < 0) {
         error("Error opening index output file: %s", indexFile.c_str());
     }
+    if (!outputAnchor_) return;
+    // setup anchor output
+    std::string anchorFile = outPref + ".anchors.tsv";
+    fdAnchor = ::open(anchorFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdAnchor < 0) {
+        error("Error opening anchor output file: %s", anchorFile.c_str());
+    }
+    header = "#x\ty";
+    for (int32_t i = 0; i < topk_; ++i) header += "\tK" + std::to_string(i+1);
+    for (int32_t i = 0; i < topk_; ++i) header += "\tP" + std::to_string(i+1);
+    header += "\n";
+    if (!write_all(fdAnchor, header.data(), header.size())) {
+        error("Error writing header to anchor output file: %s", anchorFile.c_str());
+    }
+    anchorHeaderSize = header.size();
 }
 
 template<typename T>
 void Tiles2MinibatchBase<T>::closeOutput() {
     if (fdMain >= 0) { ::close(fdMain); fdMain = -1; }
     if (fdIndex >= 0) { ::close(fdIndex); fdIndex = -1; }
+    if (fdAnchor >= 0) { ::close(fdAnchor); fdAnchor = -1; }
 }
 
 template class Tiles2MinibatchBase<int32_t>;

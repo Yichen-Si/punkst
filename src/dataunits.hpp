@@ -156,10 +156,10 @@ public:
     void getInfoHeaderStr(std::string &header) const {
         header.clear();
         for (size_t i = 0; i < header_info.size(); ++i) {
-            header += header_info[i];
-            if (i < header_info.size() - 1) {
+            if (i > 0) {
                 header += "\t";
             }
+            header += header_info[i];
         }
     }
     int32_t getIndex(const std::string &colname) const {
@@ -208,7 +208,9 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
     std::vector<SparseObs> &docs, std::vector<std::string> &rnames,
     int32_t minCountTrain = 1, double size_factor = 10000, double c = -1,
     std::string* covarFile = nullptr, std::vector<uint32_t>* covar_idx = nullptr,
-    std::vector<std::string>* covar_names = nullptr, bool allow_na = false, int32_t debug_N = 0);
+    std::vector<std::string>* covar_names = nullptr, bool allow_na = false,
+    int32_t label_idx = -1, std::vector<std::string>* labels = nullptr,
+    int32_t debug_N = 0);
 
 template<typename T>
 void readCoordRange(const std::string& rangeFile, T& xmin, T& xmax, T& ymin, T& ymax) {

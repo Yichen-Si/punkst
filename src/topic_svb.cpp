@@ -110,7 +110,7 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
 
     std::string header;
     reader.getInfoHeaderStr(header);
-    outFileStream << header;
+    outFileStream << "#" << header;
     const auto& t_names = get_topic_names(); // Virtual dispatch
     int32_t nTopics = getNumTopics();
     for (int i = 0; i < nTopics; ++i) {

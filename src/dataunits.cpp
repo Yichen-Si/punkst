@@ -397,7 +397,9 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
     std::vector<SparseObs> &docs, std::vector<std::string> &rnames,
     int32_t minCountTrain, double size_factor, double c,
     std::string* covarFile, std::vector<uint32_t>* covar_idx,
-    std::vector<std::string>* covar_names, bool allow_na, int32_t debug_N) {
+    std::vector<std::string>* covar_names, bool allow_na,
+    int32_t label_idx, std::vector<std::string>* labels,
+    int32_t debug_N) {
 
     std::ifstream inFileStream(inFile);
     if (!inFileStream) {
@@ -408,9 +410,14 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
     std::ifstream covarFileStream;
     int32_t n_covar = 0, n_tokens = 0;
     bool per_doc_c = c <= 0;
+    bool has_labels = covarFile && label_idx >= 0 && labels != nullptr;
 
     if (covarFile) {
+        if (label_idx >= 0 && labels == nullptr) {
+            error("%s: if label index is specified, a pointer to a vector to store the labels must be provided", __func__);
+        }
         covar_names->clear();
+        if (labels) {labels->clear();}
         if (!covarFile->empty()) {
             covarFileStream.open(*covarFile);
             if (!covarFileStream) {
@@ -422,7 +429,7 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
             }
             split(covar_header, "\t ", line, UINT_MAX, true, true, true);
             n_tokens = static_cast<int32_t>(covar_header.size());
-            if (covar_idx->empty()) {
+            if (covar_idx->empty() && !has_labels) {
                 // Assuming use all columns except the first one
                 n_covar = covar_header.size() - 1;
                 for (int32_t i = 1; i < n_tokens; i++) {
@@ -438,9 +445,6 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
                     covar_names->push_back(covar_header[i]);
                 }
             }
-            if (n_covar < 1) {
-                error("The covariate file should have at least 2 columns");
-            }
             notice("Covariate file has %d columns, using %d as covariates", n_tokens, n_covar);
         }
     }
@@ -448,6 +452,7 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
     if (reader.nUnits > 0) {
         docs.reserve(reader.nUnits);
     }
+    bool has_covar = n_covar > 0 || has_labels;
     int32_t idx = 0;
     while (std::getline(inFileStream, line)) {
         idx++;
@@ -460,25 +465,31 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
             error("Error parsing line %s", line.c_str());
         }
         if (ct < minCountTrain) {
+            std::getline(covarFileStream, line);
             continue;
         }
         obs.c = per_doc_c ? ct / size_factor : c;
         obs.ct_tot = ct;
-        if (n_covar > 0) { // read covariates
+        if (has_covar) { // read covariates
             if (!std::getline(covarFileStream, line)) {
                 error("The number of lines in covariate file is less than that in data file");
             }
-            obs.covar = Eigen::VectorXd::Zero(n_covar);
             split(tokens, "\t ", line, UINT_MAX, true, true, true);
             if (tokens.size() != n_tokens) {
                 error("Number of columns (%lu) of line [%s] in covariate file does not match header (%d)", tokens.size(), line.c_str(), n_tokens);
             }
-            for (int32_t i = 0; i < n_covar; i++) {
-                if (!str2double(tokens[(*covar_idx)[i]], obs.covar(i))) {
-                    if (!allow_na)
-                        error("Invalid value for %d-th covariate %s.", i+1, tokens[(*covar_idx)[i]].c_str());
-                    obs.covar(i) = 0;
+            if (n_covar > 0) {
+                obs.covar = Eigen::VectorXd::Zero(n_covar);
+                for (int32_t i = 0; i < n_covar; i++) {
+                    if (!str2double(tokens[(*covar_idx)[i]], obs.covar(i))) {
+                        if (!allow_na)
+                            error("Invalid value for %d-th covariate %s.", i+1, tokens[(*covar_idx)[i]].c_str());
+                        obs.covar(i) = 0;
+                    }
                 }
+            }
+            if (has_labels) {
+                labels->push_back(tokens[label_idx]);
             }
         }
         docs.push_back(std::move(obs));

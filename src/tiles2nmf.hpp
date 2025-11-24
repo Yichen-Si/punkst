@@ -8,10 +8,12 @@
 #include <limits>
 
 using Eigen::MatrixXf;
+using Eigen::MatrixXd;
 using Eigen::ArrayXf;
 using Eigen::VectorXf;
 using Eigen::SparseMatrix;
 using RowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 struct MultinomialLogReg {
     int M = 0;
@@ -115,8 +117,9 @@ public:
     template<typename Derived>
     void init_pnmf(const Eigen::MatrixBase<Derived>& beta, MLEOptions opts, double L = 1000, bool exact = false) {
         beta_ = beta.template cast<double>();
-        Eigen::RowVectorXd colSums = beta_.colwise().sum();
-        logBeta_ = (beta_.array().rowwise() / colSums.array() + 1e-10).log().template cast<float>();
+        beta_f_ = beta.template cast<float>();
+        Eigen::RowVectorXf colSums = beta_f_.colwise().sum();
+        logBeta_ = (beta_f_.array().rowwise() / colSums.array() + 1e-10).log();
         M_ = beta_.rows();
         K_ = beta_.cols();
         if (M_ < 1 || K_ < 1) {
@@ -128,7 +131,6 @@ public:
         pnmf_initialized_ = true;
     }
 
-    // Slow
     void run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1) const;
 
     bool is_mlr_initialized() const {return mlr_initialized_;}
@@ -138,6 +140,7 @@ private:
     int32_t K_ = 0, M_ = 0;
     MultinomialLogReg mlr_;
     RowMajorMatrixXd beta_;    // M x K
+    RowMajorMatrixXf beta_f_;
     RowMajorMatrixXf logBeta_; // M x K
     bool    exact_       = false;
     int32_t max_iter_    = 20;
@@ -167,7 +170,9 @@ protected:
     using Base::M_;
     using Base::featureNames;
     using Base::resultQueue;
-    using Base::outputOriginalData;
+    using Base::outputOriginalData_;
+    using Base::outputAnchor_;
+    using Base::anchorQueue;
     using typename Base::ProcessedResult;
     using vec2f_t = typename Base::vec2f_t;
 

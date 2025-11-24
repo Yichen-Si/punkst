@@ -7,6 +7,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv);
 int32_t cmdTopicModelSVI(int argc, char** argv);
 int32_t cmdPixelDecode(int32_t argc, char** argv);
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv);
+int32_t cmdDrawLowresFactors(int32_t argc, char** argv);
 int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv);
 int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv);
 int32_t cmdQ2Markers(int32_t argc, char** argv);
@@ -31,6 +32,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("topic-model", "Train LDA/HDP model", cmdTopicModelSVI)
         .add_command("pixel-decode", "Decoding pixel-level data", cmdPixelDecode)
         .add_command("draw-pixel-factors", "Draw pixel level factors", cmdDrawPixelFactors)
+        .add_command("draw-lowres-factors", "Draw low-resolution factor map", cmdDrawLowresFactors)
         .add_command("cooccurrence", "Compute feature co-occurrence within a given radius", cmdTiles2FeatureCooccurrence)
         .add_command("merge-mtx", "Merge multiple co-occurrence matrices", cmdMergeCooccurrenceMtx)
         .add_command("coloc2markers", "Select markers from co-occurrence matrix", cmdQ2Markers)

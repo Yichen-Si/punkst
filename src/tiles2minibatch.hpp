@@ -220,7 +220,7 @@ public:
 
     Tiles2MinibatchBase(int nThreads, double r, TileReader& tileReader, const std::string& _outPref, const std::string* opt = nullptr, int32_t debug = 0)
     : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref),
-      debug_(debug), useTicketSystem(false),
+      debug_(debug), useTicketSystem_(false),
       resultQueue(static_cast<size_t>(std::max(1, nThreads))) {
         tileSize = tileReader.getTileSize();
         if (opt && !(*opt).empty()) {
@@ -245,9 +245,13 @@ public:
         else {M_ = names.size();}
         featureNames = names;
     }
-    void setOutputOptions(bool includeOrg, bool useTicket) {
-        outputOriginalData = includeOrg;
-        useTicketSystem = useTicket;
+    void setOutputOptions(bool includeOrg, bool outputAnchor, bool useTicket) {
+        outputOriginalData_ = includeOrg;
+        outputAnchor_ = outputAnchor;
+        useTicketSystem_ = useTicket;
+        if (outputAnchor_) {
+            anchorQueue.set_capacity(static_cast<size_t>(std::max(1, nThreads)));
+        }
     }
     void setOutputProbDigits(int32_t digits) { probDigits = digits; }
     void setOutputCoordDigits(int32_t digits) { floatCoordDigits = digits; }
@@ -274,26 +278,31 @@ protected:
     TileReader& tileReader;
     ScopedTempDir tmpDir;
     bool useMemoryBuffer_;
-    bool useTicketSystem;
+    bool useTicketSystem_;
     int32_t debug_;
 
     int fdMain = -1;
     int fdIndex = -1;
+    int fdAnchor = -1;
     size_t outputSize = 0;
     size_t headerSize = 0;
+    size_t anchorHeaderSize = 0;
+    size_t anchorOutputSize = 0;
     std::map<uint32_t, std::shared_ptr<BoundaryBuffer>> boundaryBuffers;
     std::mutex boundaryBuffersMapMutex; // Protects modifying boundaryBuffers
     ThreadSafeQueue<std::pair<TileKey, int32_t> > tileQueue;
     ThreadSafeQueue<std::pair<std::shared_ptr<BoundaryBuffer>, int32_t>> bufferQueue;
     std::vector<std::thread> workThreads;
     ThreadSafeQueue<ProcessedResult> resultQueue;
+    ThreadSafeQueue<ProcessedResult> anchorQueue;
     // Anchors (optionally preloaded from files)
     // (we may need more than one set of pre-defined anchors in the future)
     using vec2f_t = std::vector<std::vector<float>>;
     std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile;
     std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
     // Output/formatting related
-    bool outputOriginalData = false;
+    bool outputOriginalData_ = false;
+    bool outputAnchor_ = false;
     std::vector<std::string> featureNames;
     int32_t floatCoordDigits = 4, probDigits = 4;
     int32_t topk_ = 3;
@@ -439,6 +448,15 @@ protected:
         buffer2bound(isVertical, bufRow, bufCol, xmin, xmax, ymin, ymax);
     }
 
+    bool isInternal(T x0, T y0, TileKey tile) {
+        T x = x0 - tile.col * tileSize;
+        T y = y0 - tile.row * tileSize;
+        return (x > r && x < tileSize - r && y > r && y < tileSize - r);
+    }
+    bool isInternal(T x, T y, TileData<T>& tileData) {
+        return (x > tileData.xmin + r && x < tileData.xmax - r &&
+                y > tileData.ymin + r && y < tileData.ymax - r);
+    }
     bool isInternalToBuffer(float x, float y, uint32_t bufferId) {
         int32_t bufRow, bufCol;
         bool isVertical = decodeTempFileKey(bufferId, bufRow, bufCol);
@@ -498,7 +516,9 @@ protected:
     void setupOutput();
     void closeOutput();
     void writeHeaderToJson();
+    ProcessedResult formatAnchorResult(const std::vector<cv::Point2f>& anchors, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax);
     ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
     ProcessedResult formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
+    void anchorWriterWorker();
 
 };

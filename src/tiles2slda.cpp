@@ -289,22 +289,28 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
             std::cout << std::endl << std::flush;
         }
     }
+
     MatrixXf topVals;
     Eigen::MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
-    if (debug_) {
-        std::cout << "Thread " << threadId << " start writing to output" << std::endl << std::flush;
-    }
-
     ProcessedResult result;
-    if (outputOriginalData) {
+    if (outputOriginalData_) {
         result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
     } else {
         result = Base::formatPixelResult(tileData, topVals, topIds, ticket);
     }
-
-    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in phi: %.1e", threadId, ticket, nAnchors, result.npts, n_iter, delta);
     resultQueue.push(std::move(result));
+    if (outputAnchor_) {
+        MatrixXf prob = rowNormalize(minibatch.gamma);
+        MatrixXf anchorTopVals;
+        Eigen::MatrixXi anchorTopIds;
+        findTopK(anchorTopVals, anchorTopIds, prob, topk_);
+        auto anchorResult = Base::formatAnchorResult(
+            anchors, anchorTopVals, anchorTopIds, ticket,
+            tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+        anchorQueue.push(std::move(anchorResult));
+    }
+    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in phi: %.1e", threadId, ticket, nAnchors, result.npts, n_iter, delta);
 }
 
 template<typename T>
