@@ -21,6 +21,8 @@ public:
         int32_t verbose = 0, int32_t debug = 0);
 
     void setLloydIter(int32_t nIter) { nLloydIter_ = nIter; }
+    void set_background_prior(VectorXf& eta0, double a0, double b0);
+    void set_background_prior(std::string& bgModelFile, double a0, double b0);
 
 protected:
     using Base = Tiles2MinibatchBase<T>;
@@ -51,6 +53,7 @@ protected:
     int32_t nLloydIter_ = 1;
     MatrixXf pseudobulk_; // K x M
     std::mutex pseudobulkMutex_; // Protects pseudobulk
+    bool fitBackground_ = false;
 
     int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
     int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);

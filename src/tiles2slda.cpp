@@ -79,6 +79,42 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
 }
 
 template<typename T>
+void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0) {
+    if (eta0.size() != M_) {
+        error("%s: size of background prior (%d) does not match feature number (%d)", __func__, (int32_t)eta0.size(), M_);
+    }
+    slda_.set_background_prior(eta0, a0, b0);
+    fitBackground_ = true;
+}
+
+template<typename T>
+void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, double b0) {
+    VectorXf eta0 = VectorXf::Zero(M_);
+    std::ifstream fin(bgModelFile);
+    if (!fin.is_open()) {
+        error("%s: cannot open background model file %s", __func__, bgModelFile.c_str());
+    }
+    std::string line;
+    std::vector<std::string> tokens;
+    while (std::getline(fin, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        split(tokens, "\t ", line, 3, true, true, true);
+        if (tokens.size() < 2) continue;
+        std::string& feature = tokens[0];
+        auto it = lineParser_.featureDict.find(feature);
+        if (it == lineParser_.featureDict.end()) {
+            continue;
+        }
+        if (!str2float(tokens[1], eta0(it->second))) {
+            error("%s: invalid value for feature %s in background model file (%s)", __func__, feature.c_str(), line.c_str());
+        }
+    }
+    fin.close();
+    slda_.set_background_prior(eta0, a0, b0);
+    fitBackground_ = true;
+}
+
+template<typename T>
 int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
     std::vector<SparseObs> documents;
     Base::buildAnchors(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_);
@@ -268,19 +304,13 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     }
     int32_t n_iter = 0;
     double delta = 0.0;
-    auto smtx = slda_.do_e_step(minibatch, true, &n_iter, &delta); // M x K
+    RowMajorMatrixXf smtx(M_, K_);
+    float f0 = slda_.do_e_step(minibatch, &smtx, &n_iter, &delta);
     {
         std::lock_guard<std::mutex> lock(pseudobulkMutex_);
         pseudobulk_ += smtx;
         if (debug_) {
             std::cout << "Thread " << threadId << " updated pseudobulk.\n";
-            // std::cout << "    Peek: " << std::fixed << std::setprecision(0);
-            // for (int32_t i = 0; i < std::min(3, K_); ++i) {
-            //     for (int32_t j = 0; j < std::min(5, M_); ++j) {
-            //         std::cout << smtx(i, j) << " ";
-            //     }
-            //     std::cout << "\n    ";
-            // }
             std::cout << "    Current sums: ";
             auto colsums = pseudobulk_.colwise().sum();
             for (int32_t i = 0; i < K_; ++i) {
@@ -310,7 +340,7 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
             tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
         anchorQueue.push(std::move(anchorResult));
     }
-    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in phi: %.1e", threadId, ticket, nAnchors, result.npts, n_iter, delta);
+    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in phi: %.1e. (%.3f background)", threadId, ticket, nAnchors, result.npts, n_iter, delta, f0);
 }
 
 template<typename T>

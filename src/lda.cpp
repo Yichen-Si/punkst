@@ -1,5 +1,13 @@
 #include "lda.hpp"
 
+void LatentDirichletAllocation::compute_global_mtx() {
+    if (algo_ == InferenceType::SCVB0) {
+        Nk_ = components_.rowwise().sum();
+    } else {
+        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
+    }
+}
+
 void LatentDirichletAllocation::sort_topics() {
     // sort topics by decreasing total weight
     VectorXd topic_weights = components_.rowwise().sum();
@@ -15,11 +23,7 @@ void LatentDirichletAllocation::sort_topics() {
         sorted_components.row(i) = components_.row(indices[i]);
     }
     components_ = std::move(sorted_components);
-    if (algo_ == InferenceType::SCVB0) {
-        Nk_ = components_.rowwise().sum();
-    } else if (algo_ == InferenceType::SVB) {
-        exp_Elog_beta_ = dirichlet_expectation_2d(sorted_components);
-    }
+    compute_global_mtx();
     // topic_names_
     if (!topic_names_.empty()) {
         std::vector<std::string> sorted_topic_names(n_topics_);
@@ -44,11 +48,7 @@ void LatentDirichletAllocation::set_model_from_matrix(std::vector<std::vector<do
             components_(i, j) = lambdaVals[i][j];
         }
     }
-    if (algo_ == InferenceType::SCVB0) {
-        Nk_ = components_.rowwise().sum();
-    } else {
-        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
-    }
+    compute_global_mtx();
 }
 
 void LatentDirichletAllocation::set_model_from_matrix(RowMajorMatrixXd& lambda) {
@@ -60,11 +60,7 @@ void LatentDirichletAllocation::set_model_from_matrix(RowMajorMatrixXd& lambda) 
     }
     notice("Global variational parameters are reset, but online training status (if any) is not. It is only safe for transform.");
     components_ = std::move(lambda);
-    if (algo_ == InferenceType::SCVB0) {
-        Nk_ = components_.rowwise().sum();
-    } else {
-        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
-    }
+    compute_global_mtx();
 }
 
 void LatentDirichletAllocation::set_model_from_tsv(const std::string& modelFile, double scalar) {
@@ -110,14 +106,10 @@ void LatentDirichletAllocation::set_model_from_tsv(const std::string& modelFile,
     if (scalar > 0.) {
         components_ *= scalar;
     }
-    if (algo_ == InferenceType::SCVB0) {
-        Nk_ = components_.rowwise().sum();
-    } else {
-        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
-    }
+    compute_global_mtx();
 }
 
-void LatentDirichletAllocation::init_model(const std::optional<MatrixXd>& topic_word_distr, double scalar) {
+void LatentDirichletAllocation::init_model(const std::optional<RowMajorMatrixXd>& topic_word_distr, double scalar) {
     if (topic_word_distr && topic_word_distr->rows() > 0
                             && topic_word_distr->cols() > 0) {
         components_ = *topic_word_distr;
@@ -135,11 +127,7 @@ void LatentDirichletAllocation::init_model(const std::optional<MatrixXd>& topic_
             }
         }
     }
-    if (algo_ == InferenceType::SCVB0) {
-        Nk_ = components_.rowwise().sum();
-    } else {
-        exp_Elog_beta_ = dirichlet_expectation_2d(components_);
-    }
+    compute_global_mtx();
 }
 
 void LatentDirichletAllocation::init() {
@@ -149,11 +137,11 @@ void LatentDirichletAllocation::init() {
     }
     random_engine_.seed(seed_);
     eps_ = std::numeric_limits<double>::epsilon();
-    if (doc_topic_prior_ < 0) {
-        doc_topic_prior_ = 1. / n_topics_;
+    if (alpha_ < 0) {
+        alpha_ = 1. / n_topics_;
     }
-    if (topic_word_prior_ < 0) {
-        topic_word_prior_ = 1. / n_topics_;
+    if (eta_ < 0) {
+        eta_ = 1. / n_topics_;
     }
     if (total_doc_count_ <= 0) {
         total_doc_count_ = 1000000;

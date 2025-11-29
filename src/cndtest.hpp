@@ -4,12 +4,12 @@ class ConditionalDEtest : public LDA4Hex {
 public:
     ConditionalDEtest(int32_t nFold, int32_t nContrast,
         int32_t nThreads, int32_t seed,
-        const std::string& dataFile, const std::string& metaFile,
+        const std::string& dataFile, HexReader& reader,
         const std::string& labelFile,
         const std::string& modelFile,
         int32_t maxIter = 100, double mDelta = -1., int32_t bSize = 1024,
         int32_t debug = 0, int32_t verbose = 0) :
-        LDA4Hex(metaFile, 0),
+        LDA4Hex(reader, 0),
         nFold_(nFold), nContrast_(nContrast), nThreads_(nThreads), seed_(seed),
         dataFile_(dataFile), labelFile_(labelFile),
         maxIter_(maxIter), mDelta_(mDelta), debug_(debug), verbose_(verbose)

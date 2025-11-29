@@ -131,7 +131,9 @@ public:
     double hexSize;
     bool hasCoordinates;
     std::vector<std::string> features;
+    bool readFullSums = false;
 
+    HexReader() = default;
     HexReader(const std::string &metaFile) {
         readMetadata(metaFile);
     }
@@ -178,6 +180,7 @@ public:
     void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap);
     void setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped = false);
     void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums = true);
+    void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0);
 
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0, bool add2sums = true) {
         std::string info;
@@ -196,10 +199,13 @@ private:
     int32_t icol_layer, icol_x, icol_y;
     int32_t mintokens;
     std::vector<double> feature_sums;
+    std::vector<double> weights;
     std::vector<std::string> header_info;
     std::unordered_map<uint32_t, uint32_t> idx_remap;
     bool remap = false;
     bool accumulate_sums = true;
+    bool weightFeatures = false;
+    double defaultWeight;
 
     void readMetadata(const std::string &metaFile);
 };

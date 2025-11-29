@@ -25,6 +25,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double mDelta = 1e-3;
 
     std::string algo = "slda"; // or "nmf"
+    double a0 = 1.0, b0 = 9.0;
+    std::string bgModelFile;
 
     MLEOptions opts;
     opts.mle_only_mode();
@@ -60,6 +62,10 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
       .add_option("seed", "Random seed", seed);
+    // Background model options
+    pl.add_option("background-model", "Background model file", bgModelFile)
+      .add_option("bg-fraction-prior-a0", "Background fraction hyper-parameter a0 in pi~beta(a0, b0) (default: 2)", a0)
+      .add_option("bg-fraction-prior-b0", "Background fraction hyper-parameter b0 in pi~beta(a0, b0) (default: 8)", b0);
     // EM-NMF specific options
     pl.add_option("size-factor", "Size factor used for per-anchor EM updates", sizeFactor)
       .add_option("exact", "Use exact Poisson updates (no log1p approximation)", exactMLE)
@@ -188,6 +194,26 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
     notice("Initialized tile reader");
 
+    VectorXf eta0;
+    if (!bgModelFile.empty()) {
+        eta0 = VectorXf::Zero(M_model);
+        std::ifstream fin(bgModelFile);
+        if (!fin.is_open()) {
+            error("Cannot open background model file %s", bgModelFile.c_str());
+        }
+        std::string line;
+        std::vector<std::string> tokens;
+        while (std::getline(fin, line)) {
+            if (line.empty() || line[0] == '#') {continue;}
+            split(tokens, "\t ", line, 3, true, true, true);
+            if (tokens.size() < 2) {continue;}
+            auto it = parser.featureDict.find(tokens[0]);
+            if (it == parser.featureDict.end()) {continue;}
+            if (!str2float(tokens[1], eta0(it->second))) {
+                error("Invalid value in background model file (%s)", line.c_str());
+            }
+        }
+    }
 
     auto configure_decoder = [&](auto& decoder, const std::string& anchorFile) {
         decoder.setOutputOptions(outputOritinalData, outputAnchor, useTicketSystem);
@@ -197,6 +223,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             int32_t nAnchors = decoder.loadAnchors(anchorFile);
             notice("Loaded %d valid anchors", nAnchors);
         }
+        decoder.setFeatureNames(featureNames);
     };
 
     if (algo == "nmf") {
@@ -261,13 +288,17 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         if (coordsAreInt) {
             Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
+            if (!bgModelFile.empty()) {
+                tiles2slda.set_background_prior(eta0, a0, b0);
+            }
             configure_decoder(tiles2slda, ds.anchorFile);
-            tiles2slda.setFeatureNames(featureNames);
             tiles2slda.run();
         } else {
             Tiles2SLDA<float> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
+            if (!bgModelFile.empty()) {
+                tiles2slda.set_background_prior(eta0, a0, b0);
+            }
             configure_decoder(tiles2slda, ds.anchorFile);
-            tiles2slda.setFeatureNames(featureNames);
             tiles2slda.run();
         }
     }

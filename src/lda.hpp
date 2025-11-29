@@ -20,10 +20,11 @@
 #include "Eigen/Dense"
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+using Eigen::ArrayXd;
 using Eigen::RowVectorXd;
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
-enum class InferenceType { SVB, SCVB0 };
+enum class InferenceType { SVB, SVB_DN, SCVB0 };
 
 class LatentDirichletAllocation {
 public:
@@ -41,11 +42,11 @@ public:
                               double learning_offset = -1., // tau
                               int total_doc_count = 1000000,
             const std::string* mfile = nullptr,
-            const std::optional<MatrixXd>& topic_word_distr = std::nullopt, double pariorScale = -1.)
+            const std::optional<RowMajorMatrixXd>& topic_word_distr = std::nullopt, double pariorScale = -1.)
         : n_topics_(n_topics), n_features_(n_features), seed_(seed),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
-        doc_topic_prior_(doc_topic_prior),
-        topic_word_prior_(topic_word_prior),
+        alpha_(doc_topic_prior),
+        eta_(topic_word_prior),
         learning_decay_(learning_decay), learning_offset_(learning_offset),
         total_doc_count_(total_doc_count),
         update_count_(0) {
@@ -79,11 +80,30 @@ public:
         init();
     }
 
+    InferenceType get_algorithm() const {
+        return algo_;
+    }
     const RowMajorMatrixXd& get_model() const {
         return components_;
     }
+    const VectorXd& get_background_model() const {
+        assert(algo_ == InferenceType::SVB_DN);
+        return lambda0_;
+    }
     RowMajorMatrixXd copy_model() const {
         return components_;
+    }
+    VectorXd copy_background_model() const {
+        assert(algo_ == InferenceType::SVB_DN);
+        return lambda0_;
+    }
+    double get_forground_count() const {
+        assert(algo_ == InferenceType::SVB_DN);
+        return b_;
+    }
+    double get_background_count() const {
+        assert(algo_ == InferenceType::SVB_DN);
+        return a_;
     }
     int32_t get_n_topics() const {
         return n_topics_;
@@ -103,6 +123,8 @@ public:
     // Set engine specific parameters
     void set_svb_parameters(int32_t max_iter = 100, double tol = -1.);
     void set_scvb0_parameters(double s_beta = 1, double s_theta = 1, double tau_theta = 10, double kappa_theta = 0.9, int32_t burnin = 10);
+    void set_background_prior(const VectorXd& eta0, double a0, double b0);
+    void set_background_prior(const std::vector<double> eta0, double a0, double b0);
 
     // Set the model matrix
     void set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals);
@@ -112,88 +134,189 @@ public:
 
     // process a mini-batch of documents to update the global topic-word distribution.
     void partial_fit(const std::vector<Document>& docs) {
-        if (algo_ == InferenceType::SCVB0) {
-            scvb0_partial_fit(docs);
-        } else {
-            svb_partial_fit(docs);
+        switch (algo_) {
+            case InferenceType::SCVB0:
+                scvb0_partial_fit(docs);
+                break;
+            case InferenceType::SVB_DN:
+                svbdn_partial_fit(docs);
+                break;
+            case InferenceType::SVB:
+                svb_partial_fit(docs);
+                break;
+            default:
+                error("%s: Unknown inference type", __func__);
         }
     }
     void svb_partial_fit(const std::vector<Document>& docs);
+    void svbdn_partial_fit(const std::vector<Document>& docs);
     void scvb0_partial_fit(const std::vector<Document>& docs);
 
     // Transform: compute document-topic distributions for a list of documents
     // For transform, we do not compute or return sufficient statistics.
     RowMajorMatrixXd transform(const std::vector<Document>& docs) {
         int n_docs = docs.size();
-        RowMajorMatrixXd doc_topic_distr(n_docs, n_topics_);
+        int ncol = algo_ == InferenceType::SVB_DN ? n_topics_ + 1 : n_topics_;
+        RowMajorMatrixXd gamma(n_docs, ncol);
         if (nThreads_ == 1) {
-            if (algo_ == InferenceType::SCVB0) {
-                for (int d = 0; d < n_docs; ++d) {
+            switch(algo_) {
+                case InferenceType::SCVB0:
+                    for (int d = 0; d < n_docs; ++d) {
+                        VectorXd hatNk;
+                        scvb0_fit_one_document(hatNk, docs[d]);
+                        hatNk /= hatNk.sum();
+                        gamma.row(d) = hatNk.transpose();
+                    }
+                    break;
+                case InferenceType::SVB_DN:
+                    for (int d = 0; d < n_docs; ++d) {
+                        VectorXd gamma_d, exp_Elog_theta_d;
+                        ArrayXd fg_counts;
+                        int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d], fg_counts);
+                        gamma_d /= gamma_d.sum();
+                        double c = std::accumulate(docs[d].cnts.begin(), docs[d].cnts.end(), 0.0);
+                        double bg = 1. - fg_counts.sum() / c;
+                        gamma(d, 0) = bg;
+                        for (int32_t k = 0; k < n_topics_; ++k) {
+                            gamma(d, k+1) = gamma_d(k);
+                        }
+                        // gamma.row(d) = gamma_d.transpose();
+                    }
+                    break;
+                case InferenceType::SVB:
+                    for (int d = 0; d < n_docs; ++d) {
+                        VectorXd gamma_d, exp_Elog_theta_d;
+                        int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d]);
+                        gamma_d /= gamma_d.sum();
+                        gamma.row(d) = gamma_d.transpose();
+                    }
+                    break;
+                default:
+                    error("%s: Unknown inference type", __func__);
+            }
+            return gamma;
+        }
+        switch(algo_) {
+            case InferenceType::SCVB0:
+                tbb::parallel_for(0, n_docs, [&](int d) {
+                    // Update document d using the helper function.
                     VectorXd hatNk;
                     scvb0_fit_one_document(hatNk, docs[d]);
-                    doc_topic_distr.row(d) = hatNk.transpose();
-                }
-            } else {
-                for (int d = 0; d < n_docs; ++d) {
-                    VectorXd updated_doc, exp_doc;
-                    int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d]);
-                    doc_topic_distr.row(d) = updated_doc.transpose();
-                }
-            }
-            return doc_topic_distr;
+                    hatNk /= hatNk.sum();
+                    gamma.row(d) = hatNk.transpose();
+                });
+                break;
+            case InferenceType::SVB_DN:
+                tbb::parallel_for(0, n_docs, [&](int d) {
+                    // Update document d using the helper function.
+                    VectorXd gamma_d, exp_Elog_theta_d;
+                    ArrayXd fg_counts;
+                    int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d], fg_counts);
+                    gamma_d /= gamma_d.sum();
+                    double c = std::accumulate(docs[d].cnts.begin(), docs[d].cnts.end(), 0.0);
+                    double bg = 1. - fg_counts.sum() / c;
+                    gamma(d, 0) = bg;
+                    for (int32_t k = 0; k < n_topics_; ++k) {
+                        gamma(d, k+1) = gamma_d(k);
+                    }
+                    // gamma.row(d) = gamma_d.transpose();
+                });
+                break;
+            case InferenceType::SVB:
+                tbb::parallel_for(0, n_docs, [&](int d) {
+                    // Update document d using the helper function.
+                    VectorXd gamma_d, exp_Elog_theta_d;
+                    int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d]);
+                    gamma_d /= gamma_d.sum();
+                    gamma.row(d) = gamma_d.transpose();
+                });
+                break;
+            default:
+                error("%s: Unknown inference type", __func__);
         }
-        if (algo_ == InferenceType::SCVB0) {
-            tbb::parallel_for(0, n_docs, [&](int d) {
-                // Update document d using the helper function.
-                VectorXd hatNk;
-                scvb0_fit_one_document(hatNk, docs[d]);
-                doc_topic_distr.row(d) = hatNk.transpose();
-            });
-        } else {
-            tbb::parallel_for(0, n_docs, [&](int d) {
-                // Update document d using the helper function.
-                VectorXd updated_doc, exp_doc;
-                int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d]);
-                doc_topic_distr.row(d) = updated_doc.transpose();
-            });
-        }
-        return doc_topic_distr;
+        return gamma;
     }
     RowMajorMatrixXd transform(const std::vector<SparseObs>& docs) {
         int n_docs = docs.size();
-        RowMajorMatrixXd doc_topic_distr(n_docs, n_topics_);
+        int ncol = algo_ == InferenceType::SVB_DN ? n_topics_ + 1 : n_topics_;
+        RowMajorMatrixXd gamma(n_docs, ncol);
         if (nThreads_ == 1) {
-            if (algo_ == InferenceType::SCVB0) {
-                for (int d = 0; d < n_docs; ++d) {
+            switch(algo_) {
+                case InferenceType::SCVB0:
+                    for (int d = 0; d < n_docs; ++d) {
+                        VectorXd hatNk;
+                        scvb0_fit_one_document(hatNk, docs[d].doc);
+                        hatNk /= hatNk.sum();
+                        gamma.row(d) = hatNk.transpose();
+                    }
+                    break;
+                case InferenceType::SVB_DN:
+                    for (int d = 0; d < n_docs; ++d) {
+                        VectorXd gamma_d, exp_Elog_theta_d;
+                        ArrayXd fg_counts;
+                        int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc, fg_counts);
+                        gamma_d /= gamma_d.sum();
+                        double c = std::accumulate(docs[d].doc.cnts.begin(), docs[d].doc.cnts.end(), 0.0);
+                        double bg = 1. - fg_counts.sum() / c;
+                        gamma(d, 0) = bg;
+                        for (int32_t k = 0; k < n_topics_; ++k) {
+                            gamma(d, k+1) = gamma_d(k);
+                        }
+                        // gamma.row(d) = gamma_d.transpose();
+                    }
+                    break;
+                case InferenceType::SVB:
+                    for (int d = 0; d < n_docs; ++d) {
+                        VectorXd gamma_d, exp_Elog_theta_d;
+                        int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc);
+                        gamma_d /= gamma_d.sum();
+                        gamma.row(d) = gamma_d.transpose();
+                    }
+                    break;
+                default:
+                    error("%s: Unknown inference type", __func__);
+            }
+            return gamma;
+        }
+        switch(algo_) {
+            case InferenceType::SCVB0:
+                tbb::parallel_for(0, n_docs, [&](int d) {
+                    // Update document d using the helper function.
                     VectorXd hatNk;
                     scvb0_fit_one_document(hatNk, docs[d].doc);
-                    doc_topic_distr.row(d) = hatNk.transpose();
-                }
-            } else {
-                for (int d = 0; d < n_docs; ++d) {
-                    VectorXd updated_doc, exp_doc;
-                    int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d].doc);
-                    doc_topic_distr.row(d) = updated_doc.transpose();
-                }
-            }
-            return doc_topic_distr;
+                    hatNk /= hatNk.sum();
+                    gamma.row(d) = hatNk.transpose();
+                });
+                break;
+            case InferenceType::SVB_DN:
+                tbb::parallel_for(0, n_docs, [&](int d) {
+                    // Update document d using the helper function.
+                    VectorXd gamma_d, exp_Elog_theta_d;
+                    ArrayXd fg_counts;
+                    int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc, fg_counts);
+                    gamma_d /= gamma_d.sum();
+                    double c = std::accumulate(docs[d].doc.cnts.begin(), docs[d].doc.cnts.end(), 0.0);
+                    double bg = 1. - fg_counts.sum() / c;
+                    gamma(d, 0) = bg;
+                    for (int32_t k = 0; k < n_topics_; ++k) {
+                        gamma(d, k+1) = gamma_d(k);
+                    }
+                    // gamma.row(d) = gamma_d.transpose();
+                });
+                break;
+            case InferenceType::SVB:
+                tbb::parallel_for(0, n_docs, [&](int d) {
+                    // Update document d using the helper function.
+                    VectorXd gamma_d, exp_Elog_theta_d;
+                    int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc);
+                    gamma_d /= gamma_d.sum();
+                    gamma.row(d) = gamma_d.transpose();
+                });
+                break;
+            default:
+                error("%s: Unknown inference type", __func__);
         }
-        if (algo_ == InferenceType::SCVB0) {
-            tbb::parallel_for(0, n_docs, [&](int d) {
-                // Update document d using the helper function.
-                VectorXd hatNk;
-                scvb0_fit_one_document(hatNk, docs[d].doc);
-                doc_topic_distr.row(d) = hatNk.transpose();
-            });
-        } else {
-            tbb::parallel_for(0, n_docs, [&](int d) {
-                // Update document d using the helper function.
-                VectorXd updated_doc, exp_doc;
-                int32_t niter = svb_fit_one_document(updated_doc, exp_doc, docs[d].doc);
-                doc_topic_distr.row(d) = updated_doc.transpose();
-            });
-        }
-        return doc_topic_distr;
+        return gamma;
     }
 
     // SVB only
@@ -201,14 +324,14 @@ public:
     std::vector<double> score(const std::vector<Document>& docs) {
         assert(algo_ == InferenceType::SVB);
         // Compute document-topic distributions using your transform() method.
-        MatrixXd doc_topic_distr = transform(docs);
-        return approx_bound(docs, doc_topic_distr, false);
+        MatrixXd gamma = transform(docs);
+        return approx_bound(docs, gamma, false);
     }
     // Compute perplexity for a set of documents.
     double perplexity(const std::vector<Document>& docs, bool sub_sampling = false) {
         assert(algo_ == InferenceType::SVB);
-        MatrixXd doc_topic_distr = transform(docs);
-        return _perplexity_precomp_distr(docs, doc_topic_distr, sub_sampling);
+        MatrixXd gamma = transform(docs);
+        return _perplexity_precomp_distr(docs, gamma, sub_sampling);
     }
 
 private:
@@ -219,8 +342,8 @@ private:
     int total_doc_count_;
     int nThreads_;
     RowMajorMatrixXd components_; // lambda in SVB or N_kw in SCVB, K x M
-    double doc_topic_prior_  = -1; // alpha
-    double topic_word_prior_ = -1; // eta
+    double alpha_ = -1; // prior for theta
+    double eta_ = -1; // prior for beta
     double eps_;
     double learning_decay_  = -1; // kappa
     double learning_offset_ = -1; // tau
@@ -230,9 +353,14 @@ private:
     std::unique_ptr<tbb::global_control> tbb_ctrl_;
 
     // SVB specific parameters
-    MatrixXd exp_Elog_beta_; // exp(E[log beta])
+    MatrixXd exp_Elog_beta_; // exp(E[log beta]), K x M
     int max_doc_update_iter_ = -1; // for per document inner loop
     double mean_change_tol_  = -1; // for per document inner loop
+    // SVB_DN specific parameters
+    double a0_, b0_; // prior for background proportion pi
+    double a_, b_;
+    VectorXd eta0_; // prior for background distribution, M x 1
+    VectorXd lambda0_, exp_Elog_beta0_; // background distribution, M x 1
 
     // SCVB0 specific parameters
     double s_beta_ = 1, s_theta_ = 1;
@@ -244,13 +372,15 @@ private:
     // doc: sparse representation of the document.
     // doc_topic: current/prior document-topic vector (K x 1).
     // Returns the updated document-topic vectors (K x 1).
-    int32_t svb_fit_one_document(VectorXd& doc_topic, VectorXd& exp_doc,
-        const Document &doc,
-        const std::optional<VectorXd>& doc_topic_ = std::nullopt);
+    int32_t svb_fit_one_document(VectorXd& gamma, VectorXd& exp_Elog_theta,
+        const Document &doc);
+    int32_t svbdn_fit_one_document(VectorXd& gamma, VectorXd& exp_Elog_theta,
+        const Document &doc, ArrayXd& fg_counts);
     void scvb0_fit_one_document(MatrixXd& hatNkw, const Document& doc);
     void scvb0_fit_one_document(VectorXd& hatNk, const Document& doc);
 
-    void init_model(const std::optional<MatrixXd>& topic_word_distr = std::nullopt, double scalar = -1.);
+    void init_model(const std::optional<RowMajorMatrixXd>& topic_word_distr = std::nullopt, double scalar = -1.);
+    void compute_global_mtx();
     void init();
 
     // SCVB0 specific
@@ -258,18 +388,18 @@ private:
     inline void scvb0_one_word(
             const uint32_t w, const VectorXd& NTheta_j, VectorXd& phi) const {
         // (β_kw + η) / (n_k + M*η) * (N_jk + α)
-        VectorXd model = (components_.col(w).array() + topic_word_prior_) / (Nk_.array() + n_features_ * topic_word_prior_);
-        phi = (components_.col(w).array() + topic_word_prior_)
-              * (NTheta_j.array() + doc_topic_prior_)
-              / (Nk_.array() + n_features_ * topic_word_prior_);
+        VectorXd model = (components_.col(w).array() + eta_) / (Nk_.array() + n_features_ * eta_);
+        phi = (components_.col(w).array() + eta_)
+              * (NTheta_j.array() + alpha_)
+              / (Nk_.array() + n_features_ * eta_);
         phi /= phi.sum();
     }
 
     // SVB specific
     // Compute the approximate variational bound
     std::vector<double> approx_bound(const std::vector<Document>& docs,
-        const MatrixXd& doc_topic_distr, bool sub_sampling);
+        const MatrixXd& gamma, bool sub_sampling);
     // Compute perplexity from precomputed document-topic distributions.
     double _perplexity_precomp_distr(const std::vector<Document>& docs,
-        const MatrixXd& doc_topic_distr, bool sub_sampling);
+        const MatrixXd& gamma, bool sub_sampling);
 };

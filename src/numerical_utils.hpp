@@ -100,15 +100,12 @@ VectorType expect_log_sticks(const VectorType& alpha, const VectorType& beta) {
 // exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k
 // = exp(psi(\alpha_k) - psi(\alpha_0))
 template<typename T>
-void dirichlet_expectation_1d(std::vector<T>& alpha, std::vector<T>& out, T offset = -1) {
-    if (offset < 1e-6) {
-        offset = 1e-6;
-    }
+void dirichlet_expectation_1d(std::vector<T>& alpha, std::vector<T>& out, T eps = 1e-6) {
     size_t size = alpha.size();
     T total = 0.0;
     // Add the prior and compute total
     for (size_t i = 0; i < size; i++) {
-        alpha[i] += offset;
+        alpha[i] += eps;
         total += alpha[i];
     }
     T psi_total = psi(total);
@@ -121,15 +118,22 @@ void dirichlet_expectation_1d(std::vector<T>& alpha, std::vector<T>& out, T offs
 // Vector version
 template<typename Derived>
 Derived dirichlet_expectation_1d(const Eigen::MatrixBase<Derived>& alpha,
-                                 typename Derived::Scalar offset = Derived::Scalar(-1)) {
+                                 double eps = 1e-6) {
     using Scalar = typename Derived::Scalar;
-    if (offset < 0) {
-        offset = 1e-6;
-    }
-    Derived tmp = alpha.array() + offset;
+    Derived tmp = alpha.array() + eps;
     Scalar psi_total = psi(tmp.sum());
     tmp = tmp.unaryExpr([](Scalar x) {return psi(x);});
     return (tmp.array() - psi_total).exp();
+}
+
+template<typename Derived>
+Derived dirichlet_entropy_1d(const Eigen::MatrixBase<Derived>& alpha,
+                             double eps = 1e-6) {
+    using Scalar = typename Derived::Scalar;
+    Derived tmp = alpha.array() + eps;
+    Scalar psi_total = psi(tmp.sum());
+    tmp = tmp.unaryExpr([](Scalar x) {return psi(x);});
+    return tmp.array() - psi_total;
 }
 
 // exp(E[log X]) for X ~ Dir(\alpha), \alpha_0 := \sum_k \alpha_k

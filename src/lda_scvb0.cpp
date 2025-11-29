@@ -37,7 +37,7 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
         MatrixXd& hatNkw, const Document& doc)
 {
     int Cj = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0);
-    VectorXd NTheta = VectorXd::Constant(n_topics_, doc_topic_prior_);
+    VectorXd NTheta = VectorXd::Constant(n_topics_, alpha_);
     VectorXd phi(n_topics_);
     int t = 0;
     // generate a random order of words to process
@@ -68,7 +68,7 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
     hatNk.resize(n_topics_);
     hatNk.setZero();
     int Cj = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0);
-    VectorXd NTheta = VectorXd::Constant(n_topics_, doc_topic_prior_);
+    VectorXd NTheta = VectorXd::Constant(n_topics_, alpha_);
     VectorXd phi(n_topics_);
     int t = 0;
     // generate a random order of words to process

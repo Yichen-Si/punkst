@@ -58,11 +58,16 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
             i += 1;
         }
     }
+    if (weightFeatures) {
+        for (size_t i = 0; i < doc.ids.size(); i++) {
+            doc.cnts[i] *= weights[doc.ids[i]];
+        }
+    }
     if (accumulate_sums && add2sums) {
-        for (size_t k = 0; k < doc.ids.size(); ++k) {
-            uint32_t j = doc.ids[k];
-            if (j < feature_sums.size()) {
-                feature_sums[j] += doc.cnts[k];
+        for (size_t i = 0; i < doc.ids.size(); ++i) {
+            uint32_t j = doc.ids[i];
+            if (j < nFeatures) {
+                feature_sums[j] += doc.cnts[i];
             }
         }
     }
@@ -125,7 +130,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     }
     std::string line;
     uint32_t idx0 = 0, idx1 = 0;
-    std::unordered_map<uint32_t, uint32_t> idx_remap;
+    std::unordered_map<uint32_t, uint32_t> remap_new;
     std::unordered_map<std::string, uint32_t> dict;
     std::stringstream ss;
     std::vector<std::string> token;
@@ -151,7 +156,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
         }
         double count = -1;
         if (read_sums) {
-            if (idx0 == 1) {
+            if (idx1 == 0) {
                 if (token.size() > 1) {
                     if (!str2num(token[1], count) || count < 0) {
                         warning("%s: Non-numerical value on the second column is ignored: %s", __func__, line.c_str());
@@ -174,7 +179,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
         if (include && !exclude &&
             kept_features.find(feature) == kept_features.end()) {
             if (has_sums) new_sums[idx1] = count;
-            idx_remap[idx_prev] = idx1++;
+            remap_new[idx_prev] = idx1++;
             kept_features.insert(feature);
         } else {
             ss << " " << feature;
@@ -183,11 +188,66 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     if (has_sums) {
         feature_sums = std::move(new_sums);
         accumulate_sums = false;
+        readFullSums = true;
     }
     notice("%s: %d features are kept out of %d", __FUNCTION__, idx1, idx0);
     if (ss.str().length() > 0)
         std::cout << "Excluded due to regex:" << ss.str() << std::endl;
-    setFeatureIndexRemap(idx_remap);
+    setFeatureIndexRemap(remap_new);
+}
+
+void HexReader::setWeights(const std::string& weightFile, double defaultWeight_) {
+    std::ifstream inWeight(weightFile);
+    if (!inWeight) {
+        error("Error opening weights file: %s", weightFile.c_str());
+    }
+    defaultWeight = defaultWeight_;
+    int32_t nweighted = 0, novlp = 0;
+    weights.resize(nFeatures);
+    std::fill(weights.begin(), weights.end(), defaultWeight);
+    std::unordered_map<std::string, uint32_t> dict;
+    if (!featureDict(dict)) {
+        warning("Feature dictionary is not found in the input metadata, we assume the weight file (--feature-weights) refers to features by their index as in the input file");
+        std::string line;
+        while (std::getline(inWeight, line)) {
+            nweighted++;
+            std::istringstream iss(line);
+            uint32_t idx;
+            double weight;
+            if (!(iss >> idx >> weight)) {
+                error("Error reading weights file at line: %s", line.c_str());
+            }
+            if (idx >= nFeatures) {
+                warning("Input file contains %zu features, feature index %u in the weights file is out of range", nFeatures, idx);
+                continue;
+            }
+            weights[idx] = weight;
+            novlp++;
+        }
+    } else { // assume the weight file refers to features by their names
+        std::string line;
+        while (std::getline(inWeight, line)) {
+            nweighted++;
+            std::istringstream iss(line);
+            std::string feature;
+            double weight;
+            if (!(iss >> feature >> weight)) {
+                error("Error reading weights file at line: %s", line.c_str());
+            }
+            auto it = dict.find(feature);
+            if (it != dict.end()) {
+                weights[it->second] = weight;
+                novlp++;
+            } else {
+                warning("Feature %s not found in the input", feature.c_str());
+            }
+        }
+    }
+    notice("Read %d weights from file, %d features overlap with the input file", nweighted, novlp);
+    if (novlp == 0) {
+        error("No features in the weight file overlap with those found in the input file, check if the files are consistent.");
+    }
+    weightFeatures = true;
 }
 
 int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount, int32_t modal, bool add2sums) {
@@ -209,7 +269,7 @@ int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>
         if (accumulate_sums && add2sums) {
             for (size_t i = 0; i < doc.ids.size(); ++i) {
                 uint32_t j = doc.ids[i];
-                if (j < feature_sums.size()) {
+                if (j < nFeatures) {
                     feature_sums[j] += doc.cnts[i];
                 }
             }
@@ -218,6 +278,7 @@ int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>
         info.push_back(std::move(l));
         n++;
     }
+    readFullSums = true;
     return n;
 }
 
@@ -240,7 +301,7 @@ int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFil
         if (accumulate_sums && add2sums) {
             for (size_t i = 0; i < doc.ids.size(); ++i) {
                 uint32_t j = doc.ids[i];
-                if (j < feature_sums.size()) {
+                if (j < nFeatures) {
                     feature_sums[j] += doc.cnts[i];
                 }
             }
@@ -248,6 +309,7 @@ int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFil
         docs.push_back(std::move(doc));
         n++;
     }
+    readFullSums = true;
     return n;
 }
 
@@ -265,12 +327,18 @@ void HexReader::setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _id
         idx_remap = _idx_remap;
         remap = true;
     }
-    nFeatures = _idx_remap.size();
+    nFeatures = idx_remap.size();
     std::vector<std::string> new_features(nFeatures);
     for (const auto& pair : _idx_remap) {
         new_features[pair.second] = features[pair.first];
     }
     features = std::move(new_features);
+    if (!weightFeatures) {return;}
+    std::vector<double> new_weights(nFeatures, defaultWeight);
+    for (const auto& pair : _idx_remap) {
+        new_weights[pair.second] = weights[pair.first];
+    }
+    weights = std::move(new_weights);
 }
 
 void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped) {
@@ -280,8 +348,7 @@ void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features, boo
     }
     int32_t n_new = new_features.size();
     bool changed = false;
-    if (nFeatures == n_new) {
-        // check if they are identical
+    if (nFeatures == n_new) { // check if they are identical
         for (uint32_t i = 0; i < nFeatures; ++i) {
             if (features[i] != new_features[i]) {
                 changed = true;
@@ -317,6 +384,23 @@ void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features, boo
     } else {
         features = new_features;
     }
+    if (weightFeatures) {
+        std::vector<double> new_weights(features.size(), defaultWeight);
+        for (const auto& pair : new_idx_remap) {
+            new_weights[pair.second] = weights[pair.first];
+        }
+        weights = std::move(new_weights);
+    }
+    if (readFullSums) {
+        std::vector<double> new_sums(features.size(), 0.0);
+        for (const auto& pair : new_idx_remap) {
+            new_sums[pair.second] = feature_sums[pair.first];
+        }
+        feature_sums = std::move(new_sums);
+    } else {
+        feature_sums.clear();
+        feature_sums.resize(features.size(), 0.0);
+    }
 
     if (remap) {
         std::unordered_map<uint32_t, uint32_t> final_idx_remap;
@@ -334,7 +418,6 @@ void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features, boo
 
     idx_remap = std::move(new_idx_remap);
     nFeatures = features.size();
-
 }
 
 bool UnitValues::readFromLine(const std::string& line, int32_t nModal, bool labeled) {

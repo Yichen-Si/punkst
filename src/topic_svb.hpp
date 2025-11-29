@@ -10,37 +10,26 @@
 class TopicModelWrapper {
 public:
     // Constructor initializes shared members
-    TopicModelWrapper(const std::string& metaFile, int32_t modal = 0) : reader(metaFile), modal(modal) {
+    TopicModelWrapper(HexReader& _reader, int32_t modal = 0) : modal(modal) {
+        reader = std::move(_reader);
         if (modal >= reader.getNmodal()) {
             error("modal %d is out of range", modal);
         }
         M_ = reader.nFeatures;
-        weightFeatures = false;
         ntot = 0;
         minCountTrain = 0;
-        usePriorMapping = false;
         initialized = false;
     }
 
     // Virtual destructor for polymorphism
     virtual ~TopicModelWrapper() = default;
 
-    // --- Common Public Methods ---
-
-    // Sets features by filtering based on count and regex
-    void setFeatures(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex) {
-        reader.setFeatureFilter(featureFile, minCount, include_ftr_regex, exclude_ftr_regex);
-        M_ = reader.nFeatures;
-    }
-
-    // Sets feature weights from a file
-    void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0);
-
     // Template method for online training
-    int32_t trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain);
+    int32_t trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits = INT32_MAX);
 
     // Template method for writing the model to a file
     void writeModelToFile(const std::string& outFile);
+    void writeModelHeader(std::ofstream& outFileStream);
 
     // Template method for transforming data and writing results
     void fitAndWriteToFile(const std::string& inFile, const std::string& outFile, int32_t _bsize);
@@ -53,10 +42,12 @@ public:
     std::vector<std::string> getFeatureNames() const {
         return featureNames.empty() ? reader.features : featureNames;
     }
+    void printTopicAbundance();
 
     // --- Pure Virtual Interface to be Implemented by Derived Classes ---
     virtual int32_t getNumTopics() const = 0;
     virtual void sortTopicsByWeight() = 0;
+    virtual void writeUnitHeader(std::ofstream& outFileStream) = 0;
 
 protected:
     // --- Shared Data Members ---
@@ -65,11 +56,8 @@ protected:
     int32_t ntot;
     int32_t M_; // Number of features
     int32_t minCountTrain;
-    bool weightFeatures;
     bool initialized;
-    bool usePriorMapping;
     double defaultWeight;
-    std::vector<double> weights;
     std::vector<std::string> featureNames;
     std::vector<Document> minibatch;
     int32_t batchSize;
@@ -77,13 +65,12 @@ protected:
     // --- Shared Helper Methods ---
     bool readMinibatch(std::ifstream& inFileStream);
     bool readMinibatch(std::ifstream& inFileStream, std::vector<std::string>& idens, bool labeled = false);
-    // Create a new feature space that is the intersection of:
-    // 1. Current filtered features (from setFeatures)
-    // 2. The input features
+    // Create a new feature space that is the intersection of
+    // 1. Current filtered features and 2. The input features
     // The output will follow the input's ordering
     virtual void setupPriorMapping(std::vector<std::string>& feature_names_, std::vector<std::uint32_t>& kept_indices);
 
-    // --- Pure Virtual "Hooks" for the Template Methods ---
+    // --- Pure virtual hooks for the template methods ---
     virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
     virtual MatrixXd do_transform(const std::vector<Document>& batch) = 0;
     virtual const RowMajorMatrixXd& get_model_matrix() const = 0;
@@ -105,7 +92,7 @@ class LDA4Hex : public TopicModelWrapper {
 
 public:
 
-    LDA4Hex(const std::string& metaFile, int32_t modal = 0) : TopicModelWrapper(metaFile, modal) {}
+    LDA4Hex(HexReader& _reader, int32_t modal = 0) : TopicModelWrapper(_reader, modal) {}
 
     void initialize_scvb0(int32_t nTopics, int32_t seed = -1,
         int32_t nThreads = 0, int32_t verbose = 0,
@@ -155,7 +142,70 @@ public:
         if (!initialized || !lda) {
             error("%s: LDA4Hex is not initialized", __FUNCTION__);
         }
-        lda->get_topic_abundance(weights);
+        lda->get_topic_abundance(topic_weights);
+    }
+    void writeBackgroundModel(std::string& outFile) {
+        if (lda->get_algorithm() != InferenceType::SVB_DN) {
+            return;
+        }
+        std::ofstream outFileStream(outFile, std::ios::out);
+        if (!outFileStream) {
+            error("%s: Failed to open output file: %s", __FUNCTION__, outFile.c_str());
+        }
+        double a = lda->get_background_count();
+        double b = lda->get_forground_count();
+        outFileStream << std::fixed << std::setprecision(3);
+        outFileStream << "##a=" << a << ";b=" << b
+                      << ";pi=" << (a / (a + b)) << "\n";
+        outFileStream << "#Feature\tBackground\n";
+        const auto& lambda0 = lda->get_background_model();
+        for (int32_t j = 0; j < M_; ++j) {
+            outFileStream << featureNames[j] << "\t" << lambda0(j) << "\n";
+        }
+        outFileStream.close();
+    }
+    void writeUnitHeader(std::ofstream& outFileStream) override {
+        if (lda->get_algorithm() == InferenceType::SVB_DN) {
+            outFileStream << "Background\t";
+        }
+        writeModelHeader(outFileStream);
+    }
+
+    void set_background_prior(std::string& bgPriorFile, double a0, double b0, double scale = 1.) {
+        std::ifstream priorIn(bgPriorFile, std::ios::in);
+        if (!priorIn) {
+            const std::vector<double>& eta0 = reader.getFeatureSums();
+            if (std::abs(scale - 1.) > 1e-12) {
+                std::vector<double> scaled_eta0(eta0.size());
+                for (size_t i = 0; i < eta0.size(); ++i) {
+                    scaled_eta0[i] = eta0[i] * scale;
+                }
+                lda->set_background_prior(scaled_eta0, a0, b0);
+            } else {
+                lda->set_background_prior(eta0, a0, b0);
+            }
+        } else {
+            std::unordered_map<std::string, uint32_t> featureDict;
+            if (!reader.featureDict(featureDict)) {
+                error("%s: Feature names must be set to use background prior from file", __FUNCTION__);
+            }
+            std::string line;
+            std::vector<std::string> tokens;
+            std::vector<double> eta0(reader.nFeatures, 0.0);
+            while(std::getline(priorIn, line)) {
+                if (line.empty() || line[0] == '#') {continue;}
+                split(tokens, "\t ", line, 3);
+                if (tokens.size() < 2) {
+                    error("%s: Invalid line in background prior file: %s", line.c_str());
+                }
+                auto it = featureDict.find(tokens[0]);
+                if (it != featureDict.end()) {
+                    eta0[it->second] = std::stod(tokens[1]);
+                }
+            }
+            priorIn.close();
+            lda->set_background_prior(eta0, a0, b0);
+        }
     }
 
 protected:
@@ -207,7 +257,7 @@ protected:
                 (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
     }
 
-    void readModelFromTsv(const std::string& modelFile, std::vector<std::string>& featureNames, MatrixXd& modelMatrix) {
+    void readModelFromTsv(const std::string& modelFile, std::vector<std::string>& _featureNames, MatrixXd& modelMatrix) {
         std::ifstream modelIn(modelFile, std::ios::in);
         if (!modelIn) {
             error("Failed to open model file: %s", modelFile.c_str());
@@ -223,14 +273,14 @@ protected:
         topicNames = std::vector<std::string>(tokens.begin() + 1, tokens.end());
 
         // Read all feature rows
-        featureNames.clear();
+        _featureNames.clear();
         std::vector<std::vector<double>> modelValues;
         while (std::getline(modelIn, line)) {
             split(tokens, "\t", line);
             if (tokens.size() != K_ + 1) {
                 error("Invalid line in model file: %s", line.c_str());
             }
-            featureNames.push_back(tokens[0]);
+            _featureNames.push_back(tokens[0]);
             std::vector<double> values(K_);
             for (int32_t i = 0; i < K_; ++i) {
                 values[i] = std::stod(tokens[i + 1]);
@@ -239,7 +289,7 @@ protected:
         }
         modelIn.close();
 
-        int32_t nFeatures = featureNames.size();
+        int32_t nFeatures = _featureNames.size();
         modelMatrix.resize(K_, nFeatures);
         for (int32_t i = 0; i < nFeatures; ++i) {
             for (int32_t j = 0; j < K_; ++j) {
@@ -279,8 +329,8 @@ protected:
  */
 class HDP4Hex : public TopicModelWrapper {
 public:
-    HDP4Hex(const std::string& metaFile, int32_t modal = 0)
-        : TopicModelWrapper(metaFile, modal), K_(0), num_topics_to_output_(-1) {}
+    HDP4Hex(HexReader& _reader, int32_t modal = 0)
+        : TopicModelWrapper(_reader, modal), K_(0), num_topics_to_output_(-1) {}
 
     // HDP-specific initializer
     void initialize(int32_t K, int32_t T, int32_t seed, int32_t nThreads, int32_t verbose, double eta, double alpha, double omega, double kappa, double tau0, int32_t totalDocCount, int32_t maxIter, double mDelta) {
@@ -315,6 +365,9 @@ public:
     void sortTopicsByWeight() override {
         if (hdp) hdp->sort_topics();
     }
+    void writeUnitHeader(std::ofstream& outFileStream) override {
+        writeModelHeader(outFileStream);
+    }
     void filterTopics(double threshold, double coverage) override {
         if (!initialized || !hdp) {
             error("HDP must be initialized to filter topics.");
@@ -325,13 +378,13 @@ public:
             return;
         }
         sorted_indices_ = hdp->sort_topics();
-        std::vector<double> weights;
-        hdp->get_topic_abundance(weights); // Gets the sorted, relative weights
+        std::vector<double> topic_weights;
+        hdp->get_topic_abundance(topic_weights); // Gets the sorted, relative weights
         // Strategy 1: Threshold-based filtering
         if (threshold > 0.0 && threshold < 1.0) {
             uint32_t k = 0;
             for (; k < K_; ++k) {
-                if (weights[sorted_indices_[k]] < threshold) {
+                if (topic_weights[sorted_indices_[k]] < threshold) {
                     break;
                 }
             }
@@ -343,7 +396,7 @@ public:
             double cumulative_weight = 0.0;
             uint32_t k = 0;
             for (uint32_t k = 0; k < K_; ++k) {
-                cumulative_weight += weights[sorted_indices_[k]];
+                cumulative_weight += topic_weights[sorted_indices_[k]];
                 if (cumulative_weight >= coverage) {
                     break;
                 }
@@ -370,7 +423,9 @@ protected:
         hdp->partial_fit(batch);
     }
     MatrixXd do_transform(const std::vector<Document>& batch) override {
-        return hdp->transform(batch);
+        MatrixXd theta = hdp->transform(batch);
+        colNormalizeInPlace(theta);
+        return theta;
     }
     const RowMajorMatrixXd& get_model_matrix() const override {
         return hdp->get_model();

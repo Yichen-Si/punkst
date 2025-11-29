@@ -56,9 +56,10 @@ int32_t cmdMultiConditionTest(int argc, char** argv) {
         error("Failed to open split info file %s for writing", outf.c_str());
     }
     fprintf(splitInfo, "#Repeat\tFold\tHeldoutIndices\n");
+    HexReader reader(metaFile);
 
     ConditionalDEtest obj(nFold, nContrast, nThreads, seed,
-                          inFile, metaFile, labelFile, modelFile, maxIter, mDelta, batchSize, debug, verbose);
+                          inFile, reader, labelFile, modelFile, maxIter, mDelta, batchSize, debug, verbose);
     int32_t M = obj.nFeatures();
     std::vector<std::string> featureNames = obj.getFeatureNames();
 

@@ -17,7 +17,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double defaultWeight = 1.;
     bool transform = false;
     bool sort_topics = false;
-    // --- Algorithm Parameters (some are shared) ---
+    // --- Algorithm Parameters ---
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1., eta = -1.;
     int32_t maxIter = 100;
@@ -26,8 +26,15 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     int32_t nTopics = 0;
     double priorScale = 1.;
     bool projection_only = false;
+    // --- LDA + background noise ---
+    bool fitBackground = false;
+    std::string bgPriorFile;
+    double a0 = 2, b0 = 8;
+    double warmInitEpoch = 0.5;
+    double bgInitScale = 0.5;
+    int32_t warmInitUnits = -1;
+    // --- SCVB0 specific parameters ---
     bool useSCVB0 = false;
-    // SCVB0 specific parameters
     int32_t z_burnin = 10;
     double s_beta = 10, s_theta = 1, kappa_theta = 0.9, tau_theta = 10;
     // --- HDP-Specific Parameters ---
@@ -42,14 +49,14 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     // --- Command-Line Option Definitions ---
     pl.add_option("model-type", "Type of topic model to train [lda|hdp]", model_type);
 
-    // Group: Input/Output Options (Common)
+    // Input/Output Options (Common)
     pl.add_option("in-data", "Input hex file", inFile, true)
       .add_option("in-meta", "Metadata file", metaFile, true)
       .add_option("out-prefix", "Output prefix for model and results files", outPrefix, true)
       .add_option("transform", "Transform data to topic space after training", transform)
       .add_option("sort-topics", "Sort topics by weight after training", sort_topics);
 
-    // Group: Feature Preprocessing Options (Common)
+    // Feature Preprocessing Options (Common)
     pl.add_option("feature-weights", "Input weights file", weightFile)
       .add_option("features", "Feature names and total counts file", featureFile)
       .add_option("min-count-per-feature", "Min count for features to be included (requires --features)", minCountFeature)
@@ -57,7 +64,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
 
-    // Group: General Training Options (Common)
+    // General Training Options (Common)
     pl.add_option("seed", "Random seed", seed)
       .add_option("threads", "Number of threads", nThreads)
       .add_option("n-epochs", "Number of epochs", nEpochs)
@@ -66,7 +73,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("verbose", "Verbose level", verbose);
 
-    // Group: Algorithm Hyperparameters (Model-Specific)
+    // Algorithm Hyperparameters (Model-Specific)
     pl.add_option("kappa", "(All) Learning decay rate", kappa)
       .add_option("tau0", "(All) Learning offset", tau0)
       .add_option("eta", "(LDA/HDP) Topic-word prior. LDA default: 1/K, HDP default: 0.01", eta)
@@ -84,10 +91,16 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("topic-threshold", "(HDP Output) Only output topics with relative weight > threshold", topic_threshold)
       .add_option("topic-coverage", "(HDP Output) Output top topics that explain this proportion of the data", topic_coverage);
 
-    // Group: LDA-Specific Advanced Options
+    // LDA-Specific Advanced Options
     pl.add_option("model-prior", "(LDA) File with initial model matrix for continued training", priorFile)
       .add_option("prior-scale", "(LDA) Uniform scaling factor for the prior model matrix", priorScale)
-      .add_option("projection-only", "(LDA) Transform data using prior model without training", projection_only);
+      .add_option("projection-only", "(LDA) Transform data using prior model without training", projection_only)
+      .add_option("fit-background", "(LDA-SVB) Fit a background noise in addition to topics", fitBackground)
+      .add_option("background-prior", "(LDA-SVB) File with background prior vector", bgPriorFile)
+      .add_option("background-init-scale", "(LDA-SVB) Scaling factor for constructing background prior from total feature counts", bgInitScale)
+      .add_option("bg-fraction-prior-a0", "(LDA-SVB) Background fraction hyper-parameter a0 in pi~beta(a0, b0) (default: 2)", a0)
+      .add_option("bg-fraction-prior-b0", "(LDA-SVB) Background fraction hyper-parameter b0 in pi~beta(a0, b0) (default: 8)", b0)
+      .add_option("warm-start-epochs", "(LDA-SVB) Number of epochs to warm start factors before fitting background (could be fractional)", warmInitEpoch);
     pl.add_option("s-beta", "(LDA-SCVB0) Step size scheduler 's' for global params", s_beta)
       .add_option("s-theta", "(LDA-SCVB0) Step size scheduler 's' for local params", s_theta)
       .add_option("kappa-theta", "(LDA-SCVB0) Step size scheduler 'kappa' for local params", kappa_theta)
@@ -114,8 +127,17 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         seed = std::random_device{}();
     }
 
-    std::unique_ptr<TopicModelWrapper> model_runner;
+    // Set up data reader
+    HexReader _reader(metaFile);
+    if (!featureFile.empty())
+        _reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
+    if (!weightFile.empty())
+        _reader.setWeights(weightFile, defaultWeight);
+    bool readFullSums = _reader.readFullSums;
+    int32_t nUnits = _reader.nUnits;
 
+    // Set up model object
+    std::unique_ptr<TopicModelWrapper> model_runner;
     if (model_type == "lda") {
         if (projection_only) {
             transform = true;
@@ -123,19 +145,29 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (nTopics <= 0 && priorFile.empty()) {
             error("Number of topics must be greater than 0");
         }
-        auto lda4hex = new LDA4Hex(metaFile, modal);
-        if (!featureFile.empty()) {
-            lda4hex->setFeatures(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
-        }
-
+        auto lda4hex = new LDA4Hex(_reader, modal);
         if (useSCVB0) {
             lda4hex->initialize_scvb0(nTopics, seed, nThreads, verbose,
-                alpha, eta, kappa, tau0, lda4hex->nUnits(),
+                alpha, eta, kappa, tau0, nUnits,
                 priorFile, priorScale, s_beta, s_theta, kappa_theta, tau_theta, z_burnin);
         } else {
             lda4hex->initialize_svb(nTopics, seed, nThreads, verbose,
-                alpha, eta, kappa, tau0, lda4hex->nUnits(),
+                alpha, eta, kappa, tau0, nUnits,
                 priorFile, priorScale, maxIter, mDelta);
+            if (fitBackground) {
+                if (warmInitUnits < 0) {
+                    warmInitUnits = static_cast<int32_t>(warmInitEpoch * nUnits);
+                } else {
+                    warmInitEpoch = (double) warmInitUnits / nUnits;
+                }
+                if (warmInitUnits > 0) {
+                    notice("Warm-start for %d units before introducing background", warmInitUnits);
+                    int32_t nWarm = lda4hex->trainOnline(inFile, batchSize, minCountTrain, warmInitUnits);
+                    lda4hex->printTopicAbundance();
+                }
+                double bgScale = readFullSums ?  bgInitScale : 1.;
+                lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale);
+            }
         }
         model_runner.reset(lda4hex);
     } else if (model_type == "hdp") {
@@ -145,19 +177,14 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (doc_trunc_T <= 0) error("For HDP, --doc-trunc-level must be > 0.");
 
         // Instantiate HDP model runner
-        auto hdp4hex = new HDP4Hex(metaFile, modal);
-        if (!featureFile.empty()) {
-            hdp4hex->setFeatures(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
-        }
+        auto hdp4hex = new HDP4Hex(_reader, modal);
         hdp4hex->initialize(max_topics_K, doc_trunc_T, seed, nThreads, verbose,
             eta, hdp_alpha, hdp_omega, kappa, tau0, hdp4hex->nUnits(), maxIter, mDelta);
         model_runner.reset(hdp4hex);
     } else {
         error("Unknown model type: '%s'. Choose 'lda' or 'hdp'.", model_type.c_str());
     }
-    if (!weightFile.empty()) {
-        model_runner->setWeights(weightFile, defaultWeight);
-    }
+
     if (!projection_only) {
         std::string outModel = outPrefix + ".model.tsv";
         if (!priorFile.empty() && priorFile == outModel) {
@@ -175,20 +202,19 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         for (int epoch = 0; epoch < nEpochs; ++epoch) {
             int32_t n = model_runner->trainOnline(inFile, batchSize, minCountTrain);
             notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
-            std::vector<double> weights;
-            model_runner->getTopicAbundance(weights);
-            std::sort(weights.begin(), weights.end(), std::greater<double>());
-            std::stringstream ss;
-            ss << std::fixed << std::setprecision(4);
-            for (size_t i = 0; i < std::min<size_t>(10, weights.size()); ++i) {
-                ss << weights[i] << "\t";
-            }
-            notice("  Top topic relative abundance: %s", ss.str().c_str());
+            model_runner->printTopicAbundance();
         }
         if (model_type == "lda" && sort_topics) {
             model_runner->sortTopicsByWeight();
         }
-        // --- Post-processing for HDP ---
+        if (model_type == "lda" && fitBackground) {
+            auto* lda_ptr = dynamic_cast<LDA4Hex*>(model_runner.get());
+            std::string bgFile = outPrefix + ".background.tsv";
+            if (lda_ptr) {
+                lda_ptr->writeBackgroundModel(bgFile);
+            }
+            notice("Background profile written to %s", bgFile.c_str());
+        }
         if (model_type == "hdp") {
             auto* hdp_ptr = dynamic_cast<HDP4Hex*>(model_runner.get());
             if (hdp_ptr) {
