@@ -147,6 +147,7 @@ void LatentDirichletAllocation::set_svb_parameters(int32_t max_iter, double tol)
 
 void LatentDirichletAllocation::set_background_prior(const VectorXd& eta0, double a0, double b0) {
     assert(algo_ == InferenceType::SVB_DN || algo_ == InferenceType::SVB);
+    assert(eta0.size() == n_features_);
     eta0_ = eta0.array().max(1e-12);
     a0_ = a0; b0_ = b0;
     a_ = 0; b_ = 0;
@@ -156,6 +157,7 @@ void LatentDirichletAllocation::set_background_prior(const VectorXd& eta0, doubl
 }
 void LatentDirichletAllocation::set_background_prior(const std::vector<double> eta0, double a0, double b0) {
     assert(algo_ == InferenceType::SVB_DN || algo_ == InferenceType::SVB);
+    assert(eta0.size() == static_cast<size_t>(n_features_));
     eta0_ = VectorXd::Zero(eta0.size());
     for (size_t j = 0; j < eta0.size(); ++j) {
         eta0_(j) = std::max(eta0[j], 1e-12);

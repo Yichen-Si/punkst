@@ -225,7 +225,7 @@ private:
             }
         }
         RowMajorMatrixXf gamma_old = batch.gamma;
-        RowMajorMatrixXf phi_old = batch.phi;
+        RowMajorMatrixXf phi_old;
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
             expitAndRowNormalize(batch.psi);
@@ -268,7 +268,8 @@ private:
             // Check convergence
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = batch.gamma;
-            meanchange_phi = mean_max_row_change(batch.phi, phi_old);
+            if (it > 0)
+                meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
             if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
                 printf("E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);
@@ -313,7 +314,7 @@ private:
             }
         }
         RowMajorMatrixXf gamma_old = batch.gamma;
-        RowMajorMatrixXf phi_old = batch.phi;
+        RowMajorMatrixXf phi_old;
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
             expitAndRowNormalize(batch.psi);
@@ -357,14 +358,15 @@ private:
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.mtx, i), it2(fgmtx, i); it1 && it2; ++it1, ++it2) {
                     int m = it1.col();
                     float b = Elog_beta0_(m) - batch.phi.row(i).dot(Elog_beta_.row(m));
-                    it2.valueRef() = it1.value() * (1. - expit(Elogit_pi0_ + it1.value() * b));
+                    it2.valueRef() = it1.value() * (1. - expit(Elogit_pi0_ + b));
                 }
             }
             Xb = fgmtx * Elog_beta_;
             // Check convergence
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = batch.gamma;
-            meanchange_phi = mean_max_row_change(batch.phi, phi_old);
+            if (it > 0)
+                meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
             if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
                 printf("E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);

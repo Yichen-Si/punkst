@@ -10,7 +10,7 @@
 class TopicModelWrapper {
 public:
     // Constructor initializes shared members
-    TopicModelWrapper(HexReader& _reader, int32_t modal = 0) : modal(modal) {
+    TopicModelWrapper(HexReader& _reader, int32_t modal = 0, int32_t verbose = 0) : modal(modal), verbose_(verbose) {
         reader = std::move(_reader);
         if (modal >= reader.getNmodal()) {
             error("modal %d is out of range", modal);
@@ -61,6 +61,7 @@ protected:
     std::vector<std::string> featureNames;
     std::vector<Document> minibatch;
     int32_t batchSize;
+    int32_t verbose_;
 
     // --- Shared Helper Methods ---
     bool readMinibatch(std::ifstream& inFileStream);
@@ -92,7 +93,7 @@ class LDA4Hex : public TopicModelWrapper {
 
 public:
 
-    LDA4Hex(HexReader& _reader, int32_t modal = 0) : TopicModelWrapper(_reader, modal) {}
+    LDA4Hex(HexReader& _reader, int32_t modal = 0, int32_t verbose = 0) : TopicModelWrapper(_reader, modal, verbose) {}
 
     void initialize_scvb0(int32_t nTopics, int32_t seed = -1,
         int32_t nThreads = 0, int32_t verbose = 0,
@@ -329,8 +330,8 @@ protected:
  */
 class HDP4Hex : public TopicModelWrapper {
 public:
-    HDP4Hex(HexReader& _reader, int32_t modal = 0)
-        : TopicModelWrapper(_reader, modal), K_(0), num_topics_to_output_(-1) {}
+    HDP4Hex(HexReader& _reader, int32_t modal = 0, int32_t verbose = 0)
+        : TopicModelWrapper(_reader, modal, verbose), K_(0), num_topics_to_output_(-1) {}
 
     // HDP-specific initializer
     void initialize(int32_t K, int32_t T, int32_t seed, int32_t nThreads, int32_t verbose, double eta, double alpha, double omega, double kappa, double tau0, int32_t totalDocCount, int32_t maxIter, double mDelta) {

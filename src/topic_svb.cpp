@@ -7,7 +7,7 @@ int32_t TopicModelWrapper::trainOnline(const std::string& inFile, int32_t _bsize
     ntot = 0;
     std::ifstream inFileStream(inFile);
     if (!inFileStream) error("Error opening input file: %s", inFile.c_str());
-
+    int32_t b = 0;
     bool fileopen = true;
     while (fileopen) {
         fileopen = readMinibatch(inFileStream);
@@ -18,6 +18,10 @@ int32_t TopicModelWrapper::trainOnline(const std::string& inFile, int32_t _bsize
         ntot += minibatch.size();
         if (ntot >= maxUnits) {
             break;
+        }
+        b++;
+        if (verbose_ > 0 && (b % verbose_ == 0)) {
+            printTopicAbundance();
         }
     }
     inFileStream.close();

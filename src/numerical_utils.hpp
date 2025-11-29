@@ -420,44 +420,43 @@ void colNormalizeInPlace(Eigen::MatrixBase<Derived>& mat, bool nonNeg = true) {
     mat.array().rowwise() *= invColNorms.transpose().array();
 }
 
-// Generic "transform + row-normalize" for sparse matrices
 template <typename Scalar, int StorageOrder, typename UnaryOp>
 void transformAndRowNormalize(Eigen::SparseMatrix<Scalar, StorageOrder>& mat,
                               UnaryOp&& op) {
     using Real = RealScalar<Scalar>;
     const Real zero(0);
+    const Real eps = std::numeric_limits<Real>::min();
+
     if constexpr (StorageOrder == Eigen::RowMajor) {
-        // Fast path for row-major (psi/logitwij case)
         for (int i = 0; i < mat.outerSize(); ++i) {
             Real rowSum = zero;
-            // 1) Apply transform and accumulate row sum
             for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
                 Real v = static_cast<Real>(it.value());
                 Real transformed = static_cast<Real>(op(v));
-                // Guard against NaN/negative from op
                 if (!std::isfinite(transformed) || transformed < zero) {
                     transformed = zero;
                 }
                 it.valueRef() = static_cast<Scalar>(transformed);
                 rowSum += transformed;
             }
-            // 2) If the row really has no positive mass, leave it as all zeros
-            //    (matches old behavior: only skip normalization if sum == 0)
-            if (rowSum <= zero) {
+
+            // Treat tiny sums as zero to avoid 1 / tiny -> inf
+            if (rowSum <= eps) {
                 continue;
             }
-            // 3) Normalize the row so it sums to 1
+
             const Real invRowSum = Real(1) / rowSum;
             for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, i); it; ++it) {
                 Real v = static_cast<Real>(it.value()) * invRowSum;
+                if (!std::isfinite(v)) {
+                    v = zero; // safety belt
+                }
                 it.valueRef() = static_cast<Scalar>(v);
             }
         }
     } else {
-        // Column-major version: accumulate per-row sums first, then renormalize.
         Eigen::Matrix<Real, Eigen::Dynamic, 1> rowSum(mat.rows());
         rowSum.setZero();
-        // 1) Apply transform and accumulate row sums
         for (int j = 0; j < mat.outerSize(); ++j) {
             for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
                 Real v = static_cast<Real>(it.value());
@@ -469,18 +468,19 @@ void transformAndRowNormalize(Eigen::SparseMatrix<Scalar, StorageOrder>& mat,
                 rowSum(it.row()) += transformed;
             }
         }
-        // 2) Precompute inverse row sums where valid
         Eigen::Matrix<Real, Eigen::Dynamic, 1> invRowSum(mat.rows());
         invRowSum.setZero();
         for (int i = 0; i < mat.rows(); ++i) {
-            if (rowSum(i) > zero) {
+            if (rowSum(i) > eps) {
                 invRowSum(i) = Real(1) / rowSum(i);
             }
         }
-        // 3) Normalize
         for (int j = 0; j < mat.outerSize(); ++j) {
             for (typename Eigen::SparseMatrix<Scalar, StorageOrder>::InnerIterator it(mat, j); it; ++it) {
                 Real v = static_cast<Real>(it.value()) * invRowSum(it.row());
+                if (!std::isfinite(v)) {
+                    v = zero;
+                }
                 it.valueRef() = static_cast<Scalar>(v);
             }
         }

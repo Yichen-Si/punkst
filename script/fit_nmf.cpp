@@ -31,6 +31,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     NmfFitOptions nmf_opts;
     nmf_opts.max_iter = 20;
     nmf_opts.tol = 1e-4;
+    nmf_opts.n_mb_epoch = 1;
     MLEOptions opts;
     opts.optim.max_iters = 50;
     opts.optim.tol = 1e-6;
@@ -157,7 +158,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         &covarFile, &covar_idx, &covar_names,
         allow_na, label_idx, &labels, debug_N);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
-    notice("Read %lu documents with %d features", N, M);
+    notice("Read %lu units with %d features", N, M);
 
     std::vector<int32_t> labels_idx;
     if (labels.size() > 0) {

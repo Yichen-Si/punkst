@@ -136,7 +136,6 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     std::vector<std::string> token;
     bool has_dict = featureDict(dict);
     std::unordered_set<std::string> kept_features; // avoid duplicates
-    std::vector<double> new_sums(nFeatures, 0.0);
     bool has_sums = false;
     while (std::getline(inFeature, line)) {
         if (line.empty() || line[0] == '#') continue;
@@ -162,6 +161,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
                         warning("%s: Non-numerical value on the second column is ignored: %s", __func__, line.c_str());
                     } else {
                         has_sums = true;
+                        feature_sums.assign(nFeatures, 0.0);
                     }
                 }
             } else if (has_sums) {
@@ -178,7 +178,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
         bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
         if (include && !exclude &&
             kept_features.find(feature) == kept_features.end()) {
-            if (has_sums) new_sums[idx1] = count;
+            if (has_sums) feature_sums[idx_prev] = count;
             remap_new[idx_prev] = idx1++;
             kept_features.insert(feature);
         } else {
@@ -186,7 +186,6 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
         }
     }
     if (has_sums) {
-        feature_sums = std::move(new_sums);
         accumulate_sums = false;
         readFullSums = true;
     }
@@ -313,32 +312,49 @@ int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFil
     return n;
 }
 
-void HexReader::setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap) {
-    if (remap) {
-        std::unordered_map<uint32_t, uint32_t> new_idx_remap;
-        for (const auto& pair : idx_remap) {
-            auto it = _idx_remap.find(pair.second);
-            if (it != _idx_remap.end()) {
-                new_idx_remap[pair.first] = it->second;
-            }
-        }
-        idx_remap = std::move(new_idx_remap);
-    } else {
-        idx_remap = _idx_remap;
-        remap = true;
-    }
-    nFeatures = idx_remap.size();
+void HexReader::setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& new_idx_remap) {
+
+    nFeatures = new_idx_remap.size();
     std::vector<std::string> new_features(nFeatures);
-    for (const auto& pair : _idx_remap) {
+    for (const auto& pair : new_idx_remap) {
+        if (pair.second >= nFeatures) {
+            nFeatures = pair.second + 1;
+            new_features.resize(nFeatures);
+        }
         new_features[pair.second] = features[pair.first];
     }
     features = std::move(new_features);
-    if (!weightFeatures) {return;}
-    std::vector<double> new_weights(nFeatures, defaultWeight);
-    for (const auto& pair : _idx_remap) {
-        new_weights[pair.second] = weights[pair.first];
+    if (weightFeatures) {
+        std::vector<double> new_weights(nFeatures, defaultWeight);
+        for (const auto& pair : new_idx_remap) {
+            new_weights[pair.second] = weights[pair.first];
+        }
+        weights = std::move(new_weights);
     }
-    weights = std::move(new_weights);
+    if (readFullSums) {
+        std::vector<double> new_sums(nFeatures, 0.0);
+        for (const auto& pair : new_idx_remap) {
+            new_sums[pair.second] = feature_sums[pair.first];
+        }
+        feature_sums = std::move(new_sums);
+    } else {
+        feature_sums.clear();
+        feature_sums.resize(nFeatures, 0.0);
+    }
+
+    if (remap) {
+        std::unordered_map<uint32_t, uint32_t> final_idx_remap;
+        for (const auto& pair : idx_remap) {
+            auto it = new_idx_remap.find(pair.second);
+            if (it != new_idx_remap.end()) {
+                final_idx_remap[pair.first] = it->second;
+            }
+        }
+        idx_remap = std::move(final_idx_remap);
+    } else {
+        idx_remap = std::move(new_idx_remap);
+    }
+    remap = true;
 }
 
 void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped) {
@@ -372,52 +388,15 @@ void HexReader::setFeatureIndexRemap(std::vector<std::string>& new_features, boo
         }
     }
     if (keep_unmapped) {
-        std::vector<std::string> features_ = features;
-        features = new_features;
         for (int32_t i = 0; i < nFeatures; ++i) {
             if (new_idx_remap.find(i) == new_idx_remap.end()) {
                 new_idx_remap[i] = static_cast<uint32_t>(n_new + n_unmap);
                 n_unmap++;
-                features.push_back(features_[i]);
             }
         }
-    } else {
-        features = new_features;
     }
-    if (weightFeatures) {
-        std::vector<double> new_weights(features.size(), defaultWeight);
-        for (const auto& pair : new_idx_remap) {
-            new_weights[pair.second] = weights[pair.first];
-        }
-        weights = std::move(new_weights);
-    }
-    if (readFullSums) {
-        std::vector<double> new_sums(features.size(), 0.0);
-        for (const auto& pair : new_idx_remap) {
-            new_sums[pair.second] = feature_sums[pair.first];
-        }
-        feature_sums = std::move(new_sums);
-    } else {
-        feature_sums.clear();
-        feature_sums.resize(features.size(), 0.0);
-    }
-
-    if (remap) {
-        std::unordered_map<uint32_t, uint32_t> final_idx_remap;
-        for (const auto& pair : idx_remap) {
-            auto it = new_idx_remap.find(pair.second);
-            if (it != new_idx_remap.end()) {
-                final_idx_remap[pair.first] = it->second;
-            }
-        }
-        new_idx_remap = std::move(final_idx_remap);
-    }
-    remap = true;
-
     notice("%s: %d features are kept out of %d, %d mapped to input set of size %d", __func__, n+n_unmap, nFeatures, n, n_new);
-
-    idx_remap = std::move(new_idx_remap);
-    nFeatures = features.size();
+    setFeatureIndexRemap(new_idx_remap);
 }
 
 bool UnitValues::readFromLine(const std::string& line, int32_t nModal, bool labeled) {

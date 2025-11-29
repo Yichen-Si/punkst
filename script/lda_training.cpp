@@ -10,7 +10,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     std::string exclude_ftr_regex;
     int32_t seed = -1;
     int32_t nEpochs = 1, batchSize = 512;
-    int32_t verbose = 0;
+    int32_t debug_ = 0, verbose = 0;
     int32_t nThreads = 0;
     int32_t modal = 0;
     int32_t minCountTrain = 20, minCountFeature = 1;
@@ -71,6 +71,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("minibatch-size", "Minibatch size", batchSize)
       .add_option("min-count-train", "Minimum total feature count for a document to be trained", minCountTrain)
       .add_option("modal", "Modality to use (0-based)", modal)
+      .add_option("debug", "If >0, only process this many units", debug_)
       .add_option("verbose", "Verbose level", verbose);
 
     // Algorithm Hyperparameters (Model-Specific)
@@ -145,7 +146,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (nTopics <= 0 && priorFile.empty()) {
             error("Number of topics must be greater than 0");
         }
-        auto lda4hex = new LDA4Hex(_reader, modal);
+        auto lda4hex = new LDA4Hex(_reader, modal, 10);
         if (useSCVB0) {
             lda4hex->initialize_scvb0(nTopics, seed, nThreads, verbose,
                 alpha, eta, kappa, tau0, nUnits,
@@ -161,7 +162,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
                     warmInitEpoch = (double) warmInitUnits / nUnits;
                 }
                 if (warmInitUnits > 0) {
-                    notice("Warm-start for %d units before introducing background", warmInitUnits);
+                    notice("Warm-start using %d units before introducing background", warmInitUnits);
                     int32_t nWarm = lda4hex->trainOnline(inFile, batchSize, minCountTrain, warmInitUnits);
                     lda4hex->printTopicAbundance();
                 }
@@ -177,7 +178,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (doc_trunc_T <= 0) error("For HDP, --doc-trunc-level must be > 0.");
 
         // Instantiate HDP model runner
-        auto hdp4hex = new HDP4Hex(_reader, modal);
+        auto hdp4hex = new HDP4Hex(_reader, modal, 10);
         hdp4hex->initialize(max_topics_K, doc_trunc_T, seed, nThreads, verbose,
             eta, hdp_alpha, hdp_omega, kappa, tau0, hdp4hex->nUnits(), maxIter, mDelta);
         model_runner.reset(hdp4hex);
@@ -199,8 +200,9 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             std::filesystem::remove(outModel);
         }
         // Training
+        int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
         for (int epoch = 0; epoch < nEpochs; ++epoch) {
-            int32_t n = model_runner->trainOnline(inFile, batchSize, minCountTrain);
+            int32_t n = model_runner->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
             notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
             model_runner->printTopicAbundance();
         }
