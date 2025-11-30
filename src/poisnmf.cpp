@@ -30,7 +30,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
     RowMajorMatrixXd X;
     std::gamma_distribution<double> dist(100.0, 0.01);
     theta_ = RowMajorMatrixXd::Zero(N, K_);
-    theta_initialized_ = false;
+    theta_valid_.assign(N, false);
     if (reset || beta_.rows() != M_ || beta_.cols() != K_) {
         beta_  = RowMajorMatrixXd::Zero(M_,K_);
         for(int k=0; k<K_; ++k) { // Initialize beta
@@ -95,12 +95,13 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                 continue;
             }
             theta_(n, k) = 1.0;
+            theta_valid_[n] = true;
         }
-        theta_initialized_ = true;
         int32_t niters_beta, niters_bcov;
         objective_old = update_beta(mtx_t, cvec, X, mle_opts_fit, niters_beta);
-        double obj_bcov = update_bcov(mtx_t, cvec, X, mle_opts_bcov, niters_bcov);
-        if (P_ > 0) {objective_old = obj_bcov;}
+        if (P_ > 0) {
+            objective_old = update_bcov(mtx_t, cvec, X, mle_opts_bcov, niters_bcov);
+        }
         notice("%s: Initialized theta from labels, objective after beta update = %.3e", __func__, objective_old);
     }
 
@@ -115,24 +116,26 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
             nmf_opts.t0 = std::min(10., 2. * N / (double) batch_size);
             notice("Set decay parameter t0 = %.1f", nmf_opts.t0);
         }
-        std::vector<int> order(N);
-        std::iota(order.begin(), order.end(), 0);
+        std::vector<uint32_t> order(N);
+        std::iota(order.begin(), order.end(), (uint32_t)0);
         size_t n_mb = 0;
         for (; epoch < nmf_opts.n_mb_epoch; ++epoch) {
             if (nmf_opts.shuffle) std::shuffle(order.begin(), order.end(), rng_);
             for (size_t start = 0; start < N; start += batch_size) {
                 size_t end = std::min(N, start + batch_size);
-                std::vector<int> batch(order.begin() + start, order.begin() + end);
+                std::vector<uint32_t> batch(order.begin() + start, order.begin() + end);
                 double rho_t = nmf_opts.use_decay ? std::pow(nmf_opts.t0 + n_mb, -nmf_opts.kappa) : -1.;
-                partial_fit(docs, mtx_t,
-                            mle_opts_fit, mle_opts_bcov,
-                            batch, rho_t, n_mb, epoch);
+                int32_t ret = partial_fit(docs, mtx_t,
+                                          mle_opts_fit, mle_opts_bcov,
+                                          batch, rho_t, n_mb, epoch);
+                if (ret < 0) {
+                    break;
+                }
                 n_mb += 1;
             }
             if (epoch % nmf_opts.rescale_period == 0) {
                 rescale_matrices();
             }
-            theta_initialized_ = true;
         }
     }
 
@@ -142,8 +145,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         int32_t niters_theta, niters_beta, niters_bcov;
 
         // --- Update theta (document-topic matrix) ---
-        objective_current = update_theta(docs, mle_opts_fit, niters_theta);
-        theta_initialized_ = true;
+        int32_t nkept = update_theta(docs, mle_opts_fit, niters_theta, objective_current);
 
         notice("Iteration %d, update theta: Objective = %.6e, avg niters = %d", epoch + 1, objective_current, niters_theta);
 
@@ -164,7 +166,7 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
         } else {
             convergence_counter = 0;
         }
-        if (convergence_counter >= 3) {
+        if (convergence_counter >= 2) {
             notice("Converged after %d iterations.", epoch + 1);
             break;
         }
@@ -284,18 +286,25 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const 
     return new_theta;
 }
 
-void PoissonLog1pNMF::partial_fit(
+int32_t PoissonLog1pNMF::partial_fit(
         const std::vector<SparseObs>& docs, const std::vector<Document>& mtx_t,
         const MLEOptions mle_opts, const MLEOptions mle_opts_bcov,
-        const std::vector<int>& batch_indices, double rho_t,
+        const std::vector<uint32_t>& batch_indices, double rho_t,
         int32_t mb_count, int32_t total_epoch) {
     const int B = static_cast<int>(batch_indices.size());
-    if (B == 0) return;
+    if (B == 0) return 0;
+
+    // Update theta
+    int niters_theta; double obj1;
+    int32_t nkept = update_theta(docs, mle_opts, niters_theta, obj1, &batch_indices);
+    if (nkept == 0) {
+        warning("%s: No documents were kept after updating theta in partial_fit", __func__);
+        return -1;
+    }
 
     // Build inverse map from global doc id -> local batch row
     std::vector<int> inv_map(docs.size(), -1);
     for (int r = 0; r < B; ++r) inv_map[ batch_indices[r] ] = r;
-
     // Build local matrices
     VectorXd cB(B);
     RowMajorMatrixXd XB;
@@ -309,38 +318,6 @@ void PoissonLog1pNMF::partial_fit(
             XB.row(r) = docs[ batch_indices[r] ].covar.transpose();
         }
     }
-    // Update theta
-    int grainsize = std::min(64, std::max(1, int(B / (2 * nThreads_))) );
-    tbb::combinable<int> niters_local(0);
-    tbb::combinable<double> obj_local(0.0);
-    tbb::parallel_for(tbb::blocked_range<int>(0, B, grainsize),
-                    [&](const tbb::blocked_range<int>& r) {
-        VectorXd cM(M_), oM;
-        if (P_ > 0) oM.resize(M_);
-        for (int rr = r.begin(); rr != r.end(); ++rr) {
-            int i = batch_indices[rr];
-            // cM is M-length vector equal to c_i
-            cM.setConstant(docs[i].c);
-            VectorXd* oM_ptr = nullptr;
-            if (P_ > 0) {
-                oM.noalias() = Bcov_ * docs[i].covar;
-                oM_ptr = &oM;
-            }
-            VectorXd b;
-            if (theta_initialized_) b = theta_.row(i).transpose();
-            MLEStats stats;
-            if (exact_) {
-                obj_local.local() += pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
-            } else {
-                obj_local.local() += pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
-            }
-            theta_.row(i) = b.transpose();
-            niters_local.local() += stats.optim.niters;
-        }
-    });
-    int niters_theta = niters_local.combine(std::plus<int>()) / B;
-    double obj1 = obj_local.combine(std::plus<double>()) / B;
-
     OptimOptions beta_opts_mb = mle_opts.optim;
     OptimOptions bcov_opts_mb = mle_opts_bcov.optim;
     beta_opts_mb.max_iters = 1;
@@ -364,10 +341,10 @@ void PoissonLog1pNMF::partial_fit(
     for (int r = 0; r < B; ++r) {
         ThetaB.row(r) = theta_.row(batch_indices[r]);
     }
-
     // Update beta and bcov
-    grainsize = std::min(64, std::max(1, int(M_ / (2 * nThreads_))) );
+    size_t grainsize = std::min(64, std::max(1, int(M_ / (2 * nThreads_))) );
     tbb::combinable<double> obj_local2(0.0);
+    tbb::combinable<int> nkept_local2(0);
     tbb::parallel_for(tbb::blocked_range<int>(0, M_, grainsize),
                     [&](const tbb::blocked_range<int>& r) {
         OptimStats stats_b{}, stats_beta{};
@@ -399,19 +376,31 @@ void PoissonLog1pNMF::partial_fit(
                 oN.noalias() = XB * Bcov_.row(j).transpose();
                 off_ptr = &oN;
             }
+            double obj;
             if (exact_) {
                 PoisRegExactProblem P_beta(ThetaB, yB, cB, off_ptr, mle_opts);
-                obj_local2.local() += tron_solve(P_beta, betaj, beta_opts_mb, stats_beta, debug_, &tr_delta_beta_[j], rho_t);
+                obj = tron_solve(P_beta, betaj, beta_opts_mb, stats_beta, debug_, &tr_delta_beta_[j], rho_t);
             } else {
                 PoisRegSparseProblem P_beta(ThetaB, yB, cB, off_ptr, mle_opts);
-                obj_local2.local() += tron_solve(P_beta, betaj, beta_opts_mb, stats_beta, debug_, &tr_delta_beta_[j], rho_t);
+                obj = tron_solve(P_beta, betaj, beta_opts_mb, stats_beta, debug_, &tr_delta_beta_[j], rho_t);
             }
+            if (std::isnan(obj) || std::isinf(obj)) {
+                warning("%s: NaN/Inf objective encountered when updating beta", __func__);
+                continue;
+            }
+            nkept_local2.local() += 1;
+            obj_local2.local() += obj;
             beta_.row(j) = betaj.transpose();
         }
     });
-    double obj2 = obj_local2.combine(std::plus<double>()) / B;
+    int nkept2 = nkept_local2.combine(std::plus<int>());
+    if (nkept2 == 0) {
+        return -1;
+    }
+    double obj2 = obj_local2.combine(std::plus<double>()) / nkept2;
     notice("Mini-batch %d, epoch %d: avg objective after theta update = %.3e, after beta update = %.3e, avg niters for theta = %d",
         mb_count, total_epoch, obj1, obj2, niters_theta);
+    return 1;
 }
 
 
@@ -494,6 +483,7 @@ double PoissonLog1pNMF::update_beta(const std::vector<Document>& mtx_t,
     const VectorXd& cvec, RowMajorMatrixXd& X,
     const MLEOptions& mle_opts, int32_t& niters_beta) {
     std::vector<int32_t> niters_reg_beta(M_, 0);
+    tbb::combinable<int> nkept(0.0);
     size_t N = theta_.rows();
     size_t grainsize_m = std::min(64, std::max(1, int(M_/ (2 * nThreads_))) );
     double objective_current = tbb::parallel_reduce(
@@ -509,20 +499,32 @@ double PoissonLog1pNMF::update_beta(const std::vector<Document>& mtx_t,
                     oN.noalias() = X * Bcov_.row(j).transpose(); // N
                     off_ptr = &oN;
                 }
+                double obj;
                 if (exact_) {
-                    local_sum += pois_log1p_mle_exact(
+                    obj = pois_log1p_mle_exact(
                         theta_, mtx_t[j], cvec, off_ptr, mle_opts, beta_j, stats_beta, debug_);
                 } else {
-                    local_sum += pois_log1p_mle(
+                    obj = pois_log1p_mle(
                         theta_, mtx_t[j], cvec, off_ptr, mle_opts, beta_j, stats_beta, debug_);
                 }
+                if (std::isnan(obj) || std::isinf(obj)) {
+                    warning("%s: NaN/Inf objective encountered when updating beta", __func__);
+                    continue;
+                }
+                nkept.local() += 1;
+                local_sum += obj;
                 beta_.row(j) = beta_j.transpose();
                 niters_reg_beta[j] += stats_beta.optim.niters;
             }
             return local_sum;
     }, std::plus<double>());
+    int n = nkept.combine(std::plus<int>());
+    if (n == 0) {
+        niters_beta = -1;
+        return -1;
+    }
 
-    niters_beta = std::accumulate(niters_reg_beta.begin(), niters_reg_beta.end(), 0) / M_;
+    niters_beta = std::accumulate(niters_reg_beta.begin(), niters_reg_beta.end(), 0) / n;
     return objective_current / N;
 }
 
@@ -533,6 +535,7 @@ double PoissonLog1pNMF::update_bcov(const std::vector<Document>& mtx_t,
         return -1;
     }
     std::vector<int32_t> niters_reg_bcov(M_, 0);
+    tbb::combinable<int> nkept(0.0);
     size_t N = theta_.rows();
     size_t grainsize_m = std::min(64, std::max(1, int(M_/ (2 * nThreads_))) );
     double objective_current = tbb::parallel_reduce(
@@ -544,35 +547,51 @@ double PoissonLog1pNMF::update_bcov(const std::vector<Document>& mtx_t,
                 // (a) update b_j with A = X, offset = theta * beta_j
                 oN.noalias() = theta_ * beta_.row(j).transpose(); // N
                 VectorXd bj = Bcov_.row(j).transpose();
+                double obj;
                 if (exact_) {
-                    local_sum += pois_log1p_mle_exact(
+                    obj = pois_log1p_mle_exact(
                     X, mtx_t[j], cvec, &oN, mle_opts, bj, stats_b, debug_);
                 } else {
-                    local_sum += pois_log1p_mle(
+                    obj = pois_log1p_mle(
                     X, mtx_t[j], cvec, &oN, mle_opts, bj, stats_b, debug_);
                 }
+                if (std::isnan(obj) || std::isinf(obj)) {
+                    warning("%s: NaN/Inf objective encountered when updating bcov", __func__);
+                    continue;
+                }
+                nkept.local() += 1;
+                local_sum += obj;
                 Bcov_.row(j) = bj.transpose();
                 niters_reg_bcov[j] += stats_b.optim.niters;
             }
             return local_sum;
     }, std::plus<double>());
-
-    niters_bcov = std::accumulate(niters_reg_bcov.begin(), niters_reg_bcov.end(), 0) / M_;
+    int n = nkept.combine(std::plus<int>());
+    if (n == 0) {
+        niters_bcov = -1;
+        return -1;
+    }
+    niters_bcov = std::accumulate(niters_reg_bcov.begin(), niters_reg_bcov.end(), 0) / n;
     return objective_current / N;
 }
 
-double PoissonLog1pNMF::update_theta(const std::vector<SparseObs>& docs,
-    const MLEOptions& mle_opts, int32_t& niters_theta) {
-    size_t N = docs.size();
+int32_t PoissonLog1pNMF::update_theta(const std::vector<SparseObs>& docs,
+    const MLEOptions& mle_opts, int32_t& niters, double& obj_avg, const std::vector<uint32_t>* batch_indices) {
+    size_t N = batch_indices == nullptr? docs.size() : batch_indices->size();
     size_t grainsize_n = std::min(64, std::max(1, int(N / (2 * nThreads_))) );
     std::vector<int32_t> niters_reg_theta(N, 0);
-    double objective_current = tbb::parallel_reduce(
+    tbb::combinable<int> nkept(0);
+    auto global_idx = [&](int i) {
+        return (batch_indices != nullptr) ? (*batch_indices)[i] : i;
+    };
+    obj_avg = tbb::parallel_reduce(
         tbb::blocked_range<int>(0, N, grainsize_n), 0.0,
         [&](const tbb::blocked_range<int>& r, double local_sum) {
         MLEStats stats;
         VectorXd cM(M_), oM;
         if (P_ > 0) oM.resize(M_);
-        for (int i = r.begin(); i != r.end(); ++i) {
+        for (int rr = r.begin(); rr != r.end(); ++rr) {
+            int i = global_idx(rr);
             cM.setConstant(docs[i].c);
             VectorXd* oM_ptr = nullptr;
             if (P_ > 0) { // Calculate offsets if covariates are present
@@ -580,22 +599,36 @@ double PoissonLog1pNMF::update_theta(const std::vector<SparseObs>& docs,
                 oM_ptr = &oM;
             }
             VectorXd b;
-            if (theta_initialized_) {
+            if (theta_valid_[i]) {
                 b = theta_.row(i).transpose();
             }
+            double obj;
             if (exact_) {
-                local_sum += pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
+                obj = pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
             } else {
-                local_sum += pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
+                obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_);
             }
+            if (std::isnan(obj) || std::isinf(obj)) {
+                warning("%s: NaN/Inf objective encountered when updating theta", __func__);
+                theta_valid_[i] = false;
+                continue;
+            }
+            nkept.local() += 1;
+            local_sum += obj;
             theta_.row(i) = b.transpose();
-            niters_reg_theta[i] += stats.optim.niters;
+            niters_reg_theta[rr] += stats.optim.niters;
+            theta_valid_[i] = true;
         }
         return local_sum;
     }, std::plus<double>());
-
-    niters_theta = std::accumulate(niters_reg_theta.begin(), niters_reg_theta.end(), 0) / N;
-    return objective_current / N;
+    int n = nkept.combine(std::plus<int>());
+    if (n == 0) {
+        niters = -1;
+        return 0;
+    }
+    niters = std::accumulate(niters_reg_theta.begin(), niters_reg_theta.end(), 0) / n;
+    obj_avg /= n;
+    return n;
 }
 
 std::vector<Document> PoissonLog1pNMF::transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec) {

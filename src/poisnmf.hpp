@@ -42,10 +42,10 @@ public:
     void fit(const std::vector<SparseObs>& docs,
         const MLEOptions mle_opts, NmfFitOptions nmf_opts, bool reset = false, std::vector<int32_t>* labels = nullptr);
 
-    void partial_fit(
+    int32_t partial_fit(
         const std::vector<SparseObs>& docs, const std::vector<Document>& mtx_t,
         const MLEOptions mle_opts, const MLEOptions mle_opts_bcov,
-        const std::vector<int>& batch_indices,
+        const std::vector<uint32_t>& batch_indices,
         double rho_t, int32_t mb_count, int32_t total_epoch);
 
     RowMajorMatrixXd transform(std::vector<SparseObs>& docs,
@@ -85,7 +85,7 @@ public:
     }
     void clear_theta() {
         theta_.resize(0,0);
-        theta_initialized_ = false;
+        theta_valid_.clear();
     }
 
     RowMajorMatrixXd convert_to_factor_loading();
@@ -105,23 +105,27 @@ private:
     std::vector<MatrixXd> cov_fisher_, cov_robust_;
     std::vector<double> feature_sums_;
     std::vector<double> feature_residuals_;
-    bool theta_initialized_ = false;
+    std::vector<bool> theta_valid_;
     double min_ct_ = 100, min_fc_ = 1.5, max_p_ = 0.05; // for DE tests
     double min_logfc_ = 0.176, max_log10p_ = -1.3; // from above
     std::vector<double> tr_delta_bcov_, tr_delta_beta_; // for minibatch
+    bool fit_background_ = false;
+    double pi_;
+    VectorXd beta0_;
 
-    // transpose sparse representation
     std::vector<Document> transpose_data(const std::vector<SparseObs>& docs, VectorXd& cvec);
+
     double update_beta(const std::vector<Document>& mtx_t,
         const VectorXd& cvec, RowMajorMatrixXd& X,
         const MLEOptions& mle_opts, int32_t& niters_beta);
     double update_bcov(const std::vector<Document>& mtx_t,
         const VectorXd& cvec, RowMajorMatrixXd& X,
         const MLEOptions& mle_opts, int32_t& niters_bcov);
+    int32_t update_theta(const std::vector<SparseObs>& docs,
+        const MLEOptions& mle_opts, int32_t& niters, double& obj_avg,
+        const std::vector<uint32_t>* batch_indices = nullptr);
 
-    double update_theta(const std::vector<SparseObs>& docs,
-        const MLEOptions& mle_opts, int32_t& niters_theta);
-    // negative log-likelihood
+        // negative log-likelihood
     double calculate_global_objective(const std::vector<SparseObs>& docs, RowMajorMatrixXd* Xptr = nullptr);
     // rescales theta and beta to improve numerical stability
     void rescale_matrices();
