@@ -29,11 +29,11 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
     debug("%s: Starting EM", __func__);
     int it = 0;
     for (; it < max_iter; it++) {
-        SparseMatrix<float, Eigen::RowMajor> ymtx = batch.psi.transpose() * batch.mtx; // n x M
+        SparseRowMatf ymtx = batch.psi.transpose() * batch.mtx; // n x M
         batch.theta = mlr_.predict(ymtx); // n x K
         for (int j = 0; j < batch.N; ++j) {
             float rowMax = -std::numeric_limits<float>::infinity();
-            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
+            for (SparseRowMatf::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
                 int i = it1.col();
                 it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)) + it2.value();
                 if (it1.valueRef() > rowMax) {
@@ -41,13 +41,13 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
                 }
             }
             float rowSum = 0.0f;
-            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(batch.psi, j); it; ++it) {
+            for (SparseRowMatf::InnerIterator it(batch.psi, j); it; ++it) {
                 it.valueRef() = expit(it.valueRef() - rowMax);
                 rowSum += it.valueRef();
             }
             if (rowSum > std::numeric_limits<float>::epsilon()) {
                 rowSum = 1.0f / rowSum;
-                for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(batch.psi, j); it; ++it) {
+                for (SparseRowMatf::InnerIterator it(batch.psi, j); it; ++it) {
                     it.valueRef() *= rowSum;
                 }
             }
@@ -80,6 +80,17 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
     }
     max_iter = (max_iter > 0) ? max_iter : max_iter_;
     tol = (tol > 0) ? tol : tol_;
+    SparseRowMatf* mtx = &(batch.mtx);
+    SparseRowMatf  mtx_local;
+    if (fit_background_) {
+        mtx_local = batch.mtx;
+        for (int i = 0; i < batch.N; ++i) {
+            for (SparseRowMatf::InnerIterator it(mtx_local, i); it; ++it) {
+                it.valueRef() *= (1.0f - pi_);
+            }
+        }
+        mtx = &mtx_local;
+    }
 
     bool theta_init = true;
     if (batch.theta.cols() != K_) {
@@ -94,7 +105,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
     debug("%s: Starting EM", __func__);
     int it = 0;
     for (; it < max_iter; it++) {
-        SparseMatrix<float, Eigen::RowMajor> ymtx = batch.psi.transpose() * batch.mtx; // n x M
+        SparseMatrix<float, Eigen::RowMajor> ymtx = batch.psi.transpose() * (*mtx); // n x M
         std::vector<int32_t> niters(batch.n, 0);
         float nkept = 0;
         MLEStats stats;
@@ -104,7 +115,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
             Document y;
             y.ids.reserve(nnz);
             y.cnts.reserve(nnz);
-            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(ymtx, j); it; ++it) {
+            for (SparseRowMatf::InnerIterator it(ymtx, j); it; ++it) {
                 if (it.value() <= 0.f) {
                     continue;
                 }
@@ -133,13 +144,13 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
             if (batch.theta.row(j).minCoeff() > 1e-8)
                 theta_valid[j] = true;
         }
-        MatrixXf loglam = ((beta_f_ * batch.theta.transpose()).array().exp() - 1.0).max(1e-12).log(); // M x n
+        MatrixXf loglam = (((beta_f_ * batch.theta.transpose()).array().exp() - 1.0)).max(1e-12).log(); // M x n
 
         RowMajorMatrixXf theta_norm = rowNormalize(batch.theta);
         for (int i = 0; i < batch.N; ++i) {
-            for (Eigen::SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
+            for (SparseRowMatf::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                 int j = it1.col();
-                it1.valueRef() = batch.mtx.row(i).dot(loglam.col(j)) + it2.value();
+                it1.valueRef() = mtx->row(i).dot(loglam.col(j)) + it2.value();
                 // if (!theta_valid[j]) {
                 //     it1.valueRef() = -std::numeric_limits<float>::infinity();
                 //     continue;
@@ -155,6 +166,29 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
 
         // rowSoftmaxInPlace(batch.psi);
         expitAndRowNormalize(batch.psi);
+
+        if (fit_background_) {
+            double x1 = 0., xtot = 0.;
+            loglam = loglam.array().exp();
+            for (int i = 0; i < batch.N; ++i) {
+                for (SparseRowMatf::InnerIterator it1(mtx_local, i), it2(batch.mtx, i); it1 && it2; ++it1, ++it2) {
+                    int m = it1.col();
+                    float p1 = 0.;
+                    for (SparseRowMatf::InnerIterator it(batch.psi, i); it; ++it) {
+                        int j = it.col();
+                        p1 += it.value() * loglam(m, j) / size_factor_;
+                    }
+                    p1 = (1.0f - pi_) * p1;
+                    float p0 = pi_ * beta0_(m);
+                    p1 = (p0 + p1 > 0) ? p1 / (p0 + p1) : 1.0f;
+                    it1.valueRef() = it2.value() * p1;
+                    xtot += it2.value();
+                    x1 += it1.value();
+                }
+            }
+            double f0 = 1. - x1 / xtot;
+            notice("%s: Average background fraction = %.4f", __func__, f0);
+        }
 
         if (theta_init) {
             meanchange_theta = mean_max_row_change(theta_old, batch.theta);
@@ -256,7 +290,7 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point
     }
 
     for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
-        for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+        for (typename SparseRowMatf::InnerIterator it(minibatch.wij, i); it; ++it) {
             it.valueRef() = logit(it.value());
         }
     }

@@ -30,6 +30,8 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
     for (int l = 0; l < modal; ++l) { // skip
         i += nfeatures[l] * 2;
     }
+    doc.ids.clear();
+    doc.cnts.clear();
     if (remap) {
         doc.ids.reserve(nfeatures[modal]);
         doc.cnts.reserve(nfeatures[modal]);
@@ -254,10 +256,11 @@ int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>
     if (!inFileStream) {
         error("%s: Error opening input file: %s", __func__, inFile.c_str());
     }
-    std::string line, l;
+    std::string line;
     int32_t n = 0;
     while (std::getline(inFileStream, line)) {
         Document doc;
+        std::string l;
         int32_t ct = parseLine(doc, l, line, modal);
         if (ct < 0) {
             error("Error parsing line %s", line.c_str());
@@ -562,4 +565,62 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
     }
     inFileStream.close();
     return (int32_t) docs.size();
+}
+
+int32_t HexReader::readAll(Eigen::SparseMatrix<double, Eigen::RowMajor> &X,
+    std::vector<std::string>& info, const std::string &inFile,
+    int32_t minCount, int32_t modal, bool add2sums) {
+    std::ifstream inFileStream(inFile);
+    if (!inFileStream) {
+        error("%s: Error opening input file: %s", __func__, inFile.c_str());
+    }
+    info.clear();
+    Document doc;
+    std::string line;
+    int32_t n = 0;
+    std::vector<Eigen::Triplet<double>> triplets;
+    if (nUnits > 0) {
+        triplets.reserve(static_cast<size_t>(nUnits) * 32);
+    }
+    while (std::getline(inFileStream, line)) {
+        std::string l;
+        int32_t ct = parseLine(doc, l, line, modal);
+        if (ct < 0) {
+            error("Error parsing line %s", line.c_str());
+        }
+        if (ct < minCount) {
+            continue;
+        }
+        if (accumulate_sums && add2sums) {
+            for (size_t i = 0; i < doc.ids.size(); ++i) {
+                uint32_t j = doc.ids[i];
+                if (j < static_cast<uint32_t>(nFeatures)) {
+                    feature_sums[j] += doc.cnts[i];
+                }
+            }
+        }
+        info.push_back(std::move(l));
+        // Add entries for this document as row n
+        for (size_t k = 0; k < doc.ids.size(); ++k) {
+            uint32_t j = doc.ids[k];
+            if (j >= static_cast<uint32_t>(nFeatures)) {
+                continue;
+            }
+            double val = doc.cnts[k];
+            if (val != 0.0) {
+                triplets.emplace_back(n, static_cast<int>(j), val);
+            }
+        }
+        ++n;
+    }
+    // Build the row-major sparse matrix (n samples x nFeatures)
+    X.resize(n, nFeatures);
+    if (!triplets.empty()) {
+        X.setFromTriplets(triplets.begin(), triplets.end());
+    } else {
+        X.setZero();  // keep the size but no non-zeros
+    }
+    X.makeCompressed();
+    readFullSums = true;
+    return n;
 }

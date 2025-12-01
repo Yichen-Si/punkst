@@ -1,275 +1,235 @@
 #include <iostream>
-#include <iomanip>
+#include <vector>
 #include <random>
 #include <numeric>
-#include <chrono>
-#include <fstream>
 #include <algorithm>
 #include <cmath>
-#include <vector>
-#include <string>
 
-#include "punkst.h"
-#include "utils.h"
-#include <tbb/parallel_for.h>
-#include <tbb/global_control.h>
-#include <Eigen/Dense>
-#include <Eigen/Sparse>
-#include "lda.hpp"
+#include "commands.hpp"
+#include "poisnmf.hpp"
 
-using Clock = std::chrono::high_resolution_clock;
+using Eigen::VectorXd;
+using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
-/**
- * Simulate a corpus with:
- *  - K topics
- *  - M vocabulary size
- *  - N documents of ~avg_doc_len words
- */
-void simulate_corpus(int N, int M, int K,
-                     int avg_doc_len,
-                     int max_topic_per_doc,
-                     double eta_beta,
-                     double a0_true, double b0_true,
-                     std::mt19937& rng,
-                     RowMajorMatrixXd& true_topics,
-                     VectorXd& true_bg,
-                     std::vector<Document>& docs,
-                     VectorXd& global_counts_out)
-{
-    true_topics.resize(K, M);
-    true_topics.setZero();
-    true_bg.resize(M);
+struct SimData {
+    std::vector<SparseObs> docs;
+    std::vector<VectorXd> topics; // K topic distributions over M features
+    VectorXd background;          // length M
+    double avg_pi = 0.0;
+    double size_factor = 0.0;
+    std::vector<double> pi;
+};
 
-    std::gamma_distribution<double> gamma_topic(eta_beta, 1.0);
-    int nz = M / K;
+static VectorXd normalize(const VectorXd& v) {
+    double s = v.sum();
+    if (s <= 0 || !std::isfinite(s)) return v;
+    return v / s;
+}
+
+// For feature-major beta (M x K, column per topic)
+static std::vector<VectorXd> feature_major_topics(const RowMajorMatrixXd& beta) {
+    const int K = static_cast<int>(beta.cols());
+    std::vector<VectorXd> dists;
+    dists.reserve(K);
     for (int k = 0; k < K; ++k) {
-        double row_sum = 0.0;
-        int st = k * nz;
-        int ed = (k == K - 1) ? M : (k + 1) * nz;
-        for (int v = st; v < ed; ++v) {
-            double x = gamma_topic(rng);
-            true_topics(k, v) = x;
-            row_sum += x;
+        VectorXd col = beta.col(k);
+        for (int i = 0; i < col.size(); ++i) {
+            if (!std::isfinite(col[i])) col[i] = 0.0;
         }
-        if (row_sum > 0) {
-            true_topics.row(k).segment(st, ed - st) /= row_sum;
+        VectorXd w = (col.array().min(20.0).max(-20.0).exp() - 1.0).cwiseMax(1e-12).matrix();
+        double s = w.sum();
+        if (s <= 0 || !std::isfinite(s)) {
+            w.setConstant(1.0 / static_cast<double>(beta.rows()));
+        } else {
+            w /= s;
         }
+        dists.push_back(w);
     }
+    return dists;
+}
 
-    // Background distribution ~ Dir(1)
-    std::gamma_distribution<double> gamma_bg(1.0, 1.0);
-    double bg_sum = 0.0;
-    for (int v = 0; v < M; ++v) {
-        double x = gamma_bg(rng);
-        true_bg[v] = x;
-        bg_sum += x;
-    }
-    true_bg /= bg_sum;
-
-    // Prebuild discrete distributions for topics and background
-    std::vector<std::discrete_distribution<int>> topic_word_dists;
-    topic_word_dists.reserve(K);
+// For factor-major beta (K x M, row per topic) used in simulation
+static std::vector<VectorXd> factor_major_topics(const RowMajorMatrixXd& beta) {
+    const int K = static_cast<int>(beta.rows());
+    std::vector<VectorXd> dists;
+    dists.reserve(K);
     for (int k = 0; k < K; ++k) {
-        std::vector<double> probs(M);
-        for (int v = 0; v < M; ++v) {
-            probs[v] = true_topics(k, v);
+        VectorXd row = beta.row(k).transpose();
+        for (int i = 0; i < row.size(); ++i) {
+            if (!std::isfinite(row[i])) row[i] = 0.0;
         }
-        topic_word_dists.emplace_back(probs.begin(), probs.end());
+        VectorXd w = (row.array().min(20.0).max(-20.0).exp() - 1.0).cwiseMax(1e-12).matrix();
+        double s = w.sum();
+        if (s <= 0 || !std::isfinite(s)) {
+            w.setConstant(1.0 / static_cast<double>(beta.cols()));
+        } else {
+            w /= s;
+        }
+        dists.push_back(w);
     }
-    std::vector<double> bg_probs(M);
-    for (int v = 0; v < M; ++v) bg_probs[v] = true_bg[v];
-    std::discrete_distribution<int> bg_word_dist(bg_probs.begin(), bg_probs.end());
+    return dists;
+}
 
-    std::uniform_int_distribution<int> topic_selector(0, K - 1);
+static double cosine(const VectorXd& a, const VectorXd& b) {
+    if (a.size() != b.size()) return 0.0;
+    if (!a.allFinite() || !b.allFinite()) return 0.0;
+    const double denom = std::sqrt(std::max(1e-12, a.squaredNorm() * b.squaredNorm()));
+    if (denom <= 0) return 0.0;
+    return a.dot(b) / denom;
+}
 
-    // Poisson for document lengths
-    std::poisson_distribution<int> doc_len(avg_doc_len);
-
-    // Beta(a0_true, b0_true) via Gammas
-    std::gamma_distribution<double> gamma_pi_a(a0_true, 1.0);
-    std::gamma_distribution<double> gamma_pi_b(b0_true, 1.0);
-    std::uniform_real_distribution<double> uni01(0.0, 1.0);
-
-    docs.clear();
-    docs.reserve(N);
-
-    global_counts_out = VectorXd::Zero(M);
-    double pi_sum = 0.0;
-
-    for (int d = 0; d < N; ++d) {
-        int L = std::max(10, doc_len(rng));
-
-        // Sparse doc-topic mixture: at most max_topic_per_doc active topics
-        std::vector<double> theta_vec(K, 0.0);
-        for (int i = 0; i < max_topic_per_doc; i++) {
-            int tk = topic_selector(rng);
-            theta_vec[tk] += 1.0 / max_topic_per_doc;
+static double best_alignment_score(const std::vector<VectorXd>& est,
+                                   const std::vector<VectorXd>& truth) {
+    const int K = static_cast<int>(std::min(est.size(), truth.size()));
+    if (K == 0) return 0.0;
+    std::vector<int> perm(K);
+    std::iota(perm.begin(), perm.end(), 0);
+    double best = -1.0;
+    do {
+        double total = 0.0;
+        for (int k = 0; k < K; ++k) {
+            total += cosine(est[perm[k]], truth[k]);
         }
-        std::discrete_distribution<int> topic_dist(theta_vec.begin(), theta_vec.end());
+        best = std::max(best, total / K);
+    } while (std::next_permutation(perm.begin(), perm.end()));
+    return best;
+}
 
-        // pi_d ~ Beta(a0_true, b0_true)
-        double ga = gamma_pi_a(rng);
-        double gb = gamma_pi_b(rng);
-        double pi_d = ga / (ga + gb);
-        pi_sum += pi_d;
+static SimData simulate_documents(std::mt19937& rng, int N, int K, int M) {
+    SimData sim;
+    sim.docs.reserve(N);
+    sim.topics.resize(K);
+    sim.pi.resize(N);
 
-        std::vector<int> word_counts(M, 0);
+    // Theta: each row has one dominant entry = 0.9, others share 0.1.
+    RowMajorMatrixXd theta(N, K);
+    for (int i = 0; i < N; ++i) {
+        int main_k = i % K;
+        for (int k = 0; k < K; ++k) {
+            theta(i, k) = (k == main_k) ? 0.9 : 0.1 / std::max(1, K - 1);
+        }
+    }
 
-        for (int n = 0; n < L; ++n) {
-            bool from_bg = (uni01(rng) < pi_d);
-            int w;
-            if (from_bg) {
-                w = bg_word_dist(rng);
-            } else {
-                int k = topic_dist(rng);
-                w = topic_word_dists[k](rng);
+    // Beta: random positive, converted via log1p for the log-link.
+    RowMajorMatrixXd beta(K, M);
+    std::gamma_distribution<double> g_beta(10, 1);
+    for (int k = 0; k < K; ++k) {
+        for (int m = 0; m < M; ++m) {
+            double w = g_beta(rng);
+            beta(k, m) = std::log1p(w);
+        }
+    }
+    sim.topics = factor_major_topics(beta);
+
+    // Lambda = exp(theta * beta) - 1.
+    RowMajorMatrixXd eta = theta * beta;
+    RowMajorMatrixXd lambda = (eta.array().exp() - 1.0).matrix();
+
+    RowMajorMatrixXd Y = RowMajorMatrixXd::Zero(N, M);
+    std::vector<double> row_sums(N, 0.0);
+
+    // Sample base counts.
+    for (int i = 0; i < N; ++i) {
+        for (int m = 0; m < M; ++m) {
+            double lam = std::max(0.0, lambda(i, m));
+            if (lam <= 0) continue;
+            std::poisson_distribution<int> pois(lam);
+            int c = pois(rng);
+            if (c > 0) {
+                Y(i, m) = static_cast<double>(c);
+                row_sums[i] += c;
             }
-            ++word_counts[w];
         }
+    }
 
+    // Background/noise distribution from column sums.
+    VectorXd col_sums = Y.colwise().sum();
+    double total_col = col_sums.sum();
+    if (total_col <= 0) {
+        col_sums.setConstant(1.0 / static_cast<double>(M));
+        total_col = col_sums.sum();
+    }
+    sim.background = col_sums / total_col;
+
+    // Add 5%~30% noise per unit drawn from the noise distribution.
+    std::discrete_distribution<int> noise_dist(sim.background.data(),
+        sim.background.data() + sim.background.size());
+    sim.avg_pi = 0.0;
+    for (int i = 0; i < N; ++i) {
+        double noise_frac = 0.05 + 0.25 * (static_cast<double>(rng()) / rng.max());
+        double base_total = row_sums[i];
+        int noise_tokens = (base_total > 0) ? static_cast<int>(std::round(noise_frac * base_total)) : 1;
+        for (int t = 0; t < noise_tokens; ++t) {
+            int m = noise_dist(rng);
+            Y(i, m) += 1.0;
+        }
+        double new_total = base_total + noise_tokens;
+        row_sums[i] = new_total;
+        double f0 = (new_total > 0) ? (static_cast<double>(noise_tokens) / new_total) : 0.0;
+        sim.avg_pi += f0;
+        sim.pi[i] = f0;
+    }
+    sim.avg_pi /= static_cast<double>(N);
+
+    // size_factor_ = average row sum of final Y.
+    double total_tokens = std::accumulate(row_sums.begin(), row_sums.end(), 0.0);
+    sim.size_factor = (N > 0) ? total_tokens / static_cast<double>(N) : 1.0;
+    if (sim.size_factor <= 0) sim.size_factor = 1.0;
+
+    // Build SparseObs.
+    for (int i = 0; i < N; ++i) {
         Document doc;
-        for (int v = 0; v < M; ++v) {
-            if (word_counts[v] > 0) {
-                doc.ids.push_back(v);
-                doc.cnts.push_back(static_cast<double>(word_counts[v]));
-                global_counts_out[v] += word_counts[v];
+        for (int m = 0; m < M; ++m) {
+            double c = Y(i, m);
+            if (c > 0) {
+                doc.ids.push_back(static_cast<uint32_t>(m));
+                doc.cnts.push_back(c);
             }
         }
-        docs.push_back(std::move(doc));
-    }
-    pi_sum /= N;
-    std::cout << "Simulated corpus with " << N << " documents, avg pi = " << pi_sum << "\n";
-}
-
-// Hungarian algorithm for square cost matrix (minimization).
-// cost is 1-based indexed: cost[1..n][1..n]
-static std::vector<int> hungarian_min_cost(
-    const std::vector<std::vector<double>>& cost)
-{
-    int n = static_cast<int>(cost.size()) - 1; // assuming cost[0] is dummy
-    const double INF = std::numeric_limits<double>::infinity();
-
-    std::vector<double> u(n + 1), v(n + 1);
-    std::vector<int> p(n + 1), way(n + 1);
-
-    for (int i = 1; i <= n; ++i) {
-        p[0] = i;
-        int j0 = 0;
-        std::vector<double> minv(n + 1, INF);
-        std::vector<char> used(n + 1, false);
-        do {
-            used[j0] = true;
-            int i0 = p[j0], j1 = 0;
-            double delta = INF;
-            for (int j = 1; j <= n; ++j) {
-                if (!used[j]) {
-                    double cur = cost[i0][j] - u[i0] - v[j];
-                    if (cur < minv[j]) {
-                        minv[j] = cur;
-                        way[j] = j0;
-                    }
-                    if (minv[j] < delta) {
-                        delta = minv[j];
-                        j1 = j;
-                    }
-                }
-            }
-            for (int j = 0; j <= n; ++j) {
-                if (used[j]) {
-                    u[p[j]] += delta;
-                    v[j] -= delta;
-                } else {
-                    minv[j] -= delta;
-                }
-            }
-            j0 = j1;
-        } while (p[j0] != 0);
-        do {
-            int j1 = way[j0];
-            p[j0] = p[j1];
-            j0 = j1;
-        } while (j0);
-    }
-
-    // p[j] = i  means row i is assigned to column j
-    std::vector<int> assignment(n, -1); // assignment[row] = col
-    for (int j = 1; j <= n; ++j) {
-        int i = p[j];
-        if (i > 0) {
-            assignment[i - 1] = j - 1;
+        if (doc.ids.empty()) {
+            doc.ids.push_back(0);
+            doc.cnts.push_back(1.0);
         }
-    }
-    return assignment;
-}
+        double ct_tot = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+        doc.ct_tot = ct_tot;
 
-// Compute best permutation of topics (rows) to align true_topics with model_topics.
-std::vector<int> best_topic_permutation(
-    const RowMajorMatrixXd& true_topics,
-    const RowMajorMatrixXd& model_topics)
-{
-    assert(true_topics.rows() == model_topics.rows());
-    int K = static_cast<int>(true_topics.rows());
-    int M = static_cast<int>(true_topics.cols());
-    assert(model_topics.cols() == M);
-
-    // Make normalized copies: rows sum to 1
-    RowMajorMatrixXd Tnorm = true_topics;
-    RowMajorMatrixXd Mnorm = model_topics;
-
-    for (int k = 0; k < K; ++k) {
-        double sT = Tnorm.row(k).sum();
-        if (sT <= 0) sT = 1.0;
-        Tnorm.row(k) /= sT;
-
-        double sM = Mnorm.row(k).sum();
-        if (sM <= 0) sM = 1.0;
-        Mnorm.row(k) /= sM;
+        SparseObs obs;
+        obs.doc = std::move(doc);
+        obs.covar = VectorXd();
+        obs.ct_tot = ct_tot;
+        obs.c = ct_tot / sim.size_factor;
+        sim.docs.push_back(std::move(obs));
     }
 
-    // Build 1-based cost matrix: cost[i][j] = 1 - dot(T_i, M_j)
-    std::vector<std::vector<double>> cost(K + 1,
-                                          std::vector<double>(K + 1, 0.0));
-    for (int i = 1; i <= K; ++i) {
-        for (int j = 1; j <= K; ++j) {
-            double sim = Tnorm.row(i - 1).dot(Mnorm.row(j - 1));
-            cost[i][j] = 1.0 - sim;  // minimize cost => maximize similarity
-        }
-    }
-
-    return hungarian_min_cost(cost);
-}
-
-template <typename Derived>
-std::vector<int> top_k_indices(const Eigen::MatrixBase<Derived>& v, int k) {
-    std::vector<int> idx(v.size());
-    std::iota(idx.begin(), idx.end(), 0);
-    k = std::min<int>(k, static_cast<int>(idx.size()));
-    std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
-        [&](int i, int j) { return v[i] > v[j]; });
-    idx.resize(k);
-    return idx;
+    return sim;
 }
 
 int32_t test(int32_t argc, char** argv) {
 
-    int32_t N, K, M;
-    int32_t seed, debug_ = 0, verbose = 0;
-    int32_t threads = 1;
-    int32_t avg_len = 100;
-    double a0_true = 2.0, b0_true = 8.0;
+    int N = 24, K = 2, M = 6;
+    int threads = 1;
+    int seed = 42;
+
+    MLEOptions mle_opts;
+    mle_opts.optim.max_iters = 50;
+    mle_opts.optim.tol = 1e-6;
+    NmfFitOptions nmf_opts;
+    nmf_opts.n_mb_epoch = 5;
+    nmf_opts.max_iter = 10;
+    nmf_opts.tol = 1e-3;
+    nmf_opts.batch_size = 512;
 
     ParamList pl;
-    // Input / sim options
     pl.add_option("N", "Number of rows (N)", N, true)
-        .add_option("K", "Number of cols (K)", K, true)
-        .add_option("M", "Number of features (M)", M, true)
-        .add_option("seed", "Random seed", seed, true)
-        .add_option("avg_len", "Average document length", avg_len)
-        .add_option("a0", "True background prior a0", a0_true)
-        .add_option("b0", "True background prior b0", b0_true)
-        .add_option("threads", "Number of threads", threads);
-    pl.add_option("debug", "Debug", debug_)
-        .add_option("verbose", "Verbose output", verbose);
+      .add_option("K", "Number of cols (K)", K, true)
+      .add_option("M", "Number of features (M)", M, true)
+      .add_option("seed", "Random seed", seed)
+      .add_option("threads", "Number of threads", threads);
+    pl.add_option("minibatch-epoch", "Number of minibatch epochs (background-aware path)", nmf_opts.n_mb_epoch)
+      .add_option("minibatch-size", "Minibatch size", nmf_opts.batch_size)
+      .add_option("t0", "Decay parameter t0 for minibatch", nmf_opts.t0)
+      .add_option("kappa", "Decay parameter kappa for minibatch", nmf_opts.kappa)
+      .add_option("max-iter-outer", "Maximum outer iterations", nmf_opts.max_iter);
 
     try {
         pl.readArgs(argc, argv);
@@ -280,135 +240,56 @@ int32_t test(int32_t argc, char** argv) {
         return 1;
     }
 
-    RowMajorMatrixXd true_topics;
-    VectorXd true_bg;
-    std::vector<Document> docs;
-    VectorXd global_counts;
     std::mt19937 rng(seed);
-    double eta_beta = 10;
-    std::vector<int> perm;
-    double avg_sim = 0.0;
-    double max_sim = 0.0;
+    SimData sim = simulate_documents(rng, N, K, M);
 
-    // --- 1) Simulate corpus ---
-    simulate_corpus(N, M, K, avg_len,
-                    2, eta_beta,
-                    a0_true, b0_true,
-                    rng, true_topics, true_bg,
-                    docs, global_counts);
+    PoissonLog1pNMF nmf_bg(K, M, threads, sim.size_factor, seed, true, 0);
+    nmf_bg.set_background_model(sim.avg_pi, &sim.background);
+    nmf_bg.fit(sim.docs, mle_opts, nmf_opts, true);
 
-    double total_tokens = global_counts.sum();
-    VectorXd global_probs = global_counts / total_tokens;
+    PoissonLog1pNMF nmf_base(K, M, threads, sim.size_factor, seed + 7, true, 0);
+    nmf_base.fit(sim.docs, mle_opts, nmf_opts, true);
 
-    std::cout << "Simulated " << N << " documents, "
-              << total_tokens << " total tokens.\n";
-    std::shuffle(docs.begin(), docs.end(), rng);
+    auto est_bg = feature_major_topics(nmf_bg.get_model());
+    auto est_base = feature_major_topics(nmf_base.get_model());
 
-    // --- 2) Instantiate LDA ---
-    int minibatch_size = 256;
-    LatentDirichletAllocation lda(
-        K, M, seed, threads, verbose,
-        InferenceType::SVB,
-        -1, -1, -1, -1, N);
-    lda.set_svb_parameters(/*max_iter=*/100, /*tol=*/1e-3);
+    double sim_bg = best_alignment_score(est_bg, sim.topics);
+    double sim_base = best_alignment_score(est_base, sim.topics);
 
-    std::cout << "Fitting SVB...\n";
-    for (int start = 0; start < N/3; start += minibatch_size) {
-        int end = std::min(start + minibatch_size, N);
-        std::vector<Document> minibatch;
-        minibatch.reserve(end - start);
-        for (int d = start; d < end; ++d) {
-            minibatch.push_back(docs[d]);
+    std::vector<int> bg_features(M);
+    std::iota(bg_features.begin(), bg_features.end(), 0);
+    int m0 = 10;
+    std::partial_sort(bg_features.begin(), bg_features.begin() + std::min(m0, M),
+        bg_features.end(), [&](int a, int b) { return sim.background[a] > sim.background[b]; });
+    bg_features.resize(std::min(m0, M));
+
+    auto bg_mass = [&](const std::vector<VectorXd>& topics) {
+        double acc = 0.0;
+        for (const auto& v : topics) {
+            double m = 0.0;
+            for (int idx : bg_features) m += v[idx];
+            acc += m;
         }
-        lda.partial_fit(minibatch);
-    }
+        return acc / topics.size();
+    };
+    double mass_bg = bg_mass(est_bg);
+    double mass_base = bg_mass(est_base);
 
-    RowMajorMatrixXd model0 = lda.copy_model();
-    perm = best_topic_permutation(true_topics, model0);
-    for (int k_true = 0; k_true < true_topics.rows(); ++k_true) {
-        int k_model = perm[k_true];
-        Eigen::VectorXd t = true_topics.row(k_true).transpose();
-        Eigen::VectorXd m = model0.row(k_model).transpose();
-        double st = t.sum();
-        double sm = m.sum();
-        if (st > 0) t /= st;
-        if (sm > 0) m /= sm;
-        double sim = t.dot(m);  // in [0,1]
-        double sim0 = t.dot(t);
-        avg_sim += sim;
-        max_sim += sim0;
-        sim /= sim0;
-        std::cout << "Topic " << k_true
-                << " matched to model topic " << k_model
-                << ", similarity = " << sim << "\n";
-    }
-    avg_sim = avg_sim / max_sim;
-    std::cout << "Average matched topic similarity: " << avg_sim << "\n";
+    const auto& beta0 = nmf_bg.get_bg_model();
+    const auto& est_pi = nmf_bg.get_bg_proportions();
+    double bg_cosine = cosine(beta0, sim.background);
+    double pi_cosine = cosine(Eigen::Map<const VectorXd>(sim.pi.data(), sim.pi.size()), Eigen::Map<const VectorXd>(est_pi.data(), est_pi.size()));
+    double avg_pi = std::accumulate(est_pi.begin(), est_pi.end(), 0.0) / static_cast<double>(est_pi.size());
 
-    // --- 3) Set background prior to empirical global feature abundance ---
-    // This makes the *prior* expected background distribution match
-    // the global feature abundance of the simulated dataset.
-    VectorXd eta0 = global_counts.array() * 0.2 + 1e-3;  // small smoothing
-    double a0_prior = a0_true;
-    double b0_prior = b0_true;
-    lda.set_background_prior(eta0, a0_prior, b0_prior);
+    std::cout << "Background model cosine similarity: " << bg_cosine << "\n";
+    std::cout << "Background proportions cosine similarity: " << pi_cosine << "\n";
+    std::cout << "Average estimated pi: " << avg_pi << "\n";
 
-    // --- 4) Fit the model on the whole corpus as one minibatch ---
-    std::cout << "Fitting SVB_DN...\n";
-    for (int start = 0; start < N; start += minibatch_size) {
-        int end = std::min(start + minibatch_size, N);
-        std::vector<Document> minibatch;
-        minibatch.reserve(end - start);
-        for (int d = start; d < end; ++d) {
-            minibatch.push_back(docs[d]);
-        }
-        lda.partial_fit(minibatch);
-    }
-
-    // --- 5) Inspect learned background vs empirical global distribution ---
-    VectorXd bg_model = lda.copy_background_model();
-    bg_model /= bg_model.sum();   // normalize
-
-    double l1_bg = (bg_model - global_probs).cwiseAbs().sum();
-    std::cout << "\nL1 distance between empirical global distribution and "
-                 "learned background: " << l1_bg << "\n";
-
-    std::cout << "\nTop 10 background words (word_id: model_prob, global_prob):\n";
-    auto bg_top = top_k_indices(bg_model, 10);
-    for (int idx : bg_top) {
-        std::cout << "  " << idx
-                  << ": model="  << bg_model[idx]
-                  << ", global=" << global_probs[idx] << "\n";
-    }
-
-    std::cout << "\nEstimated foreground / background token counts (a_, b_): "
-              << lda.get_forground_count()  << " / "
-              << lda.get_background_count() << ", ";
-    std::cout << a0_true / (a0_true+b0_true) << " vs "
-              << lda.get_background_count()/(lda.get_forground_count() + lda.get_background_count()) << "\n";
-
-    RowMajorMatrixXd model1 = lda.copy_model();
-    perm = best_topic_permutation(true_topics, model1);
-    avg_sim = 0.0; max_sim = 0.0;
-    for (int k_true = 0; k_true < true_topics.rows(); ++k_true) {
-        int k_model = perm[k_true];
-        Eigen::VectorXd t = true_topics.row(k_true).transpose();
-        Eigen::VectorXd m = model1.row(k_model).transpose();
-        double st = t.sum();
-        double sm = m.sum();
-        if (st > 0) t /= st;
-        if (sm > 0) m /= sm;
-        double sim = t.dot(m);  // in [0,1]
-        double sim0 = t.dot(t);
-        avg_sim += sim;
-        max_sim += sim0;
-        sim /= sim0;
-        std::cout << "Topic " << k_true
-                << " matched to model topic " << k_model
-                << ", similarity = " << sim << "\n";
-    }
-    avg_sim = avg_sim / max_sim;
-    std::cout << "Average matched topic similarity: " << avg_sim << "\n";
-
+    std::cout << "Similarity (with background): " << sim_bg << "\n";
+    std::cout << "Similarity (no background)  : " << sim_base << "\n";
+    std::cout << "Background feature mass (with background): " << mass_bg << "\n";
+    std::cout << "Background feature mass (no background)  : " << mass_base << "\n";
+    std::cout << "Average pi used for background: " << sim.avg_pi << "\n";
+    std::cout << "Size factor (avg row sum): " << sim.size_factor << "\n";
     return 0;
 }

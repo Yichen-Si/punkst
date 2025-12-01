@@ -48,6 +48,7 @@ struct OptimOptions {
     std::shared_ptr<const VectorXd> b_min = nullptr;
     std::shared_ptr<const VectorXd> b_max = nullptr;
     void set_bounds(double min_val, double max_val, int K) {
+		if (K <= 0) return;
         b_min = std::make_shared<VectorXd>(VectorXd::Constant(K, min_val));
         b_max = std::make_shared<VectorXd>(VectorXd::Constant(K, max_val));
     }

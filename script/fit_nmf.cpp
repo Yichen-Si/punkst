@@ -23,10 +23,12 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     bool exact = false;
     bool write_se = false;
     bool test_beta_vs_null = false;
-    bool transform = false;
+    bool fit_stats = false;
     bool random_init_missing_features = false;
     int32_t se_method = 1; // 1: fisher, 2: robust, 3: both
     double min_ct_de = 100, min_fc = 1.5, max_p = 0.05;
+    bool fit_background = false;
+    double pi0 = 0.1;
     int32_t mode = 1;
     NmfFitOptions nmf_opts;
     nmf_opts.max_iter = 20;
@@ -48,7 +50,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("random-init-missing", "Randomly initialize features missing from the model", random_init_missing_features);
     pl.add_option("K", "K", K, true)
       .add_option("mode", "Algorithm", mode)
-      .add_option("c", "Constant c in log(1+lambda/c)", c)
+      .add_option("fit-background", "Fit background noise", fit_background)
+      .add_option("background-init", "Initial background proportion pi0", pi0)
       .add_option("size-factor", "L: c_i=y_i/L, g()=log(1+lambda/c_i)", size_factor)
       .add_option("max-iter-outer", "Maximum outer iterations", nmf_opts.max_iter)
       .add_option("tol-outer", "Outer tolerance", nmf_opts.tol)
@@ -78,7 +81,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     pl.add_option("out-prefix", "Output prefix", outPrefix, true)
       .add_option("write-se", "Write standard errors for beta", write_se)
       .add_option("feature-residuals", "Compute and write per-feature residuals", opts.compute_residual)
-      .add_option("transform", "Transform the data after model fitting", transform)
+      .add_option("fit-stats", "Compute goodness of fit statistics", fit_stats)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug-N", "Debug with the first N units", debug_N)
       .add_option("debug", "Debug", debug_);
@@ -104,7 +107,10 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     int32_t M = reader.nFeatures;
     notice("Number of features: %d", M);
 
-    PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
+    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, exact, debug_);
+    if (fit_background) {
+        nmf.set_background_model(pi0);
+    }
 
     // Load model / warm start
     std::vector<std::string> factor_names;
@@ -276,6 +282,40 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     const auto& mat = nmf.get_model();
     write_matrix_to_file(outf, mat, 4, false, reader.features, "Feature", cnames_ptr);
     notice("Wrote model to %s", outf.c_str());
+    if (fit_background) {
+        const VectorXd& beta0 = nmf.get_bg_model();
+        double pi = nmf.get_pi();
+        outf = outPrefix + ".background.tsv";
+        std::ofstream ofs(outf);
+        if (!ofs) {
+            error("Cannot open output file %s", outf.c_str());
+        }
+        ofs << "##pi=" << std::scientific << std::setprecision(4) << pi << "\n";
+        ofs << "#Feature\tBackground\n";
+        for (int32_t m = 0; m < M; m++) {
+            ofs << reader.features[m] << "\t" << beta0(m) << "\n";
+        }
+        ofs.close();
+        notice("Wrote background model to %s", outf.c_str());
+
+        const std::vector<double>& phi = nmf.get_bg_proportions();
+        outf = outPrefix + ".bgprob.tsv";
+        ofs.open(outf);
+        if (!ofs) {
+            error("Cannot open output file %s", outf.c_str());
+        }
+        ofs << "#Index\tBackground\n" << std::fixed << std::setprecision(4) << "\n";
+        for (size_t i = 0; i < N; i++) {
+            ofs << rnames[i] << "\t" << phi[i] << "\n";
+        }
+        ofs.close();
+    }
+
+    const auto& theta_ = nmf.get_theta();
+    outf = outPrefix + ".theta.tsv";
+    write_matrix_to_file(outf, theta_, 4, false, rnames, "#Index");
+    notice("Wrote theta to %s", outf.c_str());
+
     if (write_se) {
         for (uint32_t flag = 1; flag <= 2; flag++) {
             if ((se_method & flag) == 0) {
@@ -312,7 +352,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         notice("Wrote covariate coefficients to %s", outf.c_str());
     }
 
-    if (!transform) {
+    // TODO: implement goodness of fit stats when background is fitted
+    if (fit_background || !fit_stats) {
         return 0;
     }
 
@@ -322,10 +363,6 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
     std::vector<MLEStats> stats;
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats);
-
-    outf = outPrefix + ".theta.tsv";
-    write_matrix_to_file(outf, theta, 4, false, rnames, "#Index");
-    notice("Wrote theta to %s", outf.c_str());
 
     outf = outPrefix + ".fit_stats.tsv";
     std::ofstream ofs(outf);

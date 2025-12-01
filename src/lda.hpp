@@ -7,6 +7,7 @@
 #include <iostream>
 #include <random>
 #include <optional>
+#include <numeric>
 #include "numerical_utils.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"
@@ -155,168 +156,10 @@ public:
     // Transform: compute document-topic distributions for a list of documents
     // For transform, we do not compute or return sufficient statistics.
     RowMajorMatrixXd transform(const std::vector<Document>& docs) {
-        int n_docs = docs.size();
-        int ncol = algo_ == InferenceType::SVB_DN ? n_topics_ + 1 : n_topics_;
-        RowMajorMatrixXd gamma(n_docs, ncol);
-        if (nThreads_ == 1) {
-            switch(algo_) {
-                case InferenceType::SCVB0:
-                    for (int d = 0; d < n_docs; ++d) {
-                        VectorXd hatNk;
-                        scvb0_fit_one_document(hatNk, docs[d]);
-                        hatNk /= hatNk.sum();
-                        gamma.row(d) = hatNk.transpose();
-                    }
-                    break;
-                case InferenceType::SVB_DN:
-                    for (int d = 0; d < n_docs; ++d) {
-                        VectorXd gamma_d, exp_Elog_theta_d;
-                        ArrayXd fg_counts;
-                        int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d], fg_counts);
-                        gamma_d /= gamma_d.sum();
-                        double c = std::accumulate(docs[d].cnts.begin(), docs[d].cnts.end(), 0.0);
-                        double bg = 1. - fg_counts.sum() / c;
-                        gamma(d, 0) = bg;
-                        for (int32_t k = 0; k < n_topics_; ++k) {
-                            gamma(d, k+1) = gamma_d(k);
-                        }
-                        // gamma.row(d) = gamma_d.transpose();
-                    }
-                    break;
-                case InferenceType::SVB:
-                    for (int d = 0; d < n_docs; ++d) {
-                        VectorXd gamma_d, exp_Elog_theta_d;
-                        int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d]);
-                        gamma_d /= gamma_d.sum();
-                        gamma.row(d) = gamma_d.transpose();
-                    }
-                    break;
-                default:
-                    error("%s: Unknown inference type", __func__);
-            }
-            return gamma;
-        }
-        switch(algo_) {
-            case InferenceType::SCVB0:
-                tbb::parallel_for(0, n_docs, [&](int d) {
-                    // Update document d using the helper function.
-                    VectorXd hatNk;
-                    scvb0_fit_one_document(hatNk, docs[d]);
-                    hatNk /= hatNk.sum();
-                    gamma.row(d) = hatNk.transpose();
-                });
-                break;
-            case InferenceType::SVB_DN:
-                tbb::parallel_for(0, n_docs, [&](int d) {
-                    // Update document d using the helper function.
-                    VectorXd gamma_d, exp_Elog_theta_d;
-                    ArrayXd fg_counts;
-                    int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d], fg_counts);
-                    gamma_d /= gamma_d.sum();
-                    double c = std::accumulate(docs[d].cnts.begin(), docs[d].cnts.end(), 0.0);
-                    double bg = 1. - fg_counts.sum() / c;
-                    gamma(d, 0) = bg;
-                    for (int32_t k = 0; k < n_topics_; ++k) {
-                        gamma(d, k+1) = gamma_d(k);
-                    }
-                    // gamma.row(d) = gamma_d.transpose();
-                });
-                break;
-            case InferenceType::SVB:
-                tbb::parallel_for(0, n_docs, [&](int d) {
-                    // Update document d using the helper function.
-                    VectorXd gamma_d, exp_Elog_theta_d;
-                    int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d]);
-                    gamma_d /= gamma_d.sum();
-                    gamma.row(d) = gamma_d.transpose();
-                });
-                break;
-            default:
-                error("%s: Unknown inference type", __func__);
-        }
-        return gamma;
+        return transform_common(docs, [](const auto& d) -> const Document& { return d; });
     }
     RowMajorMatrixXd transform(const std::vector<SparseObs>& docs) {
-        int n_docs = docs.size();
-        int ncol = algo_ == InferenceType::SVB_DN ? n_topics_ + 1 : n_topics_;
-        RowMajorMatrixXd gamma(n_docs, ncol);
-        if (nThreads_ == 1) {
-            switch(algo_) {
-                case InferenceType::SCVB0:
-                    for (int d = 0; d < n_docs; ++d) {
-                        VectorXd hatNk;
-                        scvb0_fit_one_document(hatNk, docs[d].doc);
-                        hatNk /= hatNk.sum();
-                        gamma.row(d) = hatNk.transpose();
-                    }
-                    break;
-                case InferenceType::SVB_DN:
-                    for (int d = 0; d < n_docs; ++d) {
-                        VectorXd gamma_d, exp_Elog_theta_d;
-                        ArrayXd fg_counts;
-                        int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc, fg_counts);
-                        gamma_d /= gamma_d.sum();
-                        double c = std::accumulate(docs[d].doc.cnts.begin(), docs[d].doc.cnts.end(), 0.0);
-                        double bg = 1. - fg_counts.sum() / c;
-                        gamma(d, 0) = bg;
-                        for (int32_t k = 0; k < n_topics_; ++k) {
-                            gamma(d, k+1) = gamma_d(k);
-                        }
-                        // gamma.row(d) = gamma_d.transpose();
-                    }
-                    break;
-                case InferenceType::SVB:
-                    for (int d = 0; d < n_docs; ++d) {
-                        VectorXd gamma_d, exp_Elog_theta_d;
-                        int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc);
-                        gamma_d /= gamma_d.sum();
-                        gamma.row(d) = gamma_d.transpose();
-                    }
-                    break;
-                default:
-                    error("%s: Unknown inference type", __func__);
-            }
-            return gamma;
-        }
-        switch(algo_) {
-            case InferenceType::SCVB0:
-                tbb::parallel_for(0, n_docs, [&](int d) {
-                    // Update document d using the helper function.
-                    VectorXd hatNk;
-                    scvb0_fit_one_document(hatNk, docs[d].doc);
-                    hatNk /= hatNk.sum();
-                    gamma.row(d) = hatNk.transpose();
-                });
-                break;
-            case InferenceType::SVB_DN:
-                tbb::parallel_for(0, n_docs, [&](int d) {
-                    // Update document d using the helper function.
-                    VectorXd gamma_d, exp_Elog_theta_d;
-                    ArrayXd fg_counts;
-                    int32_t niter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc, fg_counts);
-                    gamma_d /= gamma_d.sum();
-                    double c = std::accumulate(docs[d].doc.cnts.begin(), docs[d].doc.cnts.end(), 0.0);
-                    double bg = 1. - fg_counts.sum() / c;
-                    gamma(d, 0) = bg;
-                    for (int32_t k = 0; k < n_topics_; ++k) {
-                        gamma(d, k+1) = gamma_d(k);
-                    }
-                    // gamma.row(d) = gamma_d.transpose();
-                });
-                break;
-            case InferenceType::SVB:
-                tbb::parallel_for(0, n_docs, [&](int d) {
-                    // Update document d using the helper function.
-                    VectorXd gamma_d, exp_Elog_theta_d;
-                    int32_t niter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, docs[d].doc);
-                    gamma_d /= gamma_d.sum();
-                    gamma.row(d) = gamma_d.transpose();
-                });
-                break;
-            default:
-                error("%s: Unknown inference type", __func__);
-        }
-        return gamma;
+        return transform_common(docs, [](const auto& d) -> const Document& { return d.doc; });
     }
 
     // SVB only
@@ -335,6 +178,55 @@ public:
     }
 
 private:
+
+    template <typename Docs, typename DocAccessor>
+    RowMajorMatrixXd transform_common(const Docs& docs, DocAccessor&& doc_of) {
+        const int n_docs = static_cast<int>(docs.size());
+        const int ncol = algo_ == InferenceType::SVB_DN ? n_topics_ + 1 : n_topics_;
+        RowMajorMatrixXd gamma(n_docs, ncol);
+
+        auto process_doc = [&](int d) {
+            const Document& doc = doc_of(docs[d]);
+            switch (algo_) {
+                case InferenceType::SCVB0: {
+                    VectorXd hatNk;
+                    scvb0_fit_one_document(hatNk, doc);
+                    hatNk /= hatNk.sum();
+                    gamma.row(d) = hatNk.transpose();
+                    break;
+                }
+                case InferenceType::SVB_DN: {
+                    VectorXd gamma_d, exp_Elog_theta_d;
+                    ArrayXd fg_counts;
+                    (void)svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts);
+                    gamma_d /= gamma_d.sum();
+                    double c = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+                    double bg = 1. - fg_counts.sum() / c;
+                    gamma(d, 0) = bg;
+                    for (int32_t k = 0; k < n_topics_; ++k) {
+                        gamma(d, k + 1) = gamma_d(k);
+                    }
+                    break;
+                }
+                case InferenceType::SVB: {
+                    VectorXd gamma_d, exp_Elog_theta_d;
+                    (void)svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc);
+                    gamma_d /= gamma_d.sum();
+                    gamma.row(d) = gamma_d.transpose();
+                    break;
+                }
+                default:
+                    error("%s: Unknown inference type", __func__);
+            }
+        };
+
+        if (nThreads_ == 1) {
+            for (int d = 0; d < n_docs; ++d) process_doc(d);
+        } else {
+            tbb::parallel_for(0, n_docs, [&](int d) { process_doc(d); });
+        }
+        return gamma;
+    }
 
     InferenceType algo_;
     int n_topics_ = -1, n_features_ = -1;

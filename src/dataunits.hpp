@@ -6,6 +6,7 @@
 #include "assert.h"
 #include <unordered_set>
 #include "Eigen/Dense"
+#include "Eigen/Sparse"
 
 template<typename T>
 struct IndexEntry {
@@ -17,6 +18,7 @@ struct IndexEntry {
 struct Document {
     std::vector<uint32_t> ids; // Length: number of nonzero words in the doc
     std::vector<double> cnts;
+    double ct_tot = -1;
 
     inline Eigen::VectorXd to_dense(size_t n) const {
         Eigen::VectorXd y_dense = Eigen::VectorXd::Zero(n);
@@ -24,6 +26,12 @@ struct Document {
             y_dense[ids[t]] = cnts[t];
         }
         return y_dense;
+    }
+    double get_sum() {
+        if (ct_tot < 0) {
+            ct_tot = std::accumulate(cnts.begin(), cnts.end(), 0.0);
+        }
+        return ct_tot;
     }
 };
 
@@ -188,8 +196,14 @@ public:
     }
     int32_t parseLine(Document& doc, std::string &info, const std::string &line, int32_t modal = 0, bool add2sums = true);
 
-    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
-    int32_t readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
+    int32_t readAll(std::vector<Document>& docs,
+        std::vector<std::string>& info, const std::string &inFile,
+        int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
+    int32_t readAll(std::vector<Document>& docs, const std::string &inFile,
+        int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
+    int32_t readAll(Eigen::SparseMatrix<double, Eigen::RowMajor> &X,
+        std::vector<std::string>& info, const std::string &inFile,
+        int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
 
 private:
 

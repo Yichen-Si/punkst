@@ -68,7 +68,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     const int32_t M = beta.rows();
     notice("Loaded model with %d features and %d factors", M, K);
 
-    PoissonLog1pNMF nmf(K, M, nThreads, seed, exact, debug_);
+    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, exact, debug_);
     nmf.set_beta(beta);
 
     if (!covarCoefFile.empty()) {

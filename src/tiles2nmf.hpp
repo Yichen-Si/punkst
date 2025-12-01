@@ -14,6 +14,7 @@ using Eigen::VectorXf;
 using Eigen::SparseMatrix;
 using RowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+using SparseRowMatf = Eigen::SparseMatrix<float, Eigen::RowMajor>;
 
 struct MultinomialLogReg {
     int M = 0;
@@ -131,6 +132,15 @@ public:
         pnmf_initialized_ = true;
     }
 
+    void set_background_model(double pi0, VectorXf beta0) {
+        fit_background_ = true;
+        pi_ = pi0;
+        if (beta0.size() != M_) {
+            error("%s: dimension mismatch between beta0 and model", __func__);
+        }
+        beta0_ = beta0;
+    }
+
     void run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1) const;
 
     bool is_mlr_initialized() const {return mlr_initialized_;}
@@ -148,6 +158,9 @@ private:
     double  min_ct_      = 5;
     bool    pnmf_initialized_ = false;
     bool    mlr_initialized_ = false;
+    bool fit_background_ = false;
+    double pi_;
+    VectorXf beta0_;
 };
 
 template<typename T>

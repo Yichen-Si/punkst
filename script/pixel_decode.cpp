@@ -26,6 +26,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     std::string algo = "slda"; // or "nmf"
     double a0 = 1.0, b0 = 9.0;
+    double pi0 = 0.1;
     std::string bgModelFile;
 
     MLEOptions opts;
@@ -65,7 +66,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     // Background model options
     pl.add_option("background-model", "Background model file", bgModelFile)
       .add_option("bg-fraction-prior-a0", "Background fraction hyper-parameter a0 in pi~beta(a0, b0) (default: 2)", a0)
-      .add_option("bg-fraction-prior-b0", "Background fraction hyper-parameter b0 in pi~beta(a0, b0) (default: 8)", b0);
+      .add_option("bg-fraction-prior-b0", "Background fraction hyper-parameter b0 in pi~beta(a0, b0) (default: 8)", b0)
+      .add_option("bg-fraction", "Background fraction hyper-parameter, (use with --algo nmf)", pi0);
     // EM-NMF specific options
     pl.add_option("size-factor", "Size factor used for per-anchor EM updates", sizeFactor)
       .add_option("exact", "Use exact Poisson updates (no log1p approximation)", exactMLE)
@@ -195,6 +197,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     notice("Initialized tile reader");
 
     VectorXf eta0;
+    bool fit_background = false;
     if (!bgModelFile.empty()) {
         eta0 = VectorXf::Zero(M_model);
         std::ifstream fin(bgModelFile);
@@ -213,6 +216,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 error("Invalid value in background model file (%s)", line.c_str());
             }
         }
+        fit_background = true;
     }
 
     auto configure_decoder = [&](auto& decoder, const std::string& anchorFile) {
@@ -233,6 +237,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             emPois.init_mlr(mapBinFile, beta);
         } else {
             emPois.init_pnmf(beta, opts, sizeFactor, exactMLE);
+            if (fit_background) {
+                emPois.set_background_model(pi0, eta0);
+            }
         }
 
         M_model = emPois.get_M();
@@ -288,14 +295,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         if (coordsAreInt) {
             Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
-            if (!bgModelFile.empty()) {
+            if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0);
             }
             configure_decoder(tiles2slda, ds.anchorFile);
             tiles2slda.run();
         } else {
             Tiles2SLDA<float> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
-            if (!bgModelFile.empty()) {
+            if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0);
             }
             configure_decoder(tiles2slda, ds.anchorFile);
