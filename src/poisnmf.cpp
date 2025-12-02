@@ -66,8 +66,9 @@ void PoissonLog1pNMF::fit(const std::vector<SparseObs>& docs,
                 }
                 minibatch_ += 1;
             }
+            theta_valid_.assign(N_, false);
             if (epoch_ % nmf_opts.rescale_period == 0) {
-                rescale_matrices();
+                rescale_beta_to_const_sum(M_);
             }
         }
     }

@@ -36,6 +36,7 @@ protected:
     using Base::outPref;
     using Base::resultQueue;
     using Base::outputOriginalData_;
+    using Base::outputBackgroundProb_;
     using Base::outputAnchor_;
     using Base::anchorQueue;
     using typename Base::ProcessedResult;

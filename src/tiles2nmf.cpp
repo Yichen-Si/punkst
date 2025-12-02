@@ -32,26 +32,12 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
         SparseRowMatf ymtx = batch.psi.transpose() * batch.mtx; // n x M
         batch.theta = mlr_.predict(ymtx); // n x K
         for (int j = 0; j < batch.N; ++j) {
-            float rowMax = -std::numeric_limits<float>::infinity();
             for (SparseRowMatf::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
                 int i = it1.col();
                 it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)) + it2.value();
-                if (it1.valueRef() > rowMax) {
-                    rowMax = it1.valueRef();
-                }
-            }
-            float rowSum = 0.0f;
-            for (SparseRowMatf::InnerIterator it(batch.psi, j); it; ++it) {
-                it.valueRef() = expit(it.valueRef() - rowMax);
-                rowSum += it.valueRef();
-            }
-            if (rowSum > std::numeric_limits<float>::epsilon()) {
-                rowSum = 1.0f / rowSum;
-                for (SparseRowMatf::InnerIterator it(batch.psi, j); it; ++it) {
-                    it.valueRef() *= rowSum;
-                }
             }
         }
+        expitAndRowNormalize(batch.psi);
 
         // check convergence
         if (theta_init) {
@@ -291,7 +277,7 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point
 
     for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
         for (typename SparseRowMatf::InnerIterator it(minibatch.wij, i); it; ++it) {
-            it.valueRef() = logit(it.value());
+            it.valueRef() = log(it.value());
         }
     }
 

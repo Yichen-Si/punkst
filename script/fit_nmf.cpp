@@ -304,7 +304,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         if (!ofs) {
             error("Cannot open output file %s", outf.c_str());
         }
-        ofs << "#Index\tBackground\n" << std::fixed << std::setprecision(4) << "\n";
+        ofs << "#Index\tBackground\n" << std::fixed << std::setprecision(4);
         for (size_t i = 0; i < N; i++) {
             ofs << rnames[i] << "\t" << phi[i] << "\n";
         }

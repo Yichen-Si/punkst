@@ -85,6 +85,7 @@ void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0) {
     }
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
+    outputBackgroundProb_ = true;
 }
 
 template<typename T>
@@ -112,6 +113,7 @@ void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, do
     fin.close();
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
+    outputBackgroundProb_ = true;
 }
 
 template<typename T>
@@ -305,7 +307,14 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     int32_t n_iter = 0;
     double delta = 0.0;
     RowMajorMatrixXf smtx(M_, K_);
-    float f0 = slda_.do_e_step(minibatch, &smtx, &n_iter, &delta);
+    float f0;
+    // store background probability (per pixel per feature)
+    std::vector<std::unordered_map<uint32_t, float>> phi0;
+    if (fitBackground_) {
+        f0 = slda_.do_e_step_bg(minibatch, phi0, &smtx, &n_iter, &delta);
+    } else {
+        f0 = slda_.do_e_step_standard(minibatch, &smtx, &n_iter, &delta);
+    }
     {
         std::lock_guard<std::mutex> lock(pseudobulkMutex_);
         pseudobulk_ += smtx;
@@ -325,7 +334,9 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     findTopK(topVals, topIds, minibatch.phi, topk_);
     ProcessedResult result;
     if (outputOriginalData_) {
-        result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
+        result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket, &phi0);
+    } else if (fitBackground_) {
+        result = Base::formatPixelResultWithBackground(tileData, topVals, topIds, ticket, phi0);
     } else {
         result = Base::formatPixelResult(tileData, topVals, topIds, ticket);
     }
@@ -354,11 +365,14 @@ void Tiles2SLDA<T>::writePseudobulkToTsv() {
     std::ofstream oss(pseudobulkFile, std::ios::out);
     if (!oss) error("Error opening pseudobulk output file: %s", pseudobulkFile.c_str());
     oss << "Feature";
+    if (fitBackground_) {oss << "\tBackground";}
+    const VectorXf& bgProb = slda_.get_background_count();
     const auto factorNames = lda_.get_topic_names();
     for (int32_t i = 0; i < K_; ++i) oss << "\t" << factorNames[i];
     oss << "\n" << std::setprecision(probDigits) << std::fixed;
     for (int32_t i = 0; i < M_; ++i) {
         oss << featureNames[i];
+        if (fitBackground_) {oss << "\t" << bgProb(i);}
         for (int32_t j = 0; j < K_; ++j) oss << "\t" << pseudobulk_(i, j);
         oss << "\n";
     }

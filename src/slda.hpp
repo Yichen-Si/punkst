@@ -109,10 +109,13 @@ public:
         fit_background_ = true;
     }
 
-    float do_e_step(Minibatch& batch, RowMajorMatrixXf* ss = nullptr,
+    float do_e_step(Minibatch& batch,
+        RowMajorMatrixXf* ss = nullptr,
+        std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr,
         int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
         if (fit_background_) {
-            return do_e_step_bg(batch, ss, n_iter, final_meanchange);
+            assert(phi0 != nullptr);
+            return do_e_step_bg(batch, *phi0, ss, n_iter, final_meanchange);
         } else {
             return do_e_step_standard(batch, ss, n_iter, final_meanchange);
         }
@@ -183,32 +186,6 @@ public:
         double total_score = N_*1./batch.N * batch.n * (score_patch + score_gamma) + score_beta;
         return std::make_tuple(score_pixel, score_patch, score_gamma, score_beta, total_score);
     }
-
-private:
-    int K_;   // number of topics
-    int M_;   // number of features
-    int N_;   // total number of pixels (global)
-    double tau0_;
-    double kappa_;
-    int updatect_;
-    int max_iter_inner_;
-    double tol_;
-    std::mt19937 rng_;
-
-    RowMajorMatrixXf Elog_beta_; // M x K: E[log β]
-    RowMajorMatrixXf lambda_;    // M x K: variational parameter for β
-    RowVectorXf alpha_;  // 1 X K: global prior for θ
-    RowVectorXf eta_;    // 1 x M: prior for β
-
-    // background model
-    bool fit_background_ = false;
-    double a0_, b0_; // prior for background proportion pi
-    double Elogit_pi0_;
-    VectorXf lambda0_, Elog_beta0_; // background distribution, M x 1
-    VectorXf eta0_;
-    std::mutex mutex_bg_;
-    double a_, b_;
-    VectorXf bg_marginal_;
 
     float do_e_step_standard(Minibatch& batch, RowMajorMatrixXf* ss = nullptr,
         int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
@@ -292,14 +269,20 @@ private:
         return 0;
     }
 
-    float do_e_step_bg(Minibatch& batch, RowMajorMatrixXf* ss = nullptr,
+    float do_e_step_bg(Minibatch& batch,
+        std::vector<std::unordered_map<uint32_t, float>>& phi0,
+        RowMajorMatrixXf* ss = nullptr,
         int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
         SparseMatrix<float, Eigen::RowMajor> fgmtx = batch.mtx; // N x M
         double pi0 = static_cast<double>(a0_) / (a0_ + b0_);
+        phi0.reserve(batch.mtx.rows());
         for (int i = 0; i < fgmtx.rows(); ++i) {
+            std::unordered_map<uint32_t, float> phi0_i;
             for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(fgmtx, i); it; ++it) {
                 it.valueRef() *= (1. - pi0);
+                phi0_i[it.col()] = 0;
             }
+            phi0.push_back(std::move(phi0_i));
         }
         // (N x M) * (M x K) = (N x K)
         RowMajorMatrixXf Xb = fgmtx * Elog_beta_;
@@ -358,7 +341,9 @@ private:
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.mtx, i), it2(fgmtx, i); it1 && it2; ++it1, ++it2) {
                     int m = it1.col();
                     float b = Elog_beta0_(m) - batch.phi.row(i).dot(Elog_beta_.row(m));
-                    it2.valueRef() = it1.value() * (1. - expit(Elogit_pi0_ + b));
+                    b = expit(Elogit_pi0_ + b);
+                    phi0[i][m] = b;
+                    it2.valueRef() = it1.value() * (1.-b);
                 }
             }
             Xb = fgmtx * Elog_beta_;
@@ -384,7 +369,7 @@ private:
         for (int i = 0; i < fgmtx.rows(); ++i) {
             for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.mtx, i), it2(fgmtx, i); it1 && it2; ++it1, ++it2) {
                 c1 += it2.value();
-                bg_local(it1.col()) = it1.value() - it2.value();
+                bg_local(it1.col()) += it1.value() - it2.value();
             }
         }
         float c0 = bg_local.sum();
@@ -406,4 +391,30 @@ private:
         }
         return c0/(c0 + c1);
     }
+
+private:
+    int K_;   // number of topics
+    int M_;   // number of features
+    int N_;   // total number of pixels (global)
+    double tau0_;
+    double kappa_;
+    int updatect_;
+    int max_iter_inner_;
+    double tol_;
+    std::mt19937 rng_;
+
+    RowMajorMatrixXf Elog_beta_; // M x K: E[log β]
+    RowMajorMatrixXf lambda_;    // M x K: variational parameter for β
+    RowVectorXf alpha_;  // 1 X K: global prior for θ
+    RowVectorXf eta_;    // 1 x M: prior for β
+
+    // background model
+    bool fit_background_ = false;
+    double a0_, b0_; // prior for background proportion pi
+    double Elogit_pi0_;
+    VectorXf lambda0_, Elog_beta0_; // background distribution, M x 1
+    VectorXf eta0_;
+    std::mutex mutex_bg_;
+    double a_, b_;
+    VectorXf bg_marginal_;
 };

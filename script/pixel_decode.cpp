@@ -19,7 +19,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool coordsAreInt = false;
     bool outputAnchor = false;
     bool useTicketSystem = false;
-    int32_t floatCoordDigits = 4, probDigits = 4;
+    int32_t floatCoordDigits = 2, probDigits = 4;
     std::vector<std::string> annoInts, annoFloats, annoStrs;
     int32_t maxIter = 100;
     double mDelta = 1e-3;

@@ -302,9 +302,10 @@ protected:
     std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
     // Output/formatting related
     bool outputOriginalData_ = false;
+    bool outputBackgroundProb_ = false;
     bool outputAnchor_ = false;
     std::vector<std::string> featureNames;
-    int32_t floatCoordDigits = 4, probDigits = 4;
+    int32_t floatCoordDigits = 2, probDigits = 4;
     int32_t topk_ = 3;
     bool useExtended_ = false;
     lineParserUnival* lineParserPtr = nullptr; // set by derived
@@ -510,15 +511,15 @@ protected:
         InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
     int32_t parseBoundaryMemoryExtended(TileData<T>& tileData,
         InMemoryStorageExtended<T>* memStore, uint32_t bufferKey);
-
     // Output helpers
     void setExtendedSchema(size_t offset);
     void setupOutput();
     void closeOutput();
     void writeHeaderToJson();
     ProcessedResult formatAnchorResult(const std::vector<cv::Point2f>& anchors, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax);
-    ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
+    ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
     ProcessedResult formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket);
+    ProcessedResult formatPixelResultWithBackground(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>& phi0);
     void anchorWriterWorker();
 
 };
