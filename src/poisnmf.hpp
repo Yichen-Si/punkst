@@ -84,8 +84,9 @@ public:
         Bcov_ = std::move(Bcov);
         P_ = Bcov_.cols();
     }
-    void set_background_model(double pi0, VectorXd* beta0 = nullptr) {
+    void set_background_model(double pi0, VectorXd* beta0 = nullptr, bool fixed = false) {
         fit_background_ = true;
+        fix_background_ = fixed;
         assert(pi0 > 0 && pi0 < 1);
         pi0_ = pi0;
         pi_ = pi0; log_pi_ = std::log(pi0); log_1mpi_ = std::log(1 - pi0);
@@ -132,6 +133,7 @@ private:
     RowMajorMatrixXd X_;
 
     bool fit_background_ = false;
+    bool fix_background_ = false;
     double pi0_, pi_, log_pi_, log_1mpi_;
     VectorXd beta0_;
     std::vector<double> phi_;

@@ -124,8 +124,8 @@ public:
     // Set engine specific parameters
     void set_svb_parameters(int32_t max_iter = 100, double tol = -1.);
     void set_scvb0_parameters(double s_beta = 1, double s_theta = 1, double tau_theta = 10, double kappa_theta = 0.9, int32_t burnin = 10);
-    void set_background_prior(const VectorXd& eta0, double a0, double b0);
-    void set_background_prior(const std::vector<double> eta0, double a0, double b0);
+    void set_background_prior(const VectorXd& eta0, double a0, double b0, bool fixed = false);
+    void set_background_prior(const std::vector<double> eta0, double a0, double b0, bool fixed = false);
 
     // Set the model matrix
     void set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals);
@@ -249,6 +249,7 @@ private:
     int max_doc_update_iter_ = -1; // for per document inner loop
     double mean_change_tol_  = -1; // for per document inner loop
     // SVB_DN specific parameters
+    bool fix_background_ = false;
     double a0_, b0_; // prior for background proportion pi
     double a_, b_;
     VectorXd eta0_; // prior for background distribution, M x 1

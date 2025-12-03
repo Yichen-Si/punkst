@@ -28,6 +28,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     int32_t se_method = 1; // 1: fisher, 2: robust, 3: both
     double min_ct_de = 100, min_fc = 1.5, max_p = 0.05;
     bool fit_background = false;
+    bool fix_background = false;
     double pi0 = 0.1;
     int32_t mode = 1;
     NmfFitOptions nmf_opts;
@@ -51,6 +52,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     pl.add_option("K", "K", K, true)
       .add_option("mode", "Algorithm", mode)
       .add_option("fit-background", "Fit background noise", fit_background)
+      .add_option("fix-background", "Fix background model during training", fix_background)
       .add_option("background-init", "Initial background proportion pi0", pi0)
       .add_option("size-factor", "L: c_i=y_i/L, g()=log(1+lambda/c_i)", size_factor)
       .add_option("max-iter-outer", "Maximum outer iterations", nmf_opts.max_iter)
@@ -109,7 +111,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
     PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, exact, debug_);
     if (fit_background) {
-        nmf.set_background_model(pi0);
+        nmf.set_background_model(pi0, nullptr, fix_background);
     }
 
     // Load model / warm start

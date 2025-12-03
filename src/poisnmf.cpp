@@ -778,10 +778,12 @@ double PoissonLog1pNMF::update_local(const std::vector<SparseObs>& docs,
     }
 
     if (rho_t < 0) {
-        beta0_ = std::move(beta0_local);
+        if (!fix_background_)
+            beta0_ = std::move(beta0_local);
         pi_ = bg / (fg + bg);
     } else {
-        beta0_ = (1.0 - rho_t) * beta0_ + rho_t * beta0_local;
+        if (!fix_background_)
+            beta0_ = (1.0 - rho_t) * beta0_ + rho_t * beta0_local;
         pi_ = (1.0 - rho_t) * pi_ + rho_t * (bg / (fg + bg));
     }
     notice("[%d] Updated theta & phi: avg obj = %.3e (%.3e), avg niters = %d, avg pi = %.3e", epoch_, obj_avg, *obj0, niters, f0);

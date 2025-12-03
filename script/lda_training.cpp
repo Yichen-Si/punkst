@@ -28,6 +28,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     bool projection_only = false;
     // --- LDA + background noise ---
     bool fitBackground = false;
+    bool fixBackground = false;
     std::string bgPriorFile;
     double a0 = 2, b0 = 8;
     double warmInitEpoch = 0.5;
@@ -99,6 +100,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("fit-background", "(LDA-SVB) Fit a background noise in addition to topics", fitBackground)
       .add_option("background-prior", "(LDA-SVB) File with background prior vector", bgPriorFile)
       .add_option("background-init-scale", "(LDA-SVB) Scaling factor for constructing background prior from total feature counts", bgInitScale)
+      .add_option("fix-background", "(LDA-SVB) Fix the background model during training", fixBackground)
       .add_option("bg-fraction-prior-a0", "(LDA-SVB) Background fraction hyper-parameter a0 in pi~beta(a0, b0) (default: 2)", a0)
       .add_option("bg-fraction-prior-b0", "(LDA-SVB) Background fraction hyper-parameter b0 in pi~beta(a0, b0) (default: 8)", b0)
       .add_option("warm-start-epochs", "(LDA-SVB) Number of epochs to warm start factors before fitting background (could be fractional)", warmInitEpoch);
@@ -167,7 +169,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
                     lda4hex->printTopicAbundance();
                 }
                 double bgScale = readFullSums ?  bgInitScale : 1.;
-                lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale);
+                lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale, fixBackground);
             }
         }
         model_runner.reset(lda4hex);

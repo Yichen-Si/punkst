@@ -172,7 +172,7 @@ public:
         writeModelHeader(outFileStream);
     }
 
-    void set_background_prior(std::string& bgPriorFile, double a0, double b0, double scale = 1.) {
+    void set_background_prior(std::string& bgPriorFile, double a0, double b0, double scale = 1., bool fixed = false) {
         std::ifstream priorIn(bgPriorFile, std::ios::in);
         if (!priorIn) {
             const std::vector<double>& eta0 = reader.getFeatureSums();
@@ -181,9 +181,9 @@ public:
                 for (size_t i = 0; i < eta0.size(); ++i) {
                     scaled_eta0[i] = eta0[i] * scale;
                 }
-                lda->set_background_prior(scaled_eta0, a0, b0);
+                lda->set_background_prior(scaled_eta0, a0, b0, fixed);
             } else {
-                lda->set_background_prior(eta0, a0, b0);
+                lda->set_background_prior(eta0, a0, b0, fixed);
             }
         } else {
             std::unordered_map<std::string, uint32_t> featureDict;
@@ -205,7 +205,7 @@ public:
                 }
             }
             priorIn.close();
-            lda->set_background_prior(eta0, a0, b0);
+            lda->set_background_prior(eta0, a0, b0, fixed);
         }
     }
 

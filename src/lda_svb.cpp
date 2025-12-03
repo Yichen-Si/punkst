@@ -145,7 +145,7 @@ void LatentDirichletAllocation::set_svb_parameters(int32_t max_iter, double tol)
     }
 }
 
-void LatentDirichletAllocation::set_background_prior(const VectorXd& eta0, double a0, double b0) {
+void LatentDirichletAllocation::set_background_prior(const VectorXd& eta0, double a0, double b0, bool fixed) {
     assert(algo_ == InferenceType::SVB_DN || algo_ == InferenceType::SVB);
     assert(eta0.size() == n_features_);
     eta0_ = eta0.array().max(1e-12);
@@ -154,8 +154,9 @@ void LatentDirichletAllocation::set_background_prior(const VectorXd& eta0, doubl
     lambda0_ = eta0_;
     exp_Elog_beta0_ = dirichlet_expectation_1d(lambda0_, 0);
     algo_ = InferenceType::SVB_DN;
+    fix_background_ = fixed;
 }
-void LatentDirichletAllocation::set_background_prior(const std::vector<double> eta0, double a0, double b0) {
+void LatentDirichletAllocation::set_background_prior(const std::vector<double> eta0, double a0, double b0, bool fixed) {
     assert(algo_ == InferenceType::SVB_DN || algo_ == InferenceType::SVB);
     assert(eta0.size() == static_cast<size_t>(n_features_));
     eta0_ = VectorXd::Zero(eta0.size());
@@ -167,6 +168,7 @@ void LatentDirichletAllocation::set_background_prior(const std::vector<double> e
     lambda0_ = eta0_;
     exp_Elog_beta0_ = dirichlet_expectation_1d(lambda0_, 0);
     algo_ = InferenceType::SVB_DN;
+    fix_background_ = fixed;
 }
 
 std::vector<double> LatentDirichletAllocation::approx_bound(
@@ -444,6 +446,8 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
     components_ = (1 - rho) * components_ + rho * update_val;
     exp_Elog_beta_ = dirichlet_expectation_2d(components_);
     VectorXd update_val0 = eta0_ + scale * ss0;
-    lambda0_ = (1 - rho) * lambda0_ + rho * update_val0;
-    exp_Elog_beta0_ = dirichlet_expectation_1d(lambda0_, 0);
+    if (!fix_background_) {
+        lambda0_ = (1 - rho) * lambda0_ + rho * update_val0;
+        exp_Elog_beta0_ = dirichlet_expectation_1d(lambda0_, 0);
+    }
 }
