@@ -57,7 +57,7 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
     notice("%s: Finished EM with %d iterations. Final mean max change in theta: %.4e", __func__, it, meanchange_theta);
 }
 
-void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double tol) const {
+void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double tol, std::vector<std::unordered_map<uint32_t, float>>* phi0) const {
     if (!pnmf_initialized_) {
         error("%s: not initialized, run init_global_parameter first", __func__);
     }
@@ -69,6 +69,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
     SparseRowMatf* mtx = &(batch.mtx);
     SparseRowMatf  mtx_local;
     if (fit_background_) {
+        assert(phi0 != nullptr);
         mtx_local = batch.mtx;
         for (int i = 0; i < batch.N; ++i) {
             for (SparseRowMatf::InnerIterator it(mtx_local, i); it; ++it) {
@@ -76,6 +77,14 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
             }
         }
         mtx = &mtx_local;
+        phi0->reserve(batch.mtx.rows());
+        for (int i = 0; i < batch.mtx.rows(); ++i) {
+            std::unordered_map<uint32_t, float> phi0_i;
+            for (SparseRowMatf::InnerIterator it(batch.mtx, i); it; ++it) {
+                phi0_i[it.col()] = 0;
+            }
+            phi0->push_back(std::move(phi0_i));
+        }
     }
 
     bool theta_init = true;
@@ -91,7 +100,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
     debug("%s: Starting EM", __func__);
     int it = 0;
     for (; it < max_iter; it++) {
-        SparseMatrix<float, Eigen::RowMajor> ymtx = batch.psi.transpose() * (*mtx); // n x M
+        SparseRowMatf ymtx = batch.psi.transpose() * (*mtx); // n x M
         std::vector<int32_t> niters(batch.n, 0);
         float nkept = 0;
         MLEStats stats;
@@ -170,6 +179,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
                     it1.valueRef() = it2.value() * p1;
                     xtot += it2.value();
                     x1 += it1.value();
+                    (*phi0)[i][m] = 1.0f - p1;
                 }
             }
             double f0 = 1. - x1 / xtot;
@@ -199,7 +209,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
 template<typename T>
 Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
         const std::string& outPref, const std::string& tmpDir,
-        const PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, HexGrid& hexGrid, int32_t nMoves,
+        PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed, double c, double h, double res, int32_t topk,
         int32_t verbose, int32_t debug)
     : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir, debug), distR_(r),
@@ -342,20 +352,17 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
         return;
     }
     PixelEM::EMstats stats;
-    empois_.run_em(minibatch, stats);
+    // store background probability (per pixel per feature)
+    std::vector<std::unordered_map<uint32_t, float>> phi0;
+    empois_.run_em(minibatch, stats, -1, -1, &phi0);
     debug("%s: Thread %d (ticket %d) finished EM", __func__, threadId, ticket);
 
     MatrixXf topVals;
     Eigen::MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
-    ProcessedResult result;
-    if (outputOriginalData_) {
-        result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket);
-    } else {
-        result = Base::formatPixelResult(tileData, topVals, topIds, ticket);
-    }
+    ProcessedResult result = Base::formatPixelResult(tileData, topVals, topIds, ticket, &phi0);
     resultQueue.push(std::move(result));
-    if (outputAnchor_) {
+    if (Base::outputAnchor_) {
         MatrixXf anchorTopVals;
         Eigen::MatrixXi anchorTopIds;
         findTopK(anchorTopVals, anchorTopIds, minibatch.theta, topk_);

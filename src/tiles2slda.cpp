@@ -79,17 +79,18 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
 }
 
 template<typename T>
-void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0) {
+void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand) {
     if (eta0.size() != M_) {
         error("%s: size of background prior (%d) does not match feature number (%d)", __func__, (int32_t)eta0.size(), M_);
     }
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
-    outputBackgroundProb_ = true;
+    Base::outputBackgroundProbDense_ = !outputExpand;
+    Base::outputBackgroundProbExpand_ = outputExpand;
 }
 
 template<typename T>
-void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, double b0) {
+void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, double b0, bool outputExpand) {
     VectorXf eta0 = VectorXf::Zero(M_);
     std::ifstream fin(bgModelFile);
     if (!fin.is_open()) {
@@ -113,7 +114,8 @@ void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, do
     fin.close();
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
-    outputBackgroundProb_ = true;
+    Base::outputBackgroundProbDense_ = !outputExpand;
+    Base::outputBackgroundProbExpand_ = outputExpand;
 }
 
 template<typename T>
@@ -310,8 +312,10 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     float f0;
     // store background probability (per pixel per feature)
     std::vector<std::unordered_map<uint32_t, float>> phi0;
+    std::vector<std::unordered_map<uint32_t, float>>* phi0_ptr = nullptr;
     if (fitBackground_) {
         f0 = slda_.do_e_step_bg(minibatch, phi0, &smtx, &n_iter, &delta);
+        phi0_ptr = &phi0;
     } else {
         f0 = slda_.do_e_step_standard(minibatch, &smtx, &n_iter, &delta);
     }
@@ -332,16 +336,9 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     MatrixXf topVals;
     Eigen::MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
-    ProcessedResult result;
-    if (outputOriginalData_) {
-        result = Base::formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket, &phi0);
-    } else if (fitBackground_) {
-        result = Base::formatPixelResultWithBackground(tileData, topVals, topIds, ticket, phi0);
-    } else {
-        result = Base::formatPixelResult(tileData, topVals, topIds, ticket);
-    }
+    ProcessedResult result = Base::formatPixelResult(tileData, topVals, topIds, ticket, phi0_ptr);
     resultQueue.push(std::move(result));
-    if (outputAnchor_) {
+    if (Base::outputAnchor_) {
         MatrixXf prob = rowNormalize(minibatch.gamma);
         MatrixXf anchorTopVals;
         Eigen::MatrixXi anchorTopIds;

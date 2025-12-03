@@ -28,6 +28,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double a0 = 1.0, b0 = 9.0;
     double pi0 = 0.1;
     std::string bgModelFile;
+    bool outBgExpand = false;
 
     MLEOptions opts;
     opts.mle_only_mode();
@@ -90,6 +91,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("min-init-count", "Minimum", minInitCount)
       .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used if input coordinates are float or --output-original is not set)", floatCoordDigits)
       .add_option("output-prob-digits", "Number of decimal digits to output for probabilities", probDigits)
+      .add_option("output-bg-prob-expand", "Write one line per gene per pixel to include background probabilities (ignored if --output-original is set)", outBgExpand)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug_);
 
@@ -237,9 +239,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             emPois.init_mlr(mapBinFile, beta);
         } else {
             emPois.init_pnmf(beta, opts, sizeFactor, exactMLE);
-            if (fit_background) {
-                emPois.set_background_model(pi0, eta0);
-            }
         }
 
         M_model = emPois.get_M();
@@ -264,6 +263,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                     emPois, tileReader, parser, hexGrid, nMoves,
                     seed, static_cast<double>(minInitCount), 0.7, pixelResolution,
                     topK, verbose, debug_);
+                if (fit_background) {
+                    decoder.set_background_model(pi0, eta0, outBgExpand);
+                }
                 configure_decoder(decoder, ds.anchorFile);
                 decoder.run();
             } else {
@@ -272,6 +274,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                     emPois, tileReader, parser, hexGrid, nMoves,
                     seed, static_cast<double>(minInitCount), 0.7, pixelResolution,
                     topK, verbose, debug_);
+                if (fit_background) {
+                    decoder.set_background_model(pi0, eta0, outBgExpand);
+                }
                 configure_decoder(decoder, ds.anchorFile);
                 decoder.run();
             }
@@ -296,14 +301,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         if (coordsAreInt) {
             Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
             if (fit_background) {
-                tiles2slda.set_background_prior(eta0, a0, b0);
+                tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
             configure_decoder(tiles2slda, ds.anchorFile);
             tiles2slda.run();
         } else {
             Tiles2SLDA<float> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
             if (fit_background) {
-                tiles2slda.set_background_prior(eta0, a0, b0);
+                tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
             configure_decoder(tiles2slda, ds.anchorFile);
             tiles2slda.run();

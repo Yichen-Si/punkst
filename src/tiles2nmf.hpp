@@ -87,7 +87,7 @@ public:
         min_ct_ = min_ct;
     }
 
-    void run_em(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1) const {
+    void run_em(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr) const {
         if (mlr_initialized_) {
             run_em_mlr(batch, stats, max_iter, tol);
             return;
@@ -95,7 +95,7 @@ public:
         if (!pnmf_initialized_) {
             error("%s: model not initialized, call init_pnmf or init_mlr first", __func__);
         }
-        run_em_pnmf(batch, stats, max_iter, tol);
+        run_em_pnmf(batch, stats, max_iter, tol, phi0);
     }
 
     template<typename Derived>
@@ -141,7 +141,7 @@ public:
         beta0_ = beta0;
     }
 
-    void run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1) const;
+    void run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr) const;
 
     bool is_mlr_initialized() const {return mlr_initialized_;}
     bool is_pnmf_initialized() const {return pnmf_initialized_;}
@@ -168,11 +168,16 @@ class Tiles2NMF : public Tiles2MinibatchBase<T> {
 public:
     Tiles2NMF(int nThreads, double r,
                const std::string& outPref, const std::string& tmpDir,
-               const PixelEM& empois, TileReader& tileReader,
+               PixelEM& empois, TileReader& tileReader,
                lineParserUnival& lineParser, HexGrid& hexGrid, int32_t nMoves,
                unsigned int seed = std::random_device{}(),
                double c = 20.0, double h = 0.7, double res = 1.0, int32_t topk = 3,
                int32_t verbose = 0, int32_t debug = 0);
+    void set_background_model(double pi0, VectorXf beta0, bool outputExpand = false) {
+        empois_.set_background_model(pi0, beta0);
+        Base::outputBackgroundProbDense_ = !outputExpand;
+        Base::outputBackgroundProbExpand_ = outputExpand;
+    }
 
 protected:
     using Base = Tiles2MinibatchBase<T>;
@@ -183,14 +188,12 @@ protected:
     using Base::M_;
     using Base::featureNames;
     using Base::resultQueue;
-    using Base::outputOriginalData_;
-    using Base::outputAnchor_;
     using Base::anchorQueue;
     using typename Base::ProcessedResult;
     using vec2f_t = typename Base::vec2f_t;
 
     int32_t K_;
-    const PixelEM&  empois_;
+    PixelEM&  empois_;
     lineParserUnival& lineParser_;
     HexGrid&          hexGrid_;
     int32_t           nMoves_;

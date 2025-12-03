@@ -21,8 +21,8 @@ public:
         int32_t verbose = 0, int32_t debug = 0);
 
     void setLloydIter(int32_t nIter) { nLloydIter_ = nIter; }
-    void set_background_prior(VectorXf& eta0, double a0, double b0);
-    void set_background_prior(std::string& bgModelFile, double a0, double b0);
+    void set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand = false);
+    void set_background_prior(std::string& bgModelFile, double a0, double b0, bool outputExpand = false);
 
 protected:
     using Base = Tiles2MinibatchBase<T>;
@@ -35,9 +35,6 @@ protected:
     using Base::probDigits;
     using Base::outPref;
     using Base::resultQueue;
-    using Base::outputOriginalData_;
-    using Base::outputBackgroundProb_;
-    using Base::outputAnchor_;
     using Base::anchorQueue;
     using typename Base::ProcessedResult;
     using vec2f_t = typename Base::vec2f_t;
