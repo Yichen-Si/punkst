@@ -18,6 +18,7 @@
 #include "tilereader.hpp"
 #include "hexgrid.h"
 #include "utils.h"
+#include "utils_sys.hpp"
 #include "threads.hpp"
 
 #include "Eigen/Dense"

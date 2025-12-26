@@ -56,11 +56,12 @@ void TopicModelWrapper::writeModelToFile(const std::string& outFile) {
     outFileStream.close();
 }
 
-void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::string& outFile, int32_t _bsize) {
+void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::string& outPrefix, int32_t _bsize) {
      if (!initialized) error("Model must be initialized before fitting");
     batchSize = _bsize;
     std::ifstream inFileStream(inFile);
     if (!inFileStream) error("Error opening input file: %s", inFile.c_str());
+    std::string outFile = outPrefix + ".results.tsv";
     std::ofstream outFileStream(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
 
@@ -70,24 +71,53 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
     writeUnitHeader(outFileStream);
 
     bool fileopen = true;
+    Eigen::MatrixXd pseudobulk;
     while (fileopen) {
         std::vector<std::string> idens;
         fileopen = readMinibatch(inFileStream, idens, reader.getNlayer() > 1);
         if (minibatch.empty()) break;
 
         Eigen::MatrixXd doc_topic = do_transform(minibatch); // Virtual dispatch
+        if (pseudobulk.rows() == 0) {
+            pseudobulk = Eigen::MatrixXd::Zero(M_, doc_topic.cols());
+        }
         for (int i = 0; i < minibatch.size(); ++i) {
             outFileStream << idens[i] << std::fixed << std::setprecision(4);
             if (idens[i].size() > 0) outFileStream << "\t";
             outFileStream << doc_topic(i, 0);
-            for (int j = 1; j < doc_topic.cols(); ++j) {
-                outFileStream << "\t" << doc_topic(i, j);
+            for (int k = 1; k < doc_topic.cols(); ++k) {
+                outFileStream << "\t" << doc_topic(i, k);
             }
             outFileStream << "\n";
+            // Update pseudobulk
+            Document& doc = minibatch[i];
+            for (int j = 0; j < doc.ids.size(); ++j) {
+                uint32_t m = doc.ids[j];
+                for (int k = 0; k < doc_topic.cols(); ++k) {
+                    pseudobulk(m, k) += doc.cnts[j] * doc_topic(i, k);
+                }
+            }
         }
     }
     inFileStream.close();
     outFileStream.close();
+    notice("Transformation results written to %s", outFile.c_str());
+
+    outFile = outPrefix + ".pseudobulk.tsv";
+    outFileStream.open(outFile);
+    size_t K = pseudobulk.cols();
+    outFileStream << "Feature\t";
+    writeModelHeader(outFileStream);
+    outFileStream << std::fixed << std::setprecision(3);
+    for (int i = 0; i < M_; ++i) {
+        outFileStream << featureNames[i];
+        for (size_t k = 0; k < K; ++k) {
+            outFileStream << "\t" << pseudobulk(i, k);
+        }
+        outFileStream << "\n";
+    }
+    outFileStream.close();
+    notice("Pseudobulk counts written to %s", outFile.c_str());
 }
 
 bool TopicModelWrapper::readMinibatch(std::ifstream& inFileStream) {
@@ -141,8 +171,8 @@ void TopicModelWrapper::setupPriorMapping(std::vector<std::string>& feature_name
     if (!reader.featureDict(dict)) {
         error("%s: Cannot setup prior mapping when feature dictionary is not available", __FUNCTION__);
     }
-    featureNames.clear();
-    kept_indices.clear();
+    featureNames.clear(); // kept features, ordered as in feature_names_
+    kept_indices.clear(); // index in feature_names_
     uint32_t idx = 0;
     for (const std::string& v : feature_names_) {
         if (dict.find(v) != dict.end()) {
@@ -157,7 +187,7 @@ void TopicModelWrapper::setupPriorMapping(std::vector<std::string>& feature_name
     M_ = featureNames.size();
     notice("Found %d features in intersection of data (%d) and queries (%d)",
             M_, (int)dict.size(), (int)feature_names_.size());
-    // Update to use the mapped feature space (preserves prior model ordering)
+    // Update to use the mapped feature space (preserves query ordering)
     reader.setFeatureIndexRemap(featureNames, false);
 }
 

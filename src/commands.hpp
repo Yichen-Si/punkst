@@ -44,7 +44,7 @@ public:
             return 1;
         }
         // Print header info similar to the legacy version.
-        std::cout << "[" << argv[0] << " " << cmd << "] -- "
+        std::cerr << "[" << argv[0] << " " << cmd << "] -- "
                     << it->second.help << "\n\n";
         // Call the command's function with the rest of the arguments.
         return it->second.func(argc - 1, argv + 1);
@@ -52,18 +52,18 @@ public:
 
     // Prints all available commands.
     void print_help() const {
-        std::cout << "\nAvailable Commands\n\n";
-        std::cout << "The following commands are available:\n";
+        std::cerr << "\nAvailable Commands\n\n";
+        std::cerr << "The following commands are available:\n";
         const std::string indent = "   ";
         for (const std::string &name : order_) {
             const auto &cmd = commands_.at(name);
-            std::cout << indent << "--" << name;
+            std::cerr << indent << "--" << name;
             if (!cmd.help.empty()) {
-                std::cout << " [" << cmd.help << "]";
+                std::cerr << " [" << cmd.help << "]";
             }
-            std::cout << "\n";
+            std::cerr << "\n";
         }
-        std::cout << "\nFor detailed instructions, run: <program> --help\n\n";
+        std::cerr << "\nFor detailed instructions, run: <program> --help\n\n";
     }
 
 private:
@@ -215,21 +215,21 @@ public:
     }
 
     void print_help() const {
-        std::cout << "Options:\n";
+        std::cerr << "Options:\n";
         for (const auto& kv : options_) {
-            std::cout << "  --" << kv.first << " : " << kv.second.description;
+            std::cerr << "  --" << kv.first << " : " << kv.second.description;
             if (kv.second.required)
-                std::cout << " (required)";
-            std::cout << "\n";
+                std::cerr << " (required)";
+            std::cerr << "\n";
         }
     }
 
     void print_options() const {
         const int max_line_length = 80;
         const std::string indent = "    ";
-        std::cout << "Available Options\n";
-        std::cout << "The following parameters are available. Ones with \"[]\" are in effect:\n";
-        std::cout << indent;
+        std::cerr << "Available Options\n";
+        std::cerr << "The following parameters are available. Ones with \"[]\" are in effect:\n";
+        std::cerr << indent;
         int current_length = static_cast<int>(indent.size());
         bool firstFlag = true;
         for (const std::string &name : order_) {
@@ -243,16 +243,16 @@ public:
             // Check if adding this option would exceed the max line length.
             if (current_length + static_cast<int>(optionText.size()) > max_line_length) {
                 // Wrap: output newline and indentation.
-                std::cout << ",\n" << indent;
+                std::cerr << ",\n" << indent;
                 current_length = static_cast<int>(indent.size());
             } else if (!firstFlag) {
                 optionText = ", " + optionText;
             }
-            std::cout << optionText;
+            std::cerr << optionText;
             current_length += static_cast<int>(optionText.size());
             firstFlag = false;
         }
-        std::cout << "\n\n";
+        std::cerr << "\n\n";
     }
 
 private:

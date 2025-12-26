@@ -1,6 +1,5 @@
 #pragma once
 
-#include "punkst.h"
 #include <filesystem>
 #include <random>
 #include <unistd.h>
@@ -10,6 +9,21 @@
 #include <fstream>
 #include <memory>
 #include <cstdint>
+#include <cctype>
+#include <cstring>
+#include <string_view>
+#include <queue>
+#include <thread>
+#include <algorithm>
+#include <functional>
+
+#include <tbb/parallel_pipeline.h>
+#include <tbb/parallel_sort.h>
+#include <tbb/concurrent_vector.h>
+#include <tbb/task_arena.h>
+
+#include "utils.h"
+#include "error.hpp"
 
 bool createDirectory(const std::string& dir);
 
@@ -91,4 +105,108 @@ private:
     std::unique_ptr<std::ifstream> file;
     std::streampos startOffset;
     std::streampos endOffset;
+};
+
+
+class ExternalSorter {
+public:
+    using Comparator = std::function<bool(const std::string&, const std::string&)>;
+
+    // Sorts lines by the first token as 8-character hex key
+    static void sortBy1stColHex(
+        const std::string& inFile, const std::string& outFile,
+        size_t maxMemBytes = 512 * 1024 * 1024,
+        const std::string& tempDir = "", int nThreads = 1);
+    static void sortBy1stColHex_singleThread(
+        const std::string& inFile, const std::string& outFile,
+        size_t maxMemBytes = 512 * 1024 * 1024,
+        const std::string& tempDir = "");
+
+    // Sorts lines from inFile and writes to outFile using external merge sort
+    static void sort(const std::string& inFile, const std::string& outFile,
+                     Comparator comp, size_t maxMemBytes = 512 * 1024 * 1024,
+                     const std::string& tempDir = "");
+
+    static size_t parseMemoryString(const std::string& memStr, size_t defaultVal = 512 * 1024 * 1024);
+    static bool firstColumnComparator(const std::string& a, const std::string& b, size_t keyLen = 0);
+
+private:
+    struct LineRec {
+        std::string line;
+        uint32_t key; // parsed from first 8 chars
+    };
+    struct KeyLess {
+        bool operator()(const LineRec& a, const LineRec& b) const noexcept {
+            if (a.key != b.key) return a.key < b.key;
+            return a.line < b.line;
+        }
+    };
+    struct ChunkJob {
+        std::vector<LineRec> recs;
+        std::string chunkPath;
+    };
+    struct MergeNode {
+        std::string line;
+        uint32_t key;
+        size_t chunkIdx;
+    };
+    // For std::push_heap/pop_heap
+    static inline bool heapComp(const MergeNode& a, const MergeNode& b) noexcept {
+        if (a.key != b.key) return a.key > b.key;
+        return a.line > b.line;
+    }
+    // Serial reader assuming first 8 chars are hex key
+    struct Reader {
+        std::ifstream& in;
+        const std::filesystem::path& tmpPath;
+        size_t perChunkBudget;
+        std::atomic<size_t>& chunkIdx;
+        bool hasCarry = false;
+        std::string carry;
+
+        ChunkJob operator()(tbb::flow_control& fc) {
+            std::vector<LineRec> recs;
+            recs.reserve(50000);
+
+            size_t mem = 0;
+            std::string line;
+
+            auto acceptLine = [&](std::string&& s) {
+                LineRec r;
+                r.line = std::move(s);
+                r.key = hexToUint32(r.line); // only use first 8 chars
+                mem += r.line.capacity() + sizeof(LineRec);
+                recs.emplace_back(std::move(r));
+            };
+
+            if (hasCarry) {
+                acceptLine(std::move(carry));
+                hasCarry = false;
+            }
+
+            while (true) {
+                if (!std::getline(in, line)) break;
+                const size_t estMem = line.capacity() + sizeof(LineRec);
+                if (!recs.empty() && mem + estMem >= perChunkBudget) {
+                    carry = std::move(line);
+                    hasCarry = true;
+                    break;
+                }
+                acceptLine(std::move(line));
+            }
+
+            if (recs.empty()) {
+                fc.stop();
+                return {};
+            }
+
+            const size_t id = chunkIdx.fetch_add(1, std::memory_order_relaxed);
+            const std::string chunkPath =
+                (tmpPath / ("chunk_" + std::to_string(id) + ".tmp")).string();
+
+            return ChunkJob{std::move(recs), chunkPath};
+        }
+    };
+
+
 };

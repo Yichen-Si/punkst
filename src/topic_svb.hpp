@@ -32,7 +32,7 @@ public:
     void writeModelHeader(std::ofstream& outFileStream);
 
     // Template method for transforming data and writing results
-    void fitAndWriteToFile(const std::string& inFile, const std::string& outFile, int32_t _bsize);
+    void fitAndWriteToFile(const std::string& inFile, const std::string& outPrefix, int32_t _bsize);
 
     // --- Public Getters ---
     int32_t nUnits() const { return reader.nUnits; }
@@ -53,7 +53,7 @@ protected:
     // --- Shared Data Members ---
     HexReader reader;
     int32_t modal;
-    int32_t ntot;
+    int32_t ntot; // Number of documents processed in trainOnline
     int32_t M_; // Number of features
     int32_t minCountTrain;
     bool initialized;
@@ -100,10 +100,11 @@ public:
         double alpha = -1., double eta = -1.,
         double kappa = 0.9, double tau0 = 1000.,
         int32_t totalDocCount = 1000000,
-        const std::string& priorFile = "", double priorScale = 1.,
+        const std::string& priorFile = "",
+        double priorScale = -1., double priorScaleRel = -1.,
         double s_beta = 1, double s_theta = 1, double kappa_theta = 0.7, double tau_theta = 10.0, int32_t burnin = 1) {
         MatrixXd priorMatrix;
-        initialize(nTopics, priorMatrix, priorFile, priorScale);
+        initialize(nTopics, priorMatrix, priorFile, priorScale, priorScaleRel);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
             InferenceType::SCVB0,
@@ -119,10 +120,11 @@ public:
         double alpha = -1., double eta = -1.,
         double kappa = 0.7, double tau0 = 10.0,
         int32_t totalDocCount = 1000000,
-        const std::string& priorFile = "", double priorScale = 1.,
+        const std::string& priorFile = "",
+        double priorScale = -1., double priorScaleRel = -1.,
         int32_t maxIter = 100, double mDelta = -1.) {
         MatrixXd priorMatrix;
-        initialize(nTopics, priorMatrix, priorFile, priorScale);
+        initialize(nTopics, priorMatrix, priorFile, priorScale, priorScaleRel);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
             InferenceType::SVB,
@@ -229,7 +231,7 @@ protected:
         return;
     }
 
-    void initialize(int32_t nTopics, MatrixXd& priorMatrix, const std::string& priorFile, double priorScale = 1) {
+    void initialize(int32_t nTopics, MatrixXd& priorMatrix, const std::string& priorFile, double priorScale = -1, double priorScaleRel = -1) {
         if (priorFile.empty()) {
             initialize(nTopics);
             return;
@@ -249,13 +251,22 @@ protected:
         for (size_t i = 0; i < kept_indices.size(); ++i) {
             priorMatrix.col(i) = fullPriorMatrix.col(kept_indices[i]);
         }
+        notice("Created subset prior matrix: %d topics x %d features (from original %d features)",
+                (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
+
         // Apply scaling if specified
-        if (priorScale > 0. && priorScale != 1.) {
+        if (priorScaleRel > 0 && reader.readFullSums) {
+            const std::vector<double>& featureSums = reader.getFeatureSums();
+            double totalCount = 0.;
+            for (double s : featureSums) { totalCount += s;  }
+            double priorTotal = priorMatrix.sum();
+            double scale = totalCount / priorTotal * priorScaleRel;
+            priorMatrix *= scale;
+            notice("%s: total count of the overlapping features is %.1f in the prior matrix and %.1f in the data; scaling the prior matrix by %.2f to reach relative scaling factor %.2f", __func__, priorTotal, totalCount, scale, priorScaleRel);
+        } else if (priorScale > 0. && priorScale != 1.) {
             priorMatrix *= priorScale;
         }
 
-        notice("Created subset prior matrix: %d topics x %d features (from original %d features)",
-                (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
     }
 
     void readModelFromTsv(const std::string& modelFile, std::vector<std::string>& _featureNames, MatrixXd& modelMatrix) {

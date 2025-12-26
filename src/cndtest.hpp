@@ -95,10 +95,11 @@ public:
         return nDocs;
     }
 
+    // Compute score test statistics
     std::vector<Eigen::VectorXd> computeScores() {
         std::vector<Eigen::VectorXd> scores(nContrast_);
         for (int r = 0; r < nContrast_; ++r) {
-            VectorXd I = yl[r].array() * x_sum[r].array() / (l_sum[r].array() + 0.5);
+            VectorXd I = yl[r].array() * (x_sum[r].array() / l_sum[r].array().max(0.5));
             VectorXd U = yx[r].array() - I.array();
 if (debug_ % 2 == 1) {
     std::cout << r << "l_sum:\n  ";
@@ -141,7 +142,7 @@ private:
     std::vector<std::vector<int32_t>> featureIdxMaps_;
     std::vector<std::vector<int32_t>> trainIdx_, heldoutIdx_;
 
-    std::vector<Eigen::VectorXi> masks_, contrasts_;
+    std::vector<std::vector<bool>> masks_, contrasts_;
     std::vector<Eigen::VectorXd> l_sum, x_sum, yx, yl;
 
     void makeSplits() {
@@ -179,8 +180,8 @@ private:
         masks_.resize(nContrast_);
         contrasts_.resize(nContrast_);
         for (int i = 0; i < nContrast_; ++i) {
-            masks_[i] = Eigen::VectorXi::Zero(n);
-            contrasts_[i] = Eigen::VectorXi::Zero(n);
+            masks_[i].assign(n, false);
+            contrasts_[i].assign(n, false);
         }
         while (nlocal < n) {
             if (!std::getline(labelStream_, line)) {
@@ -191,13 +192,13 @@ private:
             if (tokens.size() < nContrast_) {
                 error("%s: incomplete label line: %s", __func__, line.c_str());
             }
-            std::vector<int32_t> labels(nContrast_);
             for (int32_t i = 0; i < nContrast_; ++i) {
-                if (!str2num<int32_t>(tokens[i], labels[i]) || labels[i] > 1) {
+                int32_t label;
+                if (!str2num<int32_t>(tokens[i], label) || label > 1) {
                     error("%s: invalid label value '%s' in line: %s", __func__, tokens[i].c_str(), line.c_str());
                 }
-                masks_[i][nlocal] = labels[i] == 0 | labels[i] == 1;
-                contrasts_[i][nlocal] = labels[i] == 1;
+                masks_[i][nlocal] = label == 0 | label == 1;
+                contrasts_[i][nlocal] = label == 1;
             }
             ++nlocal;
         }
@@ -216,10 +217,8 @@ private:
             }
             const auto& doc = minibatch[i];
             size_t n = doc.ids.size();
-            if (masks_[r][i]) {
-                for (size_t j = 0; j < n; ++j) {
-                    x_sum[r][doc.ids[j]] += doc.cnts[j];
-                }
+            for (size_t j = 0; j < n; ++j) {
+                x_sum[r][doc.ids[j]] += doc.cnts[j];
             }
             if (contrasts_[r][i]) {
                 for (size_t j = 0; j < n; ++j) {
@@ -227,7 +226,7 @@ private:
                 }
             }
             xsum.push_back(std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0));
-            yvec.push_back((double) contrasts_[r][i]);
+            yvec.push_back((double) (int) contrasts_[r][i]);
             Document newDoc;
             for (size_t j = 0; j < n; ++j) {
                 int32_t idx = featureIdxMaps_[r][doc.ids[j]];
@@ -246,9 +245,9 @@ private:
         }
         auto colIdx = Eigen::ArrayXi::Map(heldoutIdx_[r].data(), heldoutIdx_[r].size());
         VectorXd s = Eigen::Map<VectorXd>(xsum.data(), xsum.size());
-        Eigen::VectorXd y = Eigen::Map<Eigen::VectorXd>(yvec.data(), yvec.size());
+        VectorXd y = Eigen::Map<VectorXd>(yvec.data(), yvec.size());
         MatrixXd lambda = doc_topic * beta_(Eigen::placeholders::all, colIdx);
-        lambda.array().colwise() *= s.array();
+        lambda.array().colwise() *= s.array(); // n_i * <\theta_i, \beta_j>
         l_sum[r](colIdx) += lambda.colwise().sum();
         yl[r](colIdx) += lambda.transpose() * y;
 

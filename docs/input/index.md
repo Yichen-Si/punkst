@@ -137,8 +137,12 @@ If you would like to apply topic modeling or matrix factorization to your single
 ```bash
 punkst convert-10X-SC \
 --in-dge-dir /path/to/dge/folder --sorted-by-barcode \
---out /path/to/output/prefix --randomize
+--randomize --sort-mem 1G \
+--out /path/to/output/prefix
 ```
-The input folder should contain the standard 10X files: `barcodes.tsv.gz`, `features.tsv.gz`, and `matrix.mtx.gz` (gziped). Since normally the matrix is sorted by barcode indices, adding `--sorted-by-barcode` enables streaming mode but this is optional. Alternatively, you can specify each file directly by `--in-barcodes`, `--in-features`, and `--in-matrix`.
+The input folder should contain the standard 10X files: `barcodes.tsv.gz`, `features.tsv.gz`, and `matrix.mtx.gz` (gziped). Alternatively, you can specify the three files directly by `--in-barcodes`, `--in-features`, and `--in-matrix`.
+Since normally the matrix is sorted by barcode indices, adding `--sorted-by-barcode` enables streaming mode though this is optional.
 
 The output includes three files: the pair `${out}.tsv`, `${out}.json` (the main count matrix) and `${out}.features.tsv`. Since the gene names are not necessarily unique in the 10X DGE (multiple Ensembl IDs may map to the same gene symbol), the program replace duplicate gene names with the Ensembl IDs while keeping the one with the highest total count as the gene symbol. So the first column in the output feature file contains unique feature names (mostly gene symbols). The second column contains the total counts.
+
+For the downstream topic model to run in minibatch mode efficiently, the flag `--randomize` ensures that the order of cells is randomized in the output. The randomization is done by sorting a random key assigned to each cell. With `--sorted-by-barcode`, the maximum memory usage is usually determined by the buffer size in the sorting (ransomization) step which can be controlled by `--sort-mem`. The recognized memory units are `K`, `M`, and `G`. By default the program uses your system's `sort` (GNU sort), unless you specify `--use-internal-sort`.

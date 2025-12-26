@@ -147,12 +147,17 @@ std::string uint32toHex(uint32_t num) {
     return ss.str();
 }
 
-uint32_t hexToUint32(const std::string& hex) {
-    uint32_t num;
-    std::stringstream ss;
-    ss << std::hex << hex;
-    ss >> num;
-    return num;
+uint32_t hexToUint32(const std::string& s) {
+    uint32_t v = 0;
+    v = (v << 4) | hexNibble((unsigned char)s[0]);
+    v = (v << 4) | hexNibble((unsigned char)s[1]);
+    v = (v << 4) | hexNibble((unsigned char)s[2]);
+    v = (v << 4) | hexNibble((unsigned char)s[3]);
+    v = (v << 4) | hexNibble((unsigned char)s[4]);
+    v = (v << 4) | hexNibble((unsigned char)s[5]);
+    v = (v << 4) | hexNibble((unsigned char)s[6]);
+    v = (v << 4) | hexNibble((unsigned char)s[7]);
+    return v;
 }
 
 std::vector<int> computeLPSArray(const std::string& pattern) {

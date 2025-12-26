@@ -13,6 +13,8 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     bool noBackground = false;
     std::vector<double> boundingBoxes;
     bool randomize_output = false;
+    std::string sort_mem;
+    bool use_internal_sort = false;
 
     ParamList pl;
     // Input Options
@@ -33,6 +35,8 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     // Output Options
     pl.add_option("out", "Output TSV file", outFile)
         .add_option("randomize", "Randomize output order", randomize_output)
+        .add_option("sort-mem", "Memory to use for sorting, with units K, M, or G similar to -S in linux sort", sort_mem)
+        .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort)
         .add_option("min-count", "Minimum count for each integer column, applied with OR", min_counts)
         .add_option("ignore-background", "Ignore pixels not within radius of any of the anchors", noBackground)
         .add_option("verbose", "Verbose", verbose)
@@ -88,9 +92,21 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         tiles2Hex.writeMetadata();
     }
     if (randomize_output) {
-        if (sys_sort(outFile.c_str(), nullptr,
-                    {"-k1,1", "--parallel="+std::to_string(nThreads), "-o", outFile}) != 0) {
-            warning("Error shuffling output %s", outFile.c_str());
+        if (use_internal_sort) {
+            size_t maxMemBytes = ExternalSorter::parseMemoryString(sort_mem);
+            try {
+                ExternalSorter::sortBy1stColHex(outFile, outFile, maxMemBytes, tmpDir, nThreads);
+            } catch (const std::exception& e) {
+                warning("Error shuffling output %s: %s", outFile.c_str(), e.what());
+            }
+        } else {
+            std::vector<std::string> sort_flags = {"-k1,1", "-o", outFile};
+            #if defined(__linux__)
+            sort_flags.push_back("--parallel="+std::to_string(nThreads));
+            #endif
+            if (sys_sort(outFile.c_str(), nullptr, sort_flags) != 0) {
+                warning("Error shuffling output %s", outFile.c_str());
+            }
         }
     }
 

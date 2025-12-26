@@ -1,4 +1,6 @@
-#include "pixresultreader.hpp"
+#include "punkst.h"
+#include "utils_sys.hpp"
+#include "tileoperator.hpp"
 #include "dataunits.hpp"
 #include <opencv2/opencv.hpp>
 
@@ -86,7 +88,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     }
 
     // set up reader
-    PixelResultReader reader(dataFile, indexFile, headerFile);
+    TileOperator reader(dataFile, indexFile, headerFile);
     int32_t k = reader.getK();
     if (k<=0) error("No factor columns found in header");
     if (filter) {
@@ -94,6 +96,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         if (ntiles <= 0)
             error("No data in the queried region");
         notice("Found %d tiles intersecting the queried region", ntiles);
+    } else {
+        reader.openDataStream();
     }
 
     if (scale<=0) error("--scale must be >0");

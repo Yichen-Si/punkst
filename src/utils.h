@@ -1,9 +1,9 @@
 #pragma once
 
-#include "utils_sys.hpp"
 #include <tuple>
 #include <functional>
 #include <random>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <opencv2/opencv.hpp>
 #include <Eigen/Dense>
+#include "error.hpp"
 
 // extern "C" {
 //     #include "htslib/hts.h"
@@ -292,6 +293,12 @@ bool set_rgb(const char *s_color, std::array<int32_t, 3>& rgb);
 
 // base16 encoding
 std::string uint32toHex(uint32_t num);
+static inline uint32_t hexNibble(unsigned char c) noexcept {
+    if (c >= '0' && c <= '9') return uint32_t(c - '0');
+    c |= 0x20; // fold to lowercase
+    if (c >= 'a' && c <= 'f') return 10u + uint32_t(c - 'a');
+    return 0u;
+}
 uint32_t hexToUint32(const std::string& hex);
 // hash a tuple of three integers
 struct Tuple3Hash {

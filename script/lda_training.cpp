@@ -24,7 +24,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double  mDelta = 1e-3;
     // --- LDA-Specific Parameters ---
     int32_t nTopics = 0;
-    double priorScale = 1.;
+    double priorScale = -1.;
+    double priorScaleRel = -1.;
     bool projection_only = false;
     // --- LDA + background noise ---
     bool fitBackground = false;
@@ -96,6 +97,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     // LDA-Specific Advanced Options
     pl.add_option("model-prior", "(LDA) File with initial model matrix for continued training", priorFile)
       .add_option("prior-scale", "(LDA) Uniform scaling factor for the prior model matrix", priorScale)
+      .add_option("prior-scale-rel", "(LDA) Scale prior model relative to the total feature counts in the data (overrides --prior-scale)", priorScaleRel)
       .add_option("projection-only", "(LDA) Transform data using prior model without training", projection_only)
       .add_option("fit-background", "(LDA-SVB) Fit a background noise in addition to topics", fitBackground)
       .add_option("background-prior", "(LDA-SVB) File with background prior vector", bgPriorFile)
@@ -152,11 +154,11 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (useSCVB0) {
             lda4hex->initialize_scvb0(nTopics, seed, nThreads, verbose,
                 alpha, eta, kappa, tau0, nUnits,
-                priorFile, priorScale, s_beta, s_theta, kappa_theta, tau_theta, z_burnin);
+                priorFile, priorScale, priorScaleRel, s_beta, s_theta, kappa_theta, tau_theta, z_burnin);
         } else {
             lda4hex->initialize_svb(nTopics, seed, nThreads, verbose,
                 alpha, eta, kappa, tau0, nUnits,
-                priorFile, priorScale, maxIter, mDelta);
+                priorFile, priorScale, priorScaleRel, maxIter, mDelta);
             if (fitBackground) {
                 if (warmInitUnits < 0) {
                     warmInitUnits = static_cast<int32_t>(warmInitEpoch * nUnits);
@@ -232,9 +234,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     }
 
     if (transform) {
-        std::string outFile = outPrefix + ".results.tsv";
-        model_runner->fitAndWriteToFile(inFile, outFile, batchSize);
-        notice("Transformed data written to %s", outFile.c_str());
+        model_runner->fitAndWriteToFile(inFile, outPrefix, batchSize);
     }
 
     return 0;

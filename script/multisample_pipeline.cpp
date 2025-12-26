@@ -24,7 +24,8 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     bool forceTileSize = false;
     std::string include_ftr_regex;
     std::string exclude_ftr_regex;
-
+    std::string sort_mem;
+    bool use_internal_sort = false;
     bool overwrite = false;
 
     ParamList pl;
@@ -51,7 +52,9 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         .add_option("anchor-files-list", "A file containing the path to the anchor file for each sample", anchorListFile)
         .add_option("radius", "Radius for each set of anchors", radius)
         .add_option("min-count", "Minimum count for a unit to be included in output", minCtPerUnit)
-        .add_option("ignore-background", "Ignore pixels not within radius of any of the anchors", noBackground);
+        .add_option("ignore-background", "Ignore pixels not within radius of any of the anchors", noBackground)
+        .add_option("sort-mem", "Memory to use for sorting, with units K, M, or G similar to -S in linux sort", sort_mem)
+        .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort);
     // Output Options
     pl.add_option("out-dir", "Output base director", outDir, true)
         .add_option("temp-dir", "Directory to store temporary files", tmpDir, true)
@@ -401,10 +404,26 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
                 }
                 tiles2Hex.writeMetadata();
             }
-            // sort output file by the first column then delete the unsorted file
-            if (sys_sort(outFile.c_str(), nullptr,
-                        {"-k1,1", "--parallel="+std::to_string(nThreads), "-o", outFile}) != 0) {
-                error("Error sorting hexagon file for sample %s", samples[s].c_str());
+            // sort output file
+            if (use_internal_sort) {
+                size_t maxMemBytes = ExternalSorter::parseMemoryString(sort_mem);
+                try {
+                    ExternalSorter::sortBy1stColHex(outFile, outFile, maxMemBytes, tmpDir, nThreads);
+                } catch (const std::exception& e) {
+                    error("Error sorting hexagon file for sample %s: %s", samples[s].c_str(), e.what());
+                }
+            } else {
+                std::vector<std::string> sort_flags = {"-k1,1", "-o", outFile};
+                if (!sort_mem.empty()) {
+                    sort_flags.insert(sort_flags.begin()+1, "-S");
+                    sort_flags.insert(sort_flags.begin()+2, sort_mem);
+                }
+                #if defined(__linux__)
+                sort_flags.push_back("--parallel="+std::to_string(nThreads));
+                #endif
+                if (sys_sort(outFile.c_str(), nullptr, sort_flags) != 0) {
+                    error("Error sorting hexagon file for sample %s", samples[s].c_str());
+                }
             }
         }
         notice("[multisample] Step 2 completed for size %.1f: created sample specific hexagon files", hexSize);
@@ -475,11 +494,27 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         }
         mergedOut << std::setw(4) << meta << std::endl;
         mergedOut.close();
-        if (sys_sort(mergedFile.c_str(), nullptr,
-                    {"-k1,1", "--parallel="+std::to_string(nThreads), "-o", mergedFile} ) != 0) {
-            error("Error sorting merged hexagon file: %s", mergedFile.c_str());
-        }
 
+        if (use_internal_sort) {
+            size_t maxMemBytes = ExternalSorter::parseMemoryString(sort_mem);
+            try {
+                ExternalSorter::sortBy1stColHex(mergedFile, mergedFile, maxMemBytes, tmpDir, nThreads);
+            } catch (const std::exception& e) {
+                error("Error sorting merged hexagon file: %s", e.what());
+            }
+        } else {
+            std::vector<std::string> sort_flags = {"-k1,1", "-o", mergedFile};
+            if (!sort_mem.empty()) {
+                sort_flags.insert(sort_flags.begin()+1, "-S");
+                sort_flags.insert(sort_flags.begin()+2, sort_mem);
+            }
+            #if defined(__linux__)
+            sort_flags.push_back("--parallel="+std::to_string(nThreads));
+            #endif
+            if (sys_sort(mergedFile.c_str(), nullptr, sort_flags) != 0) {
+                error("Error sorting merged hexagon file: %s", mergedFile.c_str());
+            }
+        }
         notice("[multisample] Step 2.5 completed for size %.1f: merged hexagon files into %s", hexSize, mergedFile.c_str());
     }
     }

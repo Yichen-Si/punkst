@@ -604,6 +604,17 @@ inline double log10_twosided_p_from_z(double z) {
     return LOG10_2 + normal_log10sf(std::fabs(z));
 }
 
+inline double chisq1_log10p(double chi2) {
+    double z = std::sqrt(chi2 / 2.0);
+    if (z < 10.0) {
+        double p = std::erfc(z);
+        return -std::log10(p);
+    } else { // Switch to Taylor expansion
+        double logp = -z * z - std::log(z * std::sqrt(M_PI));
+        return -logp / std::log(10.0);
+    }
+}
+
 // Weighted quadratic local regression at each xi,
 //   tricube weights over k-NN window.
 // Input: x,y of length n. span \in (0,1].

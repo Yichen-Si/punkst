@@ -847,8 +847,7 @@ void Tiles2MinibatchBase<T>::writerWorker() {
                     totalLen += line.size();
                 }
                 size_t ed = st + totalLen;
-                if (st == 0) ed += headerSize;
-                IndexEntry<float> e{st, ed, readyToWrite.npts,
+                IndexEntryF e{st, ed, readyToWrite.npts,
                     readyToWrite.xmin, readyToWrite.xmax,
                     readyToWrite.ymin, readyToWrite.ymax};
                 if (!write_all(fdIndex, &e, sizeof(e))) {
@@ -982,6 +981,7 @@ void Tiles2MinibatchBase<T>::setupOutput() {
         error("Error writing header_str to main output file: %s", outputFile.c_str());
     }
     headerSize = header_str.size();
+    outputSize = headerSize;
     std::string indexFile = outPref + ".index";
     fdIndex = ::open(indexFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
     if (fdIndex < 0) {

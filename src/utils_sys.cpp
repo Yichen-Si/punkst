@@ -279,3 +279,351 @@ void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& block
     infile.close();
     notice("Partitioned input file into %zu blocks of size ~ %zu", blocks.size(), blockSize);
 }
+
+void ExternalSorter::sort(const std::string& inFile, const std::string& outFile,
+                          Comparator comp, size_t maxMemBytes,
+                          const std::string& tempDir) {
+    std::ifstream in(inFile);
+    if (!in) throw std::runtime_error("Cannot open input file: " + inFile);
+
+    // Determine temporary directory
+    std::filesystem::path tempPath;
+    if (tempDir.empty()) {
+        std::filesystem::path outP(outFile);
+        if (outP.has_parent_path()) {
+            tempPath = outP.parent_path();
+        } else {
+            tempPath = ".";
+        }
+    } else {
+        tempPath = tempDir;
+    }
+
+    ScopedTempDir tmpDirScope(tempPath);
+
+    std::vector<std::string> chunkFiles;
+    std::vector<std::string> lines;
+    lines.reserve(100000);
+    size_t currentMem = 0;
+    std::string line;
+
+    // 1. Read chunks, sort, write to temp
+    while (std::getline(in, line)) {
+        size_t lineMem = line.capacity() + sizeof(std::string);
+        // Check if adding this line would exceed memory, if so flush first (unless lines is empty)
+        if (!lines.empty() && currentMem + lineMem >= maxMemBytes) {
+            std::sort(lines.begin(), lines.end(), comp);
+            std::string chunkName = (tmpDirScope.path / ("chunk_" + std::to_string(chunkFiles.size()) + ".tmp")).string();
+            std::ofstream os(chunkName);
+            if (!os) throw std::runtime_error("Cannot write chunk: " + chunkName);
+            for(const auto& l : lines) os << l << "\n";
+            os.close();
+            chunkFiles.push_back(chunkName);
+            lines.clear();
+            currentMem = 0;
+        }
+        lines.emplace_back(std::move(line));
+        currentMem += lineMem;
+    }
+    // Last chunk
+    if (!lines.empty()) {
+        std::sort(lines.begin(), lines.end(), comp);
+        std::string chunkName = (tmpDirScope.path / ("chunk_" + std::to_string(chunkFiles.size()) + ".tmp")).string();
+        std::ofstream os(chunkName);
+        if (!os) throw std::runtime_error("Cannot write chunk: " + chunkName);
+        for(const auto& l : lines) os << l << "\n";
+        os.close();
+        chunkFiles.push_back(chunkName);
+        lines.clear(); // Free memory
+    }
+    in.close();
+
+    if (chunkFiles.empty()) {
+        // Empty input
+        std::ofstream os(outFile);
+        return;
+    }
+
+    // 2. Merge chunks
+    struct MergeNode {
+        std::string line;
+        int chunkIdx;
+    };
+
+    // Priority Queue comparator to create a Min-Heap based on user's 'comp'
+    auto pqComp = [&](const MergeNode& a, const MergeNode& b) {
+        return comp(b.line, a.line);
+    };
+
+    std::priority_queue<MergeNode, std::vector<MergeNode>, decltype(pqComp)> pq(pqComp);
+
+    std::vector<std::unique_ptr<std::ifstream>> readers;
+    readers.reserve(chunkFiles.size());
+
+    for (size_t i = 0; i < chunkFiles.size(); ++i) {
+        auto fs = std::make_unique<std::ifstream>(chunkFiles[i]);
+        if (!fs || !fs->is_open()) throw std::runtime_error("Cannot open chunk: " + chunkFiles[i]);
+        std::string l;
+        if (std::getline(*fs, l)) {
+            pq.push({std::move(l), (int)i});
+        }
+        readers.push_back(std::move(fs));
+    }
+
+    std::ofstream out(outFile);
+    if (!out) throw std::runtime_error("Cannot open output file: " + outFile);
+
+    while (!pq.empty()) {
+        MergeNode top = pq.top();
+        pq.pop();
+        out << top.line << "\n";
+
+        // read next from that chunk
+        std::string l;
+        if (std::getline(*readers[top.chunkIdx], l)) {
+            pq.push({std::move(l), top.chunkIdx});
+        }
+    }
+}
+
+size_t ExternalSorter::parseMemoryString(const std::string& memStr, size_t defaultVal) {
+    if (memStr.empty()) return defaultVal;
+
+    std::string s = memStr;
+    char suffix = 0;
+    if (!isdigit(s.back())) {
+        suffix = toupper(s.back());
+        s.pop_back();
+    }
+    try {
+        size_t val = std::stoull(s);
+        switch (suffix) {
+            case 'G': val *= 1024 * 1024 * 1024; break;
+            case 'M': val *= 1024 * 1024; break;
+            case 'K': val *= 1024; break;
+            case 0: break;
+            default: warning("Unknown suffix '%c' in memory string, assuming bytes", suffix);
+        }
+        return val;
+    } catch (...) {
+        warning("Invalid format for memory string: %s, using default", memStr.c_str());
+        return defaultVal;
+    }
+}
+
+bool ExternalSorter::firstColumnComparator(const std::string& a, const std::string& b, size_t keyLen) {
+    if (keyLen > 0) {
+        int c = std::memcmp(a.data(), b.data(), keyLen);
+        if (c == 0) return a < b;
+        return c < 0;
+    }
+    size_t t1 = a.find('\t');
+    size_t t2 = b.find('\t');
+    std::string_view k1 = (t1 == std::string::npos) ? std::string_view(a) : std::string_view(a.data(), t1);
+    std::string_view k2 = (t2 == std::string::npos) ? std::string_view(b) : std::string_view(b.data(), t2);
+    if (k1 == k2) return a < b;
+    return k1 < k2;
+}
+
+void ExternalSorter::sortBy1stColHex(
+        const std::string& inFile, const std::string& outFile,
+        size_t maxMemBytes, const std::string& tempDir, int nThreads) {
+
+    if (nThreads == 1 || std::thread::hardware_concurrency() == 1) {
+        sortBy1stColHex_singleThread(inFile, outFile, maxMemBytes, tempDir);
+        return;
+    }
+
+    std::ifstream in(inFile);
+    if (!in) throw std::runtime_error("Cannot open input file: " + inFile);
+
+    // Determine temporary directory
+    std::filesystem::path tempPath;
+    if (tempDir.empty()) {
+        std::filesystem::path outP(outFile);
+        tempPath = outP.has_parent_path() ? outP.parent_path() : std::filesystem::path(".");
+    } else {
+        tempPath = tempDir;
+    }
+
+    ScopedTempDir tmpDirScope(tempPath);
+
+    std::atomic<size_t> chunkIdx{0};
+    tbb::concurrent_vector<std::string> chunkFiles;
+
+    // Choose arena concurrency: numThreads<=0 means "use TBB default".
+    const int arenaConc = (nThreads > 0) ? nThreads : tbb::task_arena::automatic;
+    tbb::task_arena arena(arenaConc);
+
+    // Run the pipeline inside the arena so TBB respects the limit.
+    arena.execute([&] {
+        const int conc = std::max(1, (int)tbb::this_task_arena::max_concurrency());
+        const int tokens = std::clamp(conc, 1, 6); // in-flight chunks in the pipeline
+        const size_t perChunkBudget =
+            std::max<size_t>(1, maxMemBytes / (size_t(tokens) + 1));
+
+        Reader reader{in, tmpDirScope.path, perChunkBudget, chunkIdx};
+
+        tbb::parallel_pipeline(tokens,
+            tbb::make_filter<void, ChunkJob>(tbb::filter_mode::serial_in_order,
+                [&](tbb::flow_control& fc) { return reader(fc); })
+          & tbb::make_filter<ChunkJob, ChunkJob>(tbb::filter_mode::parallel,
+                [&](ChunkJob job) {
+                    tbb::parallel_sort(job.recs.begin(), job.recs.end(), KeyLess{});
+                    return job;
+                })
+          & tbb::make_filter<ChunkJob, void>(tbb::filter_mode::parallel,
+                [&](ChunkJob job) {
+                    std::ofstream os(job.chunkPath);
+                    if (!os) throw std::runtime_error("Cannot write chunk: " + job.chunkPath);
+                    for (const auto& r : job.recs) os << r.line << "\n";
+                    chunkFiles.push_back(job.chunkPath);
+                })
+        );
+    });
+    in.close();
+
+    if (chunkFiles.empty()) {
+        std::ofstream out(outFile);
+        return;
+    }
+
+    // -------- Serial k-way merge --------
+    std::vector<std::unique_ptr<std::ifstream>> readers;
+    readers.reserve(chunkFiles.size());
+
+    std::vector<MergeNode> heap;
+    heap.reserve(chunkFiles.size());
+
+    for (size_t i = 0; i < chunkFiles.size(); ++i) {
+        auto fs = std::make_unique<std::ifstream>(chunkFiles[i]);
+        if (!fs || !fs->is_open()) throw std::runtime_error("Cannot open chunk: " + chunkFiles[i]);
+
+        std::string l;
+        if (std::getline(*fs, l)) {
+            uint32_t k = hexToUint32(l);
+            heap.push_back(MergeNode{std::move(l), k, i});
+        }
+        readers.push_back(std::move(fs));
+    }
+
+    std::make_heap(heap.begin(), heap.end(), heapComp);
+
+    std::ofstream out(outFile);
+    if (!out) throw std::runtime_error("Cannot open output file: " + outFile);
+
+    while (!heap.empty()) {
+        std::pop_heap(heap.begin(), heap.end(), heapComp);
+        MergeNode top = std::move(heap.back());
+        heap.pop_back();
+        out << top.line << "\n";
+
+        std::string l;
+        if (std::getline(*readers[top.chunkIdx], l)) {
+            uint32_t k = hexToUint32(l);
+            heap.push_back(MergeNode{std::move(l), k, top.chunkIdx});
+            std::push_heap(heap.begin(), heap.end(), heapComp);
+        }
+    }
+}
+
+
+void ExternalSorter::sortBy1stColHex_singleThread(
+        const std::string& inFile, const std::string& outFile,
+        size_t maxMemBytes, const std::string& tempDir) {
+
+    std::ifstream in(inFile);
+    if (!in) throw std::runtime_error("Cannot open input file: " + inFile);
+
+    // Determine temporary directory
+    std::filesystem::path tempPath;
+    if (tempDir.empty()) {
+        std::filesystem::path outP(outFile);
+        tempPath = outP.has_parent_path() ? outP.parent_path() : std::filesystem::path(".");
+    } else {
+        tempPath = tempDir;
+    }
+
+    ScopedTempDir tmpDirScope(tempPath);
+
+    const size_t perChunkBudget = std::max<size_t>(1, maxMemBytes);
+    std::vector<std::string> chunkFiles;
+    chunkFiles.reserve(1024);
+
+    std::vector<LineRec> recs;
+    recs.reserve(50000);
+
+    size_t mem = 0;
+    size_t chunkIdx = 0;
+    std::string line;
+
+    auto flushChunk = [&] {
+        if (recs.empty()) return;
+        std::sort(recs.begin(), recs.end(), KeyLess{});
+        const std::string chunkPath =
+            (tmpDirScope.path / ("chunk_" + std::to_string(chunkIdx++) + ".tmp")).string();
+        std::ofstream os(chunkPath);
+        if (!os) throw std::runtime_error("Cannot write chunk: " + chunkPath);
+        for (const auto& r : recs) os << r.line << "\n";
+        os.close();
+        chunkFiles.push_back(chunkPath);
+        recs.clear();
+        mem = 0;
+    };
+
+    // -------- Chunking: read -> sort -> write (single-thread) --------
+    while (std::getline(in, line)) {
+        const size_t estMem = line.capacity() + sizeof(LineRec);
+        if (!recs.empty() && mem + estMem >= perChunkBudget) {
+            flushChunk();
+        }
+        LineRec r;
+        r.line = std::move(line);
+        r.key  = hexToUint32(r.line);  // parse fixed 8-hex prefix
+        mem += r.line.capacity() + sizeof(LineRec);
+        recs.emplace_back(std::move(r));
+    }
+
+    flushChunk();
+    in.close();
+    if (chunkFiles.empty()) { // Empty input
+        std::ofstream out(outFile);
+        return;
+    }
+
+    // -------- Serial k-way merge  --------
+    std::vector<std::unique_ptr<std::ifstream>> readers;
+    readers.reserve(chunkFiles.size());
+    std::vector<MergeNode> heap;
+    heap.reserve(chunkFiles.size());
+
+    for (size_t i = 0; i < chunkFiles.size(); ++i) {
+        auto fs = std::make_unique<std::ifstream>(chunkFiles[i]);
+        if (!fs || !fs->is_open()) throw std::runtime_error("Cannot open chunk: " + chunkFiles[i]);
+        std::string l;
+        if (std::getline(*fs, l)) {
+            uint32_t k = hexToUint32(l);
+            heap.push_back(MergeNode{std::move(l), k, i});
+        }
+        readers.push_back(std::move(fs));
+    }
+
+    std::make_heap(heap.begin(), heap.end(), heapComp);
+
+    std::ofstream out(outFile);
+    if (!out) throw std::runtime_error("Cannot open output file: " + outFile);
+
+    while (!heap.empty()) {
+        std::pop_heap(heap.begin(), heap.end(), heapComp);
+        MergeNode top = std::move(heap.back());
+        heap.pop_back();
+        out << top.line << "\n";
+
+        std::string l;
+        if (std::getline(*readers[top.chunkIdx], l)) {
+            uint32_t k = hexToUint32(l);
+            heap.push_back(MergeNode{std::move(l), k, top.chunkIdx});
+            std::push_heap(heap.begin(), heap.end(), heapComp);
+        }
+    }
+}

@@ -6,6 +6,7 @@
 #include "tilereader.hpp"
 #include "threads.hpp"
 #include "utils.h"
+#include "utils_sys.hpp"
 #include <memory>
 #include <atomic>
 #include <random>

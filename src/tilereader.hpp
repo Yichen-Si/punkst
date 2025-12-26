@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <memory>
 #include "utils.h"
+#include "utils_sys.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"
 
@@ -64,6 +65,13 @@ struct TileInfo {
     std::streampos startOffset;
     std::streampos endOffset;
     bool partial = false;
+};
+
+// Index entry for one tile
+struct IndexEntryF {
+    uint64_t st, ed;
+    uint32_t n;
+    float xmin, xmax, ymin, ymax;
 };
 
 // Parse a line in the tsv tiled pixel file

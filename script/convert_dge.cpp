@@ -1,5 +1,6 @@
 #include "punkst.h"
 #include "utils.h"
+#include "utils_sys.hpp"
 #include <zlib.h>
 #include <cstring>
 #include <exception>
@@ -233,6 +234,8 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
     uint64_t verbose = 1000000;
     bool sorted_by_barcode = false;
     bool randomize_output = false;
+    std::string sort_mem;
+    bool use_internal_sort = false;
 
     ParamList pl;
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
@@ -242,6 +245,8 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
       .add_option("sorted-by-barcode", "Input matrix is sorted by barcode, use streaming mode", sorted_by_barcode)
       .add_option("out", "Output prefix", outPref, true)
       .add_option("randomize", "Randomize output order", randomize_output)
+      .add_option("sort-mem", "Memory to use for sorting, with units K, M, or G similar to -S in linux sort", sort_mem)
+      .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort)
       .add_option("verbose", "Verbose", verbose);
 
     try {
@@ -271,12 +276,15 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
         file_idx++;
     }
 
-    // Read barcodes, features
+    // Read barcodes
     auto barcodes = read_gz_lines(in_bc);
     size_t B = barcodes.size();
     if (B == 0) {
         error("No barcodes found in %s", in_bc.c_str());
     }
+    notice("Read %zu barcodes", B);
+
+    // Read features
     auto flines = read_gz_lines(in_ft);
     std::vector<std::string> features_ids;
     std::vector<std::string> features_names;
@@ -295,6 +303,7 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
     if (F == 0) {
         error("No features found in %s", in_ft.c_str());
     }
+    notice("Read %zu features", F);
 
     // Prepare accumulators
     std::vector<uint64_t> feature_totals(F, 0);
@@ -314,6 +323,7 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
     if (std::sscanf(buf, "%zu %zu %zu", &N, &M, &L) != 3) {
         warning("Invalid header line in input matrix file (%s)", buf);
     }
+    notice("Read header of matrix.mtx.gz: %zu features, %zu barcodes, %zu entries", N, M, L);
 
     // Prepare output stream and RNG
     std::string outf = outPref + ".tsv";
@@ -348,9 +358,6 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
         while (gzgets(gzm, buf, sizeof(buf))) {
             if (buf[0] == '\0' || buf[0] == '\n' || buf[0] == '%') continue;
             ++nrow;
-            if (nrow % verbose == 0) {
-                notice("Processed %zu/%zu lines...", nrow, L);
-            }
             int bi; // 1-based indices
             uint32_t ct, gi;
             if (std::sscanf(buf, "%u %d %u", &gi, &bi, &ct) != 3) continue;
@@ -364,6 +371,9 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
                 flush_cell(current_bi, acc, current_sum);
                 current_bi = bi;
                 current_sum = 0;
+                if (current_bi % 1000 == 0) {
+                    notice("Flushed up to barcode %d/%zu (line %zu/%zu)", current_bi, B, nrow, L);
+                }
             }
             acc.emplace_back(gi, ct);
             current_sum += ct;
@@ -407,8 +417,23 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
         out.close();
     }
     if (randomize_output) {
-        if (sys_sort(outf.c_str(), nullptr, {"-k1,1", "-o", outf}) != 0) {
-            warning("Failed to shuffle the output %s", outf.c_str());
+        notice("Shuffling output %s ...", outf.c_str());
+        if (use_internal_sort) {
+            size_t maxMemBytes = ExternalSorter::parseMemoryString(sort_mem);
+            try {
+                ExternalSorter::sortBy1stColHex(outf, outf, maxMemBytes);
+            } catch (const std::exception& e) {
+                warning("Failed to shuffle the output %s: %s", outf.c_str(), e.what());
+            }
+        } else {
+            std::vector<std::string> sort_flags = {"-k1,1", "-o", outf};
+            if (!sort_mem.empty()) {
+                sort_flags.insert(sort_flags.begin()+1, "-S");
+                sort_flags.insert(sort_flags.begin()+2, sort_mem);
+            }
+            if (sys_sort(outf.c_str(), nullptr, sort_flags) != 0) {
+                warning("Failed to shuffle the output %s", outf.c_str());
+            }
         }
     }
     notice("Wrote %zu units to %s", n_units_written, outf.c_str());

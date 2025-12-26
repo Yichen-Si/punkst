@@ -154,7 +154,7 @@ public:
     void scvb0_partial_fit(const std::vector<Document>& docs);
 
     // Transform: compute document-topic distributions for a list of documents
-    // For transform, we do not compute or return sufficient statistics.
+    // Return gamma (Dirichlet parameters) matrix, D x K
     RowMajorMatrixXd transform(const std::vector<Document>& docs) {
         return transform_common(docs, [](const auto& d) -> const Document& { return d; });
     }

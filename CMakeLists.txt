@@ -102,6 +102,10 @@ set(SOURCE_FILES
     script/feature_selection.cpp
     src/tiles2nmf.hpp
     src/tiles2nmf.cpp
+    script/de_chisq.cpp
+    src/tileoperator.hpp
+    src/tileoperator.cpp
+    script/manipulate_tiles.cpp
   )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})
