@@ -1,4 +1,5 @@
 #include "tilereader.hpp"
+#include "tileoperator.hpp"
 
 /*
     lineParser
@@ -340,90 +341,120 @@ std::unique_ptr<BoundedReadline> TileReader::get_tile_iterator(int tileRow, int 
 }
 
 void TileReader::loadIndex(const std::string &indexFilename) {
-    std::ifstream indexFile(indexFilename);
+    std::ifstream indexFile(indexFilename, std::ios::binary);
     if (!indexFile.is_open()) {
         throw std::runtime_error("Unable to open index file: " + indexFilename);
     }
+    if (loadIndexBinary(indexFilename)) {return;}
+    // Fallback to text format
+    loadIndexText(indexFilename);
+}
 
-    std::string line;
-    if (!std::getline(indexFile, line)) {
-        throw std::runtime_error("Index file is empty");
-    }
-    if (line.empty()) {
-        throw std::runtime_error("Index file is malformed");
-    }
-    while (line[0] == '#') {
-        std::istringstream metaStream(line);
-        std::string hashtag, key;
-        metaStream >> hashtag >> key;
-        if (key == "tilesize") {
-            if (!(metaStream >> tileSize)) {
-                throw std::runtime_error("Failed to read tile size from metadata");
-            }
-        }
-        if (!std::getline(indexFile, line)) {
-            throw std::runtime_error("Index file is empty");
-        }
-    }
-    if (tileSize <= 0) {
-        throw std::runtime_error("Tile size is not specified or found in index file");
+bool TileReader::loadIndexBinary(const std::string &indexFilename) {
+    std::ifstream indexFile(indexFilename, std::ios::binary);
+    if (!indexFile.is_open()) {
+        error("%s: Unable to open index file %s", __func__, indexFilename.c_str());
     }
 
-    if (!rects.empty()) {
-        std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
+    uint64_t magic = 0;
+    if (!indexFile.read(reinterpret_cast<char*>(&magic), sizeof(magic)) ||
+        magic != PUNKST_INDEX_MAGIC) {
+        return false;
+    }
+
+    IndexHeader header;
+    indexFile.seekg(0);
+    indexFile.read(reinterpret_cast<char*>(&header), sizeof(header));
+    tileSize = header.tileSize;
+    if (tileSize <= 0) error("%s: invalid tileSize", __func__);
+    globalBox_ = Rectangle<float>(header.xmin, header.ymin, header.xmax, header.ymax);
+
+    IndexEntryF entry;
+    std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
+    bool filter = !rects.empty();
+    if (filter) {
         getTilesInBounds(rects, tileMap);
-        while (true) {
-            if (line.empty()) {
-                if (!std::getline(indexFile, line)) {
-                    break;
-                }
+    }
+    while (indexFile.read(reinterpret_cast<char*>(&entry), sizeof(entry))) {
+        TileKey key{entry.row, entry.col};
+        TileInfo info{static_cast<std::streampos>(entry.st), static_cast<std::streampos>(entry.ed), false};
+        if (filter) {
+            auto it = tileMap.find(key);
+            if (it == tileMap.end()) {
                 continue;
             }
-            std::istringstream iss(line);
-            int row, col;
-            std::streamoff start, end;
-            if (!(iss >> row >> col >> start >> end)) {
-                throw std::runtime_error("Malformed index line: " + line);
-            }
-            auto it = tileMap.find(TileKey{row, col});
-            if (it != tileMap.end()) {
-                index.emplace(TileKey{row, col}, TileInfo{start, end, !(it->second)});
-                if (row < minrow) minrow = row;
-                if (col < mincol) mincol = col;
-                if (row > maxrow) maxrow = row;
-                if (col > maxcol) maxcol = col;
-            }
-            if (!std::getline(indexFile, line)) {
-                break;
-            }
+            info.partial = !(it->second);
         }
-    } else {
-        while (true) {
-            if (line.empty()) {
-                if (!std::getline(indexFile, line)) {
-                    break;
-                }
-                continue;
-            }
-            std::istringstream iss(line);
-            int row, col;
-            std::streamoff start, end;
-            if (!(iss >> row >> col >> start >> end)) {
-                throw std::runtime_error("Malformed index line: " + line);
-            }
-            index.emplace(TileKey{row, col}, TileInfo{start, end});
-            if (row < minrow) minrow = row;
-            if (col < mincol) mincol = col;
-            if (row > maxrow) maxrow = row;
-            if (col > maxcol) maxcol = col;
-            if (!std::getline(indexFile, line)) {
-                break;
-            }
-        }
+        index.emplace(key, info);
+        if (entry.row < minrow) minrow = entry.row;
+        if (entry.col < mincol) mincol = entry.col;
+        if (entry.row > maxrow) maxrow = entry.row;
+        if (entry.col > maxcol) maxcol = entry.col;
     }
     nTiles = index.size();
     indexFile.close();
+    notice("Read %zu tiles from binary index file", nTiles);
+    return true;
+}
+
+bool TileReader::loadIndexText(const std::string &indexFilename) {
+    std::ifstream indexFile(indexFilename, std::ios::binary);
+    if (!indexFile.is_open()) {
+        error("%s: Unable to open index file %s", __func__, indexFilename.c_str());
+    }
+
+    indexFile.clear();
+    indexFile.seekg(0);
+    std::string line;
+    if (!std::getline(indexFile, line) || line.empty()) {
+        error("%s: Index file appears to be empty", __func__);
+    }
+
+    std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
+    bool filter = !rects.empty();
+    if (filter) getTilesInBounds(rects, tileMap);
+    while (std::getline(indexFile, line)) {
+        if (line.empty()) {continue;}
+        while (line[0] == '#') { // Parse metadata lines
+            std::istringstream metaStream(line);
+            std::string hashtag, key;
+            metaStream >> hashtag >> key;
+            if (key == "tilesize") {
+                if (!(metaStream >> tileSize)) error("%s: Invalid tileSize", __func__);
+            }
+            if (!std::getline(indexFile, line)) {
+                if (line.empty() && indexFile.eof()) break;
+                error("%s: Index file is empty/truncated", __func__);
+            }
+        }
+        std::istringstream iss(line);
+        int row, col;
+        std::streamoff start, end;
+        if (!(iss >> row >> col >> start >> end)) {
+            error("%s: Malformed index line: %s", __func__, line.c_str());
+        }
+        TileInfo info{start, end};
+        TileKey key{row, col};
+        if (filter) {
+            auto it = tileMap.find(key);
+            if (it == tileMap.end()) {continue;}
+            info.partial = !(it->second);
+        }
+        index.emplace(key, info);
+        if (row < minrow) minrow = row;
+        if (col < mincol) mincol = col;
+        if (row > maxrow) maxrow = row;
+        if (col > maxcol) maxcol = col;
+        globalBox_.extendToInclude(Rectangle<int32_t>(
+            col * tileSize, row * tileSize,
+            (col + 1) * tileSize, (row + 1) * tileSize));
+    }
+    if (tileSize <= 0) {error("%s: Cannot identify tileSize", __func__);}
+
+    nTiles = index.size();
+    indexFile.close();
     notice("Read %zu tiles from index file", nTiles);
+    return true;
 }
 
 /*

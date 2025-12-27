@@ -14,6 +14,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double minCountAnchor = 5;
     double pixelResolution = 1, defaultWeight = 0.;
     bool inMemory = false;
+    bool outputBinary = false;
     bool outputOritinalData = false;
     bool featureIsIndex = false;
     bool coordsAreInt = false;
@@ -79,6 +80,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     // Output Options
     pl.add_option("out", "Output TSV file (backward compatibility)", outFile)
       .add_option("out-pref", "Output prefix", outPref)
+      .add_option("output-binary", "Output pixel level results in binary format", outputBinary)
       .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
       .add_option("ext-col-ints", "Additional integer columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoInts)
       .add_option("ext-col-floats", "Additional float columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoFloats)
@@ -222,7 +224,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
 
     auto configure_decoder = [&](auto& decoder, const std::string& anchorFile) {
-        decoder.setOutputOptions(outputOritinalData, outputAnchor, useTicketSystem);
+        decoder.setOutputOptions(outputBinary, outputOritinalData, outputAnchor, useTicketSystem);
         decoder.setOutputCoordDigits(floatCoordDigits);
         decoder.setOutputProbDigits(probDigits);
         if (!anchorFile.empty()) {

@@ -189,7 +189,8 @@ protected:
     using Base::featureNames;
     using Base::resultQueue;
     using Base::anchorQueue;
-    using typename Base::ProcessedResult;
+    using Base::pixelResolution_;
+    using typename Base::ResultBuf;
     using vec2f_t = typename Base::vec2f_t;
 
     int32_t K_;
@@ -200,7 +201,6 @@ protected:
     unsigned int      seed_;
     double            anchorMinCount_;
     double            distNu_, distR_;
-    float             pixelResolution_;
     int32_t           verbose_;
 
     // MatrixXf pseudobulk_;

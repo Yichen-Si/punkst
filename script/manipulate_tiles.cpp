@@ -1,20 +1,30 @@
 #include "punkst.h"
 #include "tileoperator.hpp"
 
+/*
+    Input:
+        if --in is given, data file name is <in>.tsv/.bin depending on --binary, index file name is <in>.index
+        else --in-data and --in-index must be given, and the file format is inferred from the index file
+*/
+
 int32_t cmdManipulateTiles(int32_t argc, char** argv) {
-    std::string inPrefix, inTsv, inIndex, outPrefix;
+    std::string inPrefix, inData, inIndex, outPrefix;
     int32_t tileSize = -1;
+    bool isBinary = false;
     bool reorganize = false;
     bool printIndex = false;
+    bool dumpTSV = false;
 
     ParamList pl;
-    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
+    pl.add_option("in-data", "Input data file", inData)
       .add_option("in-index", "Input index file", inIndex)
-      .add_option("in", "Input prefix (equal to --in-tsv <in>.tsv --in-index <in>.index)", inPrefix)
+      .add_option("in", "Input prefix (equal to --in-tsv <in>.tsv/.bin --in-index <in>.index)", inPrefix)
+      .add_option("binary", "Data file is in binary format", isBinary)
       .add_option("out", "Output prefix", outPrefix)
-      .add_option("tile-size", "Tile size used in the original data", tileSize)
+      .add_option("tile-size", "Tile size in the original data", tileSize)
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
-      .add_option("print-index", "Print the index entries to stdout", printIndex);
+      .add_option("print-index", "Print the index entries to stdout", printIndex)
+      .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV);
 
     try {
         pl.readArgs(argc, argv);
@@ -26,27 +36,24 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (!inPrefix.empty()) {
-        inTsv = inPrefix + ".tsv";
+        inData = inPrefix + (isBinary ? ".bin" : ".tsv");
         inIndex = inPrefix + ".index";
-    } else {
-        if (inTsv.empty() || inIndex.empty()) {
-            error("Either --in or both --in-tsv and --in-index must be specified");
-        }
+    } else if (inData.empty() || inIndex.empty()) {
+        error("Either --in or both --in-data and --in-index must be specified");
     }
 
-    TileOperator tileOp(inTsv, inIndex);
+    TileOperator tileOp(inData, inIndex);
 
     if (reorganize) {
-        if (tileSize <= 0) {
-            error("Tile size is required and must be positive");
-        }
         tileOp.reorgTiles(outPrefix, tileSize);
-        return 0;
     }
 
     if(printIndex) {
         tileOp.printIndex();
-        return 0;
+    }
+
+    if (dumpTSV) {
+        tileOp.dumpTSV(outPrefix);
     }
 
     return 0;

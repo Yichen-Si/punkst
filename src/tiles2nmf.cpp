@@ -216,9 +216,9 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
         empois_(empois), lineParser_(lineParser),
         hexGrid_(hexGrid), nMoves_(nMoves),
         seed_(seed), anchorMinCount_(c),
-        pixelResolution_(static_cast<float>(res)),
         verbose_(verbose)
 {
+    pixelResolution_ = res;
     lineParserPtr = &lineParser_;
     useExtended_ = lineParser_.isExtended;
     topk_ = topk;
@@ -279,8 +279,7 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
 template<typename T>
 int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
     int32_t nPixels = Base::buildMinibatchCore(
-        tileData, anchors, minibatch,
-        pixelResolution_, distR_, distNu_);
+        tileData, anchors, minibatch, distR_, distNu_);
     if (nPixels <= 0) {
         return nPixels;
     }
@@ -358,13 +357,13 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     debug("%s: Thread %d (ticket %d) finished EM", __func__, threadId, ticket);
 
     MatrixXf topVals;
-    Eigen::MatrixXi topIds;
+    MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
-    ProcessedResult result = Base::formatPixelResult(tileData, topVals, topIds, ticket, &phi0);
+    ResultBuf result = Base::formatPixelResult(tileData, topVals, topIds, ticket, &phi0);
     resultQueue.push(std::move(result));
     if (Base::outputAnchor_) {
         MatrixXf anchorTopVals;
-        Eigen::MatrixXi anchorTopIds;
+        MatrixXi anchorTopIds;
         findTopK(anchorTopVals, anchorTopIds, minibatch.theta, topk_);
         auto anchorResult = Base::formatAnchorResult(
             anchors, anchorTopVals, anchorTopIds, ticket,

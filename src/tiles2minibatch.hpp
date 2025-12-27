@@ -16,6 +16,7 @@
 #include <opencv2/imgproc.hpp>
 #include "dataunits.hpp"
 #include "tilereader.hpp"
+#include "tileoperator.hpp"
 #include "hexgrid.h"
 #include "utils.h"
 #include "utils_sys.hpp"
@@ -24,6 +25,7 @@
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
 using Eigen::MatrixXf;
+using Eigen::MatrixXi;
 using Eigen::SparseMatrix;
 using RowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
@@ -58,7 +60,7 @@ struct TileData {
     std::vector<RecordExtendedT<T>> extPts; // original data points with extended info fields
     std::vector<int32_t> idxinternal; // indices for internal data points to output
     std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
-    std::vector<std::pair<double, double>> coords; // unique coordinates
+    std::vector<std::pair<int32_t, int32_t>> coords; // unique coordinates
     void clear() {
         buffers.clear();
         pts.clear();
@@ -94,7 +96,7 @@ struct BoundaryBuffer {
     uint32_t key; // row|col|isVertical
     uint8_t nTiles;
     std::shared_ptr<std::mutex> mutex;
-    // either a temporary file path or an in-memory storage
+    // Either a temporary file path or an in-memory storage
     std::variant<std::string, std::unique_ptr<IBoundaryStorage>> storage;
 
     BoundaryBuffer(uint32_t _key,
@@ -122,6 +124,7 @@ struct BoundaryBuffer {
         return false;
     }
 
+    // Write (to file) or store (in memory) records with fixed fields
     template<typename T>
     void addRecords(const std::vector<RecordT<T>>& recs) {
         if (recs.empty()) return;
@@ -150,6 +153,7 @@ struct BoundaryBuffer {
         nTiles++;
     }
 
+    // Write (to file) or store (in memory) records with additional fields
     template<typename T>
     void addRecordsExtended(
         const std::vector<RecordExtendedT<T>>& recs,
@@ -221,8 +225,7 @@ public:
 
     Tiles2MinibatchBase(int nThreads, double r, TileReader& tileReader, const std::string& _outPref, const std::string* opt = nullptr, int32_t debug = 0)
     : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref),
-      debug_(debug), useTicketSystem_(false),
-      resultQueue(static_cast<size_t>(std::max(1, nThreads))) {
+      debug_(debug), useTicketSystem_(false) {
         tileSize = tileReader.getTileSize();
         if (opt && !(*opt).empty()) {
             useMemoryBuffer_ = false;
@@ -231,6 +234,7 @@ public:
         } else {
             useMemoryBuffer_ = true;
         }
+        resultQueue.set_capacity(static_cast<size_t>(std::max(1, nThreads)));
     }
 
     virtual ~Tiles2MinibatchBase() {
@@ -246,7 +250,10 @@ public:
         else {M_ = names.size();}
         featureNames = names;
     }
-    void setOutputOptions(bool includeOrg, bool outputAnchor, bool useTicket) {
+    void setPixelResolution(double res) { pixelResolution_ = res; }
+    void setOutputOptions(bool outputBinary, bool includeOrg, bool outputAnchor, bool useTicket) {
+        assert(!(outputBinary && includeOrg));
+        outputBinary_ = outputBinary;
         outputOriginalData_ = includeOrg;
         outputAnchor_ = outputAnchor;
         useTicketSystem_ = useTicket;
@@ -259,15 +266,17 @@ public:
 
 protected:
 
-    // buffer output results for one tile
-    struct ProcessedResult {
+    // buffer output results (for one tile)
+    struct ResultBuf {
         int32_t ticket;
         float xmin, xmax, ymin, ymax;
         std::vector<std::string> outputLines;
+        std::vector<PixTopProbs<int32_t>> outputObjs;
         uint32_t npts;
-        ProcessedResult(int32_t t = 0, float _xmin = 0, float _xmax = 0, float _ymin = 0, float _ymax = 0)
-        : ticket(t), npts(0), xmin(_xmin), xmax(_xmax), ymin(_ymin), ymax(_ymax) {}
-        bool operator>(const ProcessedResult& other) const {
+        bool useObj = false;
+        ResultBuf(int32_t t=0, float x1=0, float x2=0, float y1=0, float y2=0)
+        : ticket(t), xmin(x1), xmax(x2), ymin(y1), ymax(y2), npts(0) {}
+        bool operator>(const ResultBuf& other) const {
             return ticket > other.ticket;
         }
     };
@@ -294,19 +303,22 @@ protected:
     ThreadSafeQueue<std::pair<TileKey, int32_t> > tileQueue;
     ThreadSafeQueue<std::pair<std::shared_ptr<BoundaryBuffer>, int32_t>> bufferQueue;
     std::vector<std::thread> workThreads;
-    ThreadSafeQueue<ProcessedResult> resultQueue;
-    ThreadSafeQueue<ProcessedResult> anchorQueue;
+    ThreadSafeQueue<ResultBuf> resultQueue;
+    ThreadSafeQueue<ResultBuf> anchorQueue;
     // Anchors (optionally preloaded from files)
     // (we may need more than one set of pre-defined anchors in the future)
     using vec2f_t = std::vector<std::vector<float>>;
     std::unordered_map<TileKey, vec2f_t, TileKeyHash> fixedAnchorForTile;
     std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
     // Output/formatting related
+    bool outputBinary_ = false;
+    size_t outputRecordSize_ = 0;
     bool outputOriginalData_ = false;
     bool outputBackgroundProbDense_ = false;
     bool outputBackgroundProbExpand_ = false;
     bool outputAnchor_ = false;
     std::vector<std::string> featureNames;
+    float pixelResolution_;
     int32_t floatCoordDigits = 2, probDigits = 4;
     int32_t topk_ = 3;
     bool useExtended_ = false;
@@ -316,11 +328,14 @@ protected:
     int32_t M_ = 0;
 
     /* Worker */
+
     void tileWorker(int threadId);
     void boundaryWorker(int threadId);
     void writerWorker();
+    void anchorWriterWorker();
 
     /* Key logic */
+
     std::shared_ptr<BoundaryBuffer> getBoundaryBuffer(uint32_t key) {
         std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
         auto it = boundaryBuffers.find(key);
@@ -351,7 +366,7 @@ protected:
         return (static_cast<uint32_t>(R) << 16) | ((static_cast<uint32_t>(C) & 0x7FFF) << 1) | static_cast<uint32_t>(isVertical);
     }
 
-    // given (x, y) and its tile, compute all buffers it walls into
+    // given (x, y) and its tile, compute all buffers it falls into
     // and whether it is "internal" to the tile
     int32_t pt2buffer(std::vector<uint32_t>& bufferidx, T x0, T y0, TileKey tile) {
         // convert to local coordinates
@@ -501,11 +516,13 @@ protected:
     }
 
     /* I/O */
+    // Given data and anchor pos, build pixels & pixel-anchor relations
     int32_t buildMinibatchCore(TileData<T>& tileData,
         std::vector<cv::Point2f>& anchors, Minibatch& minibatch,
-        double pixelResolution, double distR, double distNu);
-    // Parsing helpers (templated on coordinate type)
+        double distR, double distNu);
+    // Create anchor grid and initialize anchor level counts
     int32_t buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
+    // Parsing helpers
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
@@ -517,10 +534,11 @@ protected:
     void setExtendedSchema(size_t offset);
     void setupOutput();
     void closeOutput();
-    ProcessedResult formatAnchorResult(const std::vector<cv::Point2f>& anchors, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax);
-    ProcessedResult formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
-    ProcessedResult formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
-    ProcessedResult formatPixelResultWithBackground(const TileData<T>& tileData, const MatrixXf& topVals, const Eigen::MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>& phi0);
-    void anchorWriterWorker();
+    std::string composeHeader();
+    ResultBuf formatAnchorResult(const std::vector<cv::Point2f>& anchors, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax);
+    ResultBuf formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultWithBackground(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>& phi0);
+    ResultBuf formatPixelResultBinary(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket);
 
 };

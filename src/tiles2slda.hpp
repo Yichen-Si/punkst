@@ -36,7 +36,8 @@ protected:
     using Base::outPref;
     using Base::resultQueue;
     using Base::anchorQueue;
-    using typename Base::ProcessedResult;
+    using Base::pixelResolution_;
+    using typename Base::ResultBuf;
     using vec2f_t = typename Base::vec2f_t;
 
     int32_t K_;
@@ -46,7 +47,6 @@ protected:
     HexGrid& hexGrid_;
     int32_t nMoves_;
     double anchorMinCount_, distNu_, distR_;
-    float pixelResolution_;
     double eps_;
     int32_t nLloydIter_ = 1;
     MatrixXf pseudobulk_; // K x M

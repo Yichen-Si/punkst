@@ -62,3 +62,5 @@ claude_log/
 .claude/
 
 .cache/
+
+GEMINI.md

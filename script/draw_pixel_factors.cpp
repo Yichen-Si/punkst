@@ -5,19 +5,24 @@
 #include <opencv2/opencv.hpp>
 
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
-    std::string dataFile, indexFile, headerFile, rangeFile, colorFile, outFile;
+    std::string dataFile, inPrefix, indexFile, headerFile, rangeFile, colorFile, outFile;
     std::vector<std::string> channelListStr, colorListStr;
     double scale = 1;
-    double xmin = 0, xmax = -1, ymin = 0, ymax = -1;
+    float xmin = 0, xmax = -1, ymin = 0, ymax = -1;
     int32_t verbose = 1000000;
     bool filter = false;
     bool topOnly = false;
+    bool isBinary = false;
+    int32_t debug_ = 0;
 
     ParamList pl;
     // Input options
-    pl.add_option("in-tsv", "Input TSV file. Lines begin with # will be ignored", dataFile, true)
-      .add_option("header-json", "Header JSON file", headerFile)
+    pl.add_option("in-data", "Input data file. Lines begin with # will be ignored", dataFile)
       .add_option("index", "Index file", indexFile)
+      .add_option("in", "Input prefix (equal to --in-tsv <in>.tsv/.bin --index <in>.index)", inPrefix)
+      .add_option("binary", "Data file is in binary format", isBinary)
+      .add_option("in-tsv", "Input TSV file. Lines begin with # will be ignored", dataFile) // backward compatible
+      .add_option("header-json", "Header JSON file", headerFile) // to deprecate
       .add_option("in-color", "Input color file (RGB triples)", colorFile)
       .add_option("scale", "Scale factor: (x-xmin)/scale → pixel_x", scale)
       .add_option("range", "A file containing coordinate range (xmin ymin xmax ymax)", rangeFile)
@@ -31,7 +36,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     // Output
     pl.add_option("out", "Output image file", outFile, true)
       .add_option("top-only", "Use only the top channel per pixel", topOnly)
-      .add_option("verbose", "Verbose", verbose);
+      .add_option("verbose", "Verbose", verbose)
+      .add_option("debug", "Debug", debug_);
 
     try {
         pl.readArgs(argc, argv);
@@ -42,17 +48,44 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         return 1;
     }
 
-    if (filter && indexFile.empty())
-        error("Index file must be provided when --filter is set");
+    if (debug_ > 0) {
+        logger::Logger::getInstance().setLevel(logger::LogLevel::DEBUG);
+    }
 
     if (!checkOutputWritable(outFile))
         error("Output file is not writable: %s", outFile.c_str());
 
+    if (!inPrefix.empty()) {
+        dataFile = inPrefix + (isBinary ? ".bin" : ".tsv");
+        indexFile = inPrefix + ".index";
+    } else if (dataFile.empty()) {
+        error("One of --in --in-tsv or --in-data must be specified");
+    }
+    if (filter && indexFile.empty())
+        error("Index file is required when --filter is set");
+
+    // set up reader
+    TileOperator reader(dataFile, indexFile, headerFile);
+    int32_t k = reader.getK();
+    if (k<=0) error("No factor columns found in header");
     if (!rangeFile.empty()) {
        readCoordRange(rangeFile, xmin, xmax, ymin, ymax);
     }
-    if (xmin >= xmax || ymin >= ymax)
-        error("Invalid range: xmin >= xmax or ymin >= ymax");
+    if (xmin >= xmax || ymin >= ymax) {
+        if (!indexFile.empty() && reader.getBoundingBox(xmin, xmax, ymin, ymax)) {
+            notice("Using full data range from index: xmin=%.1f, xmax=%.1f, ymin=%.1f, ymax=%.1f", xmin, xmax, ymin, ymax);
+        } else {
+            error("Invalid range: xmin >= xmax or ymin >= ymax");
+        }
+    }
+    if (filter) {
+        int32_t ntiles = reader.query(xmin, xmax, ymin, ymax);
+        if (ntiles <= 0)
+            error("No data in the queried region");
+        notice("Found %d tiles intersecting the queried region", ntiles);
+    } else {
+        reader.openDataStream();
+    }
 
     bool selected = !channelListStr.empty();
     if (!selected && colorFile.empty())
@@ -87,19 +120,6 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         notice("Loaded %zu colors from %s", cmtx.size(), colorFile.c_str());
     }
 
-    // set up reader
-    TileOperator reader(dataFile, indexFile, headerFile);
-    int32_t k = reader.getK();
-    if (k<=0) error("No factor columns found in header");
-    if (filter) {
-        int32_t ntiles = reader.query(xmin, xmax, ymin, ymax);
-        if (ntiles <= 0)
-            error("No data in the queried region");
-        notice("Found %d tiles intersecting the queried region", ntiles);
-    } else {
-        reader.openDataStream();
-    }
-
     if (scale<=0) error("--scale must be >0");
 
     // image dims
@@ -113,7 +133,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     cv::Mat3f sumImg(height, width, cv::Vec3f(0,0,0));
     cv::Mat1b countImg(height, width, uchar(0));
     // read & accumulate
-    PixelFactorResult rec;
+    PixTopProbs<float> rec;
     int32_t ret, nline=0, nskip=0, nkept=0;
     while ((ret = reader.next(rec)) >= 0) {
         if (ret==0) {
@@ -128,7 +148,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
         int xpix = int((rec.x - xmin)/scale);
         int ypix = int((rec.y - ymin)/scale);
-        if (xpix<0||xpix>=width||ypix<0||ypix>=height) continue;
+        if (xpix<0||xpix>=width||ypix<0||ypix>=height) {
+            debug("Skipping out-of-bounds pixel (%.1f, %.1f) → (%d, %d)", rec.x, rec.y, xpix, ypix);
+            continue;
+        }
         if (countImg(ypix, xpix)>=255) { nskip++; continue; }
 
         float R=0,G=0,B=0;
@@ -172,7 +195,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             } else {
                 if (ch<0 || ch>= (int)cmtx.size()) {
                     warning("Channel index out of range: %d", ch);
-                    valid=false; break;
+                    continue;
                 }
                 R += cmtx[ch][0]*p;
                 G += cmtx[ch][1]*p;
@@ -181,7 +204,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             }
             psum += p;
         }
-        if (!valid || psum < 1e-3) continue;
+        if (!valid || psum < 1e-3) {
+            debug("Skipping pixel with no valid channels at (%.1f, %.1f) (psum=%.1e)", rec.x, rec.y, psum);
+            continue;
+        }
         R /= psum; G /= psum; B /= psum;
         sumImg(ypix, xpix) += cv::Vec3f(R,G,B);
         countImg(ypix, xpix) += 1;

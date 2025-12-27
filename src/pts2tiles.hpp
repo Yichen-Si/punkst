@@ -12,65 +12,64 @@
 #include "threads.hpp"
 #include "nanoflann.hpp"
 #include "nanoflann_utils.h"
+#include "tileoperator.hpp"
 
 class Pts2Tiles {
 public:
     Pts2Tiles(int32_t nthreads,
-        const std::string& _inFile, std::string& _tmpDir,
-        const std::string& _outPref, int32_t _tileSize,
-        int32_t icol_x, int32_t icol_y, int32_t icol_g = -1, std::vector<int32_t> icol_ints = {}, int32_t _nskip = 0,
-        bool _streamingMode = false,
-        int32_t _tileBuffer = 1000, int32_t _batchSize = 10000, double _scale = 0, int _digits=2) :
-        nThreads(nthreads),
-        inFile(_inFile), tmpDir(_tmpDir),
-        outPref(_outPref), tileSize(_tileSize),
-        icol_x(icol_x), icol_y(icol_y), icol_feature(icol_g),
-        icol_ints(icol_ints), nskip(_nskip),
-        streamingMode(_streamingMode),
-        tileBuffer(_tileBuffer), batchSize(_batchSize),
-        scale(_scale), digits(_digits) {
-        minX = std::numeric_limits<double>::infinity();
-        minY = std::numeric_limits<double>::infinity();
-        maxX = -std::numeric_limits<double>::infinity();
-        maxY = -std::numeric_limits<double>::infinity();
-        ntokens = std::max(icol_x, icol_y);
-        if (icol_feature >= 0) {
-            ntokens = std::max(ntokens, icol_feature);
-            for (const auto& icol : icol_ints) {
-                ntokens = std::max(ntokens, icol);
+        const std::string& inFile, std::string& tmpDir,
+        const std::string& outPref, int32_t tileSize,
+        int32_t icol_x, int32_t icol_y, int32_t icol_g = -1, std::vector<int32_t> icol_ints = {}, int32_t nskip = 0,
+        bool streamingMode = false,
+        int32_t tileBuffer = 1000, int32_t batchSize = 10000,
+        double scale = 1, int digits=2) :
+        nThreads_(nthreads),
+        inFile_(inFile), tmpDir_(tmpDir),
+        outPref_(outPref), tileSize_(tileSize),
+        icol_x_(icol_x), icol_y_(icol_y), icol_feature_(icol_g),
+        icol_ints_(icol_ints), nskip_(nskip),
+        streamingMode_(streamingMode),
+        tileBuffer_(tileBuffer), batchSize_(batchSize),
+        scale_(scale), digits_(digits)
+    {
+        ntokens_ = std::max(icol_x_, icol_y_);
+        if (icol_feature_ >= 0) {
+            ntokens_ = std::max(ntokens_, icol_feature_);
+            for (const auto& icol : icol_ints_) {
+                ntokens_ = std::max(ntokens_, icol);
             }
         }
-        scaling = (std::abs(scale) > 1e-20);
-        ntokens += 1;
-        notice("Created temporary directory: %s", tmpDir.path.string().c_str());
+        scaling_ = std::abs(scale_ - 1) > 1e-8;
+        ntokens_ += 1;
+        notice("Created temporary directory: %s", tmpDir_.path.string().c_str());
     }
     virtual ~Pts2Tiles() {
-        if (gz) {
-            gzclose(gz);
+        if (gz_) {
+            gzclose(gz_);
         }
-        if (inPtr && inPtr != &std::cin) {
-            delete inPtr;
+        if (inPtr_ && inPtr_ != &std::cin) {
+            delete inPtr_;
         }
     }
 
     const std::unordered_map<uint64_t, uint64_t>& getGlobalTiles() const {
-        return globalTiles;
+        return globalTiles_;
     }
 
     bool run() {
-        if (!streamingMode) {
+        if (!streamingMode_) {
             if (!launchWorkerThreads()) {
-                error("Error launching worker threads");
+                error("Error launching worker threads_");
             }
         } else {
             openInput();
-            for (int i = 0; i < nThreads; ++i) {
-                threads.emplace_back(&Pts2Tiles::streamingWorker, this, i);
+            for (int i = 0; i < nThreads_; ++i) {
+                threads_.emplace_back(&Pts2Tiles::streamingWorker, this, i);
             }
         }
-        notice("Launched %d worker threads", nThreads);
+        notice("Launched %d worker threads_", nThreads_);
         if (!joinWorkerThreads()) {
-            error("Error joining worker threads");
+            error("Error joining worker threads_");
         }
         notice("Merging temporary files and writing index");
         if (!mergeAndWriteIndex()) {
@@ -84,152 +83,163 @@ public:
     }
 
 protected:
-    int32_t nThreads;
-    std::string inFile, outPref;
-    ScopedTempDir tmpDir;
-    int32_t tileBuffer, batchSize;
-    int32_t tileSize;
-    int32_t icol_x, icol_y, icol_feature;
-    std::vector<int32_t> icol_ints;
-    int32_t ntokens;
-    int32_t nskip, nskipped = 0;
-    double scale;
-    bool scaling;
-    int32_t digits;
+    int32_t nThreads_;
+    std::string inFile_, outPref_;
+    ScopedTempDir tmpDir_;
+    int32_t tileBuffer_, batchSize_;
+    int32_t tileSize_;
+    int32_t icol_x_, icol_y_, icol_feature_;
+    std::vector<int32_t> icol_ints_;
+    int32_t ntokens_;
+    int32_t nskip_, nskipped_ = 0;
+    double scale_;
+    bool scaling_;
+    int32_t digits_;
+    Rectangle<float> globalBox_;
 
-    double minX, minY, maxX, maxY;
-    std::unordered_map<std::string, std::vector<int32_t>> featureCounts;
-    std::mutex minmaxMutex;
+    std::unordered_map<std::string, std::vector<int32_t>> featureCounts_;
+    std::mutex minmaxMutex_;
 
-    std::mutex globalTilesMutex;
-    std::unordered_map<uint64_t, uint64_t> globalTiles;
+    std::unordered_map<uint64_t, uint64_t> globalTiles_;
+    std::mutex globalTilesMutex_;
 
-    std::vector<std::thread> threads;
-    bool streamingMode;
-    gzFile         gz    = nullptr;
-    std::istream*  inPtr = nullptr;
-    std::mutex readMutex;
+    std::vector<std::thread> threads_;
+    bool streamingMode_;
+    gzFile         gz_    = nullptr;
+    std::istream*  inPtr_ = nullptr;
+    std::mutex readMutex_;
 
     struct PtRecord {
-        double x, y;
+        float x, y;
         std::string feature;
         std::vector<int32_t> vals;
     };
 
+    // Open input stream from stdin or a gzipped file
     void openInput() {
-        if (inFile == "-") {
-            inPtr = &std::cin;
+        if (inFile_ == "-") {
+            inPtr_ = &std::cin;
         }
-        else if (ends_with(inFile, ".gz")) {
-            gz = gzopen(inFile.c_str(), "rb");
-            if (gz == Z_NULL) {
-                error("Error opening gzipped input file: %s", inFile.c_str());
+        else if (ends_with(inFile_, ".gz")) {
+            gz_ = gzopen(inFile_.c_str(), "rb");
+            if (gz_ == Z_NULL) {
+                error("Error opening gzipped input file: %s", inFile_.c_str());
+            }
+        } else {
+            warning("%s: the input is not stdin or gzipped file but the streaming mode is used, assuming it is a plain tsv file", __FUNCTION__);
+            inPtr_ = new std::ifstream(inFile_);
+            if (!inPtr_ || !static_cast<std::ifstream*>(inPtr_)->is_open()) {
+                error("Error opening input file: %s", inFile_.c_str());
             }
         }
-        else {
-            warning("%s: the input is not stdin or gzipped file but the streaming mode is used, assuming it is a plain tsv file", __FUNCTION__);
-            inPtr = new std::ifstream(inFile);
-            if (!inPtr || !static_cast<std::ifstream*>(inPtr)->is_open()) {
-                error("Error opening input file: %s", inFile.c_str());
+        if (nskip_ <= 0) return;
+
+        // Skip initial lines
+        if (gz_) {
+            char buf[1<<16];
+            while (nskipped_ < nskip_ && gzgets(gz_, buf, sizeof(buf))) {
+                nskipped_++;
+            }
+        } else {
+            std::string line;
+            while (nskipped_ < nskip_ && std::getline(*inPtr_, line)) {
+                nskipped_++;
             }
         }
     }
 
+    // Parse a line, extract coordinates and return the tile ID
     virtual uint64_t parse(std::string& line, PtRecord& pt) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
-        if (tokens.size() < ntokens) {
+        if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
-        pt.x = std::stod(tokens[icol_x]);
-        pt.y = std::stod(tokens[icol_y]);
-        if (scaling) {
-            pt.x *= scale;
-            pt.y *= scale;
-            tokens[icol_x] = fp_to_string(pt.x, digits);
-            tokens[icol_y] = fp_to_string(pt.y, digits);
+        pt.x = std::stof(tokens[icol_x_]);
+        pt.y = std::stof(tokens[icol_y_]);
+        if (scaling_) {
+            pt.x *= scale_;
+            pt.y *= scale_;
+            tokens[icol_x_] = fp_to_string(pt.x, digits_);
+            tokens[icol_y_] = fp_to_string(pt.y, digits_);
             line = join(tokens, "\t");
         }
-        if (icol_feature >= 0) {
-            pt.feature = tokens[icol_feature];
-            if (icol_ints.size() > 0) {
-                pt.vals.resize(icol_ints.size());
-                for (size_t i = 0; i < icol_ints.size(); ++i) {
-                    if (!str2int32(tokens[icol_ints[i]], pt.vals[i])) {
-                        error("Error parsing the %d-th token to integer (%s) at line %s", icol_ints[i], tokens[icol_ints[i]].c_str(), line.c_str());
+        if (icol_feature_ >= 0) {
+            pt.feature = tokens[icol_feature_];
+            if (icol_ints_.size() > 0) {
+                pt.vals.resize(icol_ints_.size());
+                for (size_t i = 0; i < icol_ints_.size(); ++i) {
+                    if (!str2int32(tokens[icol_ints_[i]], pt.vals[i])) {
+                        error("Error parsing the %d-th token to integer (%s) at line %s", icol_ints_[i], tokens[icol_ints_[i]].c_str(), line.c_str());
                     }
                 }
             }
         }
-        uint32_t row = static_cast<uint32_t>(std::floor(pt.y / tileSize));
-        uint32_t col = static_cast<uint32_t>(std::floor(pt.x / tileSize));
+        uint32_t row = static_cast<uint32_t>(std::floor(pt.y / tileSize_));
+        uint32_t col = static_cast<uint32_t>(std::floor(pt.x / tileSize_));
         return ((static_cast<uint64_t>(row) << 32) | col);
     }
-
-    virtual uint64_t parse(std::string& line, double& x, double& y) {
+    virtual uint64_t parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
-        if (tokens.size() < ntokens) {
+        if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
-        x = std::stod(tokens[icol_x]);
-        y = std::stod(tokens[icol_y]);
-        if (scaling) {
-            x *= scale;
-            y *= scale;
-            tokens[icol_x] = fp_to_string(x, digits);
-            tokens[icol_y] = fp_to_string(y, digits);
+        x = std::stof(tokens[icol_x_]);
+        y = std::stof(tokens[icol_y_]);
+        if (scaling_) {
+            x *= scale_;
+            y *= scale_;
+            tokens[icol_x_] = fp_to_string(x, digits_);
+            tokens[icol_y_] = fp_to_string(y, digits_);
             line = join(tokens, "\t");
         }
-        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));
-        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize));
+        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize_));
+        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize_));
         return ((static_cast<uint64_t>(row) << 32) | col);
     }
 
+    // Process one line: parse, assign, update stats, buffer and flush
     void consumeLine(int threadId, std::string &line,
             std::unordered_map<uint64_t, std::vector<std::string>> &buffers,
-            double &localMinX,  double &localMaxX,
-            double &localMinY,  double &localMaxY,
+            std::unordered_map<uint64_t, Rectangle<float>> &tileBoxes,
+            Rectangle<float>& localBox,
             std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
         PtRecord pt;
         uint64_t tileId = parse(line, pt);
         if (tileId == uint64_t(-1)) return;
 
         // feature counts
-        if (icol_feature >= 0) {
+        if (icol_feature_ >= 0) {
             auto &v = localCounts[pt.feature];
             if (v.empty()) v = pt.vals;
             else for (size_t i = 0; i < pt.vals.size(); ++i)
                     v[i] += pt.vals[i];
         }
-
-        // min/max
-        localMinX = std::min(localMinX, pt.x);
-        localMaxX = std::max(localMaxX, pt.x);
-        localMinY = std::min(localMinY, pt.y);
-        localMaxY = std::max(localMaxY, pt.y);
-
+        // update min/max
+        localBox.extendToInclude(pt.x, pt.y);
+        tileBoxes[tileId].extendToInclude(pt.x, pt.y);
         // buffer + flush
         auto &buf = buffers[tileId];
         buf.push_back(line);
-        if (buf.size() >= static_cast<size_t>(tileBuffer))
+        if (buf.size() >= static_cast<size_t>(tileBuffer_))
             flushBuffer(threadId, tileId, buf);
     }
 
+    // Write buffered lines to a temporary file defined by (threadId, tileId)
     void flushBuffer(int threadId, uint64_t tileId,
                      std::vector<std::string> &buf) {
         {
-            std::lock_guard lk(globalTilesMutex);
-            globalTiles[tileId] += buf.size();
+            std::lock_guard lk(globalTilesMutex_);
+            globalTiles_[tileId] += buf.size();
         }
-        auto fn = tmpDir.path / (std::to_string(tileId) + "_"
+        auto fn = tmpDir_.path / (std::to_string(tileId) + "_"
                                 + std::to_string(threadId) + ".tsv");
         std::ofstream out(fn, std::ios::app);
         for (auto &l : buf) out << l << "\n";
         out.close();
         buf.clear();
     }
-
     void flushAll(int threadId,
             std::unordered_map<uint64_t,std::vector<std::string>> &buffers) {
         for (auto &p : buffers)
@@ -237,34 +247,14 @@ protected:
             flushBuffer(threadId, p.first, p.second);
     }
 
-    void mergeLocalStats(double localMinX, double localMaxX,
-                         double localMinY, double localMaxY,
-            std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
-        std::lock_guard lk(minmaxMutex);
-        minX = std::min(minX, localMinX);
-        maxX = std::max(maxX, localMaxX);
-        minY = std::min(minY, localMinY);
-        maxY = std::max(maxY, localMaxY);
-        for (auto &p : localCounts) {
-            auto &glob = featureCounts[p.first];
-            if (glob.empty()) {
-                glob = std::move(p.second);
-            } else {
-                for (size_t i = 0; i < glob.size(); ++i) {
-                    glob[i] += p.second[i];}
-            }
-        }
-    }
-
-    // Worker thread function
+    // Non-stream mode - Read and process a chunk of the input file
     virtual void worker(int threadId, std::streampos start, std::streampos end) {
-        // Map: tile id -> vector of lines (buffer)
         std::unordered_map<uint64_t,std::vector<std::string>> buffers;
+        std::unordered_map<uint64_t,Rectangle<float>> localTileMinMax;
         std::unordered_map<std::string,std::vector<int32_t>> localCounts;
-        double localMinX = +INFINITY, localMaxX = -INFINITY;
-        double localMinY = +INFINITY, localMaxY = -INFINITY;
+        Rectangle<float> localMinMax;
 
-        std::ifstream file(inFile);
+        std::ifstream file(inFile_);
         if (!file) {
             error("Thread %d: Error opening file input file", threadId);
         }
@@ -273,50 +263,38 @@ protected:
 
         while (file.tellg() < end && std::getline(file, line)) {
             consumeLine(threadId, line,
-                        buffers,
-                        localMinX, localMaxX,
-                        localMinY, localMaxY,
-                        localCounts);
+                        buffers, localTileMinMax,
+                        localMinMax, localCounts);
         }
         flushAll(threadId, buffers);
-        mergeLocalStats(localMinX, localMaxX,
-                        localMinY, localMaxY,
-                        localCounts);
+        mergeLocalStats(localMinMax, localCounts);
     }
-
+    // Non-stream mode - Decide chunk boundaries and dispatch worker threads
+    bool launchWorkerThreads() {
+        std::vector<std::pair<std::streampos, std::streampos>> blocks;
+        computeBlocks(blocks, inFile_, nThreads_, nskip_);
+        for (size_t i = 0; i < blocks.size(); i++) {
+            threads_.emplace_back(&Pts2Tiles::worker, this, static_cast<int>(i), blocks[i].first, blocks[i].second);
+        }
+        return true;
+    }
+    // Stream mode - Read the next chunk from the input stream and process
     void streamingWorker(int threadId) {
         std::unordered_map<uint64_t,std::vector<std::string>> buffers;
+        std::unordered_map<uint64_t,Rectangle<float>> localTileMinMax;
         std::unordered_map<std::string,std::vector<int32_t>> localCounts;
-        double localMinX = +INFINITY, localMaxX = -INFINITY;
-        double localMinY = +INFINITY, localMaxY = -INFINITY;
+        Rectangle<float> localMinMax;
 
         std::vector<std::string> batch;
-        batch.reserve(batchSize);
-
-        {
-            std::lock_guard lk(readMutex);
-            if (nskipped < nskip) { // Skip initial lines
-                if (gz) {
-                    char buf[1<<16];
-                    while (nskipped < nskip && gzgets(gz, buf, sizeof(buf))) {
-                        nskipped++;
-                    }
-                } else {
-                    std::string line;
-                    while (nskipped < nskip && std::getline(*inPtr, line)) {
-                        nskipped++;
-                    }
-                }
-            }
-        }
+        batch.reserve(batchSize_);
         while (true) {
             batch.clear();
             { // —— fill one batch under lock ——
-                std::lock_guard lk(readMutex);
-                if (gz) {
-                    for (int i = 0; i < batchSize; ++i) {
+                std::lock_guard lk(readMutex_);
+                if (gz_) {
+                    for (int i = 0; i < batchSize_; ++i) {
                         char buf[1<<16];
-                        if (!gzgets(gz, buf, sizeof(buf))) break;
+                        if (!gzgets(gz_, buf, sizeof(buf))) break;
                         size_t len = strlen(buf);
                         if (len > 0 && buf[len-1] == '\n') {
                             buf[--len] = '\0';
@@ -327,7 +305,7 @@ protected:
                             // Continue reading
                             std::string line(buf, len);
                             while (true) {
-                                if (!gzgets(gz, buf, sizeof(buf))) break;
+                                if (!gzgets(gz_, buf, sizeof(buf))) break;
                                 size_t chunkLen = strlen(buf);
                                 bool gotNL = chunkLen > 0 && buf[chunkLen-1] == '\n';
                                 // append without the trailing '\n'
@@ -341,9 +319,9 @@ protected:
                         }
                     }
                 } else {
-                    for (int i = 0; i < batchSize; ++i) {
+                    for (int i = 0; i < batchSize_; ++i) {
                         std::string line;
-                        if (!std::getline(*inPtr, line)) break;
+                        if (!std::getline(*inPtr_, line)) break;
                         if (!line.empty() && line.back()=='\r')
                             line.pop_back();
                         batch.push_back(std::move(line));
@@ -352,38 +330,41 @@ protected:
             }
             if (batch.empty()) break;
             for (auto &ln : batch) {
-                consumeLine(threadId, ln,
-                            buffers,
-                            localMinX, localMaxX,
-                            localMinY, localMaxY,
-                            localCounts);
+                consumeLine(threadId, ln, buffers, localTileMinMax,
+                            localMinMax, localCounts);
             }
             flushAll(threadId, buffers);
         }
-        mergeLocalStats(localMinX, localMaxX,
-                        localMinY, localMaxY,
-                        localCounts);
-    }
-
-    bool launchWorkerThreads() {
-        std::vector<std::pair<std::streampos, std::streampos>> blocks;
-        computeBlocks(blocks, inFile, nThreads, nskip);
-        for (size_t i = 0; i < blocks.size(); i++) {
-            threads.emplace_back(&Pts2Tiles::worker, this, static_cast<int>(i), blocks[i].first, blocks[i].second);
-        }
-        return true;
+        mergeLocalStats(localMinMax,localCounts);
     }
 
     bool joinWorkerThreads() {
-        for (auto& t : threads) {
+        for (auto& t : threads_) {
             t.join();
         }
         return true;
     }
 
+    // Update global coordinate range & feature counts
+    void mergeLocalStats(const Rectangle<float>& box,
+            std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
+        std::lock_guard lk(minmaxMutex_);
+        globalBox_.extendToInclude(box);
+        for (auto &p : localCounts) {
+            auto &glob = featureCounts_[p.first];
+            if (glob.empty()) {
+                glob = std::move(p.second);
+            } else {
+                for (size_t i = 0; i < glob.size(); ++i) {
+                    glob[i] += p.second[i];}
+            }
+        }
+    }
+
+    // Merge temporary files belonging to one tile
     void mergeTmpFileToOutput(uint64_t tileId, std::ofstream& outfile) {
-        for (uint32_t threadId = 0; threadId < nThreads; ++threadId) {
-            auto tmpFilename = tmpDir.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv");
+        for (uint32_t threadId = 0; threadId < nThreads_; ++threadId) {
+            auto tmpFilename = tmpDir_.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv");
             std::ifstream tmpFile(tmpFilename, std::ios::binary);
             if (tmpFile) {
                 outfile << tmpFile.rdbuf();
@@ -394,38 +375,51 @@ protected:
         }
     }
 
-    // Merge temporary files by tile and write index file
+    // Merge all temporary files and write index file
     bool mergeAndWriteIndex() {
-        std::ofstream outfile(outPref + ".tsv", std::ios::binary);
+        std::ofstream outfile(outPref_ + ".tsv", std::ios::binary);
         if (!outfile) {
-            error("Error opening output file for writing: %s.tsv", outPref.c_str());
+            error("Error opening output file for writing: %s.tsv", outPref_.c_str());
         }
 
-        std::string indexFilename = outPref + ".index";
-        std::ofstream indexfile(indexFilename);
+        std::string indexFilename = outPref_ + ".index";
+        std::ofstream indexfile(indexFilename, std::ios::binary);
         if (!indexfile) {
             error("Error opening index file for writing: %s", indexFilename.c_str());
         }
-        indexfile << "# tilesize\t" << tileSize << "\n";
 
-        uint64_t nPoints = 0;
+        // Write header
+        IndexHeader header;
+        header.magic = PUNKST_INDEX_MAGIC;
+        header.tileSize = tileSize_;
+        header.pixelResolution = 1.0;
+        header.coordType = 0; // Float
+        header.topK = 0;
+        header.recordSize = 0; // TSV
+        header.xmin = globalBox_.xmin;
+        header.xmax = globalBox_.xmax;
+        header.ymin = globalBox_.ymin;
+        header.ymax = globalBox_.ymax;
+        indexfile.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
         std::vector<uint64_t> sortedTiles;
-        for (const auto& pair : globalTiles) {
+        for (const auto& pair : globalTiles_) {
             sortedTiles.push_back(pair.first);
-            nPoints += pair.second;
         }
-        indexfile << "# npixels\t" << nPoints << "\n";
-        indexfile << "# xmin\t" << minX << "\n"
-                  << "# xmax\t" << maxX << "\n"
-                  << "# ymin\t" << minY << "\n"
-                  << "# ymax\t" << maxY << "\n";
         std::sort(sortedTiles.begin(), sortedTiles.end());
 
         for (const auto& tileId : sortedTiles) {
             std::streampos startOffset = outfile.tellp();
             mergeTmpFileToOutput(tileId, outfile);
             std::streampos endOffset = outfile.tellp();
-            indexfile << static_cast<int32_t>(tileId >> 32) << "\t" << static_cast<int32_t>(tileId & 0xFFFFFFFFULL) << "\t" << startOffset << "\t" << endOffset << "\t" << globalTiles[tileId] << "\n";
+            int32_t row = static_cast<int32_t>(tileId >> 32);
+            int32_t col = static_cast<int32_t>(tileId & 0xFFFFFFFFULL);
+            IndexEntryF entry(row, col);
+            entry.st = startOffset;
+            entry.ed = endOffset;
+            entry.n = static_cast<uint32_t>(globalTiles_[tileId]);
+            tile2bound(row, col, entry.xmin, entry.xmax, entry.ymin, entry.ymax, tileSize_);
+            indexfile.write(reinterpret_cast<const char*>(&entry), sizeof(entry));
         }
 
         outfile.close();
@@ -433,26 +427,27 @@ protected:
         return true;
     }
 
+    // Write global coordinate range and feature counts
     bool writeAuxiliaryFiles() {
-        std::string outFile = outPref + ".coord_range.tsv";
+        std::string outFile = outPref_ + ".coord_range.tsv";
         std::ofstream out(outFile);
         if (!out) {
             warning("Error opening output file for writing: %s", outFile.c_str());
             return false;
         }
-        out << "xmin\t" << minX << "\n"
-            << "xmax\t" << maxX << "\n"
-            << "ymin\t" << minY << "\n"
-            << "ymax\t" << maxY << "\n";
+        out << "xmin\t" << globalBox_.xmin << "\n"
+            << "xmax\t" << globalBox_.xmax << "\n"
+            << "ymin\t" << globalBox_.ymin << "\n"
+            << "ymax\t" << globalBox_.ymax << "\n";
         out.close();
-        if (icol_feature >= 0) {
-            std::string outFile = outPref + ".features.tsv";
+        if (icol_feature_ >= 0) {
+            std::string outFile = outPref_ + ".features.tsv";
             out.open(outFile);
             if (!out) {
                 warning("Error opening output file for writing: %s", outFile.c_str());
                 return false;
             }
-            for (const auto& pair : featureCounts) {
+            for (const auto& pair : featureCounts_) {
                 out << pair.first;
                 for (const auto& val : pair.second) {
                     out << "\t" << val;
@@ -512,26 +507,26 @@ protected:
     uint64_t parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
-        if (tokens.size() < ntokens) {
+        if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
-        x = std::stod(tokens[icol_x]);
-        y = std::stod(tokens[icol_y]);
-        if (scaling) {
-            x *= scale;
-            y *= scale;
-            tokens[icol_x] = fp_to_string(x, digits);
-            tokens[icol_y] = fp_to_string(y, digits);
+        x = std::stof(tokens[icol_x_]);
+        y = std::stof(tokens[icol_y_]);
+        if (scaling_) {
+            x *= scale_;
+            y *= scale_;
+            tokens[icol_x_] = fp_to_string(x, digits_);
+            tokens[icol_y_] = fp_to_string(y, digits_);
             line = join(tokens, "\t");
         }
-        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize));
-        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize));
+        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize_));
+        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize_));
         return ((static_cast<uint64_t>(row) << 32) | col);
     }
 
     // Worker thread function
     virtual void worker(int threadId, std::streampos start, std::streampos end) {
-        std::ifstream file(inFile);
+        std::ifstream file(inFile_);
         if (!file) {
             error("Thread %d: Error opening file input file", threadId);
         }
@@ -557,17 +552,17 @@ protected:
             line += oss.str();
             buffers[tileId].push_back(line);
             // Flush if the buffer is large enough.
-            if (buffers[tileId].size() >= tileBuffer) {
-                { // update globalTiles
-                    std::lock_guard<std::mutex> lock(globalTilesMutex);
+            if (buffers[tileId].size() >= tileBuffer_) {
+                { // update globalTiles_
+                    std::lock_guard<std::mutex> lock(globalTilesMutex_);
                     uint64_t npt = buffers[tileId].size();
-                    if (globalTiles.find(tileId) == globalTiles.end()) {
-                        globalTiles[tileId] = npt;
+                    if (globalTiles_.find(tileId) == globalTiles_.end()) {
+                        globalTiles_[tileId] = npt;
                     } else {
-                        globalTiles[tileId] += npt;
+                        globalTiles_[tileId] += npt;
                     }
                 }
-                auto tmpFilename = tmpDir.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv");
+                auto tmpFilename = tmpDir_.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv");
                 std::ofstream out(tmpFilename, std::ios::app);
                 for (const auto& bufferedLine : buffers[tileId]) {
                     out << bufferedLine << "\n";
@@ -579,16 +574,16 @@ protected:
         // Flush any remaining data in the buffers.
         for (auto& pair : buffers) {
             if (!pair.second.empty()) {
-                { // update globalTiles
-                    std::lock_guard<std::mutex> lock(globalTilesMutex);
+                { // update globalTiles_
+                    std::lock_guard<std::mutex> lock(globalTilesMutex_);
                     uint64_t npt = pair.second.size();
-                    if (globalTiles.find(pair.first) == globalTiles.end()) {
-                        globalTiles[pair.first] = npt;
+                    if (globalTiles_.find(pair.first) == globalTiles_.end()) {
+                        globalTiles_[pair.first] = npt;
                     } else {
-                        globalTiles[pair.first] += npt;
+                        globalTiles_[pair.first] += npt;
                     }
                 }
-                auto tmpFilename = tmpDir.path / (std::to_string(pair.first) + "_" + std::to_string(threadId) + ".tsv");
+                auto tmpFilename = tmpDir_.path / (std::to_string(pair.first) + "_" + std::to_string(threadId) + ".tsv");
                 std::ofstream out(tmpFilename, std::ios::app);
                 for (const auto& bufferedLine : pair.second) {
                     out << bufferedLine << "\n";

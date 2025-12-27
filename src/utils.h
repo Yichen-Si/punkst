@@ -370,14 +370,34 @@ template <typename T>
 struct Rectangle {
     T xmin, ymin, xmax, ymax;
     Rectangle(T x1, T y1, T x2, T y2) : xmin(x1), ymin(y1), xmax(x2), ymax(y2) {}
-    Rectangle() : xmin(0), ymin(0), xmax(0), ymax(0) {}
+    Rectangle() {reset();}
+    void reset() {
+        xmin = std::numeric_limits<T>::max();
+        xmax = std::numeric_limits<T>::lowest();
+        ymin = std::numeric_limits<T>::max();
+        ymax = std::numeric_limits<T>::lowest();
+    }
     bool proper() const {
         return (xmin < xmax && ymin < ymax);
     }
     bool contains(T x, T y) const {
         return (x >= xmin && x < xmax && y >= ymin && y < ymax);
     }
-    int32_t intersect(const Rectangle<T>& other) const {
+    void extendToInclude(T x, T y) {
+        if (x < xmin) xmin = x;
+        if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y;
+        if (y > ymax) ymax = y;
+    }
+    template <typename U>
+    void extendToInclude(const Rectangle<U>& other) {
+        if (other.xmin < xmin) xmin = other.xmin;
+        if (other.xmax > xmax) xmax = other.xmax;
+        if (other.ymin < ymin) ymin = other.ymin;
+        if (other.ymax > ymax) ymax = other.ymax;
+    }
+    template <typename U>
+    int32_t intersect(const Rectangle<U>& other) const {
         if (other.xmin >= xmax || other.xmax <= xmin || other.ymin >= ymax || other.ymax <= ymin) {
             return 0; // no intersection
         }

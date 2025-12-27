@@ -11,8 +11,9 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
         double c, double h, double res, int32_t N, int32_t k,
         int32_t verbose, int32_t debug)
     : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir, debug),
-      distR_(r), lda_(lda), lineParser_(lineParser), hexGrid_(hexGrid), nMoves_(nMoves), anchorMinCount_(c), pixelResolution_(res)
+      distR_(r), lda_(lda), lineParser_(lineParser), hexGrid_(hexGrid), nMoves_(nMoves), anchorMinCount_(c)
 {
+    pixelResolution_ = res;
     lineParserPtr = &lineParser_;
     useExtended_ = lineParser_.isExtended;
     topk_ = k;
@@ -142,8 +143,7 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2
 template<typename T>
 int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
     int32_t nPixels = Base::buildMinibatchCore(
-        tileData, anchors, minibatch,
-        pixelResolution_, distR_, distNu_);
+        tileData, anchors, minibatch, distR_, distNu_);
 
     if (nPixels <= 0) {
         return nPixels;
@@ -334,14 +334,14 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     }
 
     MatrixXf topVals;
-    Eigen::MatrixXi topIds;
+    MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
-    ProcessedResult result = Base::formatPixelResult(tileData, topVals, topIds, ticket, phi0_ptr);
+    ResultBuf result = Base::formatPixelResult(tileData, topVals, topIds, ticket, phi0_ptr);
     resultQueue.push(std::move(result));
     if (Base::outputAnchor_) {
         MatrixXf prob = rowNormalize(minibatch.gamma);
         MatrixXf anchorTopVals;
-        Eigen::MatrixXi anchorTopIds;
+        MatrixXi anchorTopIds;
         findTopK(anchorTopVals, anchorTopIds, prob, topk_);
         auto anchorResult = Base::formatAnchorResult(
             anchors, anchorTopVals, anchorTopIds, ticket,

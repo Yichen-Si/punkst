@@ -9,7 +9,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     int debug = 0, verbose = 1000000;
     int icol_x, icol_y, nskip = 0;
     int icol_feature = -1;
-    double scale = 0;
+    double scale = 1;
     int digits = 2;
     std::vector<int32_t> icol_ints;
 

@@ -67,13 +67,6 @@ struct TileInfo {
     bool partial = false;
 };
 
-// Index entry for one tile
-struct IndexEntryF {
-    uint64_t st, ed;
-    uint32_t n;
-    float xmin, xmax, ymin, ymax;
-};
-
 // Parse a line in the tsv tiled pixel file
 struct lineParser {
     size_t icol_x, icol_y, icol_feature;
@@ -284,11 +277,15 @@ public:
     // that reads the corresponding chunk (lines) from the TSV file.
     // Throws a runtime error if the tile is not found in the index.
     std::unique_ptr<BoundedReadline> get_tile_iterator(int tileRow, int tileCol) const;
+    const Rectangle<float>& getGlobalBox() const { return globalBox_; }
 
     CoordType getCoordType() const { return coordType; }
 private:
+    Rectangle<float> globalBox_;
     CoordType coordType;
     void loadIndex(const std::string &indexFilename) override;
+    bool loadIndexText(const std::string &indexFilename);
+    bool loadIndexBinary(const std::string &indexFilename);
 };
 
 class BoundedBinaryTileIterator {
