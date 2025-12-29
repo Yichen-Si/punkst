@@ -100,6 +100,11 @@ public:
 
     void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2);
 
+    // For each pair of (k1,k2) compute \sum_i p1_i * p2_i
+    void probDot(const std::string& outPrefix, int32_t probDigits = 4);
+
+    void probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, int32_t probDigits = 4);
+
 private:
     std::string dataFile_, indexFile_;
     std::ifstream dataStream_;

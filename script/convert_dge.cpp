@@ -29,8 +29,9 @@ static std::vector<std::string> read_gz_lines(const std::string &path) {
     return lines;
 }
 
-// Convert 10X Genomics (single-cell) 3-file format into a single TSV
+// Convert 10X Genomics 3-file format into a single TSV
 // matching the input format for pts2tiles
+// (Intended for Visium HD data)
 int32_t cmdConvertDGE(int argc, char** argv) {
     double mu = 1.0;
     bool original_scale = false;

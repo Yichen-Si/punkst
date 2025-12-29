@@ -16,9 +16,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool reorganize = false;
     bool printIndex = false;
     bool dumpTSV = false;
+    bool probDot = false;
     std::vector<uint32_t> k2keep;
     int32_t icol_x = -1;
     int32_t icol_y = -1;
+    int32_t coordDigits = 2, probDigits = 4; // for dump-tsv
     bool binaryOut = false;
 
     ParamList pl;
@@ -31,12 +33,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
       .add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
+      .add_option("prob-dot", "Compute pairwise probability dot products", probDot)
       .add_option("merge-emb", "List of embedding files to merge", inMergeEmbFiles)
-      .add_option("annotate-pts", "Points file to annotate", inMergePtsPrefix)
+      .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
       .add_option("icol-x", "X coordinate column index, 0-based (annotate only)", icol_x)
       .add_option("icol-y", "Y coordinate column index, 0-based (annotate only)", icol_y)
       .add_option("binary-out", "Output in binary format (merge only)", binaryOut);
+    pl.add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
+      .add_option("prob-digits", "Number of decimal digits to output for probabilities (for dump-tsv)", probDigits);
 
     try {
         pl.readArgs(argc, argv);
@@ -56,21 +61,34 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     TileOperator tileOp(inData, inIndex);
 
-    if (reorganize) {
-        tileOp.reorgTiles(outPrefix, tileSize);
-    }
-
     if(printIndex) {
         tileOp.printIndex();
     }
 
+    if (reorganize) {
+        tileOp.reorgTiles(outPrefix, tileSize);
+        return 0;
+    }
+
     if (dumpTSV) {
-        tileOp.dumpTSV(outPrefix);
+        tileOp.dumpTSV(outPrefix, probDigits, coordDigits);
+        return 0;
+    }
+
+    if (probDot) {
+        if (outPrefix.empty()) error("Output prefix must be specified for prob-dot");
+        if (!inMergeEmbFiles.empty()) {
+            tileOp.probDot_multi(inMergeEmbFiles, outPrefix, k2keep, probDigits);
+        } else {
+            tileOp.probDot(outPrefix, probDigits);
+        }
+        return 0;
     }
 
     if (!inMergeEmbFiles.empty()) {
         if (outPrefix.empty()) error("Output prefix must be specified for merge");
         tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut);
+        return 0;
     }
 
     if (!inMergePtsPrefix.empty()) {
@@ -79,6 +97,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         }
         if (outPrefix.empty()) error("Output prefix must be specified for annotate");
         tileOp.annotate(inMergePtsPrefix, icol_x, icol_y, outPrefix);
+        return 0;
     }
 
     return 0;

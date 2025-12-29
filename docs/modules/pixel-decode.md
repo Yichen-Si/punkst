@@ -7,13 +7,13 @@
 ```bash
 punkst pixel-decode --model ${path}/hex_12.model.tsv \
 --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
---temp-dir ${tmpdir} --out-pref ${path}/pixel.decode \
+--temp-dir ${tmpdir} --out-pref ${path}/pixel \
 --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
 --hex-grid-dist 12 --n-moves 2 \
 --pixel-res 0.5 --threads ${threads} --seed 1 --output-original
 ```
 
-The pixel-level inference result (in this case `${path}/pixel.decode.tsv`) contains the coordinates and the inferred top factors and their posterior probabilities for each pixel. The module also creates a pseudobulk file (`${path}/pixel.decode.pseudobulk.tsv`) where each row is a gene and each column is a factor.
+The pixel-level inference result (in this case `${path}/pixel.tsv`, see below "Output Parameters" for writing binary files and other options) contains the coordinates and the inferred top factors and their posterior probabilities for each pixel. The module also creates a pseudobulk file (`${path}/pixel.pseudobulk.tsv`) where each row is a gene and each column is a factor.
 
 ## Required Parameters
 
@@ -83,6 +83,8 @@ The pixel-level inference result (in this case `${path}/pixel.decode.tsv`) conta
 `--seed` - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.
 
 ### Output Parameters
+
+`--output-binary` - If set, the output files will be in binary format for more efficient post-processing, otherwise in tsv format. If set, `--output-original` cannot be used, but you can use `punkst tile-op` (see [tile-op](tileop.md)) to annotate the transcript data with the inference results or to convert the binary output back to tsv.
 
 `--output-original` - If set, the original data including the feature names and counts will be included in the output. If `pixel-res` is not 1 and `--output-original` is not set, the output contains results per collapsed pixel.
 

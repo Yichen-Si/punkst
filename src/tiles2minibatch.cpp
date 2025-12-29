@@ -235,7 +235,7 @@ int32_t Tiles2MinibatchBase<T>::parseOneTile(TileData<T>& tileData, TileKey tile
         return -1;
     }
     tileData.clear();
-    tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
     if (M_ == 0) {
         M_ = lineParserPtr->featureDict.size();
     }
@@ -890,9 +890,9 @@ void Tiles2MinibatchBase<T>::writerWorker() {
                 }
                 IndexEntryF e(st, ed, readyToWrite.npts,
                     (int32_t) std::floor(readyToWrite.xmin),
-                    (int32_t) std::floor(readyToWrite.xmax)+1,
+                    (int32_t) std::ceil(readyToWrite.xmax),
                     (int32_t) std::floor(readyToWrite.ymin),
-                    (int32_t) std::floor(readyToWrite.ymax)+1);
+                    (int32_t) std::ceil(readyToWrite.ymax));
                 if (!write_all(fdIndex, &e, sizeof(e))) {
                     error("Error writing to index output file");
                 }

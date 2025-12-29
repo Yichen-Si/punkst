@@ -104,6 +104,7 @@ set(SOURCE_FILES
     src/tiles2nmf.cpp
     script/de_chisq.cpp
     src/tileoperator.hpp
+    src/tileoperator_base.cpp
     src/tileoperator.cpp
     script/manipulate_tiles.cpp
   )

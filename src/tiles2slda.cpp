@@ -348,7 +348,13 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
             tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
         anchorQueue.push(std::move(anchorResult));
     }
-    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in phi: %.1e. (%.3f background)", threadId, ticket, nAnchors, result.npts, n_iter, delta, f0);
+
+    char buf[256];
+    int l = snprintf(buf, sizeof(buf), "Thread %d (ticket %d) fit minibatch with %d anchors and output %u internal pixels in %d iterations. Final mean max change in phi: %.1e", threadId, ticket, nAnchors, result.npts, n_iter, delta);
+    if (fitBackground_) {
+        l += snprintf(buf + l, sizeof(buf) - l, " (%.3f background)", f0);
+    }
+    notice("%s", buf);
 }
 
 template<typename T>

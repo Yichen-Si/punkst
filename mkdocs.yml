@@ -53,6 +53,7 @@ nav:
     - pixel-decode: modules/pixel-decode.md
     - Visualization: modules/visualization.md
     - Co-occurrence: modules/coexp.md
+    - tile-op: modules/tileop.md
 
 plugins:
   - blog

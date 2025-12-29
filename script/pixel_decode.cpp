@@ -91,7 +91,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("in-memory", "Keep boundary buffers in memory instead of writing to temporary files", inMemory)
       .add_option("top-k", "Top K factors to output", topK)
       .add_option("min-init-count", "Minimum", minInitCount)
-      .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used if input coordinates are float or --output-original is not set)", floatCoordDigits)
+      .add_option("output-coord-digits", "Number of decimal digits to output for coordinates (only used for tsv output when input coordinates are float or --output-original is not set)", floatCoordDigits)
       .add_option("output-prob-digits", "Number of decimal digits to output for probabilities", probDigits)
       .add_option("output-bg-prob-expand", "Write one line per gene per pixel to include background probabilities (ignored if --output-original is set)", outBgExpand)
       .add_option("verbose", "Verbose", verbose)

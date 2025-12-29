@@ -184,7 +184,8 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
         .add_option("out-pref", "Prefix for output files", outPref, true)
         .add_option("temp-dir", "Directory to store temporary files", tmpDirPath, true)
         .add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample)
-        .add_option("min-count-per-unit", "Minimum total count per unit to be included in merged output", minCtPerUnit)
+        .add_option("min-count-per-unit", "Minimum total count per unit to be included in merged output", minCtPerUnit) // backward
+        .add_option("min-count", "Minimum total count per unit to be included in merged output", minCtPerUnit)
         .add_option("threads", "Number of threads for sorting", nThreads);
 
     try {

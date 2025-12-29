@@ -1,6 +1,8 @@
 # punkst
 
-punkst is an ongoing effort to provide scalable tools for analyzing high resolution spatial transcriptomics data. Currently it mainly contains a new implementation of [FICTURE](https://doi.org/10.1038/s41592-024-02415-2).
+punkst is an ongoing effort to implement scalable tools for analyzing high resolution spatial transcriptomics data.
+
+It includes a new implementation of [FICTURE](https://doi.org/10.1038/s41592-024-02415-2).
 
 Documentation: [https://Yichen-Si.github.io/punkst](https://Yichen-Si.github.io/punkst)
 
@@ -23,7 +25,7 @@ If you are having difficulty installing, let us known (by opening an issue), and
 
 ```bash
 # 1) Clone the repository
-git clone --recursive https://github.com/your-org/punkst.git
+git clone --recursive https://github.com/Yichen-Si/punkst.git
 cd punkst
 # 2) Create and enter a build directory
 mkdir build && cd build

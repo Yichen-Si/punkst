@@ -16,7 +16,6 @@
 #include <opencv2/imgproc.hpp>
 #include "dataunits.hpp"
 #include "tilereader.hpp"
-#include "tileoperator.hpp"
 #include "hexgrid.h"
 #include "utils.h"
 #include "utils_sys.hpp"
@@ -438,13 +437,6 @@ protected:
     void pt2tile(T x, T y, TileKey &tile) const {
         tile.row = static_cast<int32_t>(std::floor(y / tileSize));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize));
-    }
-
-    void tile2bound(TileKey &tile, float& xmin, float& xmax, float& ymin, float& ymax) const {
-        xmin = static_cast<float>(tile.col * tileSize);
-        xmax = static_cast<float>((tile.col + 1) * tileSize);
-        ymin = static_cast<float>(tile.row * tileSize);
-        ymax = static_cast<float>((tile.row + 1) * tileSize);
     }
 
     void buffer2bound(bool isVertical, int32_t& bufRow, int32_t& bufCol, float& xmin, float& xmax, float& ymin, float& ymax) {

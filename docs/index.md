@@ -4,6 +4,7 @@
 
 The punkst toolkit provides a pipeline for efficient pixel level factor analysis, which achieves the same result as[ FICTURE (2024)](https://doi.org/10.1038/s41592-024-02415-2) with improved efficiency. ([Previous python package](https://github.com/seqscope/ficture) is still functioning.)
 
+It also provides a few other utilities for processing high resolution spatial data, see [Modules](modules/index.md) for details.
 
 Check [the quick start page](workflows/index.md) for help on generating the full workflow using Makefile or running each command step by step.
 

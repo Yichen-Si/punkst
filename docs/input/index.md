@@ -53,6 +53,8 @@ The optional flag `--in-tissue-only` will exclude all barcodes that are labeled 
 
 The command writes `transcripts.tsv` with coordinates in microns.
 
+The first column of the output file is the row index (0-based) of the barcode in the input barcode file (`${mtx_path}/barcodes.tsv.gz`), in case we want to recover the original barcode ID later.
+
 ## CosMx SMI
 
 You can use the template `Makefile` and `config_prepare.json` in `punkst/examples/format_input/cosmx` to conver CosMx raw output files to the generic input format. Alternatively, see the bash commands below.

@@ -38,7 +38,6 @@ Each line should contain two tab-separated columns:
 2.  The path to the raw transcript file for that sample.
 
 The raw transcript file should be in the format expected by [`pts2tiles`](../modules/pts2tiles.md).
-The raw transcript file should be in the format expected by [`pts2tiles`](../modules/pts2tiles.md).
 
 **Example `input_file_list.tsv`:**
 ```tsv
@@ -49,7 +48,6 @@ sample_B	/path/to/sample_B_transcripts.tsv
 
 ### Key Options
 
-(Other options are available, see [`pts2tiles`](../modules/pts2tiles.md) and [`tiles2hex`](../modules/tiles2hex.md) for details.)
 (Other options are available, see [`pts2tiles`](../modules/pts2tiles.md) and [`tiles2hex`](../modules/tiles2hex.md) for details.)
 
 `--in-tsv-list <file>`: (Required) Path to the input TSV file describing the samples.
@@ -177,7 +175,7 @@ The command requires a TSV file specifying the input for each sample. Each line 
 
 `--min-total-count-per-sample <int>`: Minimum per-sample count a feature must have across all samples to be included in the final merged feature set. (Default: 1. Set to 0 to use the union of features).
 
-`--min-count-per-unit <int>`: Minimum total count a unit/hexagon must have after feature filtering to be included in the merged output. \[Default: 1]
+`--min-count <int>`: Minimum total count a unit/hexagon must have after feature filtering to be included in the merged output. \[Default: 1]
 
 `--threads <int>`: Number of threads. \[Default: 1]
 
@@ -203,7 +201,7 @@ punkst multisample-prepare --in-tsv-list input_file_list.tsv \
     --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
     --tiles2hex-only \
     --min-total-count-per-sample 100 \
-    --hex-grid-dist 12 --min-count-per-unit 10 \
+    --hex-grid-dist 12 --min-count 10 \
     --out-dir ./out --out-joint-pref merged \
     --temp-dir ./tmp --threads ${threads} \
 ```

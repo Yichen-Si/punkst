@@ -10,167 +10,6 @@
 #include <set>
 #include <memory>
 
-int32_t TileOperator::query(float qxmin, float qxmax, float qymin, float qymax) {
-    queryBox_ = Rectangle<float>(qxmin, qymin, qxmax, qymax);
-    bounded_ = true;
-    blocks_.clear();
-    for (auto &b : blocks_all_) {
-        int32_t rel = queryBox_.intersect(Rectangle<float>(b.idx.xmin, b.idx.ymin, b.idx.xmax, b.idx.ymax));
-        if (rel==0) {continue;}
-        blocks_.push_back({ b.idx, rel==3});
-    }
-    if (blocks_.empty()) {
-        return 0;
-    }
-    idx_block_ = 0;
-    openDataStream();
-    openBlock(blocks_[0]);
-    if ((mode_ & 0x8) == 0) { // regular grid
-        tile_lookup_.clear();
-        for (size_t i = 0; i < blocks_.size(); ++i) {
-            auto& b = blocks_[i];
-            b.row = b.idx.row; b.col = b.idx.col;
-            tile_lookup_[{b.row, b.col}] = i;
-        }
-    }
-    return int32_t(blocks_.size());
-}
-
-int32_t TileOperator::next(PixTopProbs<float>& out, bool rawCoord) {
-    if (done_) return -1;
-    if (bounded_) {
-        return nextBounded(out);
-    }
-    if (mode_ & 0x1) { // Binary mode
-        if (mode_ & 0x4) { // int32
-            PixTopProbs<int32_t> temp;
-            if (!temp.read(dataStream_, k_)) {
-                done_ = true;
-                return -1;
-            }
-            out.x = static_cast<float>(temp.x);
-            out.y = static_cast<float>(temp.y);
-            out.ks = std::move(temp.ks);
-            out.ps = std::move(temp.ps);
-        } else { // float
-            if (!out.read(dataStream_, k_)) {
-                done_ = true;
-                return -1;
-            }
-        }
-        if (!rawCoord && (mode_ & 0x2)) {
-            out.x *= formatInfo_.pixelResolution;
-            out.y *= formatInfo_.pixelResolution;
-        }
-        return 1;
-    }
-    // Text mode
-    std::string line;
-    while (true) {
-        if (!std::getline(dataStream_, line)) {
-            done_ = true;
-            return -1;
-        }
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        if (!parseLine(line, out)) return 0;
-        if (rawCoord && (mode_ & 0x2)) {
-            out.x /= formatInfo_.pixelResolution;
-            out.y /= formatInfo_.pixelResolution;
-        }
-        return 1;
-    }
-}
-
-int32_t TileOperator::next(PixTopProbs<int32_t>& out) {
-    if (mode_ & 0x1) {assert(mode_ & 0x4);}
-    if (done_) return -1;
-    if (bounded_) {
-        return nextBounded(out);
-    }
-    if (mode_ & 0x1) { // Binary mode
-        if (out.read(dataStream_, k_)) {
-            return 1;
-        }
-        if (dataStream_.eof()) {
-            done_ = true;
-            return -1;
-        }
-        error("%s: Corrupted data", __func__);
-    }
-    // Text mode
-    std::string line;
-    while (true) {
-        if (!std::getline(dataStream_, line)) {
-            done_ = true;
-            return -1;
-        }
-        if (line.empty() || line[0] == '#') {continue;}
-        if (!parseLine(line, out)) return 0;
-        return 1;
-    }
-}
-
-int32_t TileOperator::loadTileToMap(const TileKey& key,
-    std::map<std::pair<int32_t, int32_t>, PixTopProbs<int32_t>>& pixelMap) {
-    assert((mode_ & 0x8) == 0);
-    if ((mode_ & 0x4) == 0) {
-        assert((mode_ & 0x2) == 0 && formatInfo_.pixelResolution > 0);}
-    pixelMap.clear();
-    if (tile_lookup_.find(key) == tile_lookup_.end()) return 0;
-
-    openDataStream();
-    size_t idx = tile_lookup_.at(key);
-    TileInfo& blk = blocks_[idx];
-    openBlock(blk);
-    float res = formatInfo_.pixelResolution;
-    PixTopProbs<int32_t> rec;
-    while (pos_ < blk.idx.ed) {
-        bool success = false;
-        if (mode_ & 0x4) { // int32
-            if (mode_ & 0x1) { // Binary
-                if (rec.read(dataStream_, k_)) {
-                    pos_ += formatInfo_.recordSize;
-                    success = true;
-                }
-            } else {
-                std::string line;
-                if (std::getline(dataStream_, line)) {
-                    pos_ += line.size() + 1;
-                    success = parseLine(line, rec);
-                }
-            }
-        } else { // float, scale then round to int
-            PixTopProbs<float> temp;
-            if (mode_ & 0x1) { // Binary
-                if (temp.read(dataStream_, k_)) {
-                    pos_ += formatInfo_.recordSize;
-                    success = true;
-                }
-            } else {
-                std::string line;
-                if (std::getline(dataStream_, line)) {
-                    pos_ += line.size() + 1;
-                    success = parseLine(line, temp);
-                }
-            }
-            if (success) {
-                rec.x = static_cast<int32_t>(std::floor(temp.x / res));
-                rec.y = static_cast<int32_t>(std::floor(temp.y / res));
-                rec.ks = std::move(temp.ks);
-                rec.ps = std::move(temp.ps);
-            }
-        }
-        if (success) {
-            pixelMap[{rec.x, rec.y}] = rec;
-        } else if (!dataStream_.eof()) {
-            error("%s: Corrupted data", __func__);
-        }
-    }
-    return static_cast<int32_t>(pixelMap.size());
-}
-
 void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep, bool binaryOutput) {
     std::string outIndex = outPrefix + ".index";
     int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
@@ -473,36 +312,6 @@ void TileOperator::classifyBlocks(int32_t tileSize) {
     }
 }
 
-void TileOperator::printIndex() const {
-    if (formatInfo_.magic == PUNKST_INDEX_MAGIC) {
-        // Print header info
-        printf("##Flag: 0x%x\n", formatInfo_.mode);
-        printf("##Tile size: %d\n", formatInfo_.tileSize);
-        printf("##Pixel resolution: %.2f\n", formatInfo_.pixelResolution);
-        printf("##Coordinate type: %s\n", (mode_ & 0x4) ? "int32" : "float");
-        if (k_ > 0) {
-            printf("##Result set: %u", kvec_[0]);
-            for (size_t i = 1; i < kvec_.size(); ++i) {
-                printf(",%u", kvec_[i]);
-            }
-            printf("\n");
-        }
-        if (mode_ & 0x1) {
-            printf("##Record size: %u bytes\n", formatInfo_.recordSize);
-        }
-        if (formatInfo_.xmin < formatInfo_.xmax && formatInfo_.ymin < formatInfo_.ymax) {
-            printf("##Bound: xmin %.2f, xmax %.2f, ymin %.2f, ymax %.2f\n",
-                formatInfo_.xmin, formatInfo_.xmax, formatInfo_.ymin, formatInfo_.ymax);
-        }
-    }
-    printf("#start\tend\trow\tcol\tnpts\txmin\txmax\tymin\tymax\n");
-    for (const auto& b : blocks_all_) {
-        printf("%lu\t%lu\t%d\t%d\t%u\t%d\t%d\t%d\t%d\n",
-            b.idx.st, b.idx.ed, b.idx.row, b.idx.col, b.idx.n,
-            b.idx.xmin, b.idx.xmax, b.idx.ymin, b.idx.ymax);
-    }
-}
-
 void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
     if (blocks_.empty()) {
         error("No blocks found in index");
@@ -679,260 +488,6 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
     notice("Reorganization completed. Output written to %s\n Index written to %s", outFile.c_str(), outIndex.c_str());
 }
 
-void TileOperator::parseHeaderLine() {
-    std::ifstream ss(dataFile_);
-    if (!ss.is_open()) {
-        error("Error opening data file: %s", dataFile_.c_str());
-    }
-    std::string line, headerLine_;
-    int32_t nline = 0;
-    while (std::getline(ss, line)) {
-        nline++;
-        if (line.empty() || line.substr(0, 2) == "##") {
-            continue;
-        }
-        if (line[0] == '#') {
-            headerLine_ = line;
-        } else {
-            break;
-        }
-    }
-    if (headerLine_.empty()) {
-        return;
-    }
-
-    line = headerLine_.substr(1); // skip initial '#'
-    std::vector<std::string> tokens;
-    split(tokens, "\t", line);
-    std::unordered_map<std::string, uint32_t> header;
-    for (uint32_t i = 0; i < tokens.size(); ++i) {
-        if (tokens[i] == "X" || tokens[i] == "Y") {
-            std::transform(tokens[i].begin(), tokens[i].end(), tokens[i].begin(), ::tolower);
-        }
-        header[tokens[i]] = i;
-    }
-    if (header.find("x") == header.end() || header.find("y") == header.end()) {
-        return;
-    }
-    icol_x_ = header["x"];
-    icol_y_ = header["y"];
-    int32_t k = 1;
-    while (header.find("K" + std::to_string(k)) != header.end() && header.find("P" + std::to_string(k)) != header.end()) {
-        icol_ks_.push_back(header["K" + std::to_string(k)]);
-        icol_ps_.push_back(header["P" + std::to_string(k)]);
-        k++;
-    }
-    if (icol_ks_.empty()) {
-        warning("No K and P columns found in the header");
-    }
-    k_ = k - 1;
-    icol_max_ = std::max(icol_x_, icol_y_);
-    for (int i = 0; i < k_; ++i) {
-        icol_max_ = std::max(icol_max_, std::max(icol_ks_[i], icol_ps_[i]));
-    }
-}
-
-void TileOperator::parseHeaderFile(const std::string& headerFile) {
-    std::string line;
-    int32_t k = 1;
-    std::ifstream headerStream(headerFile);
-    if (!headerStream.is_open()) {
-        error("Error opening header file: %s", headerFile.c_str());
-    }
-    // Load the JSON header file.
-    nlohmann::json header;
-    try {
-        headerStream >> header;
-    } catch (const std::exception& idx) {
-        error("Error parsing JSON header: %s", idx.what());
-    }
-    headerStream.close();
-    icol_x_ = header["x"];
-    icol_y_ = header["y"];
-    while (header.contains("K" + std::to_string(k)) && header.contains("P" + std::to_string(k))) {
-        icol_ks_.push_back(header["K" + std::to_string(k)]);
-        icol_ps_.push_back(header["P" + std::to_string(k)]);
-        k++;
-    }
-    if (icol_ks_.empty()) {
-        error("No K and P columns found in the header");
-    }
-    k_ = k - 1;
-    icol_max_ = std::max(icol_x_, icol_y_);
-    for (int i = 0; i < k_; ++i) {
-        icol_max_ = std::max(icol_max_, std::max(icol_ks_[i], icol_ps_[i]));
-    }
-}
-
-void TileOperator::loadIndex(const std::string& indexFile) {
-    std::ifstream in(indexFile, std::ios::binary);
-    if (!in.is_open())
-        error("Error opening index file: %s", indexFile.c_str());
-
-    uint64_t magic;
-    if (!in.read(reinterpret_cast<char*>(&magic), sizeof(magic)) ||
-         magic != PUNKST_INDEX_MAGIC) {
-        loadIndexLegacy(indexFile); return;
-    }
-
-    in.seekg(0);
-    if (!in.read(reinterpret_cast<char*>(&formatInfo_), sizeof(formatInfo_)))
-        error("%s: Error reading index file: %s", __func__, indexFile.c_str());
-    mode_ = formatInfo_.mode;
-    if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
-    if (mode_ & 0x2) {assert(mode_ & 0x4);}
-    k_ = formatInfo_.parseKvec(kvec_);
-    globalBox_ = Rectangle<float>(formatInfo_.xmin, formatInfo_.ymin,
-                                  formatInfo_.xmax, formatInfo_.ymax);
-    blocks_all_.clear();
-    tile_lookup_.clear();
-    IndexEntryF idx;
-    while (in.read(reinterpret_cast<char*>(&idx), sizeof(idx))) {
-        blocks_all_.push_back({idx, false});
-    }
-    if (blocks_all_.empty())
-        error("No index entries loaded from %s", indexFile.c_str());
-    blocks_ = blocks_all_;
-    if ((mode_ & 0x8) == 0) { // regular grid
-        for (size_t i = 0; i < blocks_.size(); ++i) {
-            auto& b = blocks_[i];
-            b.row = b.idx.row; b.col = b.idx.col;
-            tile_lookup_[{b.row, b.col}] = i;
-        }
-    }
-    notice("Loaded index with %lu blocks", blocks_all_.size());
-}
-
-void TileOperator::loadIndexLegacy(const std::string& indexFile) {
-    std::ifstream in(indexFile, std::ios::binary);
-    if (!in.is_open())
-        error("Error opening index file: %s", indexFile.c_str());
-    globalBox_.reset();
-    blocks_all_.clear();
-    tile_lookup_.clear();
-    IndexEntryF_legacy idx;
-    while (in.read(reinterpret_cast<char*>(&idx), sizeof(idx))) {
-        IndexEntryF idx1 = IndexEntryF(idx.st, idx.ed, idx.n,
-            idx.xmin, idx.xmax, idx.ymin, idx.ymax);
-        blocks_all_.push_back({idx1, false});
-        globalBox_.extendToInclude(
-            Rectangle<int32_t>(idx.xmin, idx.ymin, idx.xmax, idx.ymax));
-    }
-    if (blocks_all_.empty())
-        error("No index entries loaded from %s", indexFile.c_str());
-    blocks_ = blocks_all_;
-    notice("Loaded index with %lu blocks", blocks_all_.size());
-}
-
-void TileOperator::openBlock(TileInfo& blk) {
-    dataStream_.clear();  // clear EOF flags
-    dataStream_.seekg(blk.idx.st);
-    pos_ = blk.idx.st;
-}
-
-bool TileOperator::parseLine(const std::string& line, PixTopProbs<float>& R) const {
-    std::vector<std::string> tokens;
-    split(tokens, "\t", line);
-    if (tokens.size() < icol_max_+1) return false;
-    if (!str2float(tokens[icol_x_], R.x) ||
-        !str2float(tokens[icol_y_], R.y)) {
-        warning("%s: Error parsing x,y from line: %s", __func__, line.c_str());
-        return false;
-    }
-    if (mode_ & 0x2) {
-        R.x *= formatInfo_.pixelResolution;
-        R.y *= formatInfo_.pixelResolution;
-    }
-    if (k_ <= 0) return true;
-
-    R.ks.resize(k_);
-    R.ps.resize(k_);
-    for (int i = 0; i < k_; ++i) {
-        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
-            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
-        }
-    }
-    return true;
-}
-
-int32_t TileOperator::nextBounded(PixTopProbs<float>& out, bool rawCoord) {
-    if (done_ || idx_block_ < 0) return -1;
-
-    if (mode_ & 0x1) { // Binary mode
-        while (true) {
-            auto &blk = blocks_[idx_block_];
-            if (pos_ >= blk.idx.ed) {
-                if (++idx_block_ >= (int32_t) blocks_.size()) {
-                    done_ = true;
-                    return -1;
-                }
-                openBlock(blocks_[idx_block_]);
-                continue;
-            }
-            // Read one record
-            if (mode_ & 0x4) {
-                 PixTopProbs<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    error("%s: Corrupted data or invalid index", __func__);
-                }
-                out.x = static_cast<float>(temp.x);
-                out.y = static_cast<float>(temp.y);
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            } else {
-                if (!out.read(dataStream_, k_)) {
-                    error("%s: Corrupted data or invalid index", __func__);
-                }
-            }
-            pos_ += formatInfo_.recordSize;
-            if (blk.contained && rawCoord) {
-                return 1;
-            }
-            float x = out.x, y = out.y;
-            if (mode_ & 0x2) {
-                x *= formatInfo_.pixelResolution;
-                y *= formatInfo_.pixelResolution;
-                if (!rawCoord) {
-                    out.x = x;
-                    out.y = y;
-                }
-            }
-            if (blk.contained || queryBox_.contains(x, y)) {
-                return 1;
-            }
-        }
-    }
-
-    std::string line;
-    while (true) {
-        auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed || !std::getline(dataStream_, line)) {
-            if (++idx_block_ >= (int32_t) blocks_.size()) {
-                done_ = true;
-                return -1;
-            }
-            openBlock(blocks_[idx_block_]);
-            continue;
-        }
-        pos_ += line.size() + 1; // +1 for newline
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        PixTopProbs<float> rec;
-        if (!parseLine(line, rec)) return 0;
-        if (blk.contained || queryBox_.contains(rec.x, rec.y)) {
-            out = std::move(rec);
-            if (rawCoord && (mode_ & 0x2)) {
-                out.x /= formatInfo_.pixelResolution;
-                out.y /= formatInfo_.pixelResolution;
-            }
-            return 1;
-        }
-        // else skip it, keep reading
-    }
-}
-
 void TileOperator::reorgTilesBinary(const std::string& outPrefix, int32_t tileSize) {
     std::map<TileKey, std::vector<size_t>> tileMainBlocks;
     std::map<TileKey, std::vector<char>> boundaryData;
@@ -1061,189 +616,292 @@ void TileOperator::reorgTilesBinary(const std::string& outPrefix, int32_t tileSi
     return;
 }
 
-void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int32_t coordDigits) {
-    if (!(mode_ & 0x1)) {
-        error("dumpTSV only supports binary mode files");
-    }
-    if (blocks_.empty()) {
-        warning("%s: No data to write", __func__);
+void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
+    if (k_ <= 0 || kvec_.empty()) {
+        warning("%s: k is 0 or unknown, nothing to do", __func__);
         return;
     }
+    size_t nSets = kvec_.size();
+
+    // Accumulators
+    std::vector<std::map<int32_t, double>> marginals(nSets);
+    std::vector<std::map<std::pair<int32_t, int32_t>, double>> internalDots(nSets);
+    std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>> crossDots;
+
+    PixTopProbs<float> recFloat;
+    PixTopProbs<int32_t> recInt;
+    std::vector<int32_t>* ksPtr = nullptr;
+    std::vector<float>* psPtr = nullptr;
+
+    // Precompute offsets
+    std::vector<uint32_t> offsets(nSets + 1, 0);
+    for (size_t s = 0; s < nSets; ++s) offsets[s+1] = offsets[s] + kvec_[s];
+
     resetReader();
+    size_t count = 0;
+    while (true) {
+        int32_t ret = 0;
+        if (mode_ & 0x4) {
+            ret = next(recInt);
+            ksPtr = &recInt.ks;
+            psPtr = &recInt.ps;
+        } else {
+            ret = next(recFloat, true);
+            ksPtr = &recFloat.ks;
+            psPtr = &recFloat.ps;
+        }
+        if (ret == -1) break;
+        if (ret == 0) continue;
+        std::vector<int32_t>& ks = *ksPtr;
+        std::vector<float>& ps = *psPtr;
 
-    // Set up output files/stream
-    FILE* fp = stdout;
-    int fdIndex = -1;
-    std::string tsvFile;
-    bool writeIndex = false;
+        count++;
 
-    if (!outPrefix.empty() && outPrefix != "-") {
-        tsvFile = outPrefix + ".tsv";
-        std::string indexFile = outPrefix + ".index";
-        fp = fopen(tsvFile.c_str(), "w");
-        if (!fp) error("Error opening output file: %s", tsvFile.c_str());
-
-        fdIndex = open(indexFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-        if (fdIndex < 0) error("Cannot open output index %s", indexFile.c_str());
-        writeIndex = true;
-    }
-    // Write header
-    std::string headerStr = "#x\ty";
-    for (int i = 0; i < k_; ++i) {
-        headerStr += "\tK" + std::to_string(i + 1) + "\tP" + std::to_string(i + 1);
-    }
-    headerStr += "\n";
-    if (fprintf(fp, "%s", headerStr.c_str()) < 0) {
-        error("Error writing header to TSV file");
-    }
-
-    if (writeIndex) {
-        IndexHeader idxHeader = formatInfo_;
-        idxHeader.mode &= ~0x7;
-        idxHeader.recordSize = 0; // 0 for TSV
-        idxHeader.coordType = 0; // 0 for float
-        if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
-            error("Error writing header to index output file");
+        for (size_t s1 = 0; s1 < nSets; ++s1) {
+            uint32_t off1 = offsets[s1];
+            for (uint32_t i = 0; i < kvec_[s1]; ++i) {
+                int32_t k1 = ks[off1 + i];
+                float p1 = ps[off1 + i];
+                marginals[s1][k1] += p1;
+                // Internal
+                for (uint32_t j = i; j < kvec_[s1]; ++j) {
+                    int32_t k2 = ks[off1 + j];
+                    float p2 = ps[off1 + j];
+                    // Unordered pair within set
+                    int32_t ka = std::min(k1, k2);
+                    int32_t kb = std::max(k1, k2);
+                    internalDots[s1][{ka, kb}] += (double)p1 * p2;
+                }
+                // Cross with s2 > s1
+                for (size_t s2 = s1 + 1; s2 < nSets; ++s2) {
+                    uint32_t off2 = offsets[s2];
+                    for (uint32_t j = 0; j < kvec_[s2]; ++j) {
+                        int32_t k2 = ks[off2 + j];
+                        float p2 = ps[off2 + j];
+                        // Ordered pair (k1 from s1, k2 from s2)
+                        crossDots[{s1, s2}][{k1, k2}] += (double)p1 * p2;
+                    }
+                }
+            }
         }
     }
 
-    bool isInt32 = (mode_ & 0x4);
-    bool applyRes = (mode_ & 0x2);
-    float res = formatInfo_.pixelResolution;
+    notice("%s: Processed %lu records", __func__, count);
 
-    // Track current offset in the output TSV file
-    long currentOffset = ftell(fp);
+    // Write outputs
+    for (size_t s = 0; s < nSets; ++s) {
+        std::string fn = outPrefix + ".";
+        if (nSets > 1) {fn += std::to_string(s) + ".marginal.tsv";}
+        else {fn += "marginal.tsv";}
+        FILE* fp = fopen(fn.c_str(), "w");
+        if (!fp) error("Cannot open output file %s", fn.c_str());
+        fprintf(fp, "#K\tSum\n");
+        for (const auto& kv : marginals[s]) {
+             fprintf(fp, "%d\t%.*e\n", kv.first, probDigits, kv.second);
+        }
+        fclose(fp);
+    }
 
-    for (const auto& blk : blocks_) {
-        dataStream_.seekg(blk.idx.st);
-        size_t len = blk.idx.ed - blk.idx.st;
-        size_t recSize = formatInfo_.recordSize;
-        if (recSize == 0) error("Record size is 0 in binary mode");
-        bool checkBound = bounded_ && !blk.contained;
-        size_t nRecs = len / recSize;
+    for (size_t s = 0; s < nSets; ++s) {
+        std::string fn = outPrefix + ".";
+        if (nSets > 1) {fn += std::to_string(s) + ".joint.tsv";}
+        else fn += "joint.tsv";
+        FILE* fp = fopen(fn.c_str(), "w");
+        if (!fp) error("Cannot open output file %s", fn.c_str());
+        fprintf(fp, "#K1\tK2\tJoint\n");
+        for (const auto& kv : internalDots[s]) {
+             fprintf(fp, "%d\t%d\t%.*e\n", kv.first.first, kv.first.second, probDigits, kv.second);
+        }
+        fclose(fp);
+    }
 
-        // We will accumulate index entry info for this block
-        IndexEntryF newEntry = blk.idx;
-        newEntry.st = currentOffset;
-        // n, xmin, xmax, ymin, ymax are copied from the binary index entry
-        // This assumes the binary index is correct and aligned with the data we read.
+    for (auto const& [setPair, mapVal] : crossDots) {
+        std::string fn = outPrefix + "." + std::to_string(setPair.first) + "v" + std::to_string(setPair.second) + ".cross.tsv";
+        FILE* fp = fopen(fn.c_str(), "w");
+        if (!fp) error("Cannot open output file %s", fn.c_str());
+        fprintf(fp, "#K1\tK2\tJoint\n");
+        for (const auto& kv : mapVal) {
+             fprintf(fp, "%d\t%d\t%.*e\n", kv.first.first, kv.first.second, probDigits, kv.second);
+        }
+        fclose(fp);
+    }
+}
 
-        for(size_t i=0; i<nRecs; ++i) {
-            float x, y;
-            std::vector<int32_t> ks(k_);
-            std::vector<float> ps(k_);
+void TileOperator::probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep, int32_t probDigits) {
+    if (k2keep.size() > 0) {assert(k2keep.size() == otherFiles.size() + 1);}
+    assert(!otherFiles.empty());
 
-            if (isInt32) {
-                PixTopProbs<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) break;
-                x = static_cast<float>(temp.x);
-                y = static_cast<float>(temp.y);
-                ks = std::move(temp.ks);
-                ps = std::move(temp.ps);
-            } else {
-                PixTopProbs<float> temp;
-                if (!temp.read(dataStream_, k_)) break;
-                x = temp.x;
-                y = temp.y;
-                ks = std::move(temp.ks);
-                ps = std::move(temp.ps);
+    // 1. Setup operators
+    std::vector<std::unique_ptr<TileOperator>> ops;
+    std::vector<TileOperator*> opPtrs;
+    opPtrs.push_back(this); // current object
+    for (const auto& f : otherFiles) {
+        std::string idxFile = f.substr(0, f.find_last_of('.')) + ".index";
+        struct stat buffer;
+        if (stat(idxFile.c_str(), &buffer) != 0) {
+            error("%s: Index file %s not found", __func__, idxFile.c_str());
+        }
+        std::string df = f;
+        ops.push_back(std::make_unique<TileOperator>(df, idxFile));
+        opPtrs.push_back(ops.back().get());
+    }
+    uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
+    if (k2keep.size() == 0) {
+        for (auto* op : opPtrs) {
+            k2keep.push_back(op->getK());
+        }
+    } else {
+        for (uint32_t i = 0; i < nSources; ++i) {
+            if (k2keep[i] > opPtrs[i]->getK()) {
+                warning("%s: Invalid value k (%d) specified for the %d-th source", __func__, k2keep[i], i);
+                k2keep[i] = opPtrs[i]->getK();
             }
+        }
+    }
 
-            if (applyRes) {
-                x *= res;
-                y *= res;
+    size_t nSets = nSources;
+    // Accumulators
+    std::vector<std::map<int32_t, double>> marginals(nSets);
+    std::vector<std::map<std::pair<int32_t, int32_t>, double>> internalDots(nSets);
+    std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>> crossDots;
+
+    // Precompute offsets
+    std::vector<uint32_t> offsets(nSets + 1, 0);
+    for (size_t s = 0; s < nSets; ++s) offsets[s+1] = offsets[s] + k2keep[s];
+
+    // 2. Identify common tiles (Intersection)
+    std::set<TileKey> commonTiles;
+    if (opPtrs[0]->tile_lookup_.empty()) {
+        warning("%s: No tiles in the base dataset", __func__);
+        return;
+    }
+    for (const auto& kv : opPtrs[0]->tile_lookup_) {
+        commonTiles.insert(kv.first);
+    }
+    for (uint32_t i = 1; i < nSources; ++i) {
+        std::set<TileKey> currentTiles;
+        for (const auto& kv : opPtrs[i]->tile_lookup_) {
+            if (commonTiles.count(kv.first)) {
+                currentTiles.insert(kv.first);
             }
+        }
+        commonTiles = currentTiles;
+    }
+    if (commonTiles.empty()) {
+        warning("%s: No overlapping tiles found for merge", __func__);
+        return;
+    }
 
-            if (checkBound && !queryBox_.contains(x, y)) {
+    notice("%s: Start computing on %u files (%lu shared tiles)", __func__, nSources, commonTiles.size());
+
+    // 3. Process tiles
+    size_t count = 0;
+    for (const auto& tile : commonTiles) {
+        std::map<std::pair<int32_t, int32_t>, PixTopProbs<int32_t>> mergedMap;
+        bool first = true;
+
+        for (uint32_t i = 0; i < nSources; ++i) {
+            TileOperator* op = opPtrs[i];
+            std::map<std::pair<int32_t, int32_t>, PixTopProbs<int32_t>> currentMap;
+            if (op->loadTileToMap(tile, currentMap) == 0) { // Should not happen
+                 mergedMap.clear();
+                 break;
+            }
+            if (first) {
+                if (op->getK() > (int32_t)k2keep[i]) { // Trim to k2keep[i]
+                    for (auto& kv : currentMap) {
+                        kv.second.ks.resize(k2keep[i]);
+                        kv.second.ps.resize(k2keep[i]);
+                    }
+                }
+                mergedMap = std::move(currentMap);
+                first = false;
                 continue;
             }
-
-            if (fprintf(fp, "%.*f\t%.*f", coordDigits, x, coordDigits, y) < 0)
-                error("%s: Write error", __func__);
-            for (int k = 0; k < k_; ++k) {
-                if (fprintf(fp, "\t%d\t%.*e", ks[k], probDigits, ps[k]) < 0)
-                    error("%s: Write error", __func__);
+            auto it = mergedMap.begin();
+            while (it != mergedMap.end()) {
+                auto it2 = currentMap.find(it->first);
+                if (it2 == currentMap.end()) {
+                    it = mergedMap.erase(it); // Intersect
+                    continue;
+                }
+                // Concatenate
+                it->second.ks.insert(it->second.ks.end(),
+                    it2->second.ks.begin(), it2->second.ks.begin() + k2keep[i]);
+                it->second.ps.insert(it->second.ps.end(),
+                    it2->second.ps.begin(), it2->second.ps.begin() + k2keep[i]);
+                ++it;
             }
-            if (fprintf(fp, "\n") < 0) error("%s: Write error", __func__);
         }
+        if (mergedMap.empty()) continue;
+        count += mergedMap.size();
 
-        currentOffset = ftell(fp);
-        newEntry.ed = currentOffset;
-
-        if (writeIndex) {
-             if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) {
-                 error("Error writing index entry");
-             }
-        }
-    }
-
-    if (fp != stdout) fclose(fp);
-    if (fdIndex >= 0) close(fdIndex);
-
-    if (writeIndex) {
-        notice("Dumped TSV to %s and index to %s.index", tsvFile.c_str(), outPrefix.c_str());
-    }
-}
-
-int32_t TileOperator::nextBounded(PixTopProbs<int32_t>& out) {
-    if (mode_ & 0x1) {assert(mode_ & 0x4);}
-    if (done_ || idx_block_ < 0) return -1;
-    std::string line;
-    while (true) {
-        auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed) {
-            if (++idx_block_ >= (int32_t) blocks_.size()) {
-                done_ = true;
-                return -1;
+        // Accumulate stats
+        for (const auto& kv : mergedMap) {
+            const auto& ks = kv.second.ks;
+            const auto& ps = kv.second.ps;
+            for (size_t s1 = 0; s1 < nSets; ++s1) {
+                uint32_t off1 = offsets[s1];
+                for (uint32_t i = 0; i < k2keep[s1]; ++i) {
+                    int32_t k1 = ks[off1 + i];
+                    float p1 = ps[off1 + i];
+                    marginals[s1][k1] += p1;
+                    // Internal
+                    for (uint32_t j = i; j < k2keep[s1]; ++j) {
+                        int32_t k2 = ks[off1 + j];
+                        float p2 = ps[off1 + j];
+                        int32_t ka = std::min(k1, k2);
+                        int32_t kb = std::max(k1, k2);
+                        internalDots[s1][{ka, kb}] += (double)p1 * p2;
+                    }
+                    // Cross
+                    for (size_t s2 = s1 + 1; s2 < nSets; ++s2) {
+                        uint32_t off2 = offsets[s2];
+                        for (uint32_t j = 0; j < k2keep[s2]; ++j) {
+                            int32_t k2 = ks[off2 + j];
+                            float p2 = ps[off2 + j];
+                            crossDots[{s1, s2}][{k1, k2}] += (double)p1 * p2;
+                        }
+                    }
+                }
             }
-            openBlock(blocks_[idx_block_]);
-            continue;
         }
-
-        if (mode_ & 0x1) { // Binary mode
-            if (!out.read(dataStream_, k_)) {
-                error("%s: Corrupted data or invalid index", __func__);
-            }
-            pos_ += formatInfo_.recordSize;
-        } else {
-            if (!std::getline(dataStream_, line))
-                error("%s: Corrupted data or invalid index", __func__);
-            pos_ += line.size() + 1; // +1 for newline
-            if (line.empty() || line[0] == '#') {continue;}
-            if (!parseLine(line, out))
-                error("%s: Corrupted data or invalid index", __func__);
-        }
-
-        if (blk.contained) {return 1;}
-        float x = static_cast<float>(out.x);
-        float y = static_cast<float>(out.y);
-        if (mode_ & 0x2) {
-            x *= formatInfo_.pixelResolution;
-            y *= formatInfo_.pixelResolution;
-        }
-        if (blk.contained || queryBox_.contains(x, y)) {
-            return 1;
-        }
+        notice("%s: Processed tile (%d, %d) with %lu pixels shared by all sources", __func__, tile.row, tile.col, mergedMap.size());
     }
-}
 
-bool TileOperator::parseLine(const std::string& line, PixTopProbs<int32_t>& R) const {
-    std::vector<std::string> tokens;
-    split(tokens, "\t", line);
-    if (tokens.size() <= icol_max_ + 1) return false;
-    if (!str2int32(tokens[icol_x_], R.x) ||
-        !str2int32(tokens[icol_y_], R.y)) {
-        return false;
-    }
-    if (k_ <= 0) return true;
+    notice("%s: Processed %lu shared pixels", __func__, count);
 
-    R.ks.resize(k_);
-    R.ps.resize(k_);
-    for (int i = 0; i < k_; ++i) {
-        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
-            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            return false;
+    // Write outputs
+    for (size_t s = 0; s < nSets; ++s) {
+        std::string fn = outPrefix + "." + std::to_string(s) + ".marginal.tsv";
+        FILE* fp = fopen(fn.c_str(), "w");
+        if (!fp) error("Cannot open output file %s", fn.c_str());
+        fprintf(fp, "#K\tSum\n");
+        for (const auto& kv : marginals[s]) {
+             fprintf(fp, "%d\t%.*e\n", kv.first, probDigits, kv.second);
         }
+        fclose(fp);
     }
-    return true;
+
+    for (size_t s = 0; s < nSets; ++s) {
+        std::string fn = outPrefix + "." + std::to_string(s) + ".joint.tsv";
+        FILE* fp = fopen(fn.c_str(), "w");
+        if (!fp) error("Cannot open output file %s", fn.c_str());
+        fprintf(fp, "#K1\tK2\tJoint\n");
+        for (const auto& kv : internalDots[s]) {
+             fprintf(fp, "%d\t%d\t%.*e\n", kv.first.first, kv.first.second, probDigits, kv.second);
+        }
+        fclose(fp);
+    }
+
+    for (auto const& [setPair, mapVal] : crossDots) {
+        std::string fn = outPrefix + "." + std::to_string(setPair.first) + "v" + std::to_string(setPair.second) + ".cross.tsv";
+        FILE* fp = fopen(fn.c_str(), "w");
+        if (!fp) error("Cannot open output file %s", fn.c_str());
+        fprintf(fp, "#K1\tK2\tJoint\n");
+        for (const auto& kv : mapVal) {
+             fprintf(fp, "%d\t%d\t%.*e\n", kv.first.first, kv.first.second, probDigits, kv.second);
+        }
+        fclose(fp);
+    }
 }

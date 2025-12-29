@@ -406,26 +406,19 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
     indexFile.clear();
     indexFile.seekg(0);
     std::string line;
-    if (!std::getline(indexFile, line) || line.empty()) {
-        error("%s: Index file appears to be empty", __func__);
-    }
-
     std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
     bool filter = !rects.empty();
     if (filter) getTilesInBounds(rects, tileMap);
     while (std::getline(indexFile, line)) {
         if (line.empty()) {continue;}
-        while (line[0] == '#') { // Parse metadata lines
+        if (line[0] == '#') { // Parse metadata lines
             std::istringstream metaStream(line);
             std::string hashtag, key;
             metaStream >> hashtag >> key;
             if (key == "tilesize") {
                 if (!(metaStream >> tileSize)) error("%s: Invalid tileSize", __func__);
             }
-            if (!std::getline(indexFile, line)) {
-                if (line.empty() && indexFile.eof()) break;
-                error("%s: Index file is empty/truncated", __func__);
-            }
+            continue;
         }
         std::istringstream iss(line);
         int row, col;
@@ -453,7 +446,7 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
 
     nTiles = tile_map_.size();
     indexFile.close();
-    notice("Read %zu tiles from index file", nTiles);
+    notice("%s: Read %zu tiles from index file, tilesize=%d", __func__, nTiles, tileSize);
     return true;
 }
 

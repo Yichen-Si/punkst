@@ -66,7 +66,6 @@ public:
         InferenceType algo = InferenceType::SVB) : seed_(seed),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
         total_doc_count_(-1), update_count_(0) {
-        set_nthreads(nThreads);
         set_model_from_tsv(modelFile);
         init();
     }
@@ -76,7 +75,6 @@ public:
         InferenceType algo = InferenceType::SVB) : seed_(seed),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
         total_doc_count_(-1), update_count_(0) {
-        set_nthreads(nThreads);
         set_model_from_matrix(modelMtx);
         init();
     }
