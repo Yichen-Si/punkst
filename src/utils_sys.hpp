@@ -78,7 +78,7 @@ void computeBlocks(std::vector<std::pair<std::streampos, std::streampos>>& block
 // Iterator for lines
 class BoundedReadline {
 public:
-    BoundedReadline(const std::string &filename, std::streampos start, std::streampos end)
+    BoundedReadline(const std::string &filename, uint64_t start, uint64_t end)
         : startOffset(start), endOffset(end)
     {
         file = std::make_unique<std::ifstream>(filename, std::ios::binary);
@@ -86,25 +86,26 @@ public:
             throw std::runtime_error("Failed to open file: " + filename);
         }
         file->seekg(startOffset);
+        currentPos = startOffset;
     }
 
-    // Returns true and sets 'line' if a line is successfully read and within the tile's range.
     bool next(std::string &line) {
         // Check that we haven't passed the tile's end.
-        if (!file || file->tellg() >= endOffset) {
+        if (!file || currentPos >= endOffset) {
             return false;
         }
-        std::streampos before = file->tellg();
         if (!std::getline(*file, line)) {
             return false;
         }
+        currentPos += static_cast<uint64_t>(line.size()) + 1;
         return true;
     }
 
 private:
     std::unique_ptr<std::ifstream> file;
-    std::streampos startOffset;
-    std::streampos endOffset;
+    uint64_t startOffset;
+    uint64_t endOffset;
+    uint64_t currentPos;
 };
 
 

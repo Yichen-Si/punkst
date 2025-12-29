@@ -13,59 +13,12 @@
 #include "utils_sys.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"
+#include "tile_io.hpp"
 
 #include "Eigen/Sparse"
 using Eigen::SparseMatrix;
 
 enum class CoordType { INTEGER, FLOAT };
-
-// for serializing to temporary files
-#pragma pack(push, 1)
-template<typename T>
-struct RecordT {
-    T x;
-    T y;
-    uint32_t idx;
-    uint32_t ct;
-};
-#pragma pack(pop)
-
-template<typename T>
-struct RecordExtendedT {
-    RecordT<T> recBase;
-    std::vector<int32_t> intvals;
-    std::vector<float> floatvals;
-    std::vector<std::string> strvals;
-    RecordExtendedT() : recBase{T{}, T{}, 0u, 0u} {}
-    RecordExtendedT(const RecordT<T>& base) : recBase(base){}
-    RecordExtendedT(T x, T y, uint32_t idx, uint32_t ct) : recBase{x, y, idx, ct} {}
-};
-
-// Identify a tile by (row, col)
-struct TileKey {
-    int32_t row;
-    int32_t col;
-    bool operator==(const TileKey &other) const {
-        return row == other.row && col == other.col;
-    }
-    bool operator<(const TileKey &other) const {
-        return row < other.row || (row == other.row && col < other.col);
-    }
-};
-
-// Custom hash for TileKey
-struct TileKeyHash {
-    std::size_t operator()(const TileKey &key) const {
-        return std::hash<int>()(key.row) ^ (std::hash<int>()(key.col) << 1);
-    }
-};
-
-// Structure holding the offsets for a tile’s data
-struct TileInfo {
-    std::streampos startOffset;
-    std::streampos endOffset;
-    bool partial = false;
-};
 
 // Parse a line in the tsv tiled pixel file
 struct lineParser {
@@ -131,7 +84,7 @@ protected:
     int tileSize;
     size_t nTiles;
     // Map from TileKey to TileInfo.
-    std::unordered_map<TileKey, TileInfo, TileKeyHash> index;
+    std::unordered_map<TileKey, TileInfo, TileKeyHash> tile_map_;
     // Helper function to load the index file.
     virtual void loadIndex(const std::string &indexFilename) = 0;
     std::vector<Rectangle<double>> rects;
@@ -162,21 +115,21 @@ public:
     bool pt2tile(T x, T y, TileKey &tile) const {
         tile.row = static_cast<int32_t>(std::floor(y / tileSize));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize));
-        return index.find(tile) != index.end();
+        return tile_map_.find(tile) != tile_map_.end();
     }
 
     bool isPartial(TileKey &tile) const {
-        auto it = index.find(tile);
-        if (it == index.end()) {
+        auto it = tile_map_.find(tile);
+        if (it == tile_map_.end()) {
             return false;
         }
-        return it->second.partial;
+        return !(it->second.contained);
     }
 
     void getTileList(std::vector<TileKey> &tileList) const {
         tileList.reserve(nTiles);
         tileList.clear();
-        for (const auto &pair : index) {
+        for (const auto &pair : tile_map_) {
             tileList.push_back(pair.first);
         }
     }
@@ -196,16 +149,9 @@ public:
                 for (int col = colMin; col <= colMax; ++col) {
                     TileKey key{row, col};
                     // the exact bounds of this tile in world‐space
-                    Rectangle<T> tileRect(
-                        static_cast<T>(col     * tileSize),
-                        static_cast<T>(row     * tileSize),
-                        static_cast<T>((col+1) * tileSize),
-                        static_cast<T>((row+1) * tileSize)
-                    );
+                    Rectangle<T> tileRect = tile2bound<T>(row, col, tileSize);
                     int32_t code = tileRect.intersect(r);
-                    if (code == 0)
-                        continue;             // no overlap
-
+                    if (code == 0) continue; // no overlap
                     bool fullyInThisRect = (code == 2);
                     auto it = tileMap.find(key);
                     if (it == tileMap.end()) {
@@ -230,7 +176,7 @@ public:
 
         // Map each TileKey -> whether we've seen it _fully contained_
         std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
-        tileMap.reserve(index.size());
+        tileMap.reserve(tile_map_.size());
         getTilesInBounds(_rects, tileMap);
 
         // Flatten
@@ -243,7 +189,7 @@ public:
     }
 
     bool isValid() const {
-        return !index.empty() && tileSize > 0;
+        return !tile_map_.empty() && tileSize > 0;
     }
 
     // Given a focal tile returns a vector of TileKey for adjacent tiles.
@@ -252,7 +198,7 @@ public:
             for (int dc = -1; dc <= 1; ++dc) {
                 if (dr == 0 && dc == 0) continue; // skip the focal tile itself
                 TileKey key {focalRow + dr, focalCol + dc};
-                if (index.find(key) != index.end()) {
+                if (tile_map_.find(key) != tile_map_.end()) {
                     adjacent.push_back(key);
                 }
             }
@@ -267,10 +213,30 @@ public:
 class TileReader : public TileReaderBase {
 public:
 
+    std::string headerLine;
+
     TileReader(const std::string &tsvFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1, bool isInt = false)
         : TileReaderBase(tsvFilename, indexFilename, _rects, tileSize) {
         loadIndex(indexFilename);
         coordType = isInt ? CoordType::INTEGER : CoordType::FLOAT;
+        { // Read and store header/metadata lines
+            std::ifstream tsvFile(tsvFilename);
+            if (!tsvFile.is_open()) {
+                throw std::runtime_error("Unable to open TSV file: " + tsvFilename);
+            }
+            std::string line;
+            headerLine.clear();
+            while (std::getline(tsvFile, line)) {
+                if (line.empty()) {
+                    continue;
+                }
+                if (line[0] != '#') {
+                    break;
+                }
+                headerLine += line + "\n";
+            }
+            if (!headerLine.empty()) {headerLine.pop_back();}
+        }
     }
 
     // Given a tile identified by (tileRow, tileCol), returns an iterator

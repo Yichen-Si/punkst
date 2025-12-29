@@ -783,18 +783,18 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     if (useExtended_) {
         tileData.orgpts2pixel.assign(tileData.extPts.size(), -1);
         for (const auto& pt : tileData.extPts) {
-            int32_t x = static_cast<int32_t>(pt.recBase.x / res);
-            int32_t y = static_cast<int32_t>(pt.recBase.y / res);
-            uint64_t key = (static_cast<uint64_t>(x) << 32) | static_cast<uint32_t>(y);
+            int32_t x = static_cast<int32_t>(std::floor(pt.recBase.x / res));
+            int32_t y = static_cast<int32_t>(std::floor(pt.recBase.y / res));
+            uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(y);
             pixAgg[key].first[pt.recBase.idx] += pt.recBase.ct;
             pixAgg[key].second.push_back(idxOriginal++);
         }
     } else {
         tileData.orgpts2pixel.assign(tileData.pts.size(), -1);
         for (const auto& pt : tileData.pts) {
-            int32_t x = static_cast<int32_t>(pt.x / res);
-            int32_t y = static_cast<int32_t>(pt.y / res);
-            uint64_t key = (static_cast<uint64_t>(x) << 32) | static_cast<uint32_t>(y);
+            int32_t x = static_cast<int32_t>(std::floor(pt.x / res));
+            int32_t y = static_cast<int32_t>(std::floor(pt.y / res));
+            uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(y);
             pixAgg[key].first[pt.idx] += pt.ct;
             pixAgg[key].second.push_back(idxOriginal++);
         }
@@ -994,13 +994,15 @@ void Tiles2MinibatchBase<T>::setupOutput() {
     // Write index header
     IndexHeader idxHeader;
     idxHeader.magic = PUNKST_INDEX_MAGIC;
+    idxHeader.mode = 0x8;
     idxHeader.tileSize = tileSize;
     idxHeader.topK = topk_;
+    idxHeader.pixelResolution = pixelResolution_;
     const auto& box = tileReader.getGlobalBox();
     idxHeader.xmin = box.xmin; idxHeader.xmax = box.xmax;
     idxHeader.ymin = box.ymin; idxHeader.ymax = box.ymax;
     if (outputBinary_) {
-        idxHeader.pixelResolution = pixelResolution_;
+        idxHeader.mode |= 0x7;
         outputRecordSize_ = 2 * sizeof(int32_t) + topk_ * sizeof(int32_t) + topk_ * sizeof(float);
         idxHeader.coordType = 1;
         idxHeader.recordSize = outputRecordSize_;

@@ -150,6 +150,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         int ypix = int((rec.y - ymin)/scale);
         if (xpix<0||xpix>=width||ypix<0||ypix>=height) {
             debug("Skipping out-of-bounds pixel (%.1f, %.1f) → (%d, %d)", rec.x, rec.y, xpix, ypix);
+            if (debug_ && nline > debug_) {
+                return 0;
+            }
             continue;
         }
         if (countImg(ypix, xpix)>=255) { nskip++; continue; }

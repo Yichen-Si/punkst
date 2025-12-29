@@ -96,6 +96,7 @@ protected:
     bool scaling_;
     int32_t digits_;
     Rectangle<float> globalBox_;
+    std::string metaLines_;
 
     std::unordered_map<std::string, std::vector<int32_t>> featureCounts_;
     std::mutex minmaxMutex_;
@@ -262,6 +263,12 @@ protected:
         std::string line;
 
         while (file.tellg() < end && std::getline(file, line)) {
+            if (line.empty()) continue;
+            if (line[0] == '#') {
+                std::lock_guard lk(globalTilesMutex_);
+                metaLines_ += line + "\n";
+                continue;
+            }
             consumeLine(threadId, line,
                         buffers, localTileMinMax,
                         localMinMax, localCounts);
@@ -330,6 +337,11 @@ protected:
             }
             if (batch.empty()) break;
             for (auto &ln : batch) {
+                if (ln[0] == '#') {
+                    std::lock_guard lk(globalTilesMutex_);
+                    metaLines_ += ln + "\n";
+                    continue;
+                }
                 consumeLine(threadId, ln, buffers, localTileMinMax,
                             localMinMax, localCounts);
             }
@@ -381,6 +393,7 @@ protected:
         if (!outfile) {
             error("Error opening output file for writing: %s.tsv", outPref_.c_str());
         }
+        if (!metaLines_.empty()) {outfile << metaLines_;}
 
         std::string indexFilename = outPref_ + ".index";
         std::ofstream indexfile(indexFilename, std::ios::binary);
@@ -391,15 +404,10 @@ protected:
         // Write header
         IndexHeader header;
         header.magic = PUNKST_INDEX_MAGIC;
+        header.mode = 0; // tsv, no scaling, float coords, regular tiles
         header.tileSize = tileSize_;
-        header.pixelResolution = 1.0;
-        header.coordType = 0; // Float
-        header.topK = 0;
-        header.recordSize = 0; // TSV
-        header.xmin = globalBox_.xmin;
-        header.xmax = globalBox_.xmax;
-        header.ymin = globalBox_.ymin;
-        header.ymax = globalBox_.ymax;
+        header.xmin = globalBox_.xmin; header.xmax = globalBox_.xmax;
+        header.ymin = globalBox_.ymin; header.ymax = globalBox_.ymax;
         indexfile.write(reinterpret_cast<const char*>(&header), sizeof(header));
 
         std::vector<uint64_t> sortedTiles;

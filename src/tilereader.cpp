@@ -331,13 +331,13 @@ template int32_t lineParserUnival::parse<int32_t>( RecordExtendedT<int32_t>& rec
 */
 std::unique_ptr<BoundedReadline> TileReader::get_tile_iterator(int tileRow, int tileCol) const {
     TileKey key {tileRow, tileCol};
-    auto it = index.find(key);
-    if (it == index.end()) {
+    auto it = tile_map_.find(key);
+    if (it == tile_map_.end()) {
         warning("%s: Tile (%d, %d) not found in index", __FUNCTION__, tileRow, tileCol);
         return nullptr;
     }
     const TileInfo &info = it->second;
-    return std::make_unique<BoundedReadline>(tsvFilename, info.startOffset, info.endOffset);
+    return std::make_unique<BoundedReadline>(tsvFilename, info.idx.st, info.idx.ed);
 }
 
 void TileReader::loadIndex(const std::string &indexFilename) {
@@ -377,21 +377,21 @@ bool TileReader::loadIndexBinary(const std::string &indexFilename) {
     }
     while (indexFile.read(reinterpret_cast<char*>(&entry), sizeof(entry))) {
         TileKey key{entry.row, entry.col};
-        TileInfo info{static_cast<std::streampos>(entry.st), static_cast<std::streampos>(entry.ed), false};
+        TileInfo info(entry, true);
         if (filter) {
             auto it = tileMap.find(key);
             if (it == tileMap.end()) {
                 continue;
             }
-            info.partial = !(it->second);
+            info.contained = it->second;
         }
-        index.emplace(key, info);
+        tile_map_.emplace(key, info);
         if (entry.row < minrow) minrow = entry.row;
         if (entry.col < mincol) mincol = entry.col;
         if (entry.row > maxrow) maxrow = entry.row;
         if (entry.col > maxcol) maxcol = entry.col;
     }
-    nTiles = index.size();
+    nTiles = tile_map_.size();
     indexFile.close();
     notice("Read %zu tiles from binary index file", nTiles);
     return true;
@@ -429,18 +429,18 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
         }
         std::istringstream iss(line);
         int row, col;
-        std::streamoff start, end;
+        uint64_t start, end;
         if (!(iss >> row >> col >> start >> end)) {
             error("%s: Malformed index line: %s", __func__, line.c_str());
         }
-        TileInfo info{start, end};
+        TileInfo info(start, end, true);
         TileKey key{row, col};
         if (filter) {
             auto it = tileMap.find(key);
             if (it == tileMap.end()) {continue;}
-            info.partial = !(it->second);
+            info.contained = it->second;
         }
-        index.emplace(key, info);
+        tile_map_.emplace(key, info);
         if (row < minrow) minrow = row;
         if (col < mincol) mincol = col;
         if (row > maxrow) maxrow = row;
@@ -451,7 +451,7 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
     }
     if (tileSize <= 0) {error("%s: Cannot identify tileSize", __func__);}
 
-    nTiles = index.size();
+    nTiles = tile_map_.size();
     indexFile.close();
     notice("Read %zu tiles from index file", nTiles);
     return true;
@@ -499,12 +499,12 @@ bool BoundedBinaryTileIterator::next(BoundedBinaryTileIterator::Record &record) 
 */
 std::unique_ptr<BoundedBinaryTileIterator> BinaryTileReader::get_tile_iterator(int tileRow, int tileCol) const {
     TileKey key {tileRow, tileCol};
-    auto it = index.find(key);
-    if (it == index.end()) {
+    auto it = tile_map_.find(key);
+    if (it == tile_map_.end()) {
         return nullptr; // Tile not found
     }
     const TileInfo &info = it->second;
-    return std::make_unique<BoundedBinaryTileIterator>(tsvFilename, info.startOffset, info.endOffset, recordSize, numCat, numInt, numFloat);
+    return std::make_unique<BoundedBinaryTileIterator>(tsvFilename, info.idx.st, info.idx.ed, recordSize, numCat, numInt, numFloat);
 }
 
 void BinaryTileReader::loadIndex(const std::string &indexFilename) {
@@ -543,12 +543,12 @@ void BinaryTileReader::loadIndex(const std::string &indexFilename) {
         while (!line.empty()) {
             std::istringstream iss(line);
             int row, col;
-            std::streamoff start, end;
+            std::uint64_t start, end;
             int count;
             if (!(iss >> row >> col >> start >> end >> count)) {
                 throw std::runtime_error("Malformed index line: " + line);
             }
-            index.emplace(TileKey{row, col}, TileInfo{start, end});
+            tile_map_.emplace(TileKey{row, col}, TileInfo(start, end));
             if (row < minrow) minrow = row;
             if (col < mincol) mincol = col;
             if (row > maxrow) maxrow = row;
@@ -557,7 +557,7 @@ void BinaryTileReader::loadIndex(const std::string &indexFilename) {
                 break;  // End of file
             }
         }
-        nTiles = index.size();
+        nTiles = tile_map_.size();
         indexFile.close();
     }
 

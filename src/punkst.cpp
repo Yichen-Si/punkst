@@ -50,7 +50,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("feature-vst", "Compute feature variance stabilizing stats and select highly variable features", cmdFeatureVst)
         .add_command("de-chisq", "Differential expression using Chi-squared test", cmdDeChisq)
         .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk).
-        add_command("tile-op", "Reorganize tiles", cmdManipulateTiles);
+        add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
 
     if (argc < 2) {
         std::cerr << "Licensed under the CC BY-NC 4.0 https://creativecommons.org/licenses/by-nc/4.0/\n\n";
