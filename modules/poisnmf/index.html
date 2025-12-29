@@ -8,13 +8,9 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/coexp/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/poisnmf/">
       
       
-        <link rel="prev" href="../visualization/">
-      
-      
-        <link rel="next" href="../tileop/">
       
       
         
@@ -25,7 +21,7 @@
     
     
       
-        <title>Co-occurrence - punkst</title>
+        <title>Poisson NMF with log(1+x) link - punkst</title>
       
     
     
@@ -76,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#gene-cooccurrence-and-marker-selection" class="md-skip">
+        <a href="#poisson-nmf-with-log1x-link" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Co-occurrence
+              Poisson NMF with log(1+x) link
             
           </span>
         </div>
@@ -304,12 +300,10 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../" class="md-tabs__link">
           
   
@@ -566,8 +560,6 @@
       
   
   
-    
-  
   
   
     
@@ -595,19 +587,18 @@
     
     
       
-        
-        
-      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -629,13 +620,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -792,37 +783,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Co-occurrence
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../coexp/" class="md-nav__link">
         
   
   
@@ -838,188 +802,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        cooccurrence
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="cooccurrence">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#adding-up-multiple-matrices" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Adding up multiple matrices
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#coloc2markers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        coloc2markers
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="coloc2markers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#usage_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recover-factors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recover factors
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1087,18 +869,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
+  <a href="#input-format" class="md-nav__link">
     <span class="md-ellipsis">
       
-        cooccurrence
+        Input format
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="cooccurrence">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
   <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1130,6 +911,51 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Optional">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#data-and-feature-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Data and Feature Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-and-training-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model and Training Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experimental-including-covariates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experimental: including covariates
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experimental-compute-de-statistics-from-covhat-beta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experimental: compute DE statistics from Cov(\(\hat \beta\))
+      
+    </span>
+  </a>
+  
 </li>
         
       </ul>
@@ -1139,101 +965,6 @@
         
           <li class="md-nav__item">
   <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#adding-up-multiple-matrices" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Adding up multiple matrices
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#coloc2markers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        coloc2markers
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="coloc2markers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#usage_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recover-factors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recover factors
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Output files
@@ -1268,94 +999,76 @@
   
 
 
-<h1 id="gene-cooccurrence-and-marker-selection">Gene cooccurrence and marker selection<a class="headerlink" href="#gene-cooccurrence-and-marker-selection" title="Permanent link">&para;</a></h1>
-<p><strong><code>cooccurrence</code> computes gene co-occurrence within a specified radius and <code>coloc2markers</code> selects markers from the co-occurrence matrix.</strong></p>
-<h2 id="cooccurrence">cooccurrence<a class="headerlink" href="#cooccurrence" title="Permanent link">&para;</a></h2>
-<p>The <code>cooccurrence</code> command computes how frequently each pair of genes appear together within a specified radius, either as a binary relation or weighted by distance with exponential decay. (We also have a <code>merge-mtx</code> command in case you want to add up multiple co-occurrence matrices potentially computed from different datasets.)</p>
-<h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>cooccurrence<span class="w"> </span>--in-tsv<span class="w"> </span>tiles.tsv<span class="w"> </span>--in-index<span class="w"> </span>tiles.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--feature-dict<span class="w"> </span>features.tsv<span class="w"> </span>--out<span class="w"> </span>./out<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--radius<span class="w"> </span><span class="m">15</span><span class="w">  </span>--halflife<span class="w"> </span><span class="m">10</span><span class="w"> </span>--binary<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
+<h1 id="poisson-nmf-with-log1x-link">Poisson NMF with log(1+x) link<a class="headerlink" href="#poisson-nmf-with-log1x-link" title="Permanent link">&para;</a></h1>
+<p><strong><code>nmf-pois-log1p</code> fits a non-negative matrix factorization model with Poisson likelihood to single cell or spot level count data.</strong> It fits the model <span class="arithmatex">\(y_{im} \sim Pois(\lambda_{im}), \ \ g(\lambda_{im}) = \theta_i^T \beta_m\)</span> where <span class="arithmatex">\(g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)\)</span> with unit (cell) specific scaling <span class="arithmatex">\(c_i\)</span>.</p>
+<h2 id="input-format">Input format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h2>
+<p>The input data format is the same as for <code>topic-model</code>/<code>lda4hex</code>, (could be enerated from pixel level data by <code>tiles2hex</code>), including a data file and a corresponding metadata JSON file.</p>
+<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>nmf-pois-log1p<span class="w"> </span>--in-data<span class="w"> </span>hex_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>hex_meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--K<span class="w"> </span><span class="m">15</span><span class="w"> </span>--out-prefix<span class="w"> </span>nmf_results<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1984</span>
 </span></code></pre></div>
-<h4 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h4>
-<p><code>--in-tsv</code> - The tiled data created by <code>pts2tiles</code>.</p>
-<p><code>--in-index</code> The index file created by <code>pts2tiles</code>.</p>
-<p><code>--icol-x</code> - Column index for x coordinate (0-based).</p>
-<p><code>--icol-y</code> - Column index for y coordinate (0-based).</p>
-<p><code>--icol-feature</code> - Column index for feature list (0-based).</p>
-<p><code>--icol-val</code> - Column index for the integer count values (0-based).</p>
-<p><code>--radius</code> - Radius within which to count co-occurrence.</p>
-<p><code>--out</code> - Output prefix for generated files.</p>
-<p><code>--feature-dict</code> - If feature column contains non-integer values, provide a dictionary/list of all feature names.</p>
-<h4 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h4>
-<p><code>--bounding-boxes</code> - Rectangular query regions specified as <code>xmin ymin xmax ymax</code> coordinates (plain numbers separated by spaces, without parenthesis). A single co-occurrence matrix is created using pixels in the union of the regions. Can specify multiple regions by adding multiple 4-tuples. e.g. <code>--bounding-boxes 5040 2300 8830 4640 100 200 1500 1600</code> for two rectangles.</p>
-<p><code>--weight-by-count</code> - Weight co-occurrence by the product of transcript counts at each pixel. Default: false. (This is unlikely to have a noticeable impact unless for very dense sequencing data)</p>
-<p><code>--halflife</code> - Half-life (starting from 1 for zero distance, the distance where the weight is 0.5) for exponential decay weighting. Default: -1, unweighted by distance within the radius.</p>
-<p><code>--min-neighbor</code> - Minimum number of neighboring pixels within radius for a pixel to be included (meant to be used to reduce the influence from sparse/non-tissue regions). Default: 1.</p>
-<p><code>--local-min</code> - Minimum co-occurrence value within a tile to record. Default: 0.</p>
+<h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
+<p><code>--in-data</code> - Input data file (created by <code>tiles2hex</code>).</p>
+<p><code>--in-meta</code> - Metadata file created by <code>tiles2hex</code>.</p>
+<p><code>--K</code> - The number of factors (topics) to learn.</p>
+<p><code>--out-prefix</code> - Prefix for the output files.</p>
+<h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
+<h4 id="data-and-feature-filtering">Data and Feature Filtering<a class="headerlink" href="#data-and-feature-filtering" title="Permanent link">&para;</a></h4>
+<p>(Similar to <a href="../lda4hex/"><code>topic-model</code>/<code>lda4hex</code></a>)</p>
+<p><code>--features</code> - Path to a file where the first column contains gene names and the second column contains the total count of that gene. Used for filtering.</p>
+<p><code>--min-count-per-feature</code> - Minimum total count for a feature to be included. Requires <code>--features</code>. Default: 100.</p>
+<p><code>--include-feature-regex</code> - Regular expression to include only features matching this pattern.</p>
+<p><code>--exclude-feature-regex</code> - Regular expression to exclude features matching this pattern.</p>
+<p><code>--min-count-train</code> - Minimum total count for a unit (hexagon/cell) to be included in training. Default: 50.</p>
+<h4 id="model-and-training-parameters">Model and Training Parameters<a class="headerlink" href="#model-and-training-parameters" title="Permanent link">&para;</a></h4>
+<p><code>--mode</code> - Optimization algorithm to use in each Poisson regression subproblem. 1 for TRON (trust-region Newton-CG, default), 2 for Monotone FISTA (an accelerated gradient algorithm), 3 for a Newton's method with line search, 0 for Newton's method without line search.</p>
+<p><code>--size-factor</code> - A constant to scale the total counts per unit (matching <span class="arithmatex">\(L\)</span> in Seurat), used to calculate the per-observation scaling parameter <span class="arithmatex">\(c_i=\frac{\sum_m y_{im}}{L}\)</span> in <span class="arithmatex">\(g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)\)</span>. Default: 10000.</p>
+<p><code>--c</code> - If specified, use a constant <code>c</code> for all units instead of calculating it from <code>size-factor</code>. Default: -1 (per-unit <code>c</code>).</p>
+<p><code>--feature-residuals</code> - If set, output per-feature residuals for diagnosis.</p>
+<p><code>--max-iter-outer</code> - Maximum number of outer loop iterations (alternating between updating <span class="arithmatex">\(\theta\)</span> and <span class="arithmatex">\(\beta\)</span>). Default: 50, but it often approximates convergence in <span class="arithmatex">\(\lt 10\)</span> terations.</p>
+<p><code>--max-iter-inner</code> - Maximum number of iterations for each Poisson regression optimization. Default: 20.</p>
+<p><code>--tol-outer</code> - Convergence tolerance for the outer loop. Default: 1e-5.</p>
+<p><code>--tol-inner</code> - Convergence tolerance for the inner optimization problems. Default: 1e-6.</p>
+<p><code>--exact</code> - Use the exact likelihood for all observations. If not set, uses a second-order approximatio for zero-count observations to speed up computation.</p>
+<p><code>--seed</code> - Random seed for reproducibility.</p>
 <p><code>--threads</code> - Number of threads to use. Default: 1.</p>
-<p><code>--binary</code> - Output results in binary format. Default: false (TSV output). Using the binary format is more efficient especially if you were to run the
-<code>coloc2markers</code> command later.</p>
+<h4 id="experimental-including-covariates">Experimental: including covariates<a class="headerlink" href="#experimental-including-covariates" title="Permanent link">&para;</a></h4>
+<p>We fit the model <span class="arithmatex">\(g(\lambda_{im}) = \theta_i^T \beta_m + x_i^T b_m\)</span> where <span class="arithmatex">\(x_i\)</span> contains covariates for unit <span class="arithmatex">\(i\)</span> provided in <code>--in-covar</code>.</p>
+<p>Note: covariates and their effects are <strong>not</strong> constrained to be non-negative unless you specify so. We tried to make the optimization numerically stable but it may not always be interpretable if the non-negative <span class="arithmatex">\(\theta_i^T \beta_m\)</span> part is dominated by the covariate effects.</p>
+<p><code>--in-covar</code> - Path to a file containing covariates, with a header line. The number of rows and the <strong>order</strong> of units should exactly match that in the input count data <code>--in-data</code>. Currently only numerical covariates are supported, you might try to fit categorical covariates as one-hot encoded binary variables.</p>
+<p><code>--icol-covar</code> - Column indices (0-based) in the covariate file to use. If not specified, all columns except the first are used.</p>
+<p><code>--allow-na</code> - If set, non-numerical values in covariate columns are replaced with 0. Otherwise, all values must be numerical.</p>
+<p><code>--covar-coef-min</code> - Lower bound for covariate coefficients. Default: -1e6.</p>
+<p><code>--covar-coef-max</code> - Upper bound for covariate coefficients. Default: 1e6.</p>
+<p>Example usage with covariates:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>nmf-pois-log1p<span class="w"> </span>--in-data<span class="w"> </span>hex_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>hex_meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--K<span class="w"> </span><span class="m">15</span><span class="w"> </span>--out-prefix<span class="w"> </span>nmf_results<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1984</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--in-covar<span class="w"> </span>covars.tsv<span class="w"> </span>--icol-covar<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">5</span>
+</span></code></pre></div>
+<h4 id="experimental-compute-de-statistics-from-covhat-beta">Experimental: compute DE statistics from Cov(<span class="arithmatex">\(\hat \beta\)</span>)<a class="headerlink" href="#experimental-compute-de-statistics-from-covhat-beta" title="Permanent link">&para;</a></h4>
+<p><code>--detest-vs-avg</code> - Compute DE statistics for each factor vs the average, for each feature. Set to <code>1</code> to use Fisher's information based covariance, <code>2</code> to use the robust sandwich estimator, or <code>3</code> to compute both. Default: 0 (skip covariance computation so no DE output).</p>
+<p><code>--min-fc</code> - Minimum approximated fold change to report. Note: due to the nonlinear link, we don't have an exact fold change interpretation, the reported value is <span class="arithmatex">\((\exp(\beta_{km})-1)/(\exp(\beta^0_{m})-1)\)</span> where <span class="arithmatex">\(\beta^0_m\)</span> is a weighted average of <span class="arithmatex">\(\beta_m\)</span> across factors and <span class="arithmatex">\(\theta\)</span> is scaled to have column sums equal to <span class="arithmatex">\(N/K\)</span>. Default: 1.5.</p>
+<p><code>--max-p</code> - Maximum p-value to report. Default: 0.05.</p>
+<p><code>--min-ct</code> - Minimum total count for a feature to be included in DE testing. Default: 100.</p>
 <h3 id="output-files">Output files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
 <ul>
 <li>
-<p>Co-occurrence matrix named <code>{prefix}.mtx.bin</code> (if <code>--binary</code> is used) or <code>{prefix}.mtx.tsv</code> (otherwise).</p>
+<p><code>{prefix}.model.tsv</code>: The feature-factor matrix (<span class="arithmatex">\(\beta\)</span>), where rows are features (genes) and columns are factors. It is scaled such that the column sums (<span class="arithmatex">\(\sum_m \beta_{km}\)</span> for each <span class="arithmatex">\(k\)</span>) all equal to <span class="arithmatex">\(M\)</span>, the number of features.</p>
 </li>
 <li>
-<p>Marginal information per gene named <code>{prefix}.marginals.tsv</code>. The columns are feature index (corresponding to row \&amp; column index in the matrix), name, total counts, total number of pixels, used pixels, used neighbors.</p>
-</li>
-</ul>
-<h3 id="adding-up-multiple-matrices">Adding up multiple matrices<a class="headerlink" href="#adding-up-multiple-matrices" title="Permanent link">&para;</a></h3>
-<p>For convenience</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>merge-mtx<span class="w"> </span>--in-list<span class="w"> </span>mtx_list.txt<span class="w"> </span>--binary<span class="w"> </span>--binary-output<span class="w"> </span>--shared-nrows<span class="w"> </span><span class="nv">$M</span><span class="w"> </span>--out<span class="w"> </span>cooccur.merged
-</span></code></pre></div>
-<p>Just include the file paths of the input matrices in a file provided to <code>--in-list</code>.</p>
-<h2 id="coloc2markers">coloc2markers<a class="headerlink" href="#coloc2markers" title="Permanent link">&para;</a></h2>
-<p>The <code>coloc2markers</code> command selects optimal marker features from a co-occurrence matrix generated by the <code>cooccurrence</code> command. It can optionally find neighbors for selected or specified markers and recover the corresponding expression profiles.</p>
-<h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
-<p>Just finding markers:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span>
-</span></code></pre></div></p>
-<p>Recovering gene expression profiles around each set of markers:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span><span class="w"> </span>--recover-factors<span class="w"> </span>--weight-by-counts<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
-</span></code></pre></div></p>
-<h4 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h4>
-<p><code>--input</code> - Input co-occurrence matrix (binary or TSV format) from the <code>cooccurrence</code> command.</p>
-<p><code>--info</code> - Input gene/feature information file from the <code>cooccurrence</code> command.</p>
-<p><code>--K</code> - Number of markers to select. Note that marker selection is deterministic and sequential, so the set of markers generated with small <code>K</code> is almost certainly contained in the set generated with a larger <code>K</code>. Specifying a large <code>K</code> then trim down to the desired number is perhaps recommended.</p>
-<p><code>--out</code> - Output prefix for generated files.</p>
-<h4 id="optional_1">Optional<a class="headerlink" href="#optional_1" title="Permanent link">&para;</a></h4>
-<p><code>--binary</code> - Specify that input matrix is in binary format. Default: false (assumes TSV).</p>
-<p><code>--value-bytes</code> - Number of bytes per value in binary matrix. Default: 8, match with the output from <code>cooccurrence</code>. Only used with <code>--binary</code>.</p>
-<p><code>--min-count</code> - Minimum count for a feature to be considered as a marker. This should be a reaonably large number, otherwise the results are driven by rare genes.</p>
-<p><code>--fixed</code> - List of markers that must be included in the selection (strings, separated by spaces). Currently assume the input are distinct markers.</p>
-<p><code>--find-neighbors</code> - Find neighbors (often co-localized genes) for each selected marker.</p>
-<p><code>--neighbors</code> - Number of top neighbors to find for each marker. Default: 10. Can be used instead of flag <code>--find-neighbors</code>.</p>
-<p><code>--neighbor-max-rank-fraction</code> - Maximum rank (in terms of the quantile/fraction among all genes) to consider for mutual neighbors. Default: 0.1, meaning that if gene A is among the top 10% of genes to be around conditional on observing gene B, but gene B is not among the top 10%, say among the bottom 50% of genes to be observed around gene A, then they are not considered as neighbors.</p>
-<h5 id="recover-factors">Recover factors<a class="headerlink" href="#recover-factors" title="Permanent link">&para;</a></h5>
-<p><code>--recover-factors</code> - Recover underlying factors from the co-occurrence matrix after marker selection.</p>
-<p><code>--threads</code> - Number of threads to use for factor recovery. Default: -1 (auto). Only used with <code>--recover-factors</code>.</p>
-<p><code>--max-iter</code> - Maximum iterations for factor recovery. Default: 500.</p>
-<p><code>--tol</code> - Convergence tolerance for factor recovery. Default: 1e-6.</p>
-<p><code>--weight-by-counts</code> - Weight factors by gene counts. Default: false.</p>
-<p><code>--verbose</code> - Verbosity level for output messages. Default: 0.</p>
-<h3 id="output-files_1">Output files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
-<ul>
-<li>
-<p><code>{prefix}.top.tsv</code> - List of selected markers</p>
+<p><code>{prefix}.theta.tsv</code>: The unit-factor matrix (<span class="arithmatex">\(\theta\)</span>), where rows are units (cells/hexagons) and columns are factors. The relative magnitudes of values within each row are meaningful, and the total magnitude of each row is correlated with the total counts of that unit.</p>
 </li>
 <li>
-<p>if <code>--find-neighbors</code> or <code>--neighbors</code> is used:</p>
-<ul>
-<li><code>{prefix}.pairs.tsv</code> - Detailed pairwise relationships. Columns: index, name of gene 1, total count of gene 1, name of gene 2, total count of gene 2, (weighted) proportion of gene 2 in gene 1's neighbors, vice versa, rank of gene 2 as gene 1's neighbor, vice versa.</li>
-<li><code>{prefix}.short.txt</code> - Compact neighbor lists. The first gene on each line is the selected marker, followed by its neighbors.</li>
-</ul>
+<p><code>{prefix}.fit_stats.tsv</code>: Per-unit (cell/hexagon) statistics including total counts, log-likelihood, residuals, and the approximated variance of the Poisson rate estimates.</p>
 </li>
 <li>
-<p>if <code>--recover-factors</code> is used: <code>{prefix}.factors.tsv</code> for recovered factor matrix.</p>
+<p><code>{prefix}.covar.tsv</code>: (If covariates are used) The feature-covariate coefficient matrix containing <span class="arithmatex">\(b_{jm}\)</span> for each covariate <span class="arithmatex">\(j\)</span> and feature <span class="arithmatex">\(m\)</span>.</p>
+</li>
+<li>
+<p><code>{prefix}.de.{method}.tsv</code>: (If <code>--detest-vs-avg</code> is set) Differential expression statistics for each factor vs the average, for each feature. <code>{method}</code> is either <code>fisher</code>, <code>robust</code>, depending on <code>--se-method</code>.</p>
+</li>
+<li>
+<p><code>{prefix}.feature.residuals.tsv</code>: (If <code>--feature-residuals</code> is set) Per-feature total residual (averaged over all data points).</p>
 </li>
 </ul>
 
@@ -1388,44 +1101,6 @@
       
         <footer class="md-footer">
   
-    
-      
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
-        
-          
-          <a href="../visualization/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Visualization">
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
-            </div>
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Previous
-              </span>
-              <div class="md-ellipsis">
-                Visualization
-              </div>
-            </div>
-          </a>
-        
-        
-          
-          <a href="../tileop/" class="md-footer__link md-footer__link--next" aria-label="Next: tile-op">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                tile-op
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
-        
-      </nav>
     
   
   <div class="md-footer-meta md-typeset">

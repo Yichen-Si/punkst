@@ -8,13 +8,11 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/coexp/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/tileop/">
       
       
-        <link rel="prev" href="../visualization/">
+        <link rel="prev" href="../coexp/">
       
-      
-        <link rel="next" href="../tileop/">
       
       
         
@@ -25,7 +23,7 @@
     
     
       
-        <title>Co-occurrence - punkst</title>
+        <title>tile-op - punkst</title>
       
     
     
@@ -76,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#gene-cooccurrence-and-marker-selection" class="md-skip">
+        <a href="#tile-op" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Co-occurrence
+              tile-op
             
           </span>
         </div>
@@ -792,6 +790,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../coexp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Co-occurrence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -811,7 +837,7 @@
   <span class="md-ellipsis">
     
   
-    Co-occurrence
+    tile-op
   
 
     
@@ -829,7 +855,7 @@
   <span class="md-ellipsis">
     
   
-    Co-occurrence
+    tile-op
   
 
     
@@ -855,18 +881,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        cooccurrence
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="cooccurrence">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
   <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -879,10 +893,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
+  <a href="#main-input-output" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required
+        Main input &amp; output
       
     </span>
   </a>
@@ -890,26 +904,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
+  <a href="#basic-inspection-and-conversion" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
+        Basic Inspection and Conversion
       
     </span>
   </a>
@@ -917,50 +915,55 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#adding-up-multiple-matrices" class="md-nav__link">
+  <a href="#fix-fragmented-tiles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Adding up multiple matrices
+        Fix fragmented Tiles
       
     </span>
   </a>
   
 </li>
         
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#coloc2markers" class="md-nav__link">
+          <li class="md-nav__item">
+  <a href="#merge-multiple-inference-results" class="md-nav__link">
     <span class="md-ellipsis">
       
-        coloc2markers
+        Merge Multiple Inference Results
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="coloc2markers">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#annotate-points-with-inference-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Annotate Points with Inference Results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compute-joint-probability-distributions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compute Joint Probability Distributions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Compute Joint Probability Distributions">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#usage_1" class="md-nav__link">
+  <a href="#single-input" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
+        Single Input
       
     </span>
   </a>
@@ -968,22 +971,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional_1" class="md-nav__link">
+  <a href="#merging-and-computing-on-the-fly" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recover-factors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recover factors
+        Merging and Computing on the Fly
       
     </span>
   </a>
@@ -992,22 +983,6 @@
         
       </ul>
     </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
   
 </li>
         
@@ -1020,34 +995,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../tileop/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    tile-op
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -1087,18 +1034,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        cooccurrence
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="cooccurrence">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
   <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1111,10 +1046,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
+  <a href="#main-input-output" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required
+        Main input &amp; output
       
     </span>
   </a>
@@ -1122,26 +1057,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
+  <a href="#basic-inspection-and-conversion" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
+        Basic Inspection and Conversion
       
     </span>
   </a>
@@ -1149,50 +1068,55 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#adding-up-multiple-matrices" class="md-nav__link">
+  <a href="#fix-fragmented-tiles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Adding up multiple matrices
+        Fix fragmented Tiles
       
     </span>
   </a>
   
 </li>
         
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#coloc2markers" class="md-nav__link">
+          <li class="md-nav__item">
+  <a href="#merge-multiple-inference-results" class="md-nav__link">
     <span class="md-ellipsis">
       
-        coloc2markers
+        Merge Multiple Inference Results
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="coloc2markers">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#annotate-points-with-inference-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Annotate Points with Inference Results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#compute-joint-probability-distributions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compute Joint Probability Distributions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Compute Joint Probability Distributions">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#usage_1" class="md-nav__link">
+  <a href="#single-input" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
+        Single Input
       
     </span>
   </a>
@@ -1200,22 +1124,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional_1" class="md-nav__link">
+  <a href="#merging-and-computing-on-the-fly" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recover-factors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recover factors
+        Merging and Computing on the Fly
       
     </span>
   </a>
@@ -1224,22 +1136,6 @@
         
       </ul>
     </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
   
 </li>
         
@@ -1268,94 +1164,102 @@
   
 
 
-<h1 id="gene-cooccurrence-and-marker-selection">Gene cooccurrence and marker selection<a class="headerlink" href="#gene-cooccurrence-and-marker-selection" title="Permanent link">&para;</a></h1>
-<p><strong><code>cooccurrence</code> computes gene co-occurrence within a specified radius and <code>coloc2markers</code> selects markers from the co-occurrence matrix.</strong></p>
-<h2 id="cooccurrence">cooccurrence<a class="headerlink" href="#cooccurrence" title="Permanent link">&para;</a></h2>
-<p>The <code>cooccurrence</code> command computes how frequently each pair of genes appear together within a specified radius, either as a binary relation or weighted by distance with exponential decay. (We also have a <code>merge-mtx</code> command in case you want to add up multiple co-occurrence matrices potentially computed from different datasets.)</p>
-<h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>cooccurrence<span class="w"> </span>--in-tsv<span class="w"> </span>tiles.tsv<span class="w"> </span>--in-index<span class="w"> </span>tiles.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--feature-dict<span class="w"> </span>features.tsv<span class="w"> </span>--out<span class="w"> </span>./out<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--radius<span class="w"> </span><span class="m">15</span><span class="w">  </span>--halflife<span class="w"> </span><span class="m">10</span><span class="w"> </span>--binary<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
-</span></code></pre></div>
-<h4 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h4>
-<p><code>--in-tsv</code> - The tiled data created by <code>pts2tiles</code>.</p>
-<p><code>--in-index</code> The index file created by <code>pts2tiles</code>.</p>
-<p><code>--icol-x</code> - Column index for x coordinate (0-based).</p>
-<p><code>--icol-y</code> - Column index for y coordinate (0-based).</p>
-<p><code>--icol-feature</code> - Column index for feature list (0-based).</p>
-<p><code>--icol-val</code> - Column index for the integer count values (0-based).</p>
-<p><code>--radius</code> - Radius within which to count co-occurrence.</p>
-<p><code>--out</code> - Output prefix for generated files.</p>
-<p><code>--feature-dict</code> - If feature column contains non-integer values, provide a dictionary/list of all feature names.</p>
-<h4 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h4>
-<p><code>--bounding-boxes</code> - Rectangular query regions specified as <code>xmin ymin xmax ymax</code> coordinates (plain numbers separated by spaces, without parenthesis). A single co-occurrence matrix is created using pixels in the union of the regions. Can specify multiple regions by adding multiple 4-tuples. e.g. <code>--bounding-boxes 5040 2300 8830 4640 100 200 1500 1600</code> for two rectangles.</p>
-<p><code>--weight-by-count</code> - Weight co-occurrence by the product of transcript counts at each pixel. Default: false. (This is unlikely to have a noticeable impact unless for very dense sequencing data)</p>
-<p><code>--halflife</code> - Half-life (starting from 1 for zero distance, the distance where the weight is 0.5) for exponential decay weighting. Default: -1, unweighted by distance within the radius.</p>
-<p><code>--min-neighbor</code> - Minimum number of neighboring pixels within radius for a pixel to be included (meant to be used to reduce the influence from sparse/non-tissue regions). Default: 1.</p>
-<p><code>--local-min</code> - Minimum co-occurrence value within a tile to record. Default: 0.</p>
-<p><code>--threads</code> - Number of threads to use. Default: 1.</p>
-<p><code>--binary</code> - Output results in binary format. Default: false (TSV output). Using the binary format is more efficient especially if you were to run the
-<code>coloc2markers</code> command later.</p>
-<h3 id="output-files">Output files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
+<h1 id="tile-op">tile-op<a class="headerlink" href="#tile-op" title="Permanent link">&para;</a></h1>
+<p><strong><code>tile-op</code> provides utilities to view and manipulate the tiled data files</strong> created by <code>punkst pixel-decode</code> or <code>punkst pts2tiles</code>.</p>
+<p>It supports</p>
 <ul>
 <li>
-<p>Co-occurrence matrix named <code>{prefix}.mtx.bin</code> (if <code>--binary</code> is used) or <code>{prefix}.mtx.tsv</code> (otherwise).</p>
+<p>inspecting the index</p>
 </li>
 <li>
-<p>Marginal information per gene named <code>{prefix}.marginals.tsv</code>. The columns are feature index (corresponding to row \&amp; column index in the matrix), name, total counts, total number of pixels, used pixels, used neighbors.</p>
+<p>converting binary tiled files to TSV</p>
+</li>
+<li>
+<p>reorganizing fragmented tiles to a regular grid</p>
+</li>
+<li>
+<p>merging multiple inference results</p>
+</li>
+<li>
+<p>annotating (tiled) point level file with inference results</p>
+</li>
+<li>
+<p>compute joint probability distributions of factors</p>
 </li>
 </ul>
-<h3 id="adding-up-multiple-matrices">Adding up multiple matrices<a class="headerlink" href="#adding-up-multiple-matrices" title="Permanent link">&para;</a></h3>
-<p>For convenience</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>merge-mtx<span class="w"> </span>--in-list<span class="w"> </span>mtx_list.txt<span class="w"> </span>--binary<span class="w"> </span>--binary-output<span class="w"> </span>--shared-nrows<span class="w"> </span><span class="nv">$M</span><span class="w"> </span>--out<span class="w"> </span>cooccur.merged
+<p>(Except for printing the index, all operations are intended to be used separately)</p>
+<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<h3 id="main-input-output">Main input &amp; output<a class="headerlink" href="#main-input-output" title="Permanent link">&para;</a></h3>
+<p>The main input are the tiled pixel level files created by <code>punkst pixel-decode</code>, either in the custom binary format or in plain TSV format.</p>
+<p>You can specify the pair of data and index files using <code>--in-data</code> and <code>--in-index</code>, or specify the prefix using <code>--in</code>.
+When using <code>--in</code>, without <code>--binary</code>, the tool assumes the data file is <code>&lt;in&gt;.tsv</code> and the index file is <code>&lt;in&gt;.index</code>, and with <code>--binary</code> it assumes the data file is <code>&lt;in&gt;.bin</code> and the index file is <code>&lt;in&gt;.index</code>.</p>
+<p>Use <code>--out</code> to specify the output prefix. In some operations use <code>--binary-out</code> to specify that the output is to be written in binary format.</p>
+<h3 id="basic-inspection-and-conversion">Basic Inspection and Conversion<a class="headerlink" href="#basic-inspection-and-conversion" title="Permanent link">&para;</a></h3>
+<p>To inspect the index of a tiled file:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--print-index<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span>
 </span></code></pre></div>
-<p>Just include the file paths of the input matrices in a file provided to <code>--in-list</code>.</p>
-<h2 id="coloc2markers">coloc2markers<a class="headerlink" href="#coloc2markers" title="Permanent link">&para;</a></h2>
-<p>The <code>coloc2markers</code> command selects optimal marker features from a co-occurrence matrix generated by the <code>cooccurrence</code> command. It can optionally find neighbors for selected or specified markers and recover the corresponding expression profiles.</p>
-<h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
-<p>Just finding markers:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span>
-</span></code></pre></div></p>
-<p>Recovering gene expression profiles around each set of markers:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span><span class="w"> </span>--recover-factors<span class="w"> </span>--weight-by-counts<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
-</span></code></pre></div></p>
-<h4 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h4>
-<p><code>--input</code> - Input co-occurrence matrix (binary or TSV format) from the <code>cooccurrence</code> command.</p>
-<p><code>--info</code> - Input gene/feature information file from the <code>cooccurrence</code> command.</p>
-<p><code>--K</code> - Number of markers to select. Note that marker selection is deterministic and sequential, so the set of markers generated with small <code>K</code> is almost certainly contained in the set generated with a larger <code>K</code>. Specifying a large <code>K</code> then trim down to the desired number is perhaps recommended.</p>
-<p><code>--out</code> - Output prefix for generated files.</p>
-<h4 id="optional_1">Optional<a class="headerlink" href="#optional_1" title="Permanent link">&para;</a></h4>
-<p><code>--binary</code> - Specify that input matrix is in binary format. Default: false (assumes TSV).</p>
-<p><code>--value-bytes</code> - Number of bytes per value in binary matrix. Default: 8, match with the output from <code>cooccurrence</code>. Only used with <code>--binary</code>.</p>
-<p><code>--min-count</code> - Minimum count for a feature to be considered as a marker. This should be a reaonably large number, otherwise the results are driven by rare genes.</p>
-<p><code>--fixed</code> - List of markers that must be included in the selection (strings, separated by spaces). Currently assume the input are distinct markers.</p>
-<p><code>--find-neighbors</code> - Find neighbors (often co-localized genes) for each selected marker.</p>
-<p><code>--neighbors</code> - Number of top neighbors to find for each marker. Default: 10. Can be used instead of flag <code>--find-neighbors</code>.</p>
-<p><code>--neighbor-max-rank-fraction</code> - Maximum rank (in terms of the quantile/fraction among all genes) to consider for mutual neighbors. Default: 0.1, meaning that if gene A is among the top 10% of genes to be around conditional on observing gene B, but gene B is not among the top 10%, say among the bottom 50% of genes to be observed around gene A, then they are not considered as neighbors.</p>
-<h5 id="recover-factors">Recover factors<a class="headerlink" href="#recover-factors" title="Permanent link">&para;</a></h5>
-<p><code>--recover-factors</code> - Recover underlying factors from the co-occurrence matrix after marker selection.</p>
-<p><code>--threads</code> - Number of threads to use for factor recovery. Default: -1 (auto). Only used with <code>--recover-factors</code>.</p>
-<p><code>--max-iter</code> - Maximum iterations for factor recovery. Default: 500.</p>
-<p><code>--tol</code> - Convergence tolerance for factor recovery. Default: 1e-6.</p>
-<p><code>--weight-by-counts</code> - Weight factors by gene counts. Default: false.</p>
-<p><code>--verbose</code> - Verbosity level for output messages. Default: 0.</p>
-<h3 id="output-files_1">Output files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
+<p>To dump a binary tiled file to a plain TSV file:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--dump-tsv<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span>--binary<span class="w"> </span>--out<span class="w"> </span>path/prefix.dump
+</span></code></pre></div>
+<p>The output include <code>path/prefix.dump.tsv</code> and <code>path/prefix.dump.index</code>.</p>
+<h3 id="fix-fragmented-tiles">Fix fragmented Tiles<a class="headerlink" href="#fix-fragmented-tiles" title="Permanent link">&para;</a></h3>
+<p>The output of <code>punkst pixel-decode</code> is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.</p>
+<p>If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (<code>path/prefix.index</code>), currently we don't support generic reorganization)</p>
+<p>Note that this is <strong>not</strong> required for visualization <code>draw-pixel-factors</code>.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--reorganize<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/reorg_prefix
+</span></code></pre></div>
+<h3 id="merge-multiple-inference-results">Merge Multiple Inference Results<a class="headerlink" href="#merge-multiple-inference-results" title="Permanent link">&para;</a></h3>
+<p>You can merge multiple inference files (e.g., from different models) into a single file. This finds the intersection of tiles and concatenates the results ((factor, probability) pairs) for each pixel.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span>--k2keep<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged_result<span class="w"> </span>--binary-out
+</span></code></pre></div>
+<p><code>--merge-emb</code> - One or more other inference files (created by <code>pixel-decode</code>) to merge with the main input file. They can be in either TSV or binary format, but have to have proper index files stored ad <code>&lt;prefix&gt;.index</code>.</p>
+<p><code>--k2keep</code> - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all factors are kept.</p>
+<p><code>--binary-out</code> - (Optional) Save the merged output in binary format instead of TSV.</p>
+<p>In the above example, from file <code>result1.bin</code> (or <code>.tsv</code>) we keep top 3 factors, from <code>result2.tsv</code> we keep top 1 factor, and from <code>result3.bin</code> we keep top 2 factors. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.</p>
+<h3 id="annotate-points-with-inference-results">Annotate Points with Inference Results<a class="headerlink" href="#annotate-points-with-inference-results" title="Permanent link">&para;</a></h3>
+<p>You can annotate a transcript file with the inference results. The query file is required to be generated by <code>punkst pts2tiles</code> with the same tile structure as the result file so that the tool can efficiently join it with the inference results, but you can apply <code>pts2tiles</code> to any tsv file that contains X, Y coordinates as two of its columns.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged
+</span></code></pre></div>
+<p><code>--annotate-pts</code> - Prefix of the points file (the tool expects <code>&lt;prefix&gt;.tsv</code> and <code>&lt;prefix&gt;.index</code>) to be annotated.</p>
+<p><code>--icol-x</code> - 0-based column index for X coordinate in the points file.</p>
+<p><code>--icol-y</code> - 0-based column index for Y coordinate in the points file.</p>
+<h3 id="compute-joint-probability-distributions">Compute Joint Probability Distributions<a class="headerlink" href="#compute-joint-probability-distributions" title="Permanent link">&para;</a></h3>
+<p>You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from multiple models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file).</p>
+<h4 id="single-input">Single Input<a class="headerlink" href="#single-input" title="Permanent link">&para;</a></h4>
+<p>For a single inference result file:</p>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+Output:</p>
 <ul>
 <li>
-<p><code>{prefix}.top.tsv</code> - List of selected markers</p>
+<p><code>path/out_prefix.marginal.tsv</code>: Marginal sums of posterior probabilities for each factor.</p>
 </li>
 <li>
-<p>if <code>--find-neighbors</code> or <code>--neighbors</code> is used:</p>
-<ul>
-<li><code>{prefix}.pairs.tsv</code> - Detailed pairwise relationships. Columns: index, name of gene 1, total count of gene 1, name of gene 2, total count of gene 2, (weighted) proportion of gene 2 in gene 1's neighbors, vice versa, rank of gene 2 as gene 1's neighbor, vice versa.</li>
-<li><code>{prefix}.short.txt</code> - Compact neighbor lists. The first gene on each line is the selected marker, followed by its neighbors.</li>
+<p><code>path/out_prefix.joint.tsv</code>: Sum of products for each pair of factors.</p>
+</li>
 </ul>
+<p>If the file contains multiple sets of results (e.g. a merged), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., <code>path/out_prefix.0v1.cross.tsv</code>).</p>
+<h4 id="merging-and-computing-on-the-fly">Merging and Computing on the Fly<a class="headerlink" href="#merging-and-computing-on-the-fly" title="Permanent link">&para;</a></h4>
+<p>You can also compute these statistics while merging multiple inference result files on the fly, without writing the large merged file to disk.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+<p>This supports <code>--k2keep</code> to reduce the number of top-K factors used in each source before computing the products.</p>
+<p>Output:</p>
+<ul>
+<li>
+<p><code>path/out_prefix.0.marginal.tsv</code>, <code>path/out_prefix.1.marginal.tsv</code>, ... (one per input source)</p>
 </li>
 <li>
-<p>if <code>--recover-factors</code> is used: <code>{prefix}.factors.tsv</code> for recovered factor matrix.</p>
+<p><code>path/out_prefix.0.joint.tsv</code>, ... (internal dot products for each source)</p>
+</li>
+<li>
+<p><code>path/out_prefix.0v1.cross.tsv</code>, <code>path/out_prefix.0v2.cross.tsv</code>, ... (cross-source dot products)</p>
 </li>
 </ul>
 
@@ -1393,7 +1297,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../visualization/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Visualization">
+          <a href="../coexp/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Co-occurrence">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1403,27 +1307,11 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Visualization
+                Co-occurrence
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../tileop/" class="md-footer__link md-footer__link--next" aria-label="Next: tile-op">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                tile-op
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
         
       </nav>
     
