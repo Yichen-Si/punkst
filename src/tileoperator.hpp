@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <map>
+#include <tuple>
 #include <utility>
 #include <algorithm>
 #include "utils_sys.hpp"
@@ -12,6 +13,7 @@
 class TileOperator {
 
 public:
+    using PixelKey3 = std::tuple<int32_t, int32_t, int32_t>;
     TileOperator(std::string& dataFile, std::string indexFile = "", std::string headerFile = "") : dataFile_(dataFile), indexFile_(indexFile) {
         if (!indexFile.empty()) {
             loadIndex(indexFile);
@@ -89,14 +91,15 @@ public:
     // Return -1 for EOF, 0 for parse error, 1 for success
     int32_t next(PixTopProbs<float>& out, bool rawCoord = false);
     int32_t next(PixTopProbs<int32_t>& out);
+    int32_t next(PixTopProbs3D<float>& out, bool rawCoord = false);
+    int32_t next(PixTopProbs3D<int32_t>& out);
 
     void printIndex() const;
 
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
 
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
-    void annotate(const std::string& ptPrefix, uint32_t icol_x, uint32_t icol_y,
-        const std::string& outPrefix);
+    void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z = std::numeric_limits<uint32_t>::max());
 
     void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2);
 
@@ -109,7 +112,9 @@ private:
     std::string dataFile_, indexFile_;
     std::ifstream dataStream_;
     std::string headerLine_;
-    uint32_t icol_x_, icol_y_, icol_max_ = 0;
+    uint32_t icol_x_, icol_y_, icol_z_, icol_max_ = 0;
+    bool has_z_ = false;
+    uint32_t coord_dim_ = 2;
     std::vector<uint32_t> icol_ks_, icol_ps_;
     int32_t k_ = 0;
     std::vector<uint32_t> kvec_;
@@ -138,14 +143,54 @@ private:
     // Get the next record within the bounded query region
     int32_t nextBounded(PixTopProbs<float>& out, bool rawCoord = false);
     int32_t nextBounded(PixTopProbs<int32_t>& out);
+    int32_t nextBounded(PixTopProbs3D<float>& out, bool rawCoord = false);
+    int32_t nextBounded(PixTopProbs3D<int32_t>& out);
     // Parse a line to extract factor results
     bool parseLine(const std::string& line, PixTopProbs<float>& R) const;
     bool parseLine(const std::string& line, PixTopProbs<int32_t>& R) const;
+    bool parseLine(const std::string& line, PixTopProbs3D<float>& R) const;
+    bool parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const;
 
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
 
     int32_t loadTileToMap(const TileKey& key,
-        std::map<std::pair<int32_t, int32_t>, PixTopProbs<int32_t>>& pixelMap);
+        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap);
+    int32_t loadTileToMap3D(const TileKey& key,
+        std::map<PixelKey3, TopProbs>& pixelMap);
+    void mergeTiles2D(const std::set<TileKey>& commonTiles,
+        const std::vector<TileOperator*>& opPtrs,
+        const std::vector<uint32_t>& k2keep,
+        bool binaryOutput,
+        FILE* fp, int fdMain, int fdIndex,
+        long& currentOffset);
+    void mergeTiles3D(const std::set<TileKey>& commonTiles,
+        const std::vector<TileOperator*>& opPtrs,
+        const std::vector<uint32_t>& k2keep,
+        bool binaryOutput,
+        FILE* fp, int fdMain, int fdIndex,
+        long& currentOffset);
+    void probDotTiles2D(const std::set<TileKey>& commonTiles,
+        const std::vector<TileOperator*>& opPtrs,
+        const std::vector<uint32_t>& k2keep,
+        const std::vector<uint32_t>& offsets,
+        std::vector<std::map<int32_t, double>>& marginals,
+        std::vector<std::map<std::pair<int32_t, int32_t>, double>>& internalDots,
+        std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>>& crossDots,
+        size_t& count);
+    void probDotTiles3D(const std::set<TileKey>& commonTiles,
+        const std::vector<TileOperator*>& opPtrs,
+        const std::vector<uint32_t>& k2keep,
+        const std::vector<uint32_t>& offsets,
+        std::vector<std::map<int32_t, double>>& marginals,
+        std::vector<std::map<std::pair<int32_t, int32_t>, double>>& internalDots,
+        std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>>& crossDots,
+        size_t& count);
+    void annotateTiles2D(const std::vector<TileKey>& tiles,
+        TileReader& reader, uint32_t icol_x, uint32_t icol_y,
+        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
+    void annotateTiles3D(const std::vector<TileKey>& tiles,
+        TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
+        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
 
 
 };

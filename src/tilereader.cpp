@@ -4,18 +4,21 @@
 /*
     lineParser
 */
-void lineParser::init(size_t _ix, size_t _iy, size_t _iz,
+void lineParser::init(size_t _ix, size_t _iy, size_t _iw,
                       const std::vector<int32_t>& _ivals,
                       const std::string& _dfile) {
     icol_x = _ix;
     icol_y = _iy;
-    icol_feature = _iz;
-    n_ct = static_cast<int32_t>(_ivals.size());
+    icol_feature = _iw;
+    n_ct = _ivals.size();
     icol_ct.resize(n_ct);
-    n_tokens = static_cast<int32_t>(icol_feature);
-    for (int32_t i = 0; i < n_ct; ++i) {
+    n_tokens = icol_feature;
+    for (size_t i = 0; i < n_ct; ++i) {
         icol_ct[i] = _ivals[i];
         n_tokens = std::max(n_tokens, icol_ct[i]);
+    }
+    if (hasZ) {
+        n_tokens = std::max(n_tokens, icol_z);
     }
     n_tokens += 1;
     if (_dfile.empty()) {
@@ -42,6 +45,12 @@ void lineParser::init(size_t _ix, size_t _iy, size_t _iz,
         }
         notice("Read %zu features from dictionary file", featureDict.size());
     }
+}
+
+void lineParser::setZ(size_t col) {
+    icol_z = col;
+    hasZ = true;
+    n_tokens = std::max(n_tokens, icol_z + 1);
 }
 
 bool lineParser::addExtraInt(std::vector<std::string>& annoInts) {
@@ -176,7 +185,53 @@ int32_t lineParser::parse(PixelValues& pixel, std::string& line, bool checkBound
     }
     pixel.intvals.resize(n_ct);
     int32_t totVal = 0;
-    for (int32_t i = 0; i < n_ct; ++i) {
+    for (size_t i = 0; i < n_ct; ++i) {
+        if (!str2int32(tokens[icol_ct[i]], pixel.intvals[i])) {
+            return -1;
+        }
+        totVal += pixel.intvals[i];
+    }
+    return totVal;
+}
+
+int32_t lineParser::parse(PixelValues3D& pixel, std::string& line, bool checkBounds) {
+    if (!hasZ) {
+        return -1;
+    }
+    std::vector<std::string> tokens;
+    split(tokens, "\t", line);
+    if (tokens.size() < static_cast<size_t>(n_tokens)) {
+        return -1;
+    }
+    pixel.x = std::stod(tokens[icol_x]);
+    pixel.y = std::stod(tokens[icol_y]);
+    pixel.z = std::stod(tokens[icol_z]);
+    if (checkBounds) {
+        bool valid = false;
+        for (const auto& rect : rects) {
+            if (rect.contains(pixel.x, pixel.y)) {
+                valid = true;
+                break;
+            }
+        }
+        if (!valid) {
+            return 0;
+        }
+    }
+    if (isFeatureDict) {
+        auto it = featureDict.find(tokens[icol_feature]);
+        if (it == featureDict.end()) {
+            return 0;
+        }
+        pixel.feature = it->second;
+    } else {
+        if (!str2uint32(tokens[icol_feature], pixel.feature)) {
+            return -1;
+        }
+    }
+    pixel.intvals.resize(n_ct);
+    int32_t totVal = 0;
+    for (size_t i = 0; i < n_ct; ++i) {
         if (!str2int32(tokens[icol_ct[i]], pixel.intvals[i])) {
             return -1;
         }
@@ -320,11 +375,81 @@ int32_t lineParserUnival::parse( RecordExtendedT<T>& rec, std::string &line ) co
     return base_idx;
 }
 
+template<typename T>
+int32_t lineParserUnival::parse(RecordT3D<T>& rec, std::string& line, bool checkBounds) const {
+    if (!hasZ) {
+        return -2;
+    }
+    std::vector<std::string> tokens;
+    split(tokens, "\t", line);
+    if (tokens.size() < n_tokens) {
+        return -2;
+    }
+    if (!str2num<T>(tokens[icol_x], rec.x) || !str2num<T>(tokens[icol_y], rec.y) ||
+        !str2num<T>(tokens[icol_z], rec.z)) {
+        return -2;
+    }
+    if (checkBounds) {
+        bool valid = false;
+        for (const auto& rect : rects) {
+            if (rect.contains(rec.x, rec.y)) {
+                valid = true;
+                break;
+            }
+        }
+        if (!valid) {
+            return -1;
+        }
+    }
+    if (isFeatureDict) {
+        auto it = featureDict.find(tokens[icol_feature]);
+        if (it == featureDict.end()) {
+            return -1;
+        }
+        rec.idx = it->second;
+    } else {
+        rec.idx = std::stoul(tokens[icol_feature]);
+    }
+    rec.ct = std::stoi(tokens[icol_val]);
+    return rec.idx;
+}
+
+template<typename T>
+int32_t lineParserUnival::parse( RecordExtendedT3D<T>& rec, std::string &line ) const {
+    int32_t base_idx = parse(rec.recBase, line);
+    if (base_idx < 0) return base_idx;
+    std::vector<std::string> tokens;
+    split(tokens, "\t", line);
+    rec.intvals.resize(icol_ints.size());
+    for (size_t i = 0; i < icol_ints.size(); ++i) {
+        if (!str2num<int32_t>(tokens[icol_ints[i]], rec.intvals[i])) {
+            return -2;
+        }
+    }
+    rec.floatvals.resize(icol_floats.size());
+    for (size_t i = 0; i < icol_floats.size(); ++i) {
+        if (!str2num<float>(tokens[icol_floats[i]], rec.floatvals[i])) {
+            return -2;
+        }
+    }
+    rec.strvals.resize(icol_strs.size());
+    for (size_t i = 0; i < icol_strs.size(); ++i) {
+        auto &s = tokens[icol_strs[i]];
+        if (s.size() > str_lens[i]) s.resize(str_lens[i]);
+        rec.strvals[i] = s;
+    }
+    return base_idx;
+}
+
 // explicit template instantiation
 template int32_t lineParserUnival::parse<float>(RecordT<float>& rec, std::string& line, bool checkBounds) const;
 template int32_t lineParserUnival::parse<int32_t>(RecordT<int32_t>& rec, std::string& line, bool checkBounds) const;
 template int32_t lineParserUnival::parse<float>( RecordExtendedT<float>& rec, std::string &line ) const;
 template int32_t lineParserUnival::parse<int32_t>( RecordExtendedT<int32_t>& rec, std::string &line ) const;
+template int32_t lineParserUnival::parse<float>(RecordT3D<float>& rec, std::string& line, bool checkBounds) const;
+template int32_t lineParserUnival::parse<int32_t>(RecordT3D<int32_t>& rec, std::string& line, bool checkBounds) const;
+template int32_t lineParserUnival::parse<float>( RecordExtendedT3D<float>& rec, std::string &line ) const;
+template int32_t lineParserUnival::parse<int32_t>( RecordExtendedT3D<int32_t>& rec, std::string &line ) const;
 
 /*
     TileReader

@@ -77,6 +77,77 @@ void Tiles2MinibatchBase<T>::run() {
 }
 
 template<typename T>
+void Tiles2MinibatchBase<T>::configureInputMode() {
+    if (!lineParserPtr) {
+        error("%s: lineParser is required", __func__);
+    }
+    if (lineParserPtr->hasZCoord()) {
+        coordDim_ = MinibatchCoordDim::Dim3;
+    } else if (coordDim_ == MinibatchCoordDim::Dim3) {
+        error("%s: 3D mode requires a z column", __func__);
+    }
+    if (inputMode_ == MinibatchInputMode::Extended) {
+        if (!lineParserPtr->isExtended) {
+            error("%s: extended input mode requires extended parser", __func__);
+        }
+        if (coordDim_ == MinibatchCoordDim::Dim3) {
+            setExtendedSchema(sizeof(RecordT3D<T>));
+            parseTileFn_ = &Tiles2MinibatchBase::parseOneTileExtended3D;
+            parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFileExtended3D;
+            parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryExtended3DWrapper;
+        } else {
+            setExtendedSchema(sizeof(RecordT<T>));
+            parseTileFn_ = &Tiles2MinibatchBase::parseOneTileExtended;
+            parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFileExtended;
+            parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryExtendedWrapper;
+        }
+    } else {
+        if (lineParserPtr->isExtended) {
+            warning("%s: extended columns detected but input mode is standard; extra fields will be ignored", __func__);
+        }
+        useExtended_ = false;
+        if (coordDim_ == MinibatchCoordDim::Dim3) {
+            parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard3D;
+            parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile3D;
+            parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandard3DWrapper;
+        } else {
+            parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard;
+            parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile;
+            parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandardWrapper;
+        }
+    }
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::configureOutputMode() {
+    if (outputMode_ == MinibatchOutputMode::Binary) {
+        outputBinary_ = true;
+        outputOriginalData_ = false;
+        formatPixelFn_ = (coordDim_ == MinibatchCoordDim::Dim3)
+            ? &Tiles2MinibatchBase::formatPixelResultBinary3D
+            : &Tiles2MinibatchBase::formatPixelResultBinary;
+    } else if (outputMode_ == MinibatchOutputMode::Original) {
+        outputBinary_ = false;
+        outputOriginalData_ = true;
+        formatPixelFn_ = (coordDim_ == MinibatchCoordDim::Dim3)
+            ? &Tiles2MinibatchBase::formatPixelResultWithOriginalData3D
+            : &Tiles2MinibatchBase::formatPixelResultWithOriginalData;
+    } else {
+        outputBinary_ = false;
+        outputOriginalData_ = false;
+        if (outputBackgroundProbExpand_) {
+            formatPixelFn_ = (coordDim_ == MinibatchCoordDim::Dim3)
+                ? &Tiles2MinibatchBase::formatPixelResultWithBackground3D
+                : &Tiles2MinibatchBase::formatPixelResultWithBackground;
+        } else {
+            formatPixelFn_ = (coordDim_ == MinibatchCoordDim::Dim3)
+                ? &Tiles2MinibatchBase::formatPixelResultStandard3D
+                : &Tiles2MinibatchBase::formatPixelResultStandard;
+        }
+    }
+}
+
+template<typename T>
 void Tiles2MinibatchBase<T>::tileWorker(int threadId) {
     std::pair<TileKey, int32_t> tileTicket;
     TileKey tile;
@@ -108,17 +179,9 @@ void Tiles2MinibatchBase<T>::boundaryWorker(int threadId) {
         int32_t ret = 0;
 
         if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&(bufferPtr->storage))) {
-            if (auto* extStore = dynamic_cast<InMemoryStorageExtended<T>*>(storagePtr->get())) {
-                ret = parseBoundaryMemoryExtended(tileData, extStore, bufferPtr->key);
-            } else if (auto* stdStore = dynamic_cast<InMemoryStorageStandard<T>*>(storagePtr->get())) {
-                ret = parseBoundaryMemoryStandard(tileData, stdStore, bufferPtr->key);
-            }
+            ret = (this->*parseBoundaryMemoryFn_)(tileData, storagePtr->get(), bufferPtr->key);
         } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
-            if (useExtended_) {
-                ret = parseBoundaryFileExtended(tileData, bufferPtr);
-            } else {
-                ret = parseBoundaryFile(tileData, bufferPtr);
-            }
+            ret = (this->*parseBoundaryFileFn_)(tileData, bufferPtr);
             std::remove(filePath->c_str());
         }
         notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels",
@@ -140,11 +203,14 @@ int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
     while (std::getline(inFile, line)) {
         if (line.empty()) continue;
         split(tokens, "\t", line);
-        if (tokens.size() < 2) {
+        if (tokens.size() < 2 || (coordDim_ == MinibatchCoordDim::Dim3 && tokens.size() < 3)) {
             error("Error reading anchors file at line: %s", line.c_str());
         }
-        float x, y;
+        float x, y, z = 0.0f;
         bool valid = str2float(tokens[0], x) && str2float(tokens[1], y);
+        if (coordDim_ == MinibatchCoordDim::Dim3) {
+            valid = valid && str2float(tokens[2], z);
+        }
         if (!valid) {
             error("Error reading anchors file at line: %s", line.c_str());
         }
@@ -152,12 +218,20 @@ int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
         if (!tileReader.pt2tile(x, y, tile)) {
             continue;
         }
-        fixedAnchorForTile[tile].emplace_back(std::vector<float>{x, y});
+        if (coordDim_ == MinibatchCoordDim::Dim3) {
+            fixedAnchorForTile[tile].emplace_back(std::vector<float>{x, y, z});
+        } else {
+            fixedAnchorForTile[tile].emplace_back(std::vector<float>{x, y});
+        }
         std::vector<uint32_t> bufferidx;
         int32_t ret = pt2buffer(bufferidx, x, y, tile);
         (void)ret;
         for (const auto& key : bufferidx) {
-            fixedAnchorForBoundary[key].emplace_back(std::vector<float>{x, y});
+            if (coordDim_ == MinibatchCoordDim::Dim3) {
+                fixedAnchorForBoundary[key].emplace_back(std::vector<float>{x, y, z});
+            } else {
+                fixedAnchorForBoundary[key].emplace_back(std::vector<float>{x, y});
+            }
         }
         nAnchors++;
     }
@@ -169,10 +243,12 @@ int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
+int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
+    if (coordDim_ == MinibatchCoordDim::Dim3) {
+        return buildAnchors3D(tileData, anchors, documents, hexGrid_, nMoves_, minCount);
+    }
     anchors.clear();
     documents.clear();
-
     std::map<std::tuple<int32_t, int32_t, int32_t, int32_t>, std::unordered_map<uint32_t, float>> hexAggregation;
     auto assign_pt = [&](const auto& pt) {
         for (int32_t ir = 0; ir < nMoves_; ++ir) {
@@ -195,7 +271,8 @@ int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<
     }
 
     for (auto& entry : hexAggregation) {
-        float sum = std::accumulate(entry.second.begin(), entry.second.end(), 0.0, [](float acc, const auto& p) { return acc + p.second; });
+        float sum = std::accumulate(entry.second.begin(), entry.second.end(), 0.0f,
+            [](float acc, const auto& p) { return acc + p.second; });
         if (sum < minCount) {
             continue;
         }
@@ -212,7 +289,6 @@ int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<
             }
         }
         documents.push_back(std::move(obs));
-        // Unpack the key to get hex coordinates and move indices
         const auto& key = entry.first;
         int32_t hx = std::get<0>(key);
         int32_t hy = std::get<1>(key);
@@ -227,534 +303,12 @@ int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<
 
 template<typename T>
 int32_t Tiles2MinibatchBase<T>::parseOneTile(TileData<T>& tileData, TileKey tile) {
-    std::unique_ptr<BoundedReadline> iter;
-    try {
-        iter = tileReader.get_tile_iterator(tile.row, tile.col);
-    } catch (const std::exception &e) {
-        warning("%s", e.what());
-        return -1;
-    }
-    tileData.clear();
-    tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
-    if (M_ == 0) {
-        M_ = lineParserPtr->featureDict.size();
-    }
-
-    std::string line;
-    int32_t npt = 0;
-    if (useExtended_) {
-        while (iter->next(line)) {
-            RecordExtendedT<T> recExt;
-            int32_t idx = lineParserPtr->parse(recExt, line);
-            if (idx < -1) {
-                error("Error parsing line: %s", line.c_str());
-            }
-            if (idx == -1 || idx >= M_) {
-                continue;
-            }
-            tileData.extPts.push_back(recExt);
-            std::vector<uint32_t> bufferidx;
-            if (pt2buffer(bufferidx, recExt.recBase.x, recExt.recBase.y, tile) == 1) {
-                tileData.idxinternal.push_back(npt);
-            }
-            for (const auto& key : bufferidx) {
-                tileData.extBuffers[key].push_back(recExt);
-            }
-            npt++;
-        }
-        for (const auto& entry : tileData.extBuffers) {
-            auto buffer = getBoundaryBuffer(entry.first);
-            buffer->addRecordsExtended(entry.second, schema_, recordSize_);
-        }
-        tileData.extBuffers.clear();
-    } else {
-        while (iter->next(line)) {
-            RecordT<T> rec;
-            int32_t idx = lineParserPtr->parse<T>(rec, line);
-            if (idx < -1) {
-                error("Error parsing line: %s", line.c_str());
-            }
-            if (idx == -1 || idx >= M_) {
-                continue;
-            }
-            tileData.pts.push_back(rec);
-            std::vector<uint32_t> bufferidx;
-            if (pt2buffer(bufferidx, rec.x, rec.y, tile) == 1) {
-                tileData.idxinternal.push_back(npt);
-            }
-            for (const auto& key : bufferidx) {
-                tileData.buffers[key].push_back(rec);
-            }
-            npt++;
-        }
-        // write buffered records to temporary files
-        for (const auto& entry : tileData.buffers) {
-            auto buffer = getBoundaryBuffer(entry.first);
-            buffer->addRecords(entry.second);
-        }
-        tileData.buffers.clear();
-    }
-    return tileData.idxinternal.size();
-}
-
-template<typename T>
-int32_t Tiles2MinibatchBase<T>::parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
-    std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
-    std::ifstream ifs;
-    if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
-        ifs.open(*tmpFile, std::ios::binary);
-        if (!ifs) {
-            warning("%s: Failed to open temporary file %s", __func__, tmpFile->c_str());
-            return -1;
-        }
-    } else {
-        error("%s cannot be called when buffer is in memory", __func__);
-    }
-    int npt = 0;
-    tileData.clear();
-    bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    while (true) {
-        RecordT<T> rec;
-        ifs.read(reinterpret_cast<char*>(&rec), sizeof(RecordT<T>));
-        if (ifs.gcount() != sizeof(RecordT<T>)) break;
-        tileData.pts.push_back(rec);
-        if (isInternalToBuffer(rec.x, rec.y, bufferPtr->key)) {
-            tileData.idxinternal.push_back(npt);
-        }
-        npt++;
-    }
-    return tileData.idxinternal.size();
-}
-
-template<typename T>
-int32_t Tiles2MinibatchBase<T>::parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
-    std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
-    std::ifstream ifs;
-    if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
-        ifs.open(*tmpFile, std::ios::binary);
-        if (!ifs) {
-            warning("%s: Failed to open temporary file %s", __func__, tmpFile->c_str());
-            return -1;
-        }
-    } else {
-        error("%s cannot be called when buffer is in memory", __func__);
-    }
-    int npt = 0;
-    tileData.clear();
-    bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    while (true) {
-        std::vector<uint8_t> buf(recordSize_);
-        ifs.read(reinterpret_cast<char*>(buf.data()), recordSize_);
-        if (ifs.gcount() != recordSize_) break;
-        auto *ptr = buf.data();
-        RecordExtendedT<T> r;
-        // a) base part
-        std::memcpy(&r.recBase, ptr, sizeof(r.recBase));
-        // b) each extra
-        for (auto &f : schema_) {
-            auto *fp = ptr + f.offset;
-            switch (f.type) {
-                case FieldType::INT32: {
-                    int32_t v;
-                    std::memcpy(&v, fp, sizeof(v));
-                    r.intvals.push_back(v);
-                } break;
-                case FieldType::FLOAT: {
-                    float v;
-                    std::memcpy(&v, fp, sizeof(v));
-                    r.floatvals.push_back(v);
-                } break;
-                case FieldType::STRING: {
-                    std::string s((char*)fp, f.size);
-                    // trim trailing NULs
-                    auto pos = s.find('\0');
-                    if (pos!=std::string::npos) s.resize(pos);
-                    r.strvals.push_back(s);
-                } break;
-            }
-        }
-        tileData.extPts.push_back(std::move(r));
-        if (isInternalToBuffer(r.recBase.x, r.recBase.y, bufferPtr->key)) {
-            tileData.idxinternal.push_back(npt);
-        }
-        npt++;
-    }
-    return tileData.idxinternal.size();
-}
-
-template<typename T>
-int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandard(TileData<T>& tileData, InMemoryStorageStandard<T>* memStore, uint32_t bufferKey) {
-    tileData.clear();
-    bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    // Directly copy the data from the in-memory vector.
-    tileData.pts = std::move(memStore->data);
-    // Mark internal points (for output)
-    int npt = 0;
-    for(const auto& rec : tileData.pts) {
-        if (isInternalToBuffer(rec.x, rec.y, bufferKey)) {
-            tileData.idxinternal.push_back(npt);
-        }
-        npt++;
-    }
-    return tileData.idxinternal.size();
-}
-
-template<typename T>
-int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryExtended(TileData<T>& tileData, InMemoryStorageExtended<T>* memStore, uint32_t bufferKey) {
-    tileData.clear();
-    bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    tileData.extPts = std::move(memStore->dataExtended);
-    int npt = 0;
-    for(const auto& rec : tileData.extPts) {
-        if (isInternalToBuffer(rec.recBase.x, rec.recBase.y, bufferKey)) {
-            tileData.idxinternal.push_back(npt);
-        }
-        npt++;
-    }
-    return tileData.idxinternal.size();
-}
-
-template<typename T>
-typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatAnchorResult(const std::vector<cv::Point2f>& anchors, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax) {
-    size_t nrows = std::min((size_t) topVals.rows(), anchors.size());
-    if (topVals.rows() != nrows || topIds.rows() != nrows || anchors.size() != nrows) {
-        error("%s: size mismatch: topVals.rows()=%d, topIds.rows()=%d, anchors.size()=%d",
-            __func__, topVals.rows(), topIds.rows(), anchors.size());
-    }
-    ResultBuf result(ticket, xmin, xmax, ymin, ymax);
-    char buf[512];
-    for (size_t i = 0; i < nrows; ++i) {
-        if (anchors[i].x < xmin + r || anchors[i].x >= xmax - r ||
-            anchors[i].y < ymin + r || anchors[i].y >= ymax - r) {
-            continue; // only write internal anchors
-        }
-        int len = std::snprintf(
-            buf, sizeof(buf),
-            "%.*f\t%.*f",
-            floatCoordDigits,
-            anchors[i].x,
-            floatCoordDigits,
-            anchors[i].y
-        );
-        for (int32_t k = 0; k < topk_; ++k) {
-            int n = std::snprintf(
-                buf + len,
-                sizeof(buf) - len,
-                "\t%d",
-                topIds(i, k)
-            );
-            if (n < 0 || n >= int(sizeof(buf) - len)) {
-                error("%s: error writing anchor output line", __func__);
-            }
-            len += n;
-        }
-        for (int32_t k = 0; k < topk_; ++k) {
-            int n = std::snprintf(
-                buf + len,
-                sizeof(buf) - len,
-                "\t%.*e",
-                probDigits,
-                topVals(i, k)
-            );
-            if (n < 0 || n >= int(sizeof(buf) - len)) {
-                error("%s: error writing anchor output line", __func__);
-            }
-            len += n;
-        }
-        buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
-    }
-    result.npts = result.outputLines.size();
-    return result;
-}
-
-template<typename T>
-typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket,
-std::vector<std::unordered_map<uint32_t, float>>* phi0) {
-    if (outputBackgroundProbExpand_) {
-        assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
-    }
-    ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    int32_t nrows = topVals.rows();
-    char buf[65536];
-    for (size_t i = 0; i < tileData.idxinternal.size(); ++i) {
-        int32_t idxorg = tileData.idxinternal[i]; // index in the original data
-        int32_t idx = tileData.orgpts2pixel[idxorg]; // index in the pixel minibatch
-        if (idx < 0 || idx >= nrows) {
-            continue;
-        }
-        const RecordT<T>* recPtr;
-        if (useExtended_) {
-            recPtr = &tileData.extPts[idxorg].recBase;
-        } else {
-            recPtr = &tileData.pts[idxorg];
-        }
-        const RecordT<T>& rec = *recPtr;
-        int len = 0;
-        if constexpr (std::is_same_v<T, int32_t>) {
-            len = std::snprintf(
-                buf, sizeof(buf), "%d\t%d\t",
-                rec.x, rec.y
-            );
-        } else {
-            len = std::snprintf(
-                buf, sizeof(buf), "%.*f\t%.*f\t",
-                floatCoordDigits, rec.x,
-                floatCoordDigits, rec.y
-            );
-        }
-        len += std::snprintf(
-            buf + len, sizeof(buf) - len, "%s\t%d",
-            featureNames[rec.idx].c_str(), rec.ct
-        );
-        // write background probability if available
-        if (outputBackgroundProbExpand_) {
-            float bgprob = 0.0f;
-            auto& phi0_map = (*phi0)[idx];
-            auto it = phi0_map.find(rec.idx);
-            if (it != phi0_map.end()) {
-                bgprob = it->second;
-            }
-            int n = std::snprintf(
-                buf + len, sizeof(buf) - len, "\t%.*f",
-                probDigits, bgprob
-            );
-            if (n < 0 || n >= int(sizeof(buf) - len)) {
-                error("%s: error writing background probability", __func__);
-            }
-            len += n;
-        }
-        // write the top‑k IDs
-        for (int32_t k = 0; k < topk_; ++k) {
-            int n = std::snprintf(
-                buf + len, sizeof(buf) - len, "\t%d",
-                topIds(idx, k)
-            );
-            if (n < 0 || n >= int(sizeof(buf) - len)) {
-                error("%s: error writing output line", __func__);
-            }
-            len += n;
-        }
-        // write the top‑k probabilities in scientific form
-        for (int32_t k = 0; k < topk_; ++k) {
-            int n = std::snprintf(
-                buf + len, sizeof(buf) - len, "\t%.*e",
-                probDigits, topVals(idx, k)
-            );
-            if (n < 0 || n >= int(sizeof(buf) - len)) {
-                error("%s: error writing output line", __func__);
-            }
-            len += n;
-        }
-        // write the extra fields
-        if (useExtended_) {
-            const RecordExtendedT<T>& recExt = tileData.extPts[idxorg];
-            for (auto v : recExt.intvals) {
-                len += std::snprintf(buf + len, sizeof(buf) - len, "\t%d", v);
-                if (len >= int(sizeof(buf))) {
-                    error("%s: buffer overflow while writing intvals", __func__);
-                }
-            }
-            for (auto v : recExt.floatvals) {
-                len += std::snprintf(buf + len, sizeof(buf) - len, "\t%f", v);
-                if (len >= int(sizeof(buf))) {
-                    error("%s: buffer overflow while writing floatvals", __func__);
-                }
-            }
-            for (auto& v : recExt.strvals) {
-                len += std::snprintf(buf + len, sizeof(buf) - len, "\t%s", v.c_str());
-                if (len >= int(sizeof(buf))) {
-                    error("%s: buffer overflow while writing strvals", __func__);
-                }
-            }
-        }
-        buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
-    }
-    result.npts = result.outputLines.size();
-    return result;
-}
-
-template<typename T>
-typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0) {
-    if (outputBinary_) {
-        return formatPixelResultBinary(tileData, topVals, topIds, ticket);
-    }
-    if (outputOriginalData_) {
-        return formatPixelResultWithOriginalData(tileData, topVals, topIds, ticket, phi0);
-    }
-    if (outputBackgroundProbExpand_) {
-        return formatPixelResultWithBackground(tileData, topVals, topIds, ticket, *phi0);
-    }
-    if (outputBackgroundProbDense_) {
-        assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
-    }
-    ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    size_t N = tileData.coords.size();
-    std::vector<bool> internal(N, 0);
-    for (auto j : tileData.idxinternal) {
-        if (tileData.orgpts2pixel[j] < 0) {
-            continue;
-        }
-        internal[tileData.orgpts2pixel[j]] = true;
-    }
-    char buf[65536];
-    for (size_t j = 0; j < N; ++j) {
-        if (!internal[j]) {
-            continue;
-        }
-        int len = len = std::snprintf(
-            buf, sizeof(buf), "%.*f\t%.*f",
-            floatCoordDigits, tileData.coords[j].first *pixelResolution_,
-            floatCoordDigits, tileData.coords[j].second*pixelResolution_
-        );
-        // write the top‑k IDs
-        for (int32_t k = 0; k < topk_; ++k) {
-            int n = std::snprintf(
-                buf + len, sizeof(buf) - len, "\t%d",
-                topIds(j, k)
-            );
-            if (n < 0 || n >= int(sizeof(buf) - len)) {
-                error("%s: error writing output line", __func__);
-            }
-            len += n;
-        }
-        // write the top‑k probabilities in scientific form
-        for (int32_t k = 0; k < topk_; ++k) {
-            int n = std::snprintf(
-                buf + len, sizeof(buf) - len, "\t%.*e",
-                probDigits, topVals(j, k)
-            );
-            if (n < 0 || n >= int(sizeof(buf) - len)) {
-                error("%s: error writing output line", __func__);
-            }
-            len += n;
-        }
-        // build a string with gene1:p01,gene2:p02,...
-        if (outputBackgroundProbDense_) {
-            len += std::snprintf(buf + len, sizeof(buf) - len, "\t");
-            const auto& phi0_map = (*phi0)[j];
-            for (const auto& kv : phi0_map) {
-                int n = std::snprintf(
-                    buf + len, sizeof(buf) - len, "%s:%.*f,",
-                    featureNames[kv.first].c_str(),
-                    probDigits, kv.second
-                );
-                if (n < 0) {
-                    error("%s: error writing background probability", __func__);
-                }
-                if (n >= int(sizeof(buf) - len)) {
-                    warning("%s: buffer overflow while writing dense background probabilities, not all genes are written", __func__);
-                    break;
-                }
-                len += n;
-            }
-            if (len > 0 && buf[len - 1] == ',') {
-                len -= 1; // remove trailing comma
-            }
-        }
-        buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
-    }
-    result.npts = result.outputLines.size();
-    return result;
-}
-
-template<typename T>
-typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelResultWithBackground(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>& phi0) {
-    assert(!outputBackgroundProbDense_);
-    if (outputBackgroundProbExpand_) {
-        assert(phi0.size() == size_t(topVals.rows()));
-    }
-    ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    size_t N = tileData.coords.size();
-    std::vector<bool> internal(N, 0);
-    for (auto j : tileData.idxinternal) {
-        if (tileData.orgpts2pixel[j] < 0) {
-            continue;
-        }
-        internal[tileData.orgpts2pixel[j]] = true;
-    }
-    char buf[512];
-    for (size_t j = 0; j < N; ++j) {
-        if (!internal[j]) {
-            continue;
-        }
-        for (const auto& kv : phi0[j]) {
-            int len = len = std::snprintf(
-                buf, sizeof(buf), "%.*f\t%.*f",
-                floatCoordDigits, tileData.coords[j].first*pixelResolution_,
-                floatCoordDigits, tileData.coords[j].second*pixelResolution_
-            );
-            // write feature name and background probability
-            len += std::snprintf(
-                buf + len, sizeof(buf) - len, "\t%s\t%.*f",
-                featureNames[kv.first].c_str(),
-                probDigits, kv.second
-            );
-            // write the top‑k IDs
-            for (int32_t k = 0; k < topk_; ++k) {
-                int n = std::snprintf(
-                    buf + len, sizeof(buf) - len, "\t%d",
-                    topIds(j, k)
-                );
-                if (n < 0 || n >= int(sizeof(buf) - len)) {
-                    error("%s: error writing output line", __func__);
-                }
-                len += n;
-            }
-            // write the top‑k probabilities in scientific form
-            for (int32_t k = 0; k < topk_; ++k) {
-                int n = std::snprintf(
-                    buf + len, sizeof(buf) - len, "\t%.*e",
-                    probDigits, topVals(j, k)
-                );
-                if (n < 0 || n >= int(sizeof(buf) - len)) {
-                    error("%s: error writing output line", __func__);
-                }
-                len += n;
-            }
-            buf[len++] = '\n';
-            result.outputLines.emplace_back(buf, len);
-        }
-
-    }
-    result.npts = result.outputLines.size();
-    return result;
-}
-
-template<typename T>
-typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelResultBinary(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket) {
-    ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    result.useObj = true;
-    size_t N = tileData.coords.size();
-    std::vector<bool> internal(N, 0);
-    for (auto j : tileData.idxinternal) {
-        if (tileData.orgpts2pixel[j] < 0) {
-            continue;
-        }
-        internal[tileData.orgpts2pixel[j]] = true;
-    }
-    for (size_t j = 0; j < N; ++j) {
-        if (!internal[j]) {
-            continue;
-        }
-        PixTopProbs<int32_t> rec(tileData.coords[j]);
-        rec.ks.resize(topk_);
-        rec.ps.resize(topk_);
-        for (int32_t k = 0; k < topk_; ++k) {
-            rec.ks[k] = topIds(j, k);
-            rec.ps[k] = topVals(j, k);
-        }
-        result.outputObjs.emplace_back(std::move(rec));
-    }
-    result.npts = result.outputObjs.size();
-    return result;
+    return (this->*parseTileFn_)(tileData, tile);
 }
 
 template<typename T>
 int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
-    std::vector<cv::Point2f>& anchors, Minibatch& minibatch,
+    std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     double distR, double distNu) {
 
     if (minibatch.n <= 0) {
@@ -762,9 +316,13 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     }
     assert(distR > 0.0 && distNu > 0.0);
 
-    PointCloudCV<float> pc;
+    if (coordDim_ == MinibatchCoordDim::Dim3) {
+        return buildMinibatchCore3D(tileData, anchors, minibatch, distR, distNu);
+    }
+
+    PointCloud<float> pc;
     pc.pts = std::move(anchors);
-    kd_tree_cv2f_t kdtree(2, pc, {10});
+    kd_tree_f2_t kdtree(2, pc, {10});
     std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
 
     const float res = pixelResolution_;
@@ -873,12 +431,22 @@ void Tiles2MinibatchBase<T>::writerWorker() {
                 size_t st = outputSize;
                 size_t ed = st;
                 if (readyToWrite.useObj) {
-                    for (const auto& obj : readyToWrite.outputObjs) {
-                        int32_t s0 = obj.write(fdMain);
-                        if (s0 < 0) {
-                            error("Error writing to main output file");
+                    if (coordDim_ == MinibatchCoordDim::Dim3) {
+                        for (const auto& obj : readyToWrite.outputObjs3d) {
+                            int32_t s0 = obj.write(fdMain);
+                            if (s0 < 0) {
+                                error("Error writing to main output file");
+                            }
+                            ed += s0;
                         }
-                        ed += s0;
+                    } else {
+                        for (const auto& obj : readyToWrite.outputObjs) {
+                            int32_t s0 = obj.write(fdMain);
+                            if (s0 < 0) {
+                                error("Error writing to main output file");
+                            }
+                            ed += s0;
+                        }
                     }
                 } else {
                     for (const auto& line : readyToWrite.outputLines) {
@@ -919,12 +487,22 @@ void Tiles2MinibatchBase<T>::anchorWriterWorker() {
             if (readyToWrite.npts > 0) {
                 size_t totalLen = 0;
                 if (readyToWrite.useObj) {
-                    for (const auto& obj : readyToWrite.outputObjs) {
-                        int32_t s0 = obj.write(fdAnchor);
-                        if (s0 < 0) {
-                            error("Error writing to anchor output file");
+                    if (coordDim_ == MinibatchCoordDim::Dim3) {
+                        for (const auto& obj : readyToWrite.outputObjs3d) {
+                            int32_t s0 = obj.write(fdAnchor);
+                            if (s0 < 0) {
+                                error("Error writing to anchor output file");
+                            }
+                            totalLen += s0;
                         }
-                        totalLen += s0;
+                    } else {
+                        for (const auto& obj : readyToWrite.outputObjs) {
+                            int32_t s0 = obj.write(fdAnchor);
+                            if (s0 < 0) {
+                                error("Error writing to anchor output file");
+                            }
+                            totalLen += s0;
+                        }
                     }
                 } else {
                     for (const auto& line : readyToWrite.outputLines) {
@@ -967,125 +545,6 @@ void Tiles2MinibatchBase<T>::setExtendedSchema(size_t offset) {
     recordSize_ = offset;
 }
 
-template<typename T>
-void Tiles2MinibatchBase<T>::setupOutput() {
-    #if !defined(_WIN32)
-        // ensure includes present
-    #endif
-    assert(!(outputBackgroundProbDense_ && outputBackgroundProbExpand_));
-    std::string outputFile = outPref + (outputBinary_ ? ".bin" : ".tsv");
-    fdMain = ::open(outputFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdMain < 0) {
-        error("Error opening main output file: %s", outputFile.c_str());
-    }
-    if (!outputBinary_) {
-        std::string header_str = composeHeader();
-        if (!write_all(fdMain, header_str.data(), header_str.size())) {
-            error("Error writing header_str to main output file: %s", outputFile.c_str());
-        }
-        headerSize = header_str.size();
-        outputSize = headerSize;
-    }
-    std::string indexFile = outPref + ".index";
-    fdIndex = ::open(indexFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdIndex < 0) {
-        error("Error opening index output file: %s", indexFile.c_str());
-    }
-    // Write index header
-    IndexHeader idxHeader;
-    idxHeader.magic = PUNKST_INDEX_MAGIC;
-    idxHeader.mode = 0x8;
-    idxHeader.tileSize = tileSize;
-    idxHeader.topK = topk_;
-    idxHeader.pixelResolution = pixelResolution_;
-    const auto& box = tileReader.getGlobalBox();
-    idxHeader.xmin = box.xmin; idxHeader.xmax = box.xmax;
-    idxHeader.ymin = box.ymin; idxHeader.ymax = box.ymax;
-    if (outputBinary_) {
-        idxHeader.mode |= 0x7;
-        outputRecordSize_ = 2 * sizeof(int32_t) + topk_ * sizeof(int32_t) + topk_ * sizeof(float);
-        idxHeader.coordType = 1;
-        idxHeader.recordSize = outputRecordSize_;
-    }
-
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
-        error("Error writing header to index output file: %s", indexFile.c_str());
-    }
-
-    if (!outputAnchor_) return;
-
-    // setup anchor output
-    std::string anchorFile = outPref + ".anchors.tsv";
-    fdAnchor = ::open(anchorFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdAnchor < 0) {
-        error("Error opening anchor output file: %s", anchorFile.c_str());
-    }
-    std::string header_str = "#x\ty";
-    for (int32_t i = 0; i < topk_; ++i) header_str += "\tK" + std::to_string(i+1);
-    for (int32_t i = 0; i < topk_; ++i) header_str += "\tP" + std::to_string(i+1);
-    header_str += "\n";
-    if (!write_all(fdAnchor, header_str.data(), header_str.size())) {
-        error("Error writing header_str to anchor output file: %s", anchorFile.c_str());
-    }
-    anchorHeaderSize = header_str.size();
-}
-
-template<typename T>
-std::string Tiles2MinibatchBase<T>::composeHeader() {
-    assert (!outputBinary_);
-        std::string jsonFile = outPref + ".json";
-    std::ofstream jsonOut(jsonFile);
-    if (!jsonOut) {
-        error("Error opening json output file: %s", jsonFile.c_str());
-    }
-    nlohmann::json header;
-    std::string header_str = "#x\ty";
-    int32_t idx = 0;
-    header["x"] = idx++;
-    header["y"] = idx++;
-    if (outputOriginalData_) {
-        header_str += "\tfeature\tct";
-        header["feature"] = idx++;
-        header["ct"] = idx++;
-    } else if (outputBackgroundProbExpand_) {
-        header_str += "\tfeature";
-        header["feature"] = idx++;
-    }
-    if (outputBackgroundProbExpand_) {
-        header_str += "\tp0";
-        header["p0"] = idx++;
-    }
-    for (int32_t i = 0; i < topk_; ++i) {
-        header_str += "\tK" + std::to_string(i+1);
-        header["K" + std::to_string(i+1)] = idx++;
-    }
-    for (int32_t i = 0; i < topk_; ++i) {
-        header_str += "\tP" + std::to_string(i+1);
-        header["P" + std::to_string(i+1)] = idx++;
-    }
-    if (useExtended_ && lineParserPtr) {
-        for (const auto& v : lineParserPtr->name_ints) {
-            header_str += "\t" + v;
-            header[v] = idx++;
-        }
-        for (const auto& v : lineParserPtr->name_floats) {
-            header_str += "\t" + v;
-            header[v] = idx++;
-        }
-        for (const auto& v : lineParserPtr->name_strs) {
-            header_str += "\t" + v;
-            header[v] = idx++;
-        }
-    }
-    if (outputBackgroundProbDense_) {
-        header_str += "\tp0";
-        header["p0"] = idx++;
-    }
-    jsonOut << std::setw(4) << header << std::endl;
-    jsonOut.close();
-    header_str += "\n";
-    return header_str;
-}
 
 template<typename T>
 void Tiles2MinibatchBase<T>::closeOutput() {
@@ -1093,6 +552,10 @@ void Tiles2MinibatchBase<T>::closeOutput() {
     if (fdIndex >= 0) { ::close(fdIndex); fdIndex = -1; }
     if (fdAnchor >= 0) { ::close(fdAnchor); fdAnchor = -1; }
 }
+
+// Include template implementations to keep definitions in one TU.
+#include "tiles2minibatch_io.cpp"
+#include "tiles2minibatch_3d.cpp"
 
 template class Tiles2MinibatchBase<int32_t>;
 template class Tiles2MinibatchBase<float>;

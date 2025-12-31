@@ -14,6 +14,7 @@ public:
         const std::string& outPref, const std::string& tmpDir,
         LatentDirichletAllocation& lda,
         TileReader& tileReader, lineParserUnival& lineParser,
+        const MinibatchIoConfig& ioConfig,
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed = std::random_device{}(),
         double c = 20, double h = 0.7, double res = 1,
@@ -53,9 +54,9 @@ protected:
     std::mutex pseudobulkMutex_; // Protects pseudobulk
     bool fitBackground_ = false;
 
-    int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
-    int32_t initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
-    int32_t makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch);
+    int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
+    int32_t initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
+    int32_t makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
 
     void processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) override;
     void postRun() override;

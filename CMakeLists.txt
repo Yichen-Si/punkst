@@ -52,6 +52,7 @@ set(SOURCE_FILES
     src/utils_sys.hpp
     src/utils_sys.cpp
     src/hexgrid.h
+    src/bccgrid.hpp
     src/threads.hpp
     src/tilereader.hpp
     src/tilereader.cpp

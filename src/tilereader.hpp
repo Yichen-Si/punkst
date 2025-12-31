@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <memory>
+#include <limits>
 #include "utils.h"
 #include "utils_sys.hpp"
 #include "dataunits.hpp"
@@ -23,26 +24,28 @@ enum class CoordType { INTEGER, FLOAT };
 // Parse a line in the tsv tiled pixel file
 struct lineParser {
     size_t icol_x, icol_y, icol_feature;
-    std::vector<int32_t> icol_ct;
+    size_t icol_z = std::numeric_limits<size_t>::max();
+    std::vector<size_t> icol_ct;
     std::unordered_map<std::string, uint32_t> featureDict;
-    int32_t n_ct, n_tokens;
+    size_t n_ct, n_tokens;
     bool isFeatureDict, weighted;
     std::vector<double> weights;
     std::vector<Rectangle<double>> rects;
     std::vector<uint32_t> icol_ints, icol_floats, icol_strs, str_lens;
     std::vector<std::string> name_ints, name_floats, name_strs;
     bool isExtended = false;
+    bool hasZ = false;
 
     lineParser() {isFeatureDict = false; weighted = false;}
-    lineParser(size_t _ix, size_t _iy, size_t _iz, const std::vector<int32_t>& _ivals, const std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
+    lineParser(size_t _ix, size_t _iy, size_t _iw, const std::vector<int32_t>& _ivals, const std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
         weighted = false;
         if (_rects != nullptr && !_rects->empty()) {
             rects = *_rects;
         }
-        init(_ix, _iy, _iz, _ivals, _dfile);
+        init(_ix, _iy, _iw, _ivals, _dfile);
     }
 
-    void init(size_t _ix, size_t _iy, size_t _iz,
+    void init(size_t _ix, size_t _iy, size_t _iw,
               const std::vector<int32_t>& _ivals,
               const std::string& _dfile);
 
@@ -54,21 +57,24 @@ struct lineParser {
     void setFeatureDict(const std::unordered_map<std::string, uint32_t>& dict);
     void setFeatureDict(const std::vector<std::string>& featureList);
     int32_t getFeatureList(std::vector<std::string>& featureList);
+    void setZ(size_t col);
+    bool hasZCoord() const { return hasZ; }
 
     int32_t parse(PixelValues& pixel, std::string& line, bool checkBounds = false);
+    int32_t parse(PixelValues3D& pixel, std::string& line, bool checkBounds = false);
     int32_t readWeights(const std::string& weightFile, double defaultWeight = 1.0, int32_t nFeatures = -1);
 };
 
 struct lineParserUnival : public lineParser {
     size_t icol_val;
     lineParserUnival() {}
-    lineParserUnival(size_t _ix, size_t _iy, size_t _iz, size_t _ival, const std::string& _dfile = "", std::vector<Rectangle<double>>* _rects = nullptr) {
+    lineParserUnival(size_t _ix, size_t _iy, size_t _iw, size_t _ival, const std::string& _dfile = "", std::vector<Rectangle<double>>* _rects = nullptr) {
         if (_rects != nullptr && !_rects->empty()) {
             rects = *_rects;
         }
         icol_val = _ival;
         std::vector<int32_t> _ivals = { (int32_t) _ival};
-        init(_ix, _iy, _iz, _ivals, _dfile);
+        init(_ix, _iy, _iw, _ivals, _dfile);
     }
 
     template<typename T>
@@ -76,6 +82,12 @@ struct lineParserUnival : public lineParser {
 
     template<typename T>
     int32_t parse( RecordExtendedT<T>& rec, std::string &line ) const;
+
+    template<typename T>
+    int32_t parse(RecordT3D<T>& rec, std::string& line, bool checkBounds = false) const;
+
+    template<typename T>
+    int32_t parse(RecordExtendedT3D<T>& rec, std::string &line ) const;
 };
 
 class TileReaderBase {

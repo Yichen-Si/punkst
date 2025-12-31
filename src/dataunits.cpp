@@ -441,9 +441,63 @@ bool UnitValues::readFromLine(const std::string& line, int32_t nModal, bool labe
     }
     return true;
 }
+bool UnitValues3D::readFromLine(const std::string& line, int32_t nModal, bool labeled) {
+    std::istringstream iss(line);
+    std::string hexKey;
+    try {
+        iss >> hexKey >> x >> y >> z;
+        if (labeled) {
+            iss >> label;
+            if (label < 0) {
+                return false;
+            }
+        }
+    } catch (const std::exception& e) {
+        error("Error reading line: %s\n %s", line.c_str(), e.what());
+    } catch (...) {
+        error("Unknown error reading line: %s", line.c_str());
+    }
+    clear();
+    vals.resize(nModal);
+    valsums.resize(nModal);
+    std::vector<int32_t> nfeatures(nModal, 0);
+    std::vector<uint32_t> counts(nModal, 0);
+    for (int i = 0; i < nModal; ++i) {
+        if (!(iss >> nfeatures[i] >> counts[i])) {
+            return false;
+        }
+    }
+    for (size_t i = 0; i < nModal; ++i) {
+        for (int j = 0; j < nfeatures[i]; ++j) {
+            uint32_t feature;
+            int32_t value;
+            if (!(iss >> feature >> value)) {
+                return false;
+            }
+            vals[i][feature] = value;
+            valsums[i] += value;
+        }
+    }
+    return true;
+}
 
 bool UnitValues::writeToFile(std::ostream& os, uint32_t key) const {
     os << uint32toHex(key) << "\t" << x << "\t" << y;
+    if (label >= 0)
+        os << "\t" << label;
+    for (size_t i = 0; i < vals.size(); ++i) {
+        os << "\t" << vals[i].size() << "\t" << valsums[i];
+    }
+    for (const auto& val : vals) {
+        for (const auto& entry : val) {
+            os << "\t" << entry.first << " " << entry.second;
+        }
+    }
+    os << "\n";
+    return os.good();
+}
+bool UnitValues3D::writeToFile(std::ostream& os, uint32_t key) const {
+    os << uint32toHex(key) << "\t" << x << "\t" << y << "\t" << z;
     if (label >= 0)
         os << "\t" << label;
     for (size_t i = 0; i < vals.size(); ++i) {

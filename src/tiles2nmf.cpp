@@ -1,4 +1,6 @@
 #include "tiles2nmf.hpp"
+#include "bccgrid.hpp"
+#include <map>
 
 #include <algorithm>
 #include <cmath>
@@ -209,20 +211,17 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
 template<typename T>
 Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
         const std::string& outPref, const std::string& tmpDir,
-        PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, HexGrid& hexGrid, int32_t nMoves,
+        PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, const MinibatchIoConfig& ioConfig,
+        HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed, double c, double h, double res, int32_t topk,
         int32_t verbose, int32_t debug)
-    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir, debug), distR_(r),
+    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug), distR_(r),
         empois_(empois), lineParser_(lineParser),
         hexGrid_(hexGrid), nMoves_(nMoves),
         seed_(seed), anchorMinCount_(c),
         verbose_(verbose)
 {
-    pixelResolution_ = res;
-    lineParserPtr = &lineParser_;
-    useExtended_ = lineParser_.isExtended;
     topk_ = topk;
-
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
         assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match TileReader coordinate type");
     } else if constexpr (std::is_same_v<T, int32_t>) {
@@ -235,15 +234,6 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
         error("%s: smoothing parameter h must be in (0, 1)", __func__);
     }
     distNu_ = std::log(0.5) / std::log(h);
-
-    if (pixelResolution_ <= 0.f) {
-        pixelResolution_ = 1.f;
-    }
-
-    if (useExtended_) {
-         Base::setExtendedSchema(sizeof(RecordT<T>));
-    }
-
     M_ = empois_.get_M();
     K_ = empois_.get_K();
     if (M_ <= 0 || K_ <= 0) {
@@ -277,7 +267,7 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
 }
 
 template<typename T>
-int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
+int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     int32_t nPixels = Base::buildMinibatchCore(
         tileData, anchors, minibatch, distR_, distNu_);
     if (nPixels <= 0) {
@@ -294,8 +284,56 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point
 }
 
 template<typename T>
-int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
+int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     anchors.clear();
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
+        BCCGrid bccGrid(hexGrid_.size);
+        using GridKey3 = std::tuple<int32_t, int32_t, int32_t, int32_t, int32_t, int32_t>;
+        std::map<GridKey3, uint32_t> gridPts;
+        auto assign_pt = [&](const auto& pt) {
+            for (int32_t ir = 0; ir < nMoves_; ++ir) {
+                for (int32_t ic = 0; ic < nMoves_; ++ic) {
+                    for (int32_t iz = 0; iz < nMoves_; ++iz) {
+                        int32_t q1, q2, q3;
+                        double offset_x = (static_cast<double>(ic) / nMoves_) * bccGrid.size;
+                        double offset_y = (static_cast<double>(ir) / nMoves_) * bccGrid.size;
+                        double offset_z = (static_cast<double>(iz) / nMoves_) * bccGrid.size;
+                        bccGrid.cart_to_lattice(q1, q2, q3, pt.x, pt.y, pt.z, offset_x, offset_y, offset_z);
+                        gridPts[std::make_tuple(q1, q2, q3, ic, ir, iz)] += pt.ct;
+                    }
+                }
+            }
+        };
+        if (useExtended_) {
+            for (const auto& pt : tileData.extPts3d) {
+                assign_pt(pt.recBase);
+            }
+        } else {
+            for (const auto& pt : tileData.pts3d) {
+                assign_pt(pt);
+            }
+        }
+        for (auto& kv : gridPts) {
+            if (kv.second < anchorMinCount_) {
+                continue;
+            }
+            auto& key = kv.first;
+            int32_t q1 = std::get<0>(key);
+            int32_t q2 = std::get<1>(key);
+            int32_t q3 = std::get<2>(key);
+            int32_t ic = std::get<3>(key);
+            int32_t ir = std::get<4>(key);
+            int32_t iz = std::get<5>(key);
+            double offset_x = (static_cast<double>(ic) / nMoves_) * bccGrid.size;
+            double offset_y = (static_cast<double>(ir) / nMoves_) * bccGrid.size;
+            double offset_z = (static_cast<double>(iz) / nMoves_) * bccGrid.size;
+            double x, y, z;
+            bccGrid.lattice_to_cart(x, y, z, q1, q2, q3, offset_x, offset_y, offset_z);
+            anchors.emplace_back(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+        }
+        minibatch.n = anchors.size();
+        return anchors.size();
+    }
     std::unordered_map<HexGrid::GridKey, uint32_t, HexGrid::GridKeyHash> GridPts;
     auto assign_pt = [&](const auto& pt) {
         for (int32_t ir = 0; ir < nMoves_; ++ir) {
@@ -335,10 +373,11 @@ int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f
 template<typename T>
 void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     (void)anchorPtr;
-    if (tileData.pts.empty() && tileData.extPts.empty()) {
+    if (tileData.pts.empty() && tileData.extPts.empty() &&
+        tileData.pts3d.empty() && tileData.extPts3d.empty()) {
         return;
     }
-    std::vector<cv::Point2f> anchors;
+    std::vector<AnchorPoint> anchors;
     Minibatch minibatch;
     int32_t nAnchors = initAnchors(tileData, anchors, minibatch);
     debug("%s: Thread %d (ticket %d) initialized %d anchors", __func__, threadId, ticket, nAnchors);

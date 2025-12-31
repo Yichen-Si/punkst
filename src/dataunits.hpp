@@ -58,6 +58,21 @@ struct PixelValues {
     }
 };
 
+struct PixelValues3D {
+    double x, y, z;
+    uint32_t feature;
+    std::vector<int32_t> intvals;
+    PixelValues3D() {}
+    bool writeToFileText(std::ostream& os) const {
+        os << x << "\t" << y << "\t" << z << "\t" << feature;
+        for (const auto& val : intvals) {
+            os << "\t" << val;
+        }
+        os << "\n";
+        return os.good();
+    }
+};
+
 struct UnitValues {
     int32_t nPixel;
     int32_t x, y;
@@ -104,6 +119,72 @@ struct UnitValues {
     }
     bool mergeUnits(const UnitValues& other) {
         if (x != other.x || y != other.y) {
+            return false;
+        }
+        if ((vals.size() != other.vals.size()) || (valsums.size() != other.valsums.size())) {
+            return false;
+        }
+        nPixel += other.nPixel;
+        for (size_t i = 0; i < vals.size(); ++i) {
+            for (const auto& entry : other.vals[i]) {
+                if (entry.second > 0)
+                    vals[i][entry.first] += entry.second;
+            }
+            valsums[i] += other.valsums[i];
+        }
+        return true;
+    }
+    bool writeToFile(std::ostream& os, uint32_t key) const;
+    bool readFromLine(const std::string& line, int32_t nModal, bool labeled = false);
+};
+
+struct UnitValues3D {
+    int32_t nPixel;
+    int32_t x, y, z;
+    int32_t label;
+    std::vector<std::map<uint32_t, uint32_t>> vals;
+    std::vector<uint32_t> valsums;
+    UnitValues3D(int32_t hx, int32_t hy, int32_t hz, int32_t n = 0, int32_t l = -1) : nPixel(0), x(hx), y(hy), z(hz), label(l) {
+        if (n > 0) {
+            vals.resize(n);
+            valsums.resize(n);
+            std::fill(valsums.begin(), valsums.end(), 0);
+        }
+    }
+    UnitValues3D(int32_t hx, int32_t hy, int32_t hz, const PixelValues3D& pixel, int32_t l = -1)
+        : nPixel(1), x(hx), y(hy), z(hz), label(l) {
+        vals.resize(pixel.intvals.size());
+        valsums.resize(pixel.intvals.size());
+        std::fill(valsums.begin(), valsums.end(), 0);
+        for (size_t i = 0; i < pixel.intvals.size(); ++i) {
+            if (pixel.intvals[i] > 0) {
+                vals[i][pixel.feature] = pixel.intvals[i];
+                valsums[i] += pixel.intvals[i];
+            }
+        }
+    }
+    void clear() {
+        nPixel = 0;
+        vals.clear();
+        valsums.clear();
+    }
+    void addPixel(const PixelValues3D& pixel) {
+        ++nPixel;
+        if (vals.size() == 0) {
+            vals.resize(pixel.intvals.size());
+            valsums.resize(pixel.intvals.size());
+            std::fill(valsums.begin(), valsums.end(), 0);
+        }
+        assert(vals.size() == pixel.intvals.size() && "pixel and unit have different number of layers");
+        for (size_t i = 0; i < pixel.intvals.size(); ++i) {
+            if (pixel.intvals[i] > 0) {
+                vals[i][pixel.feature] += pixel.intvals[i];
+                valsums[i] += pixel.intvals[i];
+            }
+        }
+    }
+    bool mergeUnits(const UnitValues3D& other) {
+        if (x != other.x || y != other.y || z != other.z) {
             return false;
         }
         if ((vals.size() != other.vals.size()) || (valsums.size() != other.valsums.size())) {

@@ -27,7 +27,21 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     mode_ = formatInfo_.mode;
     if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
     if (mode_ & 0x2) {assert(mode_ & 0x4);}
+    if (mode_ & 0x1) {assert(formatInfo_.recordSize > 0);}
     k_ = formatInfo_.parseKvec(kvec_);
+    coord_dim_ = 2;
+    if (mode_ & 0x1) {
+        size_t kBytes = k_ * (sizeof(int32_t) + sizeof(float));
+        size_t cBytes = (mode_ & 0x4) ? sizeof(int32_t) : sizeof(float);
+        if (formatInfo_.recordSize < kBytes + 2 * cBytes ||
+            (formatInfo_.recordSize - kBytes) % cBytes != 0) {
+            error("%s: Record size %u inconsistent with k=%d and coordinate type", __func__, formatInfo_.recordSize, k_);
+        }
+        coord_dim_ = (formatInfo_.recordSize - kBytes) / cBytes;
+        if (coord_dim_ != 2 && coord_dim_ != 3) {
+            error("%s: Unsupported coordinate dimension %d", __func__, coord_dim_);
+        }
+    }
     globalBox_ = Rectangle<float>(formatInfo_.xmin, formatInfo_.ymin,
                                   formatInfo_.xmax, formatInfo_.ymax);
     blocks_all_.clear();
@@ -73,7 +87,7 @@ void TileOperator::printIndex() const {
     }
     printf("#start\tend\trow\tcol\tnpts\txmin\txmax\tymin\tymax\n");
     for (const auto& b : blocks_all_) {
-        printf("%lu\t%lu\t%d\t%d\t%u\t%d\t%d\t%d\t%d\n",
+        printf("%llu\t%llu\t%d\t%d\t%u\t%d\t%d\t%d\t%d\n",
             b.idx.st, b.idx.ed, b.idx.row, b.idx.col, b.idx.n,
             b.idx.xmin, b.idx.xmax, b.idx.ymin, b.idx.ymax);
     }
@@ -106,7 +120,10 @@ int32_t TileOperator::query(float qxmin,float qxmax,float qymin,float qymax) {
 }
 
 int32_t TileOperator::loadTileToMap(const TileKey& key,
-    std::map<std::pair<int32_t, int32_t>, PixTopProbs<int32_t>>& pixelMap) {
+    std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap) {
+    if (coord_dim_ == 3) {
+        error("%s: 3D data requires loadTileToMap3D", __func__);
+    }
     assert((mode_ & 0x8) == 0);
     if ((mode_ & 0x4) == 0) {
         assert((mode_ & 0x2) == 0 && formatInfo_.pixelResolution > 0);}
@@ -118,12 +135,62 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
     TileInfo& blk = blocks_[idx];
     openBlock(blk);
     float res = formatInfo_.pixelResolution;
-    PixTopProbs<int32_t> rec;
+    TopProbs rec;
     while (pos_ < blk.idx.ed) {
         bool success = false;
+        int32_t recX = 0;
+        int32_t recY = 0;
         if (mode_ & 0x4) { // int32
             if (mode_ & 0x1) { // Binary
-                if (rec.read(dataStream_, k_)) {
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<int32_t> temp;
+                    if (temp.read(dataStream_, k_)) {
+                        recX = temp.x;
+                        recY = temp.y;
+                        rec.ks = std::move(temp.ks);
+                        rec.ps = std::move(temp.ps);
+                        pos_ += formatInfo_.recordSize;
+                        success = true;
+                    }
+                } else {
+                    PixTopProbs<int32_t> temp;
+                    if (temp.read(dataStream_, k_)) {
+                        recX = temp.x;
+                        recY = temp.y;
+                        rec.ks = std::move(temp.ks);
+                        rec.ps = std::move(temp.ps);
+                        pos_ += formatInfo_.recordSize;
+                        success = true;
+                    }
+                }
+            } else {
+                std::string line;
+                if (std::getline(dataStream_, line)) {
+                    pos_ += line.size() + 1;
+                    PixTopProbs<int32_t> temp;
+                    success = parseLine(line, temp);
+                    if (success) {
+                        recX = temp.x;
+                        recY = temp.y;
+                        rec.ks = std::move(temp.ks);
+                        rec.ps = std::move(temp.ps);
+                    }
+                }
+            }
+        } else { // float, scale then round to int
+            PixTopProbs<float> temp;
+            if (mode_ & 0x1) { // Binary
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<float> temp3;
+                    if (temp3.read(dataStream_, k_)) {
+                        temp.x = temp3.x;
+                        temp.y = temp3.y;
+                        temp.ks = std::move(temp3.ks);
+                        temp.ps = std::move(temp3.ps);
+                        pos_ += formatInfo_.recordSize;
+                        success = true;
+                    }
+                } else if (temp.read(dataStream_, k_)) {
                     pos_ += formatInfo_.recordSize;
                     success = true;
                 }
@@ -131,11 +198,77 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
                 std::string line;
                 if (std::getline(dataStream_, line)) {
                     pos_ += line.size() + 1;
-                    success = parseLine(line, rec);
+                    success = parseLine(line, temp);
+                }
+            }
+            if (success) {
+                recX = static_cast<int32_t>(std::floor(temp.x / res));
+                recY = static_cast<int32_t>(std::floor(temp.y / res));
+                rec.ks = std::move(temp.ks);
+                rec.ps = std::move(temp.ps);
+            }
+        }
+        if (success) {
+            pixelMap[{recX, recY}] = std::move(rec);
+        } else if (!dataStream_.eof()) {
+            error("%s: Corrupted data", __func__);
+        }
+    }
+    return static_cast<int32_t>(pixelMap.size());
+}
+
+int32_t TileOperator::loadTileToMap3D(const TileKey& key,
+    std::map<PixelKey3, TopProbs>& pixelMap) {
+    if (coord_dim_ != 3) {
+        error("%s: 3D data required, but coord_dim_=%u", __func__, coord_dim_);
+    }
+    assert((mode_ & 0x8) == 0);
+    if ((mode_ & 0x4) == 0) {
+        assert((mode_ & 0x2) == 0 && formatInfo_.pixelResolution > 0);
+    }
+    pixelMap.clear();
+    if (tile_lookup_.find(key) == tile_lookup_.end()) return 0;
+
+    openDataStream();
+    size_t idx = tile_lookup_.at(key);
+    TileInfo& blk = blocks_[idx];
+    openBlock(blk);
+    float res = formatInfo_.pixelResolution;
+    TopProbs rec;
+    while (pos_ < blk.idx.ed) {
+        bool success = false;
+        int32_t recX = 0;
+        int32_t recY = 0;
+        int32_t recZ = 0;
+        if (mode_ & 0x4) { // int32
+            if (mode_ & 0x1) { // Binary
+                PixTopProbs3D<int32_t> temp;
+                if (temp.read(dataStream_, k_)) {
+                    recX = temp.x;
+                    recY = temp.y;
+                    recZ = temp.z;
+                    rec.ks = std::move(temp.ks);
+                    rec.ps = std::move(temp.ps);
+                    pos_ += formatInfo_.recordSize;
+                    success = true;
+                }
+            } else {
+                std::string line;
+                if (std::getline(dataStream_, line)) {
+                    pos_ += line.size() + 1;
+                    PixTopProbs3D<int32_t> temp;
+                    success = parseLine(line, temp);
+                    if (success) {
+                        recX = temp.x;
+                        recY = temp.y;
+                        recZ = temp.z;
+                        rec.ks = std::move(temp.ks);
+                        rec.ps = std::move(temp.ps);
+                    }
                 }
             }
         } else { // float, scale then round to int
-            PixTopProbs<float> temp;
+            PixTopProbs3D<float> temp;
             if (mode_ & 0x1) { // Binary
                 if (temp.read(dataStream_, k_)) {
                     pos_ += formatInfo_.recordSize;
@@ -149,14 +282,15 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
                 }
             }
             if (success) {
-                rec.x = static_cast<int32_t>(std::floor(temp.x / res));
-                rec.y = static_cast<int32_t>(std::floor(temp.y / res));
+                recX = static_cast<int32_t>(std::floor(temp.x / res));
+                recY = static_cast<int32_t>(std::floor(temp.y / res));
+                recZ = static_cast<int32_t>(std::floor(temp.z / res));
                 rec.ks = std::move(temp.ks);
                 rec.ps = std::move(temp.ps);
             }
         }
         if (success) {
-            pixelMap[{rec.x, rec.y}] = rec;
+            pixelMap[std::make_tuple(recX, recY, recZ)] = std::move(rec);
         } else if (!dataStream_.eof()) {
             error("%s: Corrupted data", __func__);
         }
@@ -192,6 +326,9 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
     }
     // Write header
     std::string headerStr = "#x\ty";
+    if (coord_dim_ == 3) {
+        headerStr += "\tz";
+    }
     for (int i = 0; i < k_; ++i) {
         headerStr += "\tK" + std::to_string(i + 1) + "\tP" + std::to_string(i + 1);
     }
@@ -232,37 +369,62 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
         // This assumes the binary index is correct and aligned with the data we read.
 
         for(size_t i=0; i<nRecs; ++i) {
-            float x, y;
+            float x, y, z = 0.0f;
             std::vector<int32_t> ks(k_);
             std::vector<float> ps(k_);
 
             if (isInt32) {
-                PixTopProbs<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) break;
-                x = static_cast<float>(temp.x);
-                y = static_cast<float>(temp.y);
-                ks = std::move(temp.ks);
-                ps = std::move(temp.ps);
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<int32_t> temp;
+                    if (!temp.read(dataStream_, k_)) break;
+                    x = static_cast<float>(temp.x);
+                    y = static_cast<float>(temp.y);
+                    z = static_cast<float>(temp.z);
+                    ks = std::move(temp.ks);
+                    ps = std::move(temp.ps);
+                } else {
+                    PixTopProbs<int32_t> temp;
+                    if (!temp.read(dataStream_, k_)) break;
+                    x = static_cast<float>(temp.x);
+                    y = static_cast<float>(temp.y);
+                    ks = std::move(temp.ks);
+                    ps = std::move(temp.ps);
+                }
             } else {
-                PixTopProbs<float> temp;
-                if (!temp.read(dataStream_, k_)) break;
-                x = temp.x;
-                y = temp.y;
-                ks = std::move(temp.ks);
-                ps = std::move(temp.ps);
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<float> temp;
+                    if (!temp.read(dataStream_, k_)) break;
+                    x = temp.x;
+                    y = temp.y;
+                    z = temp.z;
+                    ks = std::move(temp.ks);
+                    ps = std::move(temp.ps);
+                } else {
+                    PixTopProbs<float> temp;
+                    if (!temp.read(dataStream_, k_)) break;
+                    x = temp.x;
+                    y = temp.y;
+                    ks = std::move(temp.ks);
+                    ps = std::move(temp.ps);
+                }
             }
 
             if (applyRes) {
                 x *= res;
                 y *= res;
+                z *= res;
             }
 
             if (checkBound && !queryBox_.contains(x, y)) {
                 continue;
             }
 
-            if (fprintf(fp, "%.*f\t%.*f", coordDigits, x, coordDigits, y) < 0)
+            if (coord_dim_ == 3) {
+                if (fprintf(fp, "%.*f\t%.*f\t%.*f", coordDigits, x, coordDigits, y, coordDigits, z) < 0)
+                    error("%s: Write error", __func__);
+            } else if (fprintf(fp, "%.*f\t%.*f", coordDigits, x, coordDigits, y) < 0) {
                 error("%s: Write error", __func__);
+            }
             for (int k = 0; k < k_; ++k) {
                 if (fprintf(fp, "\t%d\t%.*e", ks[k], probDigits, ps[k]) < 0)
                     error("%s: Write error", __func__);
@@ -341,6 +503,69 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs<int32_t>& R) c
     return true;
 }
 
+bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<float>& R) const {
+    std::vector<std::string> tokens;
+    split(tokens, "\t", line);
+    if (tokens.size() < icol_max_ + 1) return false;
+    if (!str2float(tokens[icol_x_], R.x) ||
+        !str2float(tokens[icol_y_], R.y)) {
+        warning("%s: Error parsing x,y from line: %s", __func__, line.c_str());
+        return false;
+    }
+    if (has_z_) {
+        if (!str2float(tokens[icol_z_], R.z)) {
+            warning("%s: Error parsing z from line: %s", __func__, line.c_str());
+            return false;
+        }
+    } else {
+        R.z = 0;
+    }
+    if (mode_ & 0x2) {
+        R.x *= formatInfo_.pixelResolution;
+        R.y *= formatInfo_.pixelResolution;
+        R.z *= formatInfo_.pixelResolution;
+    }
+    if (k_ <= 0) return true;
+
+    R.ks.resize(k_);
+    R.ps.resize(k_);
+    for (int i = 0; i < k_; ++i) {
+        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
+            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
+            warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
+        }
+    }
+    return true;
+}
+
+bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const {
+    std::vector<std::string> tokens;
+    split(tokens, "\t", line);
+    if (tokens.size() <= icol_max_ + 1) return false;
+    if (!str2int32(tokens[icol_x_], R.x) ||
+        !str2int32(tokens[icol_y_], R.y)) {
+        return false;
+    }
+    if (has_z_) {
+        if (!str2int32(tokens[icol_z_], R.z)) {
+            return false;
+        }
+    } else {
+        R.z = 0;
+    }
+    if (k_ <= 0) return true;
+
+    R.ks.resize(k_);
+    R.ps.resize(k_);
+    for (int i = 0; i < k_; ++i) {
+        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
+            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int32_t TileOperator::next(PixTopProbs<float>& out, bool rawCoord) {
     if (done_) return -1;
     if (bounded_) {
@@ -348,19 +573,43 @@ int32_t TileOperator::next(PixTopProbs<float>& out, bool rawCoord) {
     }
     if (mode_ & 0x1) { // Binary mode
         if (mode_ & 0x4) { // int32
-            PixTopProbs<int32_t> temp;
-            if (!temp.read(dataStream_, k_)) {
-                done_ = true;
-                return -1;
+            if (coord_dim_ == 3) {
+                PixTopProbs3D<int32_t> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
+                out.x = static_cast<float>(temp.x);
+                out.y = static_cast<float>(temp.y);
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+            } else {
+                PixTopProbs<int32_t> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
+                out.x = static_cast<float>(temp.x);
+                out.y = static_cast<float>(temp.y);
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
             }
-            out.x = static_cast<float>(temp.x);
-            out.y = static_cast<float>(temp.y);
-            out.ks = std::move(temp.ks);
-            out.ps = std::move(temp.ps);
         } else { // float
-            if (!out.read(dataStream_, k_)) {
-                done_ = true;
-                return -1;
+            if (coord_dim_ == 3) {
+                PixTopProbs3D<float> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
+                out.x = temp.x;
+                out.y = temp.y;
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+            } else {
+                if (!out.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
             }
         }
         if (!rawCoord && (mode_ & 0x2)) {
@@ -395,8 +644,136 @@ int32_t TileOperator::next(PixTopProbs<int32_t>& out) {
         return nextBounded(out);
     }
     if (mode_ & 0x1) { // Binary mode
-        if (out.read(dataStream_, k_)) {
-            return 1;
+        if (coord_dim_ == 3) {
+            PixTopProbs3D<int32_t> temp;
+            if (temp.read(dataStream_, k_)) {
+                out.x = temp.x;
+                out.y = temp.y;
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+                return 1;
+            }
+        } else {
+            if (out.read(dataStream_, k_)) {
+                return 1;
+            }
+        }
+        if (dataStream_.eof()) {
+            done_ = true;
+            return -1;
+        }
+        error("%s: Corrupted data", __func__);
+    }
+    // Text mode
+    std::string line;
+    while (true) {
+        if (!std::getline(dataStream_, line)) {
+            done_ = true;
+            return -1;
+        }
+        if (line.empty() || line[0] == '#') {continue;}
+        if (!parseLine(line, out)) return 0;
+        return 1;
+    }
+}
+
+int32_t TileOperator::next(PixTopProbs3D<float>& out, bool rawCoord) {
+    if (done_) return -1;
+    if (bounded_) {
+        return nextBounded(out, rawCoord);
+    }
+    if (mode_ & 0x1) { // Binary mode
+        if (mode_ & 0x4) { // int32
+            if (coord_dim_ == 3) {
+                PixTopProbs3D<int32_t> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
+                out.x = static_cast<float>(temp.x);
+                out.y = static_cast<float>(temp.y);
+                out.z = static_cast<float>(temp.z);
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+            } else {
+                PixTopProbs<int32_t> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
+                out.x = static_cast<float>(temp.x);
+                out.y = static_cast<float>(temp.y);
+                out.z = 0.0f;
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+            }
+        } else { // float
+            if (coord_dim_ == 3) {
+                if (!out.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
+            } else {
+                PixTopProbs<float> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    done_ = true;
+                    return -1;
+                }
+                out.x = temp.x;
+                out.y = temp.y;
+                out.z = 0.0f;
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+            }
+        }
+        if (!rawCoord && (mode_ & 0x2)) {
+            out.x *= formatInfo_.pixelResolution;
+            out.y *= formatInfo_.pixelResolution;
+            out.z *= formatInfo_.pixelResolution;
+        }
+        return 1;
+    }
+    // Text mode
+    std::string line;
+    while (true) {
+        if (!std::getline(dataStream_, line)) {
+            done_ = true;
+            return -1;
+        }
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        if (!parseLine(line, out)) return 0;
+        if (rawCoord && (mode_ & 0x2)) {
+            out.x /= formatInfo_.pixelResolution;
+            out.y /= formatInfo_.pixelResolution;
+            out.z /= formatInfo_.pixelResolution;
+        }
+        return 1;
+    }
+}
+
+int32_t TileOperator::next(PixTopProbs3D<int32_t>& out) {
+    if (mode_ & 0x1) {assert(mode_ & 0x4);}
+    if (done_) return -1;
+    if (bounded_) {
+        return nextBounded(out);
+    }
+    if (mode_ & 0x1) { // Binary mode
+        if (coord_dim_ == 3) {
+            if (out.read(dataStream_, k_)) {
+                return 1;
+            }
+        } else {
+            PixTopProbs<int32_t> temp;
+            if (temp.read(dataStream_, k_)) {
+                out.x = temp.x;
+                out.y = temp.y;
+                out.z = 0;
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+                return 1;
+            }
         }
         if (dataStream_.eof()) {
             done_ = true;
@@ -433,17 +810,39 @@ int32_t TileOperator::nextBounded(PixTopProbs<float>& out, bool rawCoord) {
             }
             // Read one record
             if (mode_ & 0x4) {
-                 PixTopProbs<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    error("%s: Corrupted data or invalid index", __func__);
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<int32_t> temp;
+                    if (!temp.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
+                    out.x = static_cast<float>(temp.x);
+                    out.y = static_cast<float>(temp.y);
+                    out.ks = std::move(temp.ks);
+                    out.ps = std::move(temp.ps);
+                } else {
+                    PixTopProbs<int32_t> temp;
+                    if (!temp.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
+                    out.x = static_cast<float>(temp.x);
+                    out.y = static_cast<float>(temp.y);
+                    out.ks = std::move(temp.ks);
+                    out.ps = std::move(temp.ps);
                 }
-                out.x = static_cast<float>(temp.x);
-                out.y = static_cast<float>(temp.y);
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
             } else {
-                if (!out.read(dataStream_, k_)) {
-                    error("%s: Corrupted data or invalid index", __func__);
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<float> temp;
+                    if (!temp.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
+                    out.x = temp.x;
+                    out.y = temp.y;
+                    out.ks = std::move(temp.ks);
+                    out.ps = std::move(temp.ps);
+                } else {
+                    if (!out.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
                 }
             }
             pos_ += formatInfo_.recordSize;
@@ -510,8 +909,178 @@ int32_t TileOperator::nextBounded(PixTopProbs<int32_t>& out) {
         }
 
         if (mode_ & 0x1) { // Binary mode
-            if (!out.read(dataStream_, k_)) {
+            if (coord_dim_ == 3) {
+                PixTopProbs3D<int32_t> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    error("%s: Corrupted data or invalid index", __func__);
+                }
+                out.x = temp.x;
+                out.y = temp.y;
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
+            } else {
+                if (!out.read(dataStream_, k_)) {
+                    error("%s: Corrupted data or invalid index", __func__);
+                }
+            }
+            pos_ += formatInfo_.recordSize;
+        } else {
+            if (!std::getline(dataStream_, line))
                 error("%s: Corrupted data or invalid index", __func__);
+            pos_ += line.size() + 1; // +1 for newline
+            if (line.empty() || line[0] == '#') {continue;}
+            if (!parseLine(line, out))
+                error("%s: Corrupted data or invalid index", __func__);
+        }
+
+        if (blk.contained) {return 1;}
+        float x = static_cast<float>(out.x);
+        float y = static_cast<float>(out.y);
+        if (mode_ & 0x2) {
+            x *= formatInfo_.pixelResolution;
+            y *= formatInfo_.pixelResolution;
+        }
+        if (blk.contained || queryBox_.contains(x, y)) {
+            return 1;
+        }
+    }
+}
+
+int32_t TileOperator::nextBounded(PixTopProbs3D<float>& out, bool rawCoord) {
+    if (done_ || idx_block_ < 0) return -1;
+
+    if (mode_ & 0x1) { // Binary mode
+        while (true) {
+            auto &blk = blocks_[idx_block_];
+            if (pos_ >= blk.idx.ed) {
+                if (++idx_block_ >= (int32_t) blocks_.size()) {
+                    done_ = true;
+                    return -1;
+                }
+                openBlock(blocks_[idx_block_]);
+                continue;
+            }
+            // Read one record
+            if (mode_ & 0x4) {
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<int32_t> temp;
+                    if (!temp.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
+                    out.x = static_cast<float>(temp.x);
+                    out.y = static_cast<float>(temp.y);
+                    out.z = static_cast<float>(temp.z);
+                    out.ks = std::move(temp.ks);
+                    out.ps = std::move(temp.ps);
+                } else {
+                    PixTopProbs<int32_t> temp;
+                    if (!temp.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
+                    out.x = static_cast<float>(temp.x);
+                    out.y = static_cast<float>(temp.y);
+                    out.z = 0.0f;
+                    out.ks = std::move(temp.ks);
+                    out.ps = std::move(temp.ps);
+                }
+            } else {
+                if (coord_dim_ == 3) {
+                    if (!out.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
+                } else {
+                    PixTopProbs<float> temp;
+                    if (!temp.read(dataStream_, k_)) {
+                        error("%s: Corrupted data or invalid index", __func__);
+                    }
+                    out.x = temp.x;
+                    out.y = temp.y;
+                    out.z = 0.0f;
+                    out.ks = std::move(temp.ks);
+                    out.ps = std::move(temp.ps);
+                }
+            }
+            pos_ += formatInfo_.recordSize;
+            if (blk.contained && rawCoord) {
+                return 1;
+            }
+            float x = out.x, y = out.y, z = out.z;
+            if (mode_ & 0x2) {
+                x *= formatInfo_.pixelResolution;
+                y *= formatInfo_.pixelResolution;
+                z *= formatInfo_.pixelResolution;
+                if (!rawCoord) {
+                    out.x = x;
+                    out.y = y;
+                    out.z = z;
+                }
+            }
+            if (blk.contained || queryBox_.contains(x, y)) {
+                return 1;
+            }
+        }
+    }
+
+    std::string line;
+    while (true) {
+        auto &blk = blocks_[idx_block_];
+        if (pos_ >= blk.idx.ed || !std::getline(dataStream_, line)) {
+            if (++idx_block_ >= (int32_t) blocks_.size()) {
+                done_ = true;
+                return -1;
+            }
+            openBlock(blocks_[idx_block_]);
+            continue;
+        }
+        pos_ += line.size() + 1; // +1 for newline
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        PixTopProbs3D<float> rec;
+        if (!parseLine(line, rec)) return 0;
+        if (blk.contained || queryBox_.contains(rec.x, rec.y)) {
+            out = std::move(rec);
+            if (rawCoord && (mode_ & 0x2)) {
+                out.x /= formatInfo_.pixelResolution;
+                out.y /= formatInfo_.pixelResolution;
+                out.z /= formatInfo_.pixelResolution;
+            }
+            return 1;
+        }
+        // else skip it, keep reading
+    }
+}
+
+int32_t TileOperator::nextBounded(PixTopProbs3D<int32_t>& out) {
+    if (mode_ & 0x1) {assert(mode_ & 0x4);}
+    if (done_ || idx_block_ < 0) return -1;
+    std::string line;
+    while (true) {
+        auto &blk = blocks_[idx_block_];
+        if (pos_ >= blk.idx.ed) {
+            if (++idx_block_ >= (int32_t) blocks_.size()) {
+                done_ = true;
+                return -1;
+            }
+            openBlock(blocks_[idx_block_]);
+            continue;
+        }
+
+        if (mode_ & 0x1) { // Binary mode
+            if (coord_dim_ == 3) {
+                if (!out.read(dataStream_, k_)) {
+                    error("%s: Corrupted data or invalid index", __func__);
+                }
+            } else {
+                PixTopProbs<int32_t> temp;
+                if (!temp.read(dataStream_, k_)) {
+                    error("%s: Corrupted data or invalid index", __func__);
+                }
+                out.x = temp.x;
+                out.y = temp.y;
+                out.z = 0;
+                out.ks = std::move(temp.ks);
+                out.ps = std::move(temp.ps);
             }
             pos_ += formatInfo_.recordSize;
         } else {
@@ -584,7 +1153,7 @@ void TileOperator::parseHeaderLine() {
     split(tokens, "\t", line);
     std::unordered_map<std::string, uint32_t> header;
     for (uint32_t i = 0; i < tokens.size(); ++i) {
-        if (tokens[i] == "X" || tokens[i] == "Y") {
+        if (tokens[i] == "X" || tokens[i] == "Y" || tokens[i] == "Z") {
             std::transform(tokens[i].begin(), tokens[i].end(), tokens[i].begin(), ::tolower);
         }
         header[tokens[i]] = i;
@@ -594,6 +1163,13 @@ void TileOperator::parseHeaderLine() {
     }
     icol_x_ = header["x"];
     icol_y_ = header["y"];
+    has_z_ = (header.find("z") != header.end());
+    if (has_z_) {
+        icol_z_ = header["z"];
+        coord_dim_ = 3;
+    } else {
+        coord_dim_ = 2;
+    }
     int32_t k = 1;
     while (header.find("K" + std::to_string(k)) != header.end() && header.find("P" + std::to_string(k)) != header.end()) {
         icol_ks_.push_back(header["K" + std::to_string(k)]);
@@ -606,6 +1182,9 @@ void TileOperator::parseHeaderLine() {
     k_ = k - 1;
     kvec_.clear(); kvec_.push_back(k_);
     icol_max_ = std::max(icol_x_, icol_y_);
+    if (has_z_) {
+        icol_max_ = std::max(icol_max_, icol_z_);
+    }
     for (int i = 0; i < k_; ++i) {
         icol_max_ = std::max(icol_max_, std::max(icol_ks_[i], icol_ps_[i]));
     }
@@ -628,6 +1207,13 @@ void TileOperator::parseHeaderFile(const std::string& headerFile) {
     headerStream.close();
     icol_x_ = header["x"];
     icol_y_ = header["y"];
+    has_z_ = header.contains("z");
+    if (has_z_) {
+        icol_z_ = header["z"];
+        coord_dim_ = 3;
+    } else {
+        coord_dim_ = 2;
+    }
     while (header.contains("K" + std::to_string(k)) && header.contains("P" + std::to_string(k))) {
         icol_ks_.push_back(header["K" + std::to_string(k)]);
         icol_ps_.push_back(header["P" + std::to_string(k)]);
@@ -639,6 +1225,9 @@ void TileOperator::parseHeaderFile(const std::string& headerFile) {
     k_ = k - 1;
     kvec_.clear(); kvec_.push_back(k_);
     icol_max_ = std::max(icol_x_, icol_y_);
+    if (has_z_) {
+        icol_max_ = std::max(icol_max_, icol_z_);
+    }
     for (int i = 0; i < k_; ++i) {
         icol_max_ = std::max(icol_max_, std::max(icol_ks_[i], icol_ps_[i]));
     }

@@ -6,30 +6,21 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
         const std::string& outPref, const std::string& tmpDir,
         LatentDirichletAllocation& lda,
         TileReader& tileReader, lineParserUnival& lineParser,
+        const MinibatchIoConfig& ioConfig,
         HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed,
         double c, double h, double res, int32_t N, int32_t k,
         int32_t verbose, int32_t debug)
-    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &tmpDir, debug),
+    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug),
       distR_(r), lda_(lda), lineParser_(lineParser), hexGrid_(hexGrid), nMoves_(nMoves), anchorMinCount_(c)
 {
-    pixelResolution_ = res;
-    lineParserPtr = &lineParser_;
-    useExtended_ = lineParser_.isExtended;
     topk_ = k;
-
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
         assert(tileReader.getCoordType() == CoordType::FLOAT && "Template type does not match with TileReader coordinate type");
     } else if constexpr (std::is_same_v<T, int32_t>) {
         assert(tileReader.getCoordType() == CoordType::INTEGER && "Template type does not match with TileReader coordinate type");
     } else {
         error("%s: Unsupported coordinate type", __func__);
-    }
-    if (pixelResolution_ <= 0) {
-        pixelResolution_ = 1;
-    }
-    if (useExtended_) {
-        Base::setExtendedSchema(sizeof(RecordT<T>));
     }
     M_ = lda_.get_n_features();
     if (lineParser_.isFeatureDict) {
@@ -88,6 +79,7 @@ void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0, b
     fitBackground_ = true;
     Base::outputBackgroundProbDense_ = !outputExpand;
     Base::outputBackgroundProbExpand_ = outputExpand;
+    Base::configureOutputMode();
 }
 
 template<typename T>
@@ -117,10 +109,11 @@ void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, do
     fitBackground_ = true;
     Base::outputBackgroundProbDense_ = !outputExpand;
     Base::outputBackgroundProbExpand_ = outputExpand;
+    Base::configureOutputMode();
 }
 
 template<typename T>
-int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
+int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     std::vector<SparseObs> documents;
     Base::buildAnchors(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_);
     if (documents.empty()) {
@@ -141,7 +134,7 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<cv::Point2
 }
 
 template<typename T>
-int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch) {
+int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     int32_t nPixels = Base::buildMinibatchCore(
         tileData, anchors, minibatch, distR_, distNu_);
 
@@ -159,7 +152,13 @@ int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<cv::Poin
 }
 
 template<typename T>
-int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors) {
+int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors) {
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
+        if (fixedAnchors && !fixedAnchors->empty()) {
+            warning("%s: fixed anchors are ignored in 3D mode", __func__);
+        }
+        return initAnchors(tileData, anchors, minibatch);
+    }
     if ((fixedAnchors == nullptr) || fixedAnchors->empty()) {
         return initAnchors(tileData, anchors, minibatch);
     }
@@ -201,11 +200,11 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
     // 3 Iterative refinement (weighted Lloyd's / K-means)
     for (int32_t t = 0; t < nLloydIter_; ++t) {
         // Build a k-d tree on the current anchor positions
-        PointCloudCV<float> pc;
+        PointCloud<float> pc;
         pc.pts = anchors;
-        kd_tree_cv2f_t kdtree(2, pc, {10});
+        kd_tree_f2_t kdtree(2, pc, {10});
         docAgg.assign(nAnchors, std::unordered_map<uint32_t, float>());
-        std::vector<cv::Point2f> newAnchorCoords(nAnchors, cv::Point2f(0, 0));
+        std::vector<AnchorPoint> newAnchorCoords(nAnchors, AnchorPoint(0.f, 0.f, 0.f));
         std::vector<float> totalCounts(nAnchors, 0.0f);
         // E-Step: Assign each data point to its closest anchor
         auto assign_pt = [&](const auto& pt) {
@@ -242,7 +241,7 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
 
     // 4 Aggregate pixels and initialize anchors
     std::vector<Document> docs;
-    std::vector<cv::Point2f> finalAnchors;
+    std::vector<AnchorPoint> finalAnchors;
     for (int32_t j = 0; j < nAnchors; ++j) {
         if (docAgg[j].empty()) continue;
         float sum = std::accumulate(docAgg[j].begin(), docAgg[j].end(), 0.0,
@@ -280,10 +279,11 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<cv::
 
 template<typename T>
 void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
-    if (tileData.pts.empty() && tileData.extPts.empty()) {
+    if (tileData.pts.empty() && tileData.extPts.empty() &&
+        tileData.pts3d.empty() && tileData.extPts3d.empty()) {
         return;
     }
-    std::vector<cv::Point2f> anchors;
+    std::vector<AnchorPoint> anchors;
     Minibatch minibatch;
     int32_t nAnchors = initAnchorsHybrid(tileData, anchors, minibatch, anchorPtr);
 

@@ -96,7 +96,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
             error("icol-x and icol-y for --annotate-pts must be specified");
         }
         if (outPrefix.empty()) error("Output prefix must be specified for annotate");
-        tileOp.annotate(inMergePtsPrefix, icol_x, icol_y, outPrefix);
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y);
         return 0;
     }
 

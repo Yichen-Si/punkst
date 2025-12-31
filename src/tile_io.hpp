@@ -7,6 +7,7 @@
 #include <limits>
 #include <functional>
 #include "utils.h"
+#include "utils_sys.hpp"
 
 // Magic for binary index
 #define PUNKST_INDEX_MAGIC 0x50554E4B53544958ULL
@@ -146,12 +147,26 @@ TileKey pt2tile(T x, T y, int32_t tileSize) {
 
 
 
-// Input data structures for serializing to temporary files
+/**Input data structures  */
+
+// 2D input record (fixed fields)
 #pragma pack(push, 1)
 template<typename T>
 struct RecordT {
     T x;
     T y;
+    uint32_t idx;
+    uint32_t ct;
+};
+#pragma pack(pop)
+
+// 3D input record (fixed fields)
+#pragma pack(push, 1)
+template<typename T>
+struct RecordT3D {
+    T x;
+    T y;
+    T z;
     uint32_t idx;
     uint32_t ct;
 };
@@ -168,7 +183,114 @@ struct RecordExtendedT {
     RecordExtendedT(T x, T y, uint32_t idx, uint32_t ct) : recBase{x, y, idx, ct} {}
 };
 
-// Inference result for one pixel
+template<typename T>
+struct RecordExtendedT3D {
+    RecordT3D<T> recBase;
+    std::vector<int32_t> intvals;
+    std::vector<float> floatvals;
+    std::vector<std::string> strvals;
+    RecordExtendedT3D() : recBase{T{}, T{}, T{}, 0u, 0u} {}
+    RecordExtendedT3D(const RecordT3D<T>& base) : recBase(base){}
+    RecordExtendedT3D(T x, T y, T z, uint32_t idx, uint32_t ct) : recBase{x, y, z, idx, ct} {}
+};
+
+template<typename T>
+struct Coord3 {
+    T x, y, z;
+    Coord3() = default;
+    Coord3(T _x, T _y, T _z) : x(_x), y(_y), z(_z) {}
+};
+
+template<typename T>
+struct TileData {
+    float xmin, xmax, ymin, ymax;
+    // 2D data storage
+    std::unordered_map<uint32_t, std::vector<RecordT<T>>> buffers; // local buffer to accumulate records to be written to temporary files
+    std::unordered_map<uint32_t, std::vector<RecordExtendedT<T>>> extBuffers;
+    std::vector<RecordT<T>> pts; // original data points
+    std::vector<RecordExtendedT<T>> extPts; // with extended info fields
+    std::vector<std::pair<int32_t, int32_t>> coords; // unique coordinates
+    // 3D data storage
+    std::unordered_map<uint32_t, std::vector<RecordT3D<T>>> buffers3d;
+    std::unordered_map<uint32_t, std::vector<RecordExtendedT3D<T>>> extBuffers3d;
+    std::vector<RecordT3D<T>> pts3d; // original data points (3D)
+    std::vector<RecordExtendedT3D<T>> extPts3d; // with extended info fields (3D)
+    std::vector<Coord3<int32_t>> coords3d; // unique coordinates (3D)
+    // Map between pixel coordinates and original points
+    std::vector<int32_t> idxinternal; // indices for internal points to output
+    std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
+    void clear() {
+        pts.clear();pts3d.clear();
+        extPts.clear();extPts3d.clear();
+        buffers.clear();buffers3d.clear();
+        extBuffers.clear(); extBuffers3d.clear();
+        coords.clear();coords3d.clear();
+        idxinternal.clear();
+        orgpts2pixel.clear();
+    }
+    void setBounds(float _xmin, float _xmax, float _ymin, float _ymax) {
+        xmin = _xmin;
+        xmax = _xmax;
+        ymin = _ymin;
+        ymax = _ymax;
+    }
+};
+
+struct IBoundaryStorage {
+    virtual ~IBoundaryStorage() = default;
+};
+
+template<typename T>
+struct InMemoryStorageStandard : public IBoundaryStorage {
+    std::vector<RecordT<T>> data;
+};
+
+template<typename T>
+struct InMemoryStorageExtended : public IBoundaryStorage {
+    std::vector<RecordExtendedT<T>> dataExtended;
+};
+
+template<typename T>
+struct InMemoryStorageStandard3D : public IBoundaryStorage {
+    std::vector<RecordT3D<T>> data;
+};
+
+template<typename T>
+struct InMemoryStorageExtended3D : public IBoundaryStorage {
+    std::vector<RecordExtendedT3D<T>> dataExtended;
+};
+
+
+
+
+
+
+
+
+/** Inference result structure */
+
+struct TopProbs {
+    std::vector<int32_t> ks;
+    std::vector<float> ps;
+    int32_t write(int fd) const {
+        if (!ks.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ks.data()), ks.size() * sizeof(int32_t))) return -1;
+        }
+        if (!ps.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ps.data()), ps.size() * sizeof(float))) return -1;
+        }
+        int32_t totalSize = ks.size() * sizeof(int32_t) + ps.size() * sizeof(float);
+        return totalSize;
+    }
+    bool read(std::istream& is, int32_t k) {
+        ks.resize(k);
+        ps.resize(k);
+        if (!is.read(reinterpret_cast<char*>(ks.data()), k * sizeof(int32_t))) return false;
+        if (!is.read(reinterpret_cast<char*>(ps.data()), k * sizeof(float))) return false;
+        return true;
+    }
+};
+
 template<typename T>
 struct PixTopProbs {
     T x, y;
@@ -194,6 +316,42 @@ struct PixTopProbs {
     bool read(std::istream& is, int32_t k) {
         if (!is.read(reinterpret_cast<char*>(&x), sizeof(T))) return false;
         if (!is.read(reinterpret_cast<char*>(&y), sizeof(T))) return false;
+        ks.resize(k);
+        ps.resize(k);
+        if (!is.read(reinterpret_cast<char*>(ks.data()), k * sizeof(int32_t))) return false;
+        if (!is.read(reinterpret_cast<char*>(ps.data()), k * sizeof(float))) return false;
+        return true;
+    }
+};
+
+// Inference result for one pixel (3D)
+template<typename T>
+struct PixTopProbs3D {
+    T x, y, z;
+    std::vector<int32_t> ks;
+    std::vector<float> ps;
+    PixTopProbs3D() = default;
+    PixTopProbs3D(T _x, T _y, T _z) : x(_x), y(_y), z(_z) {}
+    PixTopProbs3D(const Coord3<T>& c) : x(c.x), y(c.y), z(c.z) {}
+
+    int32_t write(int fd) const {
+        if (!write_all(fd, reinterpret_cast<const char*>(&x), sizeof(x))) return -1;
+        if (!write_all(fd, reinterpret_cast<const char*>(&y), sizeof(y))) return -1;
+        if (!write_all(fd, reinterpret_cast<const char*>(&z), sizeof(z))) return -1;
+        if (!ks.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ks.data()), ks.size() * sizeof(int32_t))) return -1;
+        }
+        if (!ps.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ps.data()), ps.size() * sizeof(float))) return -1;
+        }
+        int32_t totalSize = 3 * sizeof(T) + ks.size() * sizeof(int32_t) + ps.size() * sizeof(float);
+        return totalSize;
+    }
+
+    bool read(std::istream& is, int32_t k) {
+        if (!is.read(reinterpret_cast<char*>(&x), sizeof(T))) return false;
+        if (!is.read(reinterpret_cast<char*>(&y), sizeof(T))) return false;
+        if (!is.read(reinterpret_cast<char*>(&z), sizeof(T))) return false;
         ks.resize(k);
         ps.resize(k);
         if (!is.read(reinterpret_cast<char*>(ks.data()), k * sizeof(int32_t))) return false;

@@ -15,6 +15,7 @@
 #include "nanoflann_utils.h"
 #include <opencv2/imgproc.hpp>
 #include "dataunits.hpp"
+#include "tile_io.hpp"
 #include "tilereader.hpp"
 #include "hexgrid.h"
 #include "utils.h"
@@ -50,45 +51,19 @@ struct FieldDef {
     size_t     offset;  // filled in after we know all fields
 };
 
-template<typename T>
-struct TileData {
-    float xmin, xmax, ymin, ymax;
-    std::unordered_map<uint32_t, std::vector<RecordT<T>>> buffers; // local buffer to accumulate records to be written to temporary files
-    std::unordered_map<uint32_t, std::vector<RecordExtendedT<T>>> extBuffers;
-    std::vector<RecordT<T>> pts; // original data points
-    std::vector<RecordExtendedT<T>> extPts; // original data points with extended info fields
-    std::vector<int32_t> idxinternal; // indices for internal data points to output
-    std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
-    std::vector<std::pair<int32_t, int32_t>> coords; // unique coordinates
-    void clear() {
-        buffers.clear();
-        pts.clear();
-        extPts.clear();
-        idxinternal.clear();
-        orgpts2pixel.clear();
-        coords.clear();
-    }
-    void setBounds(float _xmin, float _xmax, float _ymin, float _ymax) {
-        xmin = _xmin;
-        xmax = _xmax;
-        ymin = _ymin;
-        ymax = _ymax;
-    }
+enum class MinibatchInputMode : uint8_t { Standard, Extended };
+enum class MinibatchOutputMode : uint8_t { Standard, Original, Binary };
+enum class MinibatchCoordDim : uint8_t { Dim2 = 2, Dim3 = 3 };
+
+struct MinibatchIoConfig {
+    MinibatchInputMode input = MinibatchInputMode::Standard;
+    MinibatchOutputMode output = MinibatchOutputMode::Standard;
+    bool outputAnchor = false;
+    bool useTicketSystem = false;
+    MinibatchCoordDim coordDim = MinibatchCoordDim::Dim2;
 };
 
-struct IBoundaryStorage {
-    virtual ~IBoundaryStorage() = default;
-};
-
-template<typename T>
-struct InMemoryStorageStandard : public IBoundaryStorage {
-    std::vector<RecordT<T>> data;
-};
-
-template<typename T>
-struct InMemoryStorageExtended : public IBoundaryStorage {
-    std::vector<RecordExtendedT<T>> dataExtended;
-};
+using AnchorPoint = PointCloud<float>::Point;
 
 // manage one temporary buffer
 struct BoundaryBuffer {
@@ -152,13 +127,38 @@ struct BoundaryBuffer {
         nTiles++;
     }
 
+    // Write (to file) or store (in memory) records with fixed fields (3D)
+    template<typename T>
+    void addRecords3D(const std::vector<RecordT3D<T>>& recs) {
+        if (recs.empty()) return;
+        std::lock_guard<std::mutex> lock(*mutex);
+
+        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&storage)) {
+            if (!*storagePtr) {
+                *storagePtr = std::make_unique<InMemoryStorageStandard3D<T>>();
+            }
+            if (auto* memStore = dynamic_cast<InMemoryStorageStandard3D<T>*>(storagePtr->get())) {
+                memStore->data.insert(memStore->data.end(), recs.begin(), recs.end());
+            } else {
+                throw std::runtime_error("Mismatched storage type in BoundaryBuffer::addRecords3D");
+            }
+        } else if (auto* tmpFile = std::get_if<std::string>(&storage)) {
+            std::ofstream ofs(*tmpFile, std::ios::binary | std::ios::app);
+            if (!ofs) {
+                error("%s: error opening temporary file %s", __FUNCTION__, tmpFile->c_str());
+            }
+            ofs.write(reinterpret_cast<const char*>(recs.data()), recs.size() * sizeof(RecordT3D<T>));
+            ofs.close();
+        }
+        nTiles++;
+    }
+
     // Write (to file) or store (in memory) records with additional fields
     template<typename T>
     void addRecordsExtended(
         const std::vector<RecordExtendedT<T>>& recs,
         const std::vector<FieldDef>&           schema,
-        size_t                                 recordSize
-    ) {
+        size_t                                 recordSize) {
         if (recs.empty()) return;
         std::lock_guard<std::mutex> lock(*mutex);
 
@@ -214,6 +214,64 @@ struct BoundaryBuffer {
         }
         nTiles++;
     }
+
+    // Write (to file) or store (in memory) records with additional fields (3D)
+    template<typename T>
+    void addRecordsExtended3D(
+        const std::vector<RecordExtendedT3D<T>>& recs,
+        const std::vector<FieldDef>&             schema,
+        size_t                                   recordSize) {
+        if (recs.empty()) return;
+        std::lock_guard<std::mutex> lock(*mutex);
+
+        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&storage)) {
+            if (!*storagePtr) {
+                *storagePtr = std::make_unique<InMemoryStorageExtended3D<T>>();
+            }
+            if (auto* memStore = dynamic_cast<InMemoryStorageExtended3D<T>*>(storagePtr->get())) {
+                memStore->dataExtended.insert(memStore->dataExtended.end(), recs.begin(), recs.end());
+            } else {
+                throw std::runtime_error("Mismatched storage type in BoundaryBuffer::addRecords3D (Extended)");
+            }
+        } else if (auto* filePath = std::get_if<std::string>(&storage)) {
+            std::vector<uint8_t> buf;
+            buf.reserve(recs.size() * recordSize);
+            for (auto &r : recs) {
+                size_t baseOff = buf.size();
+                buf.resize(buf.size() + recordSize);
+                std::memcpy(buf.data() + baseOff, &r.recBase, sizeof(r.recBase));
+                uint32_t i_int = 0, i_flt = 0, i_str = 0;
+                for (size_t fi = 0; fi < schema.size(); ++fi) {
+                    auto const &f = schema[fi];
+                    auto dst = buf.data() + baseOff + f.offset;
+                    switch (f.type) {
+                        case FieldType::INT32: {
+                            int32_t v = r.intvals[i_int++];
+                            std::memcpy(dst, &v, sizeof(v));
+                        } break;
+                        case FieldType::FLOAT: {
+                            float v = r.floatvals[i_flt++];
+                            std::memcpy(dst, &v, sizeof(v));
+                        } break;
+                        case FieldType::STRING: {
+                            auto &s = r.strvals[i_str++];
+                            std::memcpy(dst, s.data(), std::min(s.size(), f.size));
+                            if (s.size() < f.size) {
+                                std::memset(dst + s.size(), 0, f.size - s.size());
+                            }
+                        } break;
+                    }
+                }
+            }
+            std::ofstream ofs(*filePath, std::ios::binary | std::ios::app);
+            if (!ofs) {
+                error("%s: error opening temporary file %s", __FUNCTION__, filePath->c_str());
+            }
+            ofs.write(reinterpret_cast<const char*>(buf.data()), buf.size());
+            ofs.close();
+        }
+        nTiles++;
+    }
 };
 
 /* Implement the logic of processing tiles while resolving boundary issues */
@@ -222,9 +280,16 @@ class Tiles2MinibatchBase {
 
 public:
 
-    Tiles2MinibatchBase(int nThreads, double r, TileReader& tileReader, const std::string& _outPref, const std::string* opt = nullptr, int32_t debug = 0)
+    Tiles2MinibatchBase(int nThreads, double r,
+        TileReader& tileReader, const std::string& _outPref,
+        lineParserUnival* parser, const MinibatchIoConfig& ioConfig,
+        const std::string* opt = nullptr, double res = 1, int32_t debug = 0)
     : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref),
-      debug_(debug), useTicketSystem_(false) {
+      lineParserPtr(parser), pixelResolution_(res), debug_(debug),
+      useTicketSystem_(ioConfig.useTicketSystem),
+      outputAnchor_(ioConfig.outputAnchor),
+      inputMode_(ioConfig.input), outputMode_(ioConfig.output),
+      coordDim_(ioConfig.coordDim) {
         tileSize = tileReader.getTileSize();
         if (opt && !(*opt).empty()) {
             useMemoryBuffer_ = false;
@@ -234,6 +299,17 @@ public:
             useMemoryBuffer_ = true;
         }
         resultQueue.set_capacity(static_cast<size_t>(std::max(1, nThreads)));
+        if (outputAnchor_) {
+            anchorQueue.set_capacity(static_cast<size_t>(std::max(1, nThreads)));
+        }
+        if (!lineParserPtr) {
+            error("%s: lineParser is required", __func__);
+        }
+        if (pixelResolution_ <= 0) {
+            pixelResolution_ = 1;
+        }
+        configureInputMode();
+        configureOutputMode();
     }
 
     virtual ~Tiles2MinibatchBase() {
@@ -249,17 +325,6 @@ public:
         else {M_ = names.size();}
         featureNames = names;
     }
-    void setPixelResolution(double res) { pixelResolution_ = res; }
-    void setOutputOptions(bool outputBinary, bool includeOrg, bool outputAnchor, bool useTicket) {
-        assert(!(outputBinary && includeOrg));
-        outputBinary_ = outputBinary;
-        outputOriginalData_ = includeOrg;
-        outputAnchor_ = outputAnchor;
-        useTicketSystem_ = useTicket;
-        if (outputAnchor_) {
-            anchorQueue.set_capacity(static_cast<size_t>(std::max(1, nThreads)));
-        }
-    }
     void setOutputProbDigits(int32_t digits) { probDigits = digits; }
     void setOutputCoordDigits(int32_t digits) { floatCoordDigits = digits; }
 
@@ -271,6 +336,7 @@ protected:
         float xmin, xmax, ymin, ymax;
         std::vector<std::string> outputLines;
         std::vector<PixTopProbs<int32_t>> outputObjs;
+        std::vector<PixTopProbs3D<int32_t>> outputObjs3d;
         uint32_t npts;
         bool useObj = false;
         ResultBuf(int32_t t=0, float x1=0, float x2=0, float y1=0, float y2=0)
@@ -279,6 +345,11 @@ protected:
             return ticket > other.ticket;
         }
     };
+
+    using ParseTileFn = int32_t (Tiles2MinibatchBase::*)(TileData<T>& tileData, TileKey tile);
+    using ParseBoundaryFileFn = int32_t (Tiles2MinibatchBase::*)(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    using ParseBoundaryMemoryFn = int32_t (Tiles2MinibatchBase::*)(TileData<T>& tileData, IBoundaryStorage* storage, uint32_t bufferKey);
+    using FormatPixelFn = ResultBuf (Tiles2MinibatchBase::*)(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0);
 
     int nThreads; // Number of worker threads
     int tileSize; // Tile size (square)
@@ -316,12 +387,19 @@ protected:
     bool outputBackgroundProbDense_ = false;
     bool outputBackgroundProbExpand_ = false;
     bool outputAnchor_ = false;
+    MinibatchInputMode inputMode_ = MinibatchInputMode::Standard;
+    MinibatchOutputMode outputMode_ = MinibatchOutputMode::Standard;
+    MinibatchCoordDim coordDim_ = MinibatchCoordDim::Dim2;
+    ParseTileFn parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard;
+    ParseBoundaryFileFn parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile;
+    ParseBoundaryMemoryFn parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandardWrapper;
+    FormatPixelFn formatPixelFn_ = &Tiles2MinibatchBase::formatPixelResultStandard;
     std::vector<std::string> featureNames;
-    float pixelResolution_;
+    float pixelResolution_ = 1.0f;
     int32_t floatCoordDigits = 2, probDigits = 4;
     int32_t topk_ = 3;
     bool useExtended_ = false;
-    lineParserUnival* lineParserPtr = nullptr; // set by derived
+    lineParserUnival* lineParserPtr = nullptr;
     std::vector<FieldDef> schema_;
     size_t recordSize_ = 0;
     int32_t M_ = 0;
@@ -334,6 +412,8 @@ protected:
     void anchorWriterWorker();
 
     /* Key logic */
+    void configureInputMode();
+    void configureOutputMode();
 
     std::shared_ptr<BoundaryBuffer> getBoundaryBuffer(uint32_t key) {
         std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);
@@ -510,27 +590,54 @@ protected:
     /* I/O */
     // Given data and anchor pos, build pixels & pixel-anchor relations
     int32_t buildMinibatchCore(TileData<T>& tileData,
-        std::vector<cv::Point2f>& anchors, Minibatch& minibatch,
+        std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
+        double distR, double distNu);
+    int32_t buildMinibatchCore3D(TileData<T>& tileData,
+        std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
         double distR, double distNu);
     // Create anchor grid and initialize anchor level counts
-    int32_t buildAnchors(TileData<T>& tileData, std::vector<cv::Point2f>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
+    int32_t buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
+    int32_t buildAnchors3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
     // Parsing helpers
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
+    int32_t parseOneTileStandard(TileData<T>& tileData, TileKey tile);
+    int32_t parseOneTileExtended(TileData<T>& tileData, TileKey tile);
+    int32_t parseOneTileStandard3D(TileData<T>& tileData, TileKey tile);
+    int32_t parseOneTileExtended3D(TileData<T>& tileData, TileKey tile);
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    int32_t parseBoundaryFile3D(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    int32_t parseBoundaryFileExtended3D(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryMemoryStandard(TileData<T>& tileData,
         InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
     int32_t parseBoundaryMemoryExtended(TileData<T>& tileData,
         InMemoryStorageExtended<T>* memStore, uint32_t bufferKey);
+    int32_t parseBoundaryMemoryStandard3D(TileData<T>& tileData,
+        InMemoryStorageStandard3D<T>* memStore, uint32_t bufferKey);
+    int32_t parseBoundaryMemoryExtended3D(TileData<T>& tileData,
+        InMemoryStorageExtended3D<T>* memStore, uint32_t bufferKey);
+    int32_t parseBoundaryMemoryStandardWrapper(TileData<T>& tileData,
+        IBoundaryStorage* storage, uint32_t bufferKey);
+    int32_t parseBoundaryMemoryExtendedWrapper(TileData<T>& tileData,
+        IBoundaryStorage* storage, uint32_t bufferKey);
+    int32_t parseBoundaryMemoryStandard3DWrapper(TileData<T>& tileData,
+        IBoundaryStorage* storage, uint32_t bufferKey);
+    int32_t parseBoundaryMemoryExtended3DWrapper(TileData<T>& tileData,
+        IBoundaryStorage* storage, uint32_t bufferKey);
     // Output helpers
     void setExtendedSchema(size_t offset);
     void setupOutput();
     void closeOutput();
     std::string composeHeader();
-    ResultBuf formatAnchorResult(const std::vector<cv::Point2f>& anchors, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax);
+    ResultBuf formatAnchorResult(const std::vector<AnchorPoint>& anchors, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, float xmin, float xmax, float ymin, float ymax);
     ResultBuf formatPixelResult(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultStandard(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
     ResultBuf formatPixelResultWithOriginalData(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
-    ResultBuf formatPixelResultWithBackground(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>& phi0);
-    ResultBuf formatPixelResultBinary(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket);
+    ResultBuf formatPixelResultWithBackground(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultBinary(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultStandard3D(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultWithOriginalData3D(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultWithBackground3D(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
+    ResultBuf formatPixelResultBinary3D(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
 
 };

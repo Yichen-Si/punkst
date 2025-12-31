@@ -327,7 +327,7 @@ private:
                 }
                 for (uint32_t i = 0; i < M; ++i) {
                     for (uint32_t j = 0; j < M; ++j) {
-                        fprintf(ofs, "%ld%c", denseMatrix[static_cast<size_t>(i) * M + j], (j == M - 1) ? '\n' : '\t');
+                        fprintf(ofs, "%lld%c", denseMatrix[static_cast<size_t>(i) * M + j], (j == M - 1) ? '\n' : '\t');
                     }
                 }
             }

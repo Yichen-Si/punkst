@@ -169,7 +169,8 @@ public:
     Tiles2NMF(int nThreads, double r,
                const std::string& outPref, const std::string& tmpDir,
                PixelEM& empois, TileReader& tileReader,
-               lineParserUnival& lineParser, HexGrid& hexGrid, int32_t nMoves,
+               lineParserUnival& lineParser, const MinibatchIoConfig& ioConfig,
+               HexGrid& hexGrid, int32_t nMoves,
                unsigned int seed = std::random_device{}(),
                double c = 20.0, double h = 0.7, double res = 1.0, int32_t topk = 3,
                int32_t verbose = 0, int32_t debug = 0);
@@ -177,6 +178,7 @@ public:
         empois_.set_background_model(pi0, beta0);
         Base::outputBackgroundProbDense_ = !outputExpand;
         Base::outputBackgroundProbExpand_ = outputExpand;
+        Base::configureOutputMode();
     }
 
 protected:
@@ -207,10 +209,10 @@ protected:
     // std::mutex pseudobulkMutex_;
 
     int32_t initAnchors(TileData<T>& tileData,
-                        std::vector<cv::Point2f>& anchors,
+                        std::vector<AnchorPoint>& anchors,
                         Minibatch& minibatch);
     int32_t makeMinibatch(TileData<T>& tileData,
-                          std::vector<cv::Point2f>& anchors,
+                          std::vector<AnchorPoint>& anchors,
                           Minibatch& minibatch);
     void processTile(TileData<T>& tileData,
                      int threadId, int ticket, vec2f_t* anchorPtr) override;

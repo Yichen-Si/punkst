@@ -7,7 +7,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDirPath, weightFile;
     std::string sampleList; // for multi-sample
     int nThreads = 1, seed = -1, debug_ = 0, verbose = 0;
-    int icol_x, icol_y, icol_feature, icol_val;
+    int icol_x, icol_y, icol_z = -1, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
     double radius = -1, anchorDist = -1;
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
@@ -49,6 +49,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("sample-list", "A tsv file containing input and output information for multiple samples. The columns should be sample_id, input_tsv, input_index, output_prefix, (input_anchor)", sampleList)
       .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x, true)
       .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y, true)
+      .add_option("icol-z", "Column index for z coordinate (0-based, optional)", icol_z)
       .add_option("coords-are-int", "If the coordinates are integers, otherwise assume they are floats", coordsAreInt)
       .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, true)
       .add_option("icol-val", "Column index for count/value (0-based)", icol_val, true)
@@ -182,6 +183,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     // Set up input parser
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val);
+    if (icol_z >= 0) {
+        parser.setZ(static_cast<size_t>(icol_z));
+    }
     // parse additional annotation columns (to carry over to output)
     if (!parser.addExtraInt(annoInts)) {
         error("Invalid value in --ext-col-ints");
@@ -199,6 +203,23 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         parser.readWeights(weightFile, defaultWeight, M_model);
     }
     notice("Initialized tile reader");
+
+    if (outputBinary && outputOritinalData) {
+        error("Cannot set both --output-binary and --output-original");
+    }
+
+    MinibatchIoConfig ioConfig;
+    ioConfig.input = parser.isExtended ? MinibatchInputMode::Extended : MinibatchInputMode::Standard;
+    if (outputBinary) {
+        ioConfig.output = MinibatchOutputMode::Binary;
+    } else if (outputOritinalData) {
+        ioConfig.output = MinibatchOutputMode::Original;
+    } else {
+        ioConfig.output = MinibatchOutputMode::Standard;
+    }
+    ioConfig.outputAnchor = outputAnchor;
+    ioConfig.useTicketSystem = useTicketSystem;
+    ioConfig.coordDim = parser.hasZCoord() ? MinibatchCoordDim::Dim3 : MinibatchCoordDim::Dim2;
 
     VectorXf eta0;
     bool fit_background = false;
@@ -224,7 +245,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
 
     auto configure_decoder = [&](auto& decoder, const std::string& anchorFile) {
-        decoder.setOutputOptions(outputBinary, outputOritinalData, outputAnchor, useTicketSystem);
         decoder.setOutputCoordDigits(floatCoordDigits);
         decoder.setOutputProbDigits(probDigits);
         if (!anchorFile.empty()) {
@@ -262,7 +282,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             if (coordsAreInt) {
                 Tiles2NMF<int32_t> decoder(
                     nThreads, radius, ds.outPref, tmpDirPath,
-                    emPois, tileReader, parser, hexGrid, nMoves,
+                    emPois, tileReader, parser, ioConfig, hexGrid, nMoves,
                     seed, static_cast<double>(minInitCount), 0.7, pixelResolution,
                     topK, verbose, debug_);
                 if (fit_background) {
@@ -273,7 +293,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             } else {
                 Tiles2NMF<float> decoder(
                     nThreads, radius, ds.outPref, tmpDirPath,
-                    emPois, tileReader, parser, hexGrid, nMoves,
+                    emPois, tileReader, parser, ioConfig, hexGrid, nMoves,
                     seed, static_cast<double>(minInitCount), 0.7, pixelResolution,
                     topK, verbose, debug_);
                 if (fit_background) {
@@ -301,14 +321,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("Error in input tiles: %s", ds.inTsv.c_str());
         }
         if (coordsAreInt) {
-            Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
+            Tiles2SLDA<int32_t> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
             configure_decoder(tiles2slda, ds.anchorFile);
             tiles2slda.run();
         } else {
-            Tiles2SLDA<float> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
+            Tiles2SLDA<float> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
