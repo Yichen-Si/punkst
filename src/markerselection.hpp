@@ -2,6 +2,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Dense>
+#include <cinttypes>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -432,7 +433,7 @@ private:
             std::streamsize bytesToRead = static_cast<std::streamsize>(M_) * M_ * valueBytes;
             ifs.read(reinterpret_cast<char*>(Q_.data()), bytesToRead);
             if (ifs.gcount() != bytesToRead) {
-                warning("Could not read the expected amount of data from dense binary matrix file: %s. Read %lld, expected %lld",
+                warning("Could not read the expected amount of data from dense binary matrix file: %s. Read %" PRId64 ", expected %" PRId64 "",
                     filename.c_str(), ifs.gcount(), bytesToRead);
             }
         } else { // TSV format

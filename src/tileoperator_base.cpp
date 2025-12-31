@@ -1,4 +1,5 @@
 #include "tileoperator.hpp"
+#include <cinttypes>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -87,7 +88,7 @@ void TileOperator::printIndex() const {
     }
     printf("#start\tend\trow\tcol\tnpts\txmin\txmax\tymin\tymax\n");
     for (const auto& b : blocks_all_) {
-        printf("%llu\t%llu\t%d\t%d\t%u\t%d\t%d\t%d\t%d\n",
+        printf("%" PRIu64 "\t%" PRIu64 "\t%d\t%d\t%u\t%d\t%d\t%d\t%d\n",
             b.idx.st, b.idx.ed, b.idx.row, b.idx.col, b.idx.n,
             b.idx.xmin, b.idx.xmax, b.idx.ymin, b.idx.ymax);
     }

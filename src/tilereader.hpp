@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <stdexcept>
 #include <memory>
+#include <set>
 #include <limits>
 #include "utils.h"
 #include "utils_sys.hpp"

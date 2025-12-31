@@ -5,6 +5,7 @@
 #include "threads.hpp"
 #include "utils.h"
 #include "nanoflann_utils.h"
+#include <cinttypes>
 #include <fstream>
 #include <unordered_map>
 
@@ -183,13 +184,13 @@ private:
         if (parser_.getFeatureList(featureList) < 0) {
             warning("Feature names are not found");
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%u\t%lu\t%lu\t%lu\t%lu\n",
+                fprintf(ofs, "%u\t%u\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
                     kv.first, kv.first,
                     kv.second[1], kv.second[0], kv.second[2], kv.second[3]);
             }
         } else {
             for (auto &kv : globalMargianls_) {
-                fprintf(ofs, "%u\t%s\t%lu\t%lu\t%lu\t%lu\n",
+                fprintf(ofs, "%u\t%s\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
                     kv.first, featureList[kv.first].c_str(),
                     kv.second[1], kv.second[0], kv.second[2], kv.second[3]);
             }
@@ -327,7 +328,7 @@ private:
                 }
                 for (uint32_t i = 0; i < M; ++i) {
                     for (uint32_t j = 0; j < M; ++j) {
-                        fprintf(ofs, "%lld%c", denseMatrix[static_cast<size_t>(i) * M + j], (j == M - 1) ? '\n' : '\t');
+                        fprintf(ofs, "%" PRId64 "%c", denseMatrix[static_cast<size_t>(i) * M + j], (j == M - 1) ? '\n' : '\t');
                     }
                 }
             }
