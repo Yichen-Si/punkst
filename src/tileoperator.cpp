@@ -10,6 +10,7 @@
 #include <map>
 #include <set>
 #include <memory>
+#include "numerical_utils.hpp"
 
 void TileOperator::mergeTiles2D(const std::set<TileKey>& commonTiles,
     const std::vector<TileOperator*>& opPtrs,
@@ -905,9 +906,33 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
         std::string fn = outPrefix + "." + std::to_string(setPair.first) + "v" + std::to_string(setPair.second) + ".cross.tsv";
         FILE* fp = fopen(fn.c_str(), "w");
         if (!fp) error("Cannot open output file %s", fn.c_str());
-        fprintf(fp, "#K1\tK2\tJoint\n");
+        std::map<int32_t, double> rowSums;
+        std::map<int32_t, double> colSums;
+        double total = 0.0;
+        double pseudo = 0.5;
         for (const auto& kv : mapVal) {
-             fprintf(fp, "%d\t%d\t%.*e\n", kv.first.first, kv.first.second, probDigits, kv.second);
+            rowSums[kv.first.first] += kv.second;
+            colSums[kv.first.second] += kv.second;
+            total += kv.second;
+            if (kv.second > 0 && kv.second < pseudo) {
+                pseudo = kv.second;
+            }
+        }
+        pseudo *= 0.5;
+        std::map<int32_t, double> colFreq = colSums;
+        for (auto& kv : colFreq) {kv.second /= total;}
+        fprintf(fp, "#K1\tK2\tJoint\tlog10pval\tlog2OR\n");
+        for (const auto& kv : mapVal) {
+             double a = kv.second;
+             double rowSum = rowSums[kv.first.first];
+             double colSum = colSums[kv.first.second];
+             double b = std::max(0.0, rowSum - a);
+             double c = std::max(0.0, colSum - a);
+             double d = std::max(0.0, total - rowSum - colSum + a);
+             double log10pval = chisq2x2_log10p(a, b, c, d, pseudo);
+             double log2OR = std::log2(a+pseudo) - std::log2(rowSums[kv.first.first] * colFreq[kv.first.second] + pseudo);
+             fprintf(fp, "%d\t%d\t%.*e\t%.4e\t%.4e\n",
+                 kv.first.first, kv.first.second, probDigits, kv.second, log10pval, log2OR);
         }
         fclose(fp);
     }
@@ -1191,9 +1216,33 @@ void TileOperator::probDot_multi(const std::vector<std::string>& otherFiles, con
         std::string fn = outPrefix + "." + std::to_string(setPair.first) + "v" + std::to_string(setPair.second) + ".cross.tsv";
         FILE* fp = fopen(fn.c_str(), "w");
         if (!fp) error("Cannot open output file %s", fn.c_str());
-        fprintf(fp, "#K1\tK2\tJoint\n");
+        std::map<int32_t, double> rowSums;
+        std::map<int32_t, double> colSums;
+        double total = 0.0;
+        double pseudo = 0.5;
         for (const auto& kv : mapVal) {
-             fprintf(fp, "%d\t%d\t%.*e\n", kv.first.first, kv.first.second, probDigits, kv.second);
+            rowSums[kv.first.first] += kv.second;
+            colSums[kv.first.second] += kv.second;
+            total += kv.second;
+            if (kv.second > 0 && kv.second < pseudo) {
+                pseudo = kv.second;
+            }
+        }
+        std::map<int32_t, double> colFreq = colSums;
+        for (auto& kv : colFreq) {kv.second /= total;}
+        pseudo *= 0.5;
+        fprintf(fp, "#K1\tK2\tJoint\tlog10pval\tlog2OR\n");
+        for (const auto& kv : mapVal) {
+             double a = kv.second;
+             double rowSum = rowSums[kv.first.first];
+             double colSum = colSums[kv.first.second];
+             double b = std::max(0.0, rowSum - a);
+             double c = std::max(0.0, colSum - a);
+             double d = std::max(0.0, total - rowSum - colSum + a);
+             double log2OR = std::log2(a+pseudo) - std::log2(rowSums[kv.first.first] * colFreq[kv.first.second] + pseudo);
+             double log10pval = chisq2x2_log10p(a, b, c, d, pseudo);
+             fprintf(fp, "%d\t%d\t%.*e\t%.4e\t%.4e\n",
+                 kv.first.first, kv.first.second, probDigits, kv.second, log10pval, log2OR);
         }
         fclose(fp);
     }

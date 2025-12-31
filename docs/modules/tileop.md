@@ -127,4 +127,4 @@ Output:
 
 - `path/out_prefix.0.joint.tsv`, ... (internal dot products for each source)
 
-- `path/out_prefix.0v1.cross.tsv`, `path/out_prefix.0v2.cross.tsv`, ... (cross-source dot products)
+- `path/out_prefix.0v1.cross.tsv`, `path/out_prefix.0v2.cross.tsv`, ... (cross-source dot products with `log10pval` from a naive chi-squared 2x2 enrichment test)

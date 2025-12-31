@@ -615,6 +615,31 @@ inline double chisq1_log10p(double chi2) {
     }
 }
 
+inline double chisq2x2_log10p(double a, double b, double c, double d, double pseudocount = 1e-8) {
+    a += pseudocount;
+    b += pseudocount;
+    c += pseudocount;
+    d += pseudocount;
+    double ab = a + b;
+    double cd = c + d;
+    double ac = a + c;
+    double bd = b + d;
+    double total = ab + cd;
+    if (ab <= 0.0 || cd <= 0.0 || ac <= 0.0 || bd <= 0.0 || total <= 0.0) {
+        return 0.0;
+    }
+    double denom = ab * cd * ac * bd;
+    if (denom <= 0.0) {
+        return 0.0;
+    }
+    double diff = a * d - b * c;
+    double chi2 = diff * diff / denom * total;
+    if (!std::isfinite(chi2) || chi2 <= 0.0) {
+        return 0.0;
+    }
+    return chisq1_log10p(chi2);
+}
+
 // Weighted quadratic local regression at each xi,
 //   tricube weights over k-NN window.
 // Input: x,y of length n. span \in (0,1].

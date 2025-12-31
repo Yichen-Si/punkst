@@ -262,7 +262,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
             if (!ofs) {
                 error("Cannot open output file %s", outf.c_str());
             }
-            ofs << "Feature\tFactor\tDiff\tlog10Pval\tApproxFC\n";
+            ofs << "Feature\tFactor\tDiff\tlog10pval\tApproxFC\n";
             for (const auto& r : results) {
                 ofs << reader.features[r.m] << "\t" << r.k1 << "\t"
                     << std::setprecision(6) << r.est << "\t"
