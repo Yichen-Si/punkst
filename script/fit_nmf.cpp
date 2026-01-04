@@ -10,10 +10,11 @@
 int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
 	std::string inFile, metaFile, featureFile, covarFile, outPrefix;
-    std::string modelFile;
+    std::string modelFile, labelListFile;
     std::string include_ftr_regex, exclude_ftr_regex;
     std::vector<uint32_t> covar_idx;
     int32_t label_idx = -1;
+    std::string label_na = "";
     int32_t K;
     int32_t seed = -1, nThreads = 1, debug_ = 0, debug_N = 0, verbose = 500000;
     int32_t minCountTrain = 50, minCountFeature = 100;
@@ -47,6 +48,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("allow-na", "Replace non-numerical values in covariates with zero", allow_na)
       .add_option("icol-covar", "Column indices (0-based) in --in-covar to use", covar_idx)
       .add_option("icol-label", "Column index (0-based) in --in-covar for labels", label_idx)
+      .add_option("label-list", "List of unique labels", labelListFile)
+      .add_option("label-na", "String for missing labels", label_na)
       .add_option("in-model", "Input model (beta) file", modelFile)
       .add_option("random-init-missing", "Randomly initialize features missing from the model", random_init_missing_features);
     pl.add_option("K", "K", K, true)
@@ -159,12 +162,13 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     }
 
     // Load data
+    // TODO: data loading with covariates is unsafe & messy
     std::vector<SparseObs> docs;
     std::vector<std::string> rnames, covar_names, labels;
     size_t N = read_sparse_obs(inFile, reader, docs,
         rnames, minCountTrain, size_factor, c,
         &covarFile, &covar_idx, &covar_names,
-        allow_na, label_idx, &labels, debug_N);
+        allow_na, label_idx, label_na, &labels, debug_N);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %lu units with %d features", N, M);
 
@@ -174,10 +178,27 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
             error("Number of labels (%lu) does not match number of units (%lu)", labels.size(), N);
         }
         std::unordered_map<std::string, int32_t> label_to_idx;
-        std::vector<int32_t> label_counts(K, 0);
         if (!modelFile.empty()) {
             for (int32_t i = 0; i < K; i++) {
                 label_to_idx[factor_names[i]] = i;
+            }
+        } else if (!labelListFile.empty()) {
+            std::ifstream lstream(labelListFile);
+            if (!lstream) {
+                error("Failed to open file %s", labelListFile.c_str());
+            }
+            std::string label;
+            int32_t idx = 0;
+            while (lstream >> label) {
+                label_to_idx[label] = idx++;
+                lstream.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            }
+            if (idx != K) {
+                error("Number of labels (%d) does not match specified K=%d", idx, K);
+            }
+            factor_names.resize(K);
+            for (const auto& p : label_to_idx) {
+                factor_names[p.second] = p.first;
             }
         } else {
             std::unordered_map<std::string, int32_t> label_to_ct;
@@ -215,7 +236,6 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
             auto it = label_to_idx.find(lab);
             if (it != label_to_idx.end()) {
                 labels_idx.push_back(it->second);
-                label_counts[it->second]++;
             } else {
                 labels_idx.push_back(-1);
                 skipped++;
@@ -313,10 +333,12 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         ofs.close();
     }
 
-    const auto& theta_ = nmf.get_theta();
-    outf = outPrefix + ".theta.tsv";
-    write_matrix_to_file(outf, theta_, 4, false, rnames, "#Index");
-    notice("Wrote theta to %s", outf.c_str());
+    if (opts.optim.max_iters > 0) {
+        const auto& theta_ = nmf.get_theta();
+        outf = outPrefix + ".theta.tsv";
+        write_matrix_to_file(outf, theta_, 4, false, rnames, "#Index");
+        notice("Wrote theta to %s", outf.c_str());
+    }
 
     if (write_se) {
         for (uint32_t flag = 1; flag <= 2; flag++) {

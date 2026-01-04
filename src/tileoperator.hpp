@@ -5,16 +5,33 @@
 #include <tuple>
 #include <utility>
 #include <algorithm>
+#include "utils.h"
 #include "utils_sys.hpp"
 #include "json.hpp"
 #include "tile_io.hpp"
 #include "tilereader.hpp"
+#include "hexgrid.h"
+
+struct SparseObsDict {
+    double totalCount = 0;
+    std::unordered_map<int32_t, double> featureCounts;
+    void add(const SparseObsDict& other) {
+        totalCount += other.totalCount;
+        for (const auto& kv : other.featureCounts) {
+            featureCounts[kv.first] += kv.second;
+        }
+    }
+    void add(int32_t idx, double count = 1) {
+        totalCount += count;
+        featureCounts[idx] += count;
+    }
+};
 
 class TileOperator {
 
 public:
     using PixelKey3 = std::tuple<int32_t, int32_t, int32_t>;
-    TileOperator(std::string& dataFile, std::string indexFile = "", std::string headerFile = "") : dataFile_(dataFile), indexFile_(indexFile) {
+    TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "") : dataFile_(dataFile), indexFile_(indexFile) {
         if (!indexFile.empty()) {
             loadIndex(indexFile);
         }
@@ -31,10 +48,16 @@ public:
             dataStream_.close();
         }
     }
+    TileOperator(const TileOperator&) = delete;
+    TileOperator& operator=(const TileOperator&) = delete;
+    TileOperator(TileOperator&&) noexcept = default;
+    TileOperator& operator=(TileOperator&&) noexcept = default;
 
     int32_t getK() const { return k_; }
     int32_t getTileSize() const { return formatInfo_.tileSize; }
     float getPixelResolution() const { return formatInfo_.pixelResolution; }
+    const std::vector<TileInfo>& getTileInfo() const { return blocks_; }
+
     bool getBoundingBox(float& xmin, float& xmax, float& ymin, float& ymax) const {
         if (blocks_all_.empty()) return false;
         xmin = globalBox_.xmin; xmax = globalBox_.xmax;
@@ -108,6 +131,9 @@ public:
 
     void probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, int32_t probDigits = 4);
 
+    using Slice = std::unordered_map<std::pair<int32_t, int32_t>, SparseObsDict, PairHash>; // unitKey -> sparse feature counts
+    std::unordered_map<int32_t, Slice> aggOneTile(TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb = 0.01) const;
+
 private:
     std::string dataFile_, indexFile_;
     std::ifstream dataStream_;
@@ -154,9 +180,9 @@ private:
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
 
     int32_t loadTileToMap(const TileKey& key,
-        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap);
+        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap) const;
     int32_t loadTileToMap3D(const TileKey& key,
-        std::map<PixelKey3, TopProbs>& pixelMap);
+        std::map<PixelKey3, TopProbs>& pixelMap) const;
     void mergeTiles2D(const std::set<TileKey>& commonTiles,
         const std::vector<TileOperator*>& opPtrs,
         const std::vector<uint32_t>& k2keep,

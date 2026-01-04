@@ -303,8 +303,7 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
         if (stat(idxFile.c_str(), &buffer) != 0) {
             error("%s: Index file %s not found", __func__, idxFile.c_str());
         }
-        std::string df = f;
-        ops.push_back(std::make_unique<TileOperator>(df, idxFile));
+        ops.push_back(std::make_unique<TileOperator>(f, idxFile));
         opPtrs.push_back(ops.back().get());
     }
     uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
@@ -929,10 +928,10 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
              double b = std::max(0.0, rowSum - a);
              double c = std::max(0.0, colSum - a);
              double d = std::max(0.0, total - rowSum - colSum + a);
-             double log10pval = chisq2x2_log10p(a, b, c, d, pseudo);
+             auto stats = chisq2x2_log10p(a, b, c, d, pseudo);
              double log2OR = std::log2(a+pseudo) - std::log2(rowSums[kv.first.first] * colFreq[kv.first.second] + pseudo);
              fprintf(fp, "%d\t%d\t%.*e\t%.4e\t%.4e\n",
-                 kv.first.first, kv.first.second, probDigits, kv.second, log10pval, log2OR);
+                 kv.first.first, kv.first.second, probDigits, kv.second, stats.second, log2OR);
         }
         fclose(fp);
     }
@@ -1240,10 +1239,55 @@ void TileOperator::probDot_multi(const std::vector<std::string>& otherFiles, con
              double c = std::max(0.0, colSum - a);
              double d = std::max(0.0, total - rowSum - colSum + a);
              double log2OR = std::log2(a+pseudo) - std::log2(rowSums[kv.first.first] * colFreq[kv.first.second] + pseudo);
-             double log10pval = chisq2x2_log10p(a, b, c, d, pseudo);
+             auto stats = chisq2x2_log10p(a, b, c, d, pseudo);
              fprintf(fp, "%d\t%d\t%.*e\t%.4e\t%.4e\n",
-                 kv.first.first, kv.first.second, probDigits, kv.second, log10pval, log2OR);
+                 kv.first.first, kv.first.second, probDigits, kv.second, stats.second, log2OR);
         }
         fclose(fp);
     }
+}
+
+std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTile(TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb) const {
+    if (coord_dim_ == 3) {error("%s does not support 3D data yet", __func__);}
+    assert(reader.getTileSize() == formatInfo_.tileSize);
+    float res = formatInfo_.pixelResolution;
+    if (res <= 0) res = 1.0f;
+
+    std::unordered_map<int32_t, Slice> tileAgg; // k -> unit key ->
+    std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+    if (loadTileToMap(tile, pixelMap) == 0) {return tileAgg;}
+    auto it = reader.get_tile_iterator(tile.row, tile.col);
+    if (!it) {return tileAgg;}
+
+    std::string line;
+    RecordT<float> rec;
+    // parse data with (x,y,feature_id,count)
+    while (it->next(line)) {
+        if (line.empty() || line[0] == '#') continue;
+        int32_t idx = parser.parse(rec, line);
+        if (idx < 0) continue;
+        int32_t ix = static_cast<int32_t>(std::floor(rec.x / res));
+        int32_t iy = static_cast<int32_t>(std::floor(rec.y / res));
+        auto pixIt = pixelMap.find({ix, iy});
+        if (pixIt == pixelMap.end()) continue;
+        int32_t ux = static_cast<int32_t>(std::floor(rec.x / gridSize));
+        int32_t uy = static_cast<int32_t>(std::floor(rec.y / gridSize));
+        auto& anno = pixIt->second;
+        for (size_t i = 0; i < anno.ks.size(); ++i) {
+            if (anno.ps[i] < minProb) continue;
+            int32_t k = anno.ks[i];
+            float p = anno.ps[i];
+            auto aggIt = tileAgg.find(k);
+            if (aggIt == tileAgg.end()) {
+                aggIt = tileAgg.emplace(k, Slice()).first;
+            }
+            auto& oneSlice = aggIt->second;
+            auto unitIt = oneSlice.find({ux, uy});
+            if (unitIt == oneSlice.end()) {
+                unitIt = oneSlice.emplace(std::make_pair(ux, uy), SparseObsDict()).first;
+            }
+            unitIt->second.add(rec.idx, rec.ct * p);
+        }
+    }
+    return tileAgg;
 }

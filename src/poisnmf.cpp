@@ -847,7 +847,7 @@ int32_t PoissonLog1pNMF::partial_fit(
                 oN.noalias() = ThetaB * beta_.row(j).transpose();
                 VectorXd bj = Bcov_.row(j).transpose();
                 bcov_opts_mb.tron.delta_init = tr_delta_bcov_[j];
-                PoisRegSparseProblem P_b(XB, mtx_t[j], cB, &oN, mle_opts_bcov_);
+                PoisLog1pRegSparseProblem P_b(XB, mtx_t[j], cB, &oN, mle_opts_bcov_);
                 double fval = tron_solve(P_b, bj, bcov_opts_mb, stats_b, debug_, &tr_delta_bcov_[j], rho_t);
                 (void)fval;
                 Bcov_.row(j) = bj.transpose();
@@ -860,7 +860,7 @@ int32_t PoissonLog1pNMF::partial_fit(
                 oN.noalias() = XB * Bcov_.row(j).transpose();
                 off_ptr = &oN;
             }
-            PoisRegSparseProblem P_beta(ThetaB, mtx_t[j], cB, off_ptr, mle_opts_fit_);
+            PoisLog1pRegSparseProblem P_beta(ThetaB, mtx_t[j], cB, off_ptr, mle_opts_fit_);
             double obj = tron_solve(P_beta, betaj, beta_opts_mb, stats_beta, debug_, &tr_delta_beta_[j], rho_t);
             if (std::isnan(obj) || std::isinf(obj)) {
                 warning("%s: NaN/Inf objective encountered when updating beta", __func__);

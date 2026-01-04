@@ -27,37 +27,13 @@ public:
             seed_ = std::random_device{}();
         }
         rng_.seed(seed_);
-        modelList_.resize(nFold_);
-        reset();
     }
 
-    void reset() {
-        dataStream_.open(dataFile_);
-        labelStream_.open(labelFile_);
-        fileopen = dataStream_.is_open() && labelStream_.is_open();
-        if (!fileopen) {
-            error("%s: Failed to open input file(s)", __func__);
-        }
-        makeSplits();
-        for (int32_t k = 0; k < nFold_; ++k) {
-            int32_t M = static_cast<int32_t>(trainIdx_[k].size());
-            RowMajorMatrixXd modelMatrix = priorMatrix_(Eigen::placeholders::all, Eigen::ArrayXi::Map(trainIdx_[k].data(), M));
-            modelList_[k].reset();
-            modelList_[k] = std::make_unique<LatentDirichletAllocation>(
-                                modelMatrix, seed_, nThreads_);
-            modelList_[k]->set_svb_parameters(maxIter_, mDelta_);
-        }
-        l_sum.clear(); x_sum.clear(); yx.clear(); yl.clear();
-        l_sum.resize(nContrast_, Eigen::VectorXd::Zero(M_));
-        x_sum.resize(nContrast_, Eigen::VectorXd::Zero(M_));
-        yx.resize(nContrast_, Eigen::VectorXd::Zero(M_));
-        yl.resize(nContrast_, Eigen::VectorXd::Zero(M_));
-    }
-
-    std::vector<Eigen::VectorXd> processAll() {
+    std::vector<Eigen::VectorXd> globalRun() {
+        globalReset();
         int32_t v = 0, ntot = 0;
         while (fileopen) {
-            int32_t n = processMinibatch();
+            int32_t n = globalProcessMinibatch();
             if (n >= 0) {
                 ntot += n;
                 if (ntot > v * verbose_) {
@@ -69,51 +45,8 @@ public:
                 break;
             }
         }
-        if (dataStream_.is_open()) {
-            dataStream_.close();
-        }
-        if (labelStream_.is_open()) {
-            labelStream_.close();
-        }
-        return computeScores();
-    }
-
-    int32_t processMinibatch() {
-        if (!fileopen) {
-            return -1;
-        }
-        fileopen = readMinibatch(dataStream_);
-        int32_t nDocs = static_cast<int32_t>(minibatch.size());
-        if (nDocs == 0) {return 0;}
-        int32_t nLabels = readMinibatchLabels(nDocs);
-        if (nLabels != nDocs) {
-            error("%s: Mismatch between number of documents and labels", __func__);
-        }
-        for (int r = 0; r < nContrast_; ++r) {
-            computeOneContrast(r);
-        }
-        return nDocs;
-    }
-
-    // Compute score test statistics
-    std::vector<Eigen::VectorXd> computeScores() {
-        std::vector<Eigen::VectorXd> scores(nContrast_);
-        for (int r = 0; r < nContrast_; ++r) {
-            VectorXd I = yl[r].array() * (x_sum[r].array() / l_sum[r].array().max(0.5));
-            VectorXd U = yx[r].array() - I.array();
-if (debug_ % 2 == 1) {
-    std::cout << r << "l_sum:\n  ";
-    std::cout << l_sum[r].transpose() << "\n";
-    std::cout << r << "x_sum:\n  ";
-    std::cout << x_sum[r].transpose() << "\n";
-    std::cout << r << " I:\n  ";
-    std::cout << I.transpose() << "\n";
-    std::cout << r << " U:\n  ";
-    std::cout << U.transpose() << "\n";
-}
-            scores[r] = U.array().pow(2) / I.array();
-        }
-        return scores;
+        closeStreams();
+        return globalScores();
     }
 
     const std::vector<std::vector<int32_t>>& getTrainIndices() const {
@@ -133,6 +66,7 @@ private:
     MatrixXd priorMatrix_, beta_; // K x M
     int32_t seed_, debug_, verbose_;
     std::mt19937 rng_;
+    bool featureSplit_;
 
     std::string dataFile_, labelFile_;
     std::ifstream labelStream_, dataStream_;
@@ -141,10 +75,17 @@ private:
     std::vector<std::unique_ptr<LatentDirichletAllocation> > modelList_;
     std::vector<std::vector<int32_t>> featureIdxMaps_;
     std::vector<std::vector<int32_t>> trainIdx_, heldoutIdx_;
-
     std::vector<std::vector<bool>> masks_, contrasts_;
-    std::vector<Eigen::VectorXd> l_sum, x_sum, yx, yl;
 
+    // Sufficient statistics for global conditional test
+    // x_sum[c][j]: \sum x_ij (over all docs used in contrast c)
+    // l_sum[c][j]: expected x_sum[c][j]
+    // yx[c][j]: \sum y_i x_ij (over docs with label 1 in contrast c)
+    // yl[c][j]: extected yx[c][j]
+    std::vector<Eigen::VectorXd> x_sum, yx;
+    std::vector<Eigen::VectorXd> l_sum, yl;
+
+    // Randomly split features
     void makeSplits() {
         assert(M_  > 0);
         assert(nFold_ >= 2 && nFold_ <= M_);
@@ -153,8 +94,8 @@ private:
         std::iota(perm.begin(), perm.end(), 0);
         std::shuffle(perm.begin(), perm.end(), rng_);
 
-        const int32_t base = M_ / nFold_;  // ⌊M/k⌋
-        const int32_t extra = M_ % nFold_; // first ‘extra’ folds get +1
+        const int32_t base = M_ / nFold_;
+        const int32_t extra = M_ % nFold_;
         trainIdx_.clear(); trainIdx_.resize(nFold_);
         heldoutIdx_.clear(); heldoutIdx_.resize(nFold_);
         featureIdxMaps_.clear();
@@ -174,6 +115,7 @@ private:
         }
     }
 
+    // Read contrast labels for the next n data points
     int32_t readMinibatchLabels(int32_t n) {
         std::string line;
         int32_t nlocal = 0;
@@ -205,71 +147,147 @@ private:
         return nlocal;
     }
 
-    void computeOneContrast(int32_t r) {
+    int32_t globalProcessMinibatch() {
+        if (!fileopen) {
+            return -1;
+        }
+        fileopen = readMinibatch(dataStream_);
+        int32_t nDocs = static_cast<int32_t>(minibatch.size());
+        if (nDocs == 0) {return 0;}
+        int32_t nLabels = readMinibatchLabels(nDocs); // unsafe, rely on the files being aligned
+        if (nLabels != nDocs) {
+            error("%s: Mismatch between number of documents and labels", __func__);
+        }
+        for (int c = 0; c < nContrast_; ++c) {
+            globalOneContrast(c);
+        }
+        return nDocs;
+    }
+
+    // Compute score test statistics
+    std::vector<Eigen::VectorXd> globalScores() {
+        std::vector<Eigen::VectorXd> scores(nContrast_);
+        for (int c = 0; c < nContrast_; ++c) {
+            VectorXd I = yl[c].array() * (x_sum[c].array() / l_sum[c].array().max(0.5));
+            VectorXd U = yx[c].array() - I.array();
+            scores[c] = U.array().pow(2) / I.array();
+        }
+        return scores;
+    }
+
+    // Given one minibatch, update sufficient statistics for one contrast
+    void globalOneContrast(int32_t c) {
         int32_t nDocs = static_cast<int32_t>(minibatch.size());
         if (nDocs == 0) {return;}
-        std::vector<Document> docs; docs.reserve(nDocs);
+
         std::vector<double> xsum; xsum.reserve(nDocs);
         std::vector<double> yvec; yvec.reserve(nDocs);
         for (int i = 0; i < nDocs; ++i) {
-            if (!masks_[r][i]) {
+            if (!masks_[c][i]) {
                 continue;
             }
             const auto& doc = minibatch[i];
             size_t n = doc.ids.size();
             for (size_t j = 0; j < n; ++j) {
-                x_sum[r][doc.ids[j]] += doc.cnts[j];
+                x_sum[c][doc.ids[j]] += doc.cnts[j];
             }
-            if (contrasts_[r][i]) {
+            if (contrasts_[c][i]) {
                 for (size_t j = 0; j < n; ++j) {
-                    yx[r][doc.ids[j]] += doc.cnts[j];
+                    yx[c][doc.ids[j]] += doc.cnts[j];
                 }
             }
             xsum.push_back(std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0));
-            yvec.push_back((double) (int) contrasts_[r][i]);
-            Document newDoc;
-            for (size_t j = 0; j < n; ++j) {
-                int32_t idx = featureIdxMaps_[r][doc.ids[j]];
-                if (idx < 0) {
-                    continue;
-                }
-                newDoc.ids.push_back(idx);
-                newDoc.cnts.push_back(doc.cnts[j]);
-            }
-            docs.push_back(std::move(newDoc));
+            yvec.push_back((double) (int) contrasts_[c][i]);
         }
-        MatrixXd doc_topic = modelList_[r]->transform(docs); // n x K
-        for (int i = 0; i < doc_topic.rows(); ++i) {
-            double sum = doc_topic.row(i).sum();
-            if (sum > 0) doc_topic.row(i) /= sum;
-        }
-        auto colIdx = Eigen::ArrayXi::Map(heldoutIdx_[r].data(), heldoutIdx_[r].size());
         VectorXd s = Eigen::Map<VectorXd>(xsum.data(), xsum.size());
         VectorXd y = Eigen::Map<VectorXd>(yvec.data(), yvec.size());
-        MatrixXd lambda = doc_topic * beta_(Eigen::placeholders::all, colIdx);
-        lambda.array().colwise() *= s.array(); // n_i * <\theta_i, \beta_j>
-        l_sum[r](colIdx) += lambda.colwise().sum();
-        yl[r](colIdx) += lambda.transpose() * y;
 
-if (debug_ % 2 == 1) {
-    VectorXd max_lambda = lambda.rowwise().maxCoeff();
-    std::cout << r << " lambda * s:\n  ";
-    for (int i = 0; i < 10; ++i) {
-        std::cout << i << " " << max_lambda(i) << ", ";
-    }
-    std::cout << "\n";
-    std::cout << r << " l_sum:\n  ";
-    for (int i = 0; i < 10; ++i) {
-        std::cout << l_sum[r](heldoutIdx_[r][i]) << ", ";
-    }
-    std::cout << "\n";
-    std::cout << r << " yl:\n  ";
-    for (int i = 0; i < 10; ++i) {
-        std::cout << yl[r](heldoutIdx_[r][i]) << ", ";
-    }
-    std::cout << "\n";
-}
+        // Using all features
+        if (nFold_ <= 1) {
+            MatrixXd doc_topic = lda->transform(minibatch); // n x K
+            for (int i = 0; i < doc_topic.rows(); ++i) {
+                double sum = doc_topic.row(i).sum();
+                if (sum > 0) doc_topic.row(i) /= sum;
+            }
+            // compute expected counts
+            MatrixXd lambda = doc_topic * beta_;
+            lambda.array().colwise() *= s.array(); // n_i * <\theta_i, \beta_j>
+            l_sum[c] += lambda.colwise().sum();
+            yl[c] += lambda.transpose() * y;
+            return;
+        }
 
+        // Using feature splits
+        for (int t = 0; t < nFold_; ++t) {
+            std::vector<Document> docs; docs.reserve(nDocs);
+            for (int i = 0; i < nDocs; ++i) {
+                if (!masks_[c][i]) {
+                    continue;
+                }
+                const auto& doc = minibatch[i];
+                size_t n = doc.ids.size();
+                Document newDoc;
+                for (size_t j = 0; j < n; ++j) { // not very efficient
+                    int32_t idx = featureIdxMaps_[t][doc.ids[j]];
+                    if (idx < 0) {
+                        continue;
+                    }
+                    newDoc.ids.push_back(idx);
+                    newDoc.cnts.push_back(doc.cnts[j]);
+                }
+                docs.push_back(std::move(newDoc));
+            }
+            MatrixXd doc_topic = modelList_[t]->transform(docs); // n x K
+            for (int i = 0; i < doc_topic.rows(); ++i) {
+                double sum = doc_topic.row(i).sum();
+                if (sum > 0) doc_topic.row(i) /= sum;
+            }
+            auto colIdx = Eigen::ArrayXi::Map(heldoutIdx_[t].data(), heldoutIdx_[t].size());
+            // compute expected counts
+            MatrixXd lambda = doc_topic * beta_(Eigen::placeholders::all, colIdx);
+            lambda.array().colwise() *= s.array(); // n_i * <\theta_i, \beta_j>
+            l_sum[c](colIdx) += lambda.colwise().sum();
+            yl[c](colIdx) += lambda.transpose() * y;
+        }
+    }
+
+    void globalReset() {
+        resetStreams();
+        x_sum.clear(); yx.clear();
+        x_sum.resize(nContrast_, Eigen::VectorXd::Zero(M_));
+        yx.resize(nContrast_, Eigen::VectorXd::Zero(M_));
+        l_sum.clear(); yl.clear();
+        l_sum.resize(nContrast_, Eigen::VectorXd::Zero(M_));
+        yl.resize(nContrast_, Eigen::VectorXd::Zero(M_));
+        if (nFold_ <= 1) {return;}
+
+        makeSplits();
+        modelList_.resize(nFold_);
+        for (int32_t k = 0; k < nFold_; ++k) {
+            int32_t M = static_cast<int32_t>(trainIdx_[k].size());
+            RowMajorMatrixXd modelMatrix = priorMatrix_(Eigen::placeholders::all, Eigen::ArrayXi::Map(trainIdx_[k].data(), M)); // subset to training features
+            modelList_[k].reset();
+            modelList_[k] = std::make_unique<LatentDirichletAllocation>(
+                                modelMatrix, seed_, nThreads_);
+            modelList_[k]->set_svb_parameters(maxIter_, mDelta_);
+        }
+    }
+
+    void resetStreams() {
+        dataStream_.open(dataFile_);
+        labelStream_.open(labelFile_);
+        fileopen = dataStream_.is_open() && labelStream_.is_open();
+        if (!fileopen) {
+            error("%s: Failed to open input file(s)", __func__);
+        }
+    }
+    void closeStreams() {
+        if (dataStream_.is_open()) {
+            dataStream_.close();
+        }
+        if (labelStream_.is_open()) {
+            labelStream_.close();
+        }
     }
 
 };

@@ -303,7 +303,7 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
     int32_t minCountTrain = 1, double size_factor = 10000, double c = -1,
     std::string* covarFile = nullptr, std::vector<uint32_t>* covar_idx = nullptr,
     std::vector<std::string>* covar_names = nullptr, bool allow_na = false,
-    int32_t label_idx = -1, std::vector<std::string>* labels = nullptr,
+    int32_t label_idx = -1, std::string label_na = "", std::vector<std::string>* labels = nullptr,
     int32_t debug_N = 0);
 
 template<typename T>

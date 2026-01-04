@@ -9,7 +9,6 @@
  */
 class TopicModelWrapper {
 public:
-    // Constructor initializes shared members
     TopicModelWrapper(HexReader& _reader, int32_t modal = 0, int32_t verbose = 0) : modal(modal), verbose_(verbose) {
         reader = std::move(_reader);
         if (modal >= reader.getNmodal()) {
@@ -21,20 +20,12 @@ public:
         initialized = false;
     }
 
-    // Virtual destructor for polymorphism
     virtual ~TopicModelWrapper() = default;
 
-    // Template method for online training
     int32_t trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits = INT32_MAX);
-
-    // Template method for writing the model to a file
-    void writeModelToFile(const std::string& outFile);
-    void writeModelHeader(std::ofstream& outFileStream);
-
-    // Template method for transforming data and writing results
+    // transform and writing results
     void fitAndWriteToFile(const std::string& inFile, const std::string& outPrefix, int32_t _bsize);
 
-    // --- Public Getters ---
     int32_t nUnits() const { return reader.nUnits; }
     int32_t nFeatures() const { return M_; }
     void getTopicAbundance(std::vector<double>& topic_weights);
@@ -43,14 +34,14 @@ public:
         return featureNames.empty() ? reader.features : featureNames;
     }
     void printTopicAbundance();
+    void writeModelToFile(const std::string& outFile);
+    void writeModelHeader(std::ofstream& outFileStream);
 
-    // --- Pure Virtual Interface to be Implemented by Derived Classes ---
     virtual int32_t getNumTopics() const = 0;
     virtual void sortTopicsByWeight() = 0;
     virtual void writeUnitHeader(std::ofstream& outFileStream) = 0;
 
 protected:
-    // --- Shared Data Members ---
     HexReader reader;
     int32_t modal;
     int32_t ntot; // Number of documents processed in trainOnline
@@ -71,7 +62,6 @@ protected:
     // The output will follow the input's ordering
     virtual void setupPriorMapping(std::vector<std::string>& feature_names_, std::vector<std::uint32_t>& kept_indices);
 
-    // --- Pure virtual hooks for the template methods ---
     virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
     virtual MatrixXd do_transform(const std::vector<Document>& batch) = 0;
     virtual const RowMajorMatrixXd& get_model_matrix() const = 0;

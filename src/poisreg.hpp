@@ -61,7 +61,7 @@ struct MLEStats {
 };
 
 // ---------------- Problem Definition for pois_log1p_mle_exact --------------
-class PoisRegExactProblem {
+class PoisLog1pRegExactProblem {
 public:
     const RowMajorMatrixXd& A; // N x K
     const VectorXd& c;
@@ -85,13 +85,13 @@ public:
         }
     }
 
-    PoisRegExactProblem(const RowMajorMatrixXd& A_,
+    PoisLog1pRegExactProblem(const RowMajorMatrixXd& A_,
         const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
         const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
         : A(A_), c(c_), o(o_), opt(opt_), has_offset(o != nullptr) {
         init(ids_, cnts_);
     }
-    PoisRegExactProblem(const RowMajorMatrixXd& A_, const Document& y_,
+    PoisLog1pRegExactProblem(const RowMajorMatrixXd& A_, const Document& y_,
         const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
         : A(A_), c(c_), o(o_), opt(opt_), has_offset(o != nullptr) {
         init(y_.ids, y_.cnts);
@@ -130,11 +130,11 @@ public:
 };
 
 // ---------------- Problem Definition for pois_log1p_mle (sparse) ----------
-class PoisRegSparseProblem {
+class PoisLog1pRegSparseProblem {
 public:
     // Pointers to original data
     const RowMajorMatrixXd& A;
-    std::vector<uint32_t> ids_storage;
+    std::vector<uint32_t> ids_storage; // only used when input is Eigen sparse
     std::vector<double> cnts_storage;
     const std::vector<uint32_t>& ids;
     const VectorXd& c;
@@ -143,12 +143,12 @@ public:
 
     // Precomputed values
     const bool has_offset;
-    const size_t n;
-    RowMajorMatrixXd Anz;
+    const size_t n; // number of non-zero values
+    RowMajorMatrixXd Anz; // rows of A for non-zero values, n x K
     MatrixXd AsqnzT;
     Eigen::Map<const VectorXd> yvec;
-    VectorXd cS;
-    VectorXd oS;
+    VectorXd cS; // n (c)
+    VectorXd oS; // n (offset)
     VectorXd zak;
     MatrixXd zakl;
     VectorXd dZ;
@@ -193,14 +193,14 @@ public:
         }
     }
 
-    PoisRegSparseProblem(const RowMajorMatrixXd& A_, const Document& y_,
+    PoisLog1pRegSparseProblem(const RowMajorMatrixXd& A_, const Document& y_,
         const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
         : A(A_), ids_storage(), cnts_storage(),
           ids(y_.ids), c(c_), o(o_), opt(opt_), has_offset(o != nullptr),
           n(y_.ids.size()), Anz(n, A.cols()), yvec(y_.cnts.data(), n), cS(n) {
         init();
     }
-    PoisRegSparseProblem(const RowMajorMatrixXd& A_,
+    PoisLog1pRegSparseProblem(const RowMajorMatrixXd& A_,
         const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
         const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
         : A(A_), ids_storage(), cnts_storage(),
@@ -209,7 +209,7 @@ public:
         init();
     }
     template <typename SparseDerived>
-    PoisRegSparseProblem(const RowMajorMatrixXd& A_,
+    PoisLog1pRegSparseProblem(const RowMajorMatrixXd& A_,
         const Eigen::SparseMatrixBase<SparseDerived>& y_sparse,
         const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
         : A(A_),
@@ -362,7 +362,7 @@ double pois_log1p_mle(
         error("%s: exact_zero option not supported for sparse input", __func__);
     }
     const int K = static_cast<int>(A.cols());
-    PoisRegSparseProblem P(A, y_sparse, c, o, opt);
+    PoisLog1pRegSparseProblem P(A, y_sparse, c, o, opt);
 
     // Initialization
     if (b.size() != K) {

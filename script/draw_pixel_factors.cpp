@@ -13,6 +13,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     bool filter = false;
     bool topOnly = false;
     bool isBinary = false;
+    float minProb = 1e-3;
     int32_t debug_ = 0;
 
     ParamList pl;
@@ -32,7 +33,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
       .add_option("ymax", "Maximum y coordinate", ymax)
       .add_option("filter", "Access only the queried region using the index", filter)
       .add_option("channel-list", "A list of channel IDs to draw", channelListStr)
-      .add_option("color-list", "A list of colors for channels in hex code (#RRGGBB)", colorListStr);
+      .add_option("color-list", "A list of colors for channels in hex code (#RRGGBB)", colorListStr)
+      .add_option("min-prob", "Minimum probability to consider a pixel", minProb);
     // Output
     pl.add_option("out", "Output image file", outFile, true)
       .add_option("top-only", "Use only the top channel per pixel", topOnly)
@@ -95,7 +97,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     std::unordered_map<int,std::vector<int32_t>> selectedMap;
     if (selected) { // parse selected channels
         if (colorListStr.empty()) {
-            colorListStr = std::vector<std::string>{"144A74", "FF9900", "DD65E6", "FFEC11"};
+            colorListStr = std::vector<std::string>{"FFEE00", "DD65E6", "00FFFF", "FF7000"};
         }
         if (channelListStr.size()>colorListStr.size()) {
             error("--channel-list and --color-list must have same length");
@@ -119,6 +121,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         }
         notice("Loaded %zu colors from %s", cmtx.size(), colorFile.c_str());
     }
+    int ncolor = (int) cmtx.size();
 
     if (scale<=0) error("--scale must be >0");
 
@@ -169,8 +172,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 B = c[2];
             } else {
                 if (ch<0 && ch>=(int)cmtx.size()) {
-                    warning("Channel index out of range: %d", ch);
-                    continue;
+                    // debug("Channel index out of range: %d", ch);
+                    // continue;
+                    ch = ch % ncolor;
                 }
                 R = cmtx[ch][0];
                 G = cmtx[ch][1];
@@ -187,6 +191,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         for (int i=0;i<k;++i) {
             int ch = rec.ks[i];
             double p = rec.ps[i];
+            if (p < minProb) continue;
             if (selected) {
                 auto it = selectedMap.find(ch);
                 if (it == selectedMap.end()) continue;
@@ -197,8 +202,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 valid = true;
             } else {
                 if (ch<0 || ch>= (int)cmtx.size()) {
-                    warning("Channel index out of range: %d", ch);
-                    continue;
+                    // warning("Channel index out of range: %d", ch);
+                    // continue;
+                    ch = ch % ncolor;
                 }
                 R += cmtx[ch][0]*p;
                 G += cmtx[ch][1]*p;

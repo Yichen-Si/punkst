@@ -29,8 +29,8 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
     RowMajorMatrixXf Xb = batch.mtx * logBeta_; // N x K
     double meanchange_theta = tol + 1.0;
     debug("%s: Starting EM", __func__);
-    int it = 0;
-    for (; it < max_iter; it++) {
+    int iter = 0;
+    for (; iter < max_iter; iter++) {
         SparseRowMatf ymtx = batch.psi.transpose() * batch.mtx; // n x M
         batch.theta = mlr_.predict(ymtx); // n x K
         for (int j = 0; j < batch.N; ++j) {
@@ -47,16 +47,16 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
         } else {
             theta_init = true;
         }
-        if (meanchange_theta < tol && it > 0) {
+        if (meanchange_theta < tol && iter > 0) {
             break;
         }
         theta_old = batch.theta;
-        debug("%s: EM iter %d, mean max change in theta: %.4e", __func__, it, meanchange_theta);
+        debug("%s: EM iter %d, mean max change in theta: %.4e", __func__, iter, meanchange_theta);
     }
-    stats.niter = it;
+    stats.niter = iter;
     stats.last_change = meanchange_theta;
     batch.phi = batch.psi * batch.theta; // N x K
-    notice("%s: Finished EM with %d iterations. Final mean max change in theta: %.4e", __func__, it, meanchange_theta);
+    notice("%s: Finished EM with %d iterations. Final mean max change in theta: %.4e", __func__, iter, meanchange_theta);
 }
 
 void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double tol, std::vector<std::unordered_map<uint32_t, float>>* phi0) const {
@@ -100,8 +100,8 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
     double avg_iters = 0.0f;
     // RowMajorMatrixXf Xb = batch.mtx * logBeta_; // N x K
     debug("%s: Starting EM", __func__);
-    int it = 0;
-    for (; it < max_iter; it++) {
+    int iter = 0;
+    for (; iter < max_iter; iter++) {
         SparseRowMatf ymtx = batch.psi.transpose() * (*mtx); // n x M
         std::vector<int32_t> niters(batch.n, 0);
         float nkept = 0;
@@ -159,7 +159,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
         int32_t total_iters = std::accumulate(niters.begin(), niters.end(), 0);
         avg_iters = static_cast<double>(total_iters) / nkept;
         int32_t nskip = (int32_t) (batch.n - nkept);
-        debug("%s: Completed %d-th EM iteration with %d anchors (skipped %d), average %.1f iterations per optim", __func__, it, batch.n, nskip, avg_iters);
+        debug("%s: Completed %d-th EM iteration with %d anchors (skipped %d), average %.1f iterations per optim", __func__, iter, batch.n, nskip, avg_iters);
 
         // rowSoftmaxInPlace(batch.psi);
         expitAndRowNormalize(batch.psi);
@@ -193,13 +193,14 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
         } else {
             theta_init = true;
         }
-        if (meanchange_theta < tol && it > 0) {
+        if (meanchange_theta < tol && iter > 0) {
+            iter += 1;
             break;
         }
         theta_old = batch.theta;
-        debug("%s: EM iter %d, mean max change in theta: %.4e", __func__, it, meanchange_theta);
+        debug("%s: EM iter %d, mean max change in theta: %.4e", __func__, iter, meanchange_theta);
     }
-    stats.niter = it;
+    stats.niter = iter;
     stats.last_avg_internal_niters = avg_iters;
     stats.last_change = meanchange_theta;
     rowNormalizeInPlace(batch.theta);

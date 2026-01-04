@@ -69,6 +69,7 @@ set(SOURCE_FILES
     src/topic_svb.hpp
     src/topic_svb.cpp
     src/numerical_utils.hpp
+    src/numerical_utils.cpp
     src/pts2tiles.hpp
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
@@ -100,6 +101,7 @@ set(SOURCE_FILES
     script/transform_nmf.cpp
     script/draw_pixel_genes.cpp
     src/vst.hpp
+    src/glm.hpp
     script/feature_selection.cpp
     src/tiles2nmf.hpp
     src/tiles2nmf.cpp

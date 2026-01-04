@@ -81,46 +81,38 @@ int32_t cmdFeatureVst(int32_t argc, char** argv) {
     notice("Read %lu units with %d features", docs.size(), M);
 
     // Compute stats + HVF order
-    VSTOutputs stats;
-    auto order = SelectVST(docs, (uint32_t)M, top_k, loess_span, clip_max, &stats);
+    HVF_VST vst(loess_span, clip_max);
+    auto order = vst.SelectVST(docs, (uint32_t)M);
 
     // Write per-feature stats
     std::string outf_stats = outPrefix + ".feature.stats.tsv";
-    {
-        std::ofstream ofs(outf_stats);
-        if (!ofs.is_open()) {
-            error("Cannot open output file: %s", outf_stats.c_str());
-        }
-        ofs << "#Feature\tMean\tVar\tVarExpected\tVarStd\n";
-        const auto &fnames = reader.features;
-        for (int32_t j = 0; j < M; ++j) {
-            const std::string& name = (j < (int32_t)fnames.size()) ? fnames[j] : std::to_string(j);
-            ofs << name << "\t"
-                << fp_to_string(stats.mean_all[j], 4) << "\t"
-                << fp_to_string(stats.var_all[j], 4) << "\t"
-                << fp_to_string(stats.var_expected[j], 4) << "\t"
-                << fp_to_string(stats.var_standardized[j], 4) << "\n";
+    std::string outf_hvf = outPrefix + ".hvf.tsv";
+    std::ofstream ofs(outf_stats);
+    std::ofstream ots(outf_hvf);
+    if (!ofs.is_open()) {
+        error("Cannot open output file: %s", outf_stats.c_str());
+    }
+    if (!ots.is_open()) {
+        error("Cannot open output file: %s", outf_hvf.c_str());
+    }
+    ofs << "#Feature\tMean\tVar\tVarExpected\tVarStd\n";
+    ots << "#Feature\tTotalCount\tScore\n";
+    const auto &fnames = reader.features;
+    for (size_t t = 0; t < order.size(); ++t) {
+        uint32_t j = order[t];
+        const std::string& name = (j < fnames.size()) ? fnames[j] : std::to_string(j);
+        ofs << name << "\t"
+            << fp_to_string(vst.stats.mean_all[j], 4) << "\t"
+            << fp_to_string(vst.stats.var_all[j], 4) << "\t"
+            << fp_to_string(vst.stats.var_expected[j], 4) << "\t"
+            << fp_to_string(vst.stats.var_standardized[j], 4) << "\n";
+        if (t < top_k) {
+            ots << name << "\t"
+                << fp_to_string(vst.stats.sum_all[j], 0) << "\t"
+                << fp_to_string(vst.stats.var_standardized[j], 6) << "\n";
         }
     }
     notice("Wrote VST stats to %s", outf_stats.c_str());
-
-    // Write ranked HVFs
-    std::string outf_hvf = outPrefix + ".hvf.tsv";
-    {
-        std::ofstream ofs(outf_hvf);
-        if (!ofs.is_open()) {
-            error("Cannot open output file: %s", outf_hvf.c_str());
-        }
-        ofs << "#Feature\tTotalCount\tScore\n";
-        const auto &fnames = reader.features;
-        for (size_t t = 0; t < order.size(); ++t) {
-            uint32_t j = order[t];
-            const std::string& name = (j < fnames.size()) ? fnames[j] : std::to_string(j);
-            ofs << name << "\t"
-                << fp_to_string(stats.sum_all[j], 0) << "\t"
-                << fp_to_string(stats.var_standardized[j], 6) << "\n";
-        }
-    }
     notice("Wrote HVF list to %s", outf_hvf.c_str());
 
     return 0;

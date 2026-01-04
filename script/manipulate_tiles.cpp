@@ -26,7 +26,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     ParamList pl;
     pl.add_option("in-data", "Input data file", inData)
       .add_option("in-index", "Input index file", inIndex)
-      .add_option("in", "Input prefix (equal to --in-tsv <in>.tsv/.bin --in-index <in>.index)", inPrefix)
+      .add_option("in", "Input prefix (equal to --in-data <in>.tsv/.bin --in-index <in>.index)", inPrefix)
       .add_option("binary", "Data file is in binary format", isBinary)
       .add_option("out", "Output prefix", outPrefix)
       .add_option("tile-size", "Tile size in the original data", tileSize)

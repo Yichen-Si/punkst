@@ -300,7 +300,13 @@ static inline uint32_t hexNibble(unsigned char c) noexcept {
     return 0u;
 }
 uint32_t hexToUint32(const std::string& hex);
-// hash a tuple of three integers
+// hash a tuple of integers
+struct PairHash {
+    std::size_t operator()(const std::pair<int32_t, int32_t>& p) const {
+        uint64_t packed = (static_cast<uint64_t>(static_cast<uint32_t>(p.first)) << 32) | (static_cast<uint64_t>(static_cast<uint32_t>(p.second)));
+        return std::hash<uint64_t>{}(packed);
+    }
+};
 struct Tuple3Hash {
     size_t operator()(const std::tuple<int32_t, int32_t, int32_t>& key) const {
         // Get individual hash values for each element.

@@ -2,7 +2,7 @@
 
 // Exact
 
-void PoisRegExactProblem::eval(const VectorXd& bvec, double* f_out,
+void PoisLog1pRegExactProblem::eval(const VectorXd& bvec, double* f_out,
     VectorXd* g_out, VectorXd* q_out, ArrayXd* w_out) const
 {
     if (!nonnegative) {
@@ -31,7 +31,7 @@ void PoisRegExactProblem::eval(const VectorXd& bvec, double* f_out,
     }
 }
 
-void PoisRegExactProblem::eval_safe(const VectorXd& bvec, double* f_out,
+void PoisLog1pRegExactProblem::eval_safe(const VectorXd& bvec, double* f_out,
     VectorXd* g_out, VectorXd* q_out, ArrayXd* w_out) const
 {
     ArrayXd u = (A * bvec).array();
@@ -76,7 +76,7 @@ void PoisRegExactProblem::eval_safe(const VectorXd& bvec, double* f_out,
     }
 }
 
-ArrayXd PoisRegExactProblem::residual(const VectorXd& bvec) const {
+ArrayXd PoisLog1pRegExactProblem::residual(const VectorXd& bvec) const {
     ArrayXd mu = (A * bvec).array();
     if (o) mu += o->array();
     mu = (mu.exp() - 1.0).max(0.) * c.array();
@@ -115,7 +115,7 @@ double pois_log1p_mle_exact(
     }
 
     const int K = static_cast<int>(A.cols());
-    PoisRegExactProblem P(A, y, c, o, opt);
+    PoisLog1pRegExactProblem P(A, y, c, o, opt);
 
     // Initialization
     if (b.size() != K) {
@@ -169,7 +169,7 @@ double pois_log1p_mle_exact(
 
 // Approximate
 
-void PoisRegSparseProblem::eval(const VectorXd& bvec, double* f_out,
+void PoisLog1pRegSparseProblem::eval(const VectorXd& bvec, double* f_out,
     VectorXd* g_out, VectorXd* q_out, ArrayXd* w_out) const
 {
     if (!nonnegative) {
@@ -202,7 +202,7 @@ void PoisRegSparseProblem::eval(const VectorXd& bvec, double* f_out,
     }
 }
 
-void PoisRegSparseProblem::eval_safe(const VectorXd& bvec, double* f_out,
+void PoisLog1pRegSparseProblem::eval_safe(const VectorXd& bvec, double* f_out,
     VectorXd* g_out, VectorXd* q_out, ArrayXd* w_out) const
 {
     ArrayXd u = (Anz * bvec).array();
@@ -244,7 +244,7 @@ void PoisRegSparseProblem::eval_safe(const VectorXd& bvec, double* f_out,
     }
 }
 
-ArrayXd PoisRegSparseProblem::residual(const VectorXd& bvec) const {
+ArrayXd PoisLog1pRegSparseProblem::residual(const VectorXd& bvec) const {
     ArrayXd mu = (A * bvec).array();
     if (o) mu += o->array();
     mu = ((mu.exp() - 1.0) * c.array()).max(0.);
@@ -291,7 +291,7 @@ double pois_log1p_mle(
     }
 
     const int K = static_cast<int>(A.cols());
-    PoisRegSparseProblem P(A, y, c, o, opt);
+    PoisLog1pRegSparseProblem P(A, y, c, o, opt);
 
     // Initialization
     if (b.size() != K) {

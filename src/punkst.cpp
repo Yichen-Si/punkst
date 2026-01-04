@@ -15,7 +15,7 @@ int32_t cmdConvertDGE(int argc, char** argv);
 int32_t cmdConvert10xToHexTSV(int argc, char** argv);
 int32_t cmdMultiSample(int32_t argc, char** argv);
 int32_t cmdMergeUnits(int32_t argc, char** argv);
-int32_t cmdMultiConditionTest(int argc, char** argv);
+int32_t cmdConditionalTestGlobal(int argc, char** argv);
 int32_t cmdNmfPoisLog1p(int32_t argc, char** argv);
 int32_t cmdNmfTransform(int32_t argc, char** argv);
 int32_t cmdDrawPixelFeatures(int32_t argc, char** argv);
@@ -23,6 +23,7 @@ int32_t cmdFeatureVst(int32_t argc, char** argv);
 int32_t cmdDeChisq(int argc, char** argv);
 int32_t cmdPseudoBulk(int argc, char** argv);
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
+int32_t cmdConditionalTest(int32_t argc, char** argv);
 
 int32_t main(int32_t argc, char** argv) {
 
@@ -43,14 +44,15 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("convert-10X-SC", "Convert 10X Genomics single-cell DGE to customized unit level tsv files", cmdConvert10xToHexTSV)
         .add_command("multisample-prepare", "Process multisample data", cmdMultiSample)
         .add_command("merge-units", "Merge multiple single cell/hexagon files into a single file", cmdMergeUnits)
-        .add_command("multi-conditional-test", "Multi-sample conditional DE test", cmdMultiConditionTest)
+        .add_command("multi-conditional-de-global", "Multi-sample DE test conditional on low-dim embedding using feature-splitting", cmdConditionalTestGlobal)
+        .add_command("multi-conditional-de-pixel", "Multi-sample cell type specific DE test based on pixel level cell type inference", cmdConditionalTest)
         .add_command("nmf-pois-log1p", "Fit Poisson log1p NMF", cmdNmfPoisLog1p)
         .add_command("nmf-pois-log1p-transform", "Transform data using fitted Poisson log1p NMF model", cmdNmfTransform)
         .add_command("draw-pixel-features", "Draw pixel level features/genes", cmdDrawPixelFeatures)
         .add_command("feature-vst", "Compute feature variance stabilizing stats and select highly variable features", cmdFeatureVst)
         .add_command("de-chisq", "Differential expression using Chi-squared test", cmdDeChisq)
-        .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk).
-        add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
+        .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk)
+        .add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
 
     if (argc < 2) {
         std::cerr << "Licensed under the CC BY-NC 4.0 https://creativecommons.org/licenses/by-nc/4.0/\n\n";

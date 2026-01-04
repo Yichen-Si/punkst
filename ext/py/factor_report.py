@@ -18,6 +18,7 @@ def factor_report(_args):
     parser.add_argument('--output_pref', type=str, help='')
     parser.add_argument('--annotation', type=str, default = '', help='')
     parser.add_argument('--anchor', type=str, default='', help='')
+    parser.add_argument('--keep_order', action='store_true', help='')
     args = parser.parse_args(_args)
 
     if len(_args) == 0:
@@ -41,17 +42,31 @@ def factor_report(_args):
     # DE genes
     if not os.path.exists(args.de):
         sys.exit(f"Cannot find DE file")
-    de = pd.read_csv(args.de, sep='\t', dtype={'factor':str})
+    de = pd.read_csv(args.de, sep='\t', dtype={'Factor':str})
+
+    de.rename(columns = {"logPval":"log10pval", "ApproxFC":"FoldChange", "gene":"Feature", "Gene":"Feautre", "Pval":"pval"}, inplace=True)
+    sortby = "log10pval"
+    if sortby not in de.columns:
+        sortby = "Chi2"
+    if "log10pval" not in de.columns:
+        de["log10pval"] = -np.log10(np.clip(de["pval"].values, 1e-300, 1.0))
 
     output_pref = args.output_pref
+    min_log10p = -np.log10(args.max_pval)
 
     factor_header = list(post.columns[1:])
     for u in factor_header:
         post[u] = post[u].astype(float)
-    print(factor_header)
+    K = len(factor_header)
 
+    color_table = color_table.iloc[:len(factor_header), :]
     color_table['RGB'] = [','.join(x) for x in np.clip((color_table.loc[:, ['R','G','B']].values).astype(int), 0, 255).astype(str) ]
     color_table['HEX'] = [ matplotlib.colors.to_hex(v) for v in np.clip(color_table.loc[:, ['R','G','B']].values / 255, 0, 1) ]
+    if len(color_table) < K:
+        logging.warning(f"Color table has only {len(color_table)} colors, less than {K} factors")
+        # cycle rows in color table
+        color_table = pd.concat( [color_table]*((K // len(color_table))+1), axis=0, ignore_index=True).iloc[:K, :]
+        color_table.reset_index(drop=True, inplace=True)
 
     post_umi = post.loc[:, factor_header].sum(axis = 0).astype(int).values
     post_weight = post.loc[:, factor_header].sum(axis = 0).values.astype(float)
@@ -59,25 +74,25 @@ def factor_report(_args):
 
     top_gene = []
     # Top genes by Chi2
-    de.sort_values(by=['factor','Chi2'],ascending=False,inplace=True)
-    de["Rank"] = de.groupby(by = "factor").Chi2.rank(ascending=False, method = "min").astype(int)
+    de.sort_values(by=['Factor', sortby],ascending=False,inplace=True)
+    de["Rank"] = de.groupby(by = "Factor")[sortby].rank(ascending=False, method = "min").astype(int)
     for k, kname in enumerate(factor_header):
-        indx = de.factor.eq(kname)
+        indx = de.Factor.eq(kname)
         v = de.loc[indx & ( (de.Rank < mtop) | \
-                ((de.pval <= args.max_pval) & (de.FoldChange >= args.min_fc)) ), \
-                'gene'].iloc[:ntop].values
+                ((de.log10pval > min_log10p) & (de.FoldChange >= args.min_fc)) ), \
+                'Feature'].iloc[:ntop].values
         if len(v) == 0:
             top_gene.append([kname, '.'])
         else:
             top_gene.append([kname, ', '.join(v)])
     # Top genes by fold change
-    de.sort_values(by=['factor','FoldChange'],ascending=False,inplace=True)
-    de["Rank"] = de.groupby(by = "factor").FoldChange.rank(ascending=False, method = "min").astype(int)
+    de.sort_values(by=['Factor','FoldChange'],ascending=False,inplace=True)
+    de["Rank"] = de.groupby(by = "Factor").FoldChange.rank(ascending=False, method = "min").astype(int)
     for k, kname in enumerate(factor_header):
-        indx = de.factor.eq(kname)
+        indx = de.Factor.eq(kname)
         v = de.loc[indx & ( (de.Rank < mtop) | \
-                ((de.pval <= args.max_pval) & (de.FoldChange >= args.min_fc)) ), \
-                'gene'].iloc[:ntop].values
+                ((de.log10pval > min_log10p) & (de.FoldChange >= args.min_fc)) ), \
+                'Feature'].iloc[:ntop].values
         if len(v) == 0:
             top_gene[k].append('.')
         else:
@@ -106,7 +121,8 @@ def factor_report(_args):
         oheader.insert(4, "Anchors")
         logging.info(f"Read anchor genes from {args.anchor}")
 
-    table.sort_values(by = 'Weight', ascending = False, inplace=True)
+    if not args.keep_order:
+        table.sort_values(by = 'Weight', ascending = False, inplace=True)
 
 
     if os.path.isfile(args.annotation):

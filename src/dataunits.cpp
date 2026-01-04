@@ -517,7 +517,7 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
     int32_t minCountTrain, double size_factor, double c,
     std::string* covarFile, std::vector<uint32_t>* covar_idx,
     std::vector<std::string>* covar_names, bool allow_na,
-    int32_t label_idx, std::vector<std::string>* labels,
+    int32_t label_idx, std::string label_na, std::vector<std::string>* labels,
     int32_t debug_N) {
 
     std::ifstream inFileStream(inFile);
@@ -564,7 +564,7 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
                     covar_names->push_back(covar_header[i]);
                 }
             }
-            notice("Covariate file has %d columns, using %d as covariates", n_tokens, n_covar);
+            notice("Covariate file has %d columns, using %d as covariates and %d as label", n_tokens, n_covar, (int32_t) has_labels);
         }
     }
 
@@ -608,6 +608,9 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
                 }
             }
             if (has_labels) {
+                if (tokens[label_idx] == label_na) {
+                    continue;
+                }
                 labels->push_back(tokens[label_idx]);
             }
         }

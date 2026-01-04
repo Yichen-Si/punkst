@@ -33,7 +33,7 @@ struct DeResult {
 };
 
 int32_t cmdDeChisq(int argc, char** argv) {
-    std::string inputFile;
+    std::vector<std::string> inputFiles;
     std::string outputFile;
     double minCount = 10.0;
     double minCountPerFeature = 100.0;
@@ -43,7 +43,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
     double pseudoCount = 0.5;
 
     ParamList pl;
-    pl.add_option("input", "Input pseudobulk matrix", inputFile, true)
+    pl.add_option("input", "Input pseudobulk matrix (one for 1-vs-rest, two for pairwise comparison)", inputFiles, true)
       .add_option("out", "Output file", outputFile, true)
       .add_option("min-count-per-feature", "Minimum total count for a feature to be considered", minCountPerFeature)
       .add_option("max-pval", "Max p-value for output (default: 1e-3)", minPval)
@@ -64,6 +64,110 @@ int32_t cmdDeChisq(int argc, char** argv) {
 
     if (nThreads < 1) nThreads = 1;
     tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, nThreads);
+
+    if (inputFiles.empty() || inputFiles.size() > 2) {
+        error("One or two input files must be provided.");
+    }
+
+    // Two-sample comparison
+    if (inputFiles.size() == 2) {
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> mat1, mat2;
+        std::vector<std::string> rows1, rows2;
+        std::vector<std::string> cols1, cols2;
+
+        read_matrix_from_file(inputFiles[0], mat1, &rows1, &cols1);
+        notice("Read matrix 1 with %zu rows and %zu columns", mat1.rows(), mat1.cols());
+        read_matrix_from_file(inputFiles[1], mat2, &rows2, &cols2);
+        notice("Read matrix 2 with %zu rows and %zu columns", mat2.rows(), mat2.cols());
+
+        if (cols1.size() != cols2.size()) {
+            error("Number of columns (factors) mismatch: %zu vs %zu", cols1.size(), cols2.size());
+        }
+        size_t K = cols1.size();
+        for (size_t k = 0; k < K; ++k) {
+            if (cols1[k] != cols2[k]) {
+                warning("Column name mismatch at index %zu: %s vs %s", k, cols1[k].c_str(), cols2[k].c_str());
+            }
+        }
+
+        std::unordered_map<std::string, int> rowMap1;
+        for (size_t i = 0; i < rows1.size(); ++i) rowMap1[rows1[i]] = (int)i;
+
+        std::vector<double> rowSum;
+        std::vector<std::pair<int, int>> commonRows;
+        std::vector<std::string> commonRowNames;
+        for (size_t i = 0; i < rows2.size(); ++i) {
+            auto it = rowMap1.find(rows2[i]);
+            if (it == rowMap1.end()) {continue;}
+            int j = it->second;
+            double r = mat1.row(j).sum() + mat2.row(i).sum();
+            if (r < minCountPerFeature) {continue;}
+            commonRows.emplace_back(j, (int)i);
+            commonRowNames.push_back(rows2[i]);
+            rowSum.push_back(r);
+        }
+        if (commonRows.empty()) {
+            error("No common features found between two inputs");
+        }
+        notice("Kept %zu common features", commonRows.size());
+
+        std::vector<double> colSums1(K, 0.0), colSums2(K, 0.0);
+        for (size_t k = 0; k < K; ++k) {
+            colSums1[k] = mat1.col(k).sum();
+            colSums2[k] = mat2.col(k).sum();
+        }
+
+        tbb::concurrent_vector<DeResult> results;
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, commonRows.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t i = range.begin(); i < range.end(); ++i) {
+                    int r1 = commonRows[i].first;
+                    int r2 = commonRows[i].second;
+                    for (size_t k = 0; k < K; ++k) {
+                        double a = mat1(r1, k);
+                        double b = mat2(r2, k);
+                        if (std::max(a,b) < minCount) continue;
+
+                        double c = colSums1[k] - a;
+                        double d = colSums2[k] - b;
+
+                        double a_p = a + pseudoCount;
+                        double b_p = b + pseudoCount;
+                        double t1_p = colSums1[k] + pseudoCount;
+                        double t2_p = colSums2[k] + pseudoCount;
+
+                        double fc = (a_p / t1_p) / (b_p / t2_p);
+                        if (fc < minFC && fc > 1.0/minFC) continue;
+
+                        auto stats = chisq2x2_log10p(a, b, c, d, pseudoCount);
+                        if (stats.second < maxLog10Pval) continue;
+
+                        results.emplace_back((int)i, (int)k, stats.first, stats.second, fc);
+                    }
+                }
+            });
+
+        tbb::parallel_sort(results.begin(), results.end(),
+            [](const DeResult& a, const DeResult& b) {
+                if (a.k != b.k) return a.k < b.k;
+                return a.chi2 > b.chi2;
+            });
+
+        std::ofstream out(outputFile);
+        if (!out) error("Cannot open output file: %s", outputFile.c_str());
+        out << "Feature\tFactor\tChi2\tFoldChange\tlog10pval\tCount1\tCount2\n";
+        out << std::fixed << std::setprecision(4);
+        for (const auto& r : results) {
+            out << commonRowNames[r.j] << "\t" << cols1[r.k] << "\t"
+                << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\t"
+                << mat1(commonRows[r.j].first, r.k) << "\t"
+                << mat2(commonRows[r.j].second, r.k) << "\n";
+        }
+
+        return 0;
+    }
+
+    std::string inputFile = inputFiles[0];
 
     // Read Input Matrix
     std::ifstream in(inputFile);

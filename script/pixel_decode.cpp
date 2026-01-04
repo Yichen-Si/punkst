@@ -309,6 +309,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     RowMajorMatrixXd betaT = beta.transpose(); // K x M
     LatentDirichletAllocation lda(betaT, seed, 1);
     lda.set_svb_parameters(maxIter, mDelta);
+    lda.topic_names_ = factorNames;
     // Process each dataset
     for (const auto& ds : datasets) {
         anchorFile = ds.anchorFile;

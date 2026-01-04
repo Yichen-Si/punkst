@@ -102,7 +102,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     int32_t N = read_sparse_obs(inFile, reader, docs,
         rnames, minCount, size_factor, c,
         &covarFile, &covar_idx, &covar_names,
-        allow_na, -1, nullptr, debug_N);
+        allow_na, -1, "", nullptr, debug_N);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %d documents with %d features", N, M);
 
