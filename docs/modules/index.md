@@ -1,6 +1,6 @@
 # Punkst Modules
 
-Punkst provides several command-line tools for analyzing high resolution spatial (transcriptomics) data. Each module can be used individually or as part of a pipeline.
+punkst provides several command-line tools for analyzing high resolution spatial (transcriptomics) data.
 
 ## Available Modules
 
@@ -9,8 +9,9 @@ Punkst provides several command-line tools for analyzing high resolution spatial
 - [topic-model](lda4hex.md): Runs LDA on the spot level data
 - [pixel-decode](pixel-decode.md): Annotates each pixel with the top factors and their probabilities
 - [Visualization](visualization.md): Visualizes the pixel level analysis results
+- [DE tests](de.md): Differential expression tests
 - [tile-op](tileop.md): View and manipulate tiled data files (including merge and annotate)
-- [cooccurrence](coexp.md): Computes gene co-occurrence and/or extract marker genes from the co-occurrence matrix.
+- [cooccurrence](coexp.md): Computes gene co-occurrence and/or extract marker genes from the co-occurrence matrix
 <!-- - [nmf-pois-log1p](poisnmf.md): Fits a Poisson NMF model with a log(1+x) link. -->
 
 ## Input Data Format

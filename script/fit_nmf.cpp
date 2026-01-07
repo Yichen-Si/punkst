@@ -121,7 +121,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     std::vector<std::string> factor_names;
     if (!modelFile.empty()) {
         RowMajorMatrixXd beta;
-        std::vector<std::string> model_features, covar_names_from_file;
+        std::vector<std::string> model_features;
         read_matrix_from_file(modelFile, beta, &model_features, &factor_names);
         int32_t K1 = beta.cols();
         if (K1 != K) {

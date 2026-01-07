@@ -51,6 +51,7 @@ nav:
     - tiles2hex: modules/tiles2hex.md
     - topic-model: modules/lda4hex.md
     - pixel-decode: modules/pixel-decode.md
+    - DE tests: modules/de.md
     - Visualization: modules/visualization.md
     - Co-occurrence: modules/coexp.md
     - tile-op: modules/tileop.md

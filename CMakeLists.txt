@@ -91,7 +91,6 @@ set(SOURCE_FILES
     script/multisample_pipeline.cpp
     script/merge_units.cpp
     src/cndtest.hpp
-    script/multi_conditionalde.cpp
     src/poisreg.hpp
     src/poisreg.cpp
     src/newtons.hpp
@@ -110,6 +109,8 @@ set(SOURCE_FILES
     src/tileoperator_base.cpp
     src/tileoperator.cpp
     script/manipulate_tiles.cpp
+    script/multi_cde_lowres.cpp
+    script/multi_cde_pixel.cpp
   )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

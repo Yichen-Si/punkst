@@ -60,7 +60,10 @@ struct MLEStats {
     MLEStats(const OptimStats& optim_) : optim(optim_) {}
 };
 
-// ---------------- Problem Definition for pois_log1p_mle_exact --------------
+/*
+    Poisson log(1+lambda/c) regression
+    \lambda_i = c_i * \exp(o_i + \sum_k a_{ik} b_k)
+*/
 class PoisLog1pRegExactProblem {
 public:
     const RowMajorMatrixXd& A; // N x K
@@ -129,7 +132,6 @@ public:
 
 };
 
-// ---------------- Problem Definition for pois_log1p_mle (sparse) ----------
 class PoisLog1pRegSparseProblem {
 public:
     // Pointers to original data
@@ -155,43 +157,7 @@ public:
     VectorXd zoak;
     bool nonnegative;
 
-    void init() {
-        const int K = static_cast<int>(A.cols());
-
-        // Build submatrices for non-zero counts
-        for (size_t j = 0; j < n; ++j) {
-            Anz.row(j) = A.row(ids[j]);
-        }
-        AsqnzT = Anz.array().square().matrix().transpose();
-
-        if (has_offset) oS.resize(n);
-        for (size_t t = 0; t < n; ++t) {
-            const int i = ids[t];
-            cS[t] = c[i];
-            if (has_offset) oS[t] = (*o)[i];
-        }
-
-        // Precompute for zero-count contributions
-        VectorXd zmask = c;
-        for (size_t j = 0; j < n; ++j) {
-            zmask[ids[j]] = 0.0;
-        }
-        zak = A.transpose() * zmask;
-        zakl = A.transpose() * (zmask.asDiagonal() * A);
-        dZ = zakl.diagonal();
-        zoak = VectorXd::Zero(K);
-        if (has_offset) {
-            zoak = A.transpose() * (zmask.array() * o->array()).matrix();
-        }
-
-        // Check if we need safe/heuristic to enforce non-negativity
-        double min_lower_bound = 0;
-        if (opt.optim.b_min) min_lower_bound = opt.optim.b_min->minCoeff();
-        nonnegative = min_lower_bound >= 0.0;
-        if (has_offset) {
-            nonnegative = nonnegative && (o->minCoeff() >= 0.0);
-        }
-    }
+    void init();
 
     PoisLog1pRegSparseProblem(const RowMajorMatrixXd& A_, const Document& y_,
         const VectorXd& c_, const VectorXd* o_, const MLEOptions& opt_)
@@ -292,9 +258,7 @@ private:
     }
 };
 
-// Poisson regression with log(1+λ/c) link
 // Return -logP (final objective)
-
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A,
     const Document& y,
@@ -341,6 +305,156 @@ ArrayXd pois_log1p_residual(
     const RowMajorMatrixXd& X, const VectorXd& y, const VectorXd& c,
     const VectorXd* o, const Eigen::Ref<const VectorXd>& b);
 
+
+/*
+    Poisson mixture regression
+    \lambda_i = c_i * \sum_k a_{ik} (\exp(o_{ik} + x_i b_k) - 1)
+    Assuming x_i \in \set{-1,1}
+*/
+class MixPoisLog1pSparseProblem {
+public:
+    const RowMajorMatrixXd& A;   // N x K, rows sum to 1
+    const VectorXd& x;           // N
+    const VectorXd& c;           // N
+    const VectorXd& oK;          // K
+    const std::vector<uint32_t>& ids; // indices with y>0
+    Eigen::Map<const VectorXd> yvec;  // counts for ids
+    const MLEOptions& opt;
+
+    const int N, K;
+    const int n; // nnz
+    RowMajorMatrixXd Anz;  // n x K
+    VectorXd xS, cS;       // n
+
+    // Sums of c_i a_{ik} over Zero-set split by sign of x
+    VectorXd Sz_plus, Sz_minus;
+    // Sums of (c_i a_{ik})^2 over Zero-set split by sign of x
+    VectorXd Sz2_plus,  Sz2_minus;
+
+    // Cached (depends on b, updated in eval)
+    mutable MatrixXd Vnz;       // n x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
+    mutable ArrayXd w_cache;    // n, w_i = (c_i x_i)^2 / lambda_i
+    mutable VectorXd lam_cache; // n, lambda_i for nonzero rows
+    mutable VectorXd last_qZ;
+    mutable ArrayXd slope_cache;
+
+    MixPoisLog1pSparseProblem(const RowMajorMatrixXd& A_,
+            const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
+            const VectorXd& x_, const VectorXd& c_, const VectorXd& oK_,
+            const MLEOptions& opt_, const VectorXd& s1p, const VectorXd& s1m,
+            VectorXd* s2p = nullptr, VectorXd* s2m = nullptr);
+
+    // Objective only
+    double f(const VectorXd& b) const {
+        double fval;
+        eval(b, &fval, nullptr, nullptr, nullptr);
+        return fval;
+    }
+
+    // Hessian-vector product closure
+    // Given w (fisher weights): w_i = (c_i x_i)^2 / lambda_i)
+    // H = \sum_i  w_i v_i v_i^T, vi = a_ik*exp(o_k + xi b_k)
+    // Returns a lambda function that computes Hv
+    auto make_Hv(const ArrayXd& w) const {
+        // uses cached Vnz from last eval() + diagonal zeros term T2
+        return [&](const VectorXd& v) -> VectorXd {
+            VectorXd tmp = Vnz * v; // n
+            VectorXd Hv_nz = Vnz.transpose() * (w * tmp.array()).matrix();
+            VectorXd Hv = Hv_nz;
+            Hv.array() += last_qZ.array() * v.array();
+            return Hv;
+        };
+    }
+
+    void eval(const VectorXd& b, double* f_out,
+              VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const {
+        eval_safe(b, f_out, g_out, q_out, w_out);
+    }
+    void eval_safe(const VectorXd& b, double* f_out,
+              VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+};
+
+void mix_pois_log1p_compute_se(const MixPoisLog1pSparseProblem& P,
+    const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats);
+double mix_pois_log1p_mle(const RowMajorMatrixXd& A,
+    const std::vector<uint32_t>& ids, const std::vector<double>& cnts,
+    const VectorXd& x, const VectorXd& c, const VectorXd& oK,
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats,
+    const VectorXd& s1p, const VectorXd& s1m,
+    VectorXd* s2p = nullptr, VectorXd* s2m = nullptr);
+
+
+
+
+
+/*
+  Poisson mixture regression with log link + size factor (Unknown: b)
+    lambda_i = c_i * sum_k a_{ik} * exp(o_k + x_i b_k)
+*/
+class MixPoisLogRegProblem {
+public:
+    const RowMajorMatrixXd& A;  // N x K (a_{ik})
+    const VectorXd& y;          // N
+    const VectorXd& x;          // N
+    const VectorXd& c;          // N (size factors)
+    const VectorXd& oK;         // K (offsets)
+    const MLEOptions& opt;
+
+    const int N, K;
+
+    // Cached at current b (for Hv)
+    mutable MatrixXd V;         // N x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
+    mutable ArrayXd  w_cache;   // N, w_i = (c_i x_i)^2 / lambda_i
+    mutable VectorXd lam_cache; // N
+
+    MixPoisLogRegProblem(const RowMajorMatrixXd& A_,
+        const VectorXd& y_, const VectorXd& x_,
+        const VectorXd& c_, const VectorXd& oK_, const MLEOptions& opt_)
+        : A(A_), y(y_), x(x_), c(c_), oK(oK_), opt(opt_),
+          N((int)A_.rows()), K((int)A_.cols()),
+          V(N, K), w_cache(N), lam_cache(N)
+    {
+        if (y.size() != N)  error("%s: y has wrong size", __func__);
+        if (x.size() != N)  error("%s: x has wrong size", __func__);
+        if (c.size() != N)  error("%s: c has wrong size", __func__);
+        if (oK.size() != K) error("%s: o has wrong size", __func__);
+    }
+
+    double f(const VectorXd& b) const {
+        double fval;
+        eval(b, &fval, nullptr, nullptr, nullptr);
+        return fval;
+    }
+
+    auto make_Hv(const ArrayXd& w) const {
+        const double ridge = opt.ridge;
+        return [&](const VectorXd& v) -> VectorXd {
+            VectorXd tmp = V * v; // N
+            VectorXd Hv  = V.transpose() * (w * tmp.array()).matrix(); // K
+            if (ridge > 0.0) Hv.noalias() += ridge * v;
+            return Hv;
+        };
+    }
+
+    void eval(const VectorXd& b, double* f_out,
+        VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+};
+
+void mix_pois_log_compute_se(const MixPoisLogRegProblem& P,
+    const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats);
+double mix_pois_log_mle(const RowMajorMatrixXd& A,
+    const VectorXd& y, const VectorXd& x,
+    const VectorXd& c, const VectorXd& oK,
+    MLEOptions& opt, VectorXd& b, MLEStats& stats,
+    int32_t init_newton = 0, bool init_polish = false);
+double init_b0_loglink_1d(const RowMajorMatrixXd& A,
+    const VectorXd& y, const VectorXd& x,
+    const VectorXd& c, const VectorXd& oK, double eps, int iters = 10);
+VectorXd init_mix_pois_log_vec(const RowMajorMatrixXd& A,
+    const VectorXd& y, const VectorXd& x,
+    const VectorXd& c, const VectorXd& oK,
+    double eps = 1e-12, int newton_steps_per_k = 5,
+    bool do_diag_polish = true, const MLEOptions* opt_for_polish = nullptr);
 
 
 

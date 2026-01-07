@@ -219,6 +219,7 @@ public:
     HexReader(const std::string &metaFile) {
         readMetadata(metaFile);
     }
+    void readMetadata(const std::string &metaFile);
     bool featureDict(std::unordered_map<std::string, uint32_t>& dict) {
         if (features.empty()) {
             return false;
@@ -272,12 +273,15 @@ public:
 
     int32_t readAll(std::vector<Document>& docs,
         std::vector<std::string>& info, const std::string &inFile,
-        int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
+        int32_t minCount = 1, bool add2sums = true,
+        int32_t limit = INT_MAX, int32_t modal = 0);
     int32_t readAll(std::vector<Document>& docs, const std::string &inFile,
-        int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
+        int32_t minCount = 1, bool add2sums = true,
+        int32_t limit = INT_MAX, int32_t modal = 0);
     int32_t readAll(Eigen::SparseMatrix<double, Eigen::RowMajor> &X,
         std::vector<std::string>& info, const std::string &inFile,
-        int32_t minCount = 1, int32_t modal = 0, bool add2sums = true);
+        int32_t minCount = 1, bool add2sums = true,
+        int32_t limit = INT_MAX, int32_t modal = 0);
 
 private:
 
@@ -294,8 +298,6 @@ private:
     bool accumulate_sums = true;
     bool weightFeatures = false;
     double defaultWeight;
-
-    void readMetadata(const std::string &metaFile);
 };
 
 int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,

@@ -620,3 +620,49 @@ long double log_factorial(T n) {
            0.5L * std::log(2 * M_PI * n_ld) +
            1.0L / (12.0L * n_ld);
 }
+
+// exp(z)/(1+exp(z))
+inline double sigmoid_stable(double z) {
+    if (z >= 0) {
+        double ez = std::exp(-z);
+        return 1.0 / (1.0 + ez);
+    }
+    double ez = std::exp(z);
+    return ez / (1.0 + ez);
+
+}
+inline Eigen::ArrayXd sigmoid_stable(const Eigen::ArrayXd& z) {
+    Eigen::ArrayXd result(z.size());
+    Eigen::ArrayXd ez = z.exp();
+    Eigen::ArrayXd emz= (-z).exp();
+    result = (z>=0).select(1.0/(1.0+emz), ez/(1.0+ez));
+    return result;
+}
+
+// log(1 + exp(z))
+inline double softplus_stable(double z) {
+    if (z > 40.0) return z; // log(1+exp(z)) ~ z
+    if (z < -40.0) return std::exp(z); // ~ exp(z)
+    return std::log1p(std::exp(z));
+}
+inline Eigen::ArrayXd softplus_stable(const Eigen::ArrayXd& z) {
+    Eigen::ArrayXd result(z.size());
+    const double hi = 40.0;
+    const double lo = -40.0;
+    result = (z > hi).select(z,
+             (z < lo).select(z.exp(), (z.exp() + 1.0).log()));
+    return result;
+}
+
+// eps + tau * log(1 + exp((x-eps)/tau))
+inline double smooth_floor(double x, double eps, double tau, double* slope_out) {
+    if (tau <= 0) {
+        if (slope_out) *slope_out = (x > eps) ? 1.0 : 0.0;
+        return (x > eps) ? x : eps;
+    }
+    double z = (x - eps) / tau;
+    double sp = softplus_stable(z); // log(1+exp(z))
+    double s  = sigmoid_stable(z);  // d/dz softplus = sigmoid
+    if (slope_out) *slope_out = s;  // d/dx = (1/tau)*tau*s = s
+    return eps + tau * sp;
+}

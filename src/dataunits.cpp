@@ -251,7 +251,7 @@ void HexReader::setWeights(const std::string& weightFile, double defaultWeight_)
     weightFeatures = true;
 }
 
-int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount, int32_t modal, bool add2sums) {
+int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount, bool add2sums, int32_t limit, int32_t modal) {
     std::ifstream inFileStream(inFile);
     if (!inFileStream) {
         error("%s: Error opening input file: %s", __func__, inFile.c_str());
@@ -279,12 +279,13 @@ int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>
         docs.push_back(std::move(doc));
         info.push_back(std::move(l));
         n++;
+        if (limit > 0 && n >= limit) {break;} // only for debugging
     }
     readFullSums = true;
     return n;
 }
 
-int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount, int32_t modal, bool add2sums) {
+int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFile, int32_t minCount, bool add2sums, int32_t limit, int32_t modal) {
     std::ifstream inFileStream(inFile);
     if (!inFileStream) {
         error("%s: Error opening input file: %s", __func__, inFile.c_str());
@@ -310,6 +311,7 @@ int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFil
         }
         docs.push_back(std::move(doc));
         n++;
+        if (limit > 0 && n >= limit) {break;} // only for debugging
     }
     readFullSums = true;
     return n;
@@ -626,7 +628,7 @@ int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
 
 int32_t HexReader::readAll(Eigen::SparseMatrix<double, Eigen::RowMajor> &X,
     std::vector<std::string>& info, const std::string &inFile,
-    int32_t minCount, int32_t modal, bool add2sums) {
+    int32_t minCount, bool add2sums, int32_t limit, int32_t modal) {
     std::ifstream inFileStream(inFile);
     if (!inFileStream) {
         error("%s: Error opening input file: %s", __func__, inFile.c_str());
@@ -669,6 +671,7 @@ int32_t HexReader::readAll(Eigen::SparseMatrix<double, Eigen::RowMajor> &X,
             }
         }
         ++n;
+        if (limit > 0 && n >= limit) {break;} // only for debugging
     }
     // Build the row-major sparse matrix (n samples x nFeatures)
     X.resize(n, nFeatures);

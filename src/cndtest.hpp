@@ -1,8 +1,8 @@
 #include "topic_svb.hpp"
 
-class ConditionalDEtest : public LDA4Hex {
+class GlobalDEtest : public LDA4Hex {
 public:
-    ConditionalDEtest(int32_t nFold, int32_t nContrast,
+    GlobalDEtest(int32_t nFold, int32_t nContrast,
         int32_t nThreads, int32_t seed,
         const std::string& dataFile, HexReader& reader,
         const std::string& labelFile,
@@ -279,6 +279,16 @@ private:
         fileopen = dataStream_.is_open() && labelStream_.is_open();
         if (!fileopen) {
             error("%s: Failed to open input file(s)", __func__);
+        }
+        // skip headers in labelStream
+        std::string line;
+        uint64_t pos = 0;
+        while (std::getline(labelStream_, line)) {
+            if (line.empty() && line[0] != '#') {
+                labelStream_.seekg(pos);
+                break;
+            }
+            pos = labelStream_.tellg();
         }
     }
     void closeStreams() {

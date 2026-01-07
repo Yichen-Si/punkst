@@ -88,6 +88,7 @@ double tron_solve(const Problem& P, VectorXd& b, const OptimOptions& opt, OptimS
 	int it = 0;
 	for (; it < opt.max_iters; ++it) {
 		P.eval(b, nullptr, &g, &q, &w);
+		q = q.array().max(opt.eps);
 
 		// Free set
 		Eigen::Array<bool, Eigen::Dynamic, 1> free_mask = g.array() < 0.0;
