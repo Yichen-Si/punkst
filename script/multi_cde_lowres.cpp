@@ -4,6 +4,7 @@
 #include "utils.h"
 #include "lda.hpp"
 #include "poisreg.hpp"
+#include "mixpois.hpp"
 #include <random>
 #include <fstream>
 #include <iomanip>
@@ -42,16 +43,14 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
     int32_t maxIter = 100;
     double  mDelta = 1e-3;
     int32_t minCount = 50;
-    int32_t minUnits = 10;
+    int32_t minUnits = -1;
     double  maxPval = 1;
     int32_t minCountFeature = 100;
     int32_t debug_ = 0, verbose = 0;
     uint32_t se_method = 1;
+    double sizeFactor = 10000.0;
     OptimOptions optim;
     optim.tron.enabled = true;
-    optim.max_iters = 50;
-    optim.tol = 1e-6;
-    double sizeFactor = 10000.0;
 
     ParamList pl;
     pl.add_option("in-data", "Input data files", inFile, true)
@@ -62,8 +61,8 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
       .add_option("out", "Output prefix", outPrefix, true)
       .add_option("threads", "Number of threads to use", nThreads)
       .add_option("seed", "Random seed", seed)
-      .add_option("max-iter", "(LDA) Max iterations for fitting cell type composition", maxIter)
-      .add_option("mean-change-tol", "(LDA) Convergence tolerance for fitting cell type composition", mDelta)
+      .add_option("max-iter", "Max iterations for fitting cell type composition", maxIter)
+      .add_option("mean-change-tol", "Convergence tolerance for fitting cell type composition", mDelta)
       .add_option("max-iter-inner", "(Pois. Reg) Maximum iterations for fitting DE parameters", optim.max_iters)
       .add_option("tol-inner", "Inner tolerance for fitting DE parameters", optim.tol)
       .add_option("min-count", "Minimum total count per unit to be included", minCount)
@@ -71,7 +70,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
       .add_option("min-units-per-feature", "Min number of units with nonzero count for a feature to be tested", minUnits)
       .add_option("size-factor", "Size factor for Poisson regression", sizeFactor)
       .add_option("max-pval", "Max p-value for output (default: 1)", maxPval)
-      .add_option("se-method", "Method for calculating SE (0: Fisher, 1: Sandwich)", se_method)
+      .add_option("se-method", "Method for calculating SE (0: Fisher, 1: Sandwich, 3: both)", se_method)
       .add_option("seed", "Random seed", seed)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug_);
@@ -92,7 +91,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
     if (sizeFactor <= 0) {error("Size factor must be positive");}
     if (nThreads < 0) {nThreads = 1;}
     if (maxPval <= 0) {error("max-pval must be positive");}
-    if (se_method != 1 && se_method != 2) {error("--se-method must be 1, or 2");}
+    if (se_method < 1 && se_method > 3) {error("--se-method must be 1/2/3");}
     double minlog10p = - std::log10(maxPval);
     tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, nThreads);
 
@@ -137,6 +136,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
     int32_t M = lda.get_n_features();
     std::vector<std::string>& factorNames = lda.topic_names_;
     std::vector<std::string>& featureNames = lda.feature_names_;
+    if (minUnits <= 0) {minUnits = K * 10;}
 
     // Set up data readers
     std::vector<HexReader> readers;
@@ -151,27 +151,49 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
     std::vector<RowMajorMatrixXd> thetas(G);
     std::vector<std::vector<Document>> docsT(G);
     std::vector<int32_t> offsets(G + 1, 0);
+    int32_t batchSize = 1024;
+    std::vector<VectorXd> c_theta_sums(G, VectorXd::Zero(K));
     for (int32_t g = 0; g < G; ++g) {
-        std::vector<Document> docs;
-        nUnits[g] = readers[g].readAll(docs, inFile[g], minCount, true, debug_);
+        SparseObsMinibatchReader batch_reader(inFile[g], readers[g],
+            minCount, sizeFactor, /*c=*/-1, debug_);
+        std::vector<SparseObs> docs;
+        RowMajorMatrixXd theta_g(0, K);
+        int32_t theta_capacity = 0;
+        int32_t nUnits_local = 0;
+        docsT[g].assign(M, Document{});
+        while (true) {
+            int32_t n_batch = batch_reader.readBatch(docs, nullptr, batchSize);
+            if (n_batch == 0) {break;}
+            RowMajorMatrixXd theta_batch = lda.transform(docs);
+            rowNormalizeInPlace(theta_batch);
+            if (nUnits_local + n_batch > theta_capacity) {
+                theta_capacity = std::max(theta_capacity + 2 * batchSize, nUnits_local + n_batch);
+                theta_g.conservativeResize(theta_capacity, K);
+            }
+            theta_g.block(nUnits_local, 0, n_batch, K) = theta_batch;
+            cvecs[g].reserve(static_cast<size_t>(nUnits_local + n_batch));
+            totct[g].reserve(static_cast<size_t>(nUnits_local + n_batch));
+            for (int32_t i = 0; i < n_batch; ++i) {
+                totct[g].push_back(docs[i].ct_tot);
+                cvecs[g].push_back(docs[i].c);
+                const Document& doc = docs[i].doc;
+                for (size_t t = 0; t < doc.ids.size(); ++t) {
+                    int32_t m = doc.ids[t];
+                    docsT[g][m].ids.push_back(nUnits_local + i);
+                    docsT[g][m].cnts.push_back(doc.cnts[t]);
+                }
+            }
+            nUnits_local += n_batch;
+        }
+        nUnits[g] = nUnits_local;
         notice("Read %zu units from the %d-th data file", nUnits[g], g);
         if (nUnits[g] == 0) {
             warning("No units passed the --min-count filter for the %d-th data file", g);
         }
-        thetas[g] = lda.transform(docs); // row-normalized
-        cvecs[g].resize(nUnits[g]);
-        totct[g].resize(nUnits[g]);
-        docsT[g].resize(M);
-        for (uint32_t i = 0; i < nUnits[g]; ++i) {
-            Document& doc = docs[i];
-            totct[g][i] = doc.get_sum();
-            cvecs[g][i] = doc.get_sum() / sizeFactor;
-            for (size_t t = 0; t < doc.ids.size(); ++t) {
-                int32_t m = doc.ids[t];
-                docsT[g][m].ids.push_back(i);
-                docsT[g][m].cnts.push_back(doc.cnts[t]);
-            }
-        }
+        theta_g.conservativeResize(nUnits[g], K);
+        Eigen::Map<const ArrayXd> cvec_g(cvecs[g].data(), nUnits[g]);
+        c_theta_sums[g] = (theta_g.array().colwise() * cvec_g).matrix().colwise().sum();
+        thetas[g] = std::move(theta_g);
         offsets[g + 1] = offsets[g] + nUnits[g];
     }
 
@@ -198,17 +220,21 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
         int32_t n = 0;
         VectorXd xvec = VectorXd::Zero(N_total);
         VectorXd cvec_masked = VectorXd::Zero(N_total);
+        VectorXd a_sum_ = VectorXd::Zero(K);
         for (int32_t g = 0; g < G; ++g) {
-            if (contrasts[c][g] != 0) {
-                n += nUnits[g];
-                int32_t ng = nUnits[g];
-                int32_t offset = offsets[g];
-                xvec.segment(offset, ng) =
-                    Eigen::VectorXd::Constant(ng, contrasts[c][g]);
-                cvec_masked.segment(offset, ng) =
-                    cvec_all.segment(offset, ng);
+            if (contrasts[c][g] == 0) {
+                continue;
             }
+            n += nUnits[g];
+            int32_t ng = nUnits[g];
+            int32_t offset = offsets[g];
+            xvec.segment(offset, ng) =
+                Eigen::VectorXd::Constant(ng, contrasts[c][g]);
+            cvec_masked.segment(offset, ng) = cvec_all.segment(offset, ng);
+            a_sum_ += c_theta_sums[g];
         }
+        // For fitting a aseline model
+        MixPoisReg baseline(A_all, cvec_masked, a_sum_, optim);
         // Pre-compute values to reuse in log1p sparse optimization
         VectorXd *s2p_ptr = nullptr, *s2m_ptr = nullptr;
         VectorXd s1p, s1m, s2p, s2m;
@@ -219,7 +245,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
             VectorXd wm = (c.array() * (x.array() < 0).cast<double>()).matrix();
             s1p = A_all.transpose() * wp;
             s1m = A_all.transpose() * wm;
-            if (se_method == 2) {
+            if (se_method & 0x2) {
                 s2p = VectorXd::Zero(K);
                 s2m = VectorXd::Zero(K);
                 for (int i = 0; i < N_total; ++i) {
@@ -245,7 +271,9 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
         }
         std::ofstream out(out_path);
         if (!out) error("Failed to open output file: %s", out_path.c_str());
-        out << "Feature\tFactor\tBeta\tSE\tlog10p\tCount1\tCount2\n";
+        std::string se_header = (se_method == 3) ? "SE\tSE0" : "SE";
+        out << "Feature\tFactor\tBeta\t" << se_header
+            << "\tlog10p\tDist2bd\tn\tCount1\tCount2\n";
         out << std::fixed << std::setprecision(6);
         notice("Fitting contrast %s with N=%d", contrastNames[c].c_str(), n);
 
@@ -280,22 +308,20 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
             oss << std::setprecision(6);
             for (int32_t jj = range.begin(); jj < range.end(); ++jj) {
                 int32_t j = perm_idx[jj];
-                int32_t n0 = 0, n1 = 0;
+                int32_t m = 0;
                 double ysum0 = 0.0, ysum1 = 0.0;
                 for (int32_t g = 0; g < G; ++g) {
                     if (contrasts[c][g] == 0) {continue;}
                     const auto& doc = docsT[g][j];
                     int32_t nz = static_cast<int32_t>(doc.ids.size());
                     double ysum = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+                    m += nz;
                     if (contrasts[c][g] < 0) {
-                        n0 += nz;
                         ysum0 += ysum;
                     } else {
-                        n1 += nz;
                         ysum1 += ysum;
                     }
                 }
-                int32_t m = n0 + n1;
                 if (m < minUnits) {continue;}
                 int32_t total_count = static_cast<int32_t>(ysum0 + ysum1);
                 if (total_count < minCountFeature) {
@@ -304,6 +330,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                 VectorXd oK = eta0.col(j);
                 MLEStats stats;
                 VectorXd b;
+                VectorXd bd = oK;
                 double fval = 0.0;
                 if (use_log1p) {
                     Document ys;
@@ -319,10 +346,18 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                         ys.cnts.insert(ys.cnts.end(),
                             doc.cnts.begin(), doc.cnts.end());
                     }
+                    // Fit baseline (intercept)
+                    VectorXd b0 = baseline.fit_one(ys.ids, ys.cnts, oK);
+// if (debug_ > 0 && m > 10*K) {
+//     VectorXd diff = b0 - oK;
+//     diff = diff.array() / (oK.array().abs().max(std::log(1+1e-8*sizeFactor)));
+//     std::cout << m << " " << total_count << " diff: " << diff.maxCoeff() << ", " << diff.mean() << "\n";
+// }
                     MLEOptions optLocal = mleOpt;
-                    optLocal.optim.set_bounds(-oK, oK);
+                    optLocal.optim.set_bounds(-b0, b0);
+                    // Fit coefficients
                     MixPoisLog1pSparseProblem P(A_all, ys.ids, ys.cnts,
-                        xvec, cvec_masked, oK, optLocal,
+                        xvec, cvec_masked, b0, optLocal,
                         s1p, s1m, s2p_ptr, s2m_ptr);
                     b = VectorXd::Zero(K);
                     fval = tron_solve(P, b, optLocal.optim, stats.optim);
@@ -342,9 +377,9 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                         }
                     }
                     MLEOptions optLocal = mleOpt;
-                    VectorXd bd = VectorXd::Constant(K, std::log(100.0));
+                    bd.setConstant(std::log(100.0));
                     for (int k = 0; k < K; ++k) {
-                        double bcap_floor = (oK[k] - std::log(0.01 * sizeFactor));
+                        double bcap_floor = (oK[k] - std::log(1e-8 * sizeFactor));
                         if (std::isfinite(bcap_floor) && bcap_floor > 0.0) {
                             bd[k] = std::min(bd[k], bcap_floor);
                         }
@@ -357,29 +392,40 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                     }
                 }
                 (void)fval;
-                VectorXd& se_vec = (se_method == 2) ? stats.se_robust : stats.se_fisher;
-                if (se_vec.size() != K) {continue;}
                 for (int32_t k = 0; k < K; ++k) {
-                    double se = se_vec[k];
+                    double se = -1, se2 = -1;
+                    if (se_method == 3) {
+                        se2 = stats.se_fisher[k];
+                        se = stats.se_robust[k];
+                    } else if (se_method == 2) {
+                        se = stats.se_robust[k];
+                    } else if (se_method == 1) {
+                        se = stats.se_fisher[k];
+                    }
                     if (!(se > 0.0) || !std::isfinite(se) || !std::isfinite(b[k])) {
                         std::lock_guard<std::mutex> guard(io_mutex);
                         warning("(%d, %d, %d) Invalid estimate (b=%g, se=%g)", c, k, j, b[k], se);
-                        continue;
                     }
+                    double dist2bd = std::min(std::abs(b[k] - (-bd[k])), std::abs(b[k] - bd[k]));
                     double z = (b[k] - b_null) / se;
                     double log10p = - log10_twosided_p_from_z(z);
-if (k % 10 == 1 && ((verbose > 1 && log10p > 3) || verbose > 2)) {
-std::cout << featureNames[j] << "\t" << factorNames[k]
-        << std::fixed << std::setprecision(6)
-        << "\t" << b[k] << "\t" << se << "\t" << log10p
-        << "\t" << (int32_t) (std::round(ysum0))
-        << "\t" << (int32_t) (std::round(ysum1)) << "\n";
-}
                     if (log10p < minlog10p) {continue;}
                     oss << featureNames[j] << "\t" << factorNames[k]
-                        << "\t" << b[k] << "\t" << se << "\t" << log10p
+                        << "\t" << b[k] << "\t" << se;
+                    if (se_method == 3) {oss << "\t" << se2;}
+                    oss << "\t" << log10p
+                        << "\t" << dist2bd
+                        << "\t" << m
                         << "\t" << (int32_t) (std::round(ysum0))
                         << "\t" << (int32_t) (std::round(ysum1)) << "\n";
+if (((k % 10 == 1 && (verbose > 1 && log10p > 3)) || (verbose > 2 && m > 10*K))) {
+std::cout << featureNames[j] << "\t" << factorNames[k]
+<< std::fixed << std::setprecision(6)
+<< "\t" << b[k] << "\t" << se;
+if (se_method == 3) {std::cout << "\t" << se2;}
+std::cout << "\t" << log10p
+<< "\t" << dist2bd << "\t" << m << "\n";
+}
                 }
             }
             if (verbose > 0) {
@@ -440,6 +486,9 @@ static int32_t readContrastFromFile(const std::string& contrastFile,
         }
         for (int32_t c = 1; c <= C; ++c) {
             int32_t y = std::stoi(tokens[c]);
+            if (y < -1 || y > 1) {
+                error("Contrast values must be -1, 0 (ignore), or 1: %d", y);
+            }
             contrasts[c-1][s] = y;
         }
     }

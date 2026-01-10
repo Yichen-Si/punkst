@@ -260,9 +260,9 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         fileListOut << sn << "\t" << outPref << ".tsv\t" << outPref << ".index\n";
     }
     fileListOut.close();
+    notice("[multisample] Step 1 completed: pre-processed transcript files for %zu samples.", S);
     notice("[multisample] Paths to pre-processed sample-specific transcript files written to: %s", fileList.c_str());
 }
-    notice("[multisample] Step 1 completed: pre-processed transcript files for %zu samples.", S);
 
     std::unordered_map<std::string, std::vector<uint64_t>> featCounts;
     std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> unionFeatures;
@@ -359,8 +359,8 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             }
         }
     }
-}
     notice("[multisample] Step 1.5 completed,selected %zu/%zu shared features for joint analysis", n_shared, unionFeatures.size());
+}
 
     if (hexGridDists.empty() && hexSizes.empty()) {
         return 0;

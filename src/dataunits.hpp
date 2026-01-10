@@ -300,13 +300,51 @@ private:
     double defaultWeight;
 };
 
-int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
-    std::vector<SparseObs> &docs, std::vector<std::string> &rnames,
-    int32_t minCountTrain = 1, double size_factor = 10000, double c = -1,
-    std::string* covarFile = nullptr, std::vector<uint32_t>* covar_idx = nullptr,
-    std::vector<std::string>* covar_names = nullptr, bool allow_na = false,
-    int32_t label_idx = -1, std::string label_na = "", std::vector<std::string>* labels = nullptr,
-    int32_t debug_N = 0);
+struct SparseObsMinibatchReader {
+    SparseObsMinibatchReader(const std::string &inFile, HexReader &reader,
+        int32_t minCountTrain = 1, double size_factor = 10000, double c = -1,
+        int32_t debug_N = 0);
+
+    void set_covariates(const std::string& covarFile,
+        std::vector<uint32_t>* covar_idx, std::vector<std::string>* covar_names,
+        bool allow_na = false, int32_t label_idx = -1, const std::string& label_na = "",
+        std::vector<std::string>* labels = nullptr);
+
+    int32_t readBatch(std::vector<SparseObs> &docs,
+        std::vector<std::string> *rnames = nullptr,
+        int32_t batch_size = 1024);
+    int32_t readBatch(std::vector<Document> &docs,
+        std::vector<std::string> *rnames = nullptr,
+        int32_t batch_size = 1024);
+
+    int32_t readAll(std::vector<SparseObs> &docs,
+        std::vector<std::string> &rnames,
+        int32_t batch_size = 1024);
+
+    int32_t nLinesRead() const { return line_idx_; }
+
+private:
+    HexReader *reader_;
+    std::ifstream inFileStream_;
+    std::ifstream covarFileStream_;
+    int32_t minCountTrain_;
+    double size_factor_;
+    double c_;
+    bool per_doc_c_;
+    bool allow_na_ = false;
+    int32_t label_idx_ = -1;
+    std::string label_na_;
+    std::vector<uint32_t> *covar_idx_ = nullptr;
+    std::vector<std::string> *covar_names_ = nullptr;
+    std::vector<std::string> *labels_ = nullptr;
+    bool has_labels_ = false;
+    int32_t debug_N_;
+    int32_t n_tokens_ = 0;
+    int32_t n_covar_ = 0;
+    bool has_covar_ = false;
+    bool done_ = false;
+    int32_t line_idx_ = 0;
+};
 
 template<typename T>
 void readCoordRange(const std::string& rangeFile, T& xmin, T& xmax, T& ymin, T& ymax) {

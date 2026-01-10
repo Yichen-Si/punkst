@@ -514,116 +514,213 @@ bool UnitValues3D::writeToFile(std::ostream& os, uint32_t key) const {
     return os.good();
 }
 
-int32_t read_sparse_obs(const std::string &inFile, HexReader &reader,
-    std::vector<SparseObs> &docs, std::vector<std::string> &rnames,
-    int32_t minCountTrain, double size_factor, double c,
-    std::string* covarFile, std::vector<uint32_t>* covar_idx,
-    std::vector<std::string>* covar_names, bool allow_na,
-    int32_t label_idx, std::string label_na, std::vector<std::string>* labels,
-    int32_t debug_N) {
-
-    std::ifstream inFileStream(inFile);
-    if (!inFileStream) {
+SparseObsMinibatchReader::SparseObsMinibatchReader(const std::string &inFile, HexReader &reader,
+    int32_t minCountTrain, double size_factor, double c, int32_t debug_N)
+    : reader_(&reader), minCountTrain_(minCountTrain),
+      size_factor_(size_factor), c_(c), per_doc_c_(c <= 0),
+      debug_N_(debug_N) {
+    inFileStream_.open(inFile);
+    if (!inFileStream_) {
         error("Fail to open input file: %s", inFile.c_str());
     }
-    std::string line, tmp;
-    std::vector<std::string> tokens, covar_header;
-    std::ifstream covarFileStream;
-    int32_t n_covar = 0, n_tokens = 0;
-    bool per_doc_c = c <= 0;
-    bool has_labels = covarFile && label_idx >= 0 && labels != nullptr;
+}
 
-    if (covarFile) {
-        if (label_idx >= 0 && labels == nullptr) {
-            error("%s: if label index is specified, a pointer to a vector to store the labels must be provided", __func__);
+void SparseObsMinibatchReader::set_covariates(const std::string& covarFile,
+    std::vector<uint32_t>* covar_idx, std::vector<std::string>* covar_names,
+    bool allow_na, int32_t label_idx, const std::string& label_na,
+    std::vector<std::string>* labels) {
+    if (label_idx >= 0 && labels == nullptr) {
+        error("%s: if label index is specified, a pointer to a vector to store the labels must be provided", __func__);
+    }
+    allow_na_ = allow_na;
+    label_idx_ = label_idx;
+    label_na_ = label_na;
+    covar_idx_ = covar_idx;
+    covar_names_ = covar_names;
+    labels_ = labels;
+    has_labels_ = (label_idx_ >= 0 && labels_ != nullptr);
+    n_tokens_ = 0;
+    n_covar_ = 0;
+    has_covar_ = false;
+
+    if (covarFile.empty()) {
+        if (label_idx_ >= 0) {
+            error("%s: label index requires a non-empty covariate file", __func__);
         }
-        covar_names->clear();
-        if (labels) {labels->clear();}
-        if (!covarFile->empty()) {
-            covarFileStream.open(*covarFile);
-            if (!covarFileStream) {
-                error("Fail to covariate file: %s", covarFile->c_str());
-            }
-            // Read the header line
-            if (!std::getline(covarFileStream, line)) {
-                error("Fail to parse covariate file: %s", covarFile->c_str());
-            }
-            split(covar_header, "\t ", line, UINT_MAX, true, true, true);
-            n_tokens = static_cast<int32_t>(covar_header.size());
-            if (covar_idx->empty() && !has_labels) {
-                // Assuming use all columns except the first one
-                n_covar = covar_header.size() - 1;
-                for (int32_t i = 1; i < n_tokens; i++) {
-                    covar_idx->push_back(i);
-                    covar_names->push_back(covar_header[i]);
-                }
-            } else {
-                n_covar = (int32_t) covar_idx->size();
-                for (const auto i : *covar_idx) {
-                    if (i < 0 || i >= n_tokens) {
-                        error("Covariate index %d is out of range [0,%lu)", i, covar_header.size());
-                    }
-                    covar_names->push_back(covar_header[i]);
-                }
-            }
-            notice("Covariate file has %d columns, using %d as covariates and %d as label", n_tokens, n_covar, (int32_t) has_labels);
-        }
+        return;
     }
 
-    if (reader.nUnits > 0) {
-        docs.reserve(reader.nUnits);
+    if (covar_idx_ == nullptr || covar_names_ == nullptr) {
+        error("%s: covariate index and name pointers must be provided when using covariates", __func__);
     }
-    bool has_covar = n_covar > 0 || has_labels;
-    int32_t idx = 0;
-    while (std::getline(inFileStream, line)) {
-        idx++;
-        if (idx % 10000 == 0) {
-            notice("Read %d units...", idx);
+    covar_names_->clear();
+    if (labels_) {labels_->clear();}
+
+    covarFileStream_.close();
+    covarFileStream_.clear();
+    covarFileStream_.open(covarFile);
+    if (!covarFileStream_) {
+        error("Fail to covariate file: %s", covarFile.c_str());
+    }
+    std::string line;
+    if (!std::getline(covarFileStream_, line)) {
+        error("Fail to parse covariate file: %s", covarFile.c_str());
+    }
+    std::vector<std::string> covar_header;
+    split(covar_header, "\t ", line, UINT_MAX, true, true, true);
+    n_tokens_ = static_cast<int32_t>(covar_header.size());
+    if (covar_idx_->empty() && !has_labels_) {
+        n_covar_ = covar_header.size() - 1;
+        for (int32_t i = 1; i < n_tokens_; i++) {
+            covar_idx_->push_back(i);
+            covar_names_->push_back(covar_header[i]);
         }
-        SparseObs obs;
-        int32_t ct = reader.parseLine(obs.doc, tmp, line);
+    } else {
+        n_covar_ = static_cast<int32_t>(covar_idx_->size());
+        for (const auto i : *covar_idx_) {
+            if (i >= static_cast<uint32_t>(n_tokens_)) {
+                error("Covariate index %d is out of range [0,%d)", static_cast<int32_t>(i), n_tokens_);
+            }
+            covar_names_->push_back(covar_header[i]);
+        }
+    }
+    notice("Covariate file has %d columns, using %d as covariates and %d as label", n_tokens_, n_covar_, (int32_t) has_labels_);
+    has_covar_ = (n_covar_ > 0 || has_labels_);
+}
+
+int32_t SparseObsMinibatchReader::readBatch(std::vector<Document> &docs,
+    std::vector<std::string> *rnames, int32_t batch_size) {
+    docs.clear();
+    if (rnames) {rnames->clear();}
+    if (done_) {return 0;}
+    docs.reserve(batch_size);
+    if (rnames) {rnames->reserve(batch_size);}
+    std::string line, info;
+    std::vector<std::string> tokens;
+    while (static_cast<int32_t>(docs.size()) < batch_size) {
+        if (!std::getline(inFileStream_, line)) {
+            done_ = true;
+            break;
+        }
+        info.clear();
+        line_idx_++;
+        Document doc;
+        int32_t ct = reader_->parseLine(doc, info, line);
         if (ct < 0) {
             error("Error parsing line %s", line.c_str());
         }
-        if (ct < minCountTrain) {
-            std::getline(covarFileStream, line);
-            continue;
-        }
-        obs.c = per_doc_c ? ct / size_factor : c;
-        obs.ct_tot = ct;
-        if (has_covar) { // read covariates
-            if (!std::getline(covarFileStream, line)) {
+        std::string covar_line;
+        if (has_covar_) {
+            if (!covarFileStream_) {
+                error("Covariate file stream is not open");
+            }
+            if (!std::getline(covarFileStream_, covar_line)) {
                 error("The number of lines in covariate file is less than that in data file");
             }
-            split(tokens, "\t ", line, UINT_MAX, true, true, true);
-            if (tokens.size() != n_tokens) {
-                error("Number of columns (%lu) of line [%s] in covariate file does not match header (%d)", tokens.size(), line.c_str(), n_tokens);
+        }
+        if (ct < minCountTrain_) {
+            continue;
+        }
+        docs.push_back(std::move(doc));
+        if (rnames) {rnames->emplace_back(std::to_string(line_idx_ - 1));}
+        if (debug_N_ > 0 && line_idx_ > debug_N_) {
+            done_ = true;
+            break;
+        }
+    }
+    return static_cast<int32_t>(docs.size());
+}
+
+int32_t SparseObsMinibatchReader::readBatch(std::vector<SparseObs> &docs,
+    std::vector<std::string> *rnames, int32_t batch_size) {
+    docs.clear();
+    if (rnames) {rnames->clear();}
+    if (done_) {return 0;}
+    docs.reserve(batch_size);
+    if (rnames) {rnames->reserve(batch_size);}
+    std::string line, info;
+    std::vector<std::string> tokens;
+    while (static_cast<int32_t>(docs.size()) < batch_size) {
+        if (!std::getline(inFileStream_, line)) {
+            done_ = true;
+            break;
+        }
+        info.clear();
+        line_idx_++;
+        SparseObs obs;
+        int32_t ct = reader_->parseLine(obs.doc, info, line);
+        if (ct < 0) {
+            error("Error parsing line %s", line.c_str());
+        }
+        std::string covar_line;
+        if (has_covar_) {
+            if (!covarFileStream_) {
+                error("Covariate file stream is not open");
             }
-            if (n_covar > 0) {
-                obs.covar = Eigen::VectorXd::Zero(n_covar);
-                for (int32_t i = 0; i < n_covar; i++) {
-                    if (!str2double(tokens[(*covar_idx)[i]], obs.covar(i))) {
-                        if (!allow_na)
-                            error("Invalid value for %d-th covariate %s.", i+1, tokens[(*covar_idx)[i]].c_str());
+            if (!std::getline(covarFileStream_, covar_line)) {
+                error("The number of lines in covariate file is less than that in data file");
+            }
+        }
+        if (ct < minCountTrain_) {
+            continue;
+        }
+        obs.c = per_doc_c_ ? ct / size_factor_ : c_;
+        obs.ct_tot = ct;
+        if (has_covar_) {
+            split(tokens, "\t ", covar_line, UINT_MAX, true, true, true);
+            if (tokens.size() != static_cast<size_t>(n_tokens_)) {
+                error("Number of columns (%lu) of line [%s] in covariate file does not match header (%d)", tokens.size(), covar_line.c_str(), n_tokens_);
+            }
+            if (n_covar_ > 0) {
+                obs.covar = Eigen::VectorXd::Zero(n_covar_);
+                for (int32_t i = 0; i < n_covar_; i++) {
+                    if (!str2double(tokens[(*covar_idx_)[i]], obs.covar(i))) {
+                        if (!allow_na_) {
+                            error("Invalid value for %d-th covariate %s.", i+1, tokens[(*covar_idx_)[i]].c_str());
+                        }
                         obs.covar(i) = 0;
                     }
                 }
             }
-            if (has_labels) {
-                if (tokens[label_idx] == label_na) {
+            if (has_labels_) {
+                if (tokens[label_idx_] == label_na_) {
                     continue;
                 }
-                labels->push_back(tokens[label_idx]);
+                labels_->push_back(tokens[label_idx_]);
             }
         }
         docs.push_back(std::move(obs));
-        rnames.emplace_back(std::to_string(idx-1));
-        if (debug_N > 0 && idx > debug_N) {
+        if (rnames) {rnames->emplace_back(std::to_string(line_idx_ - 1));}
+        if (debug_N_ > 0 && line_idx_ > debug_N_) {
+            done_ = true;
             break;
         }
     }
-    inFileStream.close();
-    return (int32_t) docs.size();
+    return static_cast<int32_t>(docs.size());
+}
+
+int32_t SparseObsMinibatchReader::readAll(std::vector<SparseObs> &docs,
+    std::vector<std::string> &rnames, int32_t batch_size) {
+    docs.clear();
+    rnames.clear();
+    if (done_) {return 0;}
+    if (reader_->nUnits > 0) {
+        docs.reserve(reader_->nUnits);
+        rnames.reserve(reader_->nUnits);
+    }
+    std::vector<SparseObs> batch;
+    std::vector<std::string> batch_names;
+    while (true) {
+        int32_t n_batch = readBatch(batch, &batch_names, batch_size);
+        if (n_batch == 0) {break;}
+        for (auto &obs : batch) {
+            docs.push_back(std::move(obs));
+        }
+        for (auto &name : batch_names) {
+            rnames.push_back(std::move(name));
+        }
+    }
+    return static_cast<int32_t>(docs.size());
 }
 
 int32_t HexReader::readAll(Eigen::SparseMatrix<double, Eigen::RowMajor> &X,

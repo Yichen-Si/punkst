@@ -93,6 +93,7 @@ set(SOURCE_FILES
     src/cndtest.hpp
     src/poisreg.hpp
     src/poisreg.cpp
+    src/mixpois.hpp
     src/newtons.hpp
     src/poisnmf.hpp
     src/poisnmf.cpp

@@ -165,10 +165,13 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     // TODO: data loading with covariates is unsafe & messy
     std::vector<SparseObs> docs;
     std::vector<std::string> rnames, covar_names, labels;
-    size_t N = read_sparse_obs(inFile, reader, docs,
-        rnames, minCountTrain, size_factor, c,
-        &covarFile, &covar_idx, &covar_names,
-        allow_na, label_idx, label_na, &labels, debug_N);
+    SparseObsMinibatchReader minibatch_reader(inFile, reader,
+        minCountTrain, size_factor, c, debug_N);
+    if (!covarFile.empty() || label_idx >= 0) {
+        minibatch_reader.set_covariates(covarFile, &covar_idx, &covar_names,
+            allow_na, label_idx, label_na, &labels);
+    }
+    size_t N = minibatch_reader.readAll(docs, rnames);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %lu units with %d features", N, M);
 

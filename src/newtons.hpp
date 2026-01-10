@@ -31,7 +31,7 @@ struct TrustRegionOptions {
 	double delta_init   = 1.0;     // initial trust radius
 	double delta_max    = 1e6;     // max trust radius
 	double eta          = 1e-4;    // acceptance threshold
-	double cg_tol       = 1e-4;    // relative CG tolerance
+	double cg_tol       = 5e-4;    // relative CG tolerance
 	int    cg_max_iter  = -1;      // default: 2*K
 };
 

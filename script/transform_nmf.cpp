@@ -99,10 +99,13 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     reader.setFeatureIndexRemap(model_features);
     std::vector<SparseObs> docs;
     std::vector<std::string> rnames, covar_names;
-    int32_t N = read_sparse_obs(inFile, reader, docs,
-        rnames, minCount, size_factor, c,
-        &covarFile, &covar_idx, &covar_names,
-        allow_na, -1, "", nullptr, debug_N);
+    SparseObsMinibatchReader minibatch_reader(inFile, reader,
+        minCount, size_factor, c, debug_N);
+    if (!covarFile.empty()) {
+        minibatch_reader.set_covariates(covarFile, &covar_idx, &covar_names,
+            allow_na, -1, "", nullptr);
+    }
+    int32_t N = minibatch_reader.readAll(docs, rnames);
     int32_t n_covar = static_cast<int32_t>(covar_idx.size());
     notice("Read %d documents with %d features", N, M);
 
