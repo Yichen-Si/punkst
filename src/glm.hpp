@@ -7,7 +7,99 @@
 #include <stdexcept>
 #include <utility>
 #include <algorithm>
+#include <unordered_map>
+#include "utils.h"
 #include "numerical_utils.hpp"
+
+// Cache of per-unit summaries for permutation tests
+class MultiSliceUnitCache {
+public:
+    struct Unit {
+        float n = 0.0f;        // totalCount (trials)
+        uint32_t off = 0;      // offset into feat_ids_/feat_counts_
+        uint32_t len = 0;      // number of nonzero features for this unit
+    };
+
+    MultiSliceUnitCache(int K, int M, double min_unit_total = 1.0)
+        : K_(K), M_(M), min_unit_total_(min_unit_total),
+          units_(K_), feat_ids_(K_), feat_counts_(K_)
+    {
+        if (K_ <= 0) throw std::invalid_argument("K must be positive");
+        if (M_ <= 0) throw std::invalid_argument("M must be positive");
+    }
+
+    int get_n_slices() const { return K_; }
+    int get_n_features() const { return M_; }
+
+    const std::vector<Unit>& slice_units(int k) const {
+        if (k < 0 || k >= K_) throw std::out_of_range("slice index out of range");
+        return units_[k];
+    }
+    const std::vector<int32_t>& slice_feat_ids(int k) const {
+        if (k < 0 || k >= K_) throw std::out_of_range("slice index out of range");
+        return feat_ids_[k];
+    }
+    const std::vector<double>& slice_feat_counts(int k) const {
+        if (k < 0 || k >= K_) throw std::out_of_range("slice index out of range");
+        return feat_counts_[k];
+    }
+
+    // Cache one unit (pooled across groups)
+    void add_unit(int k, double n, const std::unordered_map<int32_t, double>& feat_map) {
+        if (k < 0 || k >= K_) throw std::out_of_range("slice index out of range");
+        if (n <= 0.0 || n < min_unit_total_) return;
+
+        auto& U = units_[k];
+        auto& F = feat_ids_[k];
+        auto& C = feat_counts_[k];
+
+        const uint32_t off0 = (uint32_t)F.size();
+        uint32_t len = 0;
+
+        for (const auto& kv : feat_map) {
+            const int f = (int)kv.first;
+            const double y = kv.second;
+            if (y <= 0.0) continue;
+            if (f < 0 || f >= M_) continue;
+            F.push_back((int32_t)f);
+            C.push_back(y);
+            ++len;
+        }
+
+        U.push_back(Unit{(float)n, off0, len});
+    }
+
+    // Merge thread-local cache into this cache.
+    void merge_from(const MultiSliceUnitCache& other) {
+        if (K_ != other.K_ || M_ != other.M_) {
+            throw std::invalid_argument("MultiSliceUnitCache merge dimension mismatch");
+        }
+        for (int k = 0; k < K_; ++k) {
+            auto& U = units_[k];
+            auto& F = feat_ids_[k];
+            auto& C = feat_counts_[k];
+
+            const uint32_t base_off = (uint32_t)F.size();
+            // append features
+            F.insert(F.end(), other.feat_ids_[k].begin(), other.feat_ids_[k].end());
+            C.insert(C.end(), other.feat_counts_[k].begin(), other.feat_counts_[k].end());
+            // append units with offset shift
+            U.reserve(U.size() + other.units_[k].size());
+            for (const auto& u : other.units_[k]) {
+                Unit v = u;
+                v.off += base_off;
+                U.push_back(v);
+            }
+        }
+    }
+
+private:
+    int K_, M_;
+    double min_unit_total_;
+    std::vector<std::vector<Unit>> units_;
+    std::vector<std::vector<int32_t>> feat_ids_;
+    std::vector<std::vector<double>> feat_counts_;
+};
 
 class PairwiseBinomRobust {
 public:

@@ -60,7 +60,8 @@ Rows are sorted by factor (ascending) and Chi2 (descending) within each factor.
 
 ## multi-conditional-de-pixel
 
-`multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between pairs of datasets. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests across datasets for each cell type using a Binomial model. The p-values are computed using robust sandwich estimators of the standard errors of the estimated effect sizes.
+`multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between pairs of datasets. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests across datasets for each cell type using a Binomial model.
+The p-values are computed both by permutation and by robust sandwich estimators of the standard errors of the estimated effect sizes.
 
 $X^{(k)}_{im} \sim$ Binom $(N^{(k)}_{im}, \pi^{(k)}_{im})$ for cell type $k$, bin $i$ and gene $m$, where both $X$ and $N$ are soft-aggregated counts from pixel level cell type assignments.
 
@@ -68,15 +69,16 @@ logit $(\pi^{(k)}_{im}) = a^{(k)}_m + y_i b^{(k)}_m$, where $y_i$ is a binary in
 
 Note: the intended use is when the cell type model is from external sources (e.g. apply `pixel-decode` with a reference-based cell type pseudobulk matrix). The interpretation is tricky if the cell types are learned from the same datasets. Either way, this is only a data exploration tool and we do not claim that it is statistically rigorous.
 
+Example usage:
 ```bash
 punkst multi-conditional-de-pixel \
   --anno sampleA/pixel sampleB/pixel --binary \
   --pts sampleA/transcripts.tiled sampleB/transcripts.tiled \
   --labels sampleA sampleB \
   --K 12 --features features.tsv \
-  --grid-size 20 --min-count 10 \
+  --grid-size 20 --min-count 10 --perm 5000 \
   --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
-  --out de/pixel_de --threads 8
+  --out de/pixel_de --threads 8 --seed 1
 ```
 
 ### Required Parameters
@@ -97,6 +99,8 @@ punkst multi-conditional-de-pixel \
 
 `--out` - Output prefix.
 
+`--perm` - Number of permutations for empirical p-value calibration. If not specified, only the model-based p-values are reported.
+
 Annotation and transcript tiles must use the same tile size for each dataset pair (this is guaranteed if the pixel level decoding results are generated from the corresponding transcript tiles by `punkst pixel-decode`).
 
 ### Optional Parameters
@@ -113,27 +117,33 @@ Annotation and transcript tiles must use the same tile size for each dataset pai
 
 `--min-count` - Minimum observed cell-type-specific count for a unit to be included. Default: 10.
 
+`--seed` - Random seed for permutation.
+
 `--threads` - Number of threads. Default: 1. Almost the entire runtime is spent in data loading, so multi-threading is very useful for large datasets since tiles of data are loaded simultaneously.
 
 `--debug` - Enable debug logging.
 
 ### Output Files
 
-Given `--out PREFIX`, the command writes:
+Given `--out PREFIX`, the output includes:
+
+- When permutation is enabled (`--perm N`)
+
+`PREFIX.lebel1_vs_label2.perm_N.tsv` for each pair of datasets (labels from `--labels` or numeric indices if omitted)
+
+- When permutation is not enabled
 
 `PREFIX.marginal.tsv` - Per cell type tests between dataset pairs.
 
-`Data0`/`Data1` columns correspond to the dataset labels provided via `--labels` (or numeric indices if omitted).
-
 The first column `Slice` indicates the cell type index (0-based, as in the pixel level result files).
 
-The following pair of files are from essentially the same tests as above but transformed the effect sizes to global (across cell types) and deviation from the global shift in each cell type.
+<!-- The following pair of files are from essentially the same tests as above but transformed the effect sizes to global (across cell types) and deviation from the global shift in each cell type. -->
 
-`PREFIX.global.tsv` - Global test per feature and dataset pair.
+<!-- `PREFIX.global.tsv` - Global test per feature and dataset pair.
 
-`PREFIX.deviation.tsv` - Cell type specific shift between dataset pairs deviaiting from the global shift.
+`PREFIX.deviation.tsv` - Cell type specific shift between dataset pairs deviaiting from the global shift. -->
 
-Auxiliary files:
+- Auxiliary files
 
 `PREFIX.nobs.tsv` - The number of units and the total number of pixels used for each cell type by dataset.
 

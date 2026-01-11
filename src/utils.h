@@ -322,6 +322,25 @@ struct Tuple3Hash {
     }
 };
 
+// RNG helper
+inline uint64_t splitmix64(uint64_t x) {
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+inline double u01_from_u64(uint64_t x) {
+    // [0,1) from top 53 bits
+    return (double)(x >> 11) * (1.0 / 9007199254740992.0);
+}
+inline double u01(uint64_t seed, uint64_t r, uint64_t k, uint64_t u) {
+    uint64_t x = seed;
+    x ^= r * 0xD2B74407B1CE6E93ULL;
+    x ^= k * 0xCA5A826395121157ULL;
+    x ^= u * 0x9E3779B97F4A7C15ULL;
+    return u01_from_u64(splitmix64(x));
+}
+
 // compute percentiles (results are sorted)
 template <typename T>
 void compute_percentile(std::vector<T>& results, std::vector<T>& values, std::vector<double>& percentiles) {
