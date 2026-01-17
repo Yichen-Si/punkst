@@ -264,6 +264,7 @@ def choose_color(_args):
     factor_header = [x for x in header if x not in ["x", "y"] + args.skip_columns]
     K = len(factor_header)
     N = df.shape[0]
+    print(f"Read {N} data points with {K} factors from {args.input}")
 
     if K == 0:
         print("Input file does not contain any factors")
@@ -311,6 +312,7 @@ def choose_color(_args):
         # take the element-wise max of mtx and mtx.T
         mtx = np.maximum(mtx, mtx.T)
         # Large values in mtx indicate close proximity, to be mapped to distinct colors
+    print("Computed factor similarity")
 
     if not args.color_table and (args.cmap_name or K > 48):
         cmap_name = args.cmap_name

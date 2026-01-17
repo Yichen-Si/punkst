@@ -16,9 +16,10 @@
     "skip": 1,
     "tilesize": 500,
     "hexgrids": [12],
-    "topics": [12, 24],
+    "topics": [12,24],
+    "nepochs": 1,
     "pixhex": 12,
-    "nmove": 3,
+    "nmove": 2,
     "res": 0.5,
     "scale": 1
   },
@@ -29,6 +30,6 @@
     "job-name": "test",
     "output": "logs/%x.%j.out",
     "error":  "logs/%x.%j.err",
-    "extra_lines" : "# other customized commands, e.g. start python venv, load gcc module in your system etc. \nsource /path/to/venv/bin/activate"
+    "extra_lines" : "# other customized commands, e.g. start python venv, load gcc and tbb module in your system etc. \nsource /path/to/venv/bin/activate"
   }
 }

@@ -138,7 +138,7 @@ def factor_report(_args):
         if nanno > 0:
             table["Factor"] = table["Factor"].map(anno)
 
-    f = output_pref+".factor.info.tsv"
+    f = output_pref+".info.tsv"
     table.loc[table.PostUMI.ge(10), oheader].to_csv(f, sep='\t', index=False, header=True, float_format="%.5f")
     with open(f, 'r') as rf:
         lines = rf.readlines()
@@ -151,7 +151,7 @@ def factor_report(_args):
     # Render the HTML file
     html_output = template.render(header=header, rows=rows, image_base64=None, tree_image_alt=None, tree_image_caption=None)
 
-    f=output_pref+".factor.info.html"
+    f=output_pref+".html"
     with open(f, "w") as html_file:
         html_file.write(html_output)
 

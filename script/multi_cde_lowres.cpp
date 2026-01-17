@@ -70,8 +70,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
       .add_option("min-units-per-feature", "Min number of units with nonzero count for a feature to be tested", minUnits)
       .add_option("size-factor", "Size factor for Poisson regression", sizeFactor)
       .add_option("max-pval", "Max p-value for output (default: 1)", maxPval)
-      .add_option("se-method", "Method for calculating SE (0: Fisher, 1: Sandwich, 3: both)", se_method)
-      .add_option("seed", "Random seed", seed)
+      .add_option("se-method", "Method for calculating SE (1: Fisher, 2: Sandwich, 3: both)", se_method)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug_);
 
@@ -91,7 +90,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
     if (sizeFactor <= 0) {error("Size factor must be positive");}
     if (nThreads < 0) {nThreads = 1;}
     if (maxPval <= 0) {error("max-pval must be positive");}
-    if (se_method < 1 && se_method > 3) {error("--se-method must be 1/2/3");}
+    if (se_method < 1 || se_method > 3) {error("--se-method must be 1/2/3");}
     double minlog10p = - std::log10(maxPval);
     tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, nThreads);
 
@@ -178,7 +177,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                 cvecs[g].push_back(docs[i].c);
                 const Document& doc = docs[i].doc;
                 for (size_t t = 0; t < doc.ids.size(); ++t) {
-                    int32_t m = doc.ids[t];
+                    const uint32_t m = doc.ids[t];
                     docsT[g][m].ids.push_back(nUnits_local + i);
                     docsT[g][m].cnts.push_back(doc.cnts[t]);
                 }
@@ -186,7 +185,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
             nUnits_local += n_batch;
         }
         nUnits[g] = nUnits_local;
-        notice("Read %zu units from the %d-th data file", nUnits[g], g);
+        notice("Read %d units from the %d-th data file", nUnits[g], g);
         if (nUnits[g] == 0) {
             warning("No units passed the --min-count filter for the %d-th data file", g);
         }
@@ -278,7 +277,7 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
         notice("Fitting contrast %s with N=%d", contrastNames[c].c_str(), n);
 
         std::unique_ptr<tbb::global_control> debug_limit;
-        if (debug_ > 0) {
+        if (debug_ > 0 && verbose > 1) {
             debug_limit = std::make_unique<tbb::global_control>(
                 tbb::global_control::max_allowed_parallelism, 1);
         }
@@ -313,9 +312,8 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                 for (int32_t g = 0; g < G; ++g) {
                     if (contrasts[c][g] == 0) {continue;}
                     const auto& doc = docsT[g][j];
-                    int32_t nz = static_cast<int32_t>(doc.ids.size());
                     double ysum = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
-                    m += nz;
+                    m += static_cast<int32_t>(doc.ids.size());
                     if (contrasts[c][g] < 0) {
                         ysum0 += ysum;
                     } else {
@@ -342,19 +340,15 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                         int32_t offset = offsets[g];
                         for (size_t t = 0; t < doc.ids.size(); ++t) {
                             ys.ids.push_back(static_cast<uint32_t>(offset) + doc.ids[t]);
+                            ys.cnts.push_back(doc.cnts[t]);
                         }
-                        ys.cnts.insert(ys.cnts.end(),
-                            doc.cnts.begin(), doc.cnts.end());
                     }
                     // Fit baseline (intercept)
                     VectorXd b0 = baseline.fit_one(ys.ids, ys.cnts, oK);
-// if (debug_ > 0 && m > 10*K) {
-//     VectorXd diff = b0 - oK;
-//     diff = diff.array() / (oK.array().abs().max(std::log(1+1e-8*sizeFactor)));
-//     std::cout << m << " " << total_count << " diff: " << diff.maxCoeff() << ", " << diff.mean() << "\n";
-// }
+                    eta0.col(j) = b0;
                     MLEOptions optLocal = mleOpt;
                     optLocal.optim.set_bounds(-b0, b0);
+                    bd = b0;
                     // Fit coefficients
                     MixPoisLog1pSparseProblem P(A_all, ys.ids, ys.cnts,
                         xvec, cvec_masked, b0, optLocal,
@@ -443,6 +437,12 @@ std::cout << "\t" << log10p
 
         out.close();
         notice("Wrote results to %s", out_path.c_str());
+
+        if (use_log1p) {
+            out_path = outPrefix + "." + contrastNames[c] + ".eta0.tsv";
+            RowMajorMatrixXd eta_out = eta0.transpose().array().exp() - 1.0;
+            write_matrix_to_file(out_path, eta_out, 4, true, featureNames, "Feature", &factorNames);
+        }
     }
 
     return 0;

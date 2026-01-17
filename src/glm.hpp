@@ -18,6 +18,7 @@ public:
         float n = 0.0f;        // totalCount (trials)
         uint32_t off = 0;      // offset into feat_ids_/feat_counts_
         uint32_t len = 0;      // number of nonzero features for this unit
+        int32_t group = -1;    // dataset index
     };
 
     MultiSliceUnitCache(int K, int M, double min_unit_total = 1.0)
@@ -46,6 +47,11 @@ public:
 
     // Cache one unit (pooled across groups)
     void add_unit(int k, double n, const std::unordered_map<int32_t, double>& feat_map) {
+        add_unit(k, -1, n, feat_map);
+    }
+
+    // Cache one unit with sample label
+    void add_unit(int k, int group, double n, const std::unordered_map<int32_t, double>& feat_map) {
         if (k < 0 || k >= K_) throw std::out_of_range("slice index out of range");
         if (n <= 0.0 || n < min_unit_total_) return;
 
@@ -66,7 +72,7 @@ public:
             ++len;
         }
 
-        U.push_back(Unit{(float)n, off0, len});
+        U.push_back(Unit{(float)n, off0, len, group});
     }
 
     // Merge thread-local cache into this cache.
@@ -241,6 +247,72 @@ public:
 
         if (use_hc1) {
             const int m_pair = n_[g0] + n_[g1];
+            const int df = std::max(1, m_pair - 2);
+            out.varb *= (double)m_pair / (double)df;
+        }
+        return true;
+    }
+
+    // Compute test for aggregated group lists
+    bool compute_one_test_aggregate(int f,
+        const std::vector<int32_t>& g0s,
+        const std::vector<int32_t>& g1s,
+        PairwiseOneResult& out,
+        double min_total_pair, double pi_eps = 1e-8, bool use_hc1 = true) const
+    {
+        if (g0s.empty() || g1s.empty()) return false;
+
+        double N0 = 0.0, N1 = 0.0;
+        double C0 = 0.0, C1 = 0.0;
+        int n0 = 0, n1 = 0;
+        double Y0 = 0.0, Y1 = 0.0;
+        double A0 = 0.0, A1 = 0.0;
+        double B0 = 0.0, B1 = 0.0;
+
+        for (int g : g0s) {
+            if (g < 0 || g >= G_) throw std::out_of_range("group out of range");
+            N0 += N_[g];
+            C0 += C_[g];
+            n0 += n_[g];
+            const int idx = g * M_ + f;
+            Y0 += Y_[idx];
+            A0 += A_[idx];
+            B0 += B_[idx];
+        }
+        for (int g : g1s) {
+            if (g < 0 || g >= G_) throw std::out_of_range("group out of range");
+            N1 += N_[g];
+            C1 += C_[g];
+            n1 += n_[g];
+            const int idx = g * M_ + f;
+            Y1 += Y_[idx];
+            A1 += A_[idx];
+            B1 += B_[idx];
+        }
+
+        if (N0 <= 0.0 || N1 <= 0.0) return false;
+
+        out.tot = Y0 + Y1;
+        if (out.tot < min_total_pair) return false;
+
+        const double pi0 = clamp(Y0 / N0, pi_eps, 1.0 - pi_eps);
+        const double pi1 = clamp(Y1 / N1, pi_eps, 1.0 - pi_eps);
+        out.pi0  = pi0;
+        out.pi1  = pi1;
+        out.beta = logit(pi1) - logit(pi0);
+
+        const double S0 = N0 * (pi0 * (1.0 - pi0));
+        const double S1 = N1 * (pi1 * (1.0 - pi1));
+        if (S0 <= 0.0 || S1 <= 0.0) return false;
+
+        const double R0 = A0 - 2.0*pi0*B0 + (pi0*pi0)*C0;
+        const double R1 = A1 - 2.0*pi1*B1 + (pi1*pi1)*C1;
+
+        out.varb = (R0/(S0*S0)) + (R1/(S1*S1));
+        if (out.varb <= 0.0) return false;
+
+        if (use_hc1) {
+            const int m_pair = n0 + n1;
             const int df = std::max(1, m_pair - 2);
             out.varb *= (double)m_pair / (double)df;
         }

@@ -12,16 +12,19 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::vector<std::string> inMergeEmbFiles;
     std::string inMergePtsPrefix;
     int32_t tileSize = -1;
+    bool binaryOut = false;
     bool isBinary = false;
     bool reorganize = false;
     bool printIndex = false;
     bool dumpTSV = false;
     bool probDot = false;
+    bool cellAnno = false;
     std::vector<uint32_t> k2keep;
-    int32_t icol_x = -1;
-    int32_t icol_y = -1;
-    int32_t coordDigits = 2, probDigits = 4; // for dump-tsv
-    bool binaryOut = false;
+    int32_t icol_x = -1, icol_y = -1, icol_z = -1;
+    int32_t icol_c = -1, icol_s = -1;
+    int32_t coordDigits = 2, probDigits = 4;
+    int32_t kOut = 0;
+    float maxCellDiameter = 50;
 
     ParamList pl;
     pl.add_option("in-data", "Input data file", inData)
@@ -34,11 +37,17 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
       .add_option("prob-dot", "Compute pairwise probability dot products", probDot)
+      .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
       .add_option("merge-emb", "List of embedding files to merge", inMergeEmbFiles)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
-      .add_option("icol-x", "X coordinate column index, 0-based (annotate only)", icol_x)
-      .add_option("icol-y", "Y coordinate column index, 0-based (annotate only)", icol_y)
+      .add_option("icol-x", "X coordinate column index, 0-based", icol_x)
+      .add_option("icol-y", "Y coordinate column index, 0-based", icol_y)
+      .add_option("icol-z", "Z coordinate column index, 0-based", icol_z)
+      .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
+      .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
+      .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
+      .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter)
       .add_option("binary-out", "Output in binary format (merge only)", binaryOut);
     pl.add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities (for dump-tsv)", probDigits);
@@ -76,7 +85,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (probDot) {
-        if (outPrefix.empty()) error("Output prefix must be specified for prob-dot");
         if (!inMergeEmbFiles.empty()) {
             tileOp.probDot_multi(inMergeEmbFiles, outPrefix, k2keep, probDigits);
         } else {
@@ -85,8 +93,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         return 0;
     }
 
+    if (cellAnno) {
+        tileOp.pix2cell(inMergePtsPrefix, outPrefix, icol_c, icol_x, icol_y, icol_s, icol_z, kOut, maxCellDiameter);
+        return 0;
+    }
+
     if (!inMergeEmbFiles.empty()) {
-        if (outPrefix.empty()) error("Output prefix must be specified for merge");
         tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut);
         return 0;
     }
@@ -95,7 +107,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (icol_x < 0 || icol_y < 0) {
             error("icol-x and icol-y for --annotate-pts must be specified");
         }
-        if (outPrefix.empty()) error("Output prefix must be specified for annotate");
         tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y);
         return 0;
     }

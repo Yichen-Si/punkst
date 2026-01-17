@@ -1,291 +1,61 @@
 #include "tileoperator.hpp"
-#include <cmath>
+#include "numerical_utils.hpp"
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <algorithm>
-#include <limits>
-#include <map>
 #include <set>
 #include <memory>
-#include "numerical_utils.hpp"
+#include <unordered_map>
+#include <unordered_set>
 
-void TileOperator::mergeTiles2D(const std::set<TileKey>& commonTiles,
-    const std::vector<TileOperator*>& opPtrs,
-    const std::vector<uint32_t>& k2keep,
-    bool binaryOutput,
-    FILE* fp, int fdMain, int fdIndex,
-    long& currentOffset) {
-    uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
-    for (const auto& tile : commonTiles) {
-        std::map<std::pair<int32_t, int32_t>, TopProbs> mergedMap;
-        bool first = true;
-        for (uint32_t i = 0; i < nSources; ++i) {
-            TileOperator* op = opPtrs[i];
-            std::map<std::pair<int32_t, int32_t>, TopProbs> currentMap;
-            if (op->loadTileToMap(tile, currentMap) == 0) {
-                warning("%s: Tile (%d, %d) has no data in source %d", __func__, tile.row, tile.col, i);
-                mergedMap.clear();
-                break;
-            }
-            notice("%s: Loaded tile (%d, %d) from source %d with %lu pixels",
-                   __func__, tile.row, tile.col, i, currentMap.size());
-            if (first) {
-                if (k_ > k2keep[i]) { // Trim to k2keep[i]
-                    for (auto& kv : currentMap) {
-                        kv.second.ks.resize(k2keep[i]);
-                        kv.second.ps.resize(k2keep[i]);
-                    }
-                }
-                mergedMap = std::move(currentMap);
-                first = false;
-                continue;
-            }
-            auto it = mergedMap.begin();
-            while (it != mergedMap.end()) {
-                auto it2 = currentMap.find(it->first);
-                if (it2 == currentMap.end()) {
-                    it = mergedMap.erase(it); // Intersect
-                    continue;
-                }
-                // Concatenate
-                it->second.ks.insert(it->second.ks.end(),
-                    it2->second.ks.begin(), it2->second.ks.begin() + k2keep[i]);
-                it->second.ps.insert(it->second.ps.end(),
-                    it2->second.ps.begin(), it2->second.ps.begin() + k2keep[i]);
-                ++it;
-            }
+namespace {
+
+using FactorSums = std::pair<std::unordered_map<int32_t, double>, int32_t>;
+
+struct CellAgg {
+    FactorSums sums;
+    std::map<std::string, FactorSums> compSums;
+    bool boundary = false;
+};
+
+void write_top_factors(FILE* fp, const FactorSums& sums, uint32_t k_out) {
+    std::vector<std::pair<int32_t, double>> items;
+    items.reserve(sums.first.size());
+    for (const auto& kv : sums.first) {
+        if (kv.second != 0.0) {
+            items.emplace_back(kv.first, kv.second / sums.second);
         }
-        notice("%s: Merged tile (%d, %d) with %lu pixels shared by all sources", __func__, tile.row, tile.col, mergedMap.size());
-        if (mergedMap.empty()) {
-            continue;
-        }
-        // Write tile
-        IndexEntryF newEntry(tile.row, tile.col);
-        newEntry.st = currentOffset;
-        newEntry.n  = mergedMap.size();
-        tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, formatInfo_.tileSize);
-        for (const auto& kv : mergedMap) {
-            const auto& p = kv.second;
-            const auto& key = kv.first;
-            if (binaryOutput) {
-                PixTopProbs<int32_t> outRec;
-                outRec.x = key.first;
-                outRec.y = key.second;
-                outRec.ks = p.ks;
-                outRec.ps = p.ps;
-                if (outRec.write(fdMain) < 0) error("Write error");
-            } else {
-                fprintf(fp, "%d\t%d", key.first, key.second);
-                for (size_t i = 0; i < p.ks.size(); ++i) {
-                    fprintf(fp, "\t%d\t%.4e", p.ks[i], p.ps[i]);
-                }
-                fprintf(fp, "\n");
-            }
-        }
-        if (binaryOutput) {
-            currentOffset = lseek(fdMain, 0, SEEK_CUR);
-        } else {
-            currentOffset = ftell(fp);
-        }
-        newEntry.ed = currentOffset;
-        if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index entry write error");
+    }
+    uint32_t keep = std::min<uint32_t>(k_out, static_cast<uint32_t>(items.size()));
+    if (keep > 0) {
+        std::partial_sort(items.begin(), items.begin() + keep, items.end(),
+            [](const auto& a, const auto& b) {
+                if (a.second == b.second) return a.first < b.first;
+                return a.second > b.second;
+            });
+    }
+    fprintf(fp, "\t%d", sums.second);
+    for (uint32_t i = 0; i < keep; ++i) {
+        fprintf(fp, "\t%d\t%.4e", items[i].first, items[i].second);
+    }
+    for (uint32_t i = keep; i < k_out; ++i) {
+        fprintf(fp, "\t-1\t0");
     }
 }
 
-void TileOperator::mergeTiles3D(const std::set<TileKey>& commonTiles,
-    const std::vector<TileOperator*>& opPtrs,
-    const std::vector<uint32_t>& k2keep,
-    bool binaryOutput,
-    FILE* fp, int fdMain, int fdIndex,
-    long& currentOffset) {
-    uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
-    for (const auto& tile : commonTiles) {
-        std::map<PixelKey3, TopProbs> mergedMap;
-        bool first = true;
-        for (uint32_t i = 0; i < nSources; ++i) {
-            TileOperator* op = opPtrs[i];
-            std::map<PixelKey3, TopProbs> currentMap;
-            if (op->loadTileToMap3D(tile, currentMap) == 0) {
-                warning("%s: Tile (%d, %d) has no data in source %d", __func__, tile.row, tile.col, i);
-                mergedMap.clear();
-                break;
-            }
-            notice("%s: Loaded tile (%d, %d) from source %d with %lu pixels",
-                   __func__, tile.row, tile.col, i, currentMap.size());
-            if (first) {
-                if (k_ > k2keep[i]) { // Trim to k2keep[i]
-                    for (auto& kv : currentMap) {
-                        kv.second.ks.resize(k2keep[i]);
-                        kv.second.ps.resize(k2keep[i]);
-                    }
-                }
-                mergedMap = std::move(currentMap);
-                first = false;
-                continue;
-            }
-            auto it = mergedMap.begin();
-            while (it != mergedMap.end()) {
-                auto it2 = currentMap.find(it->first);
-                if (it2 == currentMap.end()) {
-                    it = mergedMap.erase(it); // Intersect
-                    continue;
-                }
-                // Concatenate
-                it->second.ks.insert(it->second.ks.end(),
-                    it2->second.ks.begin(), it2->second.ks.begin() + k2keep[i]);
-                it->second.ps.insert(it->second.ps.end(),
-                    it2->second.ps.begin(), it2->second.ps.begin() + k2keep[i]);
-                ++it;
-            }
-        }
-        notice("%s: Merged tile (%d, %d) with %lu pixels shared by all sources", __func__, tile.row, tile.col, mergedMap.size());
-        if (mergedMap.empty()) {
-            continue;
-        }
-        // Write tile
-        IndexEntryF newEntry(tile.row, tile.col);
-        newEntry.st = currentOffset;
-        newEntry.n  = mergedMap.size();
-        tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, formatInfo_.tileSize);
-        for (const auto& kv : mergedMap) {
-            const auto& p = kv.second;
-            const auto& key = kv.first;
-            if (binaryOutput) {
-                PixTopProbs3D<int32_t> outRec;
-                outRec.x = std::get<0>(key);
-                outRec.y = std::get<1>(key);
-                outRec.z = std::get<2>(key);
-                outRec.ks = p.ks;
-                outRec.ps = p.ps;
-                if (outRec.write(fdMain) < 0) error("Write error");
-            } else {
-                fprintf(fp, "%d\t%d\t%d", std::get<0>(key), std::get<1>(key), std::get<2>(key));
-                for (size_t i = 0; i < p.ks.size(); ++i) {
-                    fprintf(fp, "\t%d\t%.4e", p.ks[i], p.ps[i]);
-                }
-                fprintf(fp, "\n");
-            }
-        }
-        if (binaryOutput) {
-            currentOffset = lseek(fdMain, 0, SEEK_CUR);
-        } else {
-            currentOffset = ftell(fp);
-        }
-        newEntry.ed = currentOffset;
-        if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index entry write error");
+void write_cell_row(FILE* fp, const std::string& cellId, const std::string& comp, const FactorSums& sums, uint32_t k_out, bool writeComp) {
+    if (writeComp) {
+        fprintf(fp, "%s\t%s", cellId.c_str(), comp.c_str());
+    } else {
+        fprintf(fp, "%s", cellId.c_str());
     }
+    write_top_factors(fp, sums, k_out);
+    fprintf(fp, "\n");
 }
 
-void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
-    TileReader& reader, uint32_t icol_x, uint32_t icol_y,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset) {
-    notice("%s: Start annotating query with %lu tiles", __func__, tiles.size());
-    float res = formatInfo_.pixelResolution;
-    if (res <= 0) res = 1.0f;
-    for (const auto& tile : tiles) {
-        std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
-        if (loadTileToMap(tile, pixelMap) <= 0) {
-            debug("%s: Query tile (%d, %d) is not in the annotation dataset", __func__, tile.row, tile.col);
-            continue;
-        }
-        auto it = reader.get_tile_iterator(tile.row, tile.col);
-        if (!it) continue;
-        IndexEntryF newEntry(tile.row, tile.col);
-        newEntry.st = currentOffset;
-        newEntry.n = 0;
-        tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, formatInfo_.tileSize);
-        std::string s;
-        while (it->next(s)) {
-            if (s.empty() || s[0] == '#') continue;
-            std::vector<std::string> tokens;
-            split(tokens, "\t", s, ntok + 1, true, true, true);
-            if (tokens.size() < ntok) {
-                error("%s: Invalid line: %s", __func__, s.c_str());
-            }
-            float x, y;
-            if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
-                error("%s: Invalid coordinates in line: %s", __func__, s.c_str());
-            }
-            int32_t ix = static_cast<int32_t>(std::floor(x / res));
-            int32_t iy = static_cast<int32_t>(std::floor(y / res));
-            auto pit = pixelMap.find({ix, iy});
-            if (pit == pixelMap.end()) {
-                continue;
-            }
-            fprintf(fp, "%s", s.c_str());
-            for (size_t k = 0; k < pit->second.ks.size(); ++k) {
-                fprintf(fp, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
-            }
-            fprintf(fp, "\n");
-            newEntry.n++;
-        }
-        notice("%s: Annotated tile (%d, %d) with %u points", __func__, tile.row, tile.col, newEntry.n);
-        currentOffset = ftell(fp);
-        newEntry.ed = currentOffset;
-        if (newEntry.n > 0) {
-             if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index entry write error");
-        }
-    }
-}
-
-void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
-    TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset) {
-    notice("%s: Start annotating query with %lu tiles", __func__, tiles.size());
-    float res = formatInfo_.pixelResolution;
-    if (res <= 0) res = 1.0f;
-    for (const auto& tile : tiles) {
-        std::map<PixelKey3, TopProbs> pixelMap3d;
-        if (loadTileToMap3D(tile, pixelMap3d) <= 0) {
-            debug("%s: Query tile (%d, %d) is not in the annotation dataset", __func__, tile.row, tile.col);
-            continue;
-        }
-        auto it = reader.get_tile_iterator(tile.row, tile.col);
-        if (!it) continue;
-        IndexEntryF newEntry(tile.row, tile.col);
-        newEntry.st = currentOffset;
-        newEntry.n = 0;
-        tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, formatInfo_.tileSize);
-        std::string s;
-        while (it->next(s)) {
-            if (s.empty() || s[0] == '#') continue;
-            std::vector<std::string> tokens;
-            split(tokens, "\t", s, ntok + 1, true, true, true);
-            if (tokens.size() < ntok) {
-                error("%s: Invalid line: %s", __func__, s.c_str());
-            }
-            float x, y, z;
-            if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
-                error("%s: Invalid coordinates in line: %s", __func__, s.c_str());
-            }
-            if (!str2float(tokens[icol_z], z)) {
-                error("%s: Invalid z coordinate in line: %s", __func__, s.c_str());
-            }
-            int32_t ix = static_cast<int32_t>(std::floor(x / res));
-            int32_t iy = static_cast<int32_t>(std::floor(y / res));
-            int32_t iz = static_cast<int32_t>(std::floor(z / res));
-            auto pit = pixelMap3d.find(std::make_tuple(ix, iy, iz));
-            if (pit == pixelMap3d.end()) {
-                continue;
-            }
-            fprintf(fp, "%s", s.c_str());
-            for (size_t k = 0; k < pit->second.ks.size(); ++k) {
-                fprintf(fp, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
-            }
-            fprintf(fp, "\n");
-            newEntry.n++;
-        }
-        notice("%s: Annotated tile (%d, %d) with %u points", __func__, tile.row, tile.col, newEntry.n);
-        currentOffset = ftell(fp);
-        newEntry.ed = currentOffset;
-        if (newEntry.n > 0) {
-             if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index entry write error");
-        }
-    }
-}
+} // namespace
 
 void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep, bool binaryOutput) {
     std::string outIndex = outPrefix + ".index";
@@ -420,13 +190,13 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     notice("Merged %u files (%lu shared tiles) to %s", nSources, commonTiles.size(), outFile.c_str());
 }
 
-void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z) {
+void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z) {
     std::string ptData = ptPrefix + ".tsv";
     std::string ptIndex = ptPrefix + ".index";
     TileReader reader(ptData, ptIndex);
     assert(reader.getTileSize() == formatInfo_.tileSize);
     assert(icol_x != icol_y);
-    if (coord_dim_ == 3) {assert(icol_z != std::numeric_limits<uint32_t>::max() && icol_z != icol_x && icol_z != icol_y);}
+    if (coord_dim_ == 3) {assert(icol_z >= 0 && icol_z != icol_x && icol_z != icol_y);}
     bool use3d = (coord_dim_ == 3);
     std::string outFile = outPrefix + ".tsv";
     std::string outIndex = outPrefix + ".index";
@@ -437,7 +207,7 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     float res = formatInfo_.pixelResolution;
     if (res <= 0) res = 1.0f;
     uint32_t ntok = std::max(icol_x, icol_y);
-    if (use3d) {ntok = std::max(ntok, icol_z);}
+    if (use3d) {ntok = std::max(ntok, (uint32_t) icol_z);}
     ntok += 1;
     // Header?
     if (!reader.headerLine.empty()) {
@@ -457,7 +227,7 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     std::vector<TileKey> tiles;
     reader.getTileList(tiles);
     if (use3d) {
-        annotateTiles3D(tiles, reader, icol_x, icol_y, icol_z, ntok, fp, fdIndex, currentOffset);
+        annotateTiles3D(tiles, reader, icol_x, icol_y, (uint32_t) icol_z, ntok, fp, fdIndex, currentOffset);
     } else {
         annotateTiles2D(tiles, reader, icol_x, icol_y, ntok, fp, fdIndex, currentOffset);
     }
@@ -467,35 +237,208 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     notice("Annotation finished, data written to %s", outFile.c_str());
 }
 
-void TileOperator::classifyBlocks(int32_t tileSize) {
-    if (blocks_.empty()) return;
+void TileOperator::pix2cell(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_c, uint32_t icol_x, uint32_t icol_y, int32_t icol_s, int32_t icol_z, uint32_t k_out, float max_cell_diameter) {
+    std::string ptData = ptPrefix + ".tsv";
+    std::string ptIndex = ptPrefix + ".index";
+    TileReader reader(ptData, ptIndex);
+    assert(reader.getTileSize() == formatInfo_.tileSize);
+    assert(icol_c >= 0 && icol_c != icol_x && icol_c != icol_y);
+    assert(icol_x != icol_y);
+    if (coord_dim_ == 3) {assert(icol_z >= 0);}
+    bool use3d = (coord_dim_ == 3);
+    bool hasComp = (icol_s >= 0);
+    if (k_out == 0) {k_out = static_cast<uint32_t>(k_);}
+    if (k_out == 0) {error("%s: Invalid k_out value", __func__);}
 
-    for (auto& b : blocks_) {
-        // Check if block is strictly contained in a tile
-        float cx = (b.idx.xmin + b.idx.xmax) / 2.0f;
-        float cy = (b.idx.ymin + b.idx.ymax) / 2.0f;
+    std::string outFile = outPrefix + ".tsv";
+    FILE* fp = fopen(outFile.c_str(), "w");
+    if (!fp) error("Cannot open output file %s", outFile.c_str());
+    std::string headerStr = hasComp ? "#CellID\tCellComp\tnPixel" : "#CellID\tnPixel";
+    for (uint32_t i = 1; i <= k_out; ++i) {
+        headerStr += "\tK" + std::to_string(i) + "\tP" + std::to_string(i);
+    }
+    headerStr += "\n";
+    fprintf(fp, "%s", headerStr.c_str());
 
-        int32_t c = static_cast<int32_t>(std::floor(cx / tileSize));
-        int32_t r = static_cast<int32_t>(std::floor(cy / tileSize));
+    float res = formatInfo_.pixelResolution;
+    if (res <= 0) res = 1.0f;
+    int32_t tileSize =  formatInfo_.tileSize;
+    bool enableEarlyFlush = (max_cell_diameter > 0);
 
-        float tileX0 = c * tileSize;
-        float tileX1 = (c + 1) * tileSize;
-        float tileY0 = r * tileSize;
-        float tileY1 = (r + 1) * tileSize;
+    uint32_t ntok = std::max(icol_c, std::max(icol_x, icol_y));
+    if (use3d) {
+        ntok = std::max(ntok, static_cast<uint32_t>(icol_z));
+    }
+    if (hasComp) {
+        ntok = std::max(ntok, static_cast<uint32_t>(icol_s));
+    }
+    ntok += 1;
 
-        float tol = 1.0f; // 1 unit tolerance
+    std::map<std::string, CellAgg> cellAggs;
+    std::map<std::string, FactorSums> compTotals;
 
-        bool crossesX = (b.idx.xmin < tileX0 - tol) || (b.idx.xmax > tileX1 + tol);
-        bool crossesY = (b.idx.ymin < tileY0 - tol) || (b.idx.ymax > tileY1 + tol);
-
-        if (!crossesX && !crossesY) {
-            b.contained = true;
-            b.row = r;
-            b.col = c;
+    std::vector<TileKey> tiles;
+    reader.getTileList(tiles);
+    int32_t nTilesDone = 0;
+    int32_t nTiles = static_cast<int32_t>(tiles.size());
+    notice("%s: Start processing %d tiles", __func__, nTiles);
+    for (const auto& tile : tiles) {
+        nTilesDone++;
+        std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+        std::map<PixelKey3, TopProbs> pixelMap3d;
+        if (use3d) {
+            if (loadTileToMap3D(tile, pixelMap3d) <= 0) {
+                continue;
+            }
         } else {
-            b.contained = false;
+            if (loadTileToMap(tile, pixelMap) <= 0) {
+                continue;
+            }
+        }
+
+        auto it = reader.get_tile_iterator(tile.row, tile.col);
+        if (!it) continue;
+
+        float tileX0 = tile.col * tileSize;
+        float tileX1 = (tile.col + 1) * tileSize;
+        float tileY0 = tile.row * tileSize;
+        float tileY1 = (tile.row + 1) * tileSize;
+
+        std::unordered_set<std::string> tileCells;
+        std::string s;
+        while (it->next(s)) {
+            if (s.empty() || s[0] == '#') continue;
+            std::vector<std::string> tokens;
+            split(tokens, "\t", s, ntok + 1, true, true, true);
+            if (tokens.size() < ntok) {
+                error("%s: Invalid line: %s", __func__, s.c_str());
+            }
+            float x, y, z = 0.0f;
+            if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
+                error("%s: Invalid coordinates in line: %s", __func__, s.c_str());
+            }
+            if (use3d && !str2float(tokens[icol_z], z)) {
+                error("%s: Invalid z coordinate in line: %s", __func__, s.c_str());
+            }
+
+            int32_t ix = static_cast<int32_t>(std::floor(x / res));
+            int32_t iy = static_cast<int32_t>(std::floor(y / res));
+            int32_t iz = 0;
+            const TopProbs* probs = nullptr;
+            if (use3d) {
+                iz = static_cast<int32_t>(std::floor(z / res));
+                auto pit = pixelMap3d.find(std::make_tuple(ix, iy, iz));
+                if (pit == pixelMap3d.end()) {
+                    continue;
+                }
+                probs = &pit->second;
+            } else {
+                auto pit = pixelMap.find({ix, iy});
+                if (pit == pixelMap.end()) {
+                    continue;
+                }
+                probs = &pit->second;
+            }
+
+            const std::string& cellId = tokens[icol_c];
+            const std::string compartment = hasComp ? tokens[icol_s] : std::string();
+            auto& agg = cellAggs[cellId];
+            agg.sums.second += 1;
+            if (hasComp) {
+                compTotals[compartment].second += 1;
+                agg.compSums[compartment].second += 1;
+            }
+
+            if (enableEarlyFlush) {
+                tileCells.insert(cellId);
+                float minDist = std::min(
+                    std::min(x - tileX0, tileX1 - x),
+                    std::min(y - tileY0, tileY1 - y));
+                if (minDist <= max_cell_diameter) {
+                    agg.boundary = true;
+                }
+            }
+
+            for (size_t i = 0; i < probs->ks.size(); ++i) {
+                int32_t k = probs->ks[i];
+                double p = probs->ps[i];
+                agg.sums.first[k] += p;
+                if (hasComp) {
+                    agg.compSums[compartment].first[k] += p;
+                    compTotals[compartment].first[k] += p;
+                }
+            }
+        }
+
+        if (!enableEarlyFlush || tileCells.empty()) {
+            notice("%s: Processed tile [%d, %d] (%d/%d, %lu)", __func__, tile.row, tile.col, nTilesDone, nTiles, cellAggs.size());
+            continue;
+        }
+
+        int32_t nFlushed = 0;
+        for (const auto& cellId : tileCells) {
+            auto itCell = cellAggs.find(cellId);
+            if (itCell == cellAggs.end()) continue;
+            if (itCell->second.boundary) continue;
+            if (hasComp) {
+                write_cell_row(fp, cellId, "ALL", itCell->second.sums, k_out, true);
+                for (const auto& kv : itCell->second.compSums) {
+                    write_cell_row(fp, cellId, kv.first, kv.second, k_out, true);
+                }
+            } else {
+                write_cell_row(fp, cellId, "", itCell->second.sums, k_out, false);
+            }
+            cellAggs.erase(itCell);
+            nFlushed++;
+        }
+        notice("%s: Processed tile [%d, %d] (%d/%d) with %lu cells, output %d, %lu in buffer", __func__, tile.row, tile.col, nTilesDone, nTiles, tileCells.size(), nFlushed, cellAggs.size());
+    }
+
+    for (const auto& kv : cellAggs) {
+        if (hasComp) {
+            write_cell_row(fp, kv.first, "ALL", kv.second.sums, k_out, true);
+            for (const auto& comp : kv.second.compSums) {
+                write_cell_row(fp, kv.first, comp.first, comp.second, k_out, true);
+            }
+        } else {
+            write_cell_row(fp, kv.first, "", kv.second.sums, k_out, false);
         }
     }
+
+    fclose(fp);
+    notice("%s: Cell aggregation written to %s", __func__, outFile.c_str());
+    if (!hasComp) {
+        return;
+    }
+
+    std::string pbFile = outPrefix + ".pseudobulk.tsv";
+    FILE* pb = fopen(pbFile.c_str(), "w");
+    if (!pb) error("Cannot open output file %s", pbFile.c_str());
+    fprintf(pb, "Factor");
+    for (const auto& kv : compTotals) {
+        fprintf(pb, "\t%s", kv.first.c_str());
+    }
+    fprintf(pb, "\n");
+    std::set<int32_t> factors;
+    for (const auto& kv : compTotals) {
+        for (const auto& fv : kv.second.first) {
+            if (fv.second != 0.0) {
+                factors.insert(fv.first);
+            }
+        }
+    }
+    for (int32_t k : factors) {
+        fprintf(pb, "%d", k);
+        for (const auto& kv : compTotals) {
+            double v = 0.0;
+            auto it = kv.second.first.find(k);
+            if (it != kv.second.first.end()) v = it->second;
+            fprintf(pb, "\t%.4e", v);
+        }
+        fprintf(pb, "\n");
+    }
+    fclose(pb);
+    notice("%s: Pseudobulk matrix written to %s", __func__, pbFile.c_str());
 }
 
 void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
@@ -853,10 +796,8 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
                 for (uint32_t j = i; j < kvec_[s1]; ++j) {
                     int32_t k2 = ks[off1 + j];
                     float p2 = ps[off1 + j];
-                    // Unordered pair within set
-                    int32_t ka = std::min(k1, k2);
-                    int32_t kb = std::max(k1, k2);
-                    internalDots[s1][{ka, kb}] += (double)p1 * p2;
+                    std::pair<int32_t, int32_t> k12 = (k1 <= k2) ? std::make_pair(k1, k2) : std::make_pair(k2, k1);
+                    internalDots[s1][k12] += (double) p1 * p2;
                 }
                 // Cross with s2 > s1
                 for (size_t s2 = s1 + 1; s2 < nSets; ++s2) {
@@ -865,7 +806,7 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
                         int32_t k2 = ks[off2 + j];
                         float p2 = ps[off2 + j];
                         // Ordered pair (k1 from s1, k2 from s2)
-                        crossDots[{s1, s2}][{k1, k2}] += (double)p1 * p2;
+                        crossDots[std::make_pair(s1, s2)][std::make_pair(k1, k2)] += (double)p1 * p2;
                     }
                 }
             }
@@ -937,173 +878,6 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
     }
 }
 
-void TileOperator::probDotTiles2D(const std::set<TileKey>& commonTiles,
-    const std::vector<TileOperator*>& opPtrs,
-    const std::vector<uint32_t>& k2keep,
-    const std::vector<uint32_t>& offsets,
-    std::vector<std::map<int32_t, double>>& marginals,
-    std::vector<std::map<std::pair<int32_t, int32_t>, double>>& internalDots,
-    std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>>& crossDots,
-    size_t& count) {
-    uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
-    size_t nSets = k2keep.size();
-    for (const auto& tile : commonTiles) {
-        std::map<std::pair<int32_t, int32_t>, TopProbs> mergedMap;
-        bool first = true;
-
-        for (uint32_t i = 0; i < nSources; ++i) {
-            TileOperator* op = opPtrs[i];
-            std::map<std::pair<int32_t, int32_t>, TopProbs> currentMap;
-            if (op->loadTileToMap(tile, currentMap) == 0) { // Should not happen
-                 mergedMap.clear();
-                 break;
-            }
-            if (first) {
-                if (op->getK() > (int32_t)k2keep[i]) { // Trim to k2keep[i]
-                    for (auto& kv : currentMap) {
-                        kv.second.ks.resize(k2keep[i]);
-                        kv.second.ps.resize(k2keep[i]);
-                    }
-                }
-                mergedMap = std::move(currentMap);
-                first = false;
-                continue;
-            }
-            auto it = mergedMap.begin();
-            while (it != mergedMap.end()) {
-                auto it2 = currentMap.find(it->first);
-                if (it2 == currentMap.end()) {
-                    it = mergedMap.erase(it); // Intersect
-                    continue;
-                }
-                // Concatenate
-                it->second.ks.insert(it->second.ks.end(),
-                    it2->second.ks.begin(), it2->second.ks.begin() + k2keep[i]);
-                it->second.ps.insert(it->second.ps.end(),
-                    it2->second.ps.begin(), it2->second.ps.begin() + k2keep[i]);
-                ++it;
-            }
-        }
-        if (mergedMap.empty()) continue;
-        count += mergedMap.size();
-
-        // Accumulate stats
-        for (const auto& kv : mergedMap) {
-            const auto& ks = kv.second.ks;
-            const auto& ps = kv.second.ps;
-            for (size_t s1 = 0; s1 < nSets; ++s1) {
-                uint32_t off1 = offsets[s1];
-                for (uint32_t i = 0; i < k2keep[s1]; ++i) {
-                    int32_t k1 = ks[off1 + i];
-                    float p1 = ps[off1 + i];
-                    marginals[s1][k1] += p1;
-                    // Internal
-                    for (uint32_t j = i; j < k2keep[s1]; ++j) {
-                        int32_t k2 = ks[off1 + j];
-                        float p2 = ps[off1 + j];
-                        int32_t ka = std::min(k1, k2);
-                        int32_t kb = std::max(k1, k2);
-                        internalDots[s1][{ka, kb}] += (double)p1 * p2;
-                    }
-                    // Cross
-                    for (size_t s2 = s1 + 1; s2 < nSets; ++s2) {
-                        uint32_t off2 = offsets[s2];
-                        for (uint32_t j = 0; j < k2keep[s2]; ++j) {
-                            int32_t k2 = ks[off2 + j];
-                            float p2 = ps[off2 + j];
-                            crossDots[{s1, s2}][{k1, k2}] += (double)p1 * p2;
-                        }
-                    }
-                }
-            }
-        }
-        notice("%s: Processed tile (%d, %d) with %lu pixels shared by all sources", __func__, tile.row, tile.col, mergedMap.size());
-    }
-}
-
-void TileOperator::probDotTiles3D(const std::set<TileKey>& commonTiles,
-    const std::vector<TileOperator*>& opPtrs,
-    const std::vector<uint32_t>& k2keep,
-    const std::vector<uint32_t>& offsets,
-    std::vector<std::map<int32_t, double>>& marginals,
-    std::vector<std::map<std::pair<int32_t, int32_t>, double>>& internalDots,
-    std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>>& crossDots,
-    size_t& count) {
-    uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
-    size_t nSets = k2keep.size();
-    for (const auto& tile : commonTiles) {
-        std::map<PixelKey3, TopProbs> mergedMap;
-        bool first = true;
-
-        for (uint32_t i = 0; i < nSources; ++i) {
-            TileOperator* op = opPtrs[i];
-            std::map<PixelKey3, TopProbs> currentMap;
-            if (op->loadTileToMap3D(tile, currentMap) == 0) { // Should not happen
-                 mergedMap.clear();
-                 break;
-            }
-            if (first) {
-                if (op->getK() > (int32_t)k2keep[i]) { // Trim to k2keep[i]
-                    for (auto& kv : currentMap) {
-                        kv.second.ks.resize(k2keep[i]);
-                        kv.second.ps.resize(k2keep[i]);
-                    }
-                }
-                mergedMap = std::move(currentMap);
-                first = false;
-                continue;
-            }
-            auto it = mergedMap.begin();
-            while (it != mergedMap.end()) {
-                auto it2 = currentMap.find(it->first);
-                if (it2 == currentMap.end()) {
-                    it = mergedMap.erase(it); // Intersect
-                    continue;
-                }
-                // Concatenate
-                it->second.ks.insert(it->second.ks.end(),
-                    it2->second.ks.begin(), it2->second.ks.begin() + k2keep[i]);
-                it->second.ps.insert(it->second.ps.end(),
-                    it2->second.ps.begin(), it2->second.ps.begin() + k2keep[i]);
-                ++it;
-            }
-        }
-        if (mergedMap.empty()) continue;
-        count += mergedMap.size();
-
-        // Accumulate stats
-        for (const auto& kv : mergedMap) {
-            const auto& ks = kv.second.ks;
-            const auto& ps = kv.second.ps;
-            for (size_t s1 = 0; s1 < nSets; ++s1) {
-                uint32_t off1 = offsets[s1];
-                for (uint32_t i = 0; i < k2keep[s1]; ++i) {
-                    int32_t k1 = ks[off1 + i];
-                    float p1 = ps[off1 + i];
-                    marginals[s1][k1] += p1;
-                    // Internal
-                    for (uint32_t j = i; j < k2keep[s1]; ++j) {
-                        int32_t k2 = ks[off1 + j];
-                        float p2 = ps[off1 + j];
-                        int32_t ka = std::min(k1, k2);
-                        int32_t kb = std::max(k1, k2);
-                        internalDots[s1][{ka, kb}] += (double)p1 * p2;
-                    }
-                    // Cross
-                    for (size_t s2 = s1 + 1; s2 < nSets; ++s2) {
-                        uint32_t off2 = offsets[s2];
-                        for (uint32_t j = 0; j < k2keep[s2]; ++j) {
-                            int32_t k2 = ks[off2 + j];
-                            float p2 = ps[off2 + j];
-                            crossDots[{s1, s2}][{k1, k2}] += (double)p1 * p2;
-                        }
-                    }
-                }
-            }
-        }
-        notice("%s: Processed tile (%d, %d) with %lu pixels shared by all sources", __func__, tile.row, tile.col, mergedMap.size());
-    }
-}
 
 void TileOperator::probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep, int32_t probDigits) {
     if (k2keep.size() > 0) {assert(k2keep.size() == otherFiles.size() + 1);}

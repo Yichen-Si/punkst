@@ -108,6 +108,7 @@ set(SOURCE_FILES
     script/de_chisq.cpp
     src/tileoperator.hpp
     src/tileoperator_base.cpp
+    src/tileoperator_inner.cpp
     src/tileoperator.cpp
     script/manipulate_tiles.cpp
     script/multi_cde_lowres.cpp

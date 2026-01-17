@@ -67,9 +67,9 @@ public:
                 threads_.emplace_back(&Pts2Tiles::streamingWorker, this, i);
             }
         }
-        notice("Launched %d worker threads_", nThreads_);
+        notice("Launched %d worker threads", nThreads_);
         if (!joinWorkerThreads()) {
-            error("Error joining worker threads_");
+            error("Error joining worker threads");
         }
         notice("Merging temporary files and writing index");
         if (!mergeAndWriteIndex()) {

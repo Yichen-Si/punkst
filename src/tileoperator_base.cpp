@@ -6,10 +6,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <algorithm>
-#include <map>
-#include <set>
-#include <memory>
 
 void TileOperator::loadIndex(const std::string& indexFile) {
     std::ifstream in(indexFile, std::ios::binary);

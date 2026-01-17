@@ -3,67 +3,31 @@
 #include <random>
 #include <cmath>
 #include <algorithm>
-#include <string>
-#include <sstream>
-#include <iomanip>
-#include <chrono>
+#include <limits>
+
 #include "punkst.h"
 #include "mixpois.hpp"
+#include "poisreg.hpp"
 
-
-static double rel_err(double a, double b) {
-    double denom = std::max(1.0, std::max(std::abs(a), std::abs(b)));
-    return std::abs(a - b) / denom;
-}
-
-static double vec_rel_err_inf(const VectorXd& a, const VectorXd& b) {
-    assert(a.size() == b.size());
-    double maxe = 0.0;
-    for (int i = 0; i < a.size(); ++i) {
-        maxe = std::max(maxe, rel_err(a[i], b[i]));
+static double max_abs_diff(const VectorXd& a, const VectorXd& b) {
+    if (a.size() != b.size() || a.size() == 0) {
+        return std::numeric_limits<double>::infinity();
     }
-    return maxe;
+    return (a - b).cwiseAbs().maxCoeff();
 }
 
-// Finite difference gradient check (central differences)
-static VectorXd finite_diff_grad(MixPoisRegProblem& P, const VectorXd& beta, double eps = 1e-6) {
-    const int K = (int)beta.size();
-    VectorXd g(K);
-    for (int k = 0; k < K; ++k) {
-        VectorXd bp = beta, bm = beta;
-        double h = eps * std::max(1.0, std::abs(beta[k]));
-        bp[k] += h;
-        bm[k] = std::max(0.0, bm[k] - h); // keep feasible (beta>=0)
-
-        double fp = P.f(bp);
-        double fm = P.f(bm);
-        // If we clipped bm, the step is not symmetric; still OK but less accurate.
-        // Keep it simple here by ensuring beta[k] is not too close to 0 in test data.
-        g[k] = (fp - fm) / (bp[k] - bm[k]);
+static bool all_finite_positive(const VectorXd& v) {
+    for (int i = 0; i < v.size(); ++i) {
+        if (!(v[i] > 0.0) || !std::isfinite(v[i])) {
+            return false;
+        }
     }
-    return g;
-}
-
-// Finite difference Hv check using gradient differences
-static VectorXd finite_diff_Hv(MixPoisRegProblem& P, const VectorXd& beta, const VectorXd& v, double eps = 1e-6) {
-    double h = eps * std::max(1.0, beta.norm());
-    VectorXd bp = beta + h * v;
-    VectorXd bm = beta - h * v;
-
-    // Keep feasibility beta>=0
-    bp = bp.array().max(0.0);
-    bm = bm.array().max(0.0);
-
-    VectorXd gp(beta.size()), gm(beta.size());
-    P.grad(bp, gp);
-    P.grad(bm, gm);
-
-    return (gp - gm) / (2.0 * h);
+    return true;
 }
 
 int32_t test(int32_t argc, char** argv) {
-    int N = 500;
-    int K = 20;
+    int N = 3000;
+    int K = 6;
     int seed = 7;
 
     ParamList pl;
@@ -79,134 +43,182 @@ int32_t test(int32_t argc, char** argv) {
         pl.print_help();
         return 1;
     }
-    std::mt19937 rng(seed);
-    std::normal_distribution<double> nrm(0.0, 1.0);
 
-    // Random theta (row-stochastic)
-    RowMajorMatrixXd theta(N, K);
+    std::mt19937 rng(seed);
     std::gamma_distribution<double> gamma(1.0, 1.0);
+    std::uniform_real_distribution<double> unif_c(0.8, 2.0);
+    std::uniform_real_distribution<double> unif_b0(0.7, 1.2);
+    std::uniform_real_distribution<double> unif_b(-0.3, 0.3);
+    std::normal_distribution<double> nrm(0.0, 0.1);
+    std::bernoulli_distribution bern(0.5);
+
+    RowMajorMatrixXd theta(N, K);
     for (int i = 0; i < N; ++i) {
         double s = 0.0;
         for (int k = 0; k < K; ++k) {
-            double v = gamma(rng);
+            double v = gamma(rng) + 1e-3;
             theta(i, k) = v;
             s += v;
         }
         theta.row(i) /= s;
     }
 
-    // Random c_i ~ Uniform(0.5, 2.0)
     VectorXd c(N);
-    std::uniform_real_distribution<double> uni_c(0.5, 2.0);
-    for (int i = 0; i < N; ++i) c[i] = uni_c(rng);
+    VectorXd x(N);
+    for (int i = 0; i < N; ++i) {
+        c[i] = unif_c(rng);
+        x[i] = bern(rng) ? 1.0 : -1.0;
+    }
 
-    // Compute a_sum_k = sum_i c_i * theta_{ik}
+    VectorXd b0_true(K);
+    VectorXd b_true(K);
+    for (int k = 0; k < K; ++k) {
+        b0_true[k] = unif_b0(rng);
+        double bk = unif_b(rng);
+        double cap = 0.8 * b0_true[k];
+        if (std::abs(bk) > cap) {
+            bk = std::copysign(cap, bk);
+        }
+        b_true[k] = bk;
+    }
+
+    std::vector<uint32_t> ids;
+    std::vector<double> cnts;
+    ids.reserve(N);
+    cnts.reserve(N);
+    double total_count = 0.0;
+    for (int i = 0; i < N; ++i) {
+        double s = 0.0;
+        for (int k = 0; k < K; ++k) {
+            s += theta(i, k) * std::exp(b0_true[k] + x[i] * b_true[k]);
+        }
+        double lambda = c[i] * (s - 1.0);
+        if (lambda < 1e-8) lambda = 1e-8;
+        std::poisson_distribution<int> pois(lambda);
+        int y = pois(rng);
+        total_count += y;
+        if (y > 0) {
+            ids.push_back(static_cast<uint32_t>(i));
+            cnts.push_back(static_cast<double>(y));
+        }
+    }
+
+    std::cout << "nnz (y_i>0): " << ids.size() << " / " << N << "\n";
+    std::cout << "total count: " << total_count << "\n";
+
     VectorXd a_sum = VectorXd::Zero(K);
     for (int i = 0; i < N; ++i) {
         a_sum.noalias() += c[i] * theta.row(i).transpose();
     }
 
-    // True eta, beta = exp(eta)-1 (keep away from 0 to avoid FD asymmetry)
-    VectorXd eta_true(K);
-    std::uniform_real_distribution<double> uni_eta(0.2, 1.0);
-    for (int k = 0; k < K; ++k) eta_true[k] = uni_eta(rng);
+    OptimOptions optim;
+    optim.max_iters = 200;
+    optim.tol = 1e-7;
+    optim.tron.enabled = true;
 
-    VectorXd beta_true(K);
-    for (int k = 0; k < K; ++k) beta_true[k] = std::expm1(eta_true[k]); // > 0
+    MixPoisReg baseline(theta, c, a_sum, optim);
+    VectorXd eta_init = b0_true;
+    for (int k = 0; k < K; ++k) {
+        eta_init[k] = std::max(0.0, eta_init[k] + nrm(rng));
+    }
+    VectorXd b0_hat = baseline.fit_one(ids, cnts, eta_init);
 
-    // Generate one synthetic column's x_i ~ Poisson(lambda_i)
-    // lambda_i = c_i * theta_i^T beta_true
-    std::vector<uint32_t> ids;
-    std::vector<double> cnts;
-    ids.reserve(N);
-    cnts.reserve(N);
+    MixPoisRegProblem P_base(theta, c, a_sum, ids, cnts, 1e-30);
+    VectorXd beta_init(K);
+    VectorXd beta_hat(K);
+    for (int k = 0; k < K; ++k) {
+        double e0 = std::exp(std::min(eta_init[k], 40.0));
+        double eh = std::exp(std::min(b0_hat[k], 40.0));
+        beta_init[k] = std::max(0.0, e0 - 1.0);
+        beta_hat[k] = std::max(0.0, eh - 1.0);
+    }
+    double f_init = P_base.f(beta_init);
+    double f_hat = P_base.f(beta_hat);
+    double b0_err = max_abs_diff(b0_hat, b0_true);
 
+    std::cout << "baseline f(init)=" << f_init << " f(hat)=" << f_hat
+              << " max|b0_hat-b0_true|=" << b0_err << "\n";
+
+    VectorXd wp = (c.array() * (x.array() > 0).cast<double>()).matrix();
+    VectorXd wm = (c.array() * (x.array() < 0).cast<double>()).matrix();
+    VectorXd s1p = theta.transpose() * wp;
+    VectorXd s1m = theta.transpose() * wm;
+
+    VectorXd s2p = VectorXd::Zero(K);
+    VectorXd s2m = VectorXd::Zero(K);
     for (int i = 0; i < N; ++i) {
-        double lam = c[i] * theta.row(i).dot(beta_true);
-        // keep lam in a comfortable range for stable FD
-        if (lam < 1e-6) lam = 1e-6;
-
-        std::poisson_distribution<int> pois(lam);
-        int x = pois(rng);
-        if (x > 0) {
-            ids.push_back((uint32_t)i);
-            cnts.push_back((double)x);
+        if (c[i] <= 0.0 || x[i] == 0.0) continue;
+        double ci2 = c[i] * c[i];
+        auto ai = theta.row(i).array();
+        if (x[i] > 0.0) {
+            s2p.array() += ci2 * ai.square();
+        } else {
+            s2m.array() += ci2 * ai.square();
         }
     }
 
-    std::cout << "nnz (x_i>0): " << ids.size() << " / " << N << "\n";
+    MLEOptions mle_opt(optim);
+    mle_opt.se_flag = 3;
+    mle_opt.optim.set_bounds(-b0_hat, b0_hat);
 
-    // Construct problem with tiny floor so clamp is inactive
-    MixPoisRegProblem P(theta, c, a_sum, ids, cnts, /*lambda_floor=*/1e-30);
+    MixPoisLog1pSparseProblem P(theta, ids, cnts, x, c, b0_hat, mle_opt, s1p, s1m, &s2p, &s2m);
+    VectorXd b_hat = VectorXd::Zero(K);
+    MLEStats stats;
+    double f_log1p_init = P.f(b_hat);
+    double f_log1p = tron_solve(P, b_hat, mle_opt.optim, stats.optim);
+    mix_pois_log1p_compute_se(P, b_hat, mle_opt, stats);
 
-    // ---- Test 1: f == eval(f_out) ----
-    {
-        double f1 = P.f(beta_true);
+    VectorXd g(K), q(K);
+    ArrayXd w;
+    P.eval(b_hat, nullptr, &g, &q, &w);
+    double g_norm = g.norm();
+    double b_err = max_abs_diff(b_hat, b_true);
+    bool se_ok = (stats.se_fisher.size() == K) && (stats.se_robust.size() == K)
+        && all_finite_positive(stats.se_fisher) && all_finite_positive(stats.se_robust);
 
-        double f2 = 0.0;
-        VectorXd g(K), q(K);
-        ArrayXd w;
-        P.eval(beta_true, &f2, &g, &q, &w);
-        std::cout << "f(beta_true): " << f1 << "  eval f_out: " << f2
-                  << "  relerr: " << rel_err(f1, f2) << "\n";
-    }
-
-    // ---- Test 2: analytic gradient vs finite difference ----
-    {
-        VectorXd g_ana(K);
-        P.grad(beta_true, g_ana);
-
-        VectorXd g_fd = finite_diff_grad(P, beta_true, 1e-6);
-
-        double err = vec_rel_err_inf(g_ana, g_fd);
-        std::cout << "grad relerr_inf: " << err << "\n";
-    }
-
-    // ---- Test 3: Hv vs finite difference of gradient ----
-    {
-        // Get w at beta_true
-        double f_out = 0.0;
-        VectorXd g(K), q(K);
-        ArrayXd w;
-        P.eval(beta_true, &f_out, &g, &q, &w);
-
-        // Random direction v
-        VectorXd v(K);
-        for (int k = 0; k < K; ++k) v[k] = nrm(rng);
-        v.normalize();
-
-        VectorXd Hv_ana = P.make_Hv(w)(v);
-        VectorXd Hv_fd  = finite_diff_Hv(P, beta_true, v, 1e-6);
-
-        double err = vec_rel_err_inf(Hv_ana, Hv_fd);
-        std::cout << "Hv relerr_inf: " << err << "\n";
-    }
-
-    // ---- Optional Test 4: end-to-end TRON fit
-    {
-        OptimOptions opt;
-
-        MixPoisReg fitter(theta, c, a_sum, opt);
-
-        // Start near truth
-        VectorXd eta0 = eta_true;
-        for (int k = 0; k < K; ++k) eta0[k] = std::max(0.0, eta0[k] + 0.1 * nrm(rng));
-
-        VectorXd eta_hat = fitter.fit_one(ids, cnts, eta0);
-
-        // Compare objectives
-        VectorXd beta0(K), betahat(K);
-        for (int k = 0; k < K; ++k) beta0[k] = std::expm1(std::min(eta0[k], 40.0));
-        for (int k = 0; k < K; ++k) betahat[k] = std::expm1(std::min(eta_hat[k], 40.0));
-
-        double f0 = P.f(beta0);
-        double fh = P.f(betahat);
-
-        std::cout << "TRON objective: f(init)=" << f0 << "  f(hat)=" << fh << "\n";
-        if(fh > f0 + 1e-9) {
-            std::cerr << "TRON fit failed to improve objective: f(hat)=" << fh << " > f(init)=" << f0 << "\n";
+    bool q_ok = true;
+    for (int k = 0; k < K; ++k) {
+        if (!(q[k] > 0.0) || !std::isfinite(q[k])) {
+            q_ok = false;
+            break;
         }
     }
 
-    return 0;
+    std::cout << "log1p f(init)=" << f_log1p_init << " f(hat)=" << f_log1p
+              << " max|b_hat-b_true|=" << b_err
+              << " |g|=" << g_norm << "\n";
+    std::cout << "se_fisher_ok=" << (se_ok ? "yes" : "no")
+              << " q_diag_ok=" << (q_ok ? "yes" : "no") << "\n";
+
+    bool ok = true;
+    if (ids.empty()) {
+        std::cerr << "No nonzero counts generated.\n";
+        ok = false;
+    }
+    if (f_hat > f_init + 1e-9) {
+        std::cerr << "Baseline fit did not improve objective.\n";
+        ok = false;
+    }
+    if (b0_err > 0.35) {
+        std::cerr << "Baseline b0 error too large: " << b0_err << "\n";
+        ok = false;
+    }
+    if (f_log1p > f_log1p_init + 1e-9) {
+        std::cerr << "Log1p fit did not improve objective.\n";
+        ok = false;
+    }
+    if (b_err > 0.35) {
+        std::cerr << "Log1p b error too large: " << b_err << "\n";
+        ok = false;
+    }
+    if (!se_ok) {
+        std::cerr << "Invalid SE estimates.\n";
+        ok = false;
+    }
+    if (!q_ok) {
+        std::cerr << "Invalid diagonal curvature from MixPoisLog1pSparseProblem.\n";
+        ok = false;
+    }
+
+    return ok ? 0 : 1;
 }

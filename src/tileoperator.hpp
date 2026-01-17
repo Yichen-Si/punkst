@@ -122,7 +122,11 @@ public:
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
 
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
-    void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z = std::numeric_limits<uint32_t>::max());
+    void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1);
+
+    void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
+        uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
+        int32_t icol_s = -1, int32_t icol_z = -1, uint32_t k_out = 0, float max_cell_diameter = 50);
 
     void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2);
 

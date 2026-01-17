@@ -57,7 +57,7 @@ The first column of the output file is the row index (0-based) of the barcode in
 
 ## CosMx SMI
 
-You can use the template `Makefile` and `config_prepare.json` in `punkst/examples/format_input/cosmx` to conver CosMx raw output files to the generic input format. Alternatively, see the bash commands below.
+<!-- You can use the template `Makefile` and `config_prepare.json` in `punkst/examples/format_input/cosmx` to conver CosMx raw output files to the generic input format. Alternatively, see the bash commands below.
 Copy the config file to your directory and set the raw file names. For example, here is an example for the public mouse half brain data:
 
 ```json
@@ -69,22 +69,24 @@ Copy the config file to your directory and set the raw file names. For example, 
       "datadir": "/output/test"
     }
   }
-```
+``` -->
 
-You can find `"microns_per_pixel"` in the ReadMe.html, it may say something like "To convert to microns multiply the pixel value by 0.12 um per pixel".
+Find `"microns_per_pixel"` in the ReadMe.html, it may say something like "To convert to microns multiply the pixel value by 0.12 um per pixel".
 
-The following are the commands ran in the `Makefile`:
+Locate two files, `RunXXXX_tx_file.csv` (transcript file) and `RunXXXX_metadata_file.csv` (cell metadata file). Let's call them `RAW_TX` and `RAW_META`.
+
+Run the following commands to extract relevant information from the raw csv files:
 
 ```bash
 # Extract cell coordinates
-cut -d',' -f 7-8 ${RAW_META} | tail -n +2 | awk -F',' -v OFS="\t" \
-    -v mu=${MICRONS_PER_PIXEL} \
-    '{printf "%.2f\t%.2f\n", mu * $1, mu * $2 > out;}' > cell_coordinates.tsv
+cut -d',' -f 1,2,3,7,8 ${RAW_META} | tail -n +2 | sed 's/"//g' | \
+  awk -F',' -v OFS="\t" -v mu=${MICRONS_PER_PIXEL} \
+  '{printf "%.2f\t%.2f\t%s_%s\t%s\n", $4*mu, $5*mu, $1, $2, $3}' > cell_centers.tsv
 
 # Extract transcripts
 awk -F',' -v mu=${MICRONS_PER_PIXEL} '\
-NR==1{gsub(/"/, "", $0); print $3, $4, $8, "count", $7, $9 }\
-NR>1{gsub(/"/, "", $8); gsub(/"/, "", $9); printf "%.2f\t%.2f\t%s\t%d\t%d\t%s\n", mu*$3, mu*$4, $8, 1, $7, $9 } ' ${RAW_TX} > transcripts.tsv
+NR==1{gsub(/"/, "", $0); print "#" $3, $4, $8, "count", $7, "CellID", $9 }\
+NR>1{gsub(/"/, "", $8); gsub(/"/, "", $9); printf "%.2f\t%.2f\t%s\t%d\t%s\t%s_%s\t%s\n", mu*$3, mu*$4, $8, 1, $7, $1, $2, $9 } ' ${RAW_TX} > transcripts.tsv
 ```
 
 ## MERSCOPE
