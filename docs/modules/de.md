@@ -13,6 +13,12 @@ Provide one input for a 1-vs-rest test per factor, or two inputs for a pairwise 
 punkst de-chisq --input pseudobulk.tsv --out de.tsv --min-fc 1.5 --max-pval 1e-3
 ```
 
+1-vs-nearest-neighbors per factor:
+```bash
+punkst de-chisq --input pseudobulk.tsv --out de.tsv --neighbor-k 3 \
+  --min-fc 1.5 --max-pval 1e-3
+```
+
 Pairwise comparison between two pseudobulk matrices:
 ```bash
 punkst de-chisq --input sampleA.pseudobulk.tsv sampleB.pseudobulk.tsv \
@@ -46,11 +52,15 @@ For pairwise input, the two matrices should have matching factor columns. Featur
 
 `--threads` - Number of threads. Default: 1. (For consistency, multi-threading is not necessary here)
 
+`--neighbor-k` - Number of nearest neighbor columns to aggregate as background (single input only). Must be smaller than K-1. When set, writes an additional output file with 1-vs-neighbors results.
+
 ### Output
 
 Single input output columns:
 
 `Feature`, `Factor`, `Chi2`, `FoldChange`, `log10pval`
+
+When `--neighbor-k > 0`, an additional file is written with the same columns and the suffix `.1vsNeighbors.tsv` (if `--out` ends with `.tsv`, that extension is stripped first).
 
 Two-input output columns:
 
@@ -60,7 +70,7 @@ Rows are sorted by factor (ascending) and Chi2 (descending) within each factor.
 
 ## multi-conditional-de-pixel
 
-`multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between pairs of datasets. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests across datasets for each cell type using a Binomial model.
+`multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between dataset groups. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests for each cell type using a Binomial model. By default it builds all pairwise contrasts from `--labels` (or numeric indices); for more general comparisons, use a contrast design file.
 The p-values are computed both by permutation and by robust sandwich estimators of the standard errors of the estimated effect sizes.
 
 $X^{(k)}_{im} \sim$ Binom $(N^{(k)}_{im}, \pi^{(k)}_{im})$ for cell type $k$, bin $i$ and gene $m$, where both $X$ and $N$ are soft-aggregated counts from pixel level cell type assignments.
@@ -69,7 +79,7 @@ logit $(\pi^{(k)}_{im}) = a^{(k)}_m + y_i b^{(k)}_m$, where $y_i$ is a binary in
 
 Note: the intended use is when the cell type model is from external sources (e.g. apply `pixel-decode` with a reference-based cell type pseudobulk matrix). The interpretation is tricky if the cell types are learned from the same datasets. Either way, this is only a data exploration tool and we do not claim that it is statistically rigorous.
 
-Example usage:
+Example usage (pairwise contrasts between input datasets):
 ```bash
 punkst multi-conditional-de-pixel \
   --anno sampleA/pixel sampleB/pixel --binary \
@@ -81,13 +91,36 @@ punkst multi-conditional-de-pixel \
   --out de/pixel_de --threads 8 --seed 1
 ```
 
+Example usage with explicit contrast file:
+```bash
+punkst multi-conditional-de-pixel \
+  --contrast contrast.tsv \
+  --K 12 --features features.tsv \
+  --grid-size 20 --min-count 10 --perm 5000 \
+  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
+  --out de/pixel_de --threads 8 --seed 1
+```
+
+`contrast.tsv` format (tab-delimited):
+```tsv
+anno_prefix	pts_prefix	B_vs_A  C_vs_A
+sampleA/pixel	sampleA/transcripts.tiled	-1	-1
+sampleB/pixel	sampleB/transcripts.tiled	1	0
+sampleC/pixel	sampleC/transcripts.tiled	0	1
+```
+Each contrast column uses `-1` (group 0), `1` (group 1), or `0` (exclude). Contrast names come from the header.
+
 ### Required Parameters
 
-`--anno` - Prefixes of pixel annotation files (from `punkst pixel-decode`). For each prefix, the tool expects `<prefix>.tsv` (or `<prefix>.bin` if `--binary`) and `<prefix>.index`.
+Provide either `--anno`, `--pts` (or `--anno-data`/`--anno-index`, `--pts`) or a `--contrast` design file.
 
-`--anno-data` / `--anno-index` - Alternative to `--anno`. Provide explicit data and index files (same count for each).
+`--anno` - Prefixes of pixel annotation files (from `punkst pixel-decode`). For each prefix, the tool expects `<prefix>.tsv` (or `<prefix>.bin` if `--binary`) and `<prefix>.index`. Cannot be combined with `--contrast`.
 
-`--pts` - Prefixes of transcript data files (from `punkst pts2tiles`). For each prefix, the tool expects `<prefix>.tsv` and `<prefix>.index`.
+`--anno-data`, `--anno-index` - Alternative to `--anno`. Provide explicit data and index files (same count for each).
+
+`--pts` - Prefixes of transcript data files (from `punkst pts2tiles`). For each prefix, the tool expects `<prefix>.tsv` and `<prefix>.index`. Cannot be combined with `--contrast`.
+
+`--contrast` - Contrast design TSV with columns: `anno_prefix`, `pts_prefix`, and one or more contrast columns (values -1/0/1). When provided, it replaces `--anno/--anno-data/--anno-index/--pts` and `--labels`.
 
 `--K` - Number of factors in the annotation files.
 
@@ -99,23 +132,25 @@ punkst multi-conditional-de-pixel \
 
 `--out` - Output prefix.
 
-`--perm` - Number of permutations for empirical p-value calibration. If not specified, only the model-based p-values are reported.
-
 Annotation and transcript tiles must use the same tile size for each dataset pair (this is guaranteed if the pixel level decoding results are generated from the corresponding transcript tiles by `punkst pixel-decode`).
 
 ### Optional Parameters
 
-`--labels` - Labels for datasets used in pairwise output; defaults to `0..N-1`.
+`--labels` - Labels for datasets used in pairwise output; defaults to `0..N-1`. Ignored when `--contrast` is supplied.
 
 `--binary` - Indicates the annotation data files are binary (`.bin`).
 
 `--min-count-per-feature` - Minimum total count (in each pairwise comparison) for a feature to be considered. Default: 100.
 
-`--max-pval` - Max p-value for output. Default: 1e-3.
+`--max-pval` - Max p-value for output. Default: 1 (output all).
 
-`--min-or` - Minimum odds ratio for output (bidirectional, so OR$>x$ and OR$<1/x$ are kept). Default: 1.2.
+`--min-or` - Minimum odds ratio for output (bidirectional, so OR$>x$ and OR$<1/x$ are kept). Default: 1 (output all).
 
 `--min-count` - Minimum observed cell-type-specific count for a unit to be included. Default: 10.
+
+`--perm` - Number of permutations for beta calibration (two-group contrasts). Default: 0 (model-based p-values only).
+
+`--min-or-perm` - Minimum odds ratio for permutation testing (bidirectional). Default: 1.2.
 
 `--seed` - Random seed for permutation.
 
@@ -129,19 +164,17 @@ Given `--out PREFIX`, the output includes:
 
 - When permutation is enabled (`--perm N`)
 
-`PREFIX.lebel1_vs_label2.perm_N.tsv` for each pair of datasets (labels from `--labels` or numeric indices if omitted)
+`PREFIX.CONTRAST.perm_N.tsv` for each contrast (contrast name from `--contrast` header or `labelA_vs_labelB` when auto-pairwise)
 
 - When permutation is not enabled
 
-`PREFIX.marginal.tsv` - Per cell type tests between dataset pairs.
+`PREFIX.CONTRAST.marginal.tsv` - Per cell type tests for each contrast.
+
+`PREFIX.CONTRAST.global.tsv` - Global test per feature and contrast.
+
+`PREFIX.CONTRAST.deviation.tsv` - Cell type specific shift relative to the global shift.
 
 The first column `Slice` indicates the cell type index (0-based, as in the pixel level result files).
-
-<!-- The following pair of files are from essentially the same tests as above but transformed the effect sizes to global (across cell types) and deviation from the global shift in each cell type. -->
-
-<!-- `PREFIX.global.tsv` - Global test per feature and dataset pair.
-
-`PREFIX.deviation.tsv` - Cell type specific shift between dataset pairs deviaiting from the global shift. -->
 
 - Auxiliary files
 

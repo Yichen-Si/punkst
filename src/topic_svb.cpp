@@ -165,6 +165,36 @@ bool TopicModelWrapper::readMinibatch(std::ifstream& inFileStream, std::vector<s
     return true;
 }
 
+bool TopicModelWrapper::readMinibatch(std::ifstream& inFileStream, std::vector<Document>& batch,
+        std::vector<std::string>& idens, int32_t batchSizeOverride,
+        int32_t minCount, int32_t maxUnits) {
+    batch.clear();
+    idens.clear();
+    const int32_t batchTarget = batchSizeOverride > 0 ? batchSizeOverride : batchSize;
+    batch.reserve(batchTarget);
+    idens.reserve(batchTarget);
+    std::string line;
+    int32_t nlocal = 0;
+    while (nlocal < batchTarget && nlocal < maxUnits) {
+        if (!std::getline(inFileStream, line)) {
+            return false;
+        }
+        Document doc;
+        std::string info;
+        int32_t ct = reader.parseLine(doc, info, line, modal);
+        if (ct < 0) {
+            error("%s: Error parsing the %d-th line", __FUNCTION__, ntot + nlocal);
+        }
+        if (minCount > 0 && doc.get_sum() < minCount) {
+            continue;
+        }
+        idens.push_back(info);
+        batch.push_back(std::move(doc));
+        nlocal++;
+    }
+    return true;
+}
+
 void TopicModelWrapper::setupPriorMapping(std::vector<std::string>& feature_names_, std::vector<std::uint32_t>& kept_indices) {
     // Use the current filtered feature set
     std::unordered_map<std::string, uint32_t> dict;

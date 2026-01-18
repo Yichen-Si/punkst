@@ -69,6 +69,8 @@ python ext/py/factor_report.py --de ${path}/de_bulk.tsv --pseudobulk ${path}/pse
 
 `--de` specifies the differential expression results file from `de_bulk.py`.
 
+`--de_neighbor` optionally specifies a `de-chisq` neighbor-output file (e.g. `${out}.1vsNeighbors.tsv`) to add a column displaying high specific top genes.
+
 `--pseudobulk` specifies the pseudobulk count table.
 
 `--color_table` specifies the RGB color table for factors. This probably should be the same file as that used for `punkst draw-pixel-factors`.

@@ -8,6 +8,7 @@ def factor_report(_args):
 
     parser = argparse.ArgumentParser(prog="factor_report")
     parser.add_argument('--de', type=str, help='')
+    parser.add_argument('--de_neighbor', type=str, default='', help='')
     parser.add_argument('--pseudobulk', type=str, help='')
     parser.add_argument('--feature_label', type=str, default="Feature", help='')
     parser.add_argument('--color_table', type=str, default='', help='')
@@ -39,17 +40,24 @@ def factor_report(_args):
     if not os.path.exists(args.pseudobulk):
         sys.exit(f"Cannot find posterior count file")
     post = pd.read_csv(args.pseudobulk, sep='\t')
-    # DE genes
-    if not os.path.exists(args.de):
-        sys.exit(f"Cannot find DE file")
-    de = pd.read_csv(args.de, sep='\t', dtype={'Factor':str})
+    def load_de(path):
+        if not os.path.exists(path):
+            sys.exit(f"Cannot find DE file")
+        df = pd.read_csv(path, sep='\t', dtype={'Factor':str})
+        df.rename(columns = {"logPval":"log10pval", "ApproxFC":"FoldChange", "gene":"Feature", "Gene":"Feautre", "Pval":"pval"}, inplace=True)
+        sortby = "log10pval"
+        if sortby not in df.columns:
+            sortby = "Chi2"
+        if "log10pval" not in df.columns:
+            df["log10pval"] = -np.log10(np.clip(df["pval"].values, 1e-300, 1.0))
+        return df, sortby
 
-    de.rename(columns = {"logPval":"log10pval", "ApproxFC":"FoldChange", "gene":"Feature", "Gene":"Feautre", "Pval":"pval"}, inplace=True)
-    sortby = "log10pval"
-    if sortby not in de.columns:
-        sortby = "Chi2"
-    if "log10pval" not in de.columns:
-        de["log10pval"] = -np.log10(np.clip(de["pval"].values, 1e-300, 1.0))
+    # DE genes
+    de, sortby = load_de(args.de)
+    neighbor_de = None
+    neighbor_sortby = None
+    if args.de_neighbor:
+        neighbor_de, neighbor_sortby = load_de(args.de_neighbor)
 
     output_pref = args.output_pref
     min_log10p = -np.log10(args.max_pval)
@@ -73,6 +81,7 @@ def factor_report(_args):
     post_weight /= post_weight.sum()
 
     top_gene = []
+    top_gene_neighbor = []
     # Top genes by Chi2
     de.sort_values(by=['Factor', sortby],ascending=False,inplace=True)
     de["Rank"] = de.groupby(by = "Factor")[sortby].rank(ascending=False, method = "min").astype(int)
@@ -85,6 +94,18 @@ def factor_report(_args):
             top_gene.append([kname, '.'])
         else:
             top_gene.append([kname, ', '.join(v)])
+    if neighbor_de is not None:
+        neighbor_de.sort_values(by=['Factor', neighbor_sortby],ascending=False,inplace=True)
+        neighbor_de["Rank"] = neighbor_de.groupby(by = "Factor")[neighbor_sortby].rank(ascending=False, method = "min").astype(int)
+        for k, kname in enumerate(factor_header):
+            indx = neighbor_de.Factor.eq(kname)
+            v = neighbor_de.loc[indx & ( (neighbor_de.Rank < mtop) | \
+                    ((neighbor_de.log10pval > min_log10p) & (neighbor_de.FoldChange >= args.min_fc)) ), \
+                    'Feature'].iloc[:ntop].values
+            if len(v) == 0:
+                top_gene_neighbor.append('.')
+            else:
+                top_gene_neighbor.append(', '.join(v))
     # Top genes by fold change
     de.sort_values(by=['Factor','FoldChange'],ascending=False,inplace=True)
     de["Rank"] = de.groupby(by = "Factor").FoldChange.rank(ascending=False, method = "min").astype(int)
@@ -112,7 +133,12 @@ def factor_report(_args):
                         'TopGene_pval':[x[1] for x in top_gene],
                         'TopGene_fc':[x[2] for x in top_gene],
                         'TopGene_weight':[x[3] for x in top_gene] })
-    oheader = ["Factor", "RGB", "Weight", "PostUMI", "TopGene_pval", "TopGene_fc", "TopGene_weight"]
+    if neighbor_de is not None:
+        table.insert(table.columns.get_loc("TopGene_pval") + 1, "TopGene_specific", top_gene_neighbor)
+    oheader = ["Factor", "RGB", "Weight", "PostUMI", "TopGene_pval"]
+    if neighbor_de is not None:
+        oheader.append("TopGene_specific")
+    oheader += ["TopGene_fc", "TopGene_weight"]
 
     # Anchor genes used for initialization if applicable
     if os.path.exists(args.anchor):

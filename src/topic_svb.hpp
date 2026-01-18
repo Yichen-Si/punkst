@@ -40,6 +40,14 @@ public:
     virtual int32_t getNumTopics() const = 0;
     virtual void sortTopicsByWeight() = 0;
     virtual void writeUnitHeader(std::ofstream& outFileStream) = 0;
+    virtual const RowMajorMatrixXd& get_model_matrix() const = 0;
+    virtual RowMajorMatrixXd copy_model_matrix() const = 0;
+    virtual const std::vector<std::string>& get_topic_names() = 0;
+
+    virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
+    virtual MatrixXd do_transform(const std::vector<Document>& batch) = 0;
+
+    bool readMinibatch(std::ifstream& inFileStream, std::vector<Document>& batch, std::vector<std::string>& idens, int32_t batchSizeOverride, int32_t minCount = 0, int32_t maxUnits = INT32_MAX);
 
 protected:
     HexReader reader;
@@ -61,12 +69,6 @@ protected:
     // 1. Current filtered features and 2. The input features
     // The output will follow the input's ordering
     virtual void setupPriorMapping(std::vector<std::string>& feature_names_, std::vector<std::uint32_t>& kept_indices);
-
-    virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
-    virtual MatrixXd do_transform(const std::vector<Document>& batch) = 0;
-    virtual const RowMajorMatrixXd& get_model_matrix() const = 0;
-    virtual RowMajorMatrixXd copy_model_matrix() const = 0;
-    virtual const std::vector<std::string>& get_topic_names() = 0;
 };
 
 
@@ -93,7 +95,7 @@ public:
         const std::string& priorFile = "",
         double priorScale = -1., double priorScaleRel = -1.,
         double s_beta = 1, double s_theta = 1, double kappa_theta = 0.7, double tau_theta = 10.0, int32_t burnin = 1) {
-        MatrixXd priorMatrix;
+        RowMajorMatrixXd priorMatrix;
         initialize(nTopics, priorMatrix, priorFile, priorScale, priorScaleRel);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
@@ -113,7 +115,7 @@ public:
         const std::string& priorFile = "",
         double priorScale = -1., double priorScaleRel = -1.,
         int32_t maxIter = 100, double mDelta = -1.) {
-        MatrixXd priorMatrix;
+        RowMajorMatrixXd priorMatrix;
         initialize(nTopics, priorMatrix, priorFile, priorScale, priorScaleRel);
         lda = std::make_unique<LatentDirichletAllocation>(
             K_, M_, seed, nThreads, verbose,
@@ -122,6 +124,16 @@ public:
             kappa, tau0, totalDocCount,
             nullptr, priorMatrix, -1.);
         lda->set_svb_parameters(maxIter, mDelta);
+        initialized = true;
+    }
+
+    void initialize_transform(const std::string& modelFile,
+        int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
+        int32_t maxIter = 100, double mDelta = -1.) {
+        RowMajorMatrixXd priorMatrix;
+        initialize(0, priorMatrix, modelFile, -1, -1);
+        lda = std::make_unique<LatentDirichletAllocation>(
+            priorMatrix, seed, nThreads, verbose);
         initialized = true;
     }
 
@@ -201,6 +213,25 @@ public:
         }
     }
 
+    void do_partial_fit(const std::vector<Document>& batch) override {
+        lda->partial_fit(batch);
+    }
+    MatrixXd do_transform(const std::vector<Document>& batch) override {
+        return lda->transform(batch);
+    }
+    const RowMajorMatrixXd& get_model_matrix() const override {
+        return lda->get_model();
+    }
+    RowMajorMatrixXd copy_model_matrix() const override {
+        return lda->get_model();
+    }
+    const std::vector<std::string>& get_topic_names() override {
+        if (topicNames.empty()) {
+            topicNames = lda->get_topic_names();
+        }
+        return topicNames;
+    }
+
 protected:
 
     int32_t K_;
@@ -221,7 +252,7 @@ protected:
         return;
     }
 
-    void initialize(int32_t nTopics, MatrixXd& priorMatrix, const std::string& priorFile, double priorScale = -1, double priorScaleRel = -1) {
+    void initialize(int32_t nTopics, RowMajorMatrixXd& priorMatrix, const std::string& priorFile, double priorScale = -1, double priorScaleRel = -1) {
         if (priorFile.empty()) {
             initialize(nTopics);
             return;
@@ -236,25 +267,34 @@ protected:
         setupPriorMapping(priorFeatureNames, kept_indices);
 
         // Create subset matrix for only the intersected features
-        priorMatrix = MatrixXd(K_, M_);
+        MatrixXd priorMatrix_ = MatrixXd(K_, M_);
         // Map columns from full prior matrix to subset matrix
         for (size_t i = 0; i < kept_indices.size(); ++i) {
-            priorMatrix.col(i) = fullPriorMatrix.col(kept_indices[i]);
+            priorMatrix_.col(i) = fullPriorMatrix.col(kept_indices[i]);
         }
         notice("Created subset prior matrix: %d topics x %d features (from original %d features)",
-                (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
-
+                (int)priorMatrix_.rows(), (int)priorMatrix_.cols(), (int)priorFeatureNames.size());
+        priorMatrix = priorMatrix_;
         // Apply scaling if specified
         if (priorScaleRel > 0 && reader.readFullSums) {
             const std::vector<double>& featureSums = reader.getFeatureSums();
             double totalCount = 0.;
             for (double s : featureSums) { totalCount += s;  }
-            double priorTotal = priorMatrix.sum();
-            double scale = totalCount / priorTotal * priorScaleRel;
-            priorMatrix *= scale;
-            notice("%s: total count of the overlapping features is %.1f in the prior matrix and %.1f in the data; scaling the prior matrix by %.2f to reach relative scaling factor %.2f", __func__, priorTotal, totalCount, scale, priorScaleRel);
+            double globalScale0 = priorMatrix.sum() / totalCount;
+            double targetTotal = totalCount / K_ * priorScaleRel;
+            VectorXd priorSums = priorMatrix.rowwise().sum();
+            for (int32_t k = 0; k < K_; ++k) {
+                if (priorSums(k) < targetTotal) {
+                    continue;
+                }
+                double scale = targetTotal / priorSums(k);
+                priorMatrix.row(k) *= scale;
+            }
+            double globalScale1 = priorMatrix.sum() / totalCount;
+
+            notice("%s: total count of the overlapping features in the prior matrix is %.2fX that in the data, %.2fX after scaling each factor to be <= %.2f/K (%.2e) of the data total", __func__, globalScale0, globalScale1, priorScaleRel, priorScaleRel/K_);
         } else if (priorScale > 0. && priorScale != 1.) {
-            priorMatrix *= priorScale;
+            priorMatrix_ *= priorScale;
         }
 
     }
@@ -302,24 +342,6 @@ protected:
         notice("Read model matrix: %d topics x %d features from %s", K_, nFeatures, modelFile.c_str());
     }
 
-    void do_partial_fit(const std::vector<Document>& batch) override {
-        lda->partial_fit(batch);
-    }
-    MatrixXd do_transform(const std::vector<Document>& batch) override {
-        return lda->transform(batch);
-    }
-    const RowMajorMatrixXd& get_model_matrix() const override {
-        return lda->get_model();
-    }
-    RowMajorMatrixXd copy_model_matrix() const override {
-        return lda->get_model();
-    }
-    const std::vector<std::string>& get_topic_names() override {
-        if (topicNames.empty()) {
-            topicNames = lda->get_topic_names();
-        }
-        return topicNames;
-    }
 
 };
 
@@ -409,18 +431,6 @@ public:
             notice("Top %d out of %d topics cover >= %.3f%% of data", k, K_, coverage * 100);
         }
     }
-
-private:
-    // HDP-specific members
-    std::unique_ptr<HDP> hdp;
-    int32_t K_; // Maximum number of topics
-    int32_t T_; // Minimum number of topics per document
-    int32_t num_topics_to_output_;
-    std::vector<std::string> topicNames_;
-    std::vector<int32_t> sorted_indices_;
-
-protected:
-    // Implementation of protected hooks
     void do_partial_fit(const std::vector<Document>& batch) override {
         hdp->partial_fit(batch);
     }
@@ -452,4 +462,13 @@ protected:
         }
         return topicNames_;
     }
+
+private:
+    // HDP-specific members
+    std::unique_ptr<HDP> hdp;
+    int32_t K_; // Maximum number of topics
+    int32_t T_; // Minimum number of topics per document
+    int32_t num_topics_to_output_;
+    std::vector<std::string> topicNames_;
+    std::vector<int32_t> sorted_indices_;
 };

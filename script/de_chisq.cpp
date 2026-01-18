@@ -41,6 +41,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
     double minFC = 1.5;
     int nThreads = 1;
     double pseudoCount = 0.5;
+    int neighborK = 0;
 
     ParamList pl;
     pl.add_option("input", "Input pseudobulk matrix (one for 1-vs-rest, two for pairwise comparison)", inputFiles, true)
@@ -50,7 +51,8 @@ int32_t cmdDeChisq(int argc, char** argv) {
       .add_option("min-fc", "Min fold change for output (default: 1.5)", minFC)
       .add_option("min-count", "Minimum observed count for a (feature, factor) pair to be tested (default: 10)", minCount)
       .add_option("pseudocount", "Pseudocount to add to counts for Chi2 test (default: 0.5)", pseudoCount)
-      .add_option("threads", "Number of threads", nThreads);
+      .add_option("threads", "Number of threads", nThreads)
+      .add_option("neighbor-k", "Number of nearest neighbor columns for background (single input only)", neighborK);
 
     try {
         pl.readArgs(argc, argv);
@@ -68,9 +70,15 @@ int32_t cmdDeChisq(int argc, char** argv) {
     if (inputFiles.empty() || inputFiles.size() > 2) {
         error("One or two input files must be provided.");
     }
+    if (neighborK < 0) {
+        error("--neighbor-k must be non-negative");
+    }
 
     // Two-sample comparison
     if (inputFiles.size() == 2) {
+        if (neighborK > 0) {
+            warning("--neighbor-k is only supported for single-input mode");
+        }
         Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> mat1, mat2;
         std::vector<std::string> rows1, rows2;
         std::vector<std::string> cols1, cols2;
@@ -186,6 +194,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
     std::vector<std::vector<double>> matrix;
     std::vector<double> rowSums;
     std::vector<double> colSums(K, 0.0);
+    std::vector<double> colNorm2(K, 0.0);
 
     while(std::getline(in, line)) {
         if (line.empty()) continue;
@@ -209,13 +218,17 @@ int32_t cmdDeChisq(int argc, char** argv) {
     }
     in.close();
     double total_umi = 0.0;
-    for (size_t k=0; k<K; ++k) {
-        for (size_t i=0; i<matrix.size(); ++i) {
-            colSums[k] += matrix[i][k];
+    size_t M = geneNames.size();
+    for (size_t i = 0; i < M; ++i) {
+        for (size_t k = 0; k < K; ++k) {
+            double v = matrix[i][k];
+            colSums[k] += v;
+            colNorm2[k] += v * v;
         }
+    }
+    for (size_t k = 0; k < K; ++k) {
         total_umi += colSums[k];
     }
-    size_t M = geneNames.size();
     notice("Loaded %zu genes and %zu factors", M, K);
 
     tbb::concurrent_vector<DeResult> results;
@@ -259,6 +272,107 @@ int32_t cmdDeChisq(int argc, char** argv) {
     out << std::fixed << std::setprecision(4);
     for (const auto& r : results) {
         out << geneNames[r.j] << "\t" << header[r.k+1] << "\t"
+            << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\n";
+    }
+    if (neighborK <= 0) {
+        return 0;
+    }
+
+    if (neighborK >= static_cast<int>(K-1)) {
+        error("--neighbor-k must be smaller than the number of factors minus 1 (%zu)", K-1);
+    }
+
+    size_t pos = outputFile.rfind(".tsv");
+    if (pos != std::string::npos) {
+        outputFile = outputFile.substr(0, pos);
+    }
+    outputFile += ".1vsNeighbors.tsv";
+
+    std::vector<double> colNorm(K, 0.0);
+    for (size_t k = 0; k < K; ++k) {
+        colNorm[k] = std::sqrt(colNorm2[k]);
+    }
+
+    std::vector<std::vector<int>> neighbors(K);
+    std::vector<double> neighborTotals(K, 0.0);
+    for (size_t k = 0; k < K; ++k) {
+        std::vector<std::pair<double, int>> sims;
+        sims.reserve(K - 1);
+        for (size_t j = 0; j < K; ++j) {
+            if (j == k) continue;
+            double sim = 0.0;
+            if (colNorm[k] > 0.0 && colNorm[j] > 0.0) {
+                double dot = 0.0;
+                for (size_t i = 0; i < M; ++i) {
+                    dot += matrix[i][k] * matrix[i][j];
+                }
+                sim = dot / (colNorm[k] * colNorm[j]);
+            }
+            sims.emplace_back(sim, static_cast<int>(j));
+        }
+        std::nth_element(sims.begin(), sims.begin() + neighborK, sims.end(),
+            [](const auto& a, const auto& b) {
+                return a.first > b.first;
+            });
+        sims.resize(static_cast<size_t>(neighborK));
+        neighbors[k].reserve(sims.size());
+        for (const auto& item : sims) {
+            neighbors[k].push_back(item.second);
+            neighborTotals[k] += colSums[item.second];
+        }
+    }
+
+    tbb::concurrent_vector<DeResult> neighborResults;
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, K),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t k = range.begin(); k < range.end(); ++k) {
+                if (neighbors[k].empty()) continue;
+                if (colSums[k] < minCount || neighborTotals[k] <= 0.0) continue;
+                std::vector<double> neighborSums(M, 0.0);
+                for (int j : neighbors[k]) {
+                    for (size_t i = 0; i < M; ++i) {
+                        neighborSums[i] += matrix[i][j];
+                    }
+                }
+                for (size_t i = 0; i < M; ++i) {
+                    double a = matrix[i][k];
+                    if (a < minCount) continue;
+                    double c = neighborSums[i];
+                    double b = colSums[k] - a;
+                    double d = neighborTotals[k] - c;
+
+                    double a_p = a + pseudoCount;
+                    double b_p = b + pseudoCount;
+                    double c_p = c + pseudoCount;
+                    double d_p = d + pseudoCount;
+
+                    double fc = (a_p * d_p) / (b_p * c_p);
+                    if (fc < minFC) continue;
+
+                    double chi2 = (a_p * d_p - b_p * c_p) * (a_p * d_p - b_p * c_p)
+                        / ((a_p + b_p) * (c_p + d_p) * (a_p + c_p) * (b_p + d_p))
+                        * (a_p + b_p + c_p + d_p);
+                    double negLog10p = chisq1_log10p(chi2);
+                    if (negLog10p < maxLog10Pval) continue;
+
+                    neighborResults.emplace_back(static_cast<int>(i), static_cast<int>(k),
+                        chi2, negLog10p, fc);
+                }
+            }
+        });
+
+    tbb::parallel_sort(neighborResults.begin(), neighborResults.end(),
+        [](const DeResult& a, const DeResult& b) {
+            if (a.k != b.k) return a.k < b.k;
+            return a.chi2 > b.chi2;
+        });
+
+    std::ofstream outNeighbor(outputFile);
+    if (!outNeighbor) error("Cannot open output file: %s", outputFile.c_str());
+    outNeighbor << "Feature\tFactor\tChi2\tFoldChange\tlog10pval\n";
+    outNeighbor << std::fixed << std::setprecision(4);
+    for (const auto& r : neighborResults) {
+        outNeighbor << geneNames[r.j] << "\t" << header[r.k+1] << "\t"
             << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\n";
     }
 

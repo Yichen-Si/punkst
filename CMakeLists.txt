@@ -74,7 +74,8 @@ set(SOURCE_FILES
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
-    script/lda_training.cpp
+    script/fit_lda.cpp
+    script/transform_lda.cpp
     src/slda.hpp
     src/tiles2minibatch.hpp
     src/tiles2minibatch.cpp

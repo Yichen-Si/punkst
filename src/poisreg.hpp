@@ -122,7 +122,7 @@ public:
     }
 
     auto make_Hv(const ArrayXd& w) const {
-        return [&](const VectorXd& v) -> VectorXd {
+        return [this, &w](const VectorXd& v) -> VectorXd {
             VectorXd Av = A * v;
             return A.transpose() * (w * Av.array()).matrix();
         };
@@ -214,7 +214,7 @@ public:
     }
 
     auto make_Hv(const ArrayXd& w) const {
-        return [&](const VectorXd& v) -> VectorXd {
+        return [this, &w](const VectorXd& v) -> VectorXd {
             VectorXd Av = Anz * v;
             VectorXd Hv_nz = Anz.transpose() * (w * Av.array()).matrix();
             return Hv_nz + zakl * v;
@@ -357,7 +357,7 @@ public:
     // Returns a lambda function that computes Hv
     auto make_Hv(const ArrayXd& w) const {
         // uses cached Vnz from last eval() + diagonal zeros term T2
-        return [&](const VectorXd& v) -> VectorXd {
+        return [this, &w](const VectorXd& v) -> VectorXd {
             VectorXd tmp = Vnz * v; // n
             VectorXd Hv_nz = Vnz.transpose() * (w * tmp.array()).matrix();
             VectorXd Hv = Hv_nz;
@@ -428,7 +428,7 @@ public:
 
     auto make_Hv(const ArrayXd& w) const {
         const double ridge = opt.ridge;
-        return [&](const VectorXd& v) -> VectorXd {
+        return [this, &w, ridge](const VectorXd& v) -> VectorXd {
             VectorXd tmp = V * v; // N
             VectorXd Hv  = V.transpose() * (w * tmp.array()).matrix(); // K
             if (ridge > 0.0) Hv.noalias() += ridge * v;

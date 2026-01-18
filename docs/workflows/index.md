@@ -225,4 +225,6 @@ python punkst/ext/py/factor_report.py --de ${path}/de_bulk.tsv \
   --output_pref ${path}/report
 ```
 
+Optional: add `--de_neighbor ${path}/de_bulk.1vsNeighbors.tsv` if you included `--neighbor-k` when running `punkst de-chisq` to display top "highly specific" genes that are enriched even when comparing with k most similar factors.
+
 [Detailed documentation for visualization](../modules/visualization.md)
