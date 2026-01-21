@@ -1021,17 +1021,21 @@ void TileOperator::probDot_multi(const std::vector<std::string>& otherFiles, con
     }
 }
 
-std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTile(TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb) const {
+std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTile(
+    std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
+    TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb, int32_t union_key) const {
     if (coord_dim_ == 3) {error("%s does not support 3D data yet", __func__);}
     assert(reader.getTileSize() == formatInfo_.tileSize);
-    float res = formatInfo_.pixelResolution;
-    if (res <= 0) res = 1.0f;
 
     std::unordered_map<int32_t, Slice> tileAgg; // k -> unit key ->
-    std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
-    if (loadTileToMap(tile, pixelMap) == 0) {return tileAgg;}
+    if (pixelMap.size() == 0) {return tileAgg;}
     auto it = reader.get_tile_iterator(tile.row, tile.col);
     if (!it) {return tileAgg;}
+    auto aggIt0 = tileAgg.emplace(union_key, Slice()).first;
+    auto& oneSlice0 = aggIt0->second;
+
+    float res = formatInfo_.pixelResolution;
+    if (res <= 0) res = 1.0f;
 
     std::string line;
     RecordT<float> rec;
@@ -1062,6 +1066,12 @@ std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTile(TileRe
             }
             unitIt->second.add(rec.idx, rec.ct * p);
         }
+        if (union_key == 0) continue;
+        auto unitIt = oneSlice0.find({ux, uy});
+        if (unitIt == oneSlice0.end()) {
+            unitIt = oneSlice0.emplace(std::make_pair(ux, uy), SparseObsDict()).first;
+        }
+        unitIt->second.add(rec.idx, rec.ct);
     }
     return tileAgg;
 }

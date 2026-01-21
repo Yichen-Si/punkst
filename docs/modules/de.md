@@ -144,6 +144,8 @@ Annotation and transcript tiles must use the same tile size for each dataset pai
 
 `--max-pval` - Max p-value for output. Default: 1 (output all).
 
+`--max-pval-deconv` - If at least two cell types (slices) have a p-value less than this threshold, the tool runs a deconvolution to estimate effects adjusted for other cell types. Default: 1e-3.
+
 `--min-or` - Minimum odds ratio for output (bidirectional, so OR$>x$ and OR$<1/x$ are kept). Default: 1 (output all).
 
 `--min-count` - Minimum observed cell-type-specific count for a unit to be included. Default: 10.
@@ -160,24 +162,26 @@ Annotation and transcript tiles must use the same tile size for each dataset pai
 
 ### Output Files
 
-Given `--out PREFIX`, the output includes:
+Given `--out PREFIX`, the tool generates one main output file per contrast, plus auxiliary files.
 
-- When permutation is enabled (`--perm N`)
+- When permutation is enabled (`--perm > 0`), for each contrast:
+  - `PREFIX.CONTRAST.perm_N.tsv` is generated, where `CONTRAST` is from the `--contrast` file header or `labelA_vs_labelB` for auto-pairwise, and `N` is the number of permutations. It contains permutation-based p-values for significant associations. Columns are: `Slice`, `Feature`, `Beta`, `Pi0`, `Pi1`, `TotalCount`, `log10p`, `p_perm`.
 
-`PREFIX.CONTRAST.perm_N.tsv` for each contrast (contrast name from `--contrast` header or `labelA_vs_labelB` when auto-pairwise)
+- When permutation is not enabled (`--perm 0`), for each contrast:
+  - `PREFIX.CONTRAST.tsv` is generated.
+  - **Columns**:
+    - `Slice`: Cell type index (0-based).
+    - `Feature`: Feature name.
+    - `Beta`: Marginal log odds ratio for the feature.
+    - `log10p`: -log10(p-value) for `Beta`.
+    - `Pi0`, `Pi1`: Estimated feature prevalence in group 0 and 1.
+    - `TotalCount`: Total feature count in this cell type and contrast.
+    - `Beta_global`: Weighted average of `Beta` across cell types.
+    - `log10p_global`: -log10(p-value) for `Beta_global`.
+    - `log10p_deviation`: -log10(p-value) for the deviation of `Beta` from `Beta_global`.
+    - `Beta_deconv`: Deconvolved `Beta`, adjusted for other cell types. This is experimental and computed only when deconvolution is triggered (see `--max-pval-deconv`).
+    - `log10p_deconv`: -log10(p-value) for `Beta_deconv`.
 
-- When permutation is not enabled
-
-`PREFIX.CONTRAST.marginal.tsv` - Per cell type tests for each contrast.
-
-`PREFIX.CONTRAST.global.tsv` - Global test per feature and contrast.
-
-`PREFIX.CONTRAST.deviation.tsv` - Cell type specific shift relative to the global shift.
-
-The first column `Slice` indicates the cell type index (0-based, as in the pixel level result files).
-
-- Auxiliary files
-
-`PREFIX.nobs.tsv` - The number of units and the total number of pixels used for each cell type by dataset.
-
-`PREFIX.sums.tsv` - The total feature counts by dataset (this includes only the units that passed the `--min-count` filter for the corresponding cell type).
+- Auxiliary files:
+  - `PREFIX.nobs.tsv`: The number of units and total pixel counts per cell type and dataset.
+  - `PREFIX.sums.tsv`: Total feature counts per cell type and dataset for units passing filters.

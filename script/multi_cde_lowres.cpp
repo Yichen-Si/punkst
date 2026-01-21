@@ -12,6 +12,7 @@
 #include <atomic>
 #include <mutex>
 #include <sstream>
+#include <unordered_set>
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
 #include <tbb/global_control.h>
@@ -19,10 +20,11 @@
 #include "Eigen/Dense"
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
-static int32_t readContrastFromFile(const std::string& contrastFile,
+static void readContrastDesignFile(const std::string& contrastFile,
+                                  std::vector<std::string>& inFile,
+                                  std::vector<std::string>& metaFile,
                                   std::vector<std::vector<int32_t>>& contrasts,
-                                  std::vector<std::string>& contrastNames,
-                                  int32_t G);
+                                  std::vector<std::string>& contrastNames);
 
 enum class PoisLink { Log, Log1p };
 
@@ -33,10 +35,11 @@ static PoisLink parse_pois_link(const std::string& link) {
     return PoisLink::Log;
 }
 
-int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
+int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
 
     std::string contrastFile, outPrefix, modelFile;
     std::vector<std::string> inFile, metaFile;
+    std::vector<std::string> dataLabels;
     std::string link = "log1p";
     int32_t nThreads = 1;
     int32_t seed = -1;
@@ -53,9 +56,10 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
     optim.tron.enabled = true;
 
     ParamList pl;
-    pl.add_option("in-data", "Input data files", inFile, true)
-      .add_option("in-meta", "Metadata files", metaFile, true)
-      .add_option("contrast", "Contrast file", contrastFile)
+    pl.add_option("in-data", "Input data files", inFile)
+      .add_option("in-meta", "Metadata files", metaFile)
+      .add_option("labels", "Labels for the datasets to show in pairwise output", dataLabels)
+      .add_option("contrast", "Contrast design TSV (in-data, in-meta, contrasts)", contrastFile)
       .add_option("model", "Model file", modelFile, true)
       .add_option("link", "Regression link: log or log1p", link)
       .add_option("out", "Output prefix", outPrefix, true)
@@ -97,28 +101,41 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
     PoisLink pois_link = parse_pois_link(link);
     const bool use_log1p = (pois_link == PoisLink::Log1p);
 
-    int32_t G = inFile.size();
-    if (metaFile.size() != G) {
-        error("Number of metadata files must match number of data files");
-    }
-
-    // Read / construct contrasts
+    // Collect input files and contrasts
     std::vector<std::vector<int32_t>> contrasts;
     std::vector<std::string> contrastNames;
     int32_t C;
     if (!contrastFile.empty()) {
-        C = readContrastFromFile(contrastFile, contrasts, contrastNames, G);
+        if (!inFile.empty() || !metaFile.empty()) {
+            error("--contrast cannot be combined with --in-data/--in-meta");
+        }
+        readContrastDesignFile(contrastFile, inFile, metaFile, contrasts, contrastNames);
+        C = static_cast<int32_t>(contrasts.size());
         notice("Read %d contrasts from %s", C, contrastFile.c_str());
-    } else { // generate all pairwise contrasts
+    }
+    if (inFile.empty() || metaFile.empty() || inFile.size() != metaFile.size()) {
+        error("Either --contrast or both --in-data and --in-meta must be specified");
+    }
+    int32_t G = static_cast<int32_t>(inFile.size());
+
+    // Read / construct contrasts
+    if (contrastFile.empty()) { // generate all pairwise contrasts
+        dataLabels.resize(G);
+        for (int32_t g = 0; g < G; ++g) {
+            if (dataLabels[g].empty()) dataLabels[g] = std::to_string(g);
+        }
         for (int32_t g = 0; g < G; ++g) {
             for (int32_t l = g+1; l < G; ++l) {
                 contrasts.push_back(std::vector<int32_t>(G, 0));
-                contrasts.back()[g] = 1; contrasts.back()[l] = -1;
-                contrastNames.push_back(std::to_string(g) + "v" + std::to_string(l));
+                contrasts.back()[g] = -1; contrasts.back()[l] = 1;
+                contrastNames.push_back(dataLabels[g] + "v" + dataLabels[l]);
             }
         }
         C = contrasts.size();
         notice("Will perform all pairwise contrasts (%d) among %d samples", C, G);
+    }
+    if (contrasts.empty()) {
+        error("No contrasts defined");
     }
 
     // Read model
@@ -232,8 +249,11 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
             cvec_masked.segment(offset, ng) = cvec_all.segment(offset, ng);
             a_sum_ += c_theta_sums[g];
         }
-        // For fitting a aseline model
-        MixPoisReg baseline(A_all, cvec_masked, a_sum_, optim);
+        // For fitting baseline models (explicit non-negative beta)
+        OptimOptions baseline_optim = optim;
+        baseline_optim.set_bounds(0.0, 1e30, K);
+        MixPoisLink link = use_log1p ? MixPoisLink::Log1p : MixPoisLink::Log;
+        MixPoisReg baseline(A_all, cvec_masked, a_sum_, baseline_optim, link);
         // Pre-compute values to reuse in log1p sparse optimization
         VectorXd *s2p_ptr = nullptr, *s2m_ptr = nullptr;
         VectorXd s1p, s1m, s2p, s2m;
@@ -283,12 +303,12 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
         }
 
         std::unique_ptr<tbb::enumerable_thread_specific<VectorXd>> yvec_tls;
-        std::unique_ptr<tbb::enumerable_thread_specific<std::vector<int32_t>>> touched_tls;
+        std::unique_ptr<tbb::enumerable_thread_specific<std::vector<uint32_t>>> touched_tls;
         if (!use_log1p) {
             yvec_tls = std::make_unique<tbb::enumerable_thread_specific<VectorXd>>(
                 [N_total]() { return VectorXd::Zero(N_total); });
             touched_tls = std::make_unique<
-                tbb::enumerable_thread_specific<std::vector<int32_t>>>();
+                tbb::enumerable_thread_specific<std::vector<uint32_t>>>();
         }
 
         // Randomly distribute features to threads
@@ -326,30 +346,30 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                     continue;
                 }
                 VectorXd oK = eta0.col(j);
+                Document ys;
+                ys.ids.reserve(m);
+                ys.cnts.reserve(m);
+                for (int32_t g = 0; g < G; ++g) {
+                    if (contrasts[c][g] == 0) {continue;}
+                    const auto& doc = docsT[g][j];
+                    int32_t offset = offsets[g];
+                    for (size_t t = 0; t < doc.ids.size(); ++t) {
+                        ys.ids.push_back(static_cast<uint32_t>(offset) + doc.ids[t]);
+                        ys.cnts.push_back(doc.cnts[t]);
+                    }
+                }
+                // Fit baseline (intercept)
+                VectorXd b0 = baseline.fit_one(ys.ids, ys.cnts, oK);
+                eta0.col(j) = b0;
+
+                VectorXd b; // fitted coefficients
+                VectorXd bd(K); // bounds
                 MLEStats stats;
-                VectorXd b;
-                VectorXd bd = oK;
                 double fval = 0.0;
                 if (use_log1p) {
-                    Document ys;
-                    ys.ids.reserve(m);
-                    ys.cnts.reserve(m);
-                    for (int32_t g = 0; g < G; ++g) {
-                        if (contrasts[c][g] == 0) {continue;}
-                        const auto& doc = docsT[g][j];
-                        int32_t offset = offsets[g];
-                        for (size_t t = 0; t < doc.ids.size(); ++t) {
-                            ys.ids.push_back(static_cast<uint32_t>(offset) + doc.ids[t]);
-                            ys.cnts.push_back(doc.cnts[t]);
-                        }
-                    }
-                    // Fit baseline (intercept)
-                    VectorXd b0 = baseline.fit_one(ys.ids, ys.cnts, oK);
-                    eta0.col(j) = b0;
                     MLEOptions optLocal = mleOpt;
                     optLocal.optim.set_bounds(-b0, b0);
                     bd = b0;
-                    // Fit coefficients
                     MixPoisLog1pSparseProblem P(A_all, ys.ids, ys.cnts,
                         xvec, cvec_masked, b0, optLocal,
                         s1p, s1m, s2p_ptr, s2m_ptr);
@@ -360,27 +380,22 @@ int32_t cmdConditionalTestPoisLogReg(int argc, char** argv) {
                     auto& yvec = yvec_tls->local();
                     auto& touched = touched_tls->local();
                     touched.clear();
-                    for (int32_t g = 0; g < G; ++g) {
-                        if (contrasts[c][g] == 0) {continue;}
-                        const auto& doc = docsT[g][j];
-                        int32_t offset = offsets[g];
-                        for (size_t t = 0; t < doc.ids.size(); ++t) {
-                            int32_t idx = offset + static_cast<int32_t>(doc.ids[t]);
-                            yvec[idx] = doc.cnts[t];
-                            touched.push_back(idx);
-                        }
+                    for (size_t t = 0; t < ys.ids.size(); ++t) {
+                        double cnt = ys.cnts[t];
+                        yvec[ys.ids[t]] = cnt;
                     }
-                    MLEOptions optLocal = mleOpt;
+                    touched = std::move(ys.ids);
                     bd.setConstant(std::log(100.0));
                     for (int k = 0; k < K; ++k) {
-                        double bcap_floor = (oK[k] - std::log(1e-8 * sizeFactor));
+                        double bcap_floor = (b0[k] - std::log(1e-8 * sizeFactor));
                         if (std::isfinite(bcap_floor) && bcap_floor > 0.0) {
                             bd[k] = std::min(bd[k], bcap_floor);
                         }
                     }
+                    MLEOptions optLocal = mleOpt;
                     optLocal.optim.set_bounds(-bd, bd);
                     fval = mix_pois_log_mle(
-                        A_all, yvec, xvec, cvec_masked, oK, optLocal, b, stats);
+                        A_all, yvec, xvec, cvec_masked, b0, optLocal, b, stats);
                     for (int32_t idx : touched) {
                         yvec[idx] = 0.0;
                     }
@@ -449,55 +464,84 @@ std::cout << "\t" << log10p
 };
 
 
-static int32_t readContrastFromFile(const std::string& contrastFile,
+static void readContrastDesignFile(const std::string& contrastFile,
+        std::vector<std::string>& inFile,
+        std::vector<std::string>& metaFile,
         std::vector<std::vector<int32_t>>& contrasts,
-        std::vector<std::string>& contrastNames, int32_t G) {
+        std::vector<std::string>& contrastNames) {
     std::ifstream ifs(contrastFile);
     if (!ifs.is_open()) {
         error("Cannot open contrast file: %s", contrastFile.c_str());
     }
     std::string line;
-    int32_t C = 0;
-    while (std::getline(ifs, line)) {
-        if (line.empty()) {continue;}
-        std::vector<std::string> tokens;
-        split(tokens, "\t ", line, UINT_MAX, true, true, true);
-        if (line[0] == '#') {
-            contrastNames = std::vector<std::string>(tokens.begin() + 1, tokens.end());
-            C = tokens.size() - 1;
-            continue;
-        }
-        if (tokens.size() < 2) {
-            error("Contrast file malformed: %s", line.c_str());
-        }
-        if (C == 0) {
-            C = tokens.size() - 1;
-        } else {
-            if (tokens.size() != C + 1) {
-                error("Contrast file malformed: %s", line.c_str());
-            }
-        }
-        if (contrasts.empty()) {
-            contrasts.assign(C, std::vector<int32_t>(G, 0));
-        }
-        int32_t s = std::stoi(tokens[0]);
-        if (s < 0 || s >= G) {
-            error("Contrast file sample index out of range: %d", s);
-        }
-        for (int32_t c = 1; c <= C; ++c) {
-            int32_t y = std::stoi(tokens[c]);
-            if (y < -1 || y > 1) {
-                error("Contrast values must be -1, 0 (ignore), or 1: %d", y);
-            }
-            contrasts[c-1][s] = y;
-        }
+    std::vector<std::string> tokens;
+    if (!std::getline(ifs, line)) {
+        error("Contrast file is empty: %s", contrastFile.c_str());
     }
-    if (contrastNames.size() != static_cast<size_t>(C)) {
-        warning("Did not find valid contrast names in the contrast file header; using indexes by default");
-        contrastNames.resize(C);
-        for (int32_t c = 0; c < C; ++c) {
+    split(tokens, "\t ", line, UINT_MAX, true, true, true);
+    if (tokens.size() < 3) {
+        error("Contrast file must have >= 3 columns (in-data, in-meta, contrast...): %s",
+            contrastFile.c_str());
+    }
+    const int32_t C = static_cast<int32_t>(tokens.size() - 2);
+    contrasts.assign(C, std::vector<int32_t>{});
+    contrastNames.resize(C);
+    std::unordered_set<std::string> seen_names;
+    for (int32_t c = 0; c < C; ++c) {
+        const std::string name = tokens[c + 2];
+        if (name.empty()) {
+            warning("Contrast %d has an empty header name; using index instead", c);
             contrastNames[c] = std::to_string(c);
+        } else {
+            if (!seen_names.insert(name).second) {
+                error("Contrast name '%s' appears more than once in header", name.c_str());
+            }
+            contrastNames[c] = name;
         }
     }
-    return C;
+
+    int32_t n_samples = 0;
+    while (std::getline(ifs, line)) {
+        if (line.empty() || line[0] == '#') { continue; }
+        split(tokens, "\t ", line, UINT_MAX, true, true, true);
+        if (tokens.size() != static_cast<size_t>(C + 2)) {
+            error("Contrast file row has %zu columns, expected %d: %s",
+                tokens.size(), C + 2, line.c_str());
+        }
+        inFile.push_back(tokens[0]);
+        metaFile.push_back(tokens[1]);
+        for (int32_t c = 0; c < C; ++c) {
+            int32_t y = 0;
+            if (!str2int32(tokens[c + 2], y)) {
+                error("Contrast value must be -1, 0, or 1: %s", tokens[c + 2].c_str());
+            }
+            if (y < -1 || y > 1) {
+                error("Contrast value must be -1, 0, or 1: %d", y);
+            }
+            contrasts[c].push_back(y);
+        }
+        n_samples++;
+    }
+    if (n_samples == 0) {
+        error("Contrast file has a header but no samples: %s", contrastFile.c_str());
+    }
+    for (int32_t c = 0; c < C; ++c) {
+        if (contrasts[c].size() != static_cast<size_t>(n_samples)) {
+            error("Contrast %s has %zu labels, expected %d samples",
+                contrastNames[c].c_str(), contrasts[c].size(), n_samples);
+        }
+        int32_t n_neg = 0;
+        int32_t n_pos = 0;
+        for (int32_t s = 0; s < n_samples; ++s) {
+            const int32_t y = contrasts[c][s];
+            if (y < 0) {
+                n_neg++;
+            } else if (y > 0) {
+                n_pos++;
+            }
+        }
+        if (n_neg == 0 || n_pos == 0) {
+            error("Contrast %s must have at least one sample in each group", contrastNames[c].c_str());
+        }
+    }
 }

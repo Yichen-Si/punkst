@@ -135,8 +135,15 @@ public:
 
     void probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, int32_t probDigits = 4);
 
+    int32_t loadTileToMap(const TileKey& key,
+        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap) const;
+    int32_t loadTileToMap3D(const TileKey& key,
+        std::map<PixelKey3, TopProbs>& pixelMap) const;
+
     using Slice = std::unordered_map<std::pair<int32_t, int32_t>, SparseObsDict, PairHash>; // unitKey -> sparse feature counts
-    std::unordered_map<int32_t, Slice> aggOneTile(TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb = 0.01) const;
+    std::unordered_map<int32_t, Slice> aggOneTile(
+        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
+        TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb = 0.01, int32_t union_key = 0) const;
 
 private:
     std::string dataFile_, indexFile_;
@@ -183,10 +190,6 @@ private:
 
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
 
-    int32_t loadTileToMap(const TileKey& key,
-        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap) const;
-    int32_t loadTileToMap3D(const TileKey& key,
-        std::map<PixelKey3, TopProbs>& pixelMap) const;
     void mergeTiles2D(const std::set<TileKey>& commonTiles,
         const std::vector<TileOperator*>& opPtrs,
         const std::vector<uint32_t>& k2keep,

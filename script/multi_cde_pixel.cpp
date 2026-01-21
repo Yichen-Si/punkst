@@ -96,6 +96,7 @@ static void readContrastDesignFile(const std::string& contrastFile,
         if (contrasts[c].group_neg.empty() || contrasts[c].group_pos.empty()) {
             error("Contrast %s must have at least one sample in each group", contrasts[c].name.c_str());
         }
+        notice("Read contrast %s with %zu vs %zu samples", contrasts[c].name.c_str(), contrasts[c].group_pos.size(), contrasts[c].group_neg.size());
     }
 }
 
@@ -154,12 +155,13 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     int32_t icol_x, icol_y, icol_feature, icol_val;
     float qxmin, qxmax, qymin, qymax;
     bool bounded = false;
-    double pseudoCount = 0.5;
     double minCount = 10.0;
     double minCountPerFeature = 100.0;
     double minPval_output = 1;
+    double deconv_hit_p = 1;
     double minOR_output = 1;
     double minOR = 1.2;
+    double minProb = 0.01;
     int32_t debug_ = 0;
     int32_t nThreads = 1;
     int32_t nPerm = 0;
@@ -176,7 +178,7 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
       .add_option("pts", "Prefixes of the transcript data files", inPtsPrefix)
       .add_option("contrast", "Contrast design TSV (anno, pts, contrasts)", contrastFile)
       .add_option("features", "List of features to test", dictFile, true)
-      .add_option("grid-size", "Grid size", gridSize)
+      .add_option("grid-size", "Grid size", gridSize, true)
       .add_option("icol-x", "Column index for x coordinate for files in --pts (0-based)", icol_x, true)
       .add_option("icol-y", "Column index for y coordinate for files in --pts (0-based)", icol_y, true)
       .add_option("icol-feature", "Column index for feature for files in --pts (0-based)", icol_feature, true)
@@ -188,8 +190,10 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
       .add_option("bounded", "Whether to subset to the bounding box defined by --xmin/--xmax/--ymin/--ymax", bounded)
       .add_option("threads", "Number of threads to use", nThreads)
       .add_option("out", "Output prefix", outPrefix, true)
+      .add_option("min-prob", "Minimum probability for a pixel to be included (softly) in a slice", minProb)
       .add_option("min-count-per-feature", "Minimum total count for a feature to be considered", minCountPerFeature)
       .add_option("max-pval", "Max p-value for output (default: 1)", minPval_output)
+      .add_option("max-pval-deconv", "If at least two slices reach this p-value, do deconvolution", deconv_hit_p)
       .add_option("min-or", "Minimum odds ratio for output (default: 1)", minOR_output)
       .add_option("min-or-perm", "Minimum odds ratio for doing permutation (default: 1.2)", minOR)
       .add_option("min-count", "Minimum observed factor-specific count for a unit to be included (default: 10)", minCount)
@@ -279,12 +283,14 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     }
 
     MultiSlicePairwiseBinom statOp(K, n_data, M, minCount);
+    PairwiseBinomRobust statUnion(n_data, M, minCount);
     MultiSliceUnitCache unitCache(K, M, minCount);
     struct LocalAgg {
         MultiSlicePairwiseBinom stat;
         MultiSliceUnitCache cache;
+        PairwiseBinomRobust statu;
         LocalAgg(int K, int G, int M, double minCount)
-            : stat(K, G, M, minCount), cache(K, M, minCount) {}
+            : stat(K, G, M, minCount), cache(K, M, minCount), statu(G, M, minCount) {}
     };
 
     // Process each dataset and collect sufficient statistics
@@ -298,69 +304,190 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
         tbb::enumerable_thread_specific<LocalAgg> tls([&] {
             return LocalAgg(K, (int)n_data, M, minCount);
         });
-
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, tileList.size()),
-            [&](const tbb::blocked_range<size_t>& range) {
-                auto& local = tls.local();
-                for (size_t ti = range.begin(); ti != range.end(); ++ti) {
-                    const auto& tileInfo = tileList[ti];
-                    TileKey tile{tileInfo.row, tileInfo.col};
-                    auto tileAgg = tileOp.aggOneTile(reader, parser, tile, gridSize);
-                    for (const auto& kv : tileAgg) {
-                        const int32_t k = kv.first;
-                        if (k < 0 || k >= K) continue;
-                        for (const auto& unitKv : kv.second) {
-                            const auto& obs = unitKv.second;
-                            local.stat.slice(k).add_unit(static_cast<int>(i), obs.totalCount, obs.featureCounts);
-                            if (nPerm > 0) {
-                                local.cache.add_unit(k, static_cast<int>(i), obs.totalCount, obs.featureCounts);
-                            }
+        int32_t topk = tileOp.getK();
+        size_t ntasks = tileList.size();
+        if (debug_) {
+            ntasks = std::min<size_t>(ntasks, debug_ * nThreads);
+        }
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, ntasks),
+            [&](const tbb::blocked_range<size_t>& range)
+        {
+            Eigen::MatrixXd confusion = Eigen::MatrixXd::Zero(K, K);
+            auto& local = tls.local();
+            double p_residual = 0.0;
+            for (size_t ti = range.begin(); ti != range.end(); ++ti) {
+                const auto& tileInfo = tileList[ti];
+                TileKey tile{tileInfo.row, tileInfo.col};
+                std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+                tileOp.loadTileToMap(tile, pixelMap);
+                for (const auto& kv : pixelMap) {
+                    const auto& tp = kv.second;
+                    double r = 1.;
+                    for (size_t ii = 0; ii < tp.ks.size(); ++ii) {
+                        r -= tp.ps[ii];
+                        for (size_t jj = ii; jj < tp.ks.size(); ++jj) {
+                            confusion(tp.ks[ii], tp.ks[jj]) += tp.ps[ii] * tp.ps[jj];
                         }
                     }
-                    int32_t done = processed.fetch_add(1) + 1;
-                    if (done % 10 == 0) {
-                        notice("... processed %d / %d tiles for dataset %u", done, nTiles, i);
+                    if (r <= 0) {continue;}
+                    p_residual += r * r;
+                }
+                auto tileAgg = tileOp.aggOneTile(pixelMap, reader, parser, tile, gridSize, minProb, K);
+                for (const auto& kv : tileAgg) {
+                    const int32_t k = kv.first;
+                    if (k < 0 || k > K) continue;
+                    if (k == K) {
+                        for (const auto& unitKv : kv.second) {
+                            const auto& obs = unitKv.second;
+                            local.statu.add_unit(static_cast<int>(i), obs.totalCount, obs.featureCounts);
+                        }
+                        continue;
+                    }
+                    for (const auto& unitKv : kv.second) {
+                        const auto& obs = unitKv.second;
+                        local.stat.slice(k).add_unit(static_cast<int>(i), obs.totalCount, obs.featureCounts);
+                        if (nPerm > 0) {
+                            local.cache.add_unit(k, static_cast<int>(i), obs.totalCount, obs.featureCounts);
+                        }
                     }
                 }
-            });
+                int32_t done = processed.fetch_add(1) + 1;
+                if (done % 10 == 0) {
+                    notice("... processed %d / %d tiles for dataset %u", done, nTiles, i);
+                }
+            }
+            confusion += confusion.transpose().eval();
+            p_residual = p_residual / K / K;
+            for (int k = 0; k < K; ++k) {
+                confusion(k, k) /= 2.0;
+                for (int l = 0; l < K; ++l) {
+                    confusion(k, l) += p_residual;
+                }
+            }
+            local.stat.add_to_confusion(i, confusion);
+        });
         for (auto& local : tls) {
             statOp.merge_from(local.stat);
             unitCache.merge_from(local.cache);
+            statUnion.merge_from(local.statu);
         }
     }
-    statOp.finished_adding_data();
     notice("Finished collecting sufficient statistics from all datasets");
+    statOp.finished_adding_data();
 
-    // ---------------- Permutation calibration ----------------
-    if (nPerm > 0) {
-        const double min_log_or_perm = std::log(minOR);
-        const double pi_eps = 1e-8;
-        // Store observed stats
-        struct TestRec {
-            int k;
-            int f;
-            PairwiseBinomRobust::PairwiseOneResult obs;
-        };
-        // Thread-local buffers
-        struct PermTLS {
-            std::vector<double> N1;
-            std::vector<double> Y1;
-            std::vector<uint32_t> touched_idx; // indices of Y1 modified
-            std::vector<uint32_t> exceed; // exceed counts for tests
-            PermTLS(int K, int M, size_t T)
-                : N1(K, 0.0), Y1((size_t)(K * M), 0.0), exceed(T, 0) {}
-            inline void reset_perm() {
-                std::fill(N1.begin(), N1.end(), 0.0);
-                for (uint32_t idx : touched_idx) Y1[idx] = 0.0;
-                touched_idx.clear();
+    const double pi_eps = 1e-8;
+    const double min_log_or_perm = std::log(minOR);
+    struct TestRec {
+        int k; int f;
+        double beta; double log10p;
+        double pi0; double pi1;
+        double total_count;
+        double beta_global; double log10p_global; double log10p_dev;
+        double beta_deconv; double log10p_deconv;
+        double p_perm; bool perm_candidate;
+    };
+    const auto& active = statOp.get_active_features();
+    for (const auto& contrast : contrasts) {
+        ContrastPrecomp pc = statOp.prepare_contrast(contrast.group_neg, contrast.group_pos);
+
+        std::vector<TestRec> tests;
+        const size_t n_tests_guess = (size_t)(K * active.size());
+        tests.reserve(n_tests_guess);
+        notice("Contrast %s with %d active features", contrast.name.c_str(), (int32_t) active.size());
+        for (int f : active) {
+            PairwiseBinomRobust::PairwiseOneResult mu;
+            if (!statUnion.compute_one_test_aggregate(
+                    f, contrast.group_neg, contrast.group_pos, mu,
+                    minCountPerFeature, pi_eps, true)) {
+                continue;
             }
-            inline void add_y1(int k, int f, double y, int M) {
-                const uint32_t idx = (uint32_t)(k * M + f);
-                if (Y1[idx] == 0.0) touched_idx.push_back(idx);
-                Y1[idx] += y;
+            MultiSliceOneResult ms(K);
+            if (!statOp.compute_one_test_aggregate(
+                    f, contrast.group_neg, contrast.group_pos, pc, ms,
+                    minCountPerFeature, pi_eps, true, deconv_hit_p)) {
+                continue;
             }
-        };
-        for (const auto& contrast : contrasts) {
+
+            std::vector<uint8_t> ok(K, 0);
+            int ok_count = 0;
+
+            for (int k = 0; k < K; ++k) {
+                if (!ms.slice_ok[(size_t)k]) {continue;}
+                ok[k] = 1;
+                ok_count++;
+            }
+            if (ok_count == 0) {continue;}
+
+            double g = mu.beta, varg = mu.varb;
+            double log10p_g = -log10_twosided_p_from_z(g / std::sqrt(varg));
+            for (int k = 0; k < K; ++k) {
+                if (!ok[k] || std::abs(ms.beta_obs(k)) < min_log_or) {continue;}
+                if (ms.log10p_obs(k) < minLog10p) {continue;}
+
+                double total_count = 0.0;
+                {
+                    const auto& counts = statOp.slice(k).get_group_counts();
+                    double y0 = 0.0;
+                    double y1 = 0.0;
+                    for (int32_t g0 : contrast.group_neg) {
+                        size_t idx = static_cast<size_t>(g0) * M + f;
+                        y0 += counts[idx];
+                    }
+                    for (int32_t g1 : contrast.group_pos) {
+                        size_t idx = static_cast<size_t>(g1) * M + f;
+                        y1 += counts[idx];
+                    }
+                    total_count = y0 + y1;
+                }
+
+                double log10p_dev = -1.0;
+                double beta_dev = 0.0;
+                if (ok_count >= 2 && varg > 0.0) {
+                    beta_dev = ms.beta_obs(k) - g;
+                    const double se_d = std::sqrt(ms.varb_obs(k) + varg);
+                    log10p_dev = -log10_twosided_p_from_z(beta_dev / se_d);
+                }
+
+                double beta_deconv = 0.0;
+                double log10p_deconv = -1.0;
+                if (ms.deconv_ok) {
+                    beta_deconv = ms.beta_deconv(k);
+                    const double se = std::sqrt(ms.varb_obs(k));
+                    if (se > 0.0 && std::isfinite(se)) {
+                        log10p_deconv = -log10_twosided_p_from_z(beta_deconv / se);
+                    }
+                }
+
+                TestRec rec{k, f, ms.beta_obs(k), ms.log10p_obs(k),
+                            ms.pi0_obs(k), ms.pi1_obs(k),
+                            total_count, g, log10p_g, log10p_dev,
+                            beta_deconv, log10p_deconv,
+                            -1.0, false};
+                rec.perm_candidate = (std::abs(rec.beta) >= min_log_or_perm);
+                tests.push_back(rec);
+            }
+        }
+
+        if (nPerm > 0 && !tests.empty()) {
+            struct PermTLS {
+                std::vector<double> N1;
+                std::vector<double> Y1;
+                std::vector<uint32_t> touched_idx; // indices of Y1 modified
+                std::vector<uint32_t> exceed; // exceed counts for tests
+                PermTLS(int K, int M, size_t T)
+                    : N1(K, 0.0), Y1((size_t)(K * M), 0.0), exceed(T, 0) {}
+                inline void reset_perm() {
+                    std::fill(N1.begin(), N1.end(), 0.0);
+                    for (uint32_t idx : touched_idx) Y1[idx] = 0.0;
+                    touched_idx.clear();
+                }
+                inline void add_y1(int k, int f, double y, int M) {
+                    const uint32_t idx = (uint32_t)(k * M + f);
+                    if (Y1[idx] == 0.0) touched_idx.push_back(idx);
+                    Y1[idx] += y;
+                }
+            };
+
             const std::string contrastName = contrast.name;
             std::vector<double> Ntot(K, 0.0); // total counts across two groups
             std::vector<int> n1_units(K, 0), n_units(K, 0);
@@ -389,41 +516,11 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
                 }
             }
 
-            std::vector<TestRec> tests;
-            std::vector<bool> kept_flag;
             int32_t n_candidate = 0;
-            size_t n_tests = (size_t) (K * statOp.get_active_features().size());
-            tests.reserve(n_tests);
-            kept_flag.reserve(n_tests);
-            for (int k = 0; k < K; ++k) {
-                const auto& sl  = statOp.slice(k);
-                const double N0 = sum_group_totals(sl, contrast.group_neg);
-                const double N1 = sum_group_totals(sl, contrast.group_pos);
-                if (N0 <= 0.0 || N1 <= 0.0) continue;
-                for (int f : statOp.get_active_features()) {
-                    PairwiseBinomRobust::PairwiseOneResult res;
-                    if (!sl.compute_one_test_aggregate(f,
-                            contrast.group_neg, contrast.group_pos,
-                            res, minCountPerFeature, pi_eps, true)) {
-                        continue;
-                    }
-                    if (std::abs(res.beta) >= min_log_or_perm) {
-                        n_candidate++;
-                        kept_flag.push_back(true);
-                    } else {
-                        kept_flag.push_back(false);
-                    }
-                    tests.push_back(TestRec{k, f, res});
-                }
+            for (const auto& rec : tests) {
+                if (rec.perm_candidate) n_candidate++;
             }
-
-            notice("Permutation: %d tests (slice, feature) to evaluate for contrast %s", (int32_t) n_candidate, contrastName.c_str());
-
-            // Output file
-            std::string permFile = outPrefix + "." + contrastName + ".perm_" + std::to_string(nPerm) + ".tsv";
-            FILE* out_perm = fopen(permFile.c_str(), "w");
-            if (!out_perm) { error("Cannot open output file: %s", permFile.c_str()); }
-            fprintf(out_perm, "Slice\tFeature\tBeta\tPi0\tPi1\tTotalCount\tlog10p\tp_perm\n");
+            notice("Permutation: %d tests (slice, feature) to evaluate for contrast %s", n_candidate, contrastName.c_str());
 
             tbb::enumerable_thread_specific<PermTLS> tls_perm([&] {
                 return PermTLS(K, M, tests.size());
@@ -474,22 +571,21 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
 
                     // Compute betas & compare with observed beta
                     for (size_t j = 0; j < tests.size(); ++j) {
-                        if (!kept_flag[j]) continue;
-                        const auto& Q = tests[j];
-                        const int k = Q.k;
-                        const int f = Q.f;
+                        if (!tests[j].perm_candidate) continue;
+                        const int k = tests[j].k;
+                        const int f = tests[j].f;
                         const double N1p = T.N1[k];
                         const double N0p = Ntot[k] - N1p;
                         if (N0p <= 0.0 || N1p <= 0.0) continue;
 
                         const double Y1p = T.Y1[(size_t)(k*M+f)];
-                        const double Y0p = Q.obs.tot - Y1p;
+                        const double Y0p = tests[j].total_count - Y1p;
                         const double pi0p = clamp(Y0p / N0p, pi_eps, 1.0 - pi_eps);
                         const double pi1p = clamp(Y1p / N1p, pi_eps, 1.0 - pi_eps);
                         const double beta_p = logit(pi1p) - logit(pi0p);
                         if (!std::isfinite(beta_p)) continue;
 
-                        if (std::abs(beta_p) >= std::abs(Q.obs.beta)) {
+                        if (std::abs(beta_p) >= std::abs(tests[j].beta)) {
                             T.exceed[j] += 1;
                         }
                     }
@@ -502,128 +598,34 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
                 for (size_t j = 0; j < tests.size(); ++j) exceed[j] += T.exceed[j];
             }
 
-            // Output
             for (size_t j = 0; j < tests.size(); ++j) {
-                const auto& Q  = tests[j];
-                if (std::abs(Q.obs.beta) < min_log_or) continue;
-                double se = std::sqrt(Q.obs.varb);
-                double log10p = -log10_twosided_p_from_z(Q.obs.beta/se);
-                if (log10p < minLog10p) continue;
-                double p = -1;
-                if (kept_flag[j]) {
-                    p = (double)exceed[j] / (double)nPerm;
-                }
-                fprintf(out_perm, "%d\t%s\t%.4e\t%.4e\t%.4e\t%.1f\t%.4e\t%.4f\n",
-                    Q.k, featureList[Q.f].c_str(),
-                    Q.obs.beta, Q.obs.pi0, Q.obs.pi1, Q.obs.tot, log10p, p);
+                if (!tests[j].perm_candidate) continue;
+                tests[j].p_perm = (double)exceed[j] / (double)nPerm;
             }
-            fclose(out_perm);
-            notice("Permutation results written: %s", permFile.c_str());
         }
-    } else {
-        const double pi_eps = 1e-8;
-        const auto& active = statOp.get_active_features();
-        for (const auto& contrast : contrasts) {
 
-            outFile = outPrefix + "." + contrast.name + ".marginal.tsv";
-            FILE* out_marginal = fopen(outFile.c_str(), "w");
-            if (!out_marginal) {error("Cannot open output file: %s", outFile.c_str());}
-            outFile = outPrefix + "." + contrast.name + ".global.tsv";
-            FILE* out_global = fopen(outFile.c_str(), "w");
-            if (!out_global) {error("Cannot open output file: %s", outFile.c_str());}
-            outFile = outPrefix + "." + contrast.name + ".deviation.tsv";
-            FILE* out_deviation = fopen(outFile.c_str(), "w");
-            if (!out_deviation) {error("Cannot open output file: %s", outFile.c_str());}
-
-            fprintf(out_marginal,"Slice\tFeature\tBeta\tSE\tlog10p\tPi0\tPi1\tTotalCount\n");
-            fprintf(out_global,"Feature\tnPassSlices\tBeta\tSE\tlog10p\n");
-            fprintf(out_deviation,"Slice\tFeature\tBeta\tSE\tlog10p\n");
-
-            std::vector<double> base_pi(K, 0.0);
-            double base_sum = 0.0;
-            for (int k = 0; k < K; ++k) {
-                const auto& sl = statOp.slice(k);
-                const double wk = sum_group_totals(sl, contrast.group_neg) +
-                    sum_group_totals(sl, contrast.group_pos);
-                base_pi[k] = wk;
-                base_sum += wk;
-            }
-            if (base_sum <= 0.0) continue;
-            for (int k = 0; k < K; ++k) base_pi[k] /= base_sum;
-
-            for (int f : active) {
-                std::vector<double> beta(K, 0.0), varb(K, 0.0), pi0(K, 0.0), pi1(K, 0.0), tot(K, 0.0);
-                std::vector<uint8_t> ok(K, 0);
-                std::vector<double> pi = base_pi;
-                double pisum_ok = 0.0;
-                int ok_count = 0;
-
-                for (int k = 0; k < K; ++k) {
-                    PairwiseBinomRobust::PairwiseOneResult r;
-                    if (!statOp.slice(k).compute_one_test_aggregate(f,
-                            contrast.group_neg, contrast.group_pos, r,
-                            minCountPerFeature, pi_eps, true)) {
-                        continue;
-                    }
-                    ok[k] = 1;
-                    beta[k] = r.beta; varb[k] = r.varb;
-                    pi0[k]  = r.pi0;  pi1[k]  = r.pi1;  tot[k]  = r.tot;
-                    pisum_ok += pi[k];
-                    ok_count++;
-                }
-                if (ok_count == 0 || pisum_ok == 0.0) continue;
-
-                for (int k = 0; k < K; ++k) if (ok[k]) pi[k] /= pisum_ok;
-
-                for (int k = 0; k < K; ++k) {
-                    if (!ok[k] || std::abs(beta[k]) < min_log_or) continue;
-                    const double se = std::sqrt(varb[k]);
-                    double z = beta[k] / se;
-                    double log10p = -log10_twosided_p_from_z(z);
-                    if (log10p >= minLog10p) {
-                        fprintf(out_marginal, "%d\t%s\t%.4e\t%.4e\t%.4e\t%.4e\t%.4e\t%.1f\n",
-                            k, featureList[f].c_str(),
-                            beta[k], se, log10p, pi0[k], pi1[k], tot[k]);
-                    }
-                }
-
-                double g = 0.0, varg = 0.0;
-                for (int k = 0; k < K; ++k) {
-                    if (!ok[k]) continue;
-                    g += pi[k] * beta[k];
-                    varg += (pi[k] * pi[k]) * varb[k];
-                }
-                if (varg <= 0.0) continue;
-
-                const double se_g = std::sqrt(varg);
-                double z_g = g / se_g;
-                double log10p_g = -log10_twosided_p_from_z(z_g);
-                fprintf(out_global, "%s\t%d\t%.4e\t%.4e\t%.4f\n",
-                    featureList[f].c_str(),
-                    ok_count, g, se_g, log10p_g);
-
-                if (ok_count < 2) continue;
-
-                for (int k = 0; k < K; ++k) {
-                    if (!ok[k]) continue;
-                    const double d = beta[k] - g;
-                    if (std::abs(d) < min_log_or) {continue;}
-                    double vard = varb[k] + varg - 2.0 * pi[k] * varb[k];
-                    if (vard <= 0.0) continue;
-                    const double se = std::sqrt(vard);
-                    double z = beta[k] / se;
-                    double log10p = -log10_twosided_p_from_z(z);
-                    if (log10p >= minLog10p) {
-                        fprintf(out_deviation, "%d\t%s\t%.4e\t%.4e\t%.4f\n",
-                            k, featureList[f].c_str(),
-                            d, se, log10p);
-                    }
-                }
-            }
-            fclose(out_marginal);
-            fclose(out_global);
-            fclose(out_deviation);
+        outFile = outPrefix + "." + contrast.name + ".tsv";
+        FILE* out_stream = fopen(outFile.c_str(), "w");
+        if (!out_stream) {error("Cannot open output file: %s", outFile.c_str());}
+        std::string header = "Slice\tFeature\tBeta\tlog10p\tPi0\tPi1\tTotalCount\tBeta_global\tlog10p_global\tlog10p_deviation\tBeta_deconv\tlog10p_deconv";
+        if (nPerm > 0) {
+            fprintf(out_stream, "%s\tp_perm\n", header.c_str());
+        } else {
+            fprintf(out_stream, "%s\n", header.c_str());
         }
+
+        for (const auto& rec : tests) {
+            fprintf(out_stream, "%d\t%s\t%.4e\t%.4f\t%.4e\t%.4e\t%.1f\t%.4e\t%.4f\t%.4f\t%.4e\t%.4f",
+                rec.k, featureList[rec.f].c_str(),
+                rec.beta, rec.log10p, rec.pi0, rec.pi1, rec.total_count,
+                rec.beta_global, rec.log10p_global, rec.log10p_dev, rec.beta_deconv, rec.log10p_deconv);
+            if (nPerm > 0) {
+                fprintf(out_stream, "\t%.4f", rec.p_perm);
+            }
+            fprintf(out_stream, "\n");
+        }
+        fclose(out_stream);
+        notice("Result for %s is written to:\n  %s", contrast.name.c_str(),  outFile.c_str());
     }
 
     outFile = outPrefix + ".nobs.tsv";

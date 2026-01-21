@@ -57,7 +57,7 @@ void TileOperator::loadIndex(const std::string& indexFile) {
             tile_lookup_[{b.row, b.col}] = i;
         }
     }
-    notice("Loaded index with %lu blocks", blocks_all_.size());
+    notice("Loaded index with %lu tiles", blocks_all_.size());
 }
 
 void TileOperator::printIndex() const {

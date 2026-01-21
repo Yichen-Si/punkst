@@ -81,8 +81,7 @@ double chisq1_log10p(double chi2) {
     }
 }
 
-std::pair<double, double> chisq2x2_log10p(double a, double b, double c, double d,
-                                          double pseudocount) {
+std::pair<double, double> chisq2x2_log10p(double a, double b, double c, double d, double pseudocount) {
     if (pseudocount > 0) {
         a += pseudocount;
         b += pseudocount;

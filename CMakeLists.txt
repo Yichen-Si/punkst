@@ -103,6 +103,7 @@ set(SOURCE_FILES
     script/draw_pixel_genes.cpp
     src/vst.hpp
     src/glm.hpp
+    src/glm.cpp
     script/feature_selection.cpp
     src/tiles2nmf.hpp
     src/tiles2nmf.cpp

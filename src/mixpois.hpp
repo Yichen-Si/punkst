@@ -18,8 +18,8 @@ using Eigen::ArrayXd;
 using Eigen::MatrixXd;
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
-// \lambda_i = c_i * \sum_k \theta_{ik} * (\exp(\eta_k) - 1), \eta_k >= 0
-// \sum_i\lambda_i = \sum_k [(\sum_i c_i * \theta_{ik}) * (\exp(\eta_k) - 1)]
+// \lambda_i = c_i * \sum_k \theta_{ik} * beta_k, beta_k >= 0
+// \sum_i\lambda_i = \sum_k [(\sum_i c_i * \theta_{ik}) * beta_k]
 //                := \sum_k a_sum_k * beta_k
 class MixPoisRegProblem {
 public:
@@ -35,8 +35,7 @@ public:
           K_(static_cast<int>(theta.cols())),
           lambda_floor_(lambda_floor) {}
 
-    // beta_k := \exp(\eta_k) - 1
-    // a_sum_k := \sum_i c_i * theta_{ik}
+    // beta_k >= 0, a_sum_k := \sum_i c_i * theta_{ik}
     double f(const VectorXd& beta) const {
         double val = beta.dot(a_sum_);
         const int nnz = static_cast<int>(ids_.size());
@@ -102,17 +101,19 @@ private:
     double lambda_floor_;
 };
 
-// x_im ~ Poisson(lambda_im), \lambda_im = c_i * \sum_k \theta_ik * \beta_km
-// \beta_km := exp(eta_km) - 1
+enum class MixPoisLink { Log, Log1p };
+
+// x_im ~ Poisson(lambda_im), \lambda_im = c_i * \sum_k \theta_ik * g(eta_km)
+// g(eta) = exp(eta) - 1 (log1p link) or exp(eta) (log link)
 // precomputed a_sum_k := \sum_i c_i * \theta_ik
-// with knwn \theta and c_i (=n_i/L), fit eta_k >= 0
 class MixPoisReg {
 public:
     MixPoisReg(const RowMajorMatrixXd& theta, // N x K
                const VectorXd& c,     // N
                const VectorXd& a_sum, // K
-               const OptimOptions& opt)
-        : theta_(theta), c_(c), a_sum_(a_sum), opt_(opt) {
+               const OptimOptions& opt,
+               MixPoisLink link)
+        : theta_(theta), c_(c), a_sum_(a_sum), opt_(opt), link_(link) {
         N_ = static_cast<int>(theta_.rows());
         K_ = static_cast<int>(theta_.cols());
         opt_.tron.enabled = true;
@@ -122,32 +123,10 @@ public:
     VectorXd fit_one(const std::vector<uint32_t>& ids,
                      const std::vector<double>& cnts,
                      const VectorXd& eta0) const {
-        if (ids.empty()) {
-            return VectorXd::Zero(K_);
+        if (link_ == MixPoisLink::Log1p) {
+            return fit_one_log1p(ids, cnts, eta0);
         }
-        VectorXd eta = eta0;
-        if (eta.size() != K_) {
-            error("%s: wrong size of initial eta (%d vs %d)", __func__, (int)eta.size(), K_);
-        }
-        eta = eta.array().max(0.0);
-
-        // Work variable: beta := exp(eta) - 1 >= 0
-        VectorXd beta(K_);
-        for (int k = 0; k < K_; ++k) {
-            const double e = std::exp(std::min(eta[k], exp_cap_));
-            beta[k] = std::max(0.0, e - 1.0);
-        }
-
-        MixPoisRegProblem P(theta_, c_, a_sum_, ids, cnts, lambda_floor_);
-        OptimStats stats{}; //
-        tron_solve(P, beta, opt_, stats); // use non-negative bound to fit beta
-
-        // Back-transform: eta = log(1 + beta)
-        for (int k = 0; k < K_; ++k) {
-            eta[k] = std::log1p(std::max(0.0, beta[k]));
-        }
-        eta = eta.array().max(0.0);
-        return eta;
+        return fit_one_log(ids, cnts, eta0);
     }
 
     // Return: K x M
@@ -182,11 +161,72 @@ public:
     }
 
 private:
+    VectorXd fit_one_log1p(const std::vector<uint32_t>& ids,
+                           const std::vector<double>& cnts,
+                           const VectorXd& eta0) const {
+        if (ids.empty()) {
+            return VectorXd::Zero(K_);
+        }
+        VectorXd eta = eta0;
+        if (eta.size() != K_) {
+            error("%s: wrong size of initial eta (%d vs %d)", __func__, (int)eta.size(), K_);
+        }
+        eta = eta.array().max(0.0);
+
+        // Work variable: beta := exp(eta) - 1 >= 0
+        VectorXd beta(K_);
+        for (int k = 0; k < K_; ++k) {
+            const double e = std::exp(std::min(eta[k], exp_cap_));
+            beta[k] = std::max(0.0, e - 1.0);
+        }
+
+        MixPoisRegProblem P(theta_, c_, a_sum_, ids, cnts, lambda_floor_);
+        OptimStats stats{}; //
+        tron_solve(P, beta, opt_, stats); // use non-negative bound to fit beta
+
+        // Back-transform: eta = log(1 + beta)
+        for (int k = 0; k < K_; ++k) {
+            eta[k] = std::log1p(std::max(0.0, beta[k]));
+        }
+        eta = eta.array().max(0.0);
+        return eta;
+    }
+
+    VectorXd fit_one_log(const std::vector<uint32_t>& ids,
+                         const std::vector<double>& cnts,
+                         const VectorXd& eta0) const {
+        if (ids.empty()) {
+            return VectorXd::Zero(K_);
+        }
+        VectorXd eta = eta0;
+        if (eta.size() != K_) {
+            error("%s: wrong size of initial eta (%d vs %d)", __func__, (int)eta.size(), K_);
+        }
+
+        // Work variable: beta := exp(eta) > 0
+        VectorXd beta(K_);
+        for (int k = 0; k < K_; ++k) {
+            const double e = std::exp(std::min(eta[k], exp_cap_));
+            beta[k] = std::max(beta_floor_, e);
+        }
+
+        MixPoisRegProblem P(theta_, c_, a_sum_, ids, cnts, lambda_floor_);
+        OptimStats stats{}; //
+        tron_solve(P, beta, opt_, stats); // use non-negative bound to fit beta
+
+        // Back-transform: eta = log(beta)
+        for (int k = 0; k < K_; ++k) {
+            eta[k] = std::log(std::max(beta_floor_, beta[k]));
+        }
+        return eta;
+    }
     const RowMajorMatrixXd& theta_;  // N x K
     const VectorXd& c_;      // N
     const VectorXd& a_sum_;  // K
     OptimOptions opt_;
+    MixPoisLink link_;
     double lambda_floor_ = 1e-30;
+    double beta_floor_   = 1e-30;
     double exp_cap_      = 40.0;
     int N_ = 0;
     int K_ = 0;
