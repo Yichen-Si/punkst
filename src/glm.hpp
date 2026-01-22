@@ -98,6 +98,20 @@ public:
         return N_[g];
     }
     const std::vector<int>& get_active_features() const { return active_; }
+    double sum_group_totals(const std::vector<int32_t>& groups) const {
+        double total = 0.0;
+        for (int32_t g : groups) {
+            total += N_[g];
+        }
+        return total;
+    }
+    int sum_group_unit_counts(const std::vector<int32_t>& groups) const {
+        int total = 0;
+        for (int32_t g : groups) {
+            total += n_[g];
+        }
+        return total;
+    }
 
     // Add one unit
     void add_unit(int group, double n, const std::vector<int>& feat_ids,

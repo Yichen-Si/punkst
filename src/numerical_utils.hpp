@@ -548,6 +548,8 @@ inline T clamp(T x, T a, T b) {
 }
 
 double safe_log10(double x);
+double median(std::vector<double> v);
+double mad(const std::vector<double>& x, double scale = 1.4826);
 double normal_sf(double x);
 double twosided_p_from_z(double z);
 double normal_logsf(double x);

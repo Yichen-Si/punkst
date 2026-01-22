@@ -122,25 +122,6 @@ static void buildPairwiseContrasts(const std::vector<std::string>& dataLabels,
     }
 }
 
-static double sum_group_totals(const PairwiseBinomRobust& slice,
-        const std::vector<int32_t>& groups) {
-    const auto& totals = slice.get_group_totals();
-    double total = 0.0;
-    for (int32_t g : groups) {
-        total += totals[g];
-    }
-    return total;
-}
-
-static int sum_group_unit_counts(const PairwiseBinomRobust& slice,
-        const std::vector<int32_t>& groups) {
-    const auto& counts = slice.get_group_unit_counts();
-    int total = 0;
-    for (int32_t g : groups) {
-        total += counts[g];
-    }
-    return total;
-}
 /**
  * Join pixel level decoding results with original transcripts and perform
  * cluster/factor specific (conditional) DE test between groups
@@ -494,11 +475,11 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
             std::vector<std::vector<uint32_t>> eligible_units(K);
             for (int k = 0; k < K; ++k) {
                 const auto& sl = statOp.slice(k);
-                Ntot[k] = sum_group_totals(sl, contrast.group_neg) +
-                    sum_group_totals(sl, contrast.group_pos);
-                n1_units[k] = sum_group_unit_counts(sl, contrast.group_pos);
-                n_units[k]  = sum_group_unit_counts(sl, contrast.group_neg) +
-                    sum_group_unit_counts(sl, contrast.group_pos);
+                Ntot[k] = sl.sum_group_totals(contrast.group_neg) +
+                    sl.sum_group_totals(contrast.group_pos);
+                n1_units[k] = sl.sum_group_unit_counts(contrast.group_pos);
+                n_units[k]  = sl.sum_group_unit_counts(contrast.group_neg) +
+                    sl.sum_group_unit_counts(contrast.group_pos);
                 const auto& units = unitCache.slice_units(k);
                 eligible_units[k].reserve(units.size());
                 int cached_n = 0;

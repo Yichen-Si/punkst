@@ -95,6 +95,7 @@ set(SOURCE_FILES
     src/poisreg.hpp
     src/poisreg.cpp
     src/mixpois.hpp
+    src/mixpois.cpp
     src/newtons.hpp
     src/poisnmf.hpp
     src/poisnmf.cpp
@@ -114,6 +115,7 @@ set(SOURCE_FILES
     src/tileoperator.cpp
     script/manipulate_tiles.cpp
     script/multi_cde_lowres.cpp
+    script/multi_cde_lowres_nb.cpp
     script/multi_cde_pixel.cpp
   )
 

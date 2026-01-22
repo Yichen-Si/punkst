@@ -47,7 +47,7 @@ REPORTS := \
 all: $(REPORTS)
 
 # ─── Step 1: bag pixels → tiles.tsv + tiles.index ─────────────────────
-$(DATADIR)/prepare.stamp: $(TRANSCRIPTS)
+$(DATADIR)/prepare.stamp:
 	@echo "[1/6] pts2tiles → $@"
 	 $(PUNKST) pts2tiles \
 	  --in-tsv $(TRANSCRIPTS) \
@@ -61,8 +61,7 @@ $(DATADIR)/prepare.stamp: $(TRANSCRIPTS)
 # ─── Step 2: for each H in HEXGRIDS → hex_H.txt ────────────
 define HEX_RULE
 $(DATADIR)/hex_$(1)_$(NUR).txt: \
-    $(DATADIR)/prepare.stamp \
-	$(CELLCOORD)
+    $(DATADIR)/prepare.stamp
 	@echo "[2/6] tiles2hex (hex=$(1)) → $$@"
 	 $(PUNKST) tiles2hex \
 	  --in-tsv $(TILETSV) \
@@ -122,8 +121,7 @@ $(foreach H,$(HEXGRIDS),\
 define PIXEL_RULE
 $(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.decode.stamp: \
     $(DATADIR)/hex_$(1)_$(NUR).k$(2).model.stamp\
-    $(DATADIR)/prepare.stamp \
-    $(CELLCOORD)
+    $(DATADIR)/prepare.stamp
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$@"
 	 $(PUNKST) pixel-decode \
 	  --model $(DATADIR)/hex_$(1)_$(NUR).k$(2).model.tsv \

@@ -29,6 +29,42 @@ double safe_log10(double x) {
     return (x > 0.0) ? std::log10(x) : -std::numeric_limits<double>::infinity();
 }
 
+double median(std::vector<double> v) {
+    if (v.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const size_t n = v.size();
+    const size_t mid = n / 2;
+    std::nth_element(v.begin(), v.begin() + mid, v.end());
+    double med = v[mid];
+    if (n % 2 == 0) {
+        double lower = *std::max_element(v.begin(), v.begin() + mid);
+        med = 0.5 * (med + lower);
+    }
+    return med;
+}
+
+double mad(const std::vector<double>& x, double scale) {
+    if (x.empty()) {
+        return 0.0;
+    }
+    std::vector<double> tmp = x;
+    double med = median(tmp);
+    if (!std::isfinite(med)) {
+        return 0.0;
+    }
+    std::vector<double> abs_dev;
+    abs_dev.reserve(x.size());
+    for (double v : x) {
+        abs_dev.push_back(std::abs(v - med));
+    }
+    double mad_val = median(abs_dev);
+    if (!std::isfinite(mad_val)) {
+        return 0.0;
+    }
+    return scale * mad_val;
+}
+
 double normal_sf(double x) {
     return 0.5 * std::erfc(x / std::sqrt(2.0));
 }

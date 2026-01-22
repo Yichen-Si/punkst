@@ -17,6 +17,7 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv);
 int32_t cmdMultiSample(int32_t argc, char** argv);
 int32_t cmdMergeUnits(int32_t argc, char** argv);
 int32_t cmdConditionalTestPoisReg(int argc, char** argv);
+int32_t cmdConditionalTestNbReg(int argc, char** argv);
 int32_t cmdNmfPoisLog1p(int32_t argc, char** argv);
 int32_t cmdNmfTransform(int32_t argc, char** argv);
 int32_t cmdDrawPixelFeatures(int32_t argc, char** argv);
@@ -47,6 +48,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("multisample-prepare", "Process multisample data", cmdMultiSample)
         .add_command("merge-units", "Merge multiple single cell/hexagon files into a single file", cmdMergeUnits)
         .add_command("multi-conditional-de-pois", "Multi-sample cell type specific DE test by Poisson regression (use --link=log|log1p)", cmdConditionalTestPoisReg)
+        .add_command("multi-conditional-de-nb", "Multi-sample cell type specific DE test by Poisson regression with over-dispersion (NB) (use --link=log|log1p)", cmdConditionalTestNbReg)
         .add_command("multi-conditional-de-pixel", "Multi-sample cell type specific DE test based on pixel level cell type inference", cmdConditionalTest)
         .add_command("nmf-pois-log1p", "Fit Poisson log1p NMF", cmdNmfPoisLog1p)
         .add_command("nmf-pois-log1p-transform", "Transform data using fitted Poisson log1p NMF model", cmdNmfTransform)

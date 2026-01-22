@@ -201,7 +201,7 @@ int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
     std::vector<std::string> tokens;
     int32_t nAnchors = 0;
     while (std::getline(inFile, line)) {
-        if (line.empty()) continue;
+        if (line.empty() || line[0] == '#') continue;
         split(tokens, "\t", line);
         if (tokens.size() < 2 || (coordDim_ == MinibatchCoordDim::Dim3 && tokens.size() < 3)) {
             error("Error reading anchors file at line: %s", line.c_str());

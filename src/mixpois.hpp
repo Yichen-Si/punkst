@@ -18,6 +18,9 @@ using Eigen::ArrayXd;
 using Eigen::MatrixXd;
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
+struct MLEOptions;
+struct MLEStats;
+
 // \lambda_i = c_i * \sum_k \theta_{ik} * beta_k, beta_k >= 0
 // \sum_i\lambda_i = \sum_k [(\sum_i c_i * \theta_{ik}) * beta_k]
 //                := \sum_k a_sum_k * beta_k
@@ -230,4 +233,261 @@ private:
     double exp_cap_      = 40.0;
     int N_ = 0;
     int K_ = 0;
+};
+
+/*
+    Poisson mixture regression
+    \lambda_i = c_i * \sum_k a_{ik} (\exp(o_{ik} + x_i b_k) - 1)
+    Assuming x_i \in \set{-1,1}
+*/
+class MixPoisLog1pSparseProblem {
+public:
+    const RowMajorMatrixXd& A;   // A_rows x K, rows sum to 1
+    const VectorXd& x;           // N
+    const VectorXd& c;           // N
+    const VectorXd& oK;          // K
+    const std::vector<uint32_t>& ids; // indices with y>0
+    Eigen::Map<const VectorXd> yvec;  // counts for ids
+    const MLEOptions& opt;
+
+    const int N_active; // active sample count for this contrast
+    const int N, K;
+    const int n; // nnz
+    RowMajorMatrixXd Anz;  // n x K
+    VectorXd xS, cS;       // n
+
+    // Sums of c_i a_{ik} over Zero-set split by sign of x
+    VectorXd Sz_plus, Sz_minus;
+    // Sums of (c_i a_{ik})^2 over Zero-set split by sign of x
+    VectorXd Sz2_plus,  Sz2_minus;
+
+    // Cached (depends on b, updated in eval)
+    mutable MatrixXd Vnz;       // n x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
+    mutable ArrayXd w_cache;    // n, w_i = (c_i x_i)^2 / lambda_i
+    mutable VectorXd lam_cache; // n, lambda_i for nonzero rows
+    mutable VectorXd last_qZ;
+    mutable ArrayXd slope_cache;
+
+    MixPoisLog1pSparseProblem(const RowMajorMatrixXd& A_,
+            const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
+            const VectorXd& x_, const VectorXd& c_, const VectorXd& oK_,
+            const MLEOptions& opt_, const VectorXd& s1p, const VectorXd& s1m,
+            VectorXd* s2p = nullptr, VectorXd* s2m = nullptr,
+            int N_active_ = -1);
+
+    double f(const VectorXd& b) const {
+        double fval;
+        eval(b, &fval, nullptr, nullptr, nullptr);
+        return fval;
+    }
+
+    auto make_Hv(const ArrayXd& w) const {
+        return [this, &w](const VectorXd& v) -> VectorXd {
+            VectorXd tmp = Vnz * v; // n
+            VectorXd Hv_nz = Vnz.transpose() * (w * tmp.array()).matrix();
+            VectorXd Hv = Hv_nz;
+            Hv.array() += last_qZ.array() * v.array();
+            return Hv;
+        };
+    }
+
+    void eval(const VectorXd& b, double* f_out,
+              VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const {
+        eval_safe(b, f_out, g_out, q_out, w_out);
+    }
+    void eval_safe(const VectorXd& b, double* f_out,
+              VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+};
+
+void mix_pois_log1p_compute_se(const MixPoisLog1pSparseProblem& P,
+    const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats);
+double mix_pois_log1p_mle(const RowMajorMatrixXd& A,
+    const std::vector<uint32_t>& ids, const std::vector<double>& cnts,
+    const VectorXd& x, const VectorXd& c, const VectorXd& oK,
+    const MLEOptions& opt, VectorXd& b, MLEStats& stats,
+    VectorXd& s1p, VectorXd& s1m,
+    VectorXd* s2p = nullptr, VectorXd* s2m = nullptr, int N_active = -1);
+
+/*
+  Poisson mixture regression with log link + size factor (Unknown: b)
+    lambda_i = c_i * sum_k a_{ik} * exp(o_k + x_i b_k)
+*/
+class MixPoisLogRegProblem {
+public:
+    const RowMajorMatrixXd& A;  // N x K (a_{ik})
+    const VectorXd& y;          // N
+    const VectorXd& x;          // N
+    const VectorXd& c;          // N (size factors)
+    const VectorXd& oK;         // K (offsets)
+    const MLEOptions& opt;
+    const double ridge;
+
+    const int N_active; // active sample count for this contrast
+    const int N, K;
+
+    // Cached at current b (for Hv)
+    mutable MatrixXd V;         // N x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
+    mutable ArrayXd  w_cache;   // N, w_i = (c_i x_i)^2 / lambda_i
+    mutable VectorXd lam_cache; // N
+
+    MixPoisLogRegProblem(const RowMajorMatrixXd& A_,
+        const VectorXd& y_, const VectorXd& x_,
+        const VectorXd& c_, const VectorXd& oK_, const MLEOptions& opt_,
+        int N_active_ = -1);
+
+    double f(const VectorXd& b) const {
+        double fval;
+        eval(b, &fval, nullptr, nullptr, nullptr);
+        return fval;
+    }
+
+    auto make_Hv(const ArrayXd& w) const {
+        const double ridge_local = ridge;
+        return [this, &w, ridge_local](const VectorXd& v) -> VectorXd {
+            VectorXd tmp = V * v; // N
+            VectorXd Hv  = V.transpose() * (w * tmp.array()).matrix(); // K
+            if (ridge_local > 0.0) Hv.noalias() += ridge_local * v;
+            return Hv;
+        };
+    }
+
+    void eval(const VectorXd& b, double* f_out,
+        VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+};
+
+void mix_pois_log_compute_se(const MixPoisLogRegProblem& P,
+    const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats);
+double mix_pois_log_mle(const RowMajorMatrixXd& A,
+    const VectorXd& y, const VectorXd& x,
+    const VectorXd& c, const VectorXd& oK,
+    MLEOptions& opt, VectorXd& b, MLEStats& stats,
+    int32_t init_newton = 0, bool init_polish = false,
+    int N_active = -1);
+double init_b0_loglink_1d(const RowMajorMatrixXd& A,
+    const VectorXd& y, const VectorXd& x,
+    const VectorXd& c, const VectorXd& oK, double eps, int iters = 10);
+VectorXd init_mix_pois_log_vec(const RowMajorMatrixXd& A,
+    const VectorXd& y, const VectorXd& x,
+    const VectorXd& c, const VectorXd& oK,
+    double eps = 1e-12, int newton_steps_per_k = 5,
+    bool do_diag_polish = true, const MLEOptions* opt_for_polish = nullptr);
+
+/*
+  NB2 mixture regression with log link + size factor (Unknown: b)
+    lambda_i = c_i * sum_k a_{ik} * exp(o_k + x_i b_k)
+*/
+class MixNBLogRegProblem {
+public:
+    const RowMajorMatrixXd& A;  // N x K (a_{ik})
+    const VectorXd& y;          // N
+    const VectorXd& x;          // N
+    const VectorXd& c;          // N (size factors)
+    const VectorXd& oK;         // K (offsets)
+    const MLEOptions& opt;
+    const double ridge;
+    const double alpha;
+
+    const int N_active; // active sample count for this contrast
+    const int N, K;
+
+    // Cached at current b (for Hv)
+    mutable MatrixXd V;         // N x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
+    mutable ArrayXd  w_cache;   // N, w_i = (c_i x_i)^2 / (lambda_i (1 + alpha lambda_i))
+    mutable VectorXd lam_cache; // N
+
+    MixNBLogRegProblem(const RowMajorMatrixXd& A_, int N_active_,
+        const VectorXd& y_, const VectorXd& x_,
+        const VectorXd& c_, const VectorXd& oK_, double alpha_,
+        const MLEOptions& opt_);
+
+    double f(const VectorXd& b) const {
+        double fval;
+        eval(b, &fval, nullptr, nullptr, nullptr);
+        return fval;
+    }
+
+    auto make_Hv(const ArrayXd& w) const {
+        const double ridge_local = ridge;
+        return [this, &w, ridge_local](const VectorXd& v) -> VectorXd {
+            VectorXd tmp = V * v; // N
+            VectorXd Hv  = V.transpose() * (w * tmp.array()).matrix(); // K
+            if (ridge_local > 0.0) Hv.noalias() += ridge_local * v;
+            return Hv;
+        };
+    }
+
+    void eval(const VectorXd& b, double* f_out,
+        VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+    void compute_se(const VectorXd& b_hat, const MLEOptions& opt,
+        MLEStats& stats) const;
+};
+
+// NB log1p mixture regression with sparse exact nonzeros and approximate zeros
+class MixNBLog1pSparseApproxProblem {
+public:
+    const RowMajorMatrixXd& A;   // N x K, rows sum to 1
+    const VectorXd& x;           // N
+    const VectorXd& c;           // N
+    const VectorXd& oK;          // K
+    const std::vector<uint32_t>& ids; // indices with y>0
+    Eigen::Map<const VectorXd> yvec;  // counts for ids
+    const OptimOptions& opt;
+    const double ridge;
+    const double soft_tau;
+    const double alpha; // NB dispersion
+
+    const int N; // active sample count for this contrast
+    const int K;
+    const int n; // nnz
+    RowMajorMatrixXd Anz;  // n x K
+    VectorXd xS, cS;       // n
+
+    // Zero-set aggregates split by sign of x
+    VectorXd Sz_plus, Sz_minus;         // sum c_i a_ik
+    VectorXd Szc2_plus, Szc2_minus;     // sum c_i^2 a_ik
+    VectorXd Sz2_plus, Sz2_minus;       // sum c_i^2 a_ik^2
+    double Cz, Cz2;                     // sum c_i and c_i^2 over zero-set
+
+    // Cached (depends on b, updated in eval)
+    mutable MatrixXd Vnz;       // n x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
+    mutable ArrayXd w_cache;    // n, w_i = (c_i x_i)^2 / (lambda_i (1 + alpha lambda_i))
+    mutable VectorXd lam_cache; // n, lambda_i for nonzero rows
+    mutable VectorXd last_qZ;
+    mutable ArrayXd slope_cache;
+    static constexpr double kZeroApproxTau = 0.2;
+
+    MixNBLog1pSparseApproxProblem(const RowMajorMatrixXd& A_, int N_,
+            const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
+            const VectorXd& x_, const VectorXd& c_, const VectorXd& oK_,
+            double alpha_,
+            const OptimOptions& opt_, double ridge_, double soft_tau_,
+            const VectorXd& s1p, const VectorXd& s1m,
+            const VectorXd& s1p_c2, const VectorXd& s1m_c2,
+            const VectorXd& s2p, const VectorXd& s2m,
+            double csum_p, double csum_m, double c2sum_p, double c2sum_m);
+
+    double f(const VectorXd& b) const {
+        double fval;
+        eval(b, &fval, nullptr, nullptr, nullptr);
+        return fval;
+    }
+
+    auto make_Hv(const ArrayXd& w) const {
+        return [this, &w](const VectorXd& v) -> VectorXd {
+            VectorXd tmp = Vnz * v; // n
+            VectorXd Hv_nz = Vnz.transpose() * (w * tmp.array()).matrix();
+            VectorXd Hv = Hv_nz;
+            Hv.array() += last_qZ.array() * v.array();
+            return Hv;
+        };
+    }
+
+    void eval(const VectorXd& b, double* f_out,
+              VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const {
+        eval_safe(b, f_out, g_out, q_out, w_out);
+    }
+
+    void eval_safe(const VectorXd& b, double* f_out,
+              VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+    void compute_se(const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats) const;
 };
