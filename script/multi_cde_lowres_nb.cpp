@@ -103,14 +103,14 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
     if (seed <= 0) {seed = std::random_device{}();}
     if (sizeFactor <= 0) {error("Size factor must be positive");}
     if (nThreads < 0) {nThreads = 1;}
-    if (maxPval <= 0) {error("max-pval must be positive");}
     if (se_method < 1 || se_method > 3) {error("--se-method must be 1/2/3");}
     if (dispLoessSpan <= 0.0 || dispLoessSpan > 1.0) {error("--dispersion-loess-span must be in (0,1]");}
     if (dispOutlierTau <= 0.0) {error("--dispersion-outlier-tau must be positive");}
     if (alphaMin <= 0.0 || alphaMax <= 0.0 || alphaMin > alphaMax) {
         error("--alpha-min/max must be positive with min <= max");
     }
-    double minlog10p = - std::log10(maxPval);
+    double minlog10p = -1;
+    if (maxPval > 0 && maxPval < 1) {minlog10p = - std::log10(maxPval);}
     tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, nThreads);
 
     PoisLink nb_link = parse_pois_link(link);
@@ -502,12 +502,7 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
         notice("Wrote dispersions to %s", disp_path.c_str());
 
         // ---- Stage C: full model with fixed dispersion ----
-        std::string out_path = outPrefix + "." + contrastNames[c];
-        if (use_log1p) {
-            out_path += ".mixnb_log1p.tsv";
-        } else {
-            out_path += ".mixnb_log.tsv";
-        }
+        std::string out_path = outPrefix + "." + contrastNames[c] + ".tsv";
         std::ofstream out(out_path);
         if (!out) error("Failed to open output file: %s", out_path.c_str());
         std::string se_header = (se_method == 3) ? "SE\tSE0" : "SE";
@@ -679,11 +674,15 @@ std::cout << "\t" << log10p
         out.close();
         notice("Wrote results to %s", out_path.c_str());
 
+        out_path = outPrefix + "." + contrastNames[c] + ".eta0.tsv";
+        RowMajorMatrixXd eta_out;
         if (use_log1p) {
-            out_path = outPrefix + "." + contrastNames[c] + ".eta0.tsv";
-            RowMajorMatrixXd eta_out = eta0.transpose().array().exp() - 1.0;
-            write_matrix_to_file(out_path, eta_out, 4, true, featureNames, "Feature", &factorNames);
+            eta_out = eta0.transpose().array().exp() - 1.0;
+        } else {
+            eta_out = eta0.transpose().array().exp();
         }
+        write_matrix_to_file(out_path, eta_out, 4, true, featureNames, "Feature", &factorNames);
+
     }
 
     return 0;

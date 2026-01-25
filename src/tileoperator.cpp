@@ -1075,3 +1075,62 @@ std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTile(
     }
     return tileAgg;
 }
+
+Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+TileOperator::computeConfusionMatrix(double resolution, const char* outPref, int32_t probDigits) const {
+    if (coord_dim_ != 2) {error("%s: only 2D data are supported", __func__);}
+    if (K_ <= 0) {error("%s: K is 0 or unknown", __func__);}
+    const int32_t K = K_;
+    float res = formatInfo_.pixelResolution;
+    if (res <= 0) res = 1.0f;
+    if (resolution > 0) res /= resolution;
+    std::unordered_map<std::pair<int32_t, int32_t>, Eigen::VectorXd, PairHash> squareSums;
+    std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+    for (const auto& tileInfo : blocks_) {
+        TileKey tile{tileInfo.row, tileInfo.col};
+        if (loadTileToMap(tile, pixelMap) <= 0) {
+            continue;
+        }
+        for (const auto& kv : pixelMap) {
+            const auto& coord = kv.first;
+            int32_t sx = coord.first;
+            int32_t sy = coord.second;
+            if (resolution > 0) {
+                sx = static_cast<int32_t>(std::floor(coord.first * res));
+                sy = static_cast<int32_t>(std::floor(coord.second* res));
+            }
+            auto& merged = squareSums[std::make_pair(sx, sy)];
+            if (merged.size() == 0) {
+                merged = Eigen::VectorXd::Zero(K);
+            }
+            const TopProbs& tp = kv.second;
+            for (size_t i = 0; i < tp.ks.size(); ++i) {
+                int32_t k = tp.ks[i];
+                if (k < 0 || k >= K) {
+                    error("%s: factor index %d out of range [0, %d)", __func__, k, K);
+                }
+                merged[k] += tp.ps[i];
+            }
+        }
+    }
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> confusion;
+    confusion.setZero(K, K);
+    for (auto& kv : squareSums) {
+        auto& merged = kv.second;
+        double w = merged.sum();
+        if (w == 0.0) continue;
+        merged = merged.array() / w;
+        confusion += merged * merged.transpose() * w;
+    }
+
+    if (outPref) {
+        std::vector<std::string> factorNames(K);
+        for (int32_t k = 0; k < K; ++k) {factorNames[k] = std::to_string(k);}
+        std::string outFile(outPref);
+        outFile += ".confusion.tsv";
+        write_matrix_to_file(outFile, confusion, probDigits, true, factorNames, "K", &factorNames);
+        notice("Confusion matrix written to %s", outFile.c_str());
+    }
+
+    return confusion;
+}

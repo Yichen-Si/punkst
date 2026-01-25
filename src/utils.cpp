@@ -141,6 +141,45 @@ bool str2bool(const std::string& str, bool& value) {
     return false;
 }
 
+std::vector<std::string> read_lines_maybe_gz(const std::string& path) {
+    std::vector<std::string> lines;
+    if (path.empty()) {
+        error("Empty path provided");
+    }
+    if (ends_with(path, ".gz")) {
+        gzFile gz = gzopen(path.c_str(), "rb");
+        if (!gz) {
+            error("Failed to open %s", path.c_str());
+        }
+        char buf[1 << 16];
+        while (gzgets(gz, buf, sizeof(buf))) {
+            std::string s(buf);
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) {
+                s.pop_back();
+            }
+            if (!s.empty()) {
+                lines.emplace_back(std::move(s));
+            }
+        }
+        gzclose(gz);
+    } else {
+        std::ifstream in(path);
+        if (!in) {
+            error("Failed to open %s", path.c_str());
+        }
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (!line.empty()) {
+                lines.emplace_back(std::move(line));
+            }
+        }
+    }
+    return lines;
+}
+
 std::string uint32toHex(uint32_t num) {
     std::stringstream ss;
     ss << std::hex << std::setw(8) << std::setfill('0') << num;

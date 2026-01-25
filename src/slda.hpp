@@ -2,6 +2,10 @@
 
 #include "numerical_utils.hpp"
 #include "tiles2minibatch.hpp"
+#include "utils.h"
+#include <atomic>
+#include <cstdint>
+#include <unordered_map>
 
 using Eigen::VectorXf;
 using Eigen::RowVectorXf;
@@ -39,7 +43,8 @@ public:
         K_ = K;
         M_ = M;
         N_ = N;
-        rng_.seed(seed);
+        seed_ = seed;
+        rng_stream_.store(0, std::memory_order_relaxed);
         tau0_ = std::max(tau0 + 1., 1.0);
         kappa_ = kappa;
         updatect_ = 0;
@@ -59,6 +64,21 @@ public:
             eta_ = eta_.transpose();
         } else {
             eta_ = VectorXf::Constant(M_, 1./K_).transpose();
+        }
+    }
+
+    void set_thread_rng_stream(uint64_t stream) {
+        auto& rngs = thread_rng_map();
+        auto it = rngs.find(this);
+        if (it != rngs.end() && it->second.stream == stream) {
+            return;
+        }
+        auto rng = make_rng(static_cast<uint64_t>(seed_), stream);
+        if (it == rngs.end()) {
+            rngs.emplace(this, RngState{std::move(rng), stream});
+        } else {
+            it->second.rng = std::move(rng);
+            it->second.stream = stream;
         }
     }
 
@@ -85,9 +105,10 @@ public:
         }
         lambda_.resize(M_, K_);
         std::gamma_distribution<float> gamma_dist(100.0, 1.0/100.0);
+        auto& rng = thread_rng();
         for (int i = 0; i < M_; i++) {
             for (int j = 0; j < K_; j++) {
-                lambda_(i, j) = gamma_dist(rng_);
+                lambda_(i, j) = gamma_dist(rng);
             }
         }
         Elog_beta_ = dirichlet_entropy_2d(lambda_, true); // M x K
@@ -195,9 +216,10 @@ public:
         if (batch.gamma.size() == 0) {
             batch.gamma.resize(batch.n, K_);
             std::gamma_distribution<float> gamma_dist(100.0, 1.0/100.0);
+            auto& rng = thread_rng();
             for (int i = 0; i < batch.n; i++) {
                 for (int j = 0; j < K_; j++) {
-                    batch.gamma(i, j) = gamma_dist(rng_);
+                    batch.gamma(i, j) = gamma_dist(rng);
                 }
             }
         }
@@ -290,9 +312,10 @@ public:
         if (batch.gamma.size() == 0) {
             batch.gamma.resize(batch.n, K_);
             std::gamma_distribution<float> gamma_dist(100.0, 1.0/100.0);
+            auto& rng = thread_rng();
             for (int i = 0; i < batch.n; i++) {
                 for (int j = 0; j < K_; j++) {
-                    batch.gamma(i, j) = gamma_dist(rng_);
+                    batch.gamma(i, j) = gamma_dist(rng);
                 }
             }
         }
@@ -393,6 +416,36 @@ public:
     }
 
 private:
+    struct RngState {
+        std::mt19937 rng;
+        uint64_t stream;
+    };
+
+    static std::mt19937 make_rng(uint64_t seed, uint64_t stream) {
+        uint64_t mixed = ::splitmix64(seed + (stream + 1) * 0x9e3779b97f4a7c15ULL);
+        std::seed_seq seq{
+            static_cast<uint32_t>(mixed),
+            static_cast<uint32_t>(mixed >> 32)
+        };
+        return std::mt19937(seq);
+    }
+
+    static std::unordered_map<const OnlineSLDA*, RngState>& thread_rng_map() {
+        thread_local std::unordered_map<const OnlineSLDA*, RngState> rngs;
+        return rngs;
+    }
+
+    std::mt19937& thread_rng() {
+        auto& rngs = thread_rng_map();
+        auto it = rngs.find(this);
+        if (it == rngs.end()) {
+            uint64_t stream = rng_stream_.fetch_add(1, std::memory_order_relaxed);
+            auto rng = make_rng(static_cast<uint64_t>(seed_), stream);
+            it = rngs.emplace(this, RngState{std::move(rng), stream}).first;
+        }
+        return it->second.rng;
+    }
+
     int K_;   // number of topics
     int M_;   // number of features
     int N_;   // total number of pixels (global)
@@ -401,7 +454,8 @@ private:
     int updatect_;
     int max_iter_inner_;
     double tol_;
-    std::mt19937 rng_;
+    unsigned int seed_ = 0;
+    std::atomic<uint64_t> rng_stream_{0};
 
     RowMajorMatrixXf Elog_beta_; // M x K: E[log β]
     RowMajorMatrixXf lambda_;    // M x K: variational parameter for β

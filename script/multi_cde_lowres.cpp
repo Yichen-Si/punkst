@@ -52,8 +52,13 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
     int32_t debug_ = 0, verbose = 1;
     uint32_t se_method = 1;
     double sizeFactor = 10000.0;
+    bool robustSeFull = false;
+    bool ldaUncertainty = false;
     OptimOptions optim;
     optim.tron.enabled = true;
+    MLEOptions mleOpt;
+    mleOpt.hc_type = 3;
+    mleOpt.se_stabilize = 100;
 
     ParamList pl;
     pl.add_option("in-data", "Input data files", inFile)
@@ -75,6 +80,10 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
       .add_option("size-factor", "Size factor for Poisson regression", sizeFactor)
       .add_option("max-pval", "Max p-value for output (default: 1)", maxPval)
       .add_option("se-method", "Method for calculating SE (1: Fisher, 2: Sandwich, 3: both)", se_method)
+      .add_option("robust-se-full", "Use full robust SE matrix (default: diagonal approximation for the meat in the sandwich)", robustSeFull)
+      .add_option("robust-se-hc", "Type of HC adjustment for robust SE (1,2,3)", mleOpt.hc_type)
+      .add_option("robust-se-stabilize", "Stabilization parameter for robust SE (default: 100)", mleOpt.se_stabilize)
+      .add_option("propagate-uncertainty", "Add delta-method correction for cell type proportion uncertainty (log1p only)", ldaUncertainty)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug_);
 
@@ -93,9 +102,9 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
     if (seed <= 0) {seed = std::random_device{}();}
     if (sizeFactor <= 0) {error("Size factor must be positive");}
     if (nThreads < 0) {nThreads = 1;}
-    if (maxPval <= 0) {error("max-pval must be positive");}
     if (se_method < 1 || se_method > 3) {error("--se-method must be 1/2/3");}
-    double minlog10p = - std::log10(maxPval);
+    double minlog10p = -1;
+    if (maxPval > 0 && maxPval < 1) {minlog10p = - std::log10(maxPval);}
     tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, nThreads);
 
     PoisLink pois_link = parse_pois_link(link);
@@ -214,7 +223,7 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
         offsets[g + 1] = offsets[g] + nUnits[g];
     }
 
-    MLEOptions mleOpt(optim);
+    mleOpt.optim = optim;
     mleOpt.se_flag = se_method;
     mleOpt.store_cov = false;
     const double b_null = 0.0;
@@ -234,6 +243,7 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
     notice("Total %d units across all %d datasets", N_total, G);
 
     for (int32_t c = 0; c < C; ++c) {
+        notice("Processing contrast %d / %d", c + 1, C);
         int32_t n = 0;
         VectorXd xvec = VectorXd::Zero(N_total);
         VectorXd cvec_masked = VectorXd::Zero(N_total);
@@ -256,39 +266,18 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
         MixPoisLink link = use_log1p ? MixPoisLink::Log1p : MixPoisLink::Log;
         MixPoisReg baseline(A_all, cvec_masked, a_sum_, baseline_optim, link);
         // Pre-compute values to reuse in log1p sparse optimization
-        VectorXd *s2p_ptr = nullptr, *s2m_ptr = nullptr;
-        VectorXd s1p, s1m, s2p, s2m;
+        std::unique_ptr<MixPoisLog1pSparseContext> log1p_ctx;
+        std::unique_ptr<tbb::enumerable_thread_specific<MixPoisLog1pSparseProblem>> log1p_tls;
         if (use_log1p) {
-            VectorXd& c = cvec_masked;
-            VectorXd& x = xvec;
-            VectorXd wp = (c.array() * (x.array() > 0).cast<double>()).matrix();
-            VectorXd wm = (c.array() * (x.array() < 0).cast<double>()).matrix();
-            s1p = A_all.transpose() * wp;
-            s1m = A_all.transpose() * wm;
-            if (se_method & 0x2) {
-                s2p = VectorXd::Zero(K);
-                s2m = VectorXd::Zero(K);
-                for (int i = 0; i < N_total; ++i) {
-                    if (c[i] <= 0.0 || !(x[i]>0 || x[i]<0)) continue;
-                    const double ci2 = c[i] * c[i];
-                    const auto ai = A_all.row(i).array();
-                    if (x[i] > 0.0) {
-                        s2p.array()  += ci2 * ai.square();
-                    } else {
-                        s2m.array() += ci2 * ai.square();
-                    }
-                }
-                s2p_ptr = &s2p;
-                s2m_ptr = &s2m;
-            }
+            log1p_ctx = std::make_unique<MixPoisLog1pSparseContext>(
+                A_all, xvec, cvec_masked, mleOpt, robustSeFull, n,
+                ldaUncertainty, sizeFactor);
+            log1p_tls = std::make_unique<
+                tbb::enumerable_thread_specific<MixPoisLog1pSparseProblem>>(
+                [&log1p_ctx]() { return MixPoisLog1pSparseProblem(*log1p_ctx); });
         }
 
-        std::string out_path = outPrefix + "." + contrastNames[c];
-        if (use_log1p) {
-            out_path += ".mixpois_log1p.tsv";
-        } else {
-            out_path += ".mixpois_log.tsv";
-        }
+        std::string out_path = outPrefix + "." + contrastNames[c] + ".tsv";
         std::ofstream out(out_path);
         if (!out) error("Failed to open output file: %s", out_path.c_str());
         std::string se_header = (se_method == 3) ? "SE\tSE0" : "SE";
@@ -365,8 +354,9 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
                 // Fit baseline (intercept)
                 VectorXd b0 = baseline.fit_one(ys.ids, ys.cnts, oK);
                 eta0.col(j) = b0;
-
-                VectorXd b; // fitted coefficients
+if (verbose > 3)
+{std::cout << "Thread " << thread_id << ": Fitted baseline for feature " << jj << "\n";}
+                VectorXd b = VectorXd::Zero(K); // fitted coefficients
                 VectorXd bd(K); // bounds
                 MLEStats stats;
                 double fval = 0.0;
@@ -374,12 +364,10 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
                     MLEOptions optLocal = mleOpt;
                     optLocal.optim.set_bounds(-b0, b0);
                     bd = b0;
-                    MixPoisLog1pSparseProblem P(A_all, ys.ids, ys.cnts,
-                        xvec, cvec_masked, b0, optLocal,
-                        s1p, s1m, s2p_ptr, s2m_ptr, n);
-                    b = VectorXd::Zero(K);
+                    auto& P = log1p_tls->local();
+                    P.reset_feature(ys.ids, ys.cnts, b0);
                     fval = tron_solve(P, b, optLocal.optim, stats.optim);
-                    mix_pois_log1p_compute_se(P, b, optLocal, stats);
+                    P.compute_se(b, optLocal, stats);
                 } else {
                     auto& yvec = yvec_tls->local();
                     auto& touched = touched_tls->local();
@@ -400,7 +388,7 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
                     optLocal.optim.set_bounds(-bd, bd);
                     fval = mix_pois_log_mle(
                         A_all, yvec, xvec, cvec_masked, b0, optLocal, b, stats,
-                        0, false, n);
+                        n);
                     for (int32_t idx : touched) {
                         yvec[idx] = 0.0;
                     }
@@ -463,11 +451,14 @@ std::cout << "\t" << log10p
         out.close();
         notice("Wrote results to %s", out_path.c_str());
 
+        out_path = outPrefix + "." + contrastNames[c] + ".eta0.tsv";
+        RowMajorMatrixXd eta_out;
         if (use_log1p) {
-            out_path = outPrefix + "." + contrastNames[c] + ".eta0.tsv";
-            RowMajorMatrixXd eta_out = eta0.transpose().array().exp() - 1.0;
-            write_matrix_to_file(out_path, eta_out, 4, true, featureNames, "Feature", &factorNames);
+            eta_out = eta0.transpose().array().exp() - 1.0;
+        } else {
+            eta_out = eta0.transpose().array().exp();
         }
+        write_matrix_to_file(out_path, eta_out, 4, true, featureNames, "Feature", &factorNames);
     }
 
     return 0;

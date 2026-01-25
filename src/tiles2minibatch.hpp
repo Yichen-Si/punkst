@@ -327,6 +327,7 @@ public:
     }
     void setOutputProbDigits(int32_t digits) { probDigits = digits; }
     void setOutputCoordDigits(int32_t digits) { floatCoordDigits = digits; }
+    virtual int32_t getFactorCount() const = 0;
 
 protected:
 
@@ -405,6 +406,8 @@ protected:
     int32_t M_ = 0;
 
     /* Worker */
+
+    virtual void onWorkerStart(int threadId) { (void)threadId; }
 
     void tileWorker(int threadId);
     void boundaryWorker(int threadId);

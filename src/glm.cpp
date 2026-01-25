@@ -113,7 +113,7 @@ void PairwiseBinomRobust::merge_from(const PairwiseBinomRobust& other) {
 
 bool PairwiseBinomRobust::compute_one_test(int f, int g0, int g1,
     PairwiseOneResult& out,
-    double min_total_pair, double pi_eps, bool use_hc1) const
+    double min_total_pair, double pi_rel_eps, bool use_hc1) const
 {
     const double N0 = N_[g0], N1 = N_[g1];
     if (N0 <= 0.0 || N1 <= 0.0) return false;
@@ -125,8 +125,12 @@ bool PairwiseBinomRobust::compute_one_test(int f, int g0, int g1,
     out.tot = Y0 + Y1;
     if (out.tot < min_total_pair) return false;
 
-    const double pi0 = clamp(Y0 / N0, pi_eps, 1.0 - pi_eps);
-    const double pi1 = clamp(Y1 / N1, pi_eps, 1.0 - pi_eps);
+    double pi0 = Y0 / N0;
+    double pi1 = Y1 / N1;
+    double pi_null = (Y0 + Y1) / (N0 + N1);
+    double pi_eps = pi_rel_eps * pi_null;
+    pi0 = clamp(pi0, pi_eps, 1.0 - 1e-8);
+    pi1 = clamp(pi1, pi_eps, 1.0 - 1e-8);
     out.pi0  = pi0;
     out.pi1  = pi1;
     out.beta = logit(pi1) - logit(pi0);
@@ -152,7 +156,7 @@ bool PairwiseBinomRobust::compute_one_test(int f, int g0, int g1,
 bool PairwiseBinomRobust::compute_one_test_aggregate(int f,
     const std::vector<int32_t>& g0s, const std::vector<int32_t>& g1s,
     PairwiseOneResult& out,
-    double min_total_pair, double pi_eps, bool use_hc1) const
+    double min_total_pair, double pi_rel_eps, bool use_hc1) const
 {
     if (g0s.empty() || g1s.empty()) return false;
 
@@ -189,8 +193,12 @@ bool PairwiseBinomRobust::compute_one_test_aggregate(int f,
     out.tot = Y0 + Y1;
     if (out.tot < min_total_pair) return false;
 
-    const double pi0 = clamp(Y0 / N0, pi_eps, 1.0 - pi_eps);
-    const double pi1 = clamp(Y1 / N1, pi_eps, 1.0 - pi_eps);
+    double pi0 = Y0 / N0;
+    double pi1 = Y1 / N1;
+    double pi_null = (Y0 + Y1) / (N0 + N1);
+    double pi_eps = pi_rel_eps * pi_null;
+    pi0 = clamp(pi0, pi_eps, 1.0 - 1e-8);
+    pi1 = clamp(pi1, pi_eps, 1.0 - 1e-8);
     out.pi0  = pi0;
     out.pi1  = pi1;
     out.beta = logit(pi1) - logit(pi0);
@@ -279,7 +287,7 @@ void MultiSlicePairwiseBinom::finished_adding_data() {
 
 ContrastPrecomp MultiSlicePairwiseBinom::prepare_contrast(
     const std::vector<int32_t>& g0s, const std::vector<int32_t>& g1s,
-    int max_iter, double tol, double pi_eps,
+    int max_iter, double tol, double pi_rel_eps,
     double lambda_beta, double lambda_alpha, double lm_damping) const
 {
     if (g0s.empty() || g1s.empty()) {
@@ -292,7 +300,7 @@ ContrastPrecomp MultiSlicePairwiseBinom::prepare_contrast(
         if (g < 0 || g >= G_) throw std::out_of_range("group index out of range");
     }
 
-    ContrastPrecomp pc(K_, max_iter, tol, pi_eps, lambda_beta, lambda_alpha, lm_damping);
+    ContrastPrecomp pc(K_, max_iter, tol, pi_rel_eps, lambda_beta, lambda_alpha, lm_damping);
     pc.C0 = get_mixing_prob(g0s);
     pc.C1 = get_mixing_prob(g1s);
 
@@ -317,20 +325,12 @@ ContrastPrecomp MultiSlicePairwiseBinom::prepare_contrast(
 //   beta is the desired logit-diff per slice: logit(p1_true)-logit(p0_true)
 // Weighted NLS + ridge + LM damping
 // Returns false on failure
-bool MultiSlicePairwiseBinom::deconvolution(ContrastPrecomp& pc,
-    const Eigen::VectorXd& p0_obs_in, const Eigen::VectorXd& p1_obs_in,
-    Eigen::VectorXd& beta_out)
+bool MultiSlicePairwiseBinom::deconvolution(ContrastPrecomp& pc, Eigen::VectorXd& beta_out)
 {
     const int K = pc.K;
-    if (p0_obs_in.size() != K || p1_obs_in.size() != K) return false;
 
     // Clamp inputs into pc buffers
-    double wsum = 0.0;
-    for (int k = 0; k < K; ++k) {
-        pc.p0_obs(k) = clamp(p0_obs_in(k), pc.pi_eps, 1.0 - pc.pi_eps);
-        pc.p1_obs(k) = clamp(p1_obs_in(k), pc.pi_eps, 1.0 - pc.pi_eps);
-        wsum += pc.w0(k) + pc.w1(k);
-    }
+    double wsum = pc.w0.sum() + pc.w1.sum();
     if (!(wsum > 0.0)) return false;
 
     // init alpha/beta
@@ -412,7 +412,7 @@ bool MultiSlicePairwiseBinom::deconvolution(ContrastPrecomp& pc,
 bool MultiSlicePairwiseBinom::compute_one_test_aggregate(int f,
     const std::vector<int32_t>& g0s, const std::vector<int32_t>& g1s,
     ContrastPrecomp& pc, MultiSliceOneResult& out,
-    double min_total_pair, double pi_eps, bool use_hc1, double deconv_hit_p)
+    double min_total_pair, bool use_hc1, double deconv_hit_p)
 {
     if (f < 0 || f >= M_) throw std::out_of_range("feature id out of range");
     if (g0s.empty() || g1s.empty()) return false;
@@ -432,7 +432,7 @@ bool MultiSlicePairwiseBinom::compute_one_test_aggregate(int f,
     for (int k = 0; k < K_; ++k) {
         PairwiseBinomRobust::PairwiseOneResult r;
         const bool ok = slices_[k].compute_one_test_aggregate(
-            f, g0s, g1s, r, min_total_pair, pi_eps, use_hc1
+            f, g0s, g1s, r, min_total_pair, pc.pi_rel_eps, use_hc1
         );
 
         if (!ok) {
@@ -473,6 +473,8 @@ bool MultiSlicePairwiseBinom::compute_one_test_aggregate(int f,
 
     const bool do_deconv = check_hits && (n_hit >= 2);
     if (do_deconv) {
+        pc.p0_obs = out.pi0_obs;
+        pc.p1_obs = out.pi1_obs;
         pc.reset_w();
         for (int k = 0; k < K_; ++k) {
             if (!out.slice_ok[(size_t)k]) {
@@ -482,7 +484,7 @@ bool MultiSlicePairwiseBinom::compute_one_test_aggregate(int f,
         }
         pc.compute_CtWC();
         Eigen::VectorXd beta_deconv(K_);
-        const bool ok = deconvolution(pc, out.pi0_obs, out.pi1_obs, beta_deconv);
+        const bool ok = deconvolution(pc, beta_deconv);
         if (ok) {
             out.beta_deconv = beta_deconv;
             out.deconv_ok = true;

@@ -1,0 +1,31 @@
+{
+    "workflow": {
+      "threads": 4,
+      "seed": 1,
+      "gitpath": "/path/to/punkst",
+      "datadir": "/path/to/output",
+      "tmpdir": "/path/to/store/temporary/files",
+      "transcripts": "/path/to/input/transcripts.tsv",
+      "model_tsv": "/path/to/model.tsv",
+      "color_table": "/path/to/punkst/ext/py/cmap.48.tsv",
+      "icol_x": 0,
+      "icol_y": 1,
+      "icol_feature": 2,
+      "icol_count": 3,
+      "skip": 1,
+      "tilesize": 500,
+      "pixhex": 12,
+      "nmove": 2,
+      "res": 0.5,
+      "scale": 1
+    },
+    "job": {
+      "time": "12:00:00",
+      "cpus-per-task": 4,
+      "mem": "4G",
+      "job-name": "test",
+      "output": "logs/%x.%j.out",
+      "error":  "logs/%x.%j.err",
+      "extra_lines" : "# other customized commands, e.g. start python venv, load gcc module in your system etc. \nsource /path/to/venv/bin/activate"
+    }
+  }

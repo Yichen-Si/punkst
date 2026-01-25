@@ -2,9 +2,11 @@
 
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <tuple>
 #include <utility>
 #include <algorithm>
+#include <cmath>
 #include "utils.h"
 #include "utils_sys.hpp"
 #include "json.hpp"
@@ -75,6 +77,7 @@ public:
         icol_y_ = icol_y;
         icol_max_ = std::max(icol_max_, std::max(icol_x_, icol_y_));
     }
+    void setFactorCount(int32_t K) {K_ = K;}
 
     void openDataStream() {
         dataStream_.open(dataFile_);
@@ -132,7 +135,6 @@ public:
 
     // For each pair of (k1,k2) compute \sum_i p1_i * p2_i
     void probDot(const std::string& outPrefix, int32_t probDigits = 4);
-
     void probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, int32_t probDigits = 4);
 
     int32_t loadTileToMap(const TileKey& key,
@@ -145,6 +147,11 @@ public:
         std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
         TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb = 0.01, int32_t union_key = 0) const;
 
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+        computeConfusionMatrix(double resolution, const char* outPref = nullptr, int32_t probDigits = 4) const;
+
+    void sampleTilesToDebug(int32_t ntiles = 1);
+
 private:
     std::string dataFile_, indexFile_;
     std::ifstream dataStream_;
@@ -153,7 +160,7 @@ private:
     bool has_z_ = false;
     uint32_t coord_dim_ = 2;
     std::vector<uint32_t> icol_ks_, icol_ps_;
-    int32_t k_ = 0;
+    int32_t k_ = 0, K_ = 0;
     std::vector<uint32_t> kvec_;
     uint32_t mode_ = 0;
     IndexHeader formatInfo_;

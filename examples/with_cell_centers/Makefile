@@ -183,6 +183,7 @@ $(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.html: \
 	@echo "[6/6] factor_report (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/factor_report.py \
 	  --de $(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.de_bulk.tsv \
+	  --de_neighbor $(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.de_bulk.1vsNeighbors.tsv \
 	  --pseudobulk $(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.pseudobulk.tsv \
 	  --feature_label Feature \
 	  --color_table $(DATADIR)/hex_$(1)_$(NUR).k$(2).color.rgb.tsv \

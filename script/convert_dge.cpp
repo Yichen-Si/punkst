@@ -1,4 +1,5 @@
 #include "punkst.h"
+#include "dataunits.hpp"
 #include "utils.h"
 #include "utils_sys.hpp"
 #include <zlib.h>
@@ -10,6 +11,7 @@
 #include <regex>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <random>
 #include "json.hpp"
 
@@ -277,54 +279,17 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
         file_idx++;
     }
 
-    // Read barcodes
-    auto barcodes = read_gz_lines(in_bc);
-    size_t B = barcodes.size();
+    DGEReader10X dge(in_bc, in_ft, in_mtx);
+    size_t B = static_cast<size_t>(dge.nBarcodes);
+    size_t F = static_cast<size_t>(dge.nFeatures);
     if (B == 0) {
         error("No barcodes found in %s", in_bc.c_str());
     }
-    notice("Read %zu barcodes", B);
-
-    // Read features
-    auto flines = read_gz_lines(in_ft);
-    std::vector<std::string> features_ids;
-    std::vector<std::string> features_names;
-    features_ids.reserve(flines.size());
-    features_names.reserve(flines.size());
-    for (auto &l : flines) {
-        if (l.empty()) continue;
-        std::istringstream is(l);
-        std::string id, name;
-        is >> id >> name; // 10X features.tsv.gz: id, name, type
-        if (name.empty()) name = id;
-        features_ids.push_back(id);
-        features_names.push_back(name);
-    }
-    size_t F = features_names.size();
     if (F == 0) {
         error("No features found in %s", in_ft.c_str());
     }
+    notice("Read %zu barcodes", B);
     notice("Read %zu features", F);
-
-    // Prepare accumulators
-    std::vector<uint64_t> feature_totals(F, 0);
-    std::vector<uint64_t> cell_totals; // only used in non-streaming mode
-    if (!sorted_by_barcode) cell_totals.assign(B, 0);
-
-    // Stream matrix.mtx.gz and fill structures
-    gzFile gzm = gzopen(in_mtx.c_str(), "rb");
-    if (!gzm) throw std::runtime_error("Cannot open " + in_mtx);
-    char buf[1<<16];
-    // Skip comments and header line with dimensions
-    while (gzgets(gzm, buf, sizeof(buf))) {
-        if (buf[0]=='%' || buf[0]=='\n') continue;
-        break; // first non-comment line is the dimension line
-    }
-    size_t N,M,L;
-    if (std::sscanf(buf, "%zu %zu %zu", &N, &M, &L) != 3) {
-        warning("Invalid header line in input matrix file (%s)", buf);
-    }
-    notice("Read header of matrix.mtx.gz: %zu features, %zu barcodes, %zu entries", N, M, L);
 
     // Prepare output stream and RNG
     std::string outf = outPref + ".tsv";
@@ -334,89 +299,51 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
     std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
     uint64_t n_units_written = 0;
 
-    auto flush_cell = [&](int cell_idx,
-                          std::vector<std::pair<uint32_t,uint32_t>>& acc,
-                          uint64_t cell_sum) {
-        if (acc.empty() || cell_sum == 0) return;
+    auto write_cell = [&](int32_t cell_idx, const Document& doc) {
+        if (doc.ids.empty()) return;
+        uint64_t cell_sum = 0;
+        for (double v : doc.cnts) {
+            cell_sum += static_cast<uint64_t>(v);
+        }
+        if (cell_sum == 0) return;
         uint32_t key = rdUnif(rng);
         // Format: random_key, cell_index, M, C, pairs
         out << uint32toHex(key) << "\t" << cell_idx
-            << "\t" << acc.size() << "\t" << cell_sum;
-        for (size_t k = 0; k < acc.size(); ++k) {
-            out << "\t" << acc[k].first << " " << acc[k].second;
+            << "\t" << doc.ids.size() << "\t" << cell_sum;
+        for (size_t k = 0; k < doc.ids.size(); ++k) {
+            out << "\t" << doc.ids[k] << " "
+                << static_cast<uint32_t>(doc.cnts[k]);
         }
         out << '\n';
         ++n_units_written;
-        acc.clear();
+        if (verbose > 0 && n_units_written % verbose == 0) {
+            notice("Wrote %zu units...", n_units_written);
+        }
     };
 
     if (sorted_by_barcode) {
-        std::vector<std::pair<uint32_t,uint32_t>> acc;
-        acc.reserve(std::min(F, (size_t)1024));
-        int current_bi = -1; // 0-based
-        uint64_t current_sum = 0;
-        uint64_t nrow = 0;
-        while (gzgets(gzm, buf, sizeof(buf))) {
-            if (buf[0] == '\0' || buf[0] == '\n' || buf[0] == '%') continue;
-            ++nrow;
-            int bi; // 1-based indices
-            uint32_t ct, gi;
-            if (std::sscanf(buf, "%u %d %u", &gi, &bi, &ct) != 3) continue;
-            if (bi < 1 || bi > (int)B) continue;
-            if (gi < 1 || gi > (int)F) continue;
-            if (ct == 0) continue;
-            bi -= 1; gi -= 1; // convert to 0-based
-            feature_totals[gi] += ct;
-            if (current_bi == -1) current_bi = bi;
-            if (current_bi != bi) {
-                flush_cell(current_bi, acc, current_sum);
-                current_bi = bi;
-                current_sum = 0;
-                if (current_bi % 1000 == 0) {
-                    notice("Flushed up to barcode %d/%zu (line %zu/%zu)", current_bi, B, nrow, L);
-                }
-            }
-            acc.emplace_back(gi, ct);
-            current_sum += ct;
+        Document doc;
+        int32_t barcode_idx = -1;
+        while (dge.next(doc, &barcode_idx)) {
+            write_cell(barcode_idx, doc);
         }
-        // flush last
-        if (current_bi >= 0) flush_cell((size_t)current_bi, acc, current_sum);
-        gzclose(gzm);
-        out.close();
     } else {
-        // Non-streaming: store per-cell vectors
-        std::vector<std::vector<std::pair<uint32_t,uint32_t>>> cell_feats(B);
-        uint64_t nrow = 0;
-        while (gzgets(gzm, buf, sizeof(buf))) {
-            ++nrow;
-            if (nrow % verbose == 0) {
-                notice("Processed %zu/%zu lines...", nrow, L);
+        std::vector<Document> all_docs;
+        std::vector<std::string> all_barcodes;
+        dge.readAll(all_docs, all_barcodes, 0);
+        for (size_t i = 0; i < all_docs.size(); ++i) {
+            int32_t cell_idx = -1;
+            if (i < all_barcodes.size() && !all_barcodes[i].empty()) {
+                if (!str2int32(all_barcodes[i], cell_idx)) {
+                    cell_idx = static_cast<int32_t>(i);
+                }
+            } else {
+                cell_idx = static_cast<int32_t>(i);
             }
-            int gi, bi; // 1-based indices in 10X
-            uint32_t ct;
-            if (std::sscanf(buf, "%d %d %u", &gi, &bi, &ct) != 3) continue;
-            if (bi < 1 || bi > (int)B) continue;
-            if (gi < 1 || gi > (int)F) continue;
-            if (ct == 0) continue;
-            cell_feats[bi-1].emplace_back((uint32_t)(gi-1), ct);
-            feature_totals[gi-1] += ct;
-            cell_totals[bi-1] += ct;
+            write_cell(cell_idx, all_docs[i]);
         }
-        gzclose(gzm);
-        for (size_t i = 0; i < B; ++i) {
-            if (cell_totals[i] == 0) continue; // skip empty cells
-            auto &vec = cell_feats[i];
-            uint32_t key = rdUnif(rng);
-            out << uint32toHex(key) << "\t" << i
-                << "\t" << vec.size() << "\t" << cell_totals[i];
-            for (auto &p : vec) {
-                out << "\t" << p.first << " " << p.second;
-            }
-            out << "\n";
-            ++n_units_written;
-        }
-        out.close();
     }
+    out.close();
     if (randomize_output) {
         notice("Shuffling output %s ...", outf.c_str());
         if (use_internal_sort) {
@@ -439,42 +366,15 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
     }
     notice("Wrote %zu units to %s", n_units_written, outf.c_str());
 
-    // Resolve duplicate feature names using totals
-    std::vector<std::string> unique_feature_names(F);
-    {
-        std::unordered_map<std::string, std::vector<size_t>> groups;
-        groups.reserve(F);
-        for (size_t j = 0; j < F; ++j) {
-            groups[features_names[j]].push_back(j);
-        }
-        for (auto &kv : groups) {
-            auto &idxs = kv.second;
-            if (idxs.size() == 1) {
-                size_t j = idxs[0];
-                unique_feature_names[j] = features_names[j];
-            } else {
-                size_t winner = idxs[0];
-                uint64_t best = feature_totals[winner];
-                for (size_t t = 1; t < idxs.size(); ++t) {
-                    size_t j = idxs[t];
-                    uint64_t v = feature_totals[j];
-                    if (v > best || (v == best && j < winner)) {
-                        winner = j; best = v;
-                    }
-                }
-                for (size_t j : idxs) {
-                    if (j == winner) unique_feature_names[j] = features_names[j];
-                    else unique_feature_names[j] = features_ids[j];
-                }
-            }
-        }
-    }
+    const auto& feature_totals = dge.feature_totals;
+    const auto& features = dge.features;
 
     outf = outPref + ".features.tsv";
     std::ofstream fos(outf);
     if (!fos) error("Cannot open output feature file: %s", outf.c_str());
     for (size_t j = 0; j < F; ++j) {
-        fos << unique_feature_names[j] << '\t' << feature_totals[j] << '\n';
+        uint64_t total = feature_totals[j];
+        fos << features[j] << '\t' << total << '\n';
     }
     fos.close();
     notice("Wrote feature counts to %s", outf.c_str());
@@ -491,7 +391,7 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
     {
         nlohmann::json dict;
         for (size_t j = 0; j < F; ++j) {
-            dict[unique_feature_names[j]] = j;
+            dict[features[j]] = j;
         }
         meta["dictionary"] = dict;
     }

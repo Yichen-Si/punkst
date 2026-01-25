@@ -180,6 +180,7 @@ public:
         Base::outputBackgroundProbExpand_ = outputExpand;
         Base::configureOutputMode();
     }
+    int32_t getFactorCount() const override { return K_; }
 
 protected:
     using Base = Tiles2MinibatchBase<T>;

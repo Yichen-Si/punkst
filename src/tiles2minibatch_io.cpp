@@ -30,10 +30,11 @@ void Tiles2MinibatchBase<T>::setupOutput() {
     if (fdIndex < 0) {
         error("Error opening index output file: %s", indexFile.c_str());
     }
+    int32_t K = getFactorCount();
     // Write index header
     IndexHeader idxHeader;
     idxHeader.magic = PUNKST_INDEX_MAGIC;
-    idxHeader.mode = 0x8;
+    idxHeader.mode = (K << 16) | 0x8;
     idxHeader.tileSize = tileSize;
     idxHeader.topK = topk_;
     idxHeader.pixelResolution = pixelResolution_;

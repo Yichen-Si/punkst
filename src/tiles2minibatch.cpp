@@ -66,13 +66,15 @@ void Tiles2MinibatchBase<T>::run() {
     if (outputAnchor_) {
         anchorQueue.set_done();
     }
-    // notice("%s: all workers done, waiting for writer to finish", __func__);
+    notice("%s: all workers done", __func__);
 
     writer.join();
     if (anchorWriter.joinable()) {
         anchorWriter.join();
     }
     closeOutput();
+    notice("%s: writer threads done", __func__);
+
     postRun();
 }
 
@@ -149,6 +151,7 @@ void Tiles2MinibatchBase<T>::configureOutputMode() {
 
 template<typename T>
 void Tiles2MinibatchBase<T>::tileWorker(int threadId) {
+    onWorkerStart(threadId);
     std::pair<TileKey, int32_t> tileTicket;
     TileKey tile;
     int32_t ticket;
@@ -169,6 +172,7 @@ void Tiles2MinibatchBase<T>::tileWorker(int threadId) {
 
 template<typename T>
 void Tiles2MinibatchBase<T>::boundaryWorker(int threadId) {
+    onWorkerStart(threadId);
     std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
     std::shared_ptr<BoundaryBuffer> bufferPtr;
     int32_t ticket;

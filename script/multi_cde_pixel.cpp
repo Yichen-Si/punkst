@@ -23,113 +23,23 @@ struct ContrastDef {
 static void readContrastDesignFile(const std::string& contrastFile,
         std::vector<std::string>& annoPrefixes,
         std::vector<std::string>& ptsPrefixes,
-        std::vector<ContrastDef>& contrasts) {
-    std::ifstream ifs(contrastFile);
-    if (!ifs.is_open()) {
-        error("Cannot open contrast file: %s", contrastFile.c_str());
-    }
-    std::string line;
-    std::vector<std::string> tokens;
-    if (!std::getline(ifs, line)) {
-        error("Contrast file is empty: %s", contrastFile.c_str());
-    }
-    split(tokens, "\t ", line, UINT_MAX, true, true, true);
-    if (tokens.size() < 3) {
-        error("Contrast file must have >= 3 columns (anno, pts, contrast...): %s", contrastFile.c_str());
-    }
-    const int32_t C = static_cast<int32_t>(tokens.size() - 2);
-    contrasts.assign(C, ContrastDef{});
-    std::unordered_set<std::string> seen_names;
-    for (int32_t c = 0; c < C; ++c) {
-        const std::string name = tokens[c + 2];
-        if (name.empty()) {
-            warning("Contrast %d has an empty header name; using index instead", c);
-            contrasts[c].name = std::to_string(c);
-        } else {
-            if (!seen_names.insert(name).second) {
-                error("Contrast name '%s' appears more than once in header", name.c_str());
-            }
-            contrasts[c].name = name;
-        }
-    }
-
-    int32_t n_samples = 0;
-    while (std::getline(ifs, line)) {
-        if (line.empty() || line[0] == '#') { continue; }
-        split(tokens, "\t ", line, UINT_MAX, true, true, true);
-        if (tokens.size() != static_cast<size_t>(C + 2)) {
-            error("Contrast file row has %zu columns, expected %d: %s",
-                tokens.size(), C + 2, line.c_str());
-        }
-        annoPrefixes.push_back(tokens[0]);
-        ptsPrefixes.push_back(tokens[1]);
-        for (int32_t c = 0; c < C; ++c) {
-            int32_t y = 0;
-            if (!str2int32(tokens[c + 2], y)) {
-                error("Contrast value must be -1, 0, or 1: %s", tokens[c + 2].c_str());
-            }
-            if (y < -1 || y > 1) {
-                error("Contrast value must be -1, 0, or 1: %d", y);
-            }
-            contrasts[c].labels.push_back(static_cast<int8_t>(y));
-        }
-        n_samples++;
-    }
-    if (n_samples == 0) {
-        error("Contrast file has a header but no samples: %s", contrastFile.c_str());
-    }
-    for (int32_t c = 0; c < C; ++c) {
-        if (contrasts[c].labels.size() != static_cast<size_t>(n_samples)) {
-            error("Contrast %s has %zu labels, expected %d samples",
-                contrasts[c].name.c_str(), contrasts[c].labels.size(), n_samples);
-        }
-        contrasts[c].group_neg.clear();
-        contrasts[c].group_pos.clear();
-        for (int32_t s = 0; s < n_samples; ++s) {
-            const int8_t y = contrasts[c].labels[s];
-            if (y < 0) {
-                contrasts[c].group_neg.push_back(s);
-            } else if (y > 0) {
-                contrasts[c].group_pos.push_back(s);
-            }
-        }
-        if (contrasts[c].group_neg.empty() || contrasts[c].group_pos.empty()) {
-            error("Contrast %s must have at least one sample in each group", contrasts[c].name.c_str());
-        }
-        notice("Read contrast %s with %zu vs %zu samples", contrasts[c].name.c_str(), contrasts[c].group_pos.size(), contrasts[c].group_neg.size());
-    }
-}
+        std::vector<std::string>& confusionFiles,
+        std::vector<ContrastDef>& contrasts);
 
 static void buildPairwiseContrasts(const std::vector<std::string>& dataLabels,
-        std::vector<ContrastDef>& contrasts) {
-    const int32_t n = static_cast<int32_t>(dataLabels.size());
-    contrasts.clear();
-    if (n < 2) {
-        return;
-    }
-    contrasts.reserve(static_cast<size_t>(n) * (n - 1) / 2);
-    for (int32_t g0 = 0; g0 < n; ++g0) {
-        for (int32_t g1 = g0 + 1; g1 < n; ++g1) {
-            ContrastDef contrast;
-            contrast.name = dataLabels[g0] + "_vs_" + dataLabels[g1];
-            contrast.labels.assign(n, 0);
-            contrast.labels[g0] = -1;
-            contrast.labels[g1] = 1;
-            contrast.group_neg.push_back(g0);
-            contrast.group_pos.push_back(g1);
-            contrasts.push_back(contrast);
-        }
-    }
-}
+        std::vector<ContrastDef>& contrasts);
+
+static Eigen::MatrixXd readConfusionMatrixFile(const std::string& path, int K);
 
 /**
  * Join pixel level decoding results with original transcripts and perform
  * cluster/factor specific (conditional) DE test between groups
  */
 int32_t cmdConditionalTest(int32_t argc, char** argv) {
-    std::vector<std::string> inPrefix, inData, inIndex, inPtsPrefix;
+    std::vector<std::string> inPrefix, inData, inIndex, inPtsPrefix, inConfusion;
     std::vector<std::string> dataLabels;
     std::string dictFile, outPrefix, outFile, contrastFile;
+    std::string auxiSuff;
     bool isBinary = false;
     double gridSize;
     int32_t K;
@@ -143,6 +53,7 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     double minOR_output = 1;
     double minOR = 1.2;
     double minProb = 0.01;
+    double pseudoFracRel = 0.05;
     int32_t debug_ = 0;
     int32_t nThreads = 1;
     int32_t nPerm = 0;
@@ -157,9 +68,11 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
       .add_option("binary", "Data file is in binary format", isBinary)
       .add_option("K", "Number of factors in the annotation files", K, true)
       .add_option("pts", "Prefixes of the transcript data files", inPtsPrefix)
-      .add_option("contrast", "Contrast design TSV (anno, pts, contrasts)", contrastFile)
+      .add_option("contrast", "Contrast design TSV (anno, pts, [confusion], contrasts)", contrastFile)
+      .add_option("confusion", "Per-dataset confusion matrices (TSV with K+1 rows/cols)", inConfusion)
       .add_option("features", "List of features to test", dictFile, true)
       .add_option("grid-size", "Grid size", gridSize, true)
+      .add_option("pseudo-rel", "Relative pseudo count fraction w.r.t. null", pseudoFracRel)
       .add_option("icol-x", "Column index for x coordinate for files in --pts (0-based)", icol_x, true)
       .add_option("icol-y", "Column index for y coordinate for files in --pts (0-based)", icol_y, true)
       .add_option("icol-feature", "Column index for feature for files in --pts (0-based)", icol_feature, true)
@@ -171,6 +84,7 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
       .add_option("bounded", "Whether to subset to the bounding box defined by --xmin/--xmax/--ymin/--ymax", bounded)
       .add_option("threads", "Number of threads to use", nThreads)
       .add_option("out", "Output prefix", outPrefix, true)
+      .add_option("aux-suff", "Suffix for auxiliary output files", auxiSuff)
       .add_option("min-prob", "Minimum probability for a pixel to be included (softly) in a slice", minProb)
       .add_option("min-count-per-feature", "Minimum total count for a feature to be considered", minCountPerFeature)
       .add_option("max-pval", "Max p-value for output (default: 1)", minPval_output)
@@ -200,10 +114,11 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
 
     // Collect input files and contrasts
     if (!contrastFile.empty()) {
-        if (!inPrefix.empty() || !inData.empty() || !inIndex.empty() || !inPtsPrefix.empty()) {
-            error("--contrast cannot be combined with --anno/--anno-data/--anno-index/--pts");
+        if (!inPrefix.empty() || !inData.empty() || !inIndex.empty()
+                || !inPtsPrefix.empty() || !inConfusion.empty()) {
+            error("--contrast cannot be combined with --anno/--anno-data/--anno-index/--pts/--confusion");
         }
-        readContrastDesignFile(contrastFile, inPrefix, inPtsPrefix, contrasts);
+        readContrastDesignFile(contrastFile, inPrefix, inPtsPrefix, inConfusion, contrasts);
     }
     if (!inPrefix.empty()) {
         inData.resize(inPrefix.size());
@@ -219,6 +134,9 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
         error("--pts must match with --anno/--anno-data");
     }
     uint32_t n_data = static_cast<uint32_t>(inData.size());
+    if (!inConfusion.empty() && inConfusion.size() != n_data) {
+        error("--confusion must have %u entries to match datasets", n_data);
+    }
     dataLabels.resize(n_data);
     for (uint32_t i = 0; i < n_data; ++i) {
         if (dataLabels[i].empty())
@@ -274,8 +192,24 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
             : stat(K, G, M, minCount), cache(K, M, minCount), statu(G, M, minCount) {}
     };
 
+    std::vector<uint8_t> has_confusion(n_data, 0);
+    if (!inConfusion.empty()) {
+        int32_t n_has_confusion = 0;
+        for (uint32_t i = 0; i < n_data; ++i) {
+            if (inConfusion[i].empty()) {
+                continue;
+            }
+            Eigen::MatrixXd confusion = readConfusionMatrixFile(inConfusion[i], K);
+            statOp.add_to_confusion(static_cast<int>(i), confusion);
+            has_confusion[i] = 1;
+            n_has_confusion++;
+        }
+        notice("Loaded %d pre-computed confusion matrices", n_has_confusion);
+    }
+
     // Process each dataset and collect sufficient statistics
     for (uint32_t i = 0; i < n_data; ++i) {
+        const bool use_confusion = (has_confusion[i] != 0);
         auto& tileOp = *tileOps[i];
         const auto& tileList = tileOp.getTileInfo();
         int32_t nTiles = static_cast<int32_t>(tileList.size());
@@ -293,25 +227,30 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
         tbb::parallel_for(tbb::blocked_range<size_t>(0, ntasks),
             [&](const tbb::blocked_range<size_t>& range)
         {
-            Eigen::MatrixXd confusion = Eigen::MatrixXd::Zero(K, K);
             auto& local = tls.local();
+            Eigen::MatrixXd confusion;
             double p_residual = 0.0;
+            if (!use_confusion) {
+                confusion = Eigen::MatrixXd::Zero(K, K);
+            }
             for (size_t ti = range.begin(); ti != range.end(); ++ti) {
                 const auto& tileInfo = tileList[ti];
                 TileKey tile{tileInfo.row, tileInfo.col};
                 std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
                 tileOp.loadTileToMap(tile, pixelMap);
-                for (const auto& kv : pixelMap) {
-                    const auto& tp = kv.second;
-                    double r = 1.;
-                    for (size_t ii = 0; ii < tp.ks.size(); ++ii) {
-                        r -= tp.ps[ii];
-                        for (size_t jj = ii; jj < tp.ks.size(); ++jj) {
-                            confusion(tp.ks[ii], tp.ks[jj]) += tp.ps[ii] * tp.ps[jj];
+                if (!use_confusion) {
+                    for (const auto& kv : pixelMap) {
+                        const auto& tp = kv.second;
+                        double r = 1.;
+                        for (size_t ii = 0; ii < tp.ks.size(); ++ii) {
+                            r -= tp.ps[ii];
+                            for (size_t jj = ii; jj < tp.ks.size(); ++jj) {
+                                confusion(tp.ks[ii], tp.ks[jj]) += tp.ps[ii] * tp.ps[jj];
+                            }
                         }
+                        if (r <= 0) {continue;}
+                        p_residual += r * r;
                     }
-                    if (r <= 0) {continue;}
-                    p_residual += r * r;
                 }
                 auto tileAgg = tileOp.aggOneTile(pixelMap, reader, parser, tile, gridSize, minProb, K);
                 for (const auto& kv : tileAgg) {
@@ -337,15 +276,17 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
                     notice("... processed %d / %d tiles for dataset %u", done, nTiles, i);
                 }
             }
-            confusion += confusion.transpose().eval();
-            p_residual = p_residual / K / K;
-            for (int k = 0; k < K; ++k) {
-                confusion(k, k) /= 2.0;
-                for (int l = 0; l < K; ++l) {
-                    confusion(k, l) += p_residual;
+            if (!use_confusion) {
+                confusion += confusion.transpose().eval();
+                p_residual = p_residual / K / K;
+                for (int k = 0; k < K; ++k) {
+                    confusion(k, k) /= 2.0;
+                    for (int l = 0; l < K; ++l) {
+                        confusion(k, l) += p_residual;
+                    }
                 }
+                local.stat.add_to_confusion(i, confusion);
             }
-            local.stat.add_to_confusion(i, confusion);
         });
         for (auto& local : tls) {
             statOp.merge_from(local.stat);
@@ -356,7 +297,6 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     notice("Finished collecting sufficient statistics from all datasets");
     statOp.finished_adding_data();
 
-    const double pi_eps = 1e-8;
     const double min_log_or_perm = std::log(minOR);
     struct TestRec {
         int k; int f;
@@ -369,23 +309,24 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     };
     const auto& active = statOp.get_active_features();
     for (const auto& contrast : contrasts) {
-        ContrastPrecomp pc = statOp.prepare_contrast(contrast.group_neg, contrast.group_pos);
+        ContrastPrecomp pc = statOp.prepare_contrast(contrast.group_neg, contrast.group_pos, 25, 1e-6, pseudoFracRel);
 
         std::vector<TestRec> tests;
         const size_t n_tests_guess = (size_t)(K * active.size());
         tests.reserve(n_tests_guess);
         notice("Contrast %s with %d active features", contrast.name.c_str(), (int32_t) active.size());
         for (int f : active) {
+            // Baseline test on aggregated data
             PairwiseBinomRobust::PairwiseOneResult mu;
             if (!statUnion.compute_one_test_aggregate(
                     f, contrast.group_neg, contrast.group_pos, mu,
-                    minCountPerFeature, pi_eps, true)) {
+                    minCountPerFeature, pseudoFracRel, true)) {
                 continue;
             }
             MultiSliceOneResult ms(K);
             if (!statOp.compute_one_test_aggregate(
                     f, contrast.group_neg, contrast.group_pos, pc, ms,
-                    minCountPerFeature, pi_eps, true, deconv_hit_p)) {
+                    minCountPerFeature, true, deconv_hit_p)) {
                 continue;
             }
 
@@ -561,8 +502,9 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
 
                         const double Y1p = T.Y1[(size_t)(k*M+f)];
                         const double Y0p = tests[j].total_count - Y1p;
-                        const double pi0p = clamp(Y0p / N0p, pi_eps, 1.0 - pi_eps);
-                        const double pi1p = clamp(Y1p / N1p, pi_eps, 1.0 - pi_eps);
+                        double pi_eps = (Y0p + Y1p) / (N0p + N1p) * pseudoFracRel;
+                        const double pi0p = clamp(Y0p / N0p, pi_eps, 1.0 - 1e-8);
+                        const double pi1p = clamp(Y1p / N1p, pi_eps, 1.0 - 1e-8);
                         const double beta_p = logit(pi1p) - logit(pi0p);
                         if (!std::isfinite(beta_p)) continue;
 
@@ -609,10 +551,11 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
         notice("Result for %s is written to:\n  %s", contrast.name.c_str(),  outFile.c_str());
     }
 
-    outFile = outPrefix + ".nobs.tsv";
+    auxiSuff = auxiSuff.empty() ? "" : ("." + auxiSuff);
+    outFile = outPrefix + auxiSuff + ".nobs.tsv";
     FILE* out_nobs = fopen(outFile.c_str(), "w");
     if (!out_nobs) {error("Cannot open output file: %s", outFile.c_str());}
-    outFile = outPrefix + ".sums.tsv";
+    outFile = outPrefix + auxiSuff + ".sums.tsv";
     FILE* out_sums = fopen(outFile.c_str(), "w");
     if (!out_sums) {error("Cannot open output file: %s", outFile.c_str());}
     fprintf(out_nobs, "Slice\tData\tnUnits\tTotalCount\n");
@@ -636,4 +579,144 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     fclose(out_sums);
 
     return 0;
+}
+
+
+static void readContrastDesignFile(const std::string& contrastFile,
+        std::vector<std::string>& annoPrefixes,
+        std::vector<std::string>& ptsPrefixes,
+        std::vector<std::string>& confusionFiles,
+        std::vector<ContrastDef>& contrasts) {
+    annoPrefixes.clear();
+    ptsPrefixes.clear();
+    confusionFiles.clear();
+    std::ifstream ifs(contrastFile);
+    if (!ifs.is_open()) {
+        error("Cannot open contrast file: %s", contrastFile.c_str());
+    }
+    std::string line;
+    std::vector<std::string> tokens;
+    if (!std::getline(ifs, line)) {
+        error("Contrast file is empty: %s", contrastFile.c_str());
+    }
+    split(tokens, "\t ", line, UINT_MAX, true, true, true);
+    if (tokens.size() < 3) {
+        error("Contrast file must have >= 3 columns (anno, pts, [confusion], contrast...): %s", contrastFile.c_str());
+    }
+    const size_t n_header_cols = tokens.size();
+    int32_t confusion_col = -1;
+    std::vector<int32_t> contrast_cols;
+    contrast_cols.reserve(n_header_cols > 2 ? n_header_cols - 2 : 0);
+    for (size_t i = 2; i < n_header_cols; ++i) {
+        if (tokens[i] == "confusion") {
+            if (confusion_col >= 0) {
+                error("Contrast file has multiple 'confusion' columns: %s", contrastFile.c_str());
+            }
+            confusion_col = static_cast<int32_t>(i);
+            continue;
+        }
+        contrast_cols.push_back(static_cast<int32_t>(i));
+    }
+    const int32_t C = static_cast<int32_t>(contrast_cols.size());
+    if (C <= 0) {
+        error("Contrast file must include at least one contrast column: %s", contrastFile.c_str());
+    }
+    contrasts.assign(C, ContrastDef{});
+    std::unordered_set<std::string> seen_names;
+    for (int32_t c = 0; c < C; ++c) {
+        const std::string name = tokens[contrast_cols[c]];
+        if (name.empty()) {
+            warning("Contrast %d has an empty header name; using index instead", c);
+            contrasts[c].name = std::to_string(c);
+        } else {
+            if (!seen_names.insert(name).second) {
+                error("Contrast name '%s' appears more than once in header", name.c_str());
+            }
+            contrasts[c].name = name;
+        }
+    }
+
+    int32_t n_samples = 0;
+    while (std::getline(ifs, line)) {
+        if (line.empty() || line[0] == '#') { continue; }
+        split(tokens, "\t ", line, UINT_MAX, true, true, true);
+        if (tokens.size() != n_header_cols) {
+            error("Contrast file row has %zu columns, expected %zu: %s",
+                tokens.size(), n_header_cols, line.c_str());
+        }
+        annoPrefixes.push_back(tokens[0]);
+        ptsPrefixes.push_back(tokens[1]);
+        if (confusion_col >= 0) {
+            confusionFiles.push_back(tokens[confusion_col]);
+        }
+        for (int32_t c = 0; c < C; ++c) {
+            int32_t y = 0;
+            const std::string& token = tokens[contrast_cols[c]];
+            if (!str2int32(token, y)) {
+                error("Contrast value must be -1, 0, or 1: %s", token.c_str());
+            }
+            if (y < -1 || y > 1) {
+                error("Contrast value must be -1, 0, or 1: %d", y);
+            }
+            contrasts[c].labels.push_back(static_cast<int8_t>(y));
+        }
+        n_samples++;
+    }
+    if (n_samples == 0) {
+        error("Contrast file has a header but no samples: %s", contrastFile.c_str());
+    }
+    for (int32_t c = 0; c < C; ++c) {
+        if (contrasts[c].labels.size() != static_cast<size_t>(n_samples)) {
+            error("Contrast %s has %zu labels, expected %d samples",
+                contrasts[c].name.c_str(), contrasts[c].labels.size(), n_samples);
+        }
+        contrasts[c].group_neg.clear();
+        contrasts[c].group_pos.clear();
+        for (int32_t s = 0; s < n_samples; ++s) {
+            const int8_t y = contrasts[c].labels[s];
+            if (y < 0) {
+                contrasts[c].group_neg.push_back(s);
+            } else if (y > 0) {
+                contrasts[c].group_pos.push_back(s);
+            }
+        }
+        if (contrasts[c].group_neg.empty() || contrasts[c].group_pos.empty()) {
+            error("Contrast %s must have at least one sample in each group", contrasts[c].name.c_str());
+        }
+        notice("Read contrast %s with %zu vs %zu samples", contrasts[c].name.c_str(), contrasts[c].group_pos.size(), contrasts[c].group_neg.size());
+    }
+}
+
+static void buildPairwiseContrasts(const std::vector<std::string>& dataLabels,
+        std::vector<ContrastDef>& contrasts) {
+    const int32_t n = static_cast<int32_t>(dataLabels.size());
+    contrasts.clear();
+    if (n < 2) {
+        return;
+    }
+    contrasts.reserve(static_cast<size_t>(n) * (n - 1) / 2);
+    for (int32_t g0 = 0; g0 < n; ++g0) {
+        for (int32_t g1 = g0 + 1; g1 < n; ++g1) {
+            ContrastDef contrast;
+            contrast.name = dataLabels[g0] + "_vs_" + dataLabels[g1];
+            contrast.labels.assign(n, 0);
+            contrast.labels[g0] = -1;
+            contrast.labels[g1] = 1;
+            contrast.group_neg.push_back(g0);
+            contrast.group_pos.push_back(g1);
+            contrasts.push_back(contrast);
+        }
+    }
+}
+
+static Eigen::MatrixXd readConfusionMatrixFile(const std::string& path, int K) {
+    RowMajorMatrixXd mat;
+    std::vector<std::string> rnames;
+    std::vector<std::string> cnames;
+    read_matrix_from_file(path, mat, &rnames, &cnames);
+    if (mat.rows() != K || mat.cols() != K) {
+        error("Confusion matrix %s has size %d x %d, expected %d x %d",
+            path.c_str(), static_cast<int>(mat.rows()), static_cast<int>(mat.cols()), K, K);
+    }
+    return Eigen::MatrixXd(mat);
 }

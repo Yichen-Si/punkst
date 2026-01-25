@@ -92,9 +92,10 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
         if (n_ids == 0) {
             std::fill(gamma.data(), gamma.data() + n_topics_, alpha_);
         } else {
+            auto& rng = thread_rng();
             std::gamma_distribution<double> gamma_dist(100.0, 0.01);
             for (int k = 0; k < n_topics_; k++) {
-                gamma[k] = gamma_dist(random_engine_);
+                gamma[k] = gamma_dist(rng);
             }
         }
     }
@@ -295,9 +296,10 @@ int32_t LatentDirichletAllocation::svbdn_fit_one_document(
         if (n_ids == 0) {
             std::fill(gamma.data(), gamma.data() + n_topics_, alpha_);
         } else {
+            auto& rng = thread_rng();
             std::gamma_distribution<double> gamma_dist(100.0, 0.01);
             for (int k = 0; k < n_topics_; k++) {
-                gamma[k] = gamma_dist(random_engine_);
+                gamma[k] = gamma_dist(rng);
             }
         }
     }

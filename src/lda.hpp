@@ -6,11 +6,15 @@
 #include <cstdlib>
 #include <iostream>
 #include <random>
+#include <atomic>
+#include <cstdint>
+#include <unordered_map>
 #include <optional>
 #include <numeric>
 #include "numerical_utils.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"
+#include "utils.h"
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
@@ -118,6 +122,7 @@ public:
     void sort_topics();
 
     void set_nthreads(int nThreads);
+    void set_thread_rng_stream(uint64_t stream);
 
     // Set engine specific parameters
     void set_svb_parameters(int32_t max_iter = 100, double tol = -1.);
@@ -240,6 +245,7 @@ private:
     int update_count_; // number of processed minibatches
     int32_t verbose_;
     std::mt19937 random_engine_;
+    std::atomic<uint64_t> rng_stream_{0};
     std::unique_ptr<tbb::global_control> tbb_ctrl_;
 
     // SVB specific parameters
@@ -273,6 +279,27 @@ private:
     void init_model(const std::optional<RowMajorMatrixXd>& topic_word_distr = std::nullopt, double scalar = -1.);
     void compute_global_mtx();
     void init();
+
+    struct RngState {
+        std::mt19937 rng;
+        uint64_t stream;
+    };
+
+    static std::mt19937 make_rng(uint64_t seed, uint64_t stream) {
+        uint64_t mixed = ::splitmix64(seed + (stream + 1) * 0x9e3779b97f4a7c15ULL);
+        std::seed_seq seq{
+            static_cast<uint32_t>(mixed),
+            static_cast<uint32_t>(mixed >> 32)
+        };
+        return std::mt19937(seq);
+    }
+
+    static std::unordered_map<const LatentDirichletAllocation*, RngState>& thread_rng_map() {
+        thread_local std::unordered_map<const LatentDirichletAllocation*, RngState> rngs;
+        return rngs;
+    }
+
+    std::mt19937& thread_rng();
 
     // SCVB0 specific
     // SCVB0 latent variable update (Eq. 5 for gamma_{ijk} in the paper)

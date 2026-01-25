@@ -39,6 +39,7 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
         N = lda_.get_N_global() * 100;
     }
     pseudobulk_ = MatrixXf::Zero(M_, K_);
+    confusion_ = RowMajorMatrixXf::Zero(K_, K_);
     slda_.init(K_, M_, N, seed);
     slda_.init_global_parameter(lda_.get_model());
     slda_.verbose_ = verbose;
@@ -278,6 +279,13 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<Anch
 }
 
 template<typename T>
+void Tiles2SLDA<T>::onWorkerStart(int threadId) {
+    uint64_t stream = static_cast<uint64_t>(threadId);
+    lda_.set_thread_rng_stream(stream);
+    slda_.set_thread_rng_stream(stream);
+}
+
+template<typename T>
 void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     if (tileData.pts.empty() && tileData.extPts.empty() &&
         tileData.pts3d.empty() && tileData.extPts3d.empty()) {
@@ -319,9 +327,21 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     } else {
         f0 = slda_.do_e_step_standard(minibatch, &smtx, &n_iter, &delta);
     }
+    RowMajorMatrixXf gamma_use;
+    if (fitBackground_ && minibatch.gamma.cols() > K_) {
+        gamma_use = minibatch.gamma.leftCols(K_);
+    } else {
+        gamma_use = minibatch.gamma;
+    }
+    if (gamma_use.cols() != K_) {
+        error("%s: gamma has %d columns, expected %d", __func__, gamma_use.cols(), K_);
+    }
+    rowNormalizeInPlace(gamma_use);
+    RowMajorMatrixXf local_confusion = gamma_use.transpose() * gamma_use;
     {
         std::lock_guard<std::mutex> lock(pseudobulkMutex_);
         pseudobulk_ += smtx;
+        confusion_ += local_confusion;
         if (debug_) {
             std::cout << "Thread " << threadId << " updated pseudobulk.\n";
             std::cout << "    Current sums: ";
@@ -359,14 +379,14 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
 
 template<typename T>
 void Tiles2SLDA<T>::postRun() {
-    writePseudobulkToTsv();
+    writeGlobalMatrixToTsv();
 }
 
 template<typename T>
-void Tiles2SLDA<T>::writePseudobulkToTsv() {
-    std::string pseudobulkFile = outPref + ".pseudobulk.tsv";
-    std::ofstream oss(pseudobulkFile, std::ios::out);
-    if (!oss) error("Error opening pseudobulk output file: %s", pseudobulkFile.c_str());
+void Tiles2SLDA<T>::writeGlobalMatrixToTsv() {
+    std::string outFile = outPref + ".pseudobulk.tsv";
+    std::ofstream oss(outFile, std::ios::out);
+    if (!oss) error("Error opening pseudobulk output file: %s", outFile.c_str());
     oss << "Feature";
     if (fitBackground_) {oss << "\tBackground";}
     const VectorXf& bgProb = slda_.get_background_count();
@@ -380,6 +400,9 @@ void Tiles2SLDA<T>::writePseudobulkToTsv() {
         oss << "\n";
     }
     oss.close();
+
+    outFile = outPref + ".confusion.tsv";
+    write_matrix_to_file(outFile, confusion_, probDigits, true, factorNames, "K", &factorNames);
 }
 
 // explicit instantiations

@@ -240,19 +240,70 @@ private:
     \lambda_i = c_i * \sum_k a_{ik} (\exp(o_{ik} + x_i b_k) - 1)
     Assuming x_i \in \set{-1,1}
 */
+
+// Precomputed context for one contrast
+class MixPoisLog1pSparseContext {
+public:
+    const RowMajorMatrixXd& A;   // N x K, rows sum to 1
+    const VectorXd& x;           // N
+    const VectorXd& c;           // N
+    const MLEOptions& opt;
+    const int N_active; // active sample count for this contrast
+    const int N, K;
+    bool lda_uncertainty = false;
+    double size_factor = 1.0;
+    bool has_s2 = false;
+    bool has_m2 = false;
+    bool has_a_unc = false;
+    bool has_a2 = false;
+    bool has_a2_full = false;
+
+    const VectorXd* s1p = nullptr;
+    const VectorXd* s1m = nullptr;
+    const VectorXd* s2p = nullptr;
+    const VectorXd* s2m = nullptr;
+    const MatrixXd* m2p = nullptr;
+    const MatrixXd* m2m = nullptr;
+    const VectorXd* a1p = nullptr;
+    const VectorXd* a1m = nullptr;
+    const VectorXd* a2p = nullptr;
+    const VectorXd* a2m = nullptr;
+    const MatrixXd* a2p_full = nullptr;
+    const MatrixXd* a2m_full = nullptr;
+
+    MixPoisLog1pSparseContext(const RowMajorMatrixXd& A_,
+            const VectorXd& x_, const VectorXd& c_, const MLEOptions& opt_,
+            bool robust_se_full, int N_active_ = -1,
+            bool lda_uncertainty_ = false, double size_factor_ = 1.0);
+
+    MixPoisLog1pSparseContext(const RowMajorMatrixXd& A_,
+            const VectorXd& x_, const VectorXd& c_, const MLEOptions& opt_,
+            const VectorXd& s1p_, const VectorXd& s1m_,
+            const VectorXd* s2p_ = nullptr, const VectorXd* s2m_ = nullptr,
+            const MatrixXd* m2p_ = nullptr, const MatrixXd* m2m_ = nullptr,
+            int N_active_ = -1, bool lda_uncertainty_ = false,
+            double size_factor_ = 1.0);
+
+private:
+    VectorXd s1p_store, s1m_store;
+    VectorXd s2p_store, s2m_store;
+    MatrixXd m2p_store, m2m_store;
+    VectorXd a1p_store, a1m_store;
+    VectorXd a2p_store, a2m_store;
+    MatrixXd a2p_full_store, a2m_full_store;
+};
+
 class MixPoisLog1pSparseProblem {
 public:
     const RowMajorMatrixXd& A;   // A_rows x K, rows sum to 1
     const VectorXd& x;           // N
     const VectorXd& c;           // N
-    const VectorXd& oK;          // K
-    const std::vector<uint32_t>& ids; // indices with y>0
-    Eigen::Map<const VectorXd> yvec;  // counts for ids
     const MLEOptions& opt;
+    bool robust_se_diagonal_only = true;
 
     const int N_active; // active sample count for this contrast
     const int N, K;
-    const int n; // nnz
+    int n = 0; // nnz
     RowMajorMatrixXd Anz;  // n x K
     VectorXd xS, cS;       // n
 
@@ -260,6 +311,12 @@ public:
     VectorXd Sz_plus, Sz_minus;
     // Sums of (c_i a_{ik})^2 over Zero-set split by sign of x
     VectorXd Sz2_plus,  Sz2_minus;
+    // Full second-moment matrices over Zero-set split by sign of x
+    MatrixXd Mz_plus, Mz_minus;
+    // Uncertainty aggregates over Zero-set split by sign of x
+    VectorXd Az1_plus, Az1_minus;
+    VectorXd Az2_plus, Az2_minus;
+    MatrixXd Az2_full_plus, Az2_full_minus;
 
     // Cached (depends on b, updated in eval)
     mutable MatrixXd Vnz;       // n x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
@@ -268,12 +325,10 @@ public:
     mutable VectorXd last_qZ;
     mutable ArrayXd slope_cache;
 
-    MixPoisLog1pSparseProblem(const RowMajorMatrixXd& A_,
-            const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
-            const VectorXd& x_, const VectorXd& c_, const VectorXd& oK_,
-            const MLEOptions& opt_, const VectorXd& s1p, const VectorXd& s1m,
-            VectorXd* s2p = nullptr, VectorXd* s2m = nullptr,
-            int N_active_ = -1);
+    MixPoisLog1pSparseProblem(const MixPoisLog1pSparseContext& ctx_);
+
+    void reset_feature(const std::vector<uint32_t>& ids_,
+        const std::vector<double>& cnts_, const VectorXd& oK_);
 
     double f(const VectorXd& b) const {
         double fval;
@@ -297,10 +352,20 @@ public:
     }
     void eval_safe(const VectorXd& b, double* f_out,
               VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+
+    void compute_se(const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats) const;
+
+    const VectorXd& oK_ref() const { return *oK; }
+    const double* y_ptr() const { return yptr; }
+    Eigen::Index y_size() const { return ysize; }
+
+private:
+    const MixPoisLog1pSparseContext& ctx;
+    const VectorXd* oK = nullptr;
+    const double* yptr = nullptr;
+    Eigen::Index ysize = 0;
 };
 
-void mix_pois_log1p_compute_se(const MixPoisLog1pSparseProblem& P,
-    const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats);
 double mix_pois_log1p_mle(const RowMajorMatrixXd& A,
     const std::vector<uint32_t>& ids, const std::vector<double>& cnts,
     const VectorXd& x, const VectorXd& c, const VectorXd& oK,
@@ -353,24 +418,14 @@ public:
 
     void eval(const VectorXd& b, double* f_out,
         VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
+
+    void compute_se(const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats) const;
 };
 
-void mix_pois_log_compute_se(const MixPoisLogRegProblem& P,
-    const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats);
 double mix_pois_log_mle(const RowMajorMatrixXd& A,
     const VectorXd& y, const VectorXd& x,
     const VectorXd& c, const VectorXd& oK,
-    MLEOptions& opt, VectorXd& b, MLEStats& stats,
-    int32_t init_newton = 0, bool init_polish = false,
-    int N_active = -1);
-double init_b0_loglink_1d(const RowMajorMatrixXd& A,
-    const VectorXd& y, const VectorXd& x,
-    const VectorXd& c, const VectorXd& oK, double eps, int iters = 10);
-VectorXd init_mix_pois_log_vec(const RowMajorMatrixXd& A,
-    const VectorXd& y, const VectorXd& x,
-    const VectorXd& c, const VectorXd& oK,
-    double eps = 1e-12, int newton_steps_per_k = 5,
-    bool do_diag_polish = true, const MLEOptions* opt_for_polish = nullptr);
+    MLEOptions& opt, VectorXd& b, MLEStats& stats, int N_active = -1);
 
 /*
   NB2 mixture regression with log link + size factor (Unknown: b)

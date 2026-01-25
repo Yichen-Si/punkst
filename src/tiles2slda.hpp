@@ -24,6 +24,7 @@ public:
     void setLloydIter(int32_t nIter) { nLloydIter_ = nIter; }
     void set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand = false);
     void set_background_prior(std::string& bgModelFile, double a0, double b0, bool outputExpand = false);
+    int32_t getFactorCount() const override { return K_; }
 
 protected:
     using Base = Tiles2MinibatchBase<T>;
@@ -51,6 +52,7 @@ protected:
     double eps_;
     int32_t nLloydIter_ = 1;
     MatrixXf pseudobulk_; // K x M
+    RowMajorMatrixXf confusion_; // K x K
     std::mutex pseudobulkMutex_; // Protects pseudobulk
     bool fitBackground_ = false;
 
@@ -60,7 +62,8 @@ protected:
 
     void processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) override;
     void postRun() override;
+    void onWorkerStart(int threadId) override;
 
-    void writePseudobulkToTsv();
+    void writeGlobalMatrixToTsv();
 
 };

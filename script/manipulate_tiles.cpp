@@ -19,12 +19,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool dumpTSV = false;
     bool probDot = false;
     bool cellAnno = false;
+    double confusionRes = -1.0;
     std::vector<uint32_t> k2keep;
     int32_t icol_x = -1, icol_y = -1, icol_z = -1;
     int32_t icol_c = -1, icol_s = -1;
     int32_t coordDigits = 2, probDigits = 4;
     int32_t kOut = 0;
+    int32_t K = -1;
     float maxCellDiameter = 50;
+    int32_t debug_ = 0;
 
     ParamList pl;
     pl.add_option("in-data", "Input data file", inData)
@@ -36,6 +39,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
       .add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
+      .add_option("confusion", "Compute confusion matrix using r-by-r squares", confusionRes)
       .add_option("prob-dot", "Compute pairwise probability dot products", probDot)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
       .add_option("merge-emb", "List of embedding files to merge", inMergeEmbFiles)
@@ -48,9 +52,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
       .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter)
+      .add_option("K", "Total number of factors in the data", K)
       .add_option("binary-out", "Output in binary format (merge only)", binaryOut);
     pl.add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
-      .add_option("prob-digits", "Number of decimal digits to output for probabilities (for dump-tsv)", probDigits);
+      .add_option("prob-digits", "Number of decimal digits to output for probabilities (for dump-tsv)", probDigits)
+      .add_option("debug", "Debug", debug_);
 
     try {
         pl.readArgs(argc, argv);
@@ -69,9 +75,16 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     TileOperator tileOp(inData, inIndex);
+    if (K > 0) {tileOp.setFactorCount(K);}
 
     if(printIndex) {
         tileOp.printIndex();
+    }
+    if (outPrefix.empty()) {
+        return 0;
+    }
+    if (debug_ > 0) { // CAUTION
+        tileOp.sampleTilesToDebug(debug_);
     }
 
     if (reorganize) {
@@ -81,6 +94,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     if (dumpTSV) {
         tileOp.dumpTSV(outPrefix, probDigits, coordDigits);
+        return 0;
+    }
+
+    if (confusionRes >= 0) {
+        auto confusion = tileOp.computeConfusionMatrix(confusionRes, outPrefix.c_str(), probDigits);
         return 0;
     }
 

@@ -41,7 +41,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
     double minFC = 1.5;
     int nThreads = 1;
     double pseudoCount = 0.5;
-    int neighborK = 0;
+    int neighborK = 3;
 
     ParamList pl;
     pl.add_option("input", "Input pseudobulk matrix (one for 1-vs-rest, two for pairwise comparison)", inputFiles, true)

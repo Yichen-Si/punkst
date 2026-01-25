@@ -33,6 +33,9 @@ public:
     std::vector<std::string> getFeatureNames() const {
         return featureNames.empty() ? reader.features : featureNames;
     }
+    void applyWeights(Document& doc) const {
+        reader.applyWeights(doc);
+    }
     void printTopicAbundance();
     void writeModelToFile(const std::string& outFile);
     void writeModelHeader(std::ofstream& outFileStream);

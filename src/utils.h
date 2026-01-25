@@ -12,6 +12,7 @@
 #include <charconv>
 #include <locale>
 #include <stdexcept>
+#include "zlib.h"
 #include <opencv2/opencv.hpp>
 #include <Eigen/Dense>
 #include "error.hpp"
@@ -278,6 +279,8 @@ void read_matrix_from_file(
     // Copy in row-major order
     std::copy(values_linear.begin(), values_linear.end(), mat.data());
 }
+
+std::vector<std::string> read_lines_maybe_gz(const std::string& path);
 
 // String search
 std::vector<int> computeLPSArray(const std::string& pattern);

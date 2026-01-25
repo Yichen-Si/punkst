@@ -22,6 +22,7 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     if (!in.read(reinterpret_cast<char*>(&formatInfo_), sizeof(formatInfo_)))
         error("%s: Error reading index file: %s", __func__, indexFile.c_str());
     mode_ = formatInfo_.mode;
+    K_ = mode_ >> 16;
     if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
     if (mode_ & 0x2) {assert(mode_ & 0x4);}
     if (mode_ & 0x1) {assert(formatInfo_.recordSize > 0);}
@@ -114,6 +115,30 @@ int32_t TileOperator::query(float qxmin,float qxmax,float qymin,float qymax) {
         }
     }
     return int32_t(blocks_.size());
+}
+
+void TileOperator::sampleTilesToDebug(int32_t ntiles) {
+    // Pick ntiles tiles
+    blocks_.clear();
+    std::mt19937 rng(42);
+    std::uniform_int_distribution<size_t> uni(0, blocks_all_.size() - 1);
+    std::unordered_set<size_t> selected;
+    while (static_cast<int32_t>(selected.size()) < ntiles) {
+        size_t idx = uni(rng);
+        selected.insert(idx);
+    }
+    for (auto idx : selected) {
+        blocks_.push_back(blocks_all_[idx]);
+    }
+    idx_block_ = 0;
+    if ((mode_ & 0x8) == 0) { // regular grid
+        tile_lookup_.clear();
+        for (size_t i = 0; i < blocks_.size(); ++i) {
+            auto& b = blocks_[i];
+            b.row = b.idx.row; b.col = b.idx.col;
+            tile_lookup_[{b.row, b.col}] = i;
+        }
+    }
 }
 
 int32_t TileOperator::loadTileToMap(const TileKey& key,

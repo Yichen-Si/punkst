@@ -135,13 +135,13 @@ public:
     // Compute group effects with closed-form robust SE
     // logit(p_{ikm}) = a_{km} + y_i * b_{km}
     bool compute_one_test(int f, int g0, int g1, PairwiseOneResult& out,
-        double min_total_pair, double pi_eps = 1e-8, bool use_hc1 = true) const;
+        double min_total_pair, double pi_rel_eps = 0.05, bool use_hc1 = true) const;
 
     // Compute test for aggregated group lists
     bool compute_one_test_aggregate(int f,
         const std::vector<int32_t>& g0s, const std::vector<int32_t>& g1s,
         PairwiseOneResult& out,
-        double min_total_pair, double pi_eps = 1e-8, bool use_hc1 = true) const;
+        double min_total_pair, double pi_rel_eps = 0.05, bool use_hc1 = true) const;
 
 private:
     int G_, M_;
@@ -173,7 +173,8 @@ struct ContrastPrecomp {
     // Hyperparameters per contrast
     int    max_iter     = 25;
     double tol          = 1e-6;
-    double pi_eps       = 1e-8;
+    double pi_rel_eps   = 0.05;
+    double pi_abs_eps   = -1;
     double lambda_beta  = 1e-4;
     double lambda_alpha = 1e-6;
     double lm_damping   = 1e-4;
@@ -194,10 +195,11 @@ struct ContrastPrecomp {
     RowMajorMatrixXd W0C0, W1C1;
 
     ContrastPrecomp(int K_,
-        int max_iter_ = 25, double tol_ = 1e-6, double pi_eps_ = 1e-8,
+        int max_iter_ = 25, double tol_ = 1e-6,
+        double pi_rel_eps_ = 0.05,
         double lambda_beta_ = 1e-2, double lambda_alpha_ = 1e-6,
         double lm_damping_ = 1e-4) :
-        K(K_), max_iter(max_iter_), tol(tol_), pi_eps(pi_eps_),
+        K(K_), max_iter(max_iter_), tol(tol_), pi_rel_eps(pi_rel_eps_),
         lambda_beta(lambda_beta_), lambda_alpha(lambda_alpha_),
         lm_damping(lm_damping_),
         w0c(K_), w1c(K_) {}
@@ -298,17 +300,15 @@ public:
 
     ContrastPrecomp prepare_contrast(const std::vector<int32_t>& g0s,
         const std::vector<int32_t>& g1s,
-        int max_iter = 25, double tol = 1e-6, double pi_eps = 1e-8,
+        int max_iter = 25, double tol = 1e-6, double pi_rel_eps = 0.05,
         double lambda_beta = 1e-2, double lambda_alpha = 1e-6,
         double lm_damping = 1e-4) const;
 
-    bool deconvolution(ContrastPrecomp& pc,
-        const Eigen::VectorXd& p0_obs_in, const Eigen::VectorXd& p1_obs_in,
-        Eigen::VectorXd& beta_out);
+    bool deconvolution(ContrastPrecomp& pc, Eigen::VectorXd& beta_out);
 
     bool compute_one_test_aggregate(int f,
         const std::vector<int32_t>& g0s, const std::vector<int32_t>& g1s,
         ContrastPrecomp& pc, MultiSliceOneResult& out,
-        double min_total_pair, double pi_eps, bool use_hc1, double deconv_hit_p);
+        double min_total_pair, bool use_hc1, double deconv_hit_p);
 
 };

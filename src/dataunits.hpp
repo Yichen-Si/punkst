@@ -5,6 +5,10 @@
 #include "json.hpp"
 #include "assert.h"
 #include <unordered_set>
+#include <unordered_map>
+#include <array>
+#include <fstream>
+#include "zlib.h"
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
 
@@ -264,6 +268,7 @@ public:
     void setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped = false);
     void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums = true);
     void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0);
+    void applyWeights(Document& doc) const;
 
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0, bool add2sums = true) {
         std::string info;
@@ -298,6 +303,70 @@ private:
     bool accumulate_sums = true;
     bool weightFeatures = false;
     double defaultWeight;
+};
+
+class DGEReader10X {
+public:
+    int32_t nBarcodes = 0;
+    int32_t nFeatures = 0;
+    uint64_t nEntries = 0;
+    std::vector<std::string> barcodes;
+    std::vector<std::string> features;
+    std::vector<std::string> feature_ids;
+    std::vector<uint64_t> feature_totals;
+
+    DGEReader10X(bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) {}
+    DGEReader10X(const std::string &dgeDir, bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) { open(dgeDir); }
+    DGEReader10X(const std::string &barcodesFile, const std::string &featuresFile, const std::string &matrixFile, bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) {
+        open(barcodesFile, featuresFile, matrixFile);
+    }
+    ~DGEReader10X();
+
+    void open(const std::string &dgeDir);
+    void open(const std::string &barcodesFile, const std::string &featuresFile,
+        const std::string &matrixFile);
+
+    bool next(Document& doc, int32_t* barcode_idx = nullptr,
+        std::string* barcode = nullptr);
+    int32_t readAll(std::vector<Document>& docs, int32_t minCount = 1);
+    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& barcodes_out,
+        int32_t minCount = 1);
+    int32_t setFeatureIndexRemap(const std::vector<std::string>& new_features,
+        bool keep_unmapped = false);
+
+private:
+    std::string barcodesFile_;
+    std::string featuresFile_;
+    std::string matrixFile_;
+    gzFile gz_mtx_ = nullptr;
+    std::ifstream mtx_in_;
+    bool gz_matrix_ = false;
+    bool stream_open_ = false;
+    bool header_read_ = false;
+    bool done_ = false;
+    bool has_buffer_ = false;
+    int32_t buffered_barcode_ = -1;
+    uint32_t buffered_feature_ = 0;
+    uint32_t buffered_count_ = 0;
+    int32_t nRawFeatures_ = 0;
+    bool remap_ = false;
+    bool keep_unmapped_ = false;
+    bool keep_barcodes_;
+    std::vector<int32_t> idx_remap_;
+    std::vector<std::string> base_features_;
+    std::vector<std::string> target_features_;
+    std::array<char, 1 << 16> buf_{};
+
+    void readBarcodes(const std::string& path);
+    void readFeatures(const std::string& path);
+    int32_t applyFeatureIndexRemap();
+    void openMatrixStream();
+    void closeMatrixStream();
+    void readMatrixHeader();
+    bool readMatrixLine(std::string& line);
+    // Read next valid entry from matrix file, record 0-based indices
+    bool readNextEntry(int32_t& barcode_idx, uint32_t& feature_idx, uint32_t& count);
+    void resetFeatureTotals();
 };
 
 struct SparseObsMinibatchReader {

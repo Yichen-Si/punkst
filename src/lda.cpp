@@ -136,6 +136,7 @@ void LatentDirichletAllocation::init() {
         seed_ = std::random_device{}();
     }
     random_engine_.seed(seed_);
+    rng_stream_.store(0, std::memory_order_relaxed);
     eps_ = std::numeric_limits<double>::epsilon();
     if (alpha_ < 0) {
         alpha_ = 1. / n_topics_;
@@ -166,6 +167,32 @@ void LatentDirichletAllocation::init() {
     }
     if (verbose_) {
         notice("LDA initialized with %d topics, %d features, %d threads", n_topics_, n_features_, nThreads_);
+    }
+}
+
+std::mt19937& LatentDirichletAllocation::thread_rng() {
+    auto& rngs = thread_rng_map();
+    auto it = rngs.find(this);
+    if (it == rngs.end()) {
+        uint64_t stream = rng_stream_.fetch_add(1, std::memory_order_relaxed);
+        auto rng = make_rng(static_cast<uint64_t>(seed_), stream);
+        it = rngs.emplace(this, RngState{std::move(rng), stream}).first;
+    }
+    return it->second.rng;
+}
+
+void LatentDirichletAllocation::set_thread_rng_stream(uint64_t stream) {
+    auto& rngs = thread_rng_map();
+    auto it = rngs.find(this);
+    if (it != rngs.end() && it->second.stream == stream) {
+        return;
+    }
+    auto rng = make_rng(static_cast<uint64_t>(seed_), stream);
+    if (it == rngs.end()) {
+        rngs.emplace(this, RngState{std::move(rng), stream});
+    } else {
+        it->second.rng = std::move(rng);
+        it->second.stream = stream;
     }
 }
 

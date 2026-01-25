@@ -33,6 +33,7 @@ struct MLEOptions {
 	double soft_tau  = 1e-3;    // for softplus if needed
 	uint32_t se_flag = 0;       // 0: none, 1: fisher, 2: robust, 3: both
 	uint32_t hc_type = 1;
+    double se_stabilize = 0.0;
 	bool store_cov   = false;   // Store covariance matrices for estimates
     bool compute_residual = false;
     bool compute_var_mu = false;

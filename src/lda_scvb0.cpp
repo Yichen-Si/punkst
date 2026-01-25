@@ -43,7 +43,8 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
     // generate a random order of words to process
     std::vector<int> word_order(doc.ids.size());
     std::iota(word_order.begin(), word_order.end(), 0);
-    std::shuffle(word_order.begin(), word_order.end(), random_engine_);
+    auto& rng = thread_rng();
+    std::shuffle(word_order.begin(), word_order.end(), rng);
     for (int epoch = 0; epoch < burn_in_ + 1; ++epoch) {
         for (size_t i = 0; i < doc.ids.size(); ++i) {
             const uint32_t w = doc.ids[word_order[i]];
@@ -74,7 +75,8 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
     // generate a random order of words to process
     std::vector<int> word_order(doc.ids.size());
     std::iota(word_order.begin(), word_order.end(), 0);
-    std::shuffle(word_order.begin(), word_order.end(), random_engine_);
+    auto& rng = thread_rng();
+    std::shuffle(word_order.begin(), word_order.end(), rng);
     for (int epoch = 0; epoch < burn_in_ + 1; ++epoch) {
         for (size_t i = 0; i < doc.ids.size(); ++i) {
             const uint32_t w = doc.ids[word_order[i]];
