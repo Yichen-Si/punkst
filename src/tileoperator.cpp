@@ -1084,43 +1084,59 @@ TileOperator::computeConfusionMatrix(double resolution, const char* outPref, int
     float res = formatInfo_.pixelResolution;
     if (res <= 0) res = 1.0f;
     if (resolution > 0) res /= resolution;
-    std::unordered_map<std::pair<int32_t, int32_t>, Eigen::VectorXd, PairHash> squareSums;
     std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+    int32_t nTiles = 0;
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> confusion;
+    confusion.setZero(K, K);
     for (const auto& tileInfo : blocks_) {
+        nTiles++;
+        if (nTiles % 10 == 0) {
+            notice("%s: Processed %d tiles...", __func__, nTiles);
+        }
         TileKey tile{tileInfo.row, tileInfo.col};
         if (loadTileToMap(tile, pixelMap) <= 0) {
             continue;
         }
-        for (const auto& kv : pixelMap) {
-            const auto& coord = kv.first;
-            int32_t sx = coord.first;
-            int32_t sy = coord.second;
-            if (resolution > 0) {
-                sx = static_cast<int32_t>(std::floor(coord.first * res));
-                sy = static_cast<int32_t>(std::floor(coord.second* res));
-            }
-            auto& merged = squareSums[std::make_pair(sx, sy)];
-            if (merged.size() == 0) {
-                merged = Eigen::VectorXd::Zero(K);
-            }
-            const TopProbs& tp = kv.second;
-            for (size_t i = 0; i < tp.ks.size(); ++i) {
-                int32_t k = tp.ks[i];
-                if (k < 0 || k >= K) {
-                    error("%s: factor index %d out of range [0, %d)", __func__, k, K);
+        if (resolution > 0) {
+            std::unordered_map<std::pair<int32_t, int32_t>, Eigen::VectorXd, PairHash> squareSums;
+            for (const auto& kv : pixelMap) {
+                const auto& coord = kv.first;
+                int32_t sx = static_cast<int32_t>(std::floor(coord.first * res));
+                int32_t sy = static_cast<int32_t>(std::floor(coord.second* res));
+                auto& merged = squareSums[std::make_pair(sx, sy)];
+                if (merged.size() == 0) {
+                    merged = Eigen::VectorXd::Zero(K);
                 }
-                merged[k] += tp.ps[i];
+                const TopProbs& tp = kv.second;
+                for (size_t i = 0; i < tp.ks.size(); ++i) {
+                    int32_t k = tp.ks[i];
+                    if (k < 0 || k >= K) {
+                        error("%s: factor index %d out of range [0, %d)", __func__, k, K);
+                    }
+                    merged[k] += tp.ps[i];
+                }
+            }
+            for (auto& kv : squareSums) {
+                auto& merged = kv.second;
+                double w = merged.sum();
+                if (w == 0.0) continue;
+                merged = merged.array() / w;
+                confusion += merged * merged.transpose() * w;
+            }
+        } else {
+            for (const auto& kv : pixelMap) {
+                const TopProbs& tp = kv.second;
+                for (size_t i = 0; i < tp.ks.size(); ++i) {
+                    int32_t k1 = tp.ks[i];
+                    float p1 = tp.ps[i];
+                    for (size_t j = 0; j < tp.ks.size(); ++j) {
+                        int32_t k2 = tp.ks[j];
+                        float p2 = tp.ps[j];
+                        confusion(k1, k2) += static_cast<double>(p1 * p2);
+                    }
+                }
             }
         }
-    }
-    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> confusion;
-    confusion.setZero(K, K);
-    for (auto& kv : squareSums) {
-        auto& merged = kv.second;
-        double w = merged.sum();
-        if (w == 0.0) continue;
-        merged = merged.array() / w;
-        confusion += merged * merged.transpose() * w;
     }
 
     if (outPref) {

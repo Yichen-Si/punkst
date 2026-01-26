@@ -110,6 +110,11 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
     PoisLink pois_link = parse_pois_link(link);
     const bool use_log1p = (pois_link == PoisLink::Log1p);
 
+    mleOpt.optim = optim;
+    mleOpt.se_flag = se_method;
+    mleOpt.store_cov = false;
+    const double b_null = 0.0;
+
     // Collect input files and contrasts
     std::vector<std::vector<int32_t>> contrasts;
     std::vector<std::string> contrastNames;
@@ -223,11 +228,6 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
         offsets[g + 1] = offsets[g] + nUnits[g];
     }
 
-    mleOpt.optim = optim;
-    mleOpt.se_flag = se_method;
-    mleOpt.store_cov = false;
-    const double b_null = 0.0;
-
     const int32_t N_total = offsets.back();
     RowMajorMatrixXd A_all(N_total, K); // concatenate theta
     VectorXd cvec_all(N_total);
@@ -248,6 +248,7 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
         VectorXd xvec = VectorXd::Zero(N_total);
         VectorXd cvec_masked = VectorXd::Zero(N_total);
         VectorXd a_sum_ = VectorXd::Zero(K);
+        VectorXd Ac;
         for (int32_t g = 0; g < G; ++g) {
             if (contrasts[c][g] == 0) {
                 continue;
@@ -275,6 +276,8 @@ int32_t cmdConditionalTestPoisReg(int argc, char** argv) {
             log1p_tls = std::make_unique<
                 tbb::enumerable_thread_specific<MixPoisLog1pSparseProblem>>(
                 [&log1p_ctx]() { return MixPoisLog1pSparseProblem(*log1p_ctx); });
+        } else {
+            Ac = A_all.transpose() * cvec_masked; // K
         }
 
         std::string out_path = outPrefix + "." + contrastNames[c] + ".tsv";
@@ -387,7 +390,7 @@ if (verbose > 3)
                     MLEOptions optLocal = mleOpt;
                     optLocal.optim.set_bounds(-bd, bd);
                     fval = mix_pois_log_mle(
-                        A_all, yvec, xvec, cvec_masked, b0, optLocal, b, stats,
+                        A_all, yvec, xvec, cvec_masked, b0, Ac, optLocal, b, stats,
                         n);
                     for (int32_t idx : touched) {
                         yvec[idx] = 0.0;

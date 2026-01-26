@@ -60,6 +60,9 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
     double alphaMax = 1e4;
     OptimOptions optim;
     optim.tron.enabled = true;
+    MLEOptions mleOpt;
+    mleOpt.hc_type = 3;
+    mleOpt.se_stabilize = 100;
 
     ParamList pl;
     pl.add_option("in-data", "Input data files", inFile)
@@ -81,6 +84,8 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
       .add_option("size-factor", "Size factor", sizeFactor)
       .add_option("max-pval", "Max p-value for output (default: 1)", maxPval)
       .add_option("se-method", "Method for calculating SE (1: Fisher, 2: Sandwich, 3: both)", se_method)
+      .add_option("robust-se-hc", "Type of HC adjustment for robust SE (1,2,3)", mleOpt.hc_type)
+      .add_option("robust-se-stabilize", "Stabilization parameter for robust SE (default: 100)", mleOpt.se_stabilize)
       .add_option("dispersion-loess-span", "LOESS span for dispersion trend (0-1)", dispLoessSpan)
       .add_option("dispersion-outlier-tau", "Outlier threshold in MAD units", dispOutlierTau)
       .add_option("alpha-min", "Minimum dispersion clamp", alphaMin)
@@ -115,6 +120,11 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
 
     PoisLink nb_link = parse_pois_link(link);
     const bool use_log1p = (nb_link == PoisLink::Log1p);
+
+    mleOpt.optim = optim;
+    mleOpt.se_flag = se_method;
+    mleOpt.store_cov = false;
+    const double b_null = 0.0;
 
     // Collect input files and contrasts
     std::vector<std::vector<int32_t>> contrasts;
@@ -229,11 +239,6 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
         offsets[g + 1] = offsets[g] + nUnits[g];
     }
 
-    MLEOptions mleOpt(optim);
-    mleOpt.se_flag = se_method;
-    mleOpt.store_cov = false;
-    const double b_null = 0.0;
-
     const int32_t N_total = offsets.back();
     RowMajorMatrixXd A_all(N_total, K); // concatenate theta
     VectorXd cvec_all(N_total);
@@ -253,6 +258,7 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
         VectorXd xvec = VectorXd::Zero(N_total);
         VectorXd cvec_masked = VectorXd::Zero(N_total);
         VectorXd a_sum_ = VectorXd::Zero(K);
+        VectorXd Ac;
         for (int32_t g = 0; g < G; ++g) {
             if (contrasts[c][g] == 0) {
                 continue;
@@ -281,35 +287,19 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
         MatrixXd Mmat = A_all.transpose() * (A_all.array().colwise() * c2vec.array()).matrix(); // K x K
 
         // Pre-compute values to reuse in log1p sparse optimization
-        VectorXd s1p, s1m, s1p_c2, s1m_c2, s2p, s2m;
-        double csum_p = 0.0, csum_m = 0.0, c2sum_p = 0.0, c2sum_m = 0.0;
+        std::unique_ptr<MixNBLog1pSparseContext> nb_log1p_ctx;
+        std::unique_ptr<tbb::enumerable_thread_specific<MixNBLog1pSparseApproxProblem>> nb_log1p_tls;
         if (use_log1p) {
-            VectorXd& c = cvec_masked;
-            VectorXd& x = xvec;
-            VectorXd wp = (c.array() * (x.array() > 0).cast<double>()).matrix();
-            VectorXd wm = (c.array() * (x.array() < 0).cast<double>()).matrix();
-            VectorXd wp2 = (c.array().square() * (x.array() > 0).cast<double>()).matrix();
-            VectorXd wm2 = (c.array().square() * (x.array() < 0).cast<double>()).matrix();
-            s1p = A_all.transpose() * wp;
-            s1m = A_all.transpose() * wm;
-            s1p_c2 = A_all.transpose() * wp2;
-            s1m_c2 = A_all.transpose() * wm2;
-            csum_p = wp.sum();
-            csum_m = wm.sum();
-            c2sum_p = wp2.sum();
-            c2sum_m = wm2.sum();
-            s2p = VectorXd::Zero(K);
-            s2m = VectorXd::Zero(K);
-            for (int i = 0; i < N_total; ++i) {
-                if (c[i] <= 0.0 || !(x[i] > 0.0 || x[i] < 0.0)) continue;
-                const double ci2 = c[i] * c[i];
-                const auto ai = A_all.row(i).array();
-                if (x[i] > 0.0) {
-                    s2p.array()  += ci2 * ai.square();
-                } else {
-                    s2m.array() += ci2 * ai.square();
-                }
-            }
+            nb_log1p_ctx = std::make_unique<MixNBLog1pSparseContext>(
+                A_all, xvec, cvec_masked, n);
+            nb_log1p_tls = std::make_unique<
+                tbb::enumerable_thread_specific<MixNBLog1pSparseApproxProblem>>(
+                [&nb_log1p_ctx, &mleOpt]() {
+                    return MixNBLog1pSparseApproxProblem(
+                        *nb_log1p_ctx, mleOpt.optim, mleOpt.ridge, mleOpt.soft_tau);
+                });
+        } else {
+            Ac = A_all.transpose() * cvec_masked; // K
         }
 
         // For dispersion parameters
@@ -582,11 +572,8 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
                     MLEOptions optLocal = mleOpt;
                     optLocal.optim.set_bounds(-b0, b0);
                     bd = b0;
-                    MixNBLog1pSparseApproxProblem P(A_all, n, ys.ids, ys.cnts,
-                        xvec, cvec_masked, b0, alpha, optLocal.optim,
-                        optLocal.ridge, optLocal.soft_tau,
-                        s1p, s1m, s1p_c2, s1m_c2, s2p, s2m,
-                        csum_p, csum_m, c2sum_p, c2sum_m);
+                    auto& P = nb_log1p_tls->local();
+                    P.reset_feature(ys.ids, ys.cnts, b0, alpha);
                     b = VectorXd::Zero(K);
                     fval = tron_solve(P, b, optLocal.optim, stats.optim);
                     P.compute_se(b, optLocal, stats);
@@ -608,7 +595,7 @@ int32_t cmdConditionalTestNbReg(int argc, char** argv) {
                     }
                     MLEOptions optLocal = mleOpt;
                     optLocal.optim.set_bounds(-bd, bd);
-                    MixNBLogRegProblem P(A_all, n, yvec, xvec, cvec_masked, b0, alpha, optLocal);
+                    MixNBLogRegProblem P(A_all, n, yvec, xvec, cvec_masked, b0, Ac, alpha, optLocal);
                     b = VectorXd::Zero(K);
                     fval = tron_solve(P, b, optLocal.optim, stats.optim);
                     P.compute_se(b, optLocal, stats);

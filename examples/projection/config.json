@@ -7,6 +7,7 @@
       "tmpdir": "/path/to/store/temporary/files",
       "transcripts": "/path/to/input/transcripts.tsv",
       "model_tsv": "/path/to/model.tsv",
+      "outpref": "/path/to/output/prefix",
       "color_table": "/path/to/punkst/ext/py/cmap.48.tsv",
       "icol_x": 0,
       "icol_y": 1,

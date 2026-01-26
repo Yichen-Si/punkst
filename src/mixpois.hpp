@@ -384,6 +384,7 @@ public:
     const VectorXd& x;          // N
     const VectorXd& c;          // N (size factors)
     const VectorXd& oK;         // K (offsets)
+    const VectorXd& Ac;
     const MLEOptions& opt;
     const double ridge;
 
@@ -397,8 +398,8 @@ public:
 
     MixPoisLogRegProblem(const RowMajorMatrixXd& A_,
         const VectorXd& y_, const VectorXd& x_,
-        const VectorXd& c_, const VectorXd& oK_, const MLEOptions& opt_,
-        int N_active_ = -1);
+        const VectorXd& c_, const VectorXd& oK_, const VectorXd& Ac_,
+        const MLEOptions& opt_, int N_active_ = -1);
 
     double f(const VectorXd& b) const {
         double fval;
@@ -424,7 +425,7 @@ public:
 
 double mix_pois_log_mle(const RowMajorMatrixXd& A,
     const VectorXd& y, const VectorXd& x,
-    const VectorXd& c, const VectorXd& oK,
+    const VectorXd& c, const VectorXd& oK,  const VectorXd& Ac,
     MLEOptions& opt, VectorXd& b, MLEStats& stats, int N_active = -1);
 
 /*
@@ -437,6 +438,7 @@ public:
     const VectorXd& y;          // N
     const VectorXd& x;          // N
     const VectorXd& c;          // N (size factors)
+    const VectorXd& Ac;
     const VectorXd& oK;         // K (offsets)
     const MLEOptions& opt;
     const double ridge;
@@ -452,8 +454,8 @@ public:
 
     MixNBLogRegProblem(const RowMajorMatrixXd& A_, int N_active_,
         const VectorXd& y_, const VectorXd& x_,
-        const VectorXd& c_, const VectorXd& oK_, double alpha_,
-        const MLEOptions& opt_);
+        const VectorXd& c_, const VectorXd& oK_, const VectorXd& Ac_,
+        double alpha_, const MLEOptions& opt_);
 
     double f(const VectorXd& b) const {
         double fval;
@@ -477,23 +479,50 @@ public:
         MLEStats& stats) const;
 };
 
+// Precomputed context for NB log1p sparse approximation (one contrast)
+class MixNBLog1pSparseContext {
+public:
+    const RowMajorMatrixXd& A;   // N x K, rows sum to 1
+    const VectorXd& x;           // N
+    const VectorXd& c;           // N
+    const int N_active; // active sample count for this contrast
+    const int N, K;
+
+    const VectorXd* s1p = nullptr;
+    const VectorXd* s1m = nullptr;
+    const VectorXd* s1p_c2 = nullptr;
+    const VectorXd* s1m_c2 = nullptr;
+    const VectorXd* s2p = nullptr;
+    const VectorXd* s2m = nullptr;
+    double csum_p = 0.0;
+    double csum_m = 0.0;
+    double c2sum_p = 0.0;
+    double c2sum_m = 0.0;
+
+    MixNBLog1pSparseContext(const RowMajorMatrixXd& A_,
+            const VectorXd& x_, const VectorXd& c_,
+            int N_active_ = -1);
+
+private:
+    VectorXd s1p_store, s1m_store;
+    VectorXd s1p_c2_store, s1m_c2_store;
+    VectorXd s2p_store, s2m_store;
+};
+
 // NB log1p mixture regression with sparse exact nonzeros and approximate zeros
 class MixNBLog1pSparseApproxProblem {
 public:
     const RowMajorMatrixXd& A;   // N x K, rows sum to 1
     const VectorXd& x;           // N
     const VectorXd& c;           // N
-    const VectorXd& oK;          // K
-    const std::vector<uint32_t>& ids; // indices with y>0
-    Eigen::Map<const VectorXd> yvec;  // counts for ids
     const OptimOptions& opt;
     const double ridge;
     const double soft_tau;
-    const double alpha; // NB dispersion
+    double alpha = 0.0; // NB dispersion
 
-    const int N; // active sample count for this contrast
-    const int K;
-    const int n; // nnz
+    const int N_active; // active sample count for this contrast
+    const int N, K;
+    int n = 0; // nnz
     RowMajorMatrixXd Anz;  // n x K
     VectorXd xS, cS;       // n
 
@@ -501,7 +530,7 @@ public:
     VectorXd Sz_plus, Sz_minus;         // sum c_i a_ik
     VectorXd Szc2_plus, Szc2_minus;     // sum c_i^2 a_ik
     VectorXd Sz2_plus, Sz2_minus;       // sum c_i^2 a_ik^2
-    double Cz, Cz2;                     // sum c_i and c_i^2 over zero-set
+    double Cz = 0.0, Cz2 = 0.0;         // sum c_i and c_i^2 over zero-set
 
     // Cached (depends on b, updated in eval)
     mutable MatrixXd Vnz;       // n x K, v_{ik} = a_{ik} * exp(o_k + x_i b_k)
@@ -511,15 +540,12 @@ public:
     mutable ArrayXd slope_cache;
     static constexpr double kZeroApproxTau = 0.2;
 
-    MixNBLog1pSparseApproxProblem(const RowMajorMatrixXd& A_, int N_,
-            const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
-            const VectorXd& x_, const VectorXd& c_, const VectorXd& oK_,
-            double alpha_,
-            const OptimOptions& opt_, double ridge_, double soft_tau_,
-            const VectorXd& s1p, const VectorXd& s1m,
-            const VectorXd& s1p_c2, const VectorXd& s1m_c2,
-            const VectorXd& s2p, const VectorXd& s2m,
-            double csum_p, double csum_m, double c2sum_p, double c2sum_m);
+    MixNBLog1pSparseApproxProblem(const MixNBLog1pSparseContext& ctx_,
+            const OptimOptions& opt_, double ridge_, double soft_tau_);
+
+    void reset_feature(const std::vector<uint32_t>& ids_,
+        const std::vector<double>& cnts_, const VectorXd& oK_,
+        double alpha_);
 
     double f(const VectorXd& b) const {
         double fval;
@@ -545,4 +571,10 @@ public:
     void eval_safe(const VectorXd& b, double* f_out,
               VectorXd* g_out, VectorXd* q_out, ArrayXd*  w_out) const;
     void compute_se(const VectorXd& b_hat, const MLEOptions& opt, MLEStats& stats) const;
+
+private:
+    const MixNBLog1pSparseContext& ctx;
+    const VectorXd* oK = nullptr;
+    const double* yptr = nullptr;
+    Eigen::Index ysize = 0;
 };

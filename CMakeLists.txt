@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.15...3.23)
 project(punkst)
 
+include(CheckCXXCompilerFlag)
+include(CheckIPOSupported)
+
 # TBB
 option(FETCH_TBB
   "If ON, download & build oneTBB via FetchContent when no system TBB is found"
@@ -136,22 +139,43 @@ find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
 find_package(LibLZMA)
 
-target_compile_options(${APP_EXE} PRIVATE -O3 -pthread)
+target_compile_options(${APP_EXE} PRIVATE
+  $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O3>
+)
 
-option(USE_AVX2 "Detect system and specify AVX2 when possible" OFF)
-if (USE_AVX2)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-      message(STATUS "Detected Linux (x86_64)")
-      target_compile_options(${APP_EXE} PRIVATE -march=x86-64-v3)
-  elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-      if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-          message(STATUS "Detected Apple Silicon (ARM64)")
-      else()
-          message(STATUS "Detected Intel Mac (x86_64)")
-          target_compile_options(${APP_EXE} PRIVATE -march=x86-64-v3)
-      endif()
+option(ENABLE_LTO "Enable link-time optimization (IPO/LTO) in Release" OFF)
+if (ENABLE_LTO)
+  check_ipo_supported(RESULT ipo_ok OUTPUT ipo_msg)
+  if (ipo_ok)
+    set_property(TARGET ${APP_EXE} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
   else()
-      message(STATUS "System unknown")
+    message(WARNING "IPO/LTO not supported: ${ipo_msg}")
+  endif()
+endif()
+
+option(ENABLE_NATIVE_ARCH "Enable -march=native (not portable across different CPUs)" OFF)
+if (ENABLE_NATIVE_ARCH)
+  check_cxx_compiler_flag("-march=native" HAS_MARCH_NATIVE)
+  if (HAS_MARCH_NATIVE)
+    target_compile_options(${APP_EXE} PRIVATE -march=native)
+    message(STATUS "Enabled -march=native (build is NOT portable across CPUs).")
+  else()
+    message(WARNING "Compiler does not support -march=native; ignoring.")
+  endif()
+endif()
+
+option(ENABLE_X86_64_V3 "Enable -march=x86-64-v3 (requires compatible x86_64 CPU at runtime)" OFF)
+if (ENABLE_X86_64_V3)
+  if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i.86")
+    check_cxx_compiler_flag("-march=x86-64-v3" HAS_X86_64_V3)
+    if (HAS_X86_64_V3)
+      target_compile_options(${APP_EXE} PRIVATE -march=x86-64-v3)
+      message(STATUS "Enabled -march=x86-64-v3 (requires compatible CPU at runtime).")
+    else()
+      message(WARNING "Compiler does not support -march=x86-64-v3; ignoring.")
+    endif()
+  else()
+    message(STATUS "Non-x86 processor (${CMAKE_SYSTEM_PROCESSOR}); not enabling x86-64-v3.")
   endif()
 endif()
 

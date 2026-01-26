@@ -519,13 +519,13 @@ void MixPoisLog1pSparseProblem::compute_se(const VectorXd& b_hat, const MLEOptio
                 B.diagonal().array() += hc_mult * Blda_diag.array();
             }
         }
+
         MatrixXd Vrob = Hinv * B * Hinv;
         if (opt.se_stabilize > 0.0) {
             // Effective exposure per topic: E_k = sum_i c_i a_{ik}
             VectorXd E = (*ctx.s1p) + (*ctx.s1m);  // K
-            const double tiny = 1e-30;
             ArrayXd gamma = opt.se_stabilize /
-                            (opt.se_stabilize + E.array().max(0.0) + tiny);
+                            (opt.se_stabilize + E.array().max(0.0) + 1e-30);
             VectorXd diag_f = Hinv.diagonal();
             VectorXd diag_r = Vrob.diagonal();
             // Only lift (never shrink)
@@ -569,9 +569,8 @@ double mix_pois_log1p_mle(const RowMajorMatrixXd& A,
 
 MixPoisLogRegProblem::MixPoisLogRegProblem(const RowMajorMatrixXd& A_,
     const VectorXd& y_, const VectorXd& x_,
-    const VectorXd& c_, const VectorXd& oK_, const MLEOptions& opt_,
-    int N_active_)
-    : A(A_), y(y_), x(x_), c(c_), oK(oK_), opt(opt_), ridge(opt_.ridge),
+    const VectorXd& c_, const VectorXd& oK_, const VectorXd& Ac_, const MLEOptions& opt_, int N_active_)
+    : A(A_), y(y_), x(x_), c(c_), oK(oK_), Ac(Ac_), opt(opt_), ridge(opt_.ridge),
       N_active(N_active_ < 0 ? (int)A_.rows() : N_active_),
       N((int)A_.rows()), K((int)A_.cols()),
       V(N, K), w_cache(N), lam_cache(N)
@@ -696,14 +695,10 @@ void MixPoisLogRegProblem::compute_se(const VectorXd& b_hat, const MLEOptions& o
 
         MatrixXd Vrob = Hinv * B * Hinv;
         if (opt.se_stabilize > 0.0) {
-            // Effective exposure per topic: E_k = sum_i c_i a_{ik}
-            VectorXd E = A.transpose() * c;  // K
-            const double tiny = 1e-30;
             ArrayXd gamma = opt.se_stabilize /
-                            (opt.se_stabilize + E.array().max(0.0) + tiny);
+                            (opt.se_stabilize + Ac.array().max(0.0) + 1e-30);
             VectorXd diag_f = Hinv.diagonal();
             VectorXd diag_r = Vrob.diagonal();
-            // Only lift (never shrink)
             VectorXd lift = (diag_f - diag_r).cwiseMax(0.0);
             Vrob.diagonal().array() += gamma * lift.array();
         }
@@ -719,7 +714,7 @@ void MixPoisLogRegProblem::compute_se(const VectorXd& b_hat, const MLEOptions& o
 
 double mix_pois_log_mle(const RowMajorMatrixXd& A,
     const VectorXd& y, const VectorXd& x,
-    const VectorXd& c, const VectorXd& oK,
+    const VectorXd& c, const VectorXd& oK,  const VectorXd& Ac,
     MLEOptions& opt, VectorXd& b, MLEStats& stats, int N_active)
 {
     const int K = (int)A.cols();
@@ -728,7 +723,7 @@ double mix_pois_log_mle(const RowMajorMatrixXd& A,
         warning("%s: no bounds specified, assuming FC within 100", __func__);
         opt.optim.set_bounds(-bd, bd, K);
     }
-    MixPoisLogRegProblem P(A, y, x, c, oK, opt, N_active);
+    MixPoisLogRegProblem P(A, y, x, c, oK, Ac, opt, N_active);
     if (b.size() != K) {
         b = VectorXd::Zero(K);
     }
@@ -742,9 +737,9 @@ double mix_pois_log_mle(const RowMajorMatrixXd& A,
 // NB log mixture regression
 MixNBLogRegProblem::MixNBLogRegProblem(const RowMajorMatrixXd& A_, int N_active_,
     const VectorXd& y_, const VectorXd& x_,
-    const VectorXd& c_, const VectorXd& oK_, double alpha_,
-    const MLEOptions& opt_)
-    : A(A_), y(y_), x(x_), c(c_), oK(oK_), opt(opt_),
+    const VectorXd& c_, const VectorXd& oK_, const VectorXd& Ac_,
+    double alpha_, const MLEOptions& opt_)
+    : A(A_), y(y_), x(x_), c(c_), oK(oK_), Ac(Ac_), opt(opt_),
       ridge(opt_.ridge), alpha(alpha_),
       N_active(N_active_), N((int)A_.rows()), K((int)A_.cols()),
       V(N, K), w_cache(N), lam_cache(N)
@@ -871,6 +866,14 @@ void MixNBLogRegProblem::compute_se(
         MatrixXd B = Vs.transpose() * Vs;
 
         MatrixXd Vrob = Hinv * B * Hinv;
+        if (opt_se.se_stabilize > 0.0) {
+            ArrayXd gamma = opt_se.se_stabilize /
+                            (opt_se.se_stabilize + Ac.array().max(0.0) + 1e-30);
+            VectorXd diag_f = Hinv.diagonal();
+            VectorXd diag_r = Vrob.diagonal();
+            VectorXd lift = (diag_f - diag_r).cwiseMax(0.0);
+            Vrob.diagonal().array() += gamma * lift.array();
+        }
         stats.se_robust = Vrob.diagonal().array().sqrt().matrix();
 
         if (opt_se.store_cov) stats.cov_robust = Vrob;
@@ -881,64 +884,134 @@ void MixNBLogRegProblem::compute_se(
     }
 }
 
+// NB log1p sparse precompute (one contrast)
+MixNBLog1pSparseContext::MixNBLog1pSparseContext(const RowMajorMatrixXd& A_,
+        const VectorXd& x_, const VectorXd& c_, int N_active_)
+    : A(A_), x(x_), c(c_),
+      N_active(N_active_ < 0 ? (int)A_.rows() : N_active_),
+      N((int)A_.rows()), K((int)A_.cols())
+{
+    if (x.size() != N)  error("%s: x has wrong size", __func__);
+    if (c.size() != N)  error("%s: c has wrong size", __func__);
+    if (N_active < 0 || N_active > N) {
+        error("%s: N_active must be between 0 and A.rows()", __func__);
+    }
+
+    VectorXd wp = (c.array() * (x.array() > 0).cast<double>()).matrix();
+    VectorXd wm = (c.array() * (x.array() < 0).cast<double>()).matrix();
+    VectorXd wp2 = (c.array().square() * (x.array() > 0).cast<double>()).matrix();
+    VectorXd wm2 = (c.array().square() * (x.array() < 0).cast<double>()).matrix();
+
+    s1p_store = A.transpose() * wp;
+    s1m_store = A.transpose() * wm;
+    s1p_c2_store = A.transpose() * wp2;
+    s1m_c2_store = A.transpose() * wm2;
+    csum_p = wp.sum();
+    csum_m = wm.sum();
+    c2sum_p = wp2.sum();
+    c2sum_m = wm2.sum();
+
+    s2p_store = VectorXd::Zero(K);
+    s2m_store = VectorXd::Zero(K);
+    for (int i = 0; i < N; ++i) {
+        if (c[i] <= 0.0 || !(x[i] > 0.0 || x[i] < 0.0)) continue;
+        const double ci2 = c[i] * c[i];
+        const auto ai = A.row(i).array();
+        if (x[i] > 0.0) {
+            s2p_store.array() += ci2 * ai.square();
+        } else {
+            s2m_store.array() += ci2 * ai.square();
+        }
+    }
+
+    s1p = &s1p_store;
+    s1m = &s1m_store;
+    s1p_c2 = &s1p_c2_store;
+    s1m_c2 = &s1m_c2_store;
+    s2p = &s2p_store;
+    s2m = &s2m_store;
+}
+
 // NB log1p mixture regression with sparse exact nonzeros and approximate zeros
 MixNBLog1pSparseApproxProblem::MixNBLog1pSparseApproxProblem(
-        const RowMajorMatrixXd& A_, int N_,
-        const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
-        const VectorXd& x_, const VectorXd& c_, const VectorXd& oK_,
-        double alpha_,
-        const OptimOptions& opt_, double ridge_, double soft_tau_,
-        const VectorXd& s1p, const VectorXd& s1m,
-        const VectorXd& s1p_c2, const VectorXd& s1m_c2,
-        const VectorXd& s2p, const VectorXd& s2m,
-        double csum_p, double csum_m, double c2sum_p, double c2sum_m)
-    : A(A_), x(x_), c(c_), oK(oK_), ids(ids_), N(N_),
-      yvec(cnts_.data(), (Eigen::Index)cnts_.size()),
-      opt(opt_), ridge(ridge_), soft_tau(soft_tau_), alpha(alpha_),
-      K((int)A_.cols()), n((int)ids_.size()),
-      Anz(n, K), xS(n), cS(n),
-      Sz_plus(K), Sz_minus(K), Szc2_plus(K), Szc2_minus(K),
-      Sz2_plus(K), Sz2_minus(K), Cz(0.0), Cz2(0.0),
-      Vnz(n, K), w_cache(n), lam_cache(n), last_qZ(K), slope_cache(n)
+        const MixNBLog1pSparseContext& ctx_,
+        const OptimOptions& opt_, double ridge_, double soft_tau_)
+    : A(ctx_.A), x(ctx_.x), c(ctx_.c),
+      opt(opt_), ridge(ridge_), soft_tau(soft_tau_),
+      N_active(ctx_.N_active), N(ctx_.N), K(ctx_.K), n(0),
+      Anz(0, ctx_.K), xS(0), cS(0),
+      Sz_plus(ctx_.K), Sz_minus(ctx_.K), Szc2_plus(ctx_.K), Szc2_minus(ctx_.K),
+      Sz2_plus(ctx_.K), Sz2_minus(ctx_.K),
+      Vnz(0, ctx_.K), w_cache(0), lam_cache(0), last_qZ(ctx_.K), slope_cache(0),
+      ctx(ctx_)
 {
-    if (!(alpha > 0.0) || !std::isfinite(alpha)) {
-        error("%s: alpha must be positive and finite", __func__);
+    if (!ctx_.s1p || !ctx_.s1m || !ctx_.s1p_c2 || !ctx_.s1m_c2 || !ctx_.s2p || !ctx_.s2m) {
+        error("%s: missing precomputed zero-set sums", __func__);
     }
-    if (N < n) {
-        error("%s: N is the number of (active) samples, must be >= the number of non-zero values", __func__);
-    }
-    if (s1p.size() != K || s1m.size() != K) {
+    if (ctx_.s1p->size() != K || ctx_.s1m->size() != K) {
         error("%s: need valid vectors for Sz1_plus and Sz1_minus", __func__);
     }
-    if (s1p_c2.size() != K || s1m_c2.size() != K) {
+    if (ctx_.s1p_c2->size() != K || ctx_.s1m_c2->size() != K) {
         error("%s: need valid vectors for Szc2_plus and Szc2_minus", __func__);
     }
-    if (s2p.size() != K || s2m.size() != K) {
+    if (ctx_.s2p->size() != K || ctx_.s2m->size() != K) {
         error("%s: need valid vectors for Sz2_plus and Sz2_minus", __func__);
     }
+}
+
+void MixNBLog1pSparseApproxProblem::reset_feature(
+        const std::vector<uint32_t>& ids_, const std::vector<double>& cnts_,
+        const VectorXd& oK_, double alpha_)
+{
+    if (oK_.size() != K) {
+        error("%s: oK has wrong size", __func__);
+    }
+    if (cnts_.size() != ids_.size()) {
+        error("%s: ids and cnts must have the same size", __func__);
+    }
+    if (!(alpha_ > 0.0) || !std::isfinite(alpha_)) {
+        error("%s: alpha must be positive and finite", __func__);
+    }
+    oK = &oK_;
+    yptr = cnts_.data();
+    ysize = (Eigen::Index)cnts_.size();
+    alpha = alpha_;
+    n = (int)ids_.size();
+    if (N_active < n) {
+        error("%s: N_active must be >= the number of non-zero values", __func__);
+    }
+
+    Anz.resize(n, K);
+    xS.resize(n);
+    cS.resize(n);
+    Vnz.resize(n, K);
+    w_cache.resize(n);
+    lam_cache.resize(n);
+    slope_cache.resize(n);
+
     // Build Anz, xS, cS
     for (int t = 0; t < n; ++t) {
-        int i = (int)ids[t];
+        int i = (int)ids_[t];
         Anz.row(t) = A.row(i);
         xS[t] = x[i];
         cS[t] = c[i];
     }
     VectorXd cnz_plus  = (cS.array() * (xS.array() > 0).cast<double>()).matrix();
     VectorXd cnz_minus = (cS.array() * (xS.array() < 0).cast<double>()).matrix();
-    Sz_plus.noalias()  = s1p - Anz.transpose() * cnz_plus;   // K
-    Sz_minus.noalias() = s1m - Anz.transpose() * cnz_minus;  // K
+    Sz_plus.noalias()  = (*ctx.s1p) - Anz.transpose() * cnz_plus;   // K
+    Sz_minus.noalias() = (*ctx.s1m) - Anz.transpose() * cnz_minus;  // K
     Sz_plus  = Sz_plus.cwiseMax(0.0);
     Sz_minus = Sz_minus.cwiseMax(0.0);
 
     VectorXd cnz_c2_plus  = (cS.array().square() * (xS.array() > 0).cast<double>()).matrix();
     VectorXd cnz_c2_minus = (cS.array().square() * (xS.array() < 0).cast<double>()).matrix();
-    Szc2_plus.noalias()  = s1p_c2 - Anz.transpose() * cnz_c2_plus;
-    Szc2_minus.noalias() = s1m_c2 - Anz.transpose() * cnz_c2_minus;
+    Szc2_plus.noalias()  = (*ctx.s1p_c2) - Anz.transpose() * cnz_c2_plus;
+    Szc2_minus.noalias() = (*ctx.s1m_c2) - Anz.transpose() * cnz_c2_minus;
     Szc2_plus  = Szc2_plus.cwiseMax(0.0);
     Szc2_minus = Szc2_minus.cwiseMax(0.0);
 
-    Sz2_plus  = s2p;
-    Sz2_minus = s2m;
+    Sz2_plus  = *ctx.s2p;
+    Sz2_minus = *ctx.s2m;
     // subtract nonzero rows to get Z-only
     for (int t = 0; t < n; ++t) {
         if (cS[t] <= 0 || xS[t] == 0) continue;
@@ -954,8 +1027,8 @@ MixNBLog1pSparseApproxProblem::MixNBLog1pSparseApproxProblem(
 
     const double cnz_sum = cS.sum();
     const double cnz2_sum = cS.array().square().sum();
-    Cz  = (csum_p + csum_m) - cnz_sum;
-    Cz2 = (c2sum_p + c2sum_m) - cnz2_sum;
+    Cz  = (ctx.csum_p + ctx.csum_m) - cnz_sum;
+    Cz2 = (ctx.c2sum_p + ctx.c2sum_m) - cnz2_sum;
     if (Cz < 0.0) Cz = 0.0;
     if (Cz2 < 0.0) Cz2 = 0.0;
 }
@@ -965,15 +1038,17 @@ void MixNBLog1pSparseApproxProblem::eval_safe(const VectorXd& b, double* f_out,
 {
     const double eps = opt.eps;
     const double r = 1.0 / alpha;
+    const VectorXd& oK_ref = *oK;
+    Eigen::Map<const VectorXd> yvec(yptr, ysize);
 
     // ---- ZERO-set approximate contributions ----
-    ArrayXd ep = (oK.array() + b.array()).min(40.0).exp();
-    ArrayXd em = (oK.array() - b.array()).min(40.0).exp();
+    ArrayXd ep = (oK_ref.array() + b.array()).min(40.0).exp();
+    ArrayXd em = (oK_ref.array() - b.array()).min(40.0).exp();
 
     last_qZ.array() = ep * Sz_plus.array() + em * Sz_minus.array() + ridge;
     const double Lz = (ep * Sz_plus.array() + em * Sz_minus.array()).sum() - Cz;
 
-    const int nZero = N - n;
+    const int nZero = N_active - n;
 
     bool use_second_order = false;
     if (nZero > 0 && Lz > 0.0) {
@@ -994,7 +1069,7 @@ void MixNBLog1pSparseApproxProblem::eval_safe(const VectorXd& b, double* f_out,
     // ---- NONZERO-set exact contributions ----
     MatrixXd Eta(n, K);
     Eta.noalias() = xS * b.transpose();
-    Eta.rowwise() += oK.transpose();
+    Eta.rowwise() += oK_ref.transpose();
     Eta = Eta.array().min(40.0);
 
     Vnz = (Anz.array() * Eta.array().exp()).matrix();        // n x K
@@ -1058,6 +1133,7 @@ void MixNBLog1pSparseApproxProblem::compute_se(
     this->eval(b_hat, &ftmp, &gtmp, &qtmp, &wtmp); // fills caches: Vnz, lam_cache, slope_cache, last_qZ
 
     const int K = (int)b_hat.size();
+    Eigen::Map<const VectorXd> yvec(yptr, ysize);
 
     // -------- Fisher / GN SE --------
     VectorXd sqrt_w = wtmp.sqrt().matrix();
@@ -1099,12 +1175,21 @@ void MixNBLog1pSparseApproxProblem::compute_se(
         const ArrayXd denom = lam * (1.0 + this->alpha * lam);
 
         // nnz score scaling per row
-        ArrayXd s = (lam - this->yvec.array()) * (slope * cx / denom);
+        ArrayXd s = (lam - yvec.array()) * (slope * cx / denom);
 
         // HC1: use active sample count rather than nnz
         if (opt_se.hc_type >= 1) {
-            const int n_eff = this->N;
+            const int n_eff = this->N_active;
             if (n_eff > K) s *= std::sqrt(double(n_eff) / double(n_eff - K));
+        } else if (opt_se.hc_type >= 2) {
+            // leverage h_i = xw_i^T Hinv xw_i, with Xw = sqrt(w) * Vnz
+            MatrixXd Z = Xw * Hinv; // rows in Vnz x K
+            VectorXd h = (Z.cwiseProduct(Xw)).rowwise().sum(); // rows in Vnz
+            if (opt_se.hc_type == 2) {
+                s /= (1.0 - h.array()).max(eps).sqrt();
+            } else {
+                s /= (1.0 - h.array()).max(eps);
+            }
         }
 
         // B from nnz rows: V^T diag(s^2) V
@@ -1115,14 +1200,15 @@ void MixNBLog1pSparseApproxProblem::compute_se(
 
         // Add diagonal-only approximation for zeros, matching eval_safe() scaling/capping
         if (this->Sz2_plus.size() == K && this->Sz2_minus.size() == K) {
-            ArrayXd ep = (this->oK.array() + b_hat.array()).min(40.0).exp();
-            ArrayXd em = (this->oK.array() - b_hat.array()).min(40.0).exp();
+            const VectorXd& oK_ref = *oK;
+            ArrayXd ep = (oK_ref.array() + b_hat.array()).min(40.0).exp();
+            ArrayXd em = (oK_ref.array() - b_hat.array()).min(40.0).exp();
             ArrayXd ep2 = ep.square();
             ArrayXd em2 = em.square();
 
             // Determine whether second-order correction is in effect (same rule as eval_safe)
             const double Lz = (ep * this->Sz_plus.array() + em * this->Sz_minus.array()).sum() - this->Cz;
-            const int nZero = std::max(0, this->N - this->n);
+            const int nZero = std::max(0, this->N_active - this->n);
 
             bool use_second_order = false;
             double zscale = 1.0;
@@ -1139,6 +1225,15 @@ void MixNBLog1pSparseApproxProblem::compute_se(
         }
 
         MatrixXd Vrob = Hinv * B * Hinv;
+        if (opt_se.se_stabilize > 0.0) {
+            VectorXd E = (*ctx.s1p) + (*ctx.s1m);
+            ArrayXd gamma = opt_se.se_stabilize /
+                            (opt_se.se_stabilize + E.array().max(0.0) + 1e-30);
+            VectorXd diag_f = Hinv.diagonal();
+            VectorXd diag_r = Vrob.diagonal();
+            VectorXd lift = (diag_f - diag_r).cwiseMax(0.0);
+            Vrob.diagonal().array() += gamma * lift.array();
+        }
         stats.se_robust = Vrob.diagonal().array().sqrt().matrix();
         if (opt_se.store_cov) stats.cov_robust = std::move(Vrob);
         else stats.cov_robust.resize(0,0);

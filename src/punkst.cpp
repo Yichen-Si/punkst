@@ -23,6 +23,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv);
 int32_t cmdDrawPixelFeatures(int32_t argc, char** argv);
 int32_t cmdFeatureVst(int32_t argc, char** argv);
 int32_t cmdDeChisq(int argc, char** argv);
+int32_t cmdDeconvPseudobulk(int argc, char** argv);
 int32_t cmdPseudoBulk(int argc, char** argv);
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
 int32_t cmdConditionalTest(int32_t argc, char** argv);
@@ -55,6 +56,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("draw-pixel-features", "Draw pixel level features/genes", cmdDrawPixelFeatures)
         .add_command("feature-vst", "Compute feature variance stabilizing stats and select highly variable features", cmdFeatureVst)
         .add_command("de-chisq", "Differential expression using Chi-squared test", cmdDeChisq)
+        .add_command("deconv-pseudobulk", "Deconvolve pseudobulk matrix using a confusion matrix", cmdDeconvPseudobulk)
         .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk)
         .add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
 

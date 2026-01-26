@@ -327,21 +327,11 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     } else {
         f0 = slda_.do_e_step_standard(minibatch, &smtx, &n_iter, &delta);
     }
-    RowMajorMatrixXf gamma_use;
-    if (fitBackground_ && minibatch.gamma.cols() > K_) {
-        gamma_use = minibatch.gamma.leftCols(K_);
-    } else {
-        gamma_use = minibatch.gamma;
-    }
-    if (gamma_use.cols() != K_) {
-        error("%s: gamma has %d columns, expected %d", __func__, gamma_use.cols(), K_);
-    }
-    rowNormalizeInPlace(gamma_use);
-    RowMajorMatrixXf local_confusion = gamma_use.transpose() * gamma_use;
+    RowMajorMatrixXf local_cmtx = minibatch.phi.transpose() * minibatch.phi;
     {
         std::lock_guard<std::mutex> lock(pseudobulkMutex_);
         pseudobulk_ += smtx;
-        confusion_ += local_confusion;
+        confusion_ += local_cmtx;
         if (debug_) {
             std::cout << "Thread " << threadId << " updated pseudobulk.\n";
             std::cout << "    Current sums: ";
@@ -400,9 +390,25 @@ void Tiles2SLDA<T>::writeGlobalMatrixToTsv() {
         oss << "\n";
     }
     oss.close();
+    notice("Wrote pseudobulk matrix to %s", outFile.c_str());
 
     outFile = outPref + ".confusion.tsv";
     write_matrix_to_file(outFile, confusion_, probDigits, true, factorNames, "K", &factorNames);
+    notice("Wrote confusion matrix to %s", outFile.c_str());
+
+    Eigen::MatrixXd B = pseudobulk_.template cast<double>(); // M x K
+    Eigen::VectorXd colsums = B.colwise().sum();
+    colNormalizeInPlace(B);
+    Eigen::VectorXd w = colsums.array().sqrt();
+    w = w.array() / w.sum() * K_;
+    RowMajorMatrixXd C = confusion_.cast<double>();
+    rowNormalizeInPlace(C);
+    NonnegRidgeResult denoise = solve_nonneg_weighted_ridge(C, B, w);
+    for (int32_t k = 0; k < K_; ++k) {
+        denoise.A.col(k) *= colsums(k);
+    }
+    outFile = outPref + ".denoised_pseudobulk.tsv";
+    write_matrix_to_file(outFile, denoise.A, probDigits, true, featureNames, "Feature", &factorNames);
 }
 
 // explicit instantiations

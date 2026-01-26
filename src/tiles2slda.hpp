@@ -51,7 +51,7 @@ protected:
     double anchorMinCount_, distNu_, distR_;
     double eps_;
     int32_t nLloydIter_ = 1;
-    MatrixXf pseudobulk_; // K x M
+    MatrixXf pseudobulk_; // M x K
     RowMajorMatrixXf confusion_; // K x K
     std::mutex pseudobulkMutex_; // Protects pseudobulk
     bool fitBackground_ = false;

@@ -32,8 +32,37 @@ struct DeResult {
       : j(j_), k(k_), chi2(chi2_), log10pval(log10pval_), fc(fc_) {}
 };
 
+static RowMajorMatrixXd readConfusionMatrixFile(const std::string& path, int K) {
+    RowMajorMatrixXd mat;
+    std::vector<std::string> rnames;
+    std::vector<std::string> cnames;
+    read_matrix_from_file(path, mat, &rnames, &cnames);
+    if (mat.rows() != K || mat.cols() != K) {
+        error("Confusion matrix %s has size %d x %d, expected %d x %d",
+            path.c_str(), static_cast<int>(mat.rows()), static_cast<int>(mat.cols()), K, K);
+    }
+    return mat;
+}
+
+static RowMajorMatrixXd solveWithConfusion(
+    const RowMajorMatrixXd& B, const RowMajorMatrixXd& confusion) {
+    int32_t K = B.cols();
+    int32_t M = B.rows();
+    Eigen::MatrixXd B_col = Eigen::MatrixXd(B);
+    Eigen::VectorXd col_sums = B_col.colwise().sum();
+    colNormalizeInPlace(B_col);
+    Eigen::VectorXd w = Eigen::VectorXd::Ones(K);
+    RowMajorMatrixXd C = rowNormalize(confusion);
+    NonnegRidgeResult result = solve_nonneg_weighted_ridge(C, B_col, w);
+    for (int32_t k = 0; k < K; ++k) {
+        result.A.col(k) *= col_sums(k);
+    }
+    return std::move(result.A);
+}
+
 int32_t cmdDeChisq(int argc, char** argv) {
     std::vector<std::string> inputFiles;
+    std::vector<std::string> confusionFiles;
     std::string outputFile;
     double minCount = 10.0;
     double minCountPerFeature = 100.0;
@@ -46,6 +75,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
     ParamList pl;
     pl.add_option("input", "Input pseudobulk matrix (one for 1-vs-rest, two for pairwise comparison)", inputFiles, true)
       .add_option("out", "Output file", outputFile, true)
+      .add_option("confusion", "Confusion matrices (TSV with K+1 rows/cols)", confusionFiles)
       .add_option("min-count-per-feature", "Minimum total count for a feature to be considered", minCountPerFeature)
       .add_option("max-pval", "Max p-value for output (default: 1e-3)", minPval)
       .add_option("min-fc", "Min fold change for output (default: 1.5)", minFC)
@@ -73,12 +103,20 @@ int32_t cmdDeChisq(int argc, char** argv) {
     if (neighborK < 0) {
         error("--neighbor-k must be non-negative");
     }
+    if (!confusionFiles.empty()) {
+        if (inputFiles.size() == 1) {
+            warning("--confusion in single-input mode in disabled");
+        }
+        if (inputFiles.size() == 2 && confusionFiles.size() != 2) {
+            error("If provided, --confusion must have 2 entries for two-input mode");
+        }
+    }
 
     // Two-sample comparison
     if (inputFiles.size() == 2) {
-        if (neighborK > 0) {
-            warning("--neighbor-k is only supported for single-input mode");
-        }
+        // if (neighborK > 0) {
+        //     warning("--neighbor-k is only supported for single-input mode");
+        // }
         Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> mat1, mat2;
         std::vector<std::string> rows1, rows2;
         std::vector<std::string> cols1, cols2;
@@ -97,6 +135,19 @@ int32_t cmdDeChisq(int argc, char** argv) {
                 warning("Column name mismatch at index %zu: %s vs %s", k, cols1[k].c_str(), cols2[k].c_str());
             }
         }
+        const int K_int = static_cast<int>(K);
+        RowMajorMatrixXd mat1_solved;
+        RowMajorMatrixXd mat2_solved;
+        const RowMajorMatrixXd* mat1_used = &mat1;
+        const RowMajorMatrixXd* mat2_used = &mat2;
+        if (!confusionFiles.empty()) {
+            RowMajorMatrixXd confusion1 = readConfusionMatrixFile(confusionFiles[0], K_int);
+            mat1_solved = solveWithConfusion(mat1, confusion1);
+            mat1_used = &mat1_solved;
+            RowMajorMatrixXd confusion2 = readConfusionMatrixFile(confusionFiles[1], K_int);
+            mat2_solved = solveWithConfusion(mat2, confusion2);
+            mat2_used = &mat2_solved;
+        }
 
         std::unordered_map<std::string, int> rowMap1;
         for (size_t i = 0; i < rows1.size(); ++i) rowMap1[rows1[i]] = (int)i;
@@ -108,7 +159,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
             auto it = rowMap1.find(rows2[i]);
             if (it == rowMap1.end()) {continue;}
             int j = it->second;
-            double r = mat1.row(j).sum() + mat2.row(i).sum();
+            double r = mat1_used->row(j).sum() + mat2_used->row(i).sum();
             if (r < minCountPerFeature) {continue;}
             commonRows.emplace_back(j, (int)i);
             commonRowNames.push_back(rows2[i]);
@@ -121,8 +172,8 @@ int32_t cmdDeChisq(int argc, char** argv) {
 
         std::vector<double> colSums1(K, 0.0), colSums2(K, 0.0);
         for (size_t k = 0; k < K; ++k) {
-            colSums1[k] = mat1.col(k).sum();
-            colSums2[k] = mat2.col(k).sum();
+            colSums1[k] = mat1_used->col(k).sum();
+            colSums2[k] = mat2_used->col(k).sum();
         }
 
         tbb::concurrent_vector<DeResult> results;
@@ -132,8 +183,8 @@ int32_t cmdDeChisq(int argc, char** argv) {
                     int r1 = commonRows[i].first;
                     int r2 = commonRows[i].second;
                     for (size_t k = 0; k < K; ++k) {
-                        double a = mat1(r1, k);
-                        double b = mat2(r2, k);
+                        double a = (*mat1_used)(r1, k);
+                        double b = (*mat2_used)(r2, k);
                         if (std::max(a,b) < minCount) continue;
 
                         double c = colSums1[k] - a;
@@ -168,8 +219,8 @@ int32_t cmdDeChisq(int argc, char** argv) {
         for (const auto& r : results) {
             out << commonRowNames[r.j] << "\t" << cols1[r.k] << "\t"
                 << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\t"
-                << mat1(commonRows[r.j].first, r.k) << "\t"
-                << mat2(commonRows[r.j].second, r.k) << "\n";
+                << (*mat1_used)(commonRows[r.j].first, r.k) << "\t"
+                << (*mat2_used)(commonRows[r.j].second, r.k) << "\n";
         }
 
         return 0;
@@ -178,50 +229,43 @@ int32_t cmdDeChisq(int argc, char** argv) {
     std::string inputFile = inputFiles[0];
 
     // Read Input Matrix
-    std::ifstream in(inputFile);
-    if (!in) error("Cannot open input file: %s", inputFile.c_str());
-    std::string line;
-    std::vector<std::string> header;
-    if (!std::getline(in, line)) {
-        error("Input file is empty: %s", inputFile.c_str());
+    RowMajorMatrixXd mat;
+    std::vector<std::string> geneNamesRaw;
+    std::vector<std::string> factorNames;
+    read_matrix_from_file(inputFile, mat, &geneNamesRaw, &factorNames);
+    if (mat.cols() < 1) {
+        error("No factors found in input file header");
     }
-    split(header, "\t", line);
-    if (header.size() < 2) error("No factors found in input file header");
-    size_t K = header.size() - 1;
+    size_t K = static_cast<size_t>(mat.cols());
 
-    std::vector<std::string> tokens;
     std::vector<std::string> geneNames;
-    std::vector<std::vector<double>> matrix;
     std::vector<double> rowSums;
+    std::vector<int> keep_idx;
+    geneNames.reserve(mat.rows());
+    rowSums.reserve(mat.rows());
+    keep_idx.reserve(mat.rows());
+    for (int i = 0; i < mat.rows(); ++i) {
+        double rowSum = mat.row(i).sum();
+        if (rowSum > minCountPerFeature) {
+            geneNames.push_back(geneNamesRaw[i]);
+            rowSums.push_back(rowSum);
+            keep_idx.push_back(i);
+        }
+    }
+    if (keep_idx.empty()) {
+        error("No features remain after filtering by --min-count-per-feature");
+    }
+    RowMajorMatrixXd matrix(static_cast<int>(keep_idx.size()), static_cast<int>(K));
+    for (size_t i = 0; i < keep_idx.size(); ++i) {
+        matrix.row(static_cast<int>(i)) = mat.row(keep_idx[i]);
+    }
     std::vector<double> colSums(K, 0.0);
     std::vector<double> colNorm2(K, 0.0);
-
-    while(std::getline(in, line)) {
-        if (line.empty()) continue;
-        split(tokens, "\t", line);
-        if (tokens.size() < K+1) {
-            error("Invalid line\n%s", line.c_str());
-        }
-        std::vector<double> row(K, 0.0f);
-        double rowSum = 0.0;
-        for (size_t k=0; k<K; ++k) {
-            if (!str2double(tokens[k+1], row[k])) {
-                error("Invalid value %s", tokens[k+1].c_str());
-            }
-            rowSum += row[k];
-        }
-        if (rowSum > minCountPerFeature) {
-            geneNames.push_back(tokens[0]);
-            matrix.push_back(std::move(row));
-            rowSums.push_back(rowSum);
-        }
-    }
-    in.close();
     double total_umi = 0.0;
-    size_t M = geneNames.size();
-    for (size_t i = 0; i < M; ++i) {
+    int32_t M = (int32_t) geneNames.size();
+    for (int32_t i = 0; i < M; ++i) {
         for (size_t k = 0; k < K; ++k) {
-            double v = matrix[i][k];
+            double v = matrix(i, static_cast<int>(k));
             colSums[k] += v;
             colNorm2[k] += v * v;
         }
@@ -229,15 +273,15 @@ int32_t cmdDeChisq(int argc, char** argv) {
     for (size_t k = 0; k < K; ++k) {
         total_umi += colSums[k];
     }
-    notice("Loaded %zu genes and %zu factors", M, K);
+    notice("Loaded %d genes and %zu factors", M, K);
 
     tbb::concurrent_vector<DeResult> results;
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, M),
-        [&](const tbb::blocked_range<size_t>& range) {
-            for (size_t i = range.begin(); i < range.end(); ++i) {
+    tbb::parallel_for(tbb::blocked_range<int32_t>(0, M),
+        [&](const tbb::blocked_range<int32_t>& range) {
+            for (int32_t i = range.begin(); i < range.end(); ++i) {
                 for (size_t k = 0; k < K; ++k) {
                     if (colSums[k] < minCount) continue;
-                    double a = matrix[i][k];
+                    double a = matrix(i, static_cast<int>(k));
                     if (a < minCount) continue;
                     double b = colSums[k] - a;
                     double c = rowSums[i] - a;
@@ -271,7 +315,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
     out << "Feature\tFactor\tChi2\tFoldChange\tlog10pval\n";
     out << std::fixed << std::setprecision(4);
     for (const auto& r : results) {
-        out << geneNames[r.j] << "\t" << header[r.k+1] << "\t"
+        out << geneNames[r.j] << "\t" << factorNames[r.k] << "\t"
             << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\n";
     }
     if (neighborK <= 0) {
@@ -301,13 +345,14 @@ int32_t cmdDeChisq(int argc, char** argv) {
         for (size_t j = 0; j < K; ++j) {
             if (j == k) continue;
             double sim = 0.0;
-            if (colNorm[k] > 0.0 && colNorm[j] > 0.0) {
-                double dot = 0.0;
-                for (size_t i = 0; i < M; ++i) {
-                    dot += matrix[i][k] * matrix[i][j];
+                if (colNorm[k] > 0.0 && colNorm[j] > 0.0) {
+                    double dot = 0.0;
+                    for (int32_t i = 0; i < M; ++i) {
+                        dot += matrix(i, static_cast<int>(k))
+                               * matrix(i, static_cast<int>(j));
+                    }
+                    sim = dot / (colNorm[k] * colNorm[j]);
                 }
-                sim = dot / (colNorm[k] * colNorm[j]);
-            }
             sims.emplace_back(sim, static_cast<int>(j));
         }
         std::nth_element(sims.begin(), sims.begin() + neighborK, sims.end(),
@@ -330,28 +375,25 @@ int32_t cmdDeChisq(int argc, char** argv) {
                 if (colSums[k] < minCount || neighborTotals[k] <= 0.0) continue;
                 std::vector<double> neighborSums(M, 0.0);
                 for (int j : neighbors[k]) {
-                    for (size_t i = 0; i < M; ++i) {
-                        neighborSums[i] += matrix[i][j];
+                    for (int32_t i = 0; i < M; ++i) {
+                        neighborSums[i] += matrix(i, j);
                     }
                 }
-                for (size_t i = 0; i < M; ++i) {
-                    double a = matrix[i][k];
+                for (int32_t i = 0; i < M; ++i) {
+                    double a = matrix(i, static_cast<int>(k));
                     if (a < minCount) continue;
                     double c = neighborSums[i];
                     double b = colSums[k] - a;
                     double d = neighborTotals[k] - c;
+                    a += pseudoCount;
+                    b += pseudoCount;
+                    c += pseudoCount;
+                    d += pseudoCount;
 
-                    double a_p = a + pseudoCount;
-                    double b_p = b + pseudoCount;
-                    double c_p = c + pseudoCount;
-                    double d_p = d + pseudoCount;
-
-                    double fc = (a_p * d_p) / (b_p * c_p);
+                    double fc = (a * d) / (b * c);
                     if (fc < minFC) continue;
 
-                    double chi2 = (a_p * d_p - b_p * c_p) * (a_p * d_p - b_p * c_p)
-                        / ((a_p + b_p) * (c_p + d_p) * (a_p + c_p) * (b_p + d_p))
-                        * (a_p + b_p + c_p + d_p);
+                    double chi2 = (a * d - b * c) * (a * d - b * c) / ((a + b) * (c + d) * (a + c) * (b + d)) * (a + b + c + d);
                     double negLog10p = chisq1_log10p(chi2);
                     if (negLog10p < maxLog10Pval) continue;
 
@@ -372,14 +414,57 @@ int32_t cmdDeChisq(int argc, char** argv) {
     outNeighbor << "Feature\tFactor\tChi2\tFoldChange\tlog10pval\n";
     outNeighbor << std::fixed << std::setprecision(4);
     for (const auto& r : neighborResults) {
-        outNeighbor << geneNames[r.j] << "\t" << header[r.k+1] << "\t"
+        outNeighbor << geneNames[r.j] << "\t" << factorNames[r.k] << "\t"
             << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\n";
     }
 
     return 0;
 }
 
+int32_t cmdDeconvPseudobulk(int argc, char** argv) {
+    std::string inFile, confusionFile, outFile;
 
+    ParamList pl;
+    pl.add_option("input", "Input data file", inFile, true)
+      .add_option("confusion", "Confusion matrix file", confusionFile, true)
+      .add_option("out", "Output data file", outFile, true);
+
+    try {
+        pl.readArgs(argc, argv);
+        pl.print_options();
+    } catch (const std::exception &ex) {
+        std::cerr << "Error parsing options: " << ex.what() << "\n";
+        pl.print_help();
+        return 1;
+    }
+    std::vector<std::string> rows, cols, rows_c, cols_c;
+    RowMajorMatrixXd mat;
+    read_matrix_from_file(inFile, mat, &rows, &cols);
+    RowMajorMatrixXd C;
+    read_matrix_from_file(confusionFile, C, &rows_c, &cols_c);
+    int32_t K = mat.cols();
+    int32_t M = mat.rows();
+    Eigen::MatrixXd B = Eigen::MatrixXd(mat);
+    Eigen::VectorXd colsums = B.colwise().sum();
+    colNormalizeInPlace(B);
+    Eigen::VectorXd w = colsums.array().sqrt();
+    w = w.array() / w.sum() * K;
+    // Eigen::VectorXd w = colsums.array() / colsums.sum() * K;
+    rowNormalizeInPlace(C);
+    NonnegRidgeResult denoise = solve_nonneg_weighted_ridge(C, B, w);
+    Eigen::VectorXd delta = Eigen::VectorXd::Zero(K);
+    for (int32_t k = 0; k < K; ++k) {
+        delta(k) = (denoise.A.col(k).array() - B.col(k).array()).abs().sum();
+        denoise.A.col(k) *= colsums(k);
+    }
+    printf("Total abs change in proportion: %.6f\n", delta.sum());
+    delta = delta.array() * colsums.array();
+    printf("Total abs change: %.6f (%.6f)\n", delta.sum(), delta.sum() / colsums.sum());
+
+    write_matrix_to_file(outFile, denoise.A, 4, true, rows, "Feature", &cols);
+
+    return 0;
+}
 
 int32_t cmdPseudoBulk(int argc, char** argv) {
     std::string inFile, metaFile, labelFile, outFile;

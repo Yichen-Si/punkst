@@ -15,6 +15,7 @@
 #include "Eigen/Core"
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
+using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 template<typename Scalar>
 using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
@@ -667,4 +668,39 @@ inline double smooth_floor(double x, double eps, double tau, double* slope_out) 
     double s  = sigmoid_stable(z);  // d/dz softplus = sigmoid
     if (slope_out) *slope_out = s;  // d/dx = (1/tau)*tau*s = s
     return eps + tau * sp;
+}
+
+/**
+ * Solve for A in:  B ≈ A C^T (A,B,C >=0, C1=1)
+ * Objective:
+ *   min_{A>=0} ||(A C^T - B) W^{1/2}||_F^2 + lambda ||A||_F^2, W = diag(w).
+ *   default lambda = 1e-3 * RMS(B) = 1e-3 * sqrt( ||B||_F^2 / (M*K) )
+ */
+struct NonnegRidgeResult {
+    RowMajorMatrixXd A;
+    double lambda_used = 0.0;
+    int iters = 0;
+    double rel_change = 0.0;
+};
+NonnegRidgeResult solve_nonneg_weighted_ridge(
+    const RowMajorMatrixXd& C,   // KxK
+    const Eigen::MatrixXd&  B,   // MxK
+    const Eigen::VectorXd&  w0,  // K, nonnegative weights
+    double lambda = -1.0, int max_iters = 200, double tol = 1e-5);
+
+template <typename DerivedC, typename DerivedB, typename DerivedW>
+NonnegRidgeResult solve_nonneg_weighted_ridge(
+    const Eigen::MatrixBase<DerivedC>& C,
+    const Eigen::MatrixBase<DerivedB>& B,
+    const Eigen::MatrixBase<DerivedW>& w0,
+    double lambda = -1.0, int max_iters = 200, double tol = 1e-5)
+{
+    // Explicit conversion to the required types
+    RowMajorMatrixXd C_converted = C.template cast<double>();
+    Eigen::MatrixXd B_converted = B.template cast<double>();
+    Eigen::VectorXd w0_converted = w0.template cast<double>();
+    auto fn = static_cast<NonnegRidgeResult (*)(
+        const RowMajorMatrixXd&, const Eigen::MatrixXd&,
+        const Eigen::VectorXd&, double, int, double)>(&solve_nonneg_weighted_ridge);
+    return fn(C_converted, B_converted, w0_converted, lambda, max_iters, tol);
 }

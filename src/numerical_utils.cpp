@@ -293,3 +293,81 @@ int32_t loess_quadratic_tricube(const std::vector<double>& x,
     for (int r = 0; r < n; ++r) yhat[ord[r]] = yhat_sorted[r];
     return 1;
 }
+
+NonnegRidgeResult solve_nonneg_weighted_ridge(
+    const RowMajorMatrixXd& C,
+    const Eigen::MatrixXd&  B,
+    const Eigen::VectorXd&  w0,
+    double lambda, int max_iters, double tol)
+{
+    const int K = static_cast<int>(C.rows());
+    if (C.cols() != K) throw std::invalid_argument("C must be KxK.");
+    if (B.cols() != K) throw std::invalid_argument("B must be MxK with same K as C.");
+    if (w0.size() != K) throw std::invalid_argument("w must have size K.");
+    const int M = static_cast<int>(B.rows());
+
+    Eigen::VectorXd w = w0.cwiseMax(0.0);
+    if (lambda <= 1e-8) { // Auto lambda based on B magnitude
+        const double rmsB = std::sqrt(B.squaredNorm() / std::max(1, M * K));
+        lambda = std::max(1e-8, 1e-3 * rmsB);
+    }
+    // Build P = C^T W C and Q = B W C
+    RowMajorMatrixXd WC = C; // W*C : scale rows of C by w
+    for (int i = 0; i < K; ++i) WC.row(i) *= w(i);
+    Eigen::MatrixXd P = C.transpose() * WC; // KxK
+    P = 0.5 * (P + P.transpose()); // symmetrize for numerical safety
+    Eigen::MatrixXd BW = B; // B*W : scale columns of B by w
+    for (int j = 0; j < K; ++j) BW.col(j) *= w(j);
+    Eigen::MatrixXd Q = BW * C; // MxK
+
+    Eigen::MatrixXd G = P; // G = P + lambda I
+    G.diagonal().array() += lambda;
+    G = 0.5 * (G + G.transpose());
+
+    // Step size uses L = ||G||_2 = largest eigenvalue
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(G);
+    if (es.info() != Eigen::Success) {
+        throw std::runtime_error("Eigen decomposition failed (try larger lambda).");
+    }
+    double L = es.eigenvalues().maxCoeff();
+    L = std::max(L, 1e-12);
+    // Initialize A with unconstrained ridge solution
+    // Solve G * A^T = Q^T  => A = (G^{-1} Q^T)^T
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(G);
+    if (ldlt.info() != Eigen::Success) {
+        throw std::runtime_error("LDLT failed (try larger lambda).");
+    }
+    RowMajorMatrixXd A = ldlt.solve(Q.transpose()).transpose();
+    A = A.cwiseMax(0.0);
+    // --- FISTA loop
+    RowMajorMatrixXd A1= A;
+    RowMajorMatrixXd Y = A;   // extrapolated iterate
+    RowMajorMatrixXd R(M, K); // Gradient at Y: (Y*G - Q)
+    double t = 1.0;
+    double last_rel = 0.0;
+    int it = 0;
+    for (; it < max_iters; ++it) {
+        R.noalias() = Y * G;
+        R.noalias() -= Q;
+        // Prox step
+        A1 = (Y - (1.0 / L) * R).cwiseMax(0.0);
+        // Stopping based on relative change in A
+        const double denom = std::max(1.0, A.norm());
+        last_rel = (A1 - A).norm() / denom;
+        if (last_rel < tol) {
+            A.swap(A1);
+            break;
+        }
+        // FISTA momentum update
+        const double t_new = 0.5 * (1.0 + std::sqrt(1.0 + 4.0 * t * t));
+        Y.noalias() = A1 + ((t - 1.0) / t_new) * (A1 - A);
+        A.swap(A1);
+        t = t_new;
+    }
+    NonnegRidgeResult out;
+    out.A = std::move(A);
+    out.lambda_used = lambda;
+    out.iters = it + 1;
+    out.rel_change = last_rel;
+    return out;
+}

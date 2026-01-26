@@ -18,16 +18,13 @@ RES          := {RES}
 SCALE        := {SCALE}
 
 MODEL_TSV    := {MODEL_TSV}
+OUT_PREF     := {OUT_PREF}
 COLOR_TABLE  := {COLOR_TABLE}
 
 PUNKST       := $(GITPATH)/bin/punkst
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
 COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv
-
-# Model matrix fixes the number of topics (columns minus 1).
-MODEL_BASE   := $(basename $(notdir $(MODEL_TSV)))
-OUT_PREF     := $(DATADIR)/$(MODEL_BASE)
 
 # --- Compute the full list of final report files ---
 REPORTS := \

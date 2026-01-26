@@ -23,6 +23,7 @@ void TileOperator::loadIndex(const std::string& indexFile) {
         error("%s: Error reading index file: %s", __func__, indexFile.c_str());
     mode_ = formatInfo_.mode;
     K_ = mode_ >> 16;
+    mode_ &= 0xFFFF;
     if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
     if (mode_ & 0x2) {assert(mode_ & 0x4);}
     if (mode_ & 0x1) {assert(formatInfo_.recordSize > 0);}
@@ -151,7 +152,10 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
         assert((mode_ & 0x2) == 0 && formatInfo_.pixelResolution > 0);}
     pixelMap.clear();
     auto lookup = tile_lookup_.find(key);
-    if (lookup == tile_lookup_.end()) return 0;
+    if (lookup == tile_lookup_.end()) {
+        notice("%s: Tile (%d, %d) not found in index", __func__, key.row, key.col);
+        return 0;
+    }
 
     std::ifstream dataStream;
     if (mode_ & 0x1) {
