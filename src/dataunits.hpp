@@ -223,6 +223,8 @@ public:
     HexReader(const std::string &metaFile) {
         readMetadata(metaFile);
     }
+    void initFromFeatures(const std::string& featureFile,
+        int32_t n_units = 0, int32_t n_modal = 1, int32_t n_layer = 1);
     void readMetadata(const std::string &metaFile);
     bool featureDict(std::unordered_map<std::string, uint32_t>& dict) {
         if (features.empty()) {
@@ -262,11 +264,15 @@ public:
     const std::vector<double>& getFeatureSums() const {
         return feature_sums;
     }
+    const std::vector<double>& getFeatureSumsRaw() const {
+        return feature_sums_raw;
+    }
 
     void setAccumulationStatus(bool v) { accumulate_sums = v; }
     void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap);
     void setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped = false);
     void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums = true);
+    void setFeatureSums(const std::vector<double>& sums, bool read_full = true);
     void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0);
     void applyWeights(Document& doc) const;
 
@@ -296,6 +302,7 @@ private:
     int32_t icol_layer, icol_x, icol_y;
     int32_t mintokens;
     std::vector<double> feature_sums;
+    std::vector<double> feature_sums_raw;
     std::vector<double> weights;
     std::vector<std::string> header_info;
     std::unordered_map<uint32_t, uint32_t> idx_remap;
@@ -331,6 +338,10 @@ public:
     int32_t readAll(std::vector<Document>& docs, int32_t minCount = 1);
     int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& barcodes_out,
         int32_t minCount = 1);
+    int32_t readAll(std::vector<Document>& docs, std::vector<int32_t>& barcode_idx_out,
+        int32_t minCount = 1);
+    bool readMinibatch(std::vector<Document>& docs, std::vector<int32_t>& barcode_idx_out,
+        int32_t batchSize, int32_t maxUnits, int32_t minCount = 0);
     int32_t setFeatureIndexRemap(const std::vector<std::string>& new_features,
         bool keep_unmapped = false);
 

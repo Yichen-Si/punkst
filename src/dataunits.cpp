@@ -122,6 +122,88 @@ void HexReader::readMetadata(const std::string &metaFile) {
     mintokens = offset_data + 2 * nModal;
     hasCoordinates = (icol_x >= 0 && icol_y >= 0);
     feature_sums.resize(nFeatures, 0.0);
+    feature_sums_raw.resize(nFeatures, 0.0);
+}
+
+void HexReader::initFromFeatures(const std::string& featureFile,
+    int32_t n_units, int32_t n_modal, int32_t n_layer) {
+    if (featureFile.empty()) {
+        error("%s: feature file path is empty", __func__);
+    }
+    features.clear();
+    feature_sums.clear();
+    feature_sums_raw.clear();
+    bool has_sums = false;
+    bool sums_consistent = true;
+    std::vector<double> sums;
+    std::vector<std::string> token;
+    auto lines = read_lines_maybe_gz(featureFile);
+    features.reserve(lines.size());
+    sums.reserve(lines.size());
+    for (auto &line : lines) {
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        split(token, "\t ", line);
+        if (token.size() < 1) {
+            error("Error reading feature file at line: %s", line.c_str());
+        }
+        features.push_back(token[0]);
+        if (!sums_consistent) {
+            continue;
+        }
+        if (token.size() <= 1) {
+            if (has_sums) {
+                warning("%s: Expect non-negative numerical value on all or none of the second column: %s", __func__, line.c_str());
+                sums_consistent = false;
+            }
+            continue;
+        }
+        double count = -1;
+        if (!str2num(token[1], count) || count < 0) {
+            if (has_sums) {
+                warning("%s: Expect non-negative numerical value on all or none of the second column: %s", __func__, line.c_str());
+                sums_consistent = false;
+            }
+            continue;
+        }
+        has_sums = true;
+        sums.push_back(count);
+    }
+    if (features.empty()) {
+        error("No features found in %s", featureFile.c_str());
+    }
+    if (!sums_consistent || !has_sums || sums.size() != features.size()) {
+        has_sums = false;
+        sums.clear();
+    }
+
+    nUnits = n_units;
+    nModal = n_modal > 0 ? n_modal : 1;
+    nLayer = n_layer > 0 ? n_layer : 1;
+    nFeatures = static_cast<int32_t>(features.size());
+    hexSize = 0.0;
+    hasCoordinates = false;
+    offset_data = 0;
+    icol_layer = -1;
+    icol_x = -1;
+    icol_y = -1;
+    mintokens = 0;
+    header_info.clear();
+    if (has_sums) {
+        feature_sums_raw = sums;
+        feature_sums = sums;
+        readFullSums = true;
+    } else {
+        feature_sums.assign(nFeatures, 0.0);
+        feature_sums_raw.assign(nFeatures, 0.0);
+        readFullSums = false;
+    }
+    accumulate_sums = false;
+    remap = false;
+    idx_remap.clear();
+    weights.clear();
+    weightFeatures = false;
 }
 
 void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums) {
@@ -167,6 +249,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
                     } else {
                         has_sums = true;
                         feature_sums.assign(nFeatures, 0.0);
+                        feature_sums_raw.assign(nFeatures, 0.0);
                     }
                 }
             } else if (has_sums) {
@@ -183,7 +266,10 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
         bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
         if (include && !exclude &&
             kept_features.find(feature) == kept_features.end()) {
-            if (has_sums) feature_sums[idx_prev] = count;
+            if (has_sums) {
+                feature_sums_raw[idx_prev] = count;
+                feature_sums[idx_prev] = weightFeatures ? count * weights[idx_prev] : count;
+            }
             remap_new[idx_prev] = idx1++;
             kept_features.insert(feature);
         } else {
@@ -251,6 +337,18 @@ void HexReader::setWeights(const std::string& weightFile, double defaultWeight_)
     if (novlp == 0) {
         error("No features in the weight file overlap with those found in the input file, check if the files are consistent.");
     }
+    if (readFullSums) {
+        if (feature_sums_raw.size() == weights.size()) {
+            feature_sums.assign(feature_sums_raw.size(), 0.0);
+            for (size_t i = 0; i < feature_sums_raw.size(); ++i) {
+                feature_sums[i] = feature_sums_raw[i] * weights[i];
+            }
+        } else if (feature_sums.size() == weights.size()) {
+            for (size_t i = 0; i < feature_sums.size(); ++i) {
+                feature_sums[i] *= weights[i];
+            }
+        }
+    }
     weightFeatures = true;
 }
 
@@ -264,6 +362,21 @@ void HexReader::applyWeights(Document& doc) const {
             doc.cnts[i] *= weights[idx];
         }
     }
+}
+
+void HexReader::setFeatureSums(const std::vector<double>& sums, bool read_full) {
+    if (sums.size() != static_cast<size_t>(nFeatures)) {
+        error("%s: input sums size (%zu) does not match nFeatures (%d)", __func__, sums.size(), nFeatures);
+    }
+    feature_sums_raw = sums;
+    feature_sums = sums;
+    if (weightFeatures && weights.size() == feature_sums.size()) {
+        for (size_t i = 0; i < feature_sums.size(); ++i) {
+            feature_sums[i] *= weights[i];
+        }
+    }
+    readFullSums = read_full;
+    accumulate_sums = false;
 }
 
 int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount, bool add2sums, int32_t limit, int32_t modal) {
@@ -351,15 +464,27 @@ void HexReader::setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& new
         }
         weights = std::move(new_weights);
     }
-    if (readFullSums) {
-        std::vector<double> new_sums(nFeatures, 0.0);
+    std::vector<double> new_sums_raw(nFeatures, 0.0);
+    if (!feature_sums_raw.empty()) {
         for (const auto& pair : new_idx_remap) {
-            new_sums[pair.second] = feature_sums[pair.first];
+            if (pair.first < feature_sums_raw.size()) {
+                new_sums_raw[pair.second] = feature_sums_raw[pair.first];
+            }
         }
-        feature_sums = std::move(new_sums);
+    }
+    feature_sums_raw = std::move(new_sums_raw);
+
+    if (readFullSums) {
+        feature_sums.assign(nFeatures, 0.0);
+        if (weightFeatures && weights.size() == feature_sums_raw.size()) {
+            for (size_t i = 0; i < feature_sums_raw.size(); ++i) {
+                feature_sums[i] = feature_sums_raw[i] * weights[i];
+            }
+        } else {
+            feature_sums = feature_sums_raw;
+        }
     } else {
-        feature_sums.clear();
-        feature_sums.resize(nFeatures, 0.0);
+        feature_sums.assign(nFeatures, 0.0);
     }
 
     if (remap) {
@@ -927,6 +1052,78 @@ int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<std::stri
         barcodes_out.push_back(barcodes[i]);
     }
     return static_cast<int32_t>(docs.size());
+}
+
+int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<int32_t>& barcode_idx_out, int32_t minCount) {
+    if (barcodes.empty() || features.empty()) {
+        error("Barcodes and features must be loaded before readAll");
+    }
+    openMatrixStream();
+    std::vector<Document> docs_by_bc(nBarcodes);
+    std::vector<uint64_t> sums(nBarcodes, 0);
+    std::vector<bool> seen(nBarcodes, false);
+    int32_t bi = -1;
+    uint32_t gi = 0;
+    uint32_t ct = 0;
+    while (true) {
+        if (!readNextEntry(bi, gi, ct)) {
+            break;
+        }
+        seen[bi] = true;
+        docs_by_bc[bi].ids.push_back(gi);
+        docs_by_bc[bi].cnts.push_back(ct);
+        sums[bi] += ct;
+        feature_totals[gi] += ct;
+    }
+    closeMatrixStream();
+    docs.clear();
+    barcode_idx_out.clear();
+    if (nBarcodes > 0) {
+        docs.reserve(nBarcodes);
+        barcode_idx_out.reserve(nBarcodes);
+    }
+    uint64_t min_count = minCount > 0 ? static_cast<uint64_t>(minCount) : 0;
+    for (int32_t i = 0; i < nBarcodes; ++i) {
+        if (!seen[i]) {
+            continue;
+        }
+        if (sums[i] < min_count) {
+            continue;
+        }
+        docs.push_back(std::move(docs_by_bc[i]));
+        barcode_idx_out.push_back(i);
+    }
+    return static_cast<int32_t>(docs.size());
+}
+
+bool DGEReader10X::readMinibatch(std::vector<Document>& docs, std::vector<int32_t>& barcode_idx_out,
+    int32_t batchSize, int32_t maxUnits, int32_t minCount) {
+    docs.clear();
+    barcode_idx_out.clear();
+    if (batchSize <= 0) {
+        return true;
+    }
+    docs.reserve(batchSize);
+    barcode_idx_out.reserve(batchSize);
+    const bool unlimited = maxUnits <= 0;
+    int32_t seen = 0;
+    while (static_cast<int32_t>(docs.size()) < batchSize && (unlimited || seen < maxUnits)) {
+        Document doc;
+        int32_t barcode_idx = -1;
+        if (!next(doc, &barcode_idx, nullptr)) {
+            return false;
+        }
+        seen++;
+        if (barcode_idx < 0) {
+            continue;
+        }
+        if (minCount > 0 && doc.get_sum() < minCount) {
+            continue;
+        }
+        docs.push_back(std::move(doc));
+        barcode_idx_out.push_back(barcode_idx);
+    }
+    return true;
 }
 
 void DGEReader10X::readBarcodes(const std::string& path) {

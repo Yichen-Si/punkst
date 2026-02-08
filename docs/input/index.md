@@ -1,16 +1,20 @@
 # Notes on processing data from different technologies/platforms
 
-Here are instructions on how to convert raw data from different platforms to the generic input format for FICTURE
+Here are instructions on how to convert raw data from different platforms to the generic pixel/transcript level input format for FICTURE.
 
-Except for Visium HD (see below), we provide a pair of template `Makefile` and `config_prepare.json` files in the `examples/format_input` directory for each platform. You can copy `config_prepare.json` to your directory and modify the parameters, then generate the concrete `Makefile` by
+(For spot/single cell level data, `topic-model` now accepts 10X style DGE files directly, but you can also convert them to our custom format (see the last section below))
+
+<!-- Except for Visium HD (see below), we provide a pair of template `Makefile` and `config_prepare.json` files in the `examples/format_input` directory for each platform. You can copy `config_prepare.json` to your directory and modify the parameters, then generate the concrete `Makefile` by
 ```bash
 python /path/to/punkst/ext/py/generate_workflow.py \
   -t /path/to/punkst/examples/format_input/cosmx/Makefile \
   -c config_prepare.json -m Makefile
 ```
-then run `make`.
+then run `make`. -->
 
 After the conversion, you can follow the standard workflow as described in [the quick start page](../workflows/index.md) to run the pipeline (and specify all coordinate/size related parameters in microns). For platforms that provide cell coordinates, we also extracted the cell centers and you can try the experimental workflow in `examples/with_cell_centers`.
+
+
 
 ## Visium HD
 

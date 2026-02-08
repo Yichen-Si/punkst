@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <iterator>
+#include <cmath>
 
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
@@ -29,7 +30,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
-      .add_option("in-meta", "Metadata file", metaFile, true)
+      .add_option("in-meta", "Metadata file", metaFile)
       .add_option("in-model", "Input model matrix (topic-word) file", modelFile, true)
       .add_option("out-prefix", "Output prefix for results files", outPrefix, true)
       .add_option("minibatch-size", "Minibatch size", batchSize)
@@ -78,6 +79,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
     if (use_10x && !inFile.empty()) {
         warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
     }
+    if (use_10x && featureFile.empty()) {
+        error("10X input requires --features");
+    }
     if (!use_10x && inFile.empty()) {
         error("Either --in-data or 10X inputs must be provided");
     }
@@ -93,7 +97,18 @@ int32_t cmdLDATransform(int argc, char** argv) {
         error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
     }
 
-    HexReader reader(metaFile);
+    HexReader reader;
+    if (use_10x) {
+        if (!metaFile.empty()) {
+            warning("Ignoring --in-meta for 10X input");
+        }
+        reader.initFromFeatures(featureFile);
+    } else {
+        if (metaFile.empty()) {
+            error("Missing required --in-meta for non-10X input");
+        }
+        reader.readMetadata(metaFile);
+    }
     if (!featureFile.empty()) {
         reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
@@ -183,7 +198,6 @@ int32_t cmdLDATransform(int argc, char** argv) {
 
                 Document& doc = minibatch[i];
                 const double doc_total = doc.get_sum();
-                if (doc_total < minCount) {continue;}
 
                 for (size_t j = 0; j < doc.ids.size(); ++j) {
                     const uint32_t m = doc.ids[j];
@@ -221,6 +235,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
     std::vector<Document> minibatch;
     std::vector<std::string> idens;
+    const int32_t minCountInt = minCount > 0 ? static_cast<int32_t>(std::ceil(minCount)) : 0;
 
     if (use_10x) {
         DGEReader10X dge(in_bc, in_ft, in_mtx);
@@ -233,49 +248,41 @@ int32_t cmdLDATransform(int argc, char** argv) {
         auto apply_weight = [&](Document& doc) {
             lda.applyWeights(doc);
         };
+        std::vector<int32_t> barcode_idx;
 
         if (sorted_by_barcode) {
             while (fileopen && processed < maxUnits) {
-                minibatch.clear();
-                idens.clear();
                 const int32_t remaining = maxUnits - processed;
-                while ((int32_t)minibatch.size() < batchSize && (int32_t)minibatch.size() < remaining) {
-                    Document doc;
-                    std::string barcode;
-                    int32_t barcode_idx = -1;
-                    if (!dge.next(doc, &barcode_idx, &barcode)) {
-                        fileopen = false;
-                        break;
-                    }
-                    if (barcode.empty() && barcode_idx >= 0) {
-                        barcode = std::to_string(barcode_idx);
-                    }
-                    apply_weight(doc);
-                    minibatch.push_back(std::move(doc));
-                    idens.push_back(std::move(barcode));
-                }
+                fileopen = dge.readMinibatch(minibatch, barcode_idx, batchSize, remaining, minCountInt);
                 if (minibatch.empty()) {
                     break;
+                }
+                for (auto& doc : minibatch) {
+                    apply_weight(doc);
+                }
+                idens.clear();
+                idens.reserve(barcode_idx.size());
+                for (auto idx : barcode_idx) {
+                    idens.push_back(std::to_string(idx));
                 }
                 process_batch(minibatch, idens);
                 processed += static_cast<int32_t>(minibatch.size());
             }
         } else {
             std::vector<Document> all_docs;
-            std::vector<std::string> all_barcodes;
-            dge.readAll(all_docs, all_barcodes, minCount);
-            for (size_t i = 0; i < all_barcodes.size(); ++i) {
-                if (all_barcodes[i].empty()) {
-                    all_barcodes[i] = std::to_string(i);
-                }
-            }
+            std::vector<int32_t> all_barcode_idx;
+            dge.readAll(all_docs, all_barcode_idx, minCountInt);
             for (auto& doc : all_docs) {
                 apply_weight(doc);
+            }
+            idens.clear();
+            idens.reserve(all_barcode_idx.size());
+            for (auto idx : all_barcode_idx) {
+                idens.push_back(std::to_string(idx));
             }
             size_t cursor = 0;
             while (cursor < all_docs.size() && processed < maxUnits) {
                 minibatch.clear();
-                idens.clear();
                 const int32_t remaining = maxUnits - processed;
                 size_t take = std::min(static_cast<size_t>(batchSize), all_docs.size() - cursor);
                 if (take > static_cast<size_t>(remaining)) {
@@ -284,14 +291,15 @@ int32_t cmdLDATransform(int argc, char** argv) {
                 minibatch.insert(minibatch.end(),
                     std::make_move_iterator(all_docs.begin() + cursor),
                     std::make_move_iterator(all_docs.begin() + cursor + take));
-                idens.insert(idens.end(),
-                    std::make_move_iterator(all_barcodes.begin() + cursor),
-                    std::make_move_iterator(all_barcodes.begin() + cursor + take));
+                std::vector<std::string> ids_batch;
+                ids_batch.insert(ids_batch.end(),
+                    std::make_move_iterator(idens.begin() + cursor),
+                    std::make_move_iterator(idens.begin() + cursor + take));
                 cursor += take;
                 if (minibatch.empty()) {
                     break;
                 }
-                process_batch(minibatch, idens);
+                process_batch(minibatch, ids_batch);
                 processed += static_cast<int32_t>(minibatch.size());
             }
         }
@@ -300,7 +308,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
         if (!inFileStream) error("Error opening input file: %s", inFile.c_str());
         while (fileopen && processed < maxUnits) {
             const int32_t remaining = maxUnits - processed;
-            fileopen = lda.readMinibatch(inFileStream, minibatch, idens, batchSize, 0, remaining);
+            fileopen = lda.readMinibatch(inFileStream, minibatch, idens, batchSize, minCountInt, remaining);
             if (minibatch.empty()) break;
             process_batch(minibatch, idens);
             processed += static_cast<int32_t>(minibatch.size());

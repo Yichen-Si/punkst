@@ -6,6 +6,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     std::string model_type = "lda";
     // --- Common Parameters ---
     std::string inFile, metaFile, weightFile, outPrefix, priorFile, featureFile;
+    std::string dge_dir, in_bc, in_ft, in_mtx;
     std::string include_ftr_regex;
     std::string exclude_ftr_regex;
     int32_t seed = -1;
@@ -52,11 +53,16 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     pl.add_option("model-type", "Type of topic model to train [lda|hdp]", model_type);
 
     // Input/Output Options (Common)
-    pl.add_option("in-data", "Input hex file", inFile, true)
-      .add_option("in-meta", "Metadata file", metaFile, true)
+    pl.add_option("in-data", "Input hex file", inFile)
+      .add_option("in-meta", "Metadata file", metaFile)
       .add_option("out-prefix", "Output prefix for model and results files", outPrefix, true)
       .add_option("transform", "Transform data to topic space after training", transform)
       .add_option("sort-topics", "Sort topics by weight after training", sort_topics);
+
+    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
+      .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
+      .add_option("in-features", "Input features.tsv.gz", in_ft)
+      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx);
 
     // Feature Preprocessing Options (Common)
     pl.add_option("feature-weights", "Input weights file", weightFile)
@@ -131,15 +137,55 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     if (seed <= 0) {
         seed = std::random_device{}();
     }
+    int32_t nUnits;
+
+    // Check 10X input
+    bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
+    if (use_10x && featureFile.empty()) {
+        error("10X input requires --features with total counts (second column)");
+    }
+    bool tenx_cache_ready = false;
+    if (use_10x && !inFile.empty()) {
+        warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
+    }
+    if (!use_10x && inFile.empty()) {
+        error("Either --in-data or 10X inputs must be provided");
+    }
+    if (use_10x && !dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
+        if (dge_dir.back() == '/') {
+            dge_dir.pop_back();
+        }
+        in_bc = dge_dir + "/barcodes.tsv.gz";
+        in_ft = dge_dir + "/features.tsv.gz";
+        in_mtx = dge_dir + "/matrix.mtx.gz";
+    }
+    if (use_10x && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
+        error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
+    }
+    std::unique_ptr<DGEReader10X> dge_ptr;
+    if (use_10x) {
+        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
+        nUnits = dge_ptr->nBarcodes;
+    }
 
     // Set up data reader
-    HexReader _reader(metaFile);
+    HexReader _reader;
+    if (use_10x) {
+        _reader.initFromFeatures(featureFile, nUnits);
+    } else {
+        if (metaFile.empty()) {
+            error("Missing required --in-meta for non-10X input");
+        }
+        _reader.readMetadata(metaFile);
+        nUnits = _reader.nUnits;
+    }
     if (!featureFile.empty())
         _reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     if (!weightFile.empty())
         _reader.setWeights(weightFile, defaultWeight);
-    bool readFullSums = _reader.readFullSums;
-    int32_t nUnits = _reader.nUnits;
+    if (use_10x && priorScaleRel > 0 && !_reader.readFullSums) {
+        error("--prior-scale-rel requires --features with total counts when using 10X input");
+    }
 
     // Set up model object
     std::unique_ptr<TopicModelWrapper> model_runner;
@@ -159,20 +205,33 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             lda4hex->initialize_svb(nTopics, seed, nThreads, verbose,
                 alpha, eta, kappa, tau0, nUnits,
                 priorFile, priorScale, priorScaleRel, maxIter, mDelta);
-            if (fitBackground) {
-                if (warmInitUnits < 0) {
-                    warmInitUnits = static_cast<int32_t>(warmInitEpoch * nUnits);
-                } else {
-                    warmInitEpoch = (double) warmInitUnits / nUnits;
-                }
-                if (warmInitUnits > 0) {
-                    notice("Warm-start using %d units before introducing background", warmInitUnits);
-                    int32_t nWarm = lda4hex->trainOnline(inFile, batchSize, minCountTrain, warmInitUnits);
-                    lda4hex->printTopicAbundance();
-                }
-                double bgScale = readFullSums ?  bgInitScale : 1.;
-                lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale, fixBackground);
+        }
+        if (use_10x) {
+            int32_t n_overlap = dge_ptr->setFeatureIndexRemap(lda4hex->getFeatureNames(), false);
+            if (n_overlap == 0) {
+                error("No overlapping features found between 10X input and model");
             }
+            lda4hex->load10X(*dge_ptr, minCountTrain, true);
+            tenx_cache_ready = true;
+        }
+        if (fitBackground && !useSCVB0) {
+            if (warmInitUnits < 0) {
+                warmInitUnits = static_cast<int32_t>(warmInitEpoch * nUnits);
+            } else {
+                warmInitEpoch = (double) warmInitUnits / nUnits;
+            }
+            if (warmInitUnits > 0) {
+                notice("Warm-start using %d units before introducing background", warmInitUnits);
+                int32_t nWarm = 0;
+                if (use_10x) {
+                    nWarm = lda4hex->trainOnline10X(batchSize, warmInitUnits, seed);
+                } else {
+                    nWarm = lda4hex->trainOnline(inFile, batchSize, minCountTrain, warmInitUnits);
+                }
+                lda4hex->printTopicAbundance();
+            }
+            double bgScale = lda4hex->hasFullFeatureSums() ?  bgInitScale : 1.;
+            lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale, fixBackground);
         }
         model_runner.reset(lda4hex);
     } else if (model_type == "hdp") {
@@ -189,6 +248,14 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     } else {
         error("Unknown model type: '%s'. Choose 'lda' or 'hdp'.", model_type.c_str());
     }
+    if (use_10x && !tenx_cache_ready) {
+        int32_t n_overlap = dge_ptr->setFeatureIndexRemap(model_runner->getFeatureNames(), false);
+        if (n_overlap == 0) {
+            error("No overlapping features found between 10X input and model");
+        }
+        model_runner->load10X(*dge_ptr, minCountTrain, true);
+        tenx_cache_ready = true;
+    }
 
     if (!projection_only) {
         std::string outModel = outPrefix + ".model.tsv";
@@ -204,9 +271,15 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             std::filesystem::remove(outModel);
         }
         // Training
+        notice("Starting model training....");
         int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
         for (int epoch = 0; epoch < nEpochs; ++epoch) {
-            int32_t n = model_runner->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
+            int32_t n = 0;
+            if (use_10x) {
+                n = model_runner->trainOnline10X(batchSize, maxUnits, seed + epoch);
+            } else {
+                n = model_runner->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
+            }
             notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
             model_runner->printTopicAbundance();
         }
@@ -234,7 +307,11 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     }
 
     if (transform) {
-        model_runner->fitAndWriteToFile(inFile, outPrefix, batchSize);
+        if (use_10x) {
+            model_runner->fitAndWriteToFile10X(*dge_ptr, outPrefix, batchSize);
+        } else {
+            model_runner->fitAndWriteToFile(inFile, outPrefix, batchSize);
+        }
     }
 
     return 0;

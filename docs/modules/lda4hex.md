@@ -4,13 +4,17 @@
 
 ## Input format
 
-The input data is a plain text file where each line containing the sparse encoding of the gene counts for one unit (hexagon, cell, etc.). The orders of the units should be **randomized**.
+### Custom sparse matrix input (from `tiles2hex`)
+
+This format is required for training in streaming (minibatch) mode with low memory usage.
+
+The input data is a plain text file where each line containing the sparse encoding of the gene counts for one unit (hexagon, cell, etc.). The orders of the units should be **randomized** (it would be if you set `--randomize` in `tiles2hex`, or if you sorted the file by the first column (random keys)).
 
 If generated hexagon data from `tiles2hex` you probably don't need to know the following details.
 
 If you are converting from 10X single cell DGE, see [`convert-10X-SC`](../input/index.md) for details.
 
-### Required data
+#### Required data
 The required structure of each line is as follows (entries are separated by tabs):
 - one integer (m) for the number of unique genes in this unit
 - one integer for the total count of all genes in this unit
@@ -18,35 +22,56 @@ The required structure of each line is as follows (entries are separated by tabs
 
 There could be other fields in the input before the above required (m+2) fields, the number of data fields before the required fields should be specified under the key "offset_data" in the json metadata file.
 
-### Required metadata
+#### Required metadata
 We require a json file with at least the following information:
 - "dictionary": a dictionary that contains key: value pairs where each key is a gene name and each value is the corresponding index of that gene in the sparse encoding in the input data file. (You could skip this dictionary if you provides all and only the present genes' information in the order consistent with the indices (the column names and column sums in a cell-by-gene matrix) by `--features` in `lda2hex` (see below))
 - "offset_data": an integer that specifies the number of fields before the required fields in the input data file.
 - "header_info": a list of size `offset_data` that contains the names of the fields before the required fields in the input data file. We will carry over these fields to the output files.
 
+### 10X DGE input (single-cell)
+
+You can train directly from the 10X MEX format by passing `--in-dge-dir` or the explicit triplet `--in-barcodes`, `--in-features`, `--in-matrix`.
+
+When using 10X input, `--features` is required and must include per-feature totals (second column). These totals are used for prior scaling and background initialization.
+
+Due to the limit of the 10X DGE format, we load the entire dataset in memory and perform shuffling \& minibatching internally. For very large datasets, it would be memory intensive. You could use [punkst convert-10X-SC](../input/index.md) to convert the 10X DGE to the custom format once if you plan to train multiple models on a very large dataset.
+
 ## Usage
 
 ```bash
-punkst topic-model --in-data ${path}/hex_12.randomized.txt --in-meta ${path}/hex_12.json \
---n-topics 12 --out-prefix ${path}/hex_12 --transform \
+punkst topic-model --n-topics 12 --sort-topics \
+--in-data ${path}/hex_12.randomized.txt --in-meta ${path}/hex_12.json \
+--out-prefix ${path}/hex_12 --transform \
 --min-count-train 50 --minibatch-size 512 --threads ${threads} --seed 1
 ```
 
 ### Required
 
-`--in-data` - Specifies the input data file (created by `tiles2hex` then shuffled).
-
-`--in-meta` - Specifies the metadata file created by `tiles2hex`.
-
 `--n-topics` - Specifies the number of topics to learn.
 
 `--out-prefix` - Specifies the prefix for the output files.
+
+Input in one of the following two formats is required:
+
+#### For the custom format
+
+`--in-data` - Specifies the input data file (created by `tiles2hex`)
+
+`--in-meta` - Specifies the metadata (file created by `tiles2hex`)
+
+#### For 10X DGE format
+
+`--in-dge-dir` - Specifies the input directory that contains the 10X DGE files: `barcodes.tsv.gz`, `features.tsv.gz`, and `matrix.mtx.gz`.
+
+Alternatively, you can specify the three files directly by `--in-barcodes`, `--in-features`, and `--in-matrix`.
+
+`--features` - A tsv file containing at least two columns: the feature names and the total feature count in the dataset. (You will get it if you used `pts2tiles` or `multisample-prepare`) It is required for 10X input though optional for the custom format.
 
 ### Optional
 
 #### Feature Filtering
 
-`--features` - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene.
+`--features` - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene. It is also required for 10X input.
 
 `--min-count-per-feature` - Minimum total count for features to be included. Require `--features` to be specified. Default: 1.
 
@@ -94,10 +119,14 @@ punkst topic-model --in-data ${path}/hex_12.randomized.txt --in-meta ${path}/hex
 
 `--prior-scale` - Scale the initial model matrix uniformly by this value. Default: use the matrix as is.
 
+`--prior-scale-rel` - Scale the initial model matrix relative to the total feature counts in the data.
+
 #### Output Control
 
-`--transform` - Transform the data to the LDA space after training. If set, an output file `<prefix>.results.tsv` will be created.
+`--transform` - Transform the data to the LDA space after training. If set, an output file `<prefix>.results.tsv` will be created. For 10X input, identifiers are 0-based barcode indices (in the input `barcodes.tsv.gz`).
 
 `--projection-only` - Transform the data using the prior model without further training. Implies `--transform`.
+
+`--sort-topics` - Order the topics with decreasing abundance.
 
 `--verbose` - Control the verbosity level of output messages.

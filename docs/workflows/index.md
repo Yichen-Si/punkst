@@ -17,9 +17,11 @@ It can have other columns (which will be ignored in analysis but can be optional
 
 ## Use the example Makefile template
 
-We provide a template Makefile and config file in `punkst/examples` to generate the full workflow of FICTURE.
+We provide template Makefile and config files in `punkst/examples` to generate the full workflows.
 
-You can copy `punkst/examples/basic/generic/config.json` to your own directory modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
+### Basic workflow
+
+You can copy `punkst/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
 
 The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the `-o` option.
 
@@ -27,7 +29,7 @@ The python script also generates a bash script that can be submitted as a slurm 
 # set repopath to the path of the punkst repo
 python ${repopath}/ext/py/generate_workflow.py \
   -c config.json -o run.sh -m Makefile \
-  -t ${repopath}/examples/basic/generic/Makefile
+  -t ${repopath}/examples/basic/Makefile
 ```
 
 You can check the generated workflow before execution by

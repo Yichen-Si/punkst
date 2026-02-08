@@ -40,7 +40,9 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
     }
     pseudobulk_ = MatrixXf::Zero(M_, K_);
     confusion_ = RowMajorMatrixXf::Zero(K_, K_);
-    slda_.init(K_, M_, N, seed);
+    VectorXf alpha = VectorXf::Constant(K_, 0.1/K_);
+    slda_.init(K_, M_, N, seed, &alpha);
+    // slda_.set_heuristic_final_hardcall();
     slda_.init_global_parameter(lda_.get_model());
     slda_.verbose_ = verbose;
     slda_.debug_ = debug;

@@ -9,8 +9,7 @@ Documentation: [https://Yichen-Si.github.io/punkst](https://Yichen-Si.github.io/
 ## Installation
 See more details in [install page](https://yichen-si.github.io/punkst/install/).
 
-If you are having difficulty installing, let us known (by opening an issue), and meanwhile you can fall back to the [python package](https://github.com/seqscope/ficture) if you just want to test FICTURE or run a small dataset.
-
+If you have difficulty installing, let us known (by opening an issue), and meanwhile you can fall back to the [python package](https://github.com/seqscope/ficture) if you just want to test FICTURE on a small dataset. You can also try Docker (see below), but the Docker image is not always up to date.
 
 ### Building from Source
 

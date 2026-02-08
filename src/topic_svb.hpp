@@ -23,11 +23,15 @@ public:
     virtual ~TopicModelWrapper() = default;
 
     int32_t trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits = INT32_MAX);
+    void load10X(DGEReader10X& dge, int32_t _minCountTrain, bool force = false);
+    int32_t trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed);
+    void fitAndWriteToFile10X(DGEReader10X& dge, const std::string& outPrefix, int32_t _bsize);
     // transform and writing results
     void fitAndWriteToFile(const std::string& inFile, const std::string& outPrefix, int32_t _bsize);
 
     int32_t nUnits() const { return reader.nUnits; }
     int32_t nFeatures() const { return M_; }
+    bool hasFullFeatureSums() const { return reader.readFullSums; }
     void getTopicAbundance(std::vector<double>& topic_weights);
     virtual void filterTopics(double threshold, double coverage) {}
     std::vector<std::string> getFeatureNames() const {
@@ -64,6 +68,11 @@ protected:
     std::vector<Document> minibatch;
     int32_t batchSize;
     int32_t verbose_;
+    std::vector<Document> dge_docs_cache_;
+    std::vector<int32_t> dge_barcode_idx_cache_;
+    std::vector<int32_t> dge_train_idx_cache_;
+    int32_t dge_minCountTrain_cache_ = -1;
+    bool dge_cache_ready_ = false;
 
     // --- Shared Helper Methods ---
     bool readMinibatch(std::ifstream& inFileStream);
@@ -280,9 +289,17 @@ protected:
         priorMatrix = priorMatrix_;
         // Apply scaling if specified
         if (priorScaleRel > 0 && reader.readFullSums) {
-            const std::vector<double>& featureSums = reader.getFeatureSums();
+            const std::vector<double>& featureSumsRaw = reader.getFeatureSumsRaw();
             double totalCount = 0.;
-            for (double s : featureSums) { totalCount += s;  }
+            for (double s : featureSumsRaw) { totalCount += s;  }
+            if (totalCount <= 0) {
+                const std::vector<double>& weightedSums = reader.getFeatureSums();
+                totalCount = 0.;
+                for (double s : weightedSums) { totalCount += s; }
+            }
+            if (totalCount <= 0) {
+                error("%s: total feature count is zero; check --features totals or input data", __func__);
+            }
             double globalScale0 = priorMatrix.sum() / totalCount;
             double targetTotal = totalCount / K_ * priorScaleRel;
             VectorXd priorSums = priorMatrix.rowwise().sum();

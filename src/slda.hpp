@@ -67,6 +67,9 @@ public:
         }
     }
 
+    void set_heuristic_final_hardcall() {
+        heuristic_final_hardcall_ = true;
+    }
     void set_thread_rng_stream(uint64_t stream) {
         auto& rngs = thread_rng_map();
         auto it = rngs.find(this);
@@ -237,7 +240,7 @@ public:
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
-        while (it < max_iter_inner_ && meanchange > tol_) {
+        while (it < max_iter_inner_ && meanchange_phi > tol_) {
             it++;
             Elog_theta = dirichlet_entropy_2d(batch.gamma);
             // Update phi.
@@ -287,6 +290,20 @@ public:
         }
         if (ss != nullptr) {
             *ss = batch.mtx.transpose() * batch.phi; // M x N * N x K → M x K
+        }
+        if (heuristic_final_hardcall_) { // TEMPORARY TEST - remove anchor level uncertainty
+            for (int i = 0; i < gamma_old.rows(); i++) {
+                int maxIndex;
+                gamma_old.row(i).maxCoeff(&maxIndex);
+                for (int j = 0; j < gamma_old.cols(); j++) {
+                    if (j != maxIndex) {
+                        gamma_old(i, j) = 0.;
+                    }
+                }
+            }
+            Elog_theta = dirichlet_entropy_2d(gamma_old);
+            batch.phi = batch.psi * Elog_theta + Xb;
+            rowSoftmaxInPlace(batch.phi);
         }
         return 0;
     }
@@ -471,4 +488,6 @@ private:
     std::mutex mutex_bg_;
     double a_, b_;
     VectorXf bg_marginal_;
+
+    bool heuristic_final_hardcall_ = false;
 };

@@ -15,6 +15,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     bool isBinary = false;
     float minProb = 1e-3;
     int32_t debug_ = 0;
+    int32_t islandSmooth = 0;
+    bool fillEmptyIslands = false;
 
     ParamList pl;
     // Input options
@@ -38,6 +40,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     // Output
     pl.add_option("out", "Output image file", outFile, true)
       .add_option("top-only", "Use only the top channel per pixel", topOnly)
+      .add_option("island-smooth", "Perform one round of smoothing to remove isolated noisy pixels (only for --top-only)", islandSmooth)
+      .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (only for --island-smooth)", fillEmptyIslands)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug_);
 
@@ -131,6 +135,178 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     notice("Image size: %d x %d", width, height);
     if (width<=1||height<=1)
         error("Image dimensions are zero; check your bounds/scale");
+
+    if (topOnly && islandSmooth > 0) {
+        cv::Mat1i topCh(height, width, int(-1)); // store the top assignment
+        PixTopProbs<float> rec;
+        int32_t ret, nline=0, nskip=0, nkept=0;
+        // 1) Read and record top label per pixel
+        struct SmallCounts {
+            uint8_t m = 0;
+            int32_t lab[8];
+            uint8_t cnt[8];
+            inline void add(int32_t v) {
+                for (uint8_t i=0; i<m; ++i) {
+                    if (lab[i] == v) { ++cnt[i]; return; }
+                }
+                if (m < 8) { lab[m] = v; cnt[m] = 1; ++m; }
+                else {
+                    // unlikely; ignore further distinct labels
+                }
+            }
+        };
+        cv::Mat1b cnt0(height, width, uchar(0));
+        cv::Mat1b tot(height, width, uchar(0));
+        std::unordered_map<int, SmallCounts> extra; // only pixels with collisions end up here
+        std::vector<int> coords;
+        while ((ret = reader.next(rec)) >= 0) {
+            if (ret==0) {
+                if (nkept>10000) {
+                    warning("Stopped at invalid line %d", nline);
+                    break;
+                }
+                error("%s: Invalid or corrupted input", __FUNCTION__);
+            }
+            if (++nline % verbose == 0)
+                notice("Processed %d lines, skipped %d, kept %d", nline, nskip, nkept);
+            int xpix = int((rec.x - xmin)/scale);
+            int ypix = int((rec.y - ymin)/scale);
+            if ((unsigned)xpix >= (unsigned)width || (unsigned)ypix >= (unsigned)height) continue;
+            if (tot(ypix, xpix) >= 255) { ++nskip; continue; }
+            // map record -> integer label
+            int ch = rec.ks[0];
+            int lbl = -1;
+            if (selected) {
+                auto it = selectedMap.find(ch);
+                if (it == selectedMap.end()) continue;
+                lbl = ch; // store channel id
+            } else {
+                if (ch < 0 || ch >= (int)cmtx.size()) ch = ((ch % ncolor) + ncolor) % ncolor;
+                lbl = ch; // store color index
+            }
+
+            int idx = ypix*width + xpix;
+            // first time this pixel appears
+            if (topCh(ypix, xpix) == -1) {
+                topCh(ypix, xpix) = lbl;
+                cnt0(ypix, xpix) = 1;
+                tot(ypix, xpix)  = 1;
+                coords.push_back(idx);
+                ++nkept;
+                continue;
+            }
+            // subsequent hits
+            ++tot(ypix, xpix);
+            if (lbl == topCh(ypix, xpix)) {
+                ++cnt0(ypix, xpix);
+            } else {
+                extra[idx].add(lbl);
+            }
+            ++nkept;
+        }
+
+        // --- finalize per-pixel mode (exact) ---
+        for (int idx : coords) {
+            int y = idx / width;
+            int x = idx - y*width;
+            int bestLbl = topCh(y,x);
+            int bestCnt = cnt0(y,x);
+            auto it = extra.find(idx);
+            if (it != extra.end()) {
+                const SmallCounts &sc = it->second;
+                for (uint8_t i=0; i<sc.m; ++i) {
+                    if (sc.cnt[i] > bestCnt) {
+                        bestCnt = sc.cnt[i];
+                        bestLbl = sc.lab[i];
+                    }
+                    // tie policy: keep existing bestLbl if equal (stable)
+                }
+            }
+            topCh(y,x) = bestLbl; // overwrite with final mode label
+        }
+        notice("Finished reading input, start smoothing");
+
+        // 2) Smooth out isolated noise
+        cv::Mat1i sm = topCh.clone();
+        cv::Mat1i nxt(height, width, int(-1));
+        for (int round = 0; round < islandSmooth; ++round) {
+            sm.copyTo(nxt);
+            bool changed = false;
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    int center = sm(y, x);
+                    if (center == -1 && !fillEmptyIslands) continue;
+                    uint8_t nValidNbr = 0;
+                    uint8_t sameNbr = 0;
+                    std::unordered_map<int,int> freq;
+                    freq.reserve(8);
+                    int bestLbl = -1;
+                    int bestCnt = 0;
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        int yy = y + dy;
+                        if (yy < 0 || yy >= height) continue;
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            if (dx == 0 && dy == 0) continue;
+                            int xx = x + dx;
+                            if (xx < 0 || xx >= width) continue;
+                            int nb = sm(yy, xx);
+                            if (nb == -1) continue;
+                            ++nValidNbr;
+                            if (nb == center) sameNbr++;
+                            int c = ++freq[nb];
+                            if (c > bestCnt) { bestCnt = c; bestLbl = nb; }
+                        }
+                    }
+                    if (sameNbr<=1 && bestCnt-sameNbr> 3 && bestLbl != center && bestLbl != -1) {
+                        nxt(y, x) = bestLbl;
+                        changed = true;
+                    }
+                }
+            }
+            std::swap(sm, nxt);
+
+            if (!changed) {
+                notice("Island smoothing converged after %d rounds", round + 1);
+                break;
+            }
+            notice("Finished round %d of island smoothing", round + 1);
+        }
+
+        // 3) Render RGB from smoothed labels
+        cv::Mat out(height, width, CV_8UC3, cv::Scalar(0,0,0));
+
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int lbl = sm(y, x);
+                if (lbl == -1) continue;
+
+                int R=0, G=0, B=0;
+                if (selected) {
+                    auto it = selectedMap.find(lbl);
+                    if (it == selectedMap.end()) continue; // should not happen
+                    const auto &c = it->second;
+                    R = c[0]; G = c[1]; B = c[2];
+                } else {
+                    // lbl already in [0, ncolor)
+                    R = cmtx[lbl][0];
+                    G = cmtx[lbl][1];
+                    B = cmtx[lbl][2];
+                }
+
+                out.at<cv::Vec3b>(y,x) = cv::Vec3b(
+                    cv::saturate_cast<uchar>(B),
+                    cv::saturate_cast<uchar>(G),
+                    cv::saturate_cast<uchar>(R)
+                );
+            }
+        }
+
+        notice("Writing image to %s ...", outFile.c_str());
+        if (!cv::imwrite(outFile, out))
+            error("Error writing output image: %s", outFile.c_str());
+
+        return 0;
+    }
 
     // accumulators
     cv::Mat3f sumImg(height, width, cv::Vec3f(0,0,0));
