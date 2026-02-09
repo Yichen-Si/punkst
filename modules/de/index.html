@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/coexp/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/de/">
       
       
-        <link rel="prev" href="../visualization/">
+        <link rel="prev" href="../pixel-decode/">
       
       
-        <link rel="next" href="../tileop/">
+        <link rel="next" href="../visualization/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Co-occurrence - punkst</title>
+        <title>DE tests - punkst</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#gene-cooccurrence-and-marker-selection" class="md-skip">
+        <a href="#differential-expression-tests" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Co-occurrence
+              DE tests
             
           </span>
         </div>
@@ -775,10 +775,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../de/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DE tests
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -794,6 +821,137 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#de-chisq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        de-chisq
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="de-chisq">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#input-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input Format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-conditional-de-pixel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        multi-conditional-de-pixel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="multi-conditional-de-pixel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-parameters_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-parameters_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -831,37 +989,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Co-occurrence
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../coexp/" class="md-nav__link">
         
   
   
@@ -877,188 +1008,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        cooccurrence
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="cooccurrence">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#adding-up-multiple-matrices" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Adding up multiple matrices
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#coloc2markers" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        coloc2markers
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="coloc2markers">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#usage_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recover-factors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recover factors
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1153,34 +1102,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
+  <a href="#de-chisq" class="md-nav__link">
     <span class="md-ellipsis">
       
-        cooccurrence
+        de-chisq
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="cooccurrence">
+    <nav class="md-nav" aria-label="de-chisq">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
+  <a href="#input-format" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
+        Input Format
       
     </span>
   </a>
@@ -1188,26 +1125,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
+  <a href="#required-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output files
+        Required Parameters
       
     </span>
   </a>
@@ -1215,10 +1136,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#adding-up-multiple-matrices" class="md-nav__link">
+  <a href="#optional-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Adding up multiple matrices
+        Optional Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
       
     </span>
   </a>
@@ -1231,34 +1163,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#coloc2markers" class="md-nav__link">
+  <a href="#multi-conditional-de-pixel" class="md-nav__link">
     <span class="md-ellipsis">
       
-        coloc2markers
+        multi-conditional-de-pixel
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="coloc2markers">
+    <nav class="md-nav" aria-label="multi-conditional-de-pixel">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#usage_1" class="md-nav__link">
+  <a href="#required-parameters_1" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Usage
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
+        Required Parameters
       
     </span>
   </a>
@@ -1266,43 +1186,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional_1" class="md-nav__link">
+  <a href="#optional-parameters_1" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#recover-factors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recover factors
+        Optional Parameters
       
     </span>
   </a>
   
 </li>
         
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
           <li class="md-nav__item">
-  <a href="#output-files_1" class="md-nav__link">
+  <a href="#output-files" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Output files
+        Output Files
       
     </span>
   </a>
@@ -1334,95 +1232,136 @@
   
 
 
-<h1 id="gene-cooccurrence-and-marker-selection">Gene cooccurrence and marker selection<a class="headerlink" href="#gene-cooccurrence-and-marker-selection" title="Permanent link">&para;</a></h1>
-<p><strong><code>cooccurrence</code> computes gene co-occurrence within a specified radius and <code>coloc2markers</code> selects markers from the co-occurrence matrix.</strong></p>
-<h2 id="cooccurrence">cooccurrence<a class="headerlink" href="#cooccurrence" title="Permanent link">&para;</a></h2>
-<p>The <code>cooccurrence</code> command computes how frequently each pair of genes appear together within a specified radius, either as a binary relation or weighted by distance with exponential decay. (We also have a <code>merge-mtx</code> command in case you want to add up multiple co-occurrence matrices potentially computed from different datasets.)</p>
-<h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>cooccurrence<span class="w"> </span>--in-tsv<span class="w"> </span>tiles.tsv<span class="w"> </span>--in-index<span class="w"> </span>tiles.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--feature-dict<span class="w"> </span>features.tsv<span class="w"> </span>--out<span class="w"> </span>./out<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--radius<span class="w"> </span><span class="m">15</span><span class="w">  </span>--halflife<span class="w"> </span><span class="m">10</span><span class="w"> </span>--binary<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
-</span></code></pre></div>
-<h4 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h4>
-<p><code>--in-tsv</code> - The tiled data created by <code>pts2tiles</code>.</p>
-<p><code>--in-index</code> The index file created by <code>pts2tiles</code>.</p>
-<p><code>--icol-x</code> - Column index for x coordinate (0-based).</p>
-<p><code>--icol-y</code> - Column index for y coordinate (0-based).</p>
-<p><code>--icol-feature</code> - Column index for feature list (0-based).</p>
-<p><code>--icol-val</code> - Column index for the integer count values (0-based).</p>
-<p><code>--radius</code> - Radius within which to count co-occurrence.</p>
-<p><code>--out</code> - Output prefix for generated files.</p>
-<p><code>--feature-dict</code> - If feature column contains non-integer values, provide a dictionary/list of all feature names.</p>
-<h4 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h4>
-<p><code>--bounding-boxes</code> - Rectangular query regions specified as <code>xmin ymin xmax ymax</code> coordinates (plain numbers separated by spaces, without parenthesis). A single co-occurrence matrix is created using pixels in the union of the regions. Can specify multiple regions by adding multiple 4-tuples. e.g. <code>--bounding-boxes 5040 2300 8830 4640 100 200 1500 1600</code> for two rectangles.</p>
-<p><code>--weight-by-count</code> - Weight co-occurrence by the product of transcript counts at each pixel. Default: false. (This is unlikely to have a noticeable impact unless for very dense sequencing data)</p>
-<p><code>--halflife</code> - Half-life (starting from 1 for zero distance, the distance where the weight is 0.5) for exponential decay weighting. Default: -1, unweighted by distance within the radius.</p>
-<p><code>--min-neighbor</code> - Minimum number of neighboring pixels within radius for a pixel to be included (meant to be used to reduce the influence from sparse/non-tissue regions). Default: 1.</p>
-<p><code>--local-min</code> - Minimum co-occurrence value within a tile to record. Default: 0.</p>
-<p><code>--threads</code> - Number of threads to use. Default: 1.</p>
-<p><code>--binary</code> - Output results in binary format. Default: false (TSV output). Using the binary format is more efficient especially if you were to run the
-<code>coloc2markers</code> command later.</p>
-<h3 id="output-files">Output files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
+<h1 id="differential-expression-tests">Differential expression tests<a class="headerlink" href="#differential-expression-tests" title="Permanent link">&para;</a></h1>
 <ul>
-<li>
-<p>Co-occurrence matrix named <code>{prefix}.mtx.bin</code> (if <code>--binary</code> is used) or <code>{prefix}.mtx.tsv</code> (otherwise).</p>
-</li>
-<li>
-<p>Marginal information per gene named <code>{prefix}.marginals.tsv</code>. The columns are feature index (corresponding to row \&amp; column index in the matrix), name, total counts, total number of pixels, used pixels, used neighbors.</p>
-</li>
+<li><code>punkst de-chisq</code>: Chi-squared DE on pseudobulk matrices.</li>
+<li><code>punkst multi-conditional-de-pixel</code>: Multi-sample (pairwise), cell type-specific DE using pixel-level annotations.</li>
 </ul>
-<h3 id="adding-up-multiple-matrices">Adding up multiple matrices<a class="headerlink" href="#adding-up-multiple-matrices" title="Permanent link">&para;</a></h3>
-<p>For convenience</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>merge-mtx<span class="w"> </span>--in-list<span class="w"> </span>mtx_list.txt<span class="w"> </span>--binary<span class="w"> </span>--binary-output<span class="w"> </span>--shared-nrows<span class="w"> </span><span class="nv">$M</span><span class="w"> </span>--out<span class="w"> </span>cooccur.merged
+<h2 id="de-chisq">de-chisq<a class="headerlink" href="#de-chisq" title="Permanent link">&para;</a></h2>
+<p><code>de-chisq</code> runs a Chi-squared test on a pseudobulk matrix.
+Provide one input for a 1-vs-rest test per factor, or two inputs for a pairwise comparison of each factor between datasets.</p>
+<p>1-vs-rest per factor:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>de-chisq<span class="w"> </span>--input<span class="w"> </span>pseudobulk.tsv<span class="w"> </span>--out<span class="w"> </span>de.tsv<span class="w"> </span>--min-fc<span class="w"> </span><span class="m">1</span>.5<span class="w"> </span>--max-pval<span class="w"> </span>1e-3
+</span></code></pre></div></p>
+<p>1-vs-nearest-neighbors per factor:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>de-chisq<span class="w"> </span>--input<span class="w"> </span>pseudobulk.tsv<span class="w"> </span>--out<span class="w"> </span>de.tsv<span class="w"> </span>--neighbor-k<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--min-fc<span class="w"> </span><span class="m">1</span>.5<span class="w"> </span>--max-pval<span class="w"> </span>1e-3
+</span></code></pre></div></p>
+<p>Pairwise comparison between two pseudobulk matrices:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>de-chisq<span class="w"> </span>--input<span class="w"> </span>sampleA.pseudobulk.tsv<span class="w"> </span>sampleB.pseudobulk.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--out<span class="w"> </span>de.pair.tsv<span class="w"> </span>--min-fc<span class="w"> </span><span class="m">1</span>.5<span class="w"> </span>--max-pval<span class="w"> </span>1e-4
+</span></code></pre></div></p>
+<h3 id="input-format">Input Format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h3>
+<p>The input is a TSV file where the first row must be a header including an arbitrary label for the feature name column (e.g. "Gene") followed by K factor / cell type names.
+Then each row starts with the gene name followed by counts of that gene for each factor.</p>
+<p>Such matrices will be generated by <code>punkst topic-model</code> (<code>lda4hex</code>) and <code>pixel-decode</code>.</p>
+<p>For pairwise input, the two matrices should have matching factor columns. Feature names are intersected between the two files.</p>
+<h3 id="required-parameters">Required Parameters<a class="headerlink" href="#required-parameters" title="Permanent link">&para;</a></h3>
+<p><code>--input</code> - Input TSV file. Provide one file for 1-vs-rest tests, or two files for pairwise comparison.
+<code>--out</code> - Output TSV file.</p>
+<h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
+<p><code>--min-count-per-feature</code> - Minimum total count for a feature to be considered. Default: 100.</p>
+<p><code>--max-pval</code> - Max p-value for output. Default: 1e-3.</p>
+<p><code>--min-fc</code> - Minimum fold change. Default: 1.5.</p>
+<p><code>--min-count</code> - Minimum observed count for a (feature, factor) pair to be tested. Default: 10.</p>
+<p><code>--pseudocount</code> - Pseudocount added to each cell for the Chi-squared test. Default: 0.5.</p>
+<p><code>--threads</code> - Number of threads. Default: 1. (For consistency, multi-threading is not necessary here)</p>
+<p><code>--neighbor-k</code> - Number of nearest neighbor columns to aggregate as background (single input only). Must be smaller than K-1. When set, writes an additional output file with 1-vs-neighbors results.</p>
+<h3 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h3>
+<p>Single input output columns:</p>
+<p><code>Feature</code>, <code>Factor</code>, <code>Chi2</code>, <code>FoldChange</code>, <code>log10pval</code></p>
+<p>When <code>--neighbor-k &gt; 0</code>, an additional file is written with the same columns and the suffix <code>.1vsNeighbors.tsv</code> (if <code>--out</code> ends with <code>.tsv</code>, that extension is stripped first).</p>
+<p>Two-input output columns:</p>
+<p><code>Feature</code>, <code>Factor</code>, <code>Chi2</code>, <code>FoldChange</code>, <code>log10pval</code>, <code>Count1</code>, <code>Count2</code></p>
+<p>Rows are sorted by factor (ascending) and Chi2 (descending) within each factor.</p>
+<h2 id="multi-conditional-de-pixel">multi-conditional-de-pixel<a class="headerlink" href="#multi-conditional-de-pixel" title="Permanent link">&para;</a></h2>
+<p><code>multi-conditional-de-pixel</code> joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between dataset groups. It aggregates transcripts into grid units of size <code>--grid-size</code> stratified by pixel level cell type assignments then runs pairwise tests for each cell type using a Binomial model. By default it builds all pairwise contrasts from <code>--labels</code> (or numeric indices); for more general comparisons, use a contrast design file.
+The p-values are computed both by permutation and by robust sandwich estimators of the standard errors of the estimated effect sizes.</p>
+<p><span class="arithmatex">\(X^{(k)}_{im} \sim\)</span> Binom <span class="arithmatex">\((N^{(k)}_{im}, \pi^{(k)}_{im})\)</span> for cell type <span class="arithmatex">\(k\)</span>, bin <span class="arithmatex">\(i\)</span> and gene <span class="arithmatex">\(m\)</span>, where both <span class="arithmatex">\(X\)</span> and <span class="arithmatex">\(N\)</span> are soft-aggregated counts from pixel level cell type assignments.</p>
+<p>logit <span class="arithmatex">\((\pi^{(k)}_{im}) = a^{(k)}_m + y_i b^{(k)}_m\)</span>, where <span class="arithmatex">\(y_i\)</span> is a binary indicator for the dataset (0/1). The null hypothesis is <span class="arithmatex">\(b^{(k)}_m = 0\)</span>.</p>
+<p>Note: the intended use is when the cell type model is from external sources (e.g. apply <code>pixel-decode</code> with a reference-based cell type pseudobulk matrix). The interpretation is tricky if the cell types are learned from the same datasets. Either way, this is only a data exploration tool and we do not claim that it is statistically rigorous.</p>
+<p>Example usage (pairwise contrasts between input datasets):
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>multi-conditional-de-pixel<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--anno<span class="w"> </span>sampleA/pixel<span class="w"> </span>sampleB/pixel<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--pts<span class="w"> </span>sampleA/transcripts.tiled<span class="w"> </span>sampleB/transcripts.tiled<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--labels<span class="w"> </span>sampleA<span class="w"> </span>sampleB<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span>--features<span class="w"> </span>features.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--grid-size<span class="w"> </span><span class="m">20</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">10</span><span class="w"> </span>--perm<span class="w"> </span><span class="m">5000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span>--out<span class="w"> </span>de/pixel_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div></p>
+<p>Example usage with explicit contrast file:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>multi-conditional-de-pixel<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--contrast<span class="w"> </span>contrast.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span>--features<span class="w"> </span>features.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--grid-size<span class="w"> </span><span class="m">20</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">10</span><span class="w"> </span>--perm<span class="w"> </span><span class="m">5000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--out<span class="w"> </span>de/pixel_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div></p>
+<p><code>contrast.tsv</code> format (tab-delimited):
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>anno_prefix pts_prefix  B_vs_A  C_vs_A
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>sampleA/pixel   sampleA/transcripts.tiled   -1  -1
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>sampleB/pixel   sampleB/transcripts.tiled   1   0
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>sampleC/pixel   sampleC/transcripts.tiled   0   1
 </span></code></pre></div>
-<p>Just include the file paths of the input matrices in a file provided to <code>--in-list</code>.</p>
-<h2 id="coloc2markers">coloc2markers<a class="headerlink" href="#coloc2markers" title="Permanent link">&para;</a></h2>
-<p>The <code>coloc2markers</code> command selects optimal marker features from a co-occurrence matrix generated by the <code>cooccurrence</code> command. It can optionally find neighbors for selected or specified markers and recover the corresponding expression profiles.</p>
-<h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
-<p>Just finding markers:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span>
-</span></code></pre></div></p>
-<p>Recovering gene expression profiles around each set of markers:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>coloc2markers<span class="w"> </span>--input<span class="w"> </span>out.mtx.bin<span class="w"> </span>--binary<span class="w"> </span>--info<span class="w"> </span>out.marginals.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--out<span class="w"> </span>./markers<span class="w"> </span>--K<span class="w"> </span><span class="m">24</span><span class="w"> </span>--neighbors<span class="w"> </span><span class="m">10</span><span class="w"> </span>--recover-factors<span class="w"> </span>--weight-by-counts<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
-</span></code></pre></div></p>
-<h4 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h4>
-<p><code>--input</code> - Input co-occurrence matrix (binary or TSV format) from the <code>cooccurrence</code> command.</p>
-<p><code>--info</code> - Input gene/feature information file from the <code>cooccurrence</code> command.</p>
-<p><code>--K</code> - Number of markers to select. Note that marker selection is deterministic and sequential, so the set of markers generated with small <code>K</code> is almost certainly contained in the set generated with a larger <code>K</code>. Specifying a large <code>K</code> then trim down to the desired number is perhaps recommended.</p>
-<p><code>--out</code> - Output prefix for generated files.</p>
-<h4 id="optional_1">Optional<a class="headerlink" href="#optional_1" title="Permanent link">&para;</a></h4>
-<p><code>--binary</code> - Specify that input matrix is in binary format. Default: false (assumes TSV).</p>
-<p><code>--value-bytes</code> - Number of bytes per value in binary matrix. Default: 8, match with the output from <code>cooccurrence</code>. Only used with <code>--binary</code>.</p>
-<p><code>--min-count</code> - Minimum count for a feature to be considered as a marker. This should be a reaonably large number, otherwise the results are driven by rare genes.</p>
-<p><code>--fixed</code> - List of markers that must be included in the selection (strings, separated by spaces). Currently assume the input are distinct markers.</p>
-<p><code>--find-neighbors</code> - Find neighbors (often co-localized genes) for each selected marker.</p>
-<p><code>--neighbors</code> - Number of top neighbors to find for each marker. Default: 10. Can be used instead of flag <code>--find-neighbors</code>.</p>
-<p><code>--neighbor-max-rank-fraction</code> - Maximum rank (in terms of the quantile/fraction among all genes) to consider for mutual neighbors. Default: 0.1, meaning that if gene A is among the top 10% of genes to be around conditional on observing gene B, but gene B is not among the top 10%, say among the bottom 50% of genes to be observed around gene A, then they are not considered as neighbors.</p>
-<h5 id="recover-factors">Recover factors<a class="headerlink" href="#recover-factors" title="Permanent link">&para;</a></h5>
-<p><code>--recover-factors</code> - Recover underlying factors from the co-occurrence matrix after marker selection.</p>
-<p><code>--threads</code> - Number of threads to use for factor recovery. Default: -1 (auto). Only used with <code>--recover-factors</code>.</p>
-<p><code>--max-iter</code> - Maximum iterations for factor recovery. Default: 500.</p>
-<p><code>--tol</code> - Convergence tolerance for factor recovery. Default: 1e-6.</p>
-<p><code>--weight-by-counts</code> - Weight factors by gene counts. Default: false.</p>
-<p><code>--verbose</code> - Verbosity level for output messages. Default: 0.</p>
-<h3 id="output-files_1">Output files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
+Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), or <code>0</code> (exclude). Contrast names come from the header.</p>
+<h3 id="required-parameters_1">Required Parameters<a class="headerlink" href="#required-parameters_1" title="Permanent link">&para;</a></h3>
+<p>Provide either <code>--anno</code>, <code>--pts</code> (or <code>--anno-data</code>/<code>--anno-index</code>, <code>--pts</code>) or a <code>--contrast</code> design file.</p>
+<p><code>--anno</code> - Prefixes of pixel annotation files (from <code>punkst pixel-decode</code>). For each prefix, the tool expects <code>&lt;prefix&gt;.tsv</code> (or <code>&lt;prefix&gt;.bin</code> if <code>--binary</code>) and <code>&lt;prefix&gt;.index</code>. Cannot be combined with <code>--contrast</code>.</p>
+<p><code>--anno-data</code>, <code>--anno-index</code> - Alternative to <code>--anno</code>. Provide explicit data and index files (same count for each).</p>
+<p><code>--pts</code> - Prefixes of transcript data files (from <code>punkst pts2tiles</code>). For each prefix, the tool expects <code>&lt;prefix&gt;.tsv</code> and <code>&lt;prefix&gt;.index</code>. Cannot be combined with <code>--contrast</code>.</p>
+<p><code>--contrast</code> - Contrast design TSV with columns: <code>anno_prefix</code>, <code>pts_prefix</code>, and one or more contrast columns (values -1/0/1). When provided, it replaces <code>--anno/--anno-data/--anno-index/--pts</code> and <code>--labels</code>.</p>
+<p><code>--K</code> - Number of factors in the annotation files.</p>
+<p><code>--features</code> - A list of features to test, one feature name per line (lines starting with <code>#</code> are ignored).</p>
+<p><code>--grid-size</code> - Grid size used to aggregate transcripts into units.</p>
+<p><code>--icol-x</code>, <code>--icol-y</code>, <code>--icol-feature</code>, <code>--icol-val</code> - Column indices for X/Y coordinates, feature name, and count in the transcript files (0-based).</p>
+<p><code>--out</code> - Output prefix.</p>
+<p>Annotation and transcript tiles must use the same tile size for each dataset pair (this is guaranteed if the pixel level decoding results are generated from the corresponding transcript tiles by <code>punkst pixel-decode</code>).</p>
+<h3 id="optional-parameters_1">Optional Parameters<a class="headerlink" href="#optional-parameters_1" title="Permanent link">&para;</a></h3>
+<p><code>--labels</code> - Labels for datasets used in pairwise output; defaults to <code>0..N-1</code>. Ignored when <code>--contrast</code> is supplied.</p>
+<p><code>--binary</code> - Indicates the annotation data files are binary (<code>.bin</code>).</p>
+<p><code>--min-count-per-feature</code> - Minimum total count (in each pairwise comparison) for a feature to be considered. Default: 100.</p>
+<p><code>--max-pval</code> - Max p-value for output. Default: 1 (output all).</p>
+<p><code>--max-pval-deconv</code> - If at least two cell types (slices) have a p-value less than this threshold, the tool runs a deconvolution to estimate effects adjusted for other cell types. Default: 1e-3.</p>
+<p><code>--min-or</code> - Minimum odds ratio for output (bidirectional, so OR<span class="arithmatex">\(&gt;x\)</span> and OR<span class="arithmatex">\(&lt;1/x\)</span> are kept). Default: 1 (output all).</p>
+<p><code>--min-count</code> - Minimum observed cell-type-specific count for a unit to be included. Default: 10.</p>
+<p><code>--perm</code> - Number of permutations for beta calibration (two-group contrasts). Default: 0 (model-based p-values only).</p>
+<p><code>--min-or-perm</code> - Minimum odds ratio for permutation testing (bidirectional). Default: 1.2.</p>
+<p><code>--seed</code> - Random seed for permutation.</p>
+<p><code>--threads</code> - Number of threads. Default: 1. Almost the entire runtime is spent in data loading, so multi-threading is very useful for large datasets since tiles of data are loaded simultaneously.</p>
+<p><code>--debug</code> - Enable debug logging.</p>
+<h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
+<p>Given <code>--out PREFIX</code>, the tool generates one main output file per contrast, plus auxiliary files.</p>
 <ul>
+<li>When permutation is enabled (<code>--perm &gt; 0</code>), for each contrast:</li>
 <li>
-<p><code>{prefix}.top.tsv</code> - List of selected markers</p>
+<p><code>PREFIX.CONTRAST.perm_N.tsv</code> is generated, where <code>CONTRAST</code> is from the <code>--contrast</code> file header or <code>labelA_vs_labelB</code> for auto-pairwise, and <code>N</code> is the number of permutations. It contains permutation-based p-values for significant associations. Columns are: <code>Slice</code>, <code>Feature</code>, <code>Beta</code>, <code>Pi0</code>, <code>Pi1</code>, <code>TotalCount</code>, <code>log10p</code>, <code>p_perm</code>.</p>
 </li>
 <li>
-<p>if <code>--find-neighbors</code> or <code>--neighbors</code> is used:</p>
+<p>When permutation is not enabled (<code>--perm 0</code>), for each contrast:</p>
+</li>
+<li><code>PREFIX.CONTRAST.tsv</code> is generated.</li>
+<li>
+<p><strong>Columns</strong>:</p>
 <ul>
-<li><code>{prefix}.pairs.tsv</code> - Detailed pairwise relationships. Columns: index, name of gene 1, total count of gene 1, name of gene 2, total count of gene 2, (weighted) proportion of gene 2 in gene 1's neighbors, vice versa, rank of gene 2 as gene 1's neighbor, vice versa.</li>
-<li><code>{prefix}.short.txt</code> - Compact neighbor lists. The first gene on each line is the selected marker, followed by its neighbors.</li>
+<li><code>Slice</code>: Cell type index (0-based).</li>
+<li><code>Feature</code>: Feature name.</li>
+<li><code>Beta</code>: Marginal log odds ratio for the feature.</li>
+<li><code>log10p</code>: -log10(p-value) for <code>Beta</code>.</li>
+<li><code>Pi0</code>, <code>Pi1</code>: Estimated feature prevalence in group 0 and 1.</li>
+<li><code>TotalCount</code>: Total feature count in this cell type and contrast.</li>
+<li><code>Beta_global</code>: Weighted average of <code>Beta</code> across cell types.</li>
+<li><code>log10p_global</code>: -log10(p-value) for <code>Beta_global</code>.</li>
+<li><code>log10p_deviation</code>: -log10(p-value) for the deviation of <code>Beta</code> from <code>Beta_global</code>.</li>
+<li><code>Beta_deconv</code>: Deconvolved <code>Beta</code>, adjusted for other cell types. This is experimental and computed only when deconvolution is triggered (see <code>--max-pval-deconv</code>).</li>
+<li><code>log10p_deconv</code>: -log10(p-value) for <code>Beta_deconv</code>.</li>
 </ul>
 </li>
 <li>
-<p>if <code>--recover-factors</code> is used: <code>{prefix}.factors.tsv</code> for recovered factor matrix.</p>
+<p>Auxiliary files:</p>
 </li>
+<li><code>PREFIX.nobs.tsv</code>: The number of units and total pixel counts per cell type and dataset.</li>
+<li><code>PREFIX.sums.tsv</code>: Total feature counts per cell type and dataset for units passing filters.</li>
 </ul>
 
 
@@ -1459,7 +1398,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../visualization/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Visualization">
+          <a href="../pixel-decode/" class="md-footer__link md-footer__link--prev" aria-label="Previous: pixel-decode">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1469,20 +1408,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Visualization
+                pixel-decode
               </div>
             </div>
           </a>
         
         
           
-          <a href="../tileop/" class="md-footer__link md-footer__link--next" aria-label="Next: tile-op">
+          <a href="../visualization/" class="md-footer__link md-footer__link--next" aria-label="Next: Visualization">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                tile-op
+                Visualization
               </div>
             </div>
             <div class="md-footer__button md-icon">
