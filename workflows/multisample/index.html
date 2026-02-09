@@ -1385,7 +1385,7 @@ Each line should contain two tab-separated columns:
 <p><code>[--out-joint-pref].persample_file_list.tsv</code>: A list of paths to the tiled pixel level files for each sample. These are the input for <code>pixel-decode</code>.</p>
 <p><code>[--out-joint-pref].union_features.tsv</code>: A list of all features found in any of the samples, with total and sample-specific counts.</p>
 <p><code>[--out-joint-pref].features.tsv</code>: The final list of features used for the merged output.</p>
-<p><code>[--out-joint-pref].hex_[dist].txt</code> and <code>.json</code>: The final merged hexagon data and its corresponding metadata file, ready for <code>lda4hex</code>.</p>
+<p><code>[--out-joint-pref].hex_[dist].txt</code> and <code>.json</code>: The final merged hexagon data and its corresponding metadata file, ready for <code>topic-model</code>.</p>
 <p><strong>In per-sample subdirectories (<code>--out-dir/samples/[sample_id]/</code>):</strong></p>
 <p>Intermediate tiled transcript files (<code>.tiled.tsv</code>, <code>.tiled.index</code>).</p>
 <p>Per-sample feature counts (<code>.tiled.features.tsv</code>).</p>
@@ -1457,7 +1457,7 @@ It tells the tool to either use the existing random keys or generate new random 
 <p><code>--min-count &lt;int&gt;</code>: Minimum total count a unit/hexagon must have after feature filtering to be included in the merged output. [Default: 1]</p>
 <p><code>--threads &lt;int&gt;</code>: Number of threads. [Default: 1]</p>
 <h3 id="output-files_1">Output Files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
-<p><code>[--out-pref].txt</code> and <code>.json</code>: The merged hexagon data file and its corresponding metadata, ready for <code>lda4hex</code>.</p>
+<p><code>[--out-pref].txt</code> and <code>.json</code>: The merged hexagon data file and its corresponding metadata, ready for <code>topic-model</code>.</p>
 <p><code>[--out-pref].features.tsv</code>: The list of features and their total counts in the merged dataset.</p>
 <p><code>[--out-pref].union_features.tsv</code>: A list of all features found across all samples and their per-sample counts.</p>
 <hr />
