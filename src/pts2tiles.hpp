@@ -1,6 +1,7 @@
 #pragma once
 
 #include "utils.h"
+#include "img_utils.hpp"
 #include "utils_sys.hpp"
 #include <iostream>
 #include <fstream>

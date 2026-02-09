@@ -1,5 +1,6 @@
 #include "tileoperator.hpp"
 #include "numerical_utils.hpp"
+#include "img_utils.hpp"
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
@@ -743,6 +744,200 @@ void TileOperator::reorgTilesBinary(const std::string& outPrefix, int32_t tileSi
     close(fdIndex);
     notice("Reorganized into %d tiles. Output written to %s\n Index written to %s", nTiles, outFile.c_str(), outIndex.c_str());
     return;
+}
+
+void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds) {
+    if (formatInfo_.magic != PUNKST_INDEX_MAGIC) {
+        error("%s: Requires binary index with magic PUNKST_INDEX_MAGIC", __func__);
+    }
+    if (coord_dim_ != 2) {
+        error("%s: Only 2D input is supported", __func__);
+    }
+    if (islandSmoothRounds <= 0) {
+        error("%s: islandSmoothRounds must be > 0", __func__);
+    }
+    if (k_ <= 0) {
+        error("%s: Input has no factor columns", __func__);
+    }
+    if (blocks_.empty()) {
+        warning("%s: No tiles to process", __func__);
+        return;
+    }
+    if (mode_ & 0x8) {
+        error("%s: Requires regular tiled index with row/col metadata", __func__);
+    }
+    if (formatInfo_.tileSize <= 0) {
+        error("%s: Invalid tile size in index header", __func__);
+    }
+
+    const bool inputIntCoord = (mode_ & 0x4) != 0;
+    const float pixelRes = formatInfo_.pixelResolution;
+    if (!inputIntCoord && pixelRes <= 0.0f) {
+        error("%s: Float-coordinate input requires positive pixelResolution", __func__);
+    }
+
+    std::ifstream in;
+    if (mode_ & 0x1) {
+        in.open(dataFile_, std::ios::binary);
+    } else {
+        in.open(dataFile_);
+    }
+    if (!in.is_open()) {
+        error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+    }
+
+    std::string outFile = outPrefix + ".bin";
+    std::string outIndex = outPrefix + ".index";
+    int fdMain = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdMain < 0) {
+        error("%s: Cannot open output file %s", __func__, outFile.c_str());
+    }
+    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdIndex < 0) {
+        close(fdMain);
+        error("%s: Cannot open output index %s", __func__, outIndex.c_str());
+    }
+
+    IndexHeader idxHeader = formatInfo_;
+    const bool outputScaledCoord = ((mode_ & 0x2) != 0) || !inputIntCoord;
+    if (outputScaledCoord && idxHeader.pixelResolution <= 0.0f) {
+        close(fdMain);
+        close(fdIndex);
+        error("%s: Positive pixelResolution required for scaled int output", __func__);
+    }
+    std::vector<uint32_t> outKvec{1};
+    idxHeader.packKvec(outKvec);
+    idxHeader.mode = (formatInfo_.mode & 0xFFFF0000u) | (mode_ & ~0x7u) | 0x1u | 0x4u;
+    if (outputScaledCoord) {
+        idxHeader.mode |= 0x2u;
+    }
+    idxHeader.coordType = 1;
+    idxHeader.recordSize = sizeof(int32_t) * 2 + sizeof(int32_t) + sizeof(float);
+    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+        close(fdMain);
+        close(fdIndex);
+        error("%s: Failed writing index header", __func__);
+    }
+
+    auto ceil_div_res = [pixelRes](int32_t v) -> int32_t {
+        return static_cast<int32_t>(std::ceil(static_cast<double>(v) / static_cast<double>(pixelRes)));
+    };
+
+    size_t currentOffset = 0;
+    for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+        const TileInfo& blk = blocks_[bi];
+        const TileKey tile{blk.idx.row, blk.idx.col};
+        int32_t tileXMin, tileXMax, tileYMin, tileYMax;
+        tile2bound(tile, tileXMin, tileXMax, tileYMin, tileYMax, formatInfo_.tileSize);
+
+        int32_t pixX0, pixX1, pixY0, pixY1; // Tile bounds (global pix coord)
+        if (outputScaledCoord) {
+            pixX0 = ceil_div_res(tileXMin);
+            pixX1 = ceil_div_res(tileXMax);
+            pixY0 = ceil_div_res(tileYMin);
+            pixY1 = ceil_div_res(tileYMax);
+        } else {
+            pixX0 = tileXMin;
+            pixX1 = tileXMax;
+            pixY0 = tileYMin;
+            pixY1 = tileYMax;
+        }
+        if (pixX1 <= pixX0 || pixY1 <= pixY0) {
+            close(fdMain);
+            close(fdIndex);
+            error("%s: Invalid raster bounds in tile (%d, %d)", __func__, tile.row, tile.col);
+        }
+        const int64_t width64 = static_cast<int64_t>(pixX1) - static_cast<int64_t>(pixX0);
+        const int64_t height64 = static_cast<int64_t>(pixY1) - static_cast<int64_t>(pixY0);
+        const size_t width = static_cast<size_t>(width64);
+        const size_t height = static_cast<size_t>(height64);
+        if (height > 0 && width > std::numeric_limits<size_t>::max() / height) {
+            close(fdMain); close(fdIndex);
+            error("%s: Raster size overflow in tile (%d, %d)", __func__, tile.row, tile.col);
+        }
+        // Rasterized tile storage
+        const size_t nPixels = width * height;
+        std::vector<int32_t> labels(nPixels, -1);
+        std::vector<float> probs(nPixels, 0.0f);
+        size_t nCollisionIgnored = 0;
+        size_t nOutOfRangeIgnored = 0;
+
+        // Load all records in one tile
+        in.clear();
+        in.seekg(blk.idx.st);
+        if (!in.good()) {
+            close(fdMain); close(fdIndex);
+            error("%s: Failed seeking input stream to tile %lu", __func__, bi);
+        }
+        TopProbs rec;
+        int32_t xpix = 0;
+        int32_t ypix = 0;
+        uint64_t pos = blk.idx.st;
+        while (readNextRecord2DAsPixel(in, pos, blk.idx.ed, xpix, ypix, rec)) {
+            if (rec.ks.empty() || rec.ps.empty()) {
+                continue;
+            }
+            if (xpix < pixX0 || xpix >= pixX1 || ypix < pixY0 || ypix >= pixY1) {
+                ++nOutOfRangeIgnored;
+                continue;
+            }
+            const size_t x0 = static_cast<size_t>(xpix - pixX0);
+            const size_t y0 = static_cast<size_t>(ypix - pixY0);
+            const size_t idx = y0 * width + x0;
+            if (labels[idx] != -1) {
+                ++nCollisionIgnored;
+                continue;
+            }
+            labels[idx] = rec.ks[0];
+            probs[idx] = rec.ps[0];
+        }
+
+        IndexEntryF outEntry = blk.idx; // Output index entry
+        outEntry.st = currentOffset;
+        outEntry.n = 0;
+        if (nCollisionIgnored > 0) {
+            notice("%s: Ignored %lu colliding records in tile (%d, %d)",
+                __func__, nCollisionIgnored, tile.row, tile.col);
+        }
+        if (nOutOfRangeIgnored > 0) {
+            notice("%s: Ignored %lu out-of-tile records in tile (%d, %d)",
+                __func__, nOutOfRangeIgnored, tile.row, tile.col);
+        }
+        // Smooth out isolated noise
+        island_smoothing::Options smoothOpts;
+        smoothOpts.fillEmpty = false;
+        smoothOpts.updateProbFromWinnerMin = true;
+        (void) island_smoothing::smoothLabels8Neighborhood(labels, &probs, width, height, islandSmoothRounds, smoothOpts);
+
+        // Create output records
+        for (size_t y = 0; y < height; ++y) {
+            for (size_t x = 0; x < width; ++x) {
+                const size_t idx = y * width + x;
+                if (labels[idx] < 0) {
+                    continue;
+                }
+                PixTopProbs<int32_t> outRec;
+                outRec.x = static_cast<int32_t>(x) + pixX0;
+                outRec.y = static_cast<int32_t>(y) + pixY0;
+                outRec.ks = {labels[idx]};
+                outRec.ps = {probs[idx]};
+                if (outRec.write(fdMain) < 0) {
+                    close(fdMain); close(fdIndex);
+                    error("%s: Failed writing output record", __func__);
+                }
+                outEntry.n += 1;
+            }
+        }
+        outEntry.ed = lseek(fdMain, 0, SEEK_CUR);
+        currentOffset = outEntry.ed;
+        if (!write_all(fdIndex, &outEntry, sizeof(outEntry))) {
+            close(fdMain); close(fdIndex);
+            error("%s: Failed writing output index entry", __func__);
+        }
+    } // Tile loop
+
+    close(fdMain); close(fdIndex);
+    notice("%s: Wrote smoothed output to %s (index: %s)", __func__, outFile.c_str(), outIndex.c_str());
 }
 
 void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {

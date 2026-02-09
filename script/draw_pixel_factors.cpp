@@ -2,6 +2,7 @@
 #include "utils_sys.hpp"
 #include "tileoperator.hpp"
 #include "dataunits.hpp"
+#include "img_utils.hpp"
 #include <opencv2/opencv.hpp>
 
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
@@ -40,7 +41,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     // Output
     pl.add_option("out", "Output image file", outFile, true)
       .add_option("top-only", "Use only the top channel per pixel", topOnly)
-      .add_option("island-smooth", "Perform one round of smoothing to remove isolated noisy pixels (only for --top-only)", islandSmooth)
+      .add_option("island-smooth", "Remove isolated noisy pixels (only for --top-only)", islandSmooth)
       .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (only for --island-smooth)", fillEmptyIslands)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug_);
@@ -227,49 +228,21 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         notice("Finished reading input, start smoothing");
 
         // 2) Smooth out isolated noise
-        cv::Mat1i sm = topCh.clone();
-        cv::Mat1i nxt(height, width, int(-1));
-        for (int round = 0; round < islandSmooth; ++round) {
-            sm.copyTo(nxt);
-            bool changed = false;
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    int center = sm(y, x);
-                    if (center == -1 && !fillEmptyIslands) continue;
-                    uint8_t nValidNbr = 0;
-                    uint8_t sameNbr = 0;
-                    std::unordered_map<int,int> freq;
-                    freq.reserve(8);
-                    int bestLbl = -1;
-                    int bestCnt = 0;
-                    for (int dy = -1; dy <= 1; ++dy) {
-                        int yy = y + dy;
-                        if (yy < 0 || yy >= height) continue;
-                        for (int dx = -1; dx <= 1; ++dx) {
-                            if (dx == 0 && dy == 0) continue;
-                            int xx = x + dx;
-                            if (xx < 0 || xx >= width) continue;
-                            int nb = sm(yy, xx);
-                            if (nb == -1) continue;
-                            ++nValidNbr;
-                            if (nb == center) sameNbr++;
-                            int c = ++freq[nb];
-                            if (c > bestCnt) { bestCnt = c; bestLbl = nb; }
-                        }
-                    }
-                    if (sameNbr<=1 && bestCnt-sameNbr> 3 && bestLbl != center && bestLbl != -1) {
-                        nxt(y, x) = bestLbl;
-                        changed = true;
-                    }
-                }
+        std::vector<int32_t> smLabels(static_cast<size_t>(width) * static_cast<size_t>(height), -1);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                smLabels[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)] = topCh(y, x);
             }
-            std::swap(sm, nxt);
-
-            if (!changed) {
-                notice("Island smoothing converged after %d rounds", round + 1);
-                break;
-            }
-            notice("Finished round %d of island smoothing", round + 1);
+        }
+        island_smoothing::Options smoothOpts;
+        smoothOpts.fillEmpty = fillEmptyIslands;
+        smoothOpts.updateProbFromWinnerMin = false;
+        island_smoothing::Result smoothRes = island_smoothing::smoothLabels8Neighborhood(
+            smLabels, nullptr, static_cast<size_t>(width), static_cast<size_t>(height), islandSmooth, smoothOpts);
+        if (smoothRes.converged) {
+            notice("Island smoothing converged after %d rounds", smoothRes.roundsRun);
+        } else {
+            notice("Finished round %d of island smoothing", islandSmooth);
         }
 
         // 3) Render RGB from smoothed labels
@@ -277,7 +250,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                int lbl = sm(y, x);
+                int lbl = smLabels[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)];
                 if (lbl == -1) continue;
 
                 int R=0, G=0, B=0;

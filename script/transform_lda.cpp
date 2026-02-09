@@ -79,9 +79,6 @@ int32_t cmdLDATransform(int argc, char** argv) {
     if (use_10x && !inFile.empty()) {
         warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
     }
-    if (use_10x && featureFile.empty()) {
-        error("10X input requires --features");
-    }
     if (!use_10x && inFile.empty()) {
         error("Either --in-data or 10X inputs must be provided");
     }
@@ -96,13 +93,11 @@ int32_t cmdLDATransform(int argc, char** argv) {
     if (use_10x && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
         error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
     }
-
     HexReader reader;
+    std::unique_ptr<DGEReader10X> dge_ptr;
     if (use_10x) {
-        if (!metaFile.empty()) {
-            warning("Ignoring --in-meta for 10X input");
-        }
-        reader.initFromFeatures(featureFile);
+        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
+        reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
     } else {
         if (metaFile.empty()) {
             error("Missing required --in-meta for non-10X input");
@@ -238,7 +233,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     const int32_t minCountInt = minCount > 0 ? static_cast<int32_t>(std::ceil(minCount)) : 0;
 
     if (use_10x) {
-        DGEReader10X dge(in_bc, in_ft, in_mtx);
+        DGEReader10X& dge = *dge_ptr;
         const std::vector<std::string> model_features = lda.getFeatureNames();
         int32_t n_overlap = dge.setFeatureIndexRemap(model_features, false);
         if (n_overlap == 0) {

@@ -214,8 +214,8 @@ class HexReader {
 public:
 
     int32_t nUnits, nFeatures;
-    double hexSize;
-    bool hasCoordinates;
+    double hexSize = 0.;
+    bool hasCoordinates = false;
     std::vector<std::string> features;
     bool readFullSums = false;
 
@@ -223,8 +223,8 @@ public:
     HexReader(const std::string &metaFile) {
         readMetadata(metaFile);
     }
-    void initFromFeatures(const std::string& featureFile,
-        int32_t n_units = 0, int32_t n_modal = 1, int32_t n_layer = 1);
+    void initFromFeatures(const std::string& featureFile, int32_t n_units = 0);
+    void initFromFeatures(const std::vector<std::string>& featureNames, int32_t n_units = 0);
     void readMetadata(const std::string &metaFile);
     bool featureDict(std::unordered_map<std::string, uint32_t>& dict) {
         if (features.empty()) {
@@ -296,11 +296,11 @@ public:
 
 private:
 
-    int32_t nModal;
-    int32_t nLayer;
-    int32_t offset_data;
-    int32_t icol_layer, icol_x, icol_y;
-    int32_t mintokens;
+    int32_t nModal = 1;
+    int32_t nLayer = 1;
+    int32_t offset_data = -1;
+    int32_t icol_layer = -1, icol_x = -1, icol_y = -1;
+    int32_t mintokens = 0;
     std::vector<double> feature_sums;
     std::vector<double> feature_sums_raw;
     std::vector<double> weights;

@@ -12,6 +12,7 @@
 #include <set>
 #include <limits>
 #include "utils.h"
+#include "img_utils.hpp"
 #include "utils_sys.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"

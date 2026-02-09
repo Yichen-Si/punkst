@@ -86,3 +86,13 @@ make -j$(nproc) && make install
 | **zlib**     | `sudo apt-get install zlib1g-dev`   | `sudo yum install zlib-devel` | `brew install zlib`      |
 | **BZip2**    | `sudo apt-get install libbz2-dev`   | `sudo yum install bzip2-devel` | `brew install bzip2`    |
 | **LibLZMA**  | `sudo apt-get install liblzma-dev`  | `sudo yum install xz-devel` | `brew install xz`          |
+
+### Build Options for Performance and Portability
+
+By default, **punkst** builds a portable binary. You can customize the build using the following CMake flags:
+
+| Goal | CMake Command | Description |
+| :--- | :--- | :--- |
+| **Local Performance** | `cmake -DENABLE_NATIVE_ARCH=ON ..` | Optimizes the binary for your specific CPU (AVX2, AVX-512, etc.) |
+| **Maximum Portability**| `cmake -DENABLE_NATIVE_ARCH=OFF ..` | (Default) Ensures the binary runs on any 64-bit machine |
+| **Modern CPU Fleet** | `cmake -DENABLE_X86_64_V3=ON ..` | Targets x86-64-v3 (Haswell/2013+). Supports AVX2 but remains portable to most modern machines |

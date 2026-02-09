@@ -7,6 +7,7 @@
 #include <limits>
 #include <functional>
 #include "utils.h"
+#include "img_utils.hpp"
 #include "utils_sys.hpp"
 
 // Magic for binary index
@@ -19,7 +20,7 @@ struct IndexHeader {
     int32_t tileSize = 0;
     float pixelResolution = -1;
     int32_t coordType = 0; // 0: float, 1: int32
-    uint32_t topK = 0; // packed top K info
+    uint32_t topK = 0; // how many (factor, probability) pairs are kept per record (per inference set)
     uint32_t recordSize = 0; // <= 0 for tsv
     float xmin = -1.0f, xmax = -1.0f, ymin = -1.0f, ymax = -1.0f;
 

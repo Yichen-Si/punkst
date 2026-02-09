@@ -123,6 +123,7 @@ public:
     void printIndex() const;
 
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
+    void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1);
 
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
     void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1);
@@ -194,6 +195,9 @@ private:
     bool parseLine(const std::string& line, PixTopProbs<int32_t>& R) const;
     bool parseLine(const std::string& line, PixTopProbs3D<float>& R) const;
     bool parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const;
+    // Read one 2D record and convert coordinates to integer pixel space.
+    bool readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos,
+        int32_t& recX, int32_t& recY, TopProbs& rec) const;
 
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
 

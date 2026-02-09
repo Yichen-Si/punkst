@@ -142,6 +142,79 @@ void TileOperator::sampleTilesToDebug(int32_t ntiles) {
     }
 }
 
+bool TileOperator::readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos, int32_t& recX, int32_t& recY, TopProbs& rec) const {
+    if (coord_dim_ != 2) {
+        error("%s: Only 2D records are supported by this helper", __func__);
+    }
+    if (pos >= endPos) {
+        return false;
+    }
+    if (mode_ & 0x1) {
+        if (mode_ & 0x4) {
+            PixTopProbs<int32_t> temp;
+            if (!temp.read(dataStream, k_)) {
+                if (dataStream.eof()) return false;
+                error("%s: Corrupted binary data", __func__);
+            }
+            recX = temp.x;
+            recY = temp.y;
+            rec.ks = std::move(temp.ks);
+            rec.ps = std::move(temp.ps);
+            pos += formatInfo_.recordSize;
+            return true;
+        }
+        PixTopProbs<float> temp;
+        if (!temp.read(dataStream, k_)) {
+            if (dataStream.eof()) return false;
+            error("%s: Corrupted binary data", __func__);
+        }
+        if (formatInfo_.pixelResolution <= 0) {
+            error("%s: Float coordinates require positive pixelResolution", __func__);
+        }
+        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
+        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
+        rec.ks = std::move(temp.ks);
+        rec.ps = std::move(temp.ps);
+        pos += formatInfo_.recordSize;
+        return true;
+    }
+
+    std::string line;
+    while (pos < endPos) {
+        if (!std::getline(dataStream, line)) {
+            return false;
+        }
+        pos += line.size() + 1;
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        if (mode_ & 0x4) {
+            PixTopProbs<int32_t> temp;
+            if (!parseLine(line, temp)) {
+                error("%s: Invalid text record", __func__);
+            }
+            recX = temp.x;
+            recY = temp.y;
+            rec.ks = std::move(temp.ks);
+            rec.ps = std::move(temp.ps);
+            return true;
+        }
+        PixTopProbs<float> temp;
+        if (!parseLine(line, temp)) {
+            error("%s: Invalid text record", __func__);
+        }
+        if (formatInfo_.pixelResolution <= 0) {
+            error("%s: Float coordinates require positive pixelResolution", __func__);
+        }
+        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
+        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
+        rec.ks = std::move(temp.ks);
+        rec.ps = std::move(temp.ps);
+        return true;
+    }
+    return false;
+}
+
 int32_t TileOperator::loadTileToMap(const TileKey& key,
     std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap) const {
     if (coord_dim_ == 3) {
@@ -172,73 +245,11 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
     dataStream.clear();
     dataStream.seekg(blk.idx.st);
     uint64_t pos = blk.idx.st;
-    float res = formatInfo_.pixelResolution;
     TopProbs rec;
-    while (pos < blk.idx.ed) {
-        bool success = false;
-        int32_t recX = 0;
-        int32_t recY = 0;
-        if (mode_ & 0x4) { // int32
-            if (mode_ & 0x1) { // Binary
-                PixTopProbs<int32_t> temp;
-                if (temp.read(dataStream, k_)) {
-                    recX = temp.x;
-                    recY = temp.y;
-                    rec.ks = std::move(temp.ks);
-                    rec.ps = std::move(temp.ps);
-                    pos += formatInfo_.recordSize;
-                    success = true;
-                }
-            } else {
-                std::string line;
-                if (std::getline(dataStream, line)) {
-                    pos += line.size() + 1;
-                    PixTopProbs<int32_t> temp;
-                    success = parseLine(line, temp);
-                    if (success) {
-                        recX = temp.x;
-                        recY = temp.y;
-                        rec.ks = std::move(temp.ks);
-                        rec.ps = std::move(temp.ps);
-                    }
-                }
-            }
-        } else { // float, scale then round to int
-            PixTopProbs<float> temp;
-            if (mode_ & 0x1) { // Binary
-                if (coord_dim_ == 3) {
-                    PixTopProbs3D<float> temp3;
-                    if (temp3.read(dataStream, k_)) {
-                        temp.x = temp3.x;
-                        temp.y = temp3.y;
-                        temp.ks = std::move(temp3.ks);
-                        temp.ps = std::move(temp3.ps);
-                        pos += formatInfo_.recordSize;
-                        success = true;
-                    }
-                } else if (temp.read(dataStream, k_)) {
-                    pos += formatInfo_.recordSize;
-                    success = true;
-                }
-            } else {
-                std::string line;
-                if (std::getline(dataStream, line)) {
-                    pos += line.size() + 1;
-                    success = parseLine(line, temp);
-                }
-            }
-            if (success) {
-                recX = static_cast<int32_t>(std::floor(temp.x / res));
-                recY = static_cast<int32_t>(std::floor(temp.y / res));
-                rec.ks = std::move(temp.ks);
-                rec.ps = std::move(temp.ps);
-            }
-        }
-        if (success) {
-            pixelMap[{recX, recY}] = std::move(rec);
-        } else if (!dataStream.eof()) {
-            error("%s: Corrupted data", __func__);
-        }
+    int32_t recX = 0;
+    int32_t recY = 0;
+    while (readNextRecord2DAsPixel(dataStream, pos, blk.idx.ed, recX, recY, rec)) {
+        pixelMap[{recX, recY}] = std::move(rec);
     }
     return static_cast<int32_t>(pixelMap.size());
 }
@@ -386,8 +397,11 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
     }
 
     bool isInt32 = (mode_ & 0x4);
-    bool applyRes = (mode_ & 0x2);
     float res = formatInfo_.pixelResolution;
+    bool applyRes = (mode_ & 0x2) && (res > 0 && res != 1.0f);
+    if (isInt32 && (!applyRes || res == 1.0f)) {
+        coordDigits = 0;
+    }
 
     // Track current offset in the output TSV file
     long currentOffset = ftell(fp);

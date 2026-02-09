@@ -2,7 +2,7 @@
 
 **`tile-op` provides utilities to view and manipulate the tiled data files** created by `punkst pixel-decode` or `punkst pts2tiles`.
 
-It supports
+Functionalities:
 
 - inspecting the index
 
@@ -15,6 +15,12 @@ It supports
 - annotating (tiled) point level file with inference results
 
 - compute joint probability distributions of factors
+
+- compute confusion matrix among factors at a given resolution
+
+- denoise and keep only the top predicted factor per pixel
+
+- aggregate pixel level inference results by cell and subcellular compartments based in transcript/pixel level annotations
 
 (Except for printing the index, all operations are intended to be used separately)
 
@@ -93,6 +99,8 @@ punkst tile-op --in path/prefix [--binary] \
 ### Compute Joint Probability Distributions
 
 You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from multiple models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file).
+To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.
+
 
 #### Single Input
 
@@ -128,3 +136,64 @@ Output:
 - `path/out_prefix.0.joint.tsv`, ... (internal dot products for each source)
 
 - `path/out_prefix.0v1.cross.tsv`, `path/out_prefix.0v2.cross.tsv`, ... (cross-source dot products with `log10pval` from a naive chi-squared 2x2 enrichment test)
+
+### Compute Confusion Matrix
+
+This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, identifies the top factor for each square, and then builds a matrix of co-occurrences.
+
+```bash
+punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix
+```
+
+`--confusion` - The resolution (side length of square bins in microns) for computing the confusion matrix.
+
+Output:
+
+- `path/out_prefix.confusion.tsv`: A matrix of co-occurrence counts between factors.
+
+### Aggregate Results by Cell
+
+This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the tailed transcript file that contains cell/compartment annotations per transcript/pixel.
+If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have run `punkst pts2tiles` on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file already contains the necessary information.
+
+```bash
+punkst tile-op --annotate-cell --in path/result [--binary] \
+  --annotate-pts path/transcripts_with_cells \
+  --icol-x 0 --icol-y 1 --icol-c 5 --icol-s 6 \
+  --out path/cellular_results
+```
+
+This command will summarize the factors for each cell ID found in `path/transcripts_with_cells.tsv`.
+
+`--annotate-cell` - Flag to enable aggregation by cell.
+
+`--annotate-pts` - Prefix of the points file (e.g. transcripts) containing cell annotations.
+
+`--icol-x`, `--icol-y` - 0-based column indices for X and Y coordinates.
+
+`--icol-z` - (Optional) 0-based column index for Z coordinate.
+
+`--icol-c` - 0-based column index for the cell ID.
+
+`--icol-s` - (Optional) 0-based column index for subcellular component annotations. If provided, results will be aggregated per-cell and per-component.
+
+`--k-out` - (Optional) Number of top factors to include in the output for each cell/component. If not provided, the same number of in the input file is used.
+
+`--max-cell-diameter` - (Optional) The maximum expected diameter of a cell in microns. Used for avoiding boundary effects as we process by tiles. Default is 50.
+
+Output:
+
+A TSV file `path/cellular_results.tsv` containing aggregated factor probabilities for each cell (and component, if specified).
+
+A TSV file `path/cellular_results.pseudobulk.tsv` containing the sum of factor probabilities across each subcellular component. Useful for comparing global factor abundance between components.
+
+### Denoise Top Labels
+
+This is a heuristic denoising operation on the top-predicted factor labels for each pixel. It replace pixels where the predicted factor differs from most of its neighbors with the majority vote among its neighbors.
+The output is a new tiled data file where for each pixel, only the smoothed top factor is kept. (The output can be used as input for `tile-op`, so you can dump it to a tsv file or do other operations)
+
+```bash
+punkst tile-op --smooth-top-labels 2 --in path/result [--binary] --out path/smoothed_result
+```
+
+`--smooth-top-labels` - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.

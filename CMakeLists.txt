@@ -52,6 +52,8 @@ set(SOURCE_FILES
     src/punkst.cpp
     src/utils.h
     src/utils.cpp
+    src/img_utils.hpp
+    src/img_utils.cpp
     src/utils_sys.hpp
     src/utils_sys.cpp
     src/hexgrid.h

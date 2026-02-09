@@ -126,7 +126,7 @@ void HexReader::readMetadata(const std::string &metaFile) {
 }
 
 void HexReader::initFromFeatures(const std::string& featureFile,
-    int32_t n_units, int32_t n_modal, int32_t n_layer) {
+    int32_t n_units) {
     if (featureFile.empty()) {
         error("%s: feature file path is empty", __func__);
     }
@@ -179,16 +179,7 @@ void HexReader::initFromFeatures(const std::string& featureFile,
     }
 
     nUnits = n_units;
-    nModal = n_modal > 0 ? n_modal : 1;
-    nLayer = n_layer > 0 ? n_layer : 1;
     nFeatures = static_cast<int32_t>(features.size());
-    hexSize = 0.0;
-    hasCoordinates = false;
-    offset_data = 0;
-    icol_layer = -1;
-    icol_x = -1;
-    icol_y = -1;
-    mintokens = 0;
     header_info.clear();
     if (has_sums) {
         feature_sums_raw = sums;
@@ -199,6 +190,23 @@ void HexReader::initFromFeatures(const std::string& featureFile,
         feature_sums_raw.assign(nFeatures, 0.0);
         readFullSums = false;
     }
+    accumulate_sums = false;
+    remap = false;
+    idx_remap.clear();
+    weights.clear();
+    weightFeatures = false;
+}
+
+void HexReader::initFromFeatures(const std::vector<std::string>& featureNames, int32_t n_units) {
+    nUnits = n_units;
+    nFeatures = static_cast<int32_t>(featureNames.size());
+    features = featureNames;
+
+    feature_sums.clear();
+    feature_sums_raw.clear();
+    feature_sums.assign(nFeatures, 0.0);
+    feature_sums_raw.assign(nFeatures, 0.0);
+    readFullSums = false;
     accumulate_sums = false;
     remap = false;
     idx_remap.clear();

@@ -19,6 +19,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool dumpTSV = false;
     bool probDot = false;
     bool cellAnno = false;
+    int32_t smoothTopLabelsRounds = 0;
     double confusionRes = -1.0;
     std::vector<uint32_t> k2keep;
     int32_t icol_x = -1, icol_y = -1, icol_z = -1;
@@ -39,6 +40,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
       .add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
+      .add_option("smooth-top-labels", "Per-tile island smoothing of top labels (>0 to enable)", smoothTopLabelsRounds)
       .add_option("confusion", "Compute confusion matrix using r-by-r squares", confusionRes)
       .add_option("prob-dot", "Compute pairwise probability dot products", probDot)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
@@ -94,6 +96,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     if (dumpTSV) {
         tileOp.dumpTSV(outPrefix, probDigits, coordDigits);
+        return 0;
+    }
+
+    if (smoothTopLabelsRounds > 0) {
+        tileOp.smoothTopLabels2D(outPrefix, smoothTopLabelsRounds);
         return 0;
     }
 
