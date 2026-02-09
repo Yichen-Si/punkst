@@ -235,7 +235,7 @@
   
     
   
-  Home
+  Intro
 
         </a>
       </li>
@@ -400,7 +400,7 @@
   <span class="md-ellipsis">
     
   
-    Home
+    Intro
   
 
     
@@ -422,7 +422,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Home
+    Intro
   
 
           </label>
@@ -948,6 +948,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#multi-conditional-de-pois" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        multi-conditional-de-pois
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="multi-conditional-de-pois">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-parameters_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-parameters_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1212,6 +1262,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#multi-conditional-de-pois" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        multi-conditional-de-pois
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="multi-conditional-de-pois">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-parameters_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-parameters_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output Files
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1234,8 +1334,9 @@
 
 <h1 id="differential-expression-tests">Differential expression tests<a class="headerlink" href="#differential-expression-tests" title="Permanent link">&para;</a></h1>
 <ul>
-<li><code>punkst de-chisq</code>: Chi-squared DE on pseudobulk matrices.</li>
 <li><code>punkst multi-conditional-de-pixel</code>: Multi-sample (pairwise), cell type-specific DE using pixel-level annotations.</li>
+<li><code>punkst multi-conditional-de-pois</code>: Multi-sample (pairwise), cell type-specific DE using Poisson regression on spot-level data.</li>
+<li><code>punkst de-chisq</code>: Chi-squared DE on pseudobulk matrices.</li>
 </ul>
 <h2 id="de-chisq">de-chisq<a class="headerlink" href="#de-chisq" title="Permanent link">&para;</a></h2>
 <p><code>de-chisq</code> runs a Chi-squared test on a pseudobulk matrix.
@@ -1364,6 +1465,62 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <li><code>PREFIX.nobs.tsv</code>: The number of units and total pixel counts per cell type and dataset.</li>
 <li><code>PREFIX.sums.tsv</code>: Total feature counts per cell type and dataset for units passing filters.</li>
 </ul>
+<h2 id="multi-conditional-de-pois">multi-conditional-de-pois<a class="headerlink" href="#multi-conditional-de-pois" title="Permanent link">&para;</a></h2>
+<p><code>multi-conditional-de-pois</code> performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from <code>tiles2hex</code>, or single cells). It leverages a pre-trained topic model (e.g., LDA from <code>punkst topic-model</code>) to estimate cell type mixture proportions within each unit. For each gene and cell type, it fits a Poisson regression model to identify differential expression between specified groups of datasets.</p>
+<p>For gene <span class="arithmatex">\(m\)</span> and unit <span class="arithmatex">\(i\)</span>, the model is: <span class="arithmatex">\(Y_{im} \sim \text{Pois}(\lambda_{im})\)</span>. The rate <span class="arithmatex">\(\lambda_{im}\)</span> is a sum over cell types <span class="arithmatex">\(k\)</span>:
+<span class="arithmatex">\(\lambda_{im} = \sum_k \theta_{ik} g^{-1}( \eta_{mk}^0 + x_i b_{mk} )\)</span>
+where <span class="arithmatex">\(\theta_{ik}\)</span> is the proportion of cell type <span class="arithmatex">\(k\)</span> in unit <span class="arithmatex">\(i\)</span> and <span class="arithmatex">\(x_i\)</span> indicates the group that unit <span class="arithmatex">\(i\)</span> belongs to. The null hypothesis is <span class="arithmatex">\(b_{mk}=0\)</span>. The <code>log1p</code> link <span class="arithmatex">\(g^{-1}(\eta)=c_i (\exp(\eta) - 1)\)</span> is much more efficient than the canonical log link with similar performance in practice.</p>
+<p>Example usage with explicit contrast file:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>multi-conditional-de-pois<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--contrast<span class="w"> </span>contrast.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--model<span class="w"> </span>my_lda_model.bin<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--link<span class="w"> </span>log1p<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--out<span class="w"> </span>de/unit_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
+</span></code></pre></div></p>
+<p><code>contrast.tsv</code> format (tab-delimited):
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>in-data in-meta B_vs_A
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>sampleA/hex.tsv sampleA/hex.json    -1
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>sampleB/hex.tsv sampleB/hex.json    1
+</span></code></pre></div>
+Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), or <code>0</code> (exclude). Contrast names come from the header. The <code>in-data</code> column points to unit-level count data (e.g. from <code>tiles2hex</code>) and <code>in-meta</code> points to the corresponding metadata file.</p>
+<h3 id="required-parameters_2">Required Parameters<a class="headerlink" href="#required-parameters_2" title="Permanent link">&para;</a></h3>
+<p>Provide either <code>--in-data</code> and <code>--in-meta</code> (for automatic pairwise contrasts) or a <code>--contrast</code> design file.</p>
+<p><code>--model</code> - Path to the trained topic model file (e.g. LDA from <code>topic-model</code>).</p>
+<p><code>--out</code> - Output prefix.</p>
+<p><code>--contrast</code> - Contrast design TSV with columns: <code>in-data</code>, <code>in-meta</code>, and one or more contrast columns (values -1/0/1). When provided, it replaces <code>--in-data</code>, <code>--in-meta</code> and <code>--labels</code>.</p>
+<h3 id="optional-parameters_2">Optional Parameters<a class="headerlink" href="#optional-parameters_2" title="Permanent link">&para;</a></h3>
+<p><code>--in-data</code> - Input data files (e.g. <code>hex.tsv</code> from <code>tiles2hex</code>).</p>
+<p><code>--in-meta</code> - Metadata files (e.g. <code>hex.meta.tsv</code> from <code>tiles2hex</code>).</p>
+<p><code>--labels</code> - Labels for datasets used in pairwise output; defaults to <code>0..N-1</code>. Ignored when <code>--contrast</code> is supplied.</p>
+<p><code>--link</code> - Regression link function: <code>log</code> or <code>log1p</code>. Default: <code>log1p</code>.</p>
+<p><code>--min-count</code> - Minimum total count per unit to be included. Default: 50.</p>
+<p><code>--min-count-per-feature</code> - Minimum total count for a feature to be tested. Default: 100.</p>
+<p><code>--min-units-per-feature</code> - Minimum number of units with a non-zero count for a feature to be tested. Default: <code>K * 10</code> where <code>K</code> is number of cell types.</p>
+<p><code>--max-pval</code> - Max p-value for output. Default: 1.</p>
+<p><code>--se-method</code> - Method for calculating standard errors. 1: Fisher (model-based), 2: Sandwich (robust), 3: both. Default: 1.</p>
+<p><code>--size-factor</code> - Normalization size factor for the Poisson regression model. Default: 10000.0.</p>
+<p><code>--threads</code> - Number of threads. Default: 1.</p>
+<h3 id="output-files_1">Output Files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
+<p>Given <code>--out PREFIX</code>, the tool generates one main output file per contrast, plus an auxiliary file.</p>
+<ul>
+<li>For each contrast, <code>PREFIX.CONTRAST.tsv</code> is generated, where <code>CONTRAST</code> is from the <code>--contrast</code> file header or <code>labelA_vs_labelB</code> for auto-pairwise.</li>
+<li>
+<p><strong>Columns</strong>:</p>
+<ul>
+<li><code>Feature</code>: Feature name.</li>
+<li><code>Factor</code>: Cell type name.</li>
+<li><code>Beta</code>: log fold change for the feature in this cell type.</li>
+<li><code>SE</code>: Standard error of Beta. If <code>se-method=3</code>, an additional <code>SE0</code> column with the Fisher-based SE is included.</li>
+<li><code>log10p</code>: -log10(p-value) for <code>Beta</code>.</li>
+<li><code>Dist2bd</code>: Distance of the beta estimate to the optimization boundary. Small values may indicate unstable estimates.</li>
+<li><code>n</code>: Number of units included in the test for this feature.</li>
+<li><code>Count1</code>, <code>Count2</code>: Total counts of the feature in group 1 and group 2.</li>
+</ul>
+</li>
+<li>
+<p>An auxiliary file <code>PREFIX.CONTRAST.eta0.tsv</code> is also generated, containing the fitted baseline (log) expression rates for each gene and cell type.</p>
+</li>
+</ul>
 
 
 
@@ -1463,6 +1620,10 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
     
     
       <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
       
     
   </body>

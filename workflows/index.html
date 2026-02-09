@@ -235,7 +235,7 @@
   
     
   
-  Home
+  Intro
 
         </a>
       </li>
@@ -400,7 +400,7 @@
   <span class="md-ellipsis">
     
   
-    Home
+    Intro
   
 
     
@@ -422,7 +422,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Home
+    Intro
   
 
           </label>
@@ -1006,6 +1006,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#basic-workflow_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Basic workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#setup" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1135,6 +1146,14 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p><code>"scale"</code>: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want <span class="arithmatex">\(0.5 \mu m\)</span> to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is <span class="arithmatex">\(2 \mu m\)</span>, you probably want to set scale to 2.</p>
 <p>Section <code>"job"</code>: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".</p>
 <h2 id="step-by-step">Step by step<a class="headerlink" href="#step-by-step" title="Permanent link">&para;</a></h2>
+<h3 id="basic-workflow_1">Basic workflow<a class="headerlink" href="#basic-workflow_1" title="Permanent link">&para;</a></h3>
+<ol>
+<li><a href="../modules/pts2tiles/">pts2tiles</a>: Group pixels to tiles for faster processing</li>
+<li><a href="../modules/tiles2hex/">tiles2hex</a>: Group pixels into non-overlapping hexagons</li>
+<li><a href="../modules/lda4hex/">topic-model</a>: Run factorization on the hexagon/single cell data</li>
+<li><a href="../modules/pixel-decode/">pixel-decode</a>: Annotate each pixel with the top factors and their probabilities</li>
+<li><a href="../modules/visualization/">Visualization</a>: Create high resolution visualizations</li>
+</ol>
 <h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h3>
 <p>First, set up the environment variables:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">threads</span><span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="c1"># Number of threads for parallel processing</span>
@@ -1329,6 +1348,10 @@ It can have other columns (which will be ignored in analysis but can be optional
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
       
     
   </body>
