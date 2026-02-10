@@ -22,6 +22,10 @@
 
 - aggregate pixel level inference results by cell and subcellular compartments based in transcript/pixel level annotations
 
+- compute global connected components per label with centroid and coordinate range
+
+- profile shell occupancy and directional surface distance between labels
+
 (Except for printing the index, all operations are intended to be used separately)
 
 ## Usage
@@ -226,3 +230,66 @@ The output includes two files:
   - $L_{kl} / P_k$ (`frac1`)
   - $L_{kl} / P_l$ (`frac2`)
   - $L_{kl} / (A_k + A_l)$ (`density`)
+
+### Connected Components
+
+Compute global connected components for each label (4-neighborhood on raster pixels), merged across tile boundaries.
+
+```bash
+punkst tile-op --connected-components --in path/result [--binary] \
+  --cc-min-size 25 --out path/out_prefix
+```
+
+`--connected-components` - run connected component profiling.
+
+`--cc-min-size` - minimum component size to report in the main component table (histogram still includes all sizes).
+
+Output:
+
+- `path/out_prefix.connected_components.tsv`: one row per reported component with columns
+  - label index (`#k`)
+  - component rank within label by descending size (`cc_idx`)
+  - component size in pixels (`size`)
+  - centroid in pixel coordinates (`centroid_x`, `centroid_y`)
+  - inclusive coordinate range (`xmin`, `xmax`, `ymin`, `ymax`)
+
+- `path/out_prefix.connected_components_hist.tsv`: size histogram for all components with columns
+  - label index (`#k`)
+  - component size (`size`)
+  - number of components with that size (`n_components`)
+
+### Shell and Surface Profiles
+
+Profile pairwise spatial proximity between labels using boundary-seeded distance transforms.
+
+```bash
+punkst tile-op --shell-surface --in path/result [--binary] \
+  --shell-radii 5 10 20 --surface-dmax 25 \
+  --cc-min-size 25 --spatial-min-pix-per-tile-label 20 \
+  --out path/out_prefix
+```
+
+`--shell-surface` - run shell occupancy and surface distance profiling.
+
+`--shell-radii` - one or more shell radii (pixels) for occupancy reporting.
+
+`--surface-dmax` - maximum distance bin for the surface-distance histogram.
+
+`--cc-min-size` - minimum connected-component size used for boundary seed filtering.
+
+`--spatial-min-pix-per-tile-label` - require at least this many pixels of a label within a tile before that tile contributes seeds for the label.
+
+Output:
+
+- `path/out_prefix.shell.tsv`: shell occupancy summary with columns
+  - focal label (`#K_focal`)
+  - other label (`K2`)
+  - radius (`r`)
+  - number of `K2` pixels within distance `r` from boundary of focal label (`n_within`)
+  - total number of `K2` pixels (`n_K2_total`)
+
+- `path/out_prefix.surface.tsv`: directional surface-distance histogram with columns
+  - source label (`#from_K1`)
+  - target label (`to_K2`)
+  - distance bin (`d`)
+  - count (`count`)

@@ -10,6 +10,9 @@
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <numeric>
+#include <limits>
+#include <chrono>
 #include <tbb/blocked_range.h>
 #include <tbb/combinable.h>
 #include <tbb/global_control.h>
@@ -957,59 +960,17 @@ void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
     if (K_ <= 0 || K_ > 255) {
         error("%s: K must be in [1, 255], got %d", __func__, K_);
     }
-    const bool coordScaled = (mode_ & 0x2) != 0;
-
     const int32_t K = K_;
     const uint8_t BG = static_cast<uint8_t>(K);
     auto processTile = [&](const TileInfo& blk,
             std::ifstream& in, SpatialMetricsAccum& out,
             uint64_t& nOutOfRangeIgnored, uint64_t& nBadLabelIgnored) {
-        const TileKey tile{blk.idx.row, blk.idx.col};
-        int32_t pixX0, pixX1, pixY0, pixY1;
-        tile2bound(tile, pixX0, pixX1, pixY0, pixY1, formatInfo_.tileSize);
-        if (coordScaled) {
-            pixX0 = coord2pix(pixX0);
-            pixX1 = coord2pix(pixX1);
-            pixY0 = coord2pix(pixY0);
-            pixY1 = coord2pix(pixY1);
-        }
-        if (pixX1 <= pixX0 || pixY1 <= pixY0) {
-            error("%s: Invalid raster bounds in tile (%d, %d)", __func__, tile.row, tile.col);
-        }
-        const size_t width  = static_cast<size_t>(pixX1-pixX0);
-        const size_t height = static_cast<size_t>(pixY1-pixY0);
-        if (height > 0 && width > std::numeric_limits<size_t>::max() / height) {
-            error("%s: Raster size overflow in tile (%d, %d)", __func__, tile.row, tile.col);
-        }
+        DenseTile dense;
+        loadDenseTile(blk, in, dense, BG, nOutOfRangeIgnored, nBadLabelIgnored);
+        const size_t width = dense.W;
+        const size_t height = dense.H;
         const size_t nPixels = width * height;
-        std::vector<uint8_t> labels(nPixels, BG);
-
-        in.clear();
-        in.seekg(blk.idx.st);
-        if (!in.good()) {
-            error("%s: Failed seeking input stream to tile (%d, %d)", __func__, tile.row, tile.col);
-        }
-
-        TopProbs rec;
-        int32_t xpix = 0, ypix = 0;
-        uint64_t pos = blk.idx.st;
-        while (readNextRecord2DAsPixel(in, pos, blk.idx.ed, xpix, ypix, rec)) {
-            if (rec.ks.empty() || rec.ps.empty()) {
-                continue;
-            }
-            if (xpix < pixX0 || xpix >= pixX1 || ypix < pixY0 || ypix >= pixY1) { // shouldn't happen
-                ++nOutOfRangeIgnored;
-                continue;
-            }
-            const int32_t k = rec.ks[0];
-            if (k < 0 || k >= K) { // shouldn't happen
-                ++nBadLabelIgnored;
-                continue;
-            }
-            const size_t x0 = static_cast<size_t>(xpix - pixX0); // local coord
-            const size_t y0 = static_cast<size_t>(ypix - pixY0);
-            labels[y0 * width + x0] = static_cast<uint8_t>(k);
-        }
+        const std::vector<uint8_t>& labels = dense.lab;
 
         for (size_t i = 0; i < nPixels; ++i) {
             uint8_t a = labels[i];
@@ -1120,6 +1081,643 @@ void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
     }
     fclose(fpPairwise);
     notice("%s: Wrote pairwise metrics to %s", __func__, outPairwise.c_str());
+    if (totalOutOfRangeIgnored > 0) {
+        warning("%s: Ignored %llu out-of-tile records",
+            __func__, static_cast<unsigned long long>(totalOutOfRangeIgnored));
+    }
+    if (totalBadLabelIgnored > 0) {
+        warning("%s: Ignored %llu records with invalid labels",
+            __func__, static_cast<unsigned long long>(totalBadLabelIgnored));
+    }
+}
+
+void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t minSize) {
+    if (blocks_.empty()) {
+        warning("%s: No tiles to process", __func__);
+        return;
+    }
+    if (!regular_labeled_raster_ || coord_dim_ != 2) {
+        error("%s only supports raster 2D data with regular tiles", __func__);
+    }
+    if (K_ <= 0 || K_ > 255) {
+        error("%s: K must be in [1, 255], got %d", __func__, K_);
+    }
+    const int32_t K = K_;
+    const uint8_t BG = static_cast<uint8_t>(K);
+    const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
+    const auto tStage1Start = std::chrono::steady_clock::now();
+
+    std::vector<TileCCL> perTile(blocks_.size());
+    uint64_t totalOutOfRangeIgnored = 0;
+    uint64_t totalBadLabelIgnored = 0;
+    // Stage 1: tile-local CCL
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<std::pair<uint64_t, uint64_t>> tlsIgnored(
+            [] { return std::make_pair(0ULL, 0ULL); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in;
+                if (mode_ & 0x1) {
+                    in.open(dataFile_, std::ios::binary);
+                } else {
+                    in.open(dataFile_);
+                }
+                if (!in.is_open()) {
+                    error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+                }
+                auto& localIgnored = tlsIgnored.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    DenseTile dense;
+                    loadDenseTile(blocks_[bi], in, dense, BG, localIgnored.first, localIgnored.second);
+                    perTile[bi] = tileLocalCCL(dense, BG);
+                }
+            });
+        tlsIgnored.combine_each([&](const std::pair<uint64_t, uint64_t>& localIgnored) {
+            totalOutOfRangeIgnored += localIgnored.first;
+            totalBadLabelIgnored += localIgnored.second;
+        });
+    } else {
+        std::ifstream in;
+        if (mode_ & 0x1) {
+            in.open(dataFile_, std::ios::binary);
+        } else {
+            in.open(dataFile_);
+        }
+        if (!in.is_open()) {
+            error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+        }
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            DenseTile dense;
+            loadDenseTile(blocks_[bi], in, dense, BG, totalOutOfRangeIgnored, totalBadLabelIgnored);
+            perTile[bi] = tileLocalCCL(dense, BG);
+        }
+    }
+    const auto tStage1End = std::chrono::steady_clock::now();
+
+    struct CCOutRec {
+        uint64_t size = 0;
+        uint64_t sumX = 0;
+        uint64_t sumY = 0;
+        PixBox box;
+    };
+    std::vector<std::vector<CCOutRec>> perLabelComponents(static_cast<size_t>(K));
+    std::vector<std::unordered_map<uint64_t, uint64_t>> perLabelHist(static_cast<size_t>(K));
+    auto addFinalComponent = [&](uint8_t lbl, uint64_t size,
+                                 uint64_t sumX, uint64_t sumY,
+                                 const PixBox& box) {
+        if (lbl >= BG || size == 0) return;
+        perLabelHist[static_cast<size_t>(lbl)][size] += 1;
+        if (size >= static_cast<uint64_t>(minSize)) {
+            perLabelComponents[static_cast<size_t>(lbl)].push_back(CCOutRec{size, sumX, sumY, box});
+        }
+    };
+
+    // Stage 1.5: local-finalize non-border components
+    const auto tStage15Start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < perTile.size(); ++i) {
+        auto& t = perTile[i];
+        if (t.ncomp == 0) continue;
+        const BorderRemapInfo remapInfo = remapTileToBorderComponents(t, INVALID);
+        for (uint32_t cid = 0; cid < remapInfo.remap.size(); ++cid) {
+            if (remapInfo.remap[cid] != INVALID) continue;
+            addFinalComponent(
+                remapInfo.oldCompLabel[cid],
+                static_cast<uint64_t>(remapInfo.oldCompSize[cid]),
+                remapInfo.oldCompSumX[cid],
+                remapInfo.oldCompSumY[cid],
+                remapInfo.oldCompBox[cid]);
+        }
+    }
+    const auto tStage15End = std::chrono::steady_clock::now();
+
+    // Stage 2: seam union on border-touching components only
+    const auto tStage2Start = std::chrono::steady_clock::now();
+    const BorderDSUState dsuState = mergeBorderComponentsWithDSU(perTile, BG, INVALID);
+    for (size_t i = 0; i < dsuState.rootSize.size(); ++i) {
+        if (dsuState.rootSize[i] == 0 || dsuState.rootLabel[i] >= BG) continue;
+        addFinalComponent(
+            dsuState.rootLabel[i],
+            dsuState.rootSize[i],
+            dsuState.rootSumX[i],
+            dsuState.rootSumY[i],
+            dsuState.rootBox[i]);
+    }
+    const auto tStage2End = std::chrono::steady_clock::now();
+    const auto stage1Ms = std::chrono::duration_cast<std::chrono::milliseconds>(tStage1End - tStage1Start).count();
+    const auto stage15Ms = std::chrono::duration_cast<std::chrono::milliseconds>(tStage15End - tStage15Start).count();
+    const auto stage2Ms = std::chrono::duration_cast<std::chrono::milliseconds>(tStage2End - tStage2Start).count();
+    notice("%s: timing(ms): stage1=%lld stage1.5=%lld stage2=%lld",
+        __func__,
+        static_cast<long long>(stage1Ms),
+        static_cast<long long>(stage15Ms),
+        static_cast<long long>(stage2Ms));
+
+    std::string outCc = outPrefix + ".connected_components.tsv";
+    FILE* fpCc = fopen(outCc.c_str(), "w");
+    if (!fpCc) {
+        error("%s: Cannot open output file %s", __func__, outCc.c_str());
+    }
+    fprintf(fpCc, "#k\tcc_idx\tsize\tcentroid_x\tcentroid_y\txmin\txmax\tymin\tymax\n");
+    for (int32_t k = 0; k < K; ++k) {
+        auto& vec = perLabelComponents[static_cast<size_t>(k)];
+        std::sort(vec.begin(), vec.end(),
+            [](const CCOutRec& a, const CCOutRec& b) {
+                if (a.size != b.size) return a.size > b.size;
+                if (a.box.minX != b.box.minX) return a.box.minX < b.box.minX;
+                if (a.box.minY != b.box.minY) return a.box.minY < b.box.minY;
+                if (a.box.maxX != b.box.maxX) return a.box.maxX < b.box.maxX;
+                return a.box.maxY < b.box.maxY;
+            });
+        for (size_t i = 0; i < vec.size(); ++i) {
+            const double cx = static_cast<double>(vec[i].sumX) / static_cast<double>(vec[i].size);
+            const double cy = static_cast<double>(vec[i].sumY) / static_cast<double>(vec[i].size);
+            fprintf(fpCc, "%d\t%zu\t%llu\t%.6f\t%.6f\t%d\t%d\t%d\t%d\n",
+                k, i,
+                static_cast<unsigned long long>(vec[i].size),
+                cx,
+                cy,
+                vec[i].box.minX,
+                vec[i].box.maxX,
+                vec[i].box.minY,
+                vec[i].box.maxY);
+        }
+    }
+    fclose(fpCc);
+    notice("%s: Wrote connected components to %s", __func__, outCc.c_str());
+
+    std::string outHist = outPrefix + ".connected_components_hist.tsv";
+    FILE* fpHist = fopen(outHist.c_str(), "w");
+    if (!fpHist) {
+        error("%s: Cannot open output file %s", __func__, outHist.c_str());
+    }
+    fprintf(fpHist, "#k\tsize\tn_components\n");
+    for (int32_t k = 0; k < K; ++k) {
+        const auto& hist = perLabelHist[static_cast<size_t>(k)];
+        for (const auto& kv : hist) {
+            fprintf(fpHist, "%d\t%llu\t%llu\n",
+                k,
+                static_cast<unsigned long long>(kv.first),
+                static_cast<unsigned long long>(kv.second));
+        }
+    }
+    fclose(fpHist);
+    notice("%s: Wrote connected component size histogram to %s", __func__, outHist.c_str());
+
+    if (totalOutOfRangeIgnored > 0) {
+        warning("%s: Ignored %llu out-of-tile records",
+            __func__, static_cast<unsigned long long>(totalOutOfRangeIgnored));
+    }
+    if (totalBadLabelIgnored > 0) {
+        warning("%s: Ignored %llu records with invalid labels",
+            __func__, static_cast<unsigned long long>(totalBadLabelIgnored));
+    }
+}
+
+void TileOperator::profileShellAndSurface(const std::string& outPrefix,
+    const std::vector<int32_t>& radii, int32_t dMax,
+    uint32_t minCompSize, uint32_t minPixPerTilePerLabel) {
+    if (blocks_.empty()) {
+        warning("%s: No tiles to process", __func__);
+        return;
+    }
+    if (!regular_labeled_raster_ || coord_dim_ != 2) {
+        error("%s only supports raster 2D data with regular tiles", __func__);
+    }
+    if (K_ <= 0 || K_ > 255) {
+        error("%s: K must be in [1, 255], got %d", __func__, K_);
+    }
+    if (dMax < 0) {
+        error("%s: dMax must be >= 0", __func__);
+    }
+    std::vector<int32_t> radiiSorted;
+    radiiSorted.reserve(radii.size());
+    for (int32_t r : radii) {
+        if (r < 0) continue;
+        radiiSorted.push_back(r);
+    }
+    if (radiiSorted.empty()) {
+        error("%s: At least one non-negative radius is required", __func__);
+    }
+    std::sort(radiiSorted.begin(), radiiSorted.end());
+    radiiSorted.erase(std::unique(radiiSorted.begin(), radiiSorted.end()), radiiSorted.end());
+    const int32_t rMax = radiiSorted.back();
+    const int32_t D = std::max(rMax, dMax + 1);
+    if (D > 65534) {
+        error("%s: Distance cap too large (%d), must be <= 65534", __func__, D);
+    }
+
+    const int32_t K = K_;
+    const uint8_t BG = static_cast<uint8_t>(K);
+    const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
+
+    // Stage 1: load all tiles and collect global/tile label counts
+    std::vector<DenseTile> tiles(blocks_.size());
+    std::vector<std::vector<uint32_t>> tileLabelCount(
+        blocks_.size(), std::vector<uint32_t>(static_cast<size_t>(K), 0));
+    std::vector<uint64_t> areaTot(static_cast<size_t>(K + 1), 0);
+    uint64_t totalOutOfRangeIgnored = 0;
+    uint64_t totalBadLabelIgnored = 0;
+
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<std::vector<uint64_t>> tlsArea([&] {
+            return std::vector<uint64_t>(static_cast<size_t>(K + 1), 0);
+        });
+        tbb::combinable<std::pair<uint64_t, uint64_t>> tlsIgnored(
+            [] { return std::make_pair(0ULL, 0ULL); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in;
+                if (mode_ & 0x1) {
+                    in.open(dataFile_, std::ios::binary);
+                } else {
+                    in.open(dataFile_);
+                }
+                if (!in.is_open()) {
+                    error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+                }
+                auto& localArea = tlsArea.local();
+                auto& localIgnored = tlsIgnored.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    loadDenseTile(blocks_[bi], in, tiles[bi], BG, localIgnored.first, localIgnored.second);
+                    if (tiles[bi].lab.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+                        error("%s: Tile too large for local indexing", __func__);
+                    }
+                    auto& counts = tileLabelCount[bi];
+                    for (size_t li = 0; li < tiles[bi].lab.size(); ++li) {
+                        const uint8_t lbl = tiles[bi].lab[li];
+                        localArea[lbl] += 1;
+                        if (lbl < BG) counts[lbl] += 1;
+                    }
+                }
+            });
+        tlsArea.combine_each([&](const std::vector<uint64_t>& localArea) {
+            for (size_t i = 0; i < areaTot.size(); ++i) areaTot[i] += localArea[i];
+        });
+        tlsIgnored.combine_each([&](const std::pair<uint64_t, uint64_t>& localIgnored) {
+            totalOutOfRangeIgnored += localIgnored.first;
+            totalBadLabelIgnored += localIgnored.second;
+        });
+    } else {
+        std::ifstream in;
+        if (mode_ & 0x1) {
+            in.open(dataFile_, std::ios::binary);
+        } else {
+            in.open(dataFile_);
+        }
+        if (!in.is_open()) {
+            error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+        }
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            loadDenseTile(blocks_[bi], in, tiles[bi], BG, totalOutOfRangeIgnored, totalBadLabelIgnored);
+            if (tiles[bi].lab.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+                error("%s: Tile too large for local indexing", __func__);
+            }
+            auto& counts = tileLabelCount[bi];
+            for (size_t li = 0; li < tiles[bi].lab.size(); ++li) {
+                const uint8_t lbl = tiles[bi].lab[li];
+                areaTot[lbl] += 1;
+                if (lbl < BG) counts[lbl] += 1;
+            }
+        }
+    }
+
+    // Stage 1.25: compute seam-aware boundary masks, then local CCL with boundary->cid tracking.
+    computeTileBoundaryMasks(tiles);
+    std::vector<TileCCL> perTile(tiles.size());
+    if (threads_ > 1 && tiles.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, tiles.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    perTile[bi] = tileLocalCCL(tiles[bi], BG, &tiles[bi].boundary);
+                }
+            });
+    } else {
+        for (size_t bi = 0; bi < tiles.size(); ++bi) {
+            perTile[bi] = tileLocalCCL(tiles[bi], BG, &tiles[bi].boundary);
+        }
+    }
+
+    // Stage 1.5: finalize non-border components and keep remapped border components.
+    std::vector<std::vector<PixelRef>> seedsBoundaryBig(static_cast<size_t>(K));
+    std::vector<std::vector<uint8_t>> tileCompBig(tiles.size());
+    for (size_t i = 0; i < perTile.size(); ++i) {
+        auto& t = perTile[i];
+        if (t.ncomp == 0) continue;
+        const BorderRemapInfo remapInfo = remapTileToBorderComponents(t, INVALID);
+
+        std::vector<uint32_t> bndPixKeep;
+        std::vector<uint32_t> bndCidKeep;
+        bndPixKeep.reserve(t.bndPix.size());
+        bndCidKeep.reserve(t.bndCid.size());
+        for (size_t bi = 0; bi < t.bndPix.size(); ++bi) {
+            const uint32_t oldCid = t.bndCid[bi];
+            if (oldCid >= remapInfo.remap.size()) {
+                error("%s: Boundary cid out of range", __func__);
+            }
+            const uint32_t pix = t.bndPix[bi];
+            const uint8_t lbl = tiles[i].lab[pix];
+            if (lbl >= BG) continue;
+            if (remapInfo.remap[oldCid] == INVALID) {
+                if (remapInfo.oldCompSize[oldCid] < minCompSize) continue;
+                if (minPixPerTilePerLabel > 0 &&
+                    tileLabelCount[i][static_cast<size_t>(lbl)] < minPixPerTilePerLabel) {
+                    continue;
+                }
+                seedsBoundaryBig[static_cast<size_t>(lbl)].push_back(
+                    PixelRef{static_cast<uint32_t>(i), pix});
+            } else {
+                bndPixKeep.push_back(pix);
+                bndCidKeep.push_back(remapInfo.remap[oldCid]);
+            }
+        }
+        t.bndPix.swap(bndPixKeep);
+        t.bndCid.swap(bndCidKeep);
+        tileCompBig[i].assign(static_cast<size_t>(t.ncomp), 0);
+    }
+
+    // Stage 2: seam union for border components only and finalize big flags/seeds.
+    const BorderDSUState dsuState = mergeBorderComponentsWithDSU(perTile, BG, INVALID);
+    for (size_t i = 0; i < perTile.size(); ++i) {
+        auto& t = perTile[i];
+        auto& big = tileCompBig[i];
+        if (big.size() != static_cast<size_t>(t.ncomp)) {
+            big.assign(static_cast<size_t>(t.ncomp), 0);
+        }
+        const auto& tileRoot = dsuState.tileRoot[i];
+        for (size_t cid = 0; cid < t.ncomp; ++cid) {
+            if (cid >= tileRoot.size()) {
+                error("%s: Missing root id for border component", __func__);
+            }
+            const size_t root = tileRoot[cid];
+            big[cid] = (root < dsuState.rootSize.size() && dsuState.rootSize[root] >= minCompSize) ? 1 : 0;
+        }
+        for (size_t bi = 0; bi < t.bndPix.size(); ++bi) {
+            const uint32_t cid = t.bndCid[bi];
+            if (cid >= big.size() || !big[cid]) continue;
+            const uint32_t pix = t.bndPix[bi];
+            const uint8_t lbl = tiles[i].lab[pix];
+            if (lbl >= BG) continue;
+            if (minPixPerTilePerLabel > 0 &&
+                tileLabelCount[i][static_cast<size_t>(lbl)] < minPixPerTilePerLabel) {
+                continue;
+            }
+            seedsBoundaryBig[static_cast<size_t>(lbl)].push_back(
+                PixelRef{static_cast<uint32_t>(i), pix});
+        }
+    }
+
+    struct TileNeighbor {
+        int32_t left = -1;
+        int32_t right = -1;
+        int32_t up = -1;
+        int32_t down = -1;
+    };
+    struct TileSeamJump {
+        std::vector<uint32_t> left;
+        std::vector<uint32_t> right;
+        std::vector<uint32_t> up;
+        std::vector<uint32_t> down;
+    };
+    std::vector<TileNeighbor> nbr(tiles.size());
+    std::vector<TileSeamJump> seam(tiles.size());
+    for (size_t i = 0; i < tiles.size(); ++i) {
+        const TileKey key = tiles[i].key;
+        auto it = tile_lookup_.find(TileKey{key.row, key.col - 1});
+        if (it != tile_lookup_.end()) nbr[i].left = static_cast<int32_t>(it->second);
+        it = tile_lookup_.find(TileKey{key.row, key.col + 1});
+        if (it != tile_lookup_.end()) nbr[i].right = static_cast<int32_t>(it->second);
+        it = tile_lookup_.find(TileKey{key.row - 1, key.col});
+        if (it != tile_lookup_.end()) nbr[i].up = static_cast<int32_t>(it->second);
+        it = tile_lookup_.find(TileKey{key.row + 1, key.col});
+        if (it != tile_lookup_.end()) nbr[i].down = static_cast<int32_t>(it->second);
+
+        auto& sj = seam[i];
+        sj.left.assign(tiles[i].H, INVALID);
+        sj.right.assign(tiles[i].H, INVALID);
+        sj.up.assign(tiles[i].W, INVALID);
+        sj.down.assign(tiles[i].W, INVALID);
+
+        if (nbr[i].left >= 0) {
+            const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].left)];
+            for (size_t y = 0; y < tiles[i].H; ++y) {
+                const int32_t ngx = tiles[i].pixX0 - 1;
+                const int32_t ngy = tiles[i].pixY0 + static_cast<int32_t>(y);
+                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
+                sj.left[y] = static_cast<uint32_t>(ny * nt.W + nx);
+            }
+        }
+        if (nbr[i].right >= 0) {
+            const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].right)];
+            for (size_t y = 0; y < tiles[i].H; ++y) {
+                const int32_t ngx = tiles[i].pixX1;
+                const int32_t ngy = tiles[i].pixY0 + static_cast<int32_t>(y);
+                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
+                sj.right[y] = static_cast<uint32_t>(ny * nt.W + nx);
+            }
+        }
+        if (nbr[i].up >= 0) {
+            const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].up)];
+            for (size_t x = 0; x < tiles[i].W; ++x) {
+                const int32_t ngx = tiles[i].pixX0 + static_cast<int32_t>(x);
+                const int32_t ngy = tiles[i].pixY0 - 1;
+                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
+                sj.up[x] = static_cast<uint32_t>(ny * nt.W + nx);
+            }
+        }
+        if (nbr[i].down >= 0) {
+            const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].down)];
+            for (size_t x = 0; x < tiles[i].W; ++x) {
+                const int32_t ngx = tiles[i].pixX0 + static_cast<int32_t>(x);
+                const int32_t ngy = tiles[i].pixY1;
+                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
+                sj.down[x] = static_cast<uint32_t>(ny * nt.W + nx);
+            }
+        }
+    }
+
+    const uint16_t INF = static_cast<uint16_t>(D + 1);
+    struct TileDistBuf {
+        std::vector<uint16_t> dist;
+        std::vector<uint32_t> touched;
+    };
+    std::vector<TileDistBuf> distBuf(tiles.size());
+    for (size_t i = 0; i < tiles.size(); ++i) {
+        distBuf[i].dist.assign(tiles[i].lab.size(), INF);
+        distBuf[i].touched.reserve(std::min<size_t>(tiles[i].lab.size(), 4096));
+    }
+    std::vector<uint8_t> tileActiveMark(tiles.size(), 0);
+    std::vector<uint32_t> activeTiles;
+    activeTiles.reserve(std::min<size_t>(tiles.size(), 1024));
+
+    std::string outShell = outPrefix + ".shell.tsv";
+    FILE* fpShell = fopen(outShell.c_str(), "w");
+    if (!fpShell) {
+        error("%s: Cannot open output file %s", __func__, outShell.c_str());
+    }
+    fprintf(fpShell, "#K_focal\tK2\tr\tn_within\tn_K2_total\n");
+
+    std::string outSurface = outPrefix + ".surface.tsv";
+    FILE* fpSurface = fopen(outSurface.c_str(), "w");
+    if (!fpSurface) {
+        fclose(fpShell);
+        error("%s: Cannot open output file %s", __func__, outSurface.c_str());
+    }
+    fprintf(fpSurface, "#from_K1\tto_K2\td\tcount\n");
+
+    auto shellIndex = [&](int32_t b, int32_t d) -> size_t {
+        return static_cast<size_t>(b) * static_cast<size_t>(rMax + 1) + static_cast<size_t>(d);
+    };
+    auto surfIndex = [&](int32_t b, int32_t d) -> size_t {
+        return static_cast<size_t>(b) * static_cast<size_t>(dMax + 1) + static_cast<size_t>(d);
+    };
+
+    std::vector<PixelRef> frontier;
+    std::vector<PixelRef> nextFrontier;
+    for (int32_t A = 0; A < K; ++A) {
+        for (uint32_t ti : activeTiles) {
+            auto& db = distBuf[ti];
+            if (db.touched.size() > db.dist.size() / 2) {
+                std::fill(db.dist.begin(), db.dist.end(), INF);
+            } else {
+                for (uint32_t idx : db.touched) db.dist[idx] = INF;
+            }
+            tileActiveMark[ti] = 0;
+        }
+        activeTiles.clear();
+
+        frontier.clear();
+        nextFrontier.clear();
+        const auto& seedsA = seedsBoundaryBig[static_cast<size_t>(A)];
+        frontier.reserve(seedsA.size());
+        for (const auto& ref : seedsA) {
+            auto& db = distBuf[ref.tileIdx];
+            if (db.dist[ref.localIdx] == 0) continue;
+            db.dist[ref.localIdx] = 0;
+            db.touched.push_back(ref.localIdx);
+            if (!tileActiveMark[ref.tileIdx]) {
+                tileActiveMark[ref.tileIdx] = 1;
+                activeTiles.push_back(ref.tileIdx);
+            }
+            frontier.push_back(ref);
+        }
+        if (frontier.empty()) continue;
+
+        std::vector<uint64_t> shellCount(static_cast<size_t>(K + 1) * static_cast<size_t>(rMax + 1), 0);
+        std::vector<uint64_t> surfHist(static_cast<size_t>(K + 1) * static_cast<size_t>(dMax + 1), 0);
+
+        for (int32_t d = 0; d <= D && !frontier.empty(); ++d) {
+            nextFrontier.clear();
+            auto tryPush = [&](uint32_t nti, uint32_t nli, uint16_t nd) {
+                if (tiles[nti].lab[nli] == static_cast<uint8_t>(A)) return;
+                auto& db = distBuf[nti];
+                if (db.dist[nli] != INF) return;
+                db.dist[nli] = nd;
+                db.touched.push_back(nli);
+                if (!tileActiveMark[nti]) {
+                    tileActiveMark[nti] = 1;
+                    activeTiles.push_back(nti);
+                }
+                nextFrontier.push_back(PixelRef{nti, nli});
+            };
+
+            for (const auto& ref : frontier) {
+                const DenseTile& tile = tiles[ref.tileIdx];
+                const size_t li = ref.localIdx;
+                const uint8_t B = tile.lab[li];
+                if (B != static_cast<uint8_t>(A)) {
+                    if (d <= rMax) {
+                        shellCount[shellIndex(B, d)] += 1;
+                    }
+                    if (tile.boundary[li]) {
+                        const int32_t dReport = (d > 0) ? (d - 1) : 0;
+                        if (dReport <= dMax) {
+                            surfHist[surfIndex(B, dReport)] += 1;
+                        }
+                    }
+                }
+                if (d == D) continue;
+
+                const size_t x = li % tile.W;
+                const size_t y = li / tile.W;
+                const uint16_t nd = static_cast<uint16_t>(d + 1);
+                if (x > 0) {
+                    tryPush(ref.tileIdx, static_cast<uint32_t>(li - 1), nd);
+                } else if (nbr[ref.tileIdx].left >= 0) {
+                    const uint32_t nli = seam[ref.tileIdx].left[y];
+                    if (nli != INVALID) {
+                        tryPush(static_cast<uint32_t>(nbr[ref.tileIdx].left), nli, nd);
+                    }
+                }
+                if (x + 1 < tile.W) {
+                    tryPush(ref.tileIdx, static_cast<uint32_t>(li + 1), nd);
+                } else if (nbr[ref.tileIdx].right >= 0) {
+                    const uint32_t nli = seam[ref.tileIdx].right[y];
+                    if (nli != INVALID) {
+                        tryPush(static_cast<uint32_t>(nbr[ref.tileIdx].right), nli, nd);
+                    }
+                }
+                if (y > 0) {
+                    tryPush(ref.tileIdx, static_cast<uint32_t>(li - tile.W), nd);
+                } else if (nbr[ref.tileIdx].up >= 0) {
+                    const uint32_t nli = seam[ref.tileIdx].up[x];
+                    if (nli != INVALID) {
+                        tryPush(static_cast<uint32_t>(nbr[ref.tileIdx].up), nli, nd);
+                    }
+                }
+                if (y + 1 < tile.H) {
+                    tryPush(ref.tileIdx, static_cast<uint32_t>(li + tile.W), nd);
+                } else if (nbr[ref.tileIdx].down >= 0) {
+                    const uint32_t nli = seam[ref.tileIdx].down[x];
+                    if (nli != INVALID) {
+                        tryPush(static_cast<uint32_t>(nbr[ref.tileIdx].down), nli, nd);
+                    }
+                }
+            }
+            frontier.swap(nextFrontier);
+        }
+
+        for (int32_t b = 0; b <= K; ++b) {
+            for (int32_t d = 1; d <= rMax; ++d) {
+                shellCount[shellIndex(b, d)] += shellCount[shellIndex(b, d - 1)];
+            }
+        }
+        for (int32_t b = 0; b <= K; ++b) {
+            if (b == A) continue;
+            const uint64_t totalB = areaTot[static_cast<size_t>(b)];
+            for (int32_t r : radiiSorted) {
+                const uint64_t within = shellCount[shellIndex(b, r)];
+                fprintf(fpShell, "%d\t%d\t%d\t%llu\t%llu\n",
+                    A, b, r,
+                    static_cast<unsigned long long>(within),
+                    static_cast<unsigned long long>(totalB));
+            }
+        }
+        for (int32_t b = 0; b <= K; ++b) {
+            if (b == A) continue;
+            for (int32_t d = 0; d <= dMax; ++d) {
+                const uint64_t ct = surfHist[surfIndex(b, d)];
+                if (ct == 0) continue;
+                fprintf(fpSurface, "%d\t%d\t%d\t%llu\n",
+                    b, A, d, static_cast<unsigned long long>(ct));
+            }
+        }
+    }
+
+    fclose(fpShell);
+    fclose(fpSurface);
+    notice("%s: Wrote shell occupancy to %s", __func__, outShell.c_str());
+    notice("%s: Wrote surface distance histogram to %s", __func__, outSurface.c_str());
     if (totalOutOfRangeIgnored > 0) {
         warning("%s: Ignored %llu out-of-tile records",
             __func__, static_cast<unsigned long long>(totalOutOfRangeIgnored));

@@ -20,6 +20,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool probDot = false;
     bool cellAnno = false;
     bool spatialMetrics = false;
+    bool cnctComponents = false;
+    bool profileShellSurface = false;
+    uint32_t ccMinSize = 1;
+    std::vector<int32_t> shellRadii;
+    int32_t surfaceDmax = -1;
+    uint32_t spatialMinPixPerTilePerLabel = 0;
     int32_t smoothTopLabelsRounds = 0;
     bool fillEmptyIslands = false;
     double confusionRes = -1.0;
@@ -46,6 +52,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("smooth-top-labels", "Per-tile island smoothing of top labels (>0 to enable)", smoothTopLabelsRounds)
       .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (only for --smooth-top-labels)", fillEmptyIslands)
       .add_option("spatial-metrics", "Compute area/perim metrics for single & pairwise channels", spatialMetrics)
+      .add_option("connected-components", "Compute global connected-component sizes per label", cnctComponents)
+      .add_option("cc-min-size", "Minimum size of connected components", ccMinSize)
+      .add_option("shell-surface", "Compute shell occupancy and directional surface-distance histograms", profileShellSurface)
+      .add_option("shell-radii", "Radii list for --spatial-shell-surface (pixel units)", shellRadii)
+      .add_option("surface-dmax", "Maximum distance for surface histogram in --shell-surface", surfaceDmax)
+      .add_option("spatial-min-pix-per-tile-label", "Only seed a label in a tile if nPixels(label,tile) >= this threshold", spatialMinPixPerTilePerLabel)
       .add_option("confusion", "Compute confusion matrix using r-by-r squares", confusionRes)
       .add_option("prob-dot", "Compute pairwise probability dot products", probDot)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
@@ -113,6 +125,20 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     if (spatialMetrics) {
         tileOp.spatialMetricsBasic(outPrefix);
+        return 0;
+    }
+    if (cnctComponents) {
+        tileOp.connectedComponents(outPrefix, ccMinSize);
+        return 0;
+    }
+    if (profileShellSurface) {
+        if (shellRadii.empty()) {
+            error("--spatial-radii is required for --shell-surface");
+        }
+        if (surfaceDmax < 0) {
+            error("--spatial-dmax (>=0) is required for --shell-surface");
+        }
+        tileOp.profileShellAndSurface(outPrefix, shellRadii, surfaceDmax, ccMinSize, spatialMinPixPerTilePerLabel);
         return 0;
     }
 

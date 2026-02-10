@@ -135,6 +135,10 @@ public:
     void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
 
     void spatialMetricsBasic(const std::string& outPrefix);
+    void connectedComponents(const std::string& outPrefix, uint32_t minSize = 10);
+    void profileShellAndSurface(const std::string& outPrefix,
+        const std::vector<int32_t>& radii, int32_t dMax,
+        uint32_t minCompSize = 10, uint32_t minPixPerTilePerLabel = 0);
 
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
     void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1);
@@ -249,5 +253,119 @@ private:
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
         uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
 
+    struct DenseTile {
+        TileKey key;
+        int32_t pixX0 = 0;
+        int32_t pixX1 = 0;
+        int32_t pixY0 = 0;
+        int32_t pixY1 = 0;
+        size_t W = 0;
+        size_t H = 0;
+        std::vector<uint8_t> lab;
+        std::vector<uint8_t> boundary;
+    };
+
+    struct PixBox {
+        int32_t minX = std::numeric_limits<int32_t>::max();
+        int32_t maxX = std::numeric_limits<int32_t>::lowest();
+        int32_t minY = std::numeric_limits<int32_t>::max();
+        int32_t maxY = std::numeric_limits<int32_t>::lowest();
+
+        void include(int32_t x, int32_t y) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+
+        void include(const PixBox& other) {
+            if (other.minX < minX) minX = other.minX;
+            if (other.maxX > maxX) maxX = other.maxX;
+            if (other.minY < minY) minY = other.minY;
+            if (other.maxY > maxY) maxY = other.maxY;
+        }
+    };
+
+    struct TileCCL {
+        int32_t pixX0 = 0;
+        int32_t pixX1 = 0;
+        int32_t pixY0 = 0;
+        int32_t pixY1 = 0;
+        uint32_t ncomp = 0;
+        std::vector<uint32_t> compSize;
+        std::vector<uint8_t> compLabel;
+        std::vector<uint32_t> leftCid;
+        std::vector<uint32_t> rightCid;
+        std::vector<uint32_t> topCid;
+        std::vector<uint32_t> bottomCid;
+        std::vector<uint64_t> compSumX;
+        std::vector<uint64_t> compSumY;
+        std::vector<PixBox> compBox;
+        std::vector<uint32_t> bndPix;
+        std::vector<uint32_t> bndCid;
+    };
+
+    struct BorderRemapInfo {
+        std::vector<uint32_t> remap;
+        std::vector<uint32_t> oldCompSize;
+        std::vector<uint8_t> oldCompLabel;
+        std::vector<uint64_t> oldCompSumX;
+        std::vector<uint64_t> oldCompSumY;
+        std::vector<PixBox> oldCompBox;
+    };
+
+    struct BorderDSUState {
+        std::vector<size_t> globalBase;
+        std::vector<uint64_t> rootSize;
+        std::vector<uint8_t> rootLabel;
+        std::vector<uint64_t> rootSumX;
+        std::vector<uint64_t> rootSumY;
+        std::vector<PixBox> rootBox;
+        std::vector<std::vector<size_t>> tileRoot;
+    };
+
+    struct DisjointSet {
+        std::vector<size_t> parent;
+        std::vector<uint8_t> rankv;
+
+        explicit DisjointSet(size_t n) : parent(n), rankv(n, 0) {
+            std::iota(parent.begin(), parent.end(), static_cast<size_t>(0));
+        }
+
+        size_t find(size_t x) {
+            while (parent[x] != x) {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            return x;
+        }
+
+        void unite(size_t a, size_t b) {
+            size_t ra = find(a);
+            size_t rb = find(b);
+            if (ra == rb) return;
+            if (rankv[ra] < rankv[rb]) std::swap(ra, rb);
+            parent[rb] = ra;
+            if (rankv[ra] == rankv[rb]) rankv[ra]++;
+        }
+
+        void compress_all() {
+            for (size_t i = 0; i < parent.size(); ++i) parent[i] = find(i);
+        }
+    };
+
+    struct PixelRef {
+        uint32_t tileIdx = 0;
+        uint32_t localIdx = 0;
+    };
+
+    void loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTile& out, uint8_t bg, uint64_t& nOutOfRangeIgnored, uint64_t& nBadLabelIgnored) const;
+    // Connected component labeling within a tile
+    TileCCL tileLocalCCL(const DenseTile& tile, uint8_t bg, const std::vector<uint8_t>* boundaryMask = nullptr) const;
+    // Mask boundary pixels: iff any of its 4 neighbors have a different label
+    void computeTileBoundaryMasks(std::vector<DenseTile>& tiles) const;
+    // Detect border components and remap them to global IDs
+    BorderRemapInfo remapTileToBorderComponents(TileCCL& t, uint32_t invalid) const;
+    BorderDSUState mergeBorderComponentsWithDSU(const std::vector<TileCCL>& perTile, uint8_t bg, uint32_t invalid) const;
 
 };
