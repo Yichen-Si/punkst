@@ -804,7 +804,7 @@
   <span class="md-ellipsis">
     
   
-    Visualization
+    visualize
   
 
     
@@ -832,7 +832,7 @@
   <span class="md-ellipsis">
     
   
-    Co-occurrence
+    co-occurrence
   
 
     
@@ -935,6 +935,18 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#nmf-pois-log1p-fitting-the-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nmf-pois-log1p: Fitting the model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="nmf-pois-log1p: Fitting the model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#input-format" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -944,8 +956,8 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -954,8 +966,7 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
+</li>
         
           <li class="md-nav__item">
   <a href="#required" class="md-nav__link">
@@ -992,10 +1003,43 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#input-for-warm-start-or-guided-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input for warm-start or guided mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#model-and-training-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
         Model and Training Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minibatch-training-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Minibatch Training Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#experimental-background-noise-modeling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Experimental: Background Noise Modeling
       
     </span>
   </a>
@@ -1045,6 +1089,95 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#nmf-transform-projecting-new-data-with-a-trained-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        nmf-transform: Projecting new data with a trained model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="nmf-transform: Projecting new data with a trained model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#usage_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Optional">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#input-data-and-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input Data and Model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#algorithm-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Algorithm Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#output-files_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output files
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1066,10 +1199,12 @@
 
 
 <h1 id="poisson-nmf-with-log1x-link">Poisson NMF with log(1+x) link<a class="headerlink" href="#poisson-nmf-with-log1x-link" title="Permanent link">&para;</a></h1>
-<p><strong><code>nmf-pois-log1p</code> fits a non-negative matrix factorization model with Poisson likelihood to single cell or spot level count data.</strong> It fits the model <span class="arithmatex">\(y_{im} \sim Pois(\lambda_{im}), \ \ g(\lambda_{im}) = \theta_i^T \beta_m\)</span> where <span class="arithmatex">\(g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)\)</span> with unit (cell) specific scaling <span class="arithmatex">\(c_i\)</span>.</p>
-<h2 id="input-format">Input format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h2>
-<p>The input data format is the same as for <code>topic-model</code>/<code>lda4hex</code>, (could be enerated from pixel level data by <code>tiles2hex</code>), including a data file and a corresponding metadata JSON file.</p>
-<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<p>This document describes two related commands: <code>nmf-pois-log1p</code> for fitting a Poisson NMF model, and <code>nmf-transform</code> for applying a fitted model to new data.</p>
+<h2 id="nmf-pois-log1p-fitting-the-model"><code>nmf-pois-log1p</code>: Fitting the model<a class="headerlink" href="#nmf-pois-log1p-fitting-the-model" title="Permanent link">&para;</a></h2>
+<p><strong><code>nmf-pois-log1p</code> fits a non-negative matrix factorization model with Poisson likelihood to single cell or spot level count data.</strong> It fits the model <span class="arithmatex">\(y_{im} \sim Pois(\lambda_{im}), \ \ g(\lambda_{im}) = \theta_i^T \beta_m\)</span> where <span class="arithmatex">\(g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)\)</span> with unit (cell) specific scaling <span class="arithmatex">\(c_i := n_i/L\)</span>. (<span class="arithmatex">\(n_i\)</span>: total transcript count of unit <span class="arithmatex">\(i\)</span>. <span class="arithmatex">\(L\)</span>: constnat size factor)</p>
+<h3 id="input-format">Input format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h3>
+<p>The input data format is the same as for <code>topic-model</code> (could be enerated from pixel level data by <code>tiles2hex</code>), including a data file and a corresponding metadata JSON file.</p>
+<h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>nmf-pois-log1p<span class="w"> </span>--in-data<span class="w"> </span>hex_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>hex_meta.json<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--K<span class="w"> </span><span class="m">15</span><span class="w"> </span>--out-prefix<span class="w"> </span>nmf_results<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1984</span>
 </span></code></pre></div>
@@ -1080,24 +1215,41 @@
 <p><code>--out-prefix</code> - Prefix for the output files.</p>
 <h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
 <h4 id="data-and-feature-filtering">Data and Feature Filtering<a class="headerlink" href="#data-and-feature-filtering" title="Permanent link">&para;</a></h4>
-<p>(Similar to <a href="../lda4hex/"><code>topic-model</code>/<code>lda4hex</code></a>)</p>
+<p>(Similar to <a href="../lda4hex/"><code>topic-model</code></a>)</p>
 <p><code>--features</code> - Path to a file where the first column contains gene names and the second column contains the total count of that gene. Used for filtering.</p>
 <p><code>--min-count-per-feature</code> - Minimum total count for a feature to be included. Requires <code>--features</code>. Default: 100.</p>
 <p><code>--include-feature-regex</code> - Regular expression to include only features matching this pattern.</p>
 <p><code>--exclude-feature-regex</code> - Regular expression to exclude features matching this pattern.</p>
 <p><code>--min-count-train</code> - Minimum total count for a unit (hexagon/cell) to be included in training. Default: 50.</p>
+<h4 id="input-for-warm-start-or-guided-mode">Input for warm-start or guided mode<a class="headerlink" href="#input-for-warm-start-or-guided-mode" title="Permanent link">&para;</a></h4>
+<p><code>--in-model</code> - Input model (beta) file for warm start.</p>
+<p><code>--random-init-missing</code> - If set, randomly initialize features present in the data but missing from the input model.</p>
+<p><code>--icol-label</code> - Column index in <code>--in-covar</code> for labels to guide the factorization. This turns the model into a guided/supervised one where factors correspond to labels.</p>
+<p><code>--label-list</code> - A file containing a list of unique labels, one per line. The order determines the factor indices.</p>
+<p><code>--label-na</code> - String for missing labels in the label column (e.g., "NA"). These units are not used for guidance.</p>
 <h4 id="model-and-training-parameters">Model and Training Parameters<a class="headerlink" href="#model-and-training-parameters" title="Permanent link">&para;</a></h4>
-<p><code>--mode</code> - Optimization algorithm to use in each Poisson regression subproblem. 1 for TRON (trust-region Newton-CG, default), 2 for Monotone FISTA (an accelerated gradient algorithm), 3 for a Newton's method with line search, 0 for Newton's method without line search.</p>
+<p><code>--mode</code> - Optimization algorithm to use in each Poisson regression subproblem. 1 for TRON (trust-region Newton-CG, default), 2 for an accelerated gradient algorithm (FISTA), 3 for a Newton's method with line search.</p>
 <p><code>--size-factor</code> - A constant to scale the total counts per unit (matching <span class="arithmatex">\(L\)</span> in Seurat), used to calculate the per-observation scaling parameter <span class="arithmatex">\(c_i=\frac{\sum_m y_{im}}{L}\)</span> in <span class="arithmatex">\(g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)\)</span>. Default: 10000.</p>
 <p><code>--c</code> - If specified, use a constant <code>c</code> for all units instead of calculating it from <code>size-factor</code>. Default: -1 (per-unit <code>c</code>).</p>
 <p><code>--feature-residuals</code> - If set, output per-feature residuals for diagnosis.</p>
-<p><code>--max-iter-outer</code> - Maximum number of outer loop iterations (alternating between updating <span class="arithmatex">\(\theta\)</span> and <span class="arithmatex">\(\beta\)</span>). Default: 50, but it often approximates convergence in <span class="arithmatex">\(\lt 10\)</span> terations.</p>
+<p><code>--fit-stats</code> - If set, compute and write goodness of fit statistics. Not compatible with <code>--fit-background</code>.</p>
+<p><code>--write-se</code> - If set, compute and write standard errors for the model parameters (<span class="arithmatex">\(\beta\)</span>). See also <code>--se-method</code>.</p>
+<p><code>--max-iter-outer</code> - Maximum number of outer loop iterations (alternating between updating <span class="arithmatex">\(\theta\)</span> and <span class="arithmatex">\(\beta\)</span>). Default: 50, but it often approximates convergence in <span class="arithmatex">\(\lt 10\)</span> iterations.</p>
 <p><code>--max-iter-inner</code> - Maximum number of iterations for each Poisson regression optimization. Default: 20.</p>
 <p><code>--tol-outer</code> - Convergence tolerance for the outer loop. Default: 1e-5.</p>
 <p><code>--tol-inner</code> - Convergence tolerance for the inner optimization problems. Default: 1e-6.</p>
-<p><code>--exact</code> - Use the exact likelihood for all observations. If not set, uses a second-order approximatio for zero-count observations to speed up computation.</p>
+<p><code>--exact</code> - Use the exact likelihood for all observations. If not set, uses a second-order approximation for zero-count observations to speed up computation.</p>
 <p><code>--seed</code> - Random seed for reproducibility.</p>
 <p><code>--threads</code> - Number of threads to use. Default: 1.</p>
+<h4 id="minibatch-training-options">Minibatch Training Options<a class="headerlink" href="#minibatch-training-options" title="Permanent link">&para;</a></h4>
+<p><code>--minibatch-epoch</code> - Number of minibatch epochs at the beginning of training. Default: 1.</p>
+<p><code>--minibatch-size</code> - Minibatch size. Default: not set (full batch).</p>
+<p><code>--t0</code> - Decay parameter t0 for minibatch step size. Default: 1.</p>
+<p><code>--kappa</code> - Decay parameter kappa for minibatch step size. Default: 0.9.</p>
+<h4 id="experimental-background-noise-modeling">Experimental: Background Noise Modeling<a class="headerlink" href="#experimental-background-noise-modeling" title="Permanent link">&para;</a></h4>
+<p><code>--fit-background</code> - If set, fit a background noise component.</p>
+<p><code>--fix-background</code> - If set, fix the background model during training (useful for warm starts).</p>
+<p><code>--background-init</code> - Initial background proportion (pi0). Default: 0.1.</p>
 <h4 id="experimental-including-covariates">Experimental: including covariates<a class="headerlink" href="#experimental-including-covariates" title="Permanent link">&para;</a></h4>
 <p>We fit the model <span class="arithmatex">\(g(\lambda_{im}) = \theta_i^T \beta_m + x_i^T b_m\)</span> where <span class="arithmatex">\(x_i\)</span> contains covariates for unit <span class="arithmatex">\(i\)</span> provided in <code>--in-covar</code>.</p>
 <p>Note: covariates and their effects are <strong>not</strong> constrained to be non-negative unless you specify so. We tried to make the optimization numerically stable but it may not always be interpretable if the non-negative <span class="arithmatex">\(\theta_i^T \beta_m\)</span> part is dominated by the covariate effects.</p>
@@ -1112,7 +1264,8 @@
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--in-covar<span class="w"> </span>covars.tsv<span class="w"> </span>--icol-covar<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">5</span>
 </span></code></pre></div>
 <h4 id="experimental-compute-de-statistics-from-covhat-beta">Experimental: compute DE statistics from Cov(<span class="arithmatex">\(\hat \beta\)</span>)<a class="headerlink" href="#experimental-compute-de-statistics-from-covhat-beta" title="Permanent link">&para;</a></h4>
-<p><code>--detest-vs-avg</code> - Compute DE statistics for each factor vs the average, for each feature. Set to <code>1</code> to use Fisher's information based covariance, <code>2</code> to use the robust sandwich estimator, or <code>3</code> to compute both. Default: 0 (skip covariance computation so no DE output).</p>
+<p><code>--detest-vs-avg</code> - If set, compute DE statistics for each factor vs the average, for each feature.</p>
+<p><code>--se-method</code> - Method for calculating standard errors of <span class="arithmatex">\(\beta\)</span>: <code>1</code> for Fisher's information based covariance (default), <code>2</code> for the robust sandwich estimator, or <code>3</code> to compute both. Used for DE testing or if <code>--write-se</code> is set.</p>
 <p><code>--min-fc</code> - Minimum approximated fold change to report. Note: due to the nonlinear link, we don't have an exact fold change interpretation, the reported value is <span class="arithmatex">\((\exp(\beta_{km})-1)/(\exp(\beta^0_{m})-1)\)</span> where <span class="arithmatex">\(\beta^0_m\)</span> is a weighted average of <span class="arithmatex">\(\beta_m\)</span> across factors and <span class="arithmatex">\(\theta\)</span> is scaled to have column sums equal to <span class="arithmatex">\(N/K\)</span>. Default: 1.5.</p>
 <p><code>--max-p</code> - Maximum p-value to report. Default: 0.05.</p>
 <p><code>--min-ct</code> - Minimum total count for a feature to be included in DE testing. Default: 100.</p>
@@ -1122,19 +1275,67 @@
 <p><code>{prefix}.model.tsv</code>: The feature-factor matrix (<span class="arithmatex">\(\beta\)</span>), where rows are features (genes) and columns are factors. It is scaled such that the column sums (<span class="arithmatex">\(\sum_m \beta_{km}\)</span> for each <span class="arithmatex">\(k\)</span>) all equal to <span class="arithmatex">\(M\)</span>, the number of features.</p>
 </li>
 <li>
+<p><code>{prefix}.model.se.{method}.tsv</code>: (If <code>--write-se</code> is set) Standard errors of <span class="arithmatex">\(\beta\)</span>. <code>{method}</code> is either <code>fisher</code> or <code>robust</code>.</p>
+</li>
+<li>
 <p><code>{prefix}.theta.tsv</code>: The unit-factor matrix (<span class="arithmatex">\(\theta\)</span>), where rows are units (cells/hexagons) and columns are factors. The relative magnitudes of values within each row are meaningful, and the total magnitude of each row is correlated with the total counts of that unit.</p>
 </li>
 <li>
-<p><code>{prefix}.fit_stats.tsv</code>: Per-unit (cell/hexagon) statistics including total counts, log-likelihood, residuals, and the approximated variance of the Poisson rate estimates.</p>
+<p><code>{prefix}.fit_stats.tsv</code>: (If <code>--fit-stats</code> is set) Per-unit (cell/hexagon) statistics including total counts, log-likelihood, residuals, and the approximated variance of the Poisson rate estimates.</p>
 </li>
 <li>
 <p><code>{prefix}.covar.tsv</code>: (If covariates are used) The feature-covariate coefficient matrix containing <span class="arithmatex">\(b_{jm}\)</span> for each covariate <span class="arithmatex">\(j\)</span> and feature <span class="arithmatex">\(m\)</span>.</p>
 </li>
 <li>
-<p><code>{prefix}.de.{method}.tsv</code>: (If <code>--detest-vs-avg</code> is set) Differential expression statistics for each factor vs the average, for each feature. <code>{method}</code> is either <code>fisher</code>, <code>robust</code>, depending on <code>--se-method</code>.</p>
+<p><code>{prefix}.de.{method}.tsv</code>: (If <code>--detest-vs-avg</code> is set) Differential expression statistics for each factor vs the average, for each feature. <code>{method}</code> is either <code>fisher</code> or <code>robust</code>.</p>
 </li>
 <li>
 <p><code>{prefix}.feature.residuals.tsv</code>: (If <code>--feature-residuals</code> is set) Per-feature total residual (averaged over all data points).</p>
+</li>
+<li>
+<p><code>{prefix}.background.tsv</code>: (If <code>--fit-background</code> is set) Background expression rates for each feature.</p>
+</li>
+<li>
+<p><code>{prefix}.bgprob.tsv</code>: (If <code>--fit-background</code> is set) Per-unit posterior probabilities of belonging to the background component.</p>
+</li>
+</ul>
+<h2 id="nmf-transform-projecting-new-data-with-a-trained-model"><code>nmf-transform</code>: Projecting new data with a trained model<a class="headerlink" href="#nmf-transform-projecting-new-data-with-a-trained-model" title="Permanent link">&para;</a></h2>
+<p>The <code>nmf-transform</code> command applies a trained NMF model to new data to obtain the unit-factor matrix (<span class="arithmatex">\(\theta\)</span>) for the new units.</p>
+<h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>nmf-transform<span class="w"> </span>--in-data<span class="w"> </span>new_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>new_meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--in-model<span class="w"> </span>nmf_results.model.tsv<span class="w"> </span>--out-prefix<span class="w"> </span>projected_results
+</span></code></pre></div>
+<h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
+<p><code>--in-data</code> - Input data file for the new data.</p>
+<p><code>--in-meta</code> - Metadata file for the new data.</p>
+<p><code>--in-model</code> - The trained feature-factor matrix (<code>.model.tsv</code> file from <code>nmf-pois-log1p</code>).</p>
+<p><code>--out-prefix</code> - Prefix for the output files.</p>
+<h3 id="optional_1">Optional<a class="headerlink" href="#optional_1" title="Permanent link">&para;</a></h3>
+<h4 id="input-data-and-model">Input Data and Model<a class="headerlink" href="#input-data-and-model" title="Permanent link">&para;</a></h4>
+<p><code>--in-covar</code> - Covariate file for the new data.</p>
+<p><code>--in-covar-coef</code> - The trained feature-covariate coefficient matrix (<code>.covar.tsv</code> file from <code>nmf-pois-log1p</code>).</p>
+<p><code>--allow-na</code> - If set, replace non-numerical values in covariates with zero.</p>
+<p><code>--icol-covar</code> - Column indices (0-based) in <code>--in-covar</code> to use.</p>
+<p><code>--min-count</code> - Minimum total count for a unit to be included. Default: 50.</p>
+<h4 id="algorithm-parameters">Algorithm Parameters<a class="headerlink" href="#algorithm-parameters" title="Permanent link">&para;</a></h4>
+<p><code>--mode</code> - Optimization algorithm. 1 for TRON (default), 2 for FISTA, 3 for a Newton method with line search.</p>
+<p><code>--c</code> - Constant <code>c</code> in <code>log(1+lambda/c)</code>. If not set, it is calculated from <code>size-factor</code>.</p>
+<p><code>--size-factor</code> - Constant to scale total counts to get per-unit scaling factors. Default: 10000.</p>
+<p><code>--max-iter-inner</code> - Maximum number of iterations. Default: 20.</p>
+<p><code>--tol-inner</code> - Convergence tolerance. Default: 1e-6.</p>
+<p><code>--exact</code> - Use exact likelihood for all observations.</p>
+<p><code>--seed</code> - Random seed.</p>
+<p><code>--threads</code> - Number of threads. Default: 1.</p>
+<h3 id="output-files_1">Output files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li>
+<p><code>{prefix}.theta.tsv</code>: The transformed unit-factor matrix (<span class="arithmatex">\(\theta\)</span>) for the new data.</p>
+</li>
+<li>
+<p><code>{prefix}.fit_stats.tsv</code>: Per-unit goodness-of-fit statistics for the new data.</p>
+</li>
+<li>
+<p><code>{prefix}.feature_residuals.tsv</code>: Per-feature averaged residuals on the new data.</p>
 </li>
 </ul>
 

@@ -813,7 +813,7 @@
   <span class="md-ellipsis">
     
   
-    Visualization
+    visualize
   
 
     
@@ -841,7 +841,7 @@
   <span class="md-ellipsis">
     
   
-    Co-occurrence
+    co-occurrence
   
 
     
@@ -989,14 +989,14 @@
 <p>punkst provides several command-line tools for analyzing high resolution spatial (transcriptomics) data.</p>
 <h2 id="available-modules">Available Modules<a class="headerlink" href="#available-modules" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="pts2tiles/">pts2tiles</a>: Groups pixels to tiles for faster processing</li>
-<li><a href="tiles2hex/">tiles2hex</a>: Groups pixels into non-overlapping hexagons for spot level analysis</li>
-<li><a href="lda4hex/">topic-model</a>: Runs LDA on the spot level data</li>
-<li><a href="pixel-decode/">pixel-decode</a>: Annotates each pixel with the top factors and their probabilities</li>
-<li><a href="visualization/">Visualization</a>: Visualizes the pixel level analysis results</li>
+<li><a href="pts2tiles/">pts2tiles</a>: Group pixels to tiles for faster processing</li>
+<li><a href="tiles2hex/">tiles2hex</a>: Group pixels into non-overlapping hexagons for spot level analysis</li>
+<li><a href="lda4hex/">topic-model</a>: Run LDA on the spot level data</li>
+<li><a href="pixel-decode/">pixel-decode</a>: Annotate each pixel with the top factors and their probabilities</li>
+<li><a href="coexp/">cooccurrence</a>: Compute gene co-occurrence and/or extract marker genes from the co-occurrence matrix</li>
+<li><a href="visualization/">visualization</a>: Visualize the pixel level analysis results</li>
 <li><a href="de/">DE tests</a>: Differential expression tests</li>
-<li><a href="tileop/">tile-op</a>: View and manipulate tiled data files (including merge and annotate)</li>
-<li><a href="coexp/">cooccurrence</a>: Computes gene co-occurrence and/or extract marker genes from the co-occurrence matrix</li>
+<li><a href="tileop/">tile-op</a>: View and manipulate high resolution spatial inference output (merge, annotate, denoise, bin, etc.)</li>
 </ul>
 <!-- - [nmf-pois-log1p](poisnmf.md): Fits a Poisson NMF model with a log(1+x) link. -->
 
@@ -1004,13 +1004,13 @@
 <p>The input is a tsv file with the following columns: X, Y, feature, count. Whether the file contains headers or other columns is not relevant, as long as the above four columns are present.</p>
 <ul>
 <li>
-<p>X, Y coordinates can be either integer or float vlaues. (If your coordinates are integers and you would like to keep the original coordinates in the pixel level inference output, set <code>--coords-are-int</code> in <code>punkst pixel-decode</code>). The coordinates can be in arbitrary units, just make sure all scale/size related parameters you later provide should be in the same unit.</p>
+<p>X, Y coordinates can be either integer or float vlaues. (If your coordinates are integers and you would like to keep the original coordinates in the pixel level inference output, set <code>--coords-are-int</code> in <code>punkst pixel-decode</code>). The coordinates can be in arbitrary units, just make sure all scale/size related parameters you later provide are in the same unit.</p>
 </li>
 <li>
-<p>"feature" can be a string or a nonnegative integer corresponding to the index in a feature list.</p>
+<p>"feature" column contains the gene names (strings) or a nonnegative integer corresponding to the index in a feature list.</p>
 </li>
 <li>
-<p>"count" is a nonnegative integer. You could apply gene-specific non-negative real valued weights to the count later in analysis.</p>
+<p>"count" is a nonnegative value for transcript counts (it does not have to be integers). If your data are from imaging platforms where each record is a single transcript, you might need to add this column manually with all <code>1</code>.</p>
 </li>
 </ul>
 

@@ -813,7 +813,7 @@
   <span class="md-ellipsis">
     
   
-    Visualization
+    visualize
   
 
     
@@ -841,7 +841,7 @@
   <span class="md-ellipsis">
     
   
-    Co-occurrence
+    co-occurrence
   
 
     
@@ -920,6 +920,17 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#available-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Operations
+      
+    </span>
+  </a>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#usage" class="md-nav__link">
@@ -1065,6 +1076,28 @@
     <span class="md-ellipsis">
       
         Compute basic spatial metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connected-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connected Components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shell-and-surface-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell and Surface Profiles
       
     </span>
   </a>
@@ -1146,6 +1179,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#available-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Operations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1295,6 +1339,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#connected-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connected Components
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shell-and-surface-profiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell and Surface Profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1322,7 +1388,7 @@
 
 <h1 id="tile-op">tile-op<a class="headerlink" href="#tile-op" title="Permanent link">&para;</a></h1>
 <p><strong><code>tile-op</code> provides utilities to view and manipulate the tiled data files</strong> created by <code>punkst pixel-decode</code> or <code>punkst pts2tiles</code>.</p>
-<p>Functionalities:</p>
+<h2 id="available-operations">Available Operations<a class="headerlink" href="#available-operations" title="Permanent link">&para;</a></h2>
 <ul>
 <li>
 <p>inspecting the index</p>
@@ -1350,6 +1416,12 @@
 </li>
 <li>
 <p>aggregate pixel level inference results by cell and subcellular compartments based in transcript/pixel level annotations</p>
+</li>
+<li>
+<p>compute global connected components per label with centroid and coordinate range</p>
+</li>
+<li>
+<p>profile shell occupancy and directional surface distance between labels</p>
 </li>
 </ul>
 <p>(Except for printing the index, all operations are intended to be used separately)</p>
@@ -1489,6 +1561,60 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <li><span class="arithmatex">\(L_{kl} / P_l\)</span> (<code>frac2</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / (A_k + A_l)\)</span> (<code>density</code>)</li>
 </ul>
+<h3 id="connected-components">Connected Components<a class="headerlink" href="#connected-components" title="Permanent link">&para;</a></h3>
+<p>Compute global connected components for each label (4-neighborhood on raster pixels), merged across tile boundaries.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--connected-components<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+<p><code>--connected-components</code> - run connected component profiling.</p>
+<p><code>--cc-min-size</code> - minimum component size to report in the main component table (histogram still includes all sizes).</p>
+<p>Output:</p>
+<ul>
+<li><code>path/out_prefix.connected_components.tsv</code>: one row per reported component with columns</li>
+<li>label index (<code>#k</code>)</li>
+<li>component rank within label by descending size (<code>cc_idx</code>)</li>
+<li>component size in pixels (<code>size</code>)</li>
+<li>centroid in pixel coordinates (<code>centroid_x</code>, <code>centroid_y</code>)</li>
+<li>
+<p>inclusive coordinate range (<code>xmin</code>, <code>xmax</code>, <code>ymin</code>, <code>ymax</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.connected_components_hist.tsv</code>: size histogram for all components with columns</p>
+</li>
+<li>label index (<code>#k</code>)</li>
+<li>component size (<code>size</code>)</li>
+<li>number of components with that size (<code>n_components</code>)</li>
+</ul>
+<h3 id="shell-and-surface-profiles">Shell and Surface Profiles<a class="headerlink" href="#shell-and-surface-profiles" title="Permanent link">&para;</a></h3>
+<p>Profile pairwise spatial proximity between labels using boundary-seeded distance transforms.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--shell-surface<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>--shell-radii<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="m">20</span><span class="w"> </span>--surface-dmax<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--spatial-min-pix-per-tile-label<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+<p><code>--shell-surface</code> - run shell occupancy and surface distance profiling.</p>
+<p><code>--shell-radii</code> - one or more shell radii (pixels) for occupancy reporting.</p>
+<p><code>--surface-dmax</code> - maximum distance bin for the surface-distance histogram.</p>
+<p><code>--cc-min-size</code> - minimum connected-component size used for boundary seed filtering.</p>
+<p><code>--spatial-min-pix-per-tile-label</code> - require at least this many pixels of a label within a tile before that tile contributes seeds for the label.</p>
+<p>Output:</p>
+<ul>
+<li><code>path/out_prefix.shell.tsv</code>: shell occupancy summary with columns</li>
+<li>focal label (<code>#K_focal</code>)</li>
+<li>other label (<code>K2</code>)</li>
+<li>radius (<code>r</code>)</li>
+<li>number of <code>K2</code> pixels within distance <code>r</code> from boundary of focal label (<code>n_within</code>)</li>
+<li>
+<p>total number of <code>K2</code> pixels (<code>n_K2_total</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.surface.tsv</code>: directional surface-distance histogram with columns</p>
+</li>
+<li>source label (<code>#from_K1</code>)</li>
+<li>target label (<code>to_K2</code>)</li>
+<li>distance bin (<code>d</code>)</li>
+<li>count (<code>count</code>)</li>
+</ul>
 
 
 
@@ -1524,7 +1650,7 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../coexp/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Co-occurrence">
+          <a href="../coexp/" class="md-footer__link md-footer__link--prev" aria-label="Previous: co-occurrence">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1534,7 +1660,7 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
                 Previous
               </span>
               <div class="md-ellipsis">
-                Co-occurrence
+                co-occurrence
               </div>
             </div>
           </a>
