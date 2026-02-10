@@ -1339,19 +1339,22 @@
 <li><code>punkst de-chisq</code>: Chi-squared DE on pseudobulk matrices.</li>
 </ul>
 <h2 id="de-chisq">de-chisq<a class="headerlink" href="#de-chisq" title="Permanent link">&para;</a></h2>
-<p><code>de-chisq</code> runs a Chi-squared test on a pseudobulk matrix.
+<p><code>de-chisq</code> runs <span class="arithmatex">\(\chi^2\)</span> tests on a pseudobulk matrix for a quick and dirty check on gene enrichment at factor level.
 Provide one input for a 1-vs-rest test per factor, or two inputs for a pairwise comparison of each factor between datasets.</p>
+<ul>
+<li>
 <p>1-vs-rest per factor:
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>de-chisq<span class="w"> </span>--input<span class="w"> </span>pseudobulk.tsv<span class="w"> </span>--out<span class="w"> </span>de.tsv<span class="w"> </span>--min-fc<span class="w"> </span><span class="m">1</span>.5<span class="w"> </span>--max-pval<span class="w"> </span>1e-3
-</span></code></pre></div></p>
-<p>1-vs-nearest-neighbors per factor:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>de-chisq<span class="w"> </span>--input<span class="w"> </span>pseudobulk.tsv<span class="w"> </span>--out<span class="w"> </span>de.tsv<span class="w"> </span>--neighbor-k<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--min-fc<span class="w"> </span><span class="m">1</span>.5<span class="w"> </span>--max-pval<span class="w"> </span>1e-3
-</span></code></pre></div></p>
+</span></code></pre></div>
+By default, it also reports 1-vs-neighbors results that highlight more specific genes enriched in this factor compared to <code>k</code> (default 3) other most similar factors.</p>
+</li>
+<li>
 <p>Pairwise comparison between two pseudobulk matrices:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>de-chisq<span class="w"> </span>--input<span class="w"> </span>sampleA.pseudobulk.tsv<span class="w"> </span>sampleB.pseudobulk.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--out<span class="w"> </span>de.pair.tsv<span class="w"> </span>--min-fc<span class="w"> </span><span class="m">1</span>.5<span class="w"> </span>--max-pval<span class="w"> </span>1e-4
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>de-chisq<span class="w"> </span>--input<span class="w"> </span>sampleA.pseudobulk.tsv<span class="w"> </span>sampleB.pseudobulk.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--out<span class="w"> </span>de.pair.tsv<span class="w"> </span>--min-fc<span class="w"> </span><span class="m">1</span>.5<span class="w"> </span>--max-pval<span class="w"> </span>1e-4
 </span></code></pre></div></p>
+</li>
+</ul>
 <h3 id="input-format">Input Format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h3>
 <p>The input is a TSV file where the first row must be a header including an arbitrary label for the feature name column (e.g. "Gene") followed by K factor / cell type names.
 Then each row starts with the gene name followed by counts of that gene for each factor.</p>
@@ -1368,7 +1371,7 @@ Then each row starts with the gene name followed by counts of that gene for each
 <p><code>--pseudocount</code> - Pseudocount added to each cell for the Chi-squared test. Default: 0.5.</p>
 <p><code>--threads</code> - Number of threads. Default: 1. (normally unnecessary)</p>
 <p><code>--neighbor-k</code> - Number of nearest neighbor columns to aggregate as background (single input only). Default: 3. Must be smaller than K-1. When set, writes an additional output file with 1-vs-neighbors results.</p>
-<p><code>--confusion</code> - (Pairwise mode only; experimental heuristics) Two confusion matrices to deconvolve the two input pseudobulk matrices before comparison.</p>
+<p><code>--confusion</code> - (Pairwise mode only; experimental heuristics) Two confusion matrices to deconvolve the two input pseudobulk matrices before comparison, meant to reduce the bias due to the difference of spatial environment or contaminations (from neighboring factors) between datasets.</p>
 <h3 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h3>
 <p>Single input output columns:</p>
 <p><code>Feature</code>, <code>Factor</code>, <code>Chi2</code>, <code>FoldChange</code>, <code>log10pval</code></p>
@@ -1383,28 +1386,28 @@ The p-values are computed both by permutation and by robust sandwich estimators 
 <p>logit <span class="arithmatex">\((\pi^{(k)}_{im}) = a^{(k)}_m + y_i b^{(k)}_m\)</span>, where <span class="arithmatex">\(y_i\)</span> is a binary indicator for the dataset (0/1). The null hypothesis is <span class="arithmatex">\(b^{(k)}_m = 0\)</span>.</p>
 <p>Note: the intended use is when the cell type model is from external sources (e.g. apply <code>pixel-decode</code> with a reference-based cell type pseudobulk matrix). The interpretation is tricky if the cell types are learned from the same datasets. Either way, this is only a data exploration tool and we do not claim that it is statistically rigorous.</p>
 <p>Example usage (pairwise contrasts between input datasets):
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>multi-conditional-de-pixel<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--anno<span class="w"> </span>sampleA/pixel<span class="w"> </span>sampleB/pixel<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--pts<span class="w"> </span>sampleA/transcripts.tiled<span class="w"> </span>sampleB/transcripts.tiled<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--labels<span class="w"> </span>sampleA<span class="w"> </span>sampleB<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span>--features<span class="w"> </span>features.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--grid-size<span class="w"> </span><span class="m">20</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">10</span><span class="w"> </span>--perm<span class="w"> </span><span class="m">5000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span>--out<span class="w"> </span>de/pixel_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>multi-conditional-de-pixel<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--anno<span class="w"> </span>sampleA/pixel<span class="w"> </span>sampleB/pixel<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--pts<span class="w"> </span>sampleA/transcripts.tiled<span class="w"> </span>sampleB/transcripts.tiled<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--labels<span class="w"> </span>sampleA<span class="w"> </span>sampleB<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span>--features<span class="w"> </span>features.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--grid-size<span class="w"> </span><span class="m">20</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">10</span><span class="w"> </span>--perm<span class="w"> </span><span class="m">5000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span>--out<span class="w"> </span>de/pixel_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div></p>
 <p>Example usage with explicit contrast file:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>multi-conditional-de-pixel<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--contrast<span class="w"> </span>contrast.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span>--features<span class="w"> </span>features.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--grid-size<span class="w"> </span><span class="m">20</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">10</span><span class="w"> </span>--perm<span class="w"> </span><span class="m">5000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--out<span class="w"> </span>de/pixel_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>multi-conditional-de-pixel<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--contrast<span class="w"> </span>contrast.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span>--features<span class="w"> </span>features.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--grid-size<span class="w"> </span><span class="m">20</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">10</span><span class="w"> </span>--perm<span class="w"> </span><span class="m">5000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--out<span class="w"> </span>de/pixel_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div></p>
 <p><code>contrast.tsv</code> format (tab-delimited):
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>anno_prefix pts_prefix  B_vs_A  C_vs_A
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>sampleA/pixel   sampleA/transcripts.tiled   -1  -1
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>sampleB/pixel   sampleB/transcripts.tiled   1   0
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>sampleC/pixel   sampleC/transcripts.tiled   0   1
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>anno_prefix pts_prefix  B_vs_A  C_vs_A
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>sampleA/pixel   sampleA/transcripts.tiled   -1  -1
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>sampleB/pixel   sampleB/transcripts.tiled   1   0
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>sampleC/pixel   sampleC/transcripts.tiled   0   1
 </span></code></pre></div>
 Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), or <code>0</code> (exclude). Contrast names come from the header.</p>
 <h3 id="required-parameters_1">Required Parameters<a class="headerlink" href="#required-parameters_1" title="Permanent link">&para;</a></h3>
@@ -1466,21 +1469,21 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <li><code>PREFIX.sums.tsv</code>: Total feature counts per cell type and dataset for units passing filters.</li>
 </ul>
 <h2 id="multi-conditional-de-pois">multi-conditional-de-pois<a class="headerlink" href="#multi-conditional-de-pois" title="Permanent link">&para;</a></h2>
-<p><code>multi-conditional-de-pois</code> performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from <code>tiles2hex</code>, or single cells). It leverages a pre-trained topic model (e.g., LDA from <code>punkst topic-model</code>) to estimate cell type mixture proportions within each unit. For each gene and cell type, it fits a Poisson regression model to identify differential expression between specified groups of datasets.</p>
-<p>For gene <span class="arithmatex">\(m\)</span> and unit <span class="arithmatex">\(i\)</span>, the model is: <span class="arithmatex">\(Y_{im} \sim \text{Pois}(\lambda_{im})\)</span>. The rate <span class="arithmatex">\(\lambda_{im}\)</span> is a sum over cell types <span class="arithmatex">\(k\)</span>:
+<p><code>multi-conditional-de-pois</code> performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from <code>tiles2hex</code>, other binned data, single cells, or low resolution data like Visium). It leverages a pre-trained topic model (e.g., LDA from <code>punkst topic-model</code>) to estimate cell type mixture proportions within each unit first, then for each gene and cell type, it fits a Poisson regression model to estimate differential expression between specified groups of datasets.</p>
+<p>For gene <span class="arithmatex">\(m\)</span> and unit <span class="arithmatex">\(i\)</span>, the model is: <span class="arithmatex">\(Y_{im} \sim \text{Pois}(\lambda_{im})\)</span> with rate <span class="arithmatex">\(\lambda_{im}\)</span> defined by a mixture across cell types:
 <span class="arithmatex">\(\lambda_{im} = \sum_k \theta_{ik} g^{-1}( \eta_{mk}^0 + x_i b_{mk} )\)</span>
-where <span class="arithmatex">\(\theta_{ik}\)</span> is the proportion of cell type <span class="arithmatex">\(k\)</span> in unit <span class="arithmatex">\(i\)</span> and <span class="arithmatex">\(x_i\)</span> indicates the group that unit <span class="arithmatex">\(i\)</span> belongs to. The null hypothesis is <span class="arithmatex">\(b_{mk}=0\)</span>. The <code>log1p</code> link <span class="arithmatex">\(g^{-1}(\eta)=c_i (\exp(\eta) - 1)\)</span> is much more efficient than the canonical log link with similar performance in practice.</p>
+where <span class="arithmatex">\(\theta_{ik}\)</span> is the proportion of cell type <span class="arithmatex">\(k\)</span> in unit <span class="arithmatex">\(i\)</span>, <span class="arithmatex">\(x_i \in \set{\pm 1}\)</span> indicates the group that unit <span class="arithmatex">\(i\)</span> belongs to. The null hypothesis is <span class="arithmatex">\(b_{mk}=0\)</span>, and <span class="arithmatex">\(g\)</span> is a link function. The <code>log1p</code> link <span class="arithmatex">\(g^{-1}(\eta)=c_i (\exp(\eta) - 1) \ (c_i=n_i/L)\)</span> is much more efficient than the canonical <code>log</code> link with similar performance in practice.</p>
 <p>Example usage with explicit contrast file:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>multi-conditional-de-pois<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--contrast<span class="w"> </span>contrast.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--model<span class="w"> </span>my_lda_model.bin<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--link<span class="w"> </span>log1p<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--out<span class="w"> </span>de/unit_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>multi-conditional-de-pois<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--contrast<span class="w"> </span>contrast.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--model<span class="w"> </span>my_lda_model.bin<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--link<span class="w"> </span>log1p<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--out<span class="w"> </span>de/unit_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div></p>
 <p><code>contrast.tsv</code> format (tab-delimited):
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>in-data in-meta B_vs_A
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>sampleA/hex.tsv sampleA/hex.json    -1
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>sampleB/hex.tsv sampleB/hex.json    1
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>in-data in-meta B_vs_A
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>sampleA/hex.tsv sampleA/hex.json    -1
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>sampleB/hex.tsv sampleB/hex.json    1
 </span></code></pre></div>
 Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), or <code>0</code> (exclude). Contrast names come from the header. The <code>in-data</code> column points to unit-level count data (e.g. from <code>tiles2hex</code>) and <code>in-meta</code> points to the corresponding metadata file.</p>
 <h3 id="required-parameters_2">Required Parameters<a class="headerlink" href="#required-parameters_2" title="Permanent link">&para;</a></h3>
@@ -1489,8 +1492,8 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <p><code>--out</code> - Output prefix.</p>
 <p><code>--contrast</code> - Contrast design TSV with columns: <code>in-data</code>, <code>in-meta</code>, and one or more contrast columns (values -1/0/1). When provided, it replaces <code>--in-data</code>, <code>--in-meta</code> and <code>--labels</code>.</p>
 <h3 id="optional-parameters_2">Optional Parameters<a class="headerlink" href="#optional-parameters_2" title="Permanent link">&para;</a></h3>
-<p><code>--in-data</code> - Input data files (e.g. <code>hex.tsv</code> from <code>tiles2hex</code>).</p>
-<p><code>--in-meta</code> - Metadata files (e.g. <code>hex.meta.tsv</code> from <code>tiles2hex</code>).</p>
+<p><code>--in-data</code> - Input data files (<code>.tsv</code> from <code>tiles2hex</code>).</p>
+<p><code>--in-meta</code> - Metadata files (<code>.json</code> from <code>tiles2hex</code>).</p>
 <p><code>--labels</code> - Labels for datasets used in pairwise output; defaults to <code>0..N-1</code>. Ignored when <code>--contrast</code> is supplied.</p>
 <p><code>--link</code> - Regression link function: <code>log</code> or <code>log1p</code>. Default: <code>log1p</code>.</p>
 <p><code>--min-count</code> - Minimum total count per unit to be included. Default: 50.</p>
@@ -1498,7 +1501,7 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <p><code>--min-units-per-feature</code> - Minimum number of units with a non-zero count for a feature to be tested. Default: <code>K * 10</code> where <code>K</code> is number of cell types.</p>
 <p><code>--max-pval</code> - Max p-value for output. Default: 1.</p>
 <p><code>--se-method</code> - Method for calculating standard errors. 1: Fisher (model-based), 2: Sandwich (robust), 3: both. Default: 1.</p>
-<p><code>--size-factor</code> - Normalization size factor for the Poisson regression model. Default: 10000.0.</p>
+<p><code>--size-factor</code> - Size factor <span class="arithmatex">\(L\)</span> for the Poisson regression model. Default: 10000.0.</p>
 <p><code>--threads</code> - Number of threads. Default: 1.</p>
 <h3 id="output-files_1">Output Files<a class="headerlink" href="#output-files_1" title="Permanent link">&para;</a></h3>
 <p>Given <code>--out PREFIX</code>, the tool generates one main output file per contrast, plus an auxiliary file.</p>

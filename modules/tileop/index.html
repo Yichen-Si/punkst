@@ -1060,6 +1060,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#compute-basic-spatial-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compute basic spatial metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1273,6 +1284,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#compute-basic-spatial-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compute basic spatial metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1442,6 +1464,31 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--smooth-top-labels<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/smoothed_result
 </span></code></pre></div>
 <p><code>--smooth-top-labels</code> - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.</p>
+<p>Optional:</p>
+<p><code>fill-empty-islands</code> - fill isolated empty pixels if they are surrounded by consistent neighbors. Default is to leave empty pixels unchanged. This may be helpful if you would like to get statistics like area and perimeter/edge per cell type later using <code>tile-op --spatial-metrics</code></p>
+<h3 id="compute-basic-spatial-metrics">Compute basic spatial metrics<a class="headerlink" href="#compute-basic-spatial-metrics" title="Permanent link">&para;</a></h3>
+<p>This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with <code>tile-op --smooth-top-labels r --fill-empty-islands</code> (see above).</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--smooth-top-labels<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/prefix<span class="w"> </span>--spatial-metrics
+</span></code></pre></div>
+<p>The output includes two files:</p>
+<ul>
+<li><code>path/prefix.stats.single.tsv</code> for per-channel (factor or cell type) metrics. Columns are:</li>
+<li>channel index (<code>#k</code>)</li>
+<li>total number of pixels (<code>area</code>)</li>
+<li>length of all boundaries shared with non-background pixels from other channels (<code>perim</code>)</li>
+<li>
+<p>length of boundaries shared with background pixels (<code>perim_bg</code>)</p>
+</li>
+<li>
+<p><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are</p>
+</li>
+<li>channel indices for the pair (<code>#k</code>, <code>l</code>)</li>
+<li>length of shared boundary <span class="arithmatex">\(L_{kl}\)</span> (<code>contact</code>)</li>
+<li><span class="arithmatex">\(L_{kl} / (P_k + P_l - L_{kl})\)</span> (<code>frac0</code>)</li>
+<li><span class="arithmatex">\(L_{kl} / P_k\)</span> (<code>frac1</code>)</li>
+<li><span class="arithmatex">\(L_{kl} / P_l\)</span> (<code>frac2</code>)</li>
+<li><span class="arithmatex">\(L_{kl} / (A_k + A_l)\)</span> (<code>density</code>)</li>
+</ul>
 
 
 
