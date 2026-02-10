@@ -10,6 +10,10 @@
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <tbb/blocked_range.h>
+#include <tbb/combinable.h>
+#include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
 
 namespace {
 
@@ -54,6 +58,48 @@ void write_cell_row(FILE* fp, const std::string& cellId, const std::string& comp
     }
     write_top_factors(fp, sums, k_out);
     fprintf(fp, "\n");
+}
+
+struct SpatialMetricsAccum {
+    int32_t K = 0;
+    std::vector<uint64_t> area; // pixel count
+    std::vector<uint64_t> perim; // shared edge count with all other labels
+    std::vector<uint64_t> perim_bg; // shared edge count with background
+    std::vector<uint64_t> shared_ij; // asymmetric
+
+    explicit SpatialMetricsAccum(int32_t K_)
+        : K(K_),
+          area(static_cast<size_t>(K_), 0),
+          perim(static_cast<size_t>(K_), 0),
+          perim_bg(static_cast<size_t>(K_), 0),
+          shared_ij(static_cast<size_t>(K_ + 1) * static_cast<size_t>(K_) / 2, 0) {}
+
+    size_t triIndex(int32_t i, int32_t j) const {
+        const size_t base = static_cast<size_t>(i) * static_cast<size_t>(2 * K - i + 1) / 2;
+        return base + static_cast<size_t>(j - i - 1);
+    }
+
+    uint64_t& shared(int32_t i, int32_t j) {
+        if (i > j) std::swap(i, j);
+        return shared_ij[triIndex(i, j)];
+    }
+
+    void add(const SpatialMetricsAccum& other) {
+        for (size_t i = 0; i < area.size(); ++i) area[i] += other.area[i];
+        for (size_t i = 0; i < perim.size(); ++i) perim[i] += other.perim[i];
+        for (size_t i = 0; i < perim_bg.size(); ++i) perim_bg[i] += other.perim_bg[i];
+        for (size_t i = 0; i < shared_ij.size(); ++i) shared_ij[i] += other.shared_ij[i];
+    }
+};
+
+inline void spatialAccumulateEdge(SpatialMetricsAccum& m, uint8_t a, uint8_t b) {
+    if (a == b) return;
+    const uint8_t BG = static_cast<uint8_t>(m.K);
+    m.shared(static_cast<int32_t>(a), static_cast<int32_t>(b))++;
+    if (a < BG) m.perim[a]++;
+    if (b < BG) m.perim[b]++;
+    if (a == BG && b < BG) m.perim_bg[b]++;
+    else if (b == BG && a < BG) m.perim_bg[a]++;
 }
 
 } // namespace
@@ -746,35 +792,18 @@ void TileOperator::reorgTilesBinary(const std::string& outPrefix, int32_t tileSi
     return;
 }
 
-void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds) {
-    if (formatInfo_.magic != PUNKST_INDEX_MAGIC) {
-        error("%s: Requires binary index with magic PUNKST_INDEX_MAGIC", __func__);
-    }
-    if (coord_dim_ != 2) {
-        error("%s: Only 2D input is supported", __func__);
+void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds, bool fillEmptyIslands) {
+    if (!regular_labeled_raster_ || coord_dim_ != 2) {
+        error("%s only supports raster 2D data with regular tiles", __func__);
     }
     if (islandSmoothRounds <= 0) {
         error("%s: islandSmoothRounds must be > 0", __func__);
-    }
-    if (k_ <= 0) {
-        error("%s: Input has no factor columns", __func__);
     }
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;
     }
-    if (mode_ & 0x8) {
-        error("%s: Requires regular tiled index with row/col metadata", __func__);
-    }
-    if (formatInfo_.tileSize <= 0) {
-        error("%s: Invalid tile size in index header", __func__);
-    }
-
-    const bool inputIntCoord = (mode_ & 0x4) != 0;
-    const float pixelRes = formatInfo_.pixelResolution;
-    if (!inputIntCoord && pixelRes <= 0.0f) {
-        error("%s: Float-coordinate input requires positive pixelResolution", __func__);
-    }
+    const bool coordScaled = (mode_ & 0x2) != 0;
 
     std::ifstream in;
     if (mode_ & 0x1) {
@@ -799,18 +828,9 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     }
 
     IndexHeader idxHeader = formatInfo_;
-    const bool outputScaledCoord = ((mode_ & 0x2) != 0) || !inputIntCoord;
-    if (outputScaledCoord && idxHeader.pixelResolution <= 0.0f) {
-        close(fdMain);
-        close(fdIndex);
-        error("%s: Positive pixelResolution required for scaled int output", __func__);
-    }
     std::vector<uint32_t> outKvec{1};
     idxHeader.packKvec(outKvec);
-    idxHeader.mode = (formatInfo_.mode & 0xFFFF0000u) | (mode_ & ~0x7u) | 0x1u | 0x4u;
-    if (outputScaledCoord) {
-        idxHeader.mode |= 0x2u;
-    }
+    idxHeader.mode = (K_ << 16) | (mode_ & 0x2) | 0x5;
     idxHeader.coordType = 1;
     idxHeader.recordSize = sizeof(int32_t) * 2 + sizeof(int32_t) + sizeof(float);
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
@@ -819,38 +839,24 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
         error("%s: Failed writing index header", __func__);
     }
 
-    auto ceil_div_res = [pixelRes](int32_t v) -> int32_t {
-        return static_cast<int32_t>(std::ceil(static_cast<double>(v) / static_cast<double>(pixelRes)));
-    };
-
     size_t currentOffset = 0;
     for (size_t bi = 0; bi < blocks_.size(); ++bi) {
         const TileInfo& blk = blocks_[bi];
         const TileKey tile{blk.idx.row, blk.idx.col};
-        int32_t tileXMin, tileXMax, tileYMin, tileYMax;
-        tile2bound(tile, tileXMin, tileXMax, tileYMin, tileYMax, formatInfo_.tileSize);
-
         int32_t pixX0, pixX1, pixY0, pixY1; // Tile bounds (global pix coord)
-        if (outputScaledCoord) {
-            pixX0 = ceil_div_res(tileXMin);
-            pixX1 = ceil_div_res(tileXMax);
-            pixY0 = ceil_div_res(tileYMin);
-            pixY1 = ceil_div_res(tileYMax);
-        } else {
-            pixX0 = tileXMin;
-            pixX1 = tileXMax;
-            pixY0 = tileYMin;
-            pixY1 = tileYMax;
+        tile2bound(tile, pixX0, pixX1, pixY0, pixY1, formatInfo_.tileSize);
+        if (coordScaled) {
+            pixX0 = coord2pix(pixX0);
+            pixX1 = coord2pix(pixX1);
+            pixY0 = coord2pix(pixY0);
+            pixY1 = coord2pix(pixY1);
         }
         if (pixX1 <= pixX0 || pixY1 <= pixY0) {
-            close(fdMain);
-            close(fdIndex);
+            close(fdMain); close(fdIndex);
             error("%s: Invalid raster bounds in tile (%d, %d)", __func__, tile.row, tile.col);
         }
-        const int64_t width64 = static_cast<int64_t>(pixX1) - static_cast<int64_t>(pixX0);
-        const int64_t height64 = static_cast<int64_t>(pixY1) - static_cast<int64_t>(pixY0);
-        const size_t width = static_cast<size_t>(width64);
-        const size_t height = static_cast<size_t>(height64);
+        const size_t width  = static_cast<size_t>(pixX1-pixX0);
+        const size_t height = static_cast<size_t>(pixY1-pixY0);
         if (height > 0 && width > std::numeric_limits<size_t>::max() / height) {
             close(fdMain); close(fdIndex);
             error("%s: Raster size overflow in tile (%d, %d)", __func__, tile.row, tile.col);
@@ -896,16 +902,16 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
         outEntry.st = currentOffset;
         outEntry.n = 0;
         if (nCollisionIgnored > 0) {
-            notice("%s: Ignored %lu colliding records in tile (%d, %d)",
+            warning("%s: Ignored %lu colliding records in tile (%d, %d)",
                 __func__, nCollisionIgnored, tile.row, tile.col);
         }
         if (nOutOfRangeIgnored > 0) {
-            notice("%s: Ignored %lu out-of-tile records in tile (%d, %d)",
+            warning("%s: Ignored %lu out-of-tile records in tile (%d, %d)",
                 __func__, nOutOfRangeIgnored, tile.row, tile.col);
         }
         // Smooth out isolated noise
         island_smoothing::Options smoothOpts;
-        smoothOpts.fillEmpty = false;
+        smoothOpts.fillEmpty = fillEmptyIslands;
         smoothOpts.updateProbFromWinnerMin = true;
         (void) island_smoothing::smoothLabels8Neighborhood(labels, &probs, width, height, islandSmoothRounds, smoothOpts);
 
@@ -938,6 +944,190 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
 
     close(fdMain); close(fdIndex);
     notice("%s: Wrote smoothed output to %s (index: %s)", __func__, outFile.c_str(), outIndex.c_str());
+}
+
+void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
+    if (blocks_.empty()) {
+        warning("%s: No tiles to process", __func__);
+        return;
+    }
+    if (!regular_labeled_raster_ || coord_dim_ != 2) {
+        error("%s only supports raster 2D data with regular tiles", __func__);
+    }
+    if (K_ <= 0 || K_ > 255) {
+        error("%s: K must be in [1, 255], got %d", __func__, K_);
+    }
+    const bool coordScaled = (mode_ & 0x2) != 0;
+
+    const int32_t K = K_;
+    const uint8_t BG = static_cast<uint8_t>(K);
+    auto processTile = [&](const TileInfo& blk,
+            std::ifstream& in, SpatialMetricsAccum& out,
+            uint64_t& nOutOfRangeIgnored, uint64_t& nBadLabelIgnored) {
+        const TileKey tile{blk.idx.row, blk.idx.col};
+        int32_t pixX0, pixX1, pixY0, pixY1;
+        tile2bound(tile, pixX0, pixX1, pixY0, pixY1, formatInfo_.tileSize);
+        if (coordScaled) {
+            pixX0 = coord2pix(pixX0);
+            pixX1 = coord2pix(pixX1);
+            pixY0 = coord2pix(pixY0);
+            pixY1 = coord2pix(pixY1);
+        }
+        if (pixX1 <= pixX0 || pixY1 <= pixY0) {
+            error("%s: Invalid raster bounds in tile (%d, %d)", __func__, tile.row, tile.col);
+        }
+        const size_t width  = static_cast<size_t>(pixX1-pixX0);
+        const size_t height = static_cast<size_t>(pixY1-pixY0);
+        if (height > 0 && width > std::numeric_limits<size_t>::max() / height) {
+            error("%s: Raster size overflow in tile (%d, %d)", __func__, tile.row, tile.col);
+        }
+        const size_t nPixels = width * height;
+        std::vector<uint8_t> labels(nPixels, BG);
+
+        in.clear();
+        in.seekg(blk.idx.st);
+        if (!in.good()) {
+            error("%s: Failed seeking input stream to tile (%d, %d)", __func__, tile.row, tile.col);
+        }
+
+        TopProbs rec;
+        int32_t xpix = 0, ypix = 0;
+        uint64_t pos = blk.idx.st;
+        while (readNextRecord2DAsPixel(in, pos, blk.idx.ed, xpix, ypix, rec)) {
+            if (rec.ks.empty() || rec.ps.empty()) {
+                continue;
+            }
+            if (xpix < pixX0 || xpix >= pixX1 || ypix < pixY0 || ypix >= pixY1) { // shouldn't happen
+                ++nOutOfRangeIgnored;
+                continue;
+            }
+            const int32_t k = rec.ks[0];
+            if (k < 0 || k >= K) { // shouldn't happen
+                ++nBadLabelIgnored;
+                continue;
+            }
+            const size_t x0 = static_cast<size_t>(xpix - pixX0); // local coord
+            const size_t y0 = static_cast<size_t>(ypix - pixY0);
+            labels[y0 * width + x0] = static_cast<uint8_t>(k);
+        }
+
+        for (size_t i = 0; i < nPixels; ++i) {
+            uint8_t a = labels[i];
+            if (a < BG) out.area[a]++;
+        }
+
+        if (width > 1) { // right edge
+            for (size_t y = 0; y < height; ++y) {
+                const size_t row = y * width;
+                for (size_t x = 0; x + 1 < width; ++x) {
+                    spatialAccumulateEdge(out, labels[row + x], labels[row + x + 1]);
+                }
+            }
+        }
+        if (height > 1) { // down edge
+            for (size_t y = 0; y + 1 < height; ++y) {
+                const size_t row = y * width;
+                const size_t rowDown = row + width;
+                for (size_t x = 0; x < width; ++x) {
+                    spatialAccumulateEdge(out, labels[row + x], labels[rowDown + x]);
+                }
+            }
+        }
+    };
+
+    SpatialMetricsAccum total(K);
+    uint64_t totalOutOfRangeIgnored = 0;
+    uint64_t totalBadLabelIgnored = 0;
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<SpatialMetricsAccum> tls([&] { return SpatialMetricsAccum(K); });
+        tbb::combinable<std::pair<uint64_t, uint64_t>> tlsIgnored(
+            [] { return std::make_pair(0ULL, 0ULL); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in; // thread-local input stream
+                if (mode_ & 0x1) {
+                    in.open(dataFile_, std::ios::binary);
+                } else {
+                    in.open(dataFile_);
+                }
+                if (!in.is_open()) {
+                    error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+                }
+                auto& local = tls.local();
+                auto& localIgnored = tlsIgnored.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    processTile(blocks_[bi], in, local, localIgnored.first, localIgnored.second);
+                }
+            });
+        tls.combine_each([&](const SpatialMetricsAccum& local) {
+            total.add(local);
+        });
+        tlsIgnored.combine_each([&](const std::pair<uint64_t, uint64_t>& localIgnored) {
+            totalOutOfRangeIgnored += localIgnored.first;
+            totalBadLabelIgnored += localIgnored.second;
+        });
+    } else {
+        std::ifstream in;
+        if (mode_ & 0x1) {
+            in.open(dataFile_, std::ios::binary);
+        } else {
+            in.open(dataFile_);
+        }
+        if (!in.is_open()) {
+            error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+        }
+        for (const auto& blk : blocks_) {
+            processTile(blk, in, total, totalOutOfRangeIgnored, totalBadLabelIgnored);
+        }
+    }
+
+    std::string outSingle = outPrefix + ".stats.single.tsv";
+    FILE* fpSingle = fopen(outSingle.c_str(), "w");
+    if (!fpSingle) {
+        error("%s: Cannot open output file %s", __func__, outSingle.c_str());
+    }
+    fprintf(fpSingle, "#k\tarea\tperim\tperim_bg\n");
+    for (int32_t k = 0; k < K; ++k) {
+        fprintf(fpSingle, "%d\t%llu\t%llu\t%llu\n",
+            k,
+            static_cast<unsigned long long>(total.area[k]),
+            static_cast<unsigned long long>(total.perim[k]),
+            static_cast<unsigned long long>(total.perim_bg[k]));
+    }
+    fclose(fpSingle);
+    notice("%s: Wrote single-channel metrics to %s", __func__, outSingle.c_str());
+
+    std::string outPairwise = outPrefix + ".stats.pairwise.tsv";
+    FILE* fpPairwise = fopen(outPairwise.c_str(), "w");
+    if (!fpPairwise) {
+        error("%s: Cannot open output file %s", __func__, outPairwise.c_str());
+    }
+    fprintf(fpPairwise, "#k\tl\tcontact\tfrac0\tfrac1\tfrac2\tdensity\n");
+    for (int32_t k = 0; k < K; ++k) {
+        double ak = std::max(1., static_cast<double>(total.area[k]));
+        double pk = std::max(1., static_cast<double>(total.perim[k]));
+        for (int32_t l = k + 1; l <= K; ++l) {
+            double al = std::max(1., static_cast<double>(total.area[l]));
+            double pl = std::max(1., static_cast<double>(total.perim[l]));
+            double pkl = static_cast<double>(total.shared_ij[total.triIndex(k, l)]);
+            fprintf(fpPairwise, "%d\t%d\t%llu\t%.2e\t%.2e\t%.2e\t%.2e\n",
+                k, l,
+                static_cast<unsigned long long>(total.shared_ij[total.triIndex(k, l)]),
+                pkl / (pk + pl - pkl), pkl / pk, pkl / pl, pkl / (ak + al)
+            );
+        }
+    }
+    fclose(fpPairwise);
+    notice("%s: Wrote pairwise metrics to %s", __func__, outPairwise.c_str());
+    if (totalOutOfRangeIgnored > 0) {
+        warning("%s: Ignored %llu out-of-tile records",
+            __func__, static_cast<unsigned long long>(totalOutOfRangeIgnored));
+    }
+    if (totalBadLabelIgnored > 0) {
+        warning("%s: Ignored %llu records with invalid labels",
+            __func__, static_cast<unsigned long long>(totalBadLabelIgnored));
+    }
 }
 
 void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {

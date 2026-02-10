@@ -27,7 +27,7 @@ The pixel-level inference result (in this case `${path}/pixel.tsv`, see below "O
 
 `--icol-val` - Specifies the column index for count/value (0-based).
 
-`--model` - Specifies the model file where the first column contains feature names and the subsequent columns contain the parameters for each factor. The format should match that created by `lda4hex`.
+`--model` - Specifies the model file where the first column contains feature names and the subsequent columns contain the parameters for each factor. The format should match that created by `topic-model`.
 
 `--temp-dir` - Specifies the directory to store temporary files.
 

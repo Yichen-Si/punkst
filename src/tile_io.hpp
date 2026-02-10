@@ -16,10 +16,16 @@
 // Index header
 struct IndexHeader {
     uint64_t magic = 0;
-    uint32_t mode = 0; // tsv/binary, org/scale, float/int xy, regular/no
+    // mode & 0xFFFF0000 stores K, the total number of factors in the inference
+    // mode & 0x1: 0 for tsv, 1 for binary
+    // mode & 0x2: 0 for original coordinates, 1 for scaled
+    // mode & 0x4: 0 for float coordinates, 1 for int32 coordinates
+    // mode & 0x8: 0 for regular grid, 1 for generic rectangular blocks
+    // mode & 0x10: 0 for 2D, 1 for 3D
+    uint32_t mode = 0;
     int32_t tileSize = 0;
-    float pixelResolution = -1;
-    int32_t coordType = 0; // 0: float, 1: int32
+    float pixelResolution = -1; // Must be > 0 if mode & 0x2 or mode & 0x4
+    int32_t coordType = 0; // 0: float, 1: int32 (redundant now, for future use)
     uint32_t topK = 0; // how many (factor, probability) pairs are kept per record (per inference set)
     uint32_t recordSize = 0; // <= 0 for tsv
     float xmin = -1.0f, xmax = -1.0f, ymin = -1.0f, ymax = -1.0f;
@@ -71,7 +77,7 @@ struct IndexHeader {
 struct IndexEntryF {
     uint64_t st, ed;
     uint32_t n;
-    int32_t xmin, xmax, ymin, ymax;
+    int32_t xmin, xmax, ymin, ymax; // Global coordinate, original units
     // row/col may not apply for generic rectangular blocks
     int32_t row = std::numeric_limits<int32_t>::lowest();
     int32_t col = std::numeric_limits<int32_t>::lowest();

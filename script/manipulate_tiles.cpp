@@ -19,7 +19,9 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool dumpTSV = false;
     bool probDot = false;
     bool cellAnno = false;
+    bool spatialMetrics = false;
     int32_t smoothTopLabelsRounds = 0;
+    bool fillEmptyIslands = false;
     double confusionRes = -1.0;
     std::vector<uint32_t> k2keep;
     int32_t icol_x = -1, icol_y = -1, icol_z = -1;
@@ -28,6 +30,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     int32_t kOut = 0;
     int32_t K = -1;
     float maxCellDiameter = 50;
+    int32_t threads = 1;
     int32_t debug_ = 0;
 
     ParamList pl;
@@ -35,12 +38,14 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("in-index", "Input index file", inIndex)
       .add_option("in", "Input prefix (equal to --in-data <in>.tsv/.bin --in-index <in>.index)", inPrefix)
       .add_option("binary", "Data file is in binary format", isBinary)
-      .add_option("out", "Output prefix", outPrefix)
-      .add_option("tile-size", "Tile size in the original data", tileSize)
+      .add_option("K", "Total number of factors in the data", K)
+      .add_option("tile-size", "Tile size in the original data", tileSize);
+    pl.add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
-      .add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
       .add_option("smooth-top-labels", "Per-tile island smoothing of top labels (>0 to enable)", smoothTopLabelsRounds)
+      .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (only for --smooth-top-labels)", fillEmptyIslands)
+      .add_option("spatial-metrics", "Compute area/perim metrics for single & pairwise channels", spatialMetrics)
       .add_option("confusion", "Compute confusion matrix using r-by-r squares", confusionRes)
       .add_option("prob-dot", "Compute pairwise probability dot products", probDot)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
@@ -53,11 +58,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
-      .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter)
-      .add_option("K", "Total number of factors in the data", K)
-      .add_option("binary-out", "Output in binary format (merge only)", binaryOut);
-    pl.add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
+      .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter);
+    pl.add_option("out", "Output prefix", outPrefix)
+      .add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities (for dump-tsv)", probDigits)
+      .add_option("binary-out", "Output in binary format (merge only)", binaryOut)
+      .add_option("threads", "Number of threads to use", threads)
       .add_option("debug", "Debug", debug_);
 
     try {
@@ -78,6 +84,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     TileOperator tileOp(inData, inIndex);
     if (K > 0) {tileOp.setFactorCount(K);}
+    tileOp.setThreads(threads);
 
     if(printIndex) {
         tileOp.printIndex();
@@ -100,7 +107,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (smoothTopLabelsRounds > 0) {
-        tileOp.smoothTopLabels2D(outPrefix, smoothTopLabelsRounds);
+        tileOp.smoothTopLabels2D(outPrefix, smoothTopLabelsRounds, fillEmptyIslands);
+        return 0;
+    }
+
+    if (spatialMetrics) {
+        tileOp.spatialMetricsBasic(outPrefix);
         return 0;
     }
 

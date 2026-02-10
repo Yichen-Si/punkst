@@ -94,7 +94,7 @@ All outputs are under the specified `--out-dir`
 
 `[--out-joint-pref].features.tsv`: The final list of features used for the merged output.
 
-`[--out-joint-pref].hex_[dist].txt` and `.json`: The final merged hexagon data and its corresponding metadata file, ready for `lda4hex`.
+`[--out-joint-pref].hex_[dist].txt` and `.json`: The final merged hexagon data and its corresponding metadata file, ready for `topic-model`.
 
 **In per-sample subdirectories (`--out-dir/samples/[sample_id]/`):**
 
@@ -181,7 +181,7 @@ The command requires a TSV file specifying the input for each sample. Each line 
 
 ### Output Files
 
-`[--out-pref].txt` and `.json`: The merged hexagon data file and its corresponding metadata, ready for `lda4hex`.
+`[--out-pref].txt` and `.json`: The merged hexagon data file and its corresponding metadata, ready for `topic-model`.
 
 `[--out-pref].features.tsv`: The list of features and their total counts in the merged dataset.
 

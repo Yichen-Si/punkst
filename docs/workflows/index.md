@@ -10,7 +10,7 @@ There is a small example data `transcripts.tsv.gz` in `punkst/examples/data`.
 
 See [Input](../input/index.md) for details on starting from raw data from different platforms.
 
-We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (`example_data/transcripts.tsv.gz`)
+We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (`punkst/examples/data/transcripts.tsv.gz`)
 
 It can be gzipped or uncompressed.
 It can have other columns (which will be ignored in analysis but can be optionally carried over to the pixel level output), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.
@@ -72,6 +72,14 @@ Section `"job"`: only for slurm users. Those are just slurm job parameters to cr
 
 ## Step by step
 
+### Basic workflow
+
+1. [pts2tiles](../modules/pts2tiles.md): Group pixels to tiles for faster processing
+2. [tiles2hex](../modules/tiles2hex.md): Group pixels into non-overlapping hexagons
+3. [topic-model](../modules/lda4hex.md): Run factorization on the hexagon/single cell data
+4. [pixel-decode](../modules/pixel-decode.md): Annotate each pixel with the top factors and their probabilities
+5. [Visualization](../modules/visualization.md): Create high resolution visualizations
+
 ### Setup
 
 First, set up the environment variables:
@@ -114,7 +122,7 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv \
   --feature-dict ${path}/transcripts.tiled.features.tsv \
   --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
   --min-count 20 --hex-size 7 \
-  --out ${path}/hex_12.txt \
+  --out ${path}/hex_12.txt --randomize \
   --temp-dir ${tmpdir} --threads ${threads}
 ```
 
@@ -126,11 +134,7 @@ Key parameters:
 
 `--min-count`: Minimum count for a hexagon to be included
 
-Shuffle the output for training:
-```bash
-sort -k1,1 --parallel ${threads} ${path}/hex_12.txt > ${path}/hex_12.randomized.txt
-rm ${path}/hex_12.txt
-```
+`--randomize`: If set, the order of hexagons in the output will be randomized. You should always shuffle hexagons before running `topic-model`.
 
 [Detailed documentation for tiles2hex](../modules/tiles2hex.md)
 
@@ -139,7 +143,7 @@ rm ${path}/hex_12.txt
 Perform Latent Dirichlet Allocation on the hexagon data:
 
 ```bash
-punkst lda4hex --in-data ${path}/hex_12.randomized.txt \
+punkst topic-model --in-data ${path}/hex_12.randomized.txt \
   --in-meta ${path}/hex_12.json \
   --n-topics 12 \
   --n-epochs 2 --min-count-train 50 \
@@ -153,7 +157,7 @@ Key parameters:
 
 `--transform`: Generate transform results after model fitting
 
-[Detailed documentation for lda4hex](../modules/lda4hex.md)
+[Detailed documentation for topic-model](../modules/lda4hex.md)
 
 ### Step 4: Decode pixels with the model
 
@@ -173,7 +177,7 @@ punkst pixel-decode --model ${path}/hex_12.model.tsv \
 
 Key parameters:
 
-`--model`: Model file created by lda4hex
+`--model`: Model file created by `topic-model`
 
 `--hex-grid-dist`: Center-to-center distance of the hexagonal grid
 

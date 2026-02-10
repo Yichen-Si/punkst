@@ -39,12 +39,12 @@ theme:
 
 
 nav:
-  - Home: index.md
-  - Install: install.md
+  - Intro:
+    - Intro: index.md
+    - Install: install.md
   - Quickstart:
     - Quickstart: workflows/index.md
     - Multisample: workflows/multisample.md
-  - Input: input/index.md
   - Modules:
     - Overview: modules/index.md
     - pts2tiles: modules/pts2tiles.md
@@ -55,6 +55,7 @@ nav:
     - Visualization: modules/visualization.md
     - Co-occurrence: modules/coexp.md
     - tile-op: modules/tileop.md
+  - Input: input/index.md
 
 plugins:
   - blog
@@ -109,3 +110,7 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
   - pymdownx.tilde
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js

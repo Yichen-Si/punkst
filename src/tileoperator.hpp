@@ -33,7 +33,7 @@ class TileOperator {
 
 public:
     using PixelKey3 = std::tuple<int32_t, int32_t, int32_t>;
-    TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "") : dataFile_(dataFile), indexFile_(indexFile) {
+    TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "", int32_t threads = 1) : dataFile_(dataFile), indexFile_(indexFile), threads_(std::max(0, threads)) {
         if (!indexFile.empty()) {
             loadIndex(indexFile);
         }
@@ -71,7 +71,15 @@ public:
         box = globalBox_;
         return true;
     }
-
+    template<typename T>
+    int32_t coord2pix(T v) const {
+        if (formatInfo_.pixelResolution > 0)
+            return static_cast<int32_t>(static_cast<float>(v) / formatInfo_.pixelResolution);
+        return static_cast<int32_t>(v);
+    }
+    void setThreads(int32_t threads) {
+        threads_ = std::max(0, threads);
+    }
     void setCoordinateColumns(int32_t icol_x, int32_t icol_y) {
         icol_x_ = icol_x;
         icol_y_ = icol_y;
@@ -123,7 +131,10 @@ public:
     void printIndex() const;
 
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
-    void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1);
+
+    void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
+
+    void spatialMetricsBasic(const std::string& outPrefix);
 
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
     void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1);
@@ -173,6 +184,8 @@ private:
     Rectangle<float> globalBox_;
     uint64_t pos_;
     std::unordered_map<TileKey, size_t, TileKeyHash> tile_lookup_;
+    int32_t threads_ = 1;
+    bool regular_labeled_raster_ = false;
 
     // Determine if a block is strictly within a tile or a boundary block
     void classifyBlocks(int32_t tileSize);

@@ -11,7 +11,8 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/trans
 --feature-dict ${path}/features.txt \
 --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
 --min-count 20 --hex-grid-dist 12 \
---out ${path}/hex_12.txt --temp-dir ${tmpdir} --threads ${threads}
+--out ${path}/hex_12.txt --randomize \
+--temp-dir ${tmpdir} --threads ${threads}
 ```
 
 ### Required Parameters
@@ -44,11 +45,11 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/trans
 
 The output is a plain tab-delimited text file. It is not a table: each line contains data for one unit and lines have different number of tokens.
 
-The first element in each line of the output is a random key, which can be used to shuffle the data before model training. When `--randomize` is not set when you run `tiles2hex`, you can do the following
+The first element in each line of the output is a random key, which is used to shuffle the data before model training. When `--randomize` is not set when you run `tiles2hex`, you can do the following
 ```bash
 sort -k1,1 --parallel ${threads} -S 1G ${path}/hex.txt -o ${path}/hex.txt
 ```
-If you use `lda4hex`, you should always shuffle the ordering in the hexagon file.
+If you use `topic-model`, you should always shuffle the hexagon file.
 
 The remaining of each line is structured as follows:
 

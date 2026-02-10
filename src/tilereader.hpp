@@ -104,9 +104,9 @@ protected:
     std::vector<Rectangle<double>> rects;
 
 public:
-    int32_t minrow = INT32_MAX;
+    int32_t minrow = INT32_MAX; // inclusive
     int32_t mincol = INT32_MAX;
-    int32_t maxrow = INT32_MIN;
+    int32_t maxrow = INT32_MIN; // inclusive
     int32_t maxcol = INT32_MIN;
     TileReaderBase(const std::string &tsvFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1)
         : tsvFilename(tsvFilename), tileSize(tileSize) {
@@ -120,9 +120,6 @@ public:
     }
     size_t getNumTiles() const {
         return nTiles;
-    }
-    int32_t tile2int(int32_t row, int32_t col) const {
-        return (maxcol - mincol) * (row - minrow) + (col - mincol);
     }
     // given (x, y) compute the tile key and whether the tile is in the data
     template<typename T>

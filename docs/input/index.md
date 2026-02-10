@@ -1,6 +1,6 @@
 # Notes on processing data from different technologies/platforms
 
-Here are instructions on how to convert raw data from different platforms to the generic pixel/transcript level input format for FICTURE.
+Here are instructions on how to convert raw data from different platforms to the generic pixel/transcript level input format for punkst.
 
 (For spot/single cell level data, `topic-model` now accepts 10X style DGE files directly, but you can also convert them to our custom format (see the last section below))
 
@@ -14,7 +14,7 @@ then run `make`. -->
 
 After the conversion, you can follow the standard workflow as described in [the quick start page](../workflows/index.md) to run the pipeline (and specify all coordinate/size related parameters in microns). For platforms that provide cell coordinates, we also extracted the cell centers and you can try the experimental workflow in `examples/with_cell_centers`.
 
-
+(We currently documented examples for 10X Genomics Visium HD, Xenium, NanoString CosMx SMI, and Vizgen MERSCOPE data. We've also applied punkst to Seq-scope, Stereo-seq, and other similar platforms, we are working on providing more information.)
 
 ## Visium HD
 

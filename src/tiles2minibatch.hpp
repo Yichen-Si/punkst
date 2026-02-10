@@ -455,31 +455,35 @@ protected:
         T x = x0 - tile.col * tileSize;
         T y = y0 - tile.row * tileSize;
         bufferidx.clear();
+        // vertical, right
         if (x > tileSize - 2 * r && tile.col < tileReader.maxcol) {
             bufferidx.push_back(encodeTempFileKey(true, tile.row, tile.col));
         }
+        // vertical, left
         if (x < 2 * r && tile.col > tileReader.mincol) {
             bufferidx.push_back(encodeTempFileKey(true, tile.row, tile.col - 1));
         }
+        // horizontal, up
         if (y < 2 * r && tile.row > tileReader.minrow) {
             bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col));
         }
-        if (y > tileSize - 2 * r) {
+        // horizontal, down
+        if (y > tileSize - 2 * r && tile.row < tileReader.maxrow) {
             bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col));
         }
         if (x < r && tile.col > tileReader.mincol) {
             if (y < 2 * r && tile.row > tileReader.minrow) {
                 bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col - 1));
             }
-            if (y > tileSize - 2 * r) {
+            if (y > tileSize - 2 * r && tile.row < tileReader.maxrow) {
                 bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col - 1));
             }
         }
-        if (x > tileSize - r) {
-            if (y < 2 * r && tile.row > tileReader.minrow && tile.col < tileReader.maxcol) {
+        if (x > tileSize - r && tile.col < tileReader.maxcol) {
+            if (y < 2 * r && tile.row > tileReader.minrow) {
                 bufferidx.push_back(encodeTempFileKey(false, tile.row - 1, tile.col + 1));
             }
-            if (y > tileSize - 2 * r && tile.col < tileReader.maxcol) {
+            if (y > tileSize - 2 * r && tile.row < tileReader.maxrow) {
                 bufferidx.push_back(encodeTempFileKey(false, tile.row, tile.col + 1));
             }
         }
@@ -560,6 +564,9 @@ protected:
             float y_max = bufRow * tileSize + tileSize - r;
             if (bufRow == tileReader.minrow) {
                 return (x > x_min && x < x_max && y < y_max);
+            }
+            if (bufRow == tileReader.maxrow) {
+                return (x > x_min && x < x_max && y > y_min);
             }
             return (x > x_min && x < x_max && y > y_min && y < y_max);
         } else {

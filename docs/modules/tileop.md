@@ -2,7 +2,7 @@
 
 **`tile-op` provides utilities to view and manipulate the tiled data files** created by `punkst pixel-decode` or `punkst pts2tiles`.
 
-Functionalities:
+## Available Operations
 
 - inspecting the index
 
@@ -190,6 +190,7 @@ A TSV file `path/cellular_results.pseudobulk.tsv` containing the sum of factor p
 ### Denoise Top Labels
 
 This is a heuristic denoising operation on the top-predicted factor labels for each pixel. It replace pixels where the predicted factor differs from most of its neighbors with the majority vote among its neighbors.
+It is meant for the case where you projected categorical cell types at high resolution data where you do not expect to see much mixing of cell types at single pixel level.
 The output is a new tiled data file where for each pixel, only the smoothed top factor is kept. (The output can be used as input for `tile-op`, so you can dump it to a tsv file or do other operations)
 
 ```bash
@@ -197,3 +198,31 @@ punkst tile-op --smooth-top-labels 2 --in path/result [--binary] --out path/smoo
 ```
 
 `--smooth-top-labels` - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.
+
+Optional:
+
+`fill-empty-islands` - fill isolated empty pixels if they are surrounded by consistent neighbors. Default is to leave empty pixels unchanged. This may be helpful if you would like to get statistics like area and perimeter/edge per cell type later using `tile-op --spatial-metrics`
+
+### Compute basic spatial metrics
+
+This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with `tile-op --smooth-top-labels r --fill-empty-islands` (see above).
+
+```bash
+punkst tile-op --smooth-top-labels 2 --in path/result [--binary] --out path/prefix --spatial-metrics
+```
+
+The output includes two files:
+
+- `path/prefix.stats.single.tsv` for per-channel (factor or cell type) metrics. Columns are:
+  - channel index (`#k`)
+  - total number of pixels (`area`)
+  - length of all boundaries shared with non-background pixels from other channels (`perim`)
+  - length of boundaries shared with background pixels (`perim_bg`)
+
+- `path/prefix.stats.pairwise.tsv` for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be $A_k, P_k, A_l, P_l$, the columns are
+  - channel indices for the pair (`#k`, `l`)
+  - length of shared boundary $L_{kl}$ (`contact`)
+  - $L_{kl} / (P_k + P_l - L_{kl})$ (`frac0`)
+  - $L_{kl} / P_k$ (`frac1`)
+  - $L_{kl} / P_l$ (`frac2`)
+  - $L_{kl} / (A_k + A_l)$ (`density`)

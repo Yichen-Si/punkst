@@ -25,22 +25,19 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     K_ = mode_ >> 16;
     mode_ &= 0xFFFF;
     if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
-    if (mode_ & 0x2) {assert(mode_ & 0x4);}
+    if (mode_ & 0x2) {assert((mode_ & 0x4) != 0 && (formatInfo_.pixelResolution > 0.0f));}
     if (mode_ & 0x1) {assert(formatInfo_.recordSize > 0);}
     k_ = formatInfo_.parseKvec(kvec_);
-    coord_dim_ = 2;
+    coord_dim_ = (mode_ & 0x10) ? 3 : 2;
     if (mode_ & 0x1) {
         size_t kBytes = k_ * (sizeof(int32_t) + sizeof(float));
         size_t cBytes = (mode_ & 0x4) ? sizeof(int32_t) : sizeof(float);
-        if (formatInfo_.recordSize < kBytes + 2 * cBytes ||
-            (formatInfo_.recordSize - kBytes) % cBytes != 0) {
-            error("%s: Record size %u inconsistent with k=%d and coordinate type", __func__, formatInfo_.recordSize, k_);
-        }
-        coord_dim_ = (formatInfo_.recordSize - kBytes) / cBytes;
-        if (coord_dim_ != 2 && coord_dim_ != 3) {
-            error("%s: Unsupported coordinate dimension %d", __func__, coord_dim_);
+        if (formatInfo_.recordSize != kBytes + coord_dim_ * cBytes) {
+            error("%s: Record size %u inconsistent with k=%d and %dD dimensional coordinates", __func__, formatInfo_.recordSize, k_, coord_dim_);
         }
     }
+    regular_labeled_raster_ = ((mode_ & 0x8) == 0) && (k_ > 0) && ((mode_ & 0x4) != 0 || formatInfo_.pixelResolution > 0.0f);
+
     globalBox_ = Rectangle<float>(formatInfo_.xmin, formatInfo_.ymin,
                                   formatInfo_.xmax, formatInfo_.ymax);
     blocks_all_.clear();
