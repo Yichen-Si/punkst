@@ -4,6 +4,13 @@ project(punkst)
 include(CheckCXXCompilerFlag)
 include(CheckIPOSupported)
 
+# Default single-config generators to Release for better runtime performance.
+if (NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the build type." FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
+  message(STATUS "No build type selected; defaulting to Release for runtime performance.")
+endif()
+
 # TBB
 option(FETCH_TBB
   "If ON, download & build oneTBB via FetchContent when no system TBB is found"
@@ -145,7 +152,7 @@ target_compile_options(${APP_EXE} PRIVATE
   $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O3>
 )
 
-option(ENABLE_LTO "Enable link-time optimization (IPO/LTO) in Release" OFF)
+option(ENABLE_LTO "Enable link-time optimization (IPO/LTO) in Release" ON)
 if (ENABLE_LTO)
   check_ipo_supported(RESULT ipo_ok OUTPUT ipo_msg)
   if (ipo_ok)
@@ -155,8 +162,12 @@ if (ENABLE_LTO)
   endif()
 endif()
 
-option(ENABLE_NATIVE_ARCH "Enable -march=native (not portable across different CPUs)" OFF)
-if (ENABLE_NATIVE_ARCH)
+option(ENABLE_PORTABLE_BUILD "Disable architecture-specific tuning flags for maximum CPU portability" OFF)
+
+option(ENABLE_NATIVE_ARCH "Enable -march=native (not portable across different CPUs)" ON)
+if (ENABLE_PORTABLE_BUILD)
+  message(STATUS "ENABLE_PORTABLE_BUILD=ON: skipping -march=native and -march=x86-64-v3.")
+elseif (ENABLE_NATIVE_ARCH)
   check_cxx_compiler_flag("-march=native" HAS_MARCH_NATIVE)
   if (HAS_MARCH_NATIVE)
     target_compile_options(${APP_EXE} PRIVATE -march=native)
@@ -167,7 +178,9 @@ if (ENABLE_NATIVE_ARCH)
 endif()
 
 option(ENABLE_X86_64_V3 "Enable -march=x86-64-v3 (requires compatible x86_64 CPU at runtime)" OFF)
-if (ENABLE_X86_64_V3)
+if (ENABLE_PORTABLE_BUILD)
+  # handled above
+elseif (ENABLE_X86_64_V3)
   if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i.86")
     check_cxx_compiler_flag("-march=x86-64-v3" HAS_X86_64_V3)
     if (HAS_X86_64_V3)

@@ -75,7 +75,6 @@ inline Result smoothLabels8Neighborhood(std::vector<int32_t>& labels, std::vecto
     if (updateProb) {
         nextProbs = *probs;
     }
-
     for (int32_t round = 0; round < rounds; ++round) {
         nextLabels = labels;
         if (updateProb) {

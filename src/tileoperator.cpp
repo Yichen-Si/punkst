@@ -808,16 +808,6 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     }
     const bool coordScaled = (mode_ & 0x2) != 0;
 
-    std::ifstream in;
-    if (mode_ & 0x1) {
-        in.open(dataFile_, std::ios::binary);
-    } else {
-        in.open(dataFile_);
-    }
-    if (!in.is_open()) {
-        error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
-    }
-
     std::string outFile = outPrefix + ".bin";
     std::string outIndex = outPrefix + ".index";
     int fdMain = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
@@ -842,10 +832,26 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
         error("%s: Failed writing index header", __func__);
     }
 
-    size_t currentOffset = 0;
-    for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+    struct SmoothTileResult {
+        std::vector<char> data;
+        uint32_t nOut = 0;
+        size_t nCollisionIgnored = 0;
+        size_t nOutOfRangeIgnored = 0;
+        int32_t row = 0;
+        int32_t col = 0;
+    };
+
+    const bool useParallel = (threads_ > 1 && blocks_.size() > 1);
+    const size_t recSize = static_cast<size_t>(idxHeader.recordSize);
+    const size_t chunkTileCount = useParallel
+        ? std::max<size_t>(static_cast<size_t>(threads_) * 4, 1)
+        : static_cast<size_t>(1);
+
+    auto processTile = [&](size_t bi, std::ifstream& in, SmoothTileResult& out) {
         const TileInfo& blk = blocks_[bi];
         const TileKey tile{blk.idx.row, blk.idx.col};
+        out.row = tile.row;
+        out.col = tile.col;
         int32_t pixX0, pixX1, pixY0, pixY1; // Tile bounds (global pix coord)
         tile2bound(tile, pixX0, pixX1, pixY0, pixY1, formatInfo_.tileSize);
         if (coordScaled) {
@@ -855,27 +861,20 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
             pixY1 = coord2pix(pixY1);
         }
         if (pixX1 <= pixX0 || pixY1 <= pixY0) {
-            close(fdMain); close(fdIndex);
             error("%s: Invalid raster bounds in tile (%d, %d)", __func__, tile.row, tile.col);
         }
-        const size_t width  = static_cast<size_t>(pixX1-pixX0);
-        const size_t height = static_cast<size_t>(pixY1-pixY0);
+        const size_t width = static_cast<size_t>(pixX1 - pixX0);
+        const size_t height = static_cast<size_t>(pixY1 - pixY0);
         if (height > 0 && width > std::numeric_limits<size_t>::max() / height) {
-            close(fdMain); close(fdIndex);
             error("%s: Raster size overflow in tile (%d, %d)", __func__, tile.row, tile.col);
         }
-        // Rasterized tile storage
         const size_t nPixels = width * height;
         std::vector<int32_t> labels(nPixels, -1);
         std::vector<float> probs(nPixels, 0.0f);
-        size_t nCollisionIgnored = 0;
-        size_t nOutOfRangeIgnored = 0;
 
-        // Load all records in one tile
         in.clear();
-        in.seekg(blk.idx.st);
+        in.seekg(static_cast<std::streamoff>(blk.idx.st));
         if (!in.good()) {
-            close(fdMain); close(fdIndex);
             error("%s: Failed seeking input stream to tile %lu", __func__, bi);
         }
         TopProbs rec;
@@ -887,63 +886,134 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
                 continue;
             }
             if (xpix < pixX0 || xpix >= pixX1 || ypix < pixY0 || ypix >= pixY1) {
-                ++nOutOfRangeIgnored;
+                ++out.nOutOfRangeIgnored;
                 continue;
             }
             const size_t x0 = static_cast<size_t>(xpix - pixX0);
             const size_t y0 = static_cast<size_t>(ypix - pixY0);
             const size_t idx = y0 * width + x0;
             if (labels[idx] != -1) {
-                ++nCollisionIgnored;
+                ++out.nCollisionIgnored;
                 continue;
             }
             labels[idx] = rec.ks[0];
             probs[idx] = rec.ps[0];
         }
 
-        IndexEntryF outEntry = blk.idx; // Output index entry
-        outEntry.st = currentOffset;
-        outEntry.n = 0;
-        if (nCollisionIgnored > 0) {
-            warning("%s: Ignored %lu colliding records in tile (%d, %d)",
-                __func__, nCollisionIgnored, tile.row, tile.col);
-        }
-        if (nOutOfRangeIgnored > 0) {
-            warning("%s: Ignored %lu out-of-tile records in tile (%d, %d)",
-                __func__, nOutOfRangeIgnored, tile.row, tile.col);
-        }
-        // Smooth out isolated noise
         island_smoothing::Options smoothOpts;
         smoothOpts.fillEmpty = fillEmptyIslands;
         smoothOpts.updateProbFromWinnerMin = true;
-        (void) island_smoothing::smoothLabels8Neighborhood(labels, &probs, width, height, islandSmoothRounds, smoothOpts);
+        island_smoothing::Result ret = island_smoothing::smoothLabels8Neighborhood(
+            labels, &probs, width, height, islandSmoothRounds, smoothOpts);
+        (void)ret;
 
-        // Create output records
+        size_t nOutLocal = 0;
+        for (size_t i = 0; i < nPixels; ++i) {
+            if (labels[i] >= 0) {
+                ++nOutLocal;
+            }
+        }
+        if (nOutLocal > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+            error("%s: Too many output records in tile (%d, %d)", __func__, tile.row, tile.col);
+        }
+        out.nOut = static_cast<uint32_t>(nOutLocal);
+        out.data.resize(nOutLocal * recSize);
+        size_t off = 0;
         for (size_t y = 0; y < height; ++y) {
             for (size_t x = 0; x < width; ++x) {
                 const size_t idx = y * width + x;
-                if (labels[idx] < 0) {
+                const int32_t label = labels[idx];
+                if (label < 0) {
                     continue;
                 }
-                PixTopProbs<int32_t> outRec;
-                outRec.x = static_cast<int32_t>(x) + pixX0;
-                outRec.y = static_cast<int32_t>(y) + pixY0;
-                outRec.ks = {labels[idx]};
-                outRec.ps = {probs[idx]};
-                if (outRec.write(fdMain) < 0) {
-                    close(fdMain); close(fdIndex);
-                    error("%s: Failed writing output record", __func__);
-                }
-                outEntry.n += 1;
+                const int32_t outX = static_cast<int32_t>(x) + pixX0;
+                const int32_t outY = static_cast<int32_t>(y) + pixY0;
+                const float outP = probs[idx];
+                std::memcpy(out.data.data() + off, &outX, sizeof(int32_t));
+                std::memcpy(out.data.data() + off + sizeof(int32_t), &outY, sizeof(int32_t));
+                std::memcpy(out.data.data() + off + sizeof(int32_t) * 2, &label, sizeof(int32_t));
+                std::memcpy(out.data.data() + off + sizeof(int32_t) * 3, &outP, sizeof(float));
+                off += recSize;
             }
         }
-        outEntry.ed = lseek(fdMain, 0, SEEK_CUR);
-        currentOffset = outEntry.ed;
-        if (!write_all(fdIndex, &outEntry, sizeof(outEntry))) {
-            close(fdMain); close(fdIndex);
-            error("%s: Failed writing output index entry", __func__);
+    };
+
+    size_t currentOffset = 0;
+    const size_t nTiles = blocks_.size();
+    size_t nProcessed = 0;
+    std::unique_ptr<tbb::global_control> globalLimit;
+    if (useParallel) {
+        globalLimit = std::make_unique<tbb::global_control>(
+            tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+    }
+    for (size_t chunkBegin = 0; chunkBegin < nTiles; chunkBegin += chunkTileCount) {
+        const size_t chunkEnd = std::min(nTiles, chunkBegin + chunkTileCount);
+        std::vector<SmoothTileResult> chunkResults(chunkEnd - chunkBegin);
+        if (useParallel && (chunkEnd - chunkBegin) > 1) {
+            tbb::parallel_for(tbb::blocked_range<size_t>(chunkBegin, chunkEnd),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    std::ifstream in;
+                    if (mode_ & 0x1) {
+                        in.open(dataFile_, std::ios::binary);
+                    } else {
+                        in.open(dataFile_);
+                    }
+                    if (!in.is_open()) {
+                        error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+                    }
+                    for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                        processTile(bi, in, chunkResults[bi - chunkBegin]);
+                    }
+                });
+        } else {
+            std::ifstream in;
+            if (mode_ & 0x1) {
+                in.open(dataFile_, std::ios::binary);
+            } else {
+                in.open(dataFile_);
+            }
+            if (!in.is_open()) {
+                error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+            }
+            for (size_t bi = chunkBegin; bi < chunkEnd; ++bi) {
+                processTile(bi, in, chunkResults[bi - chunkBegin]);
+            }
         }
-    } // Tile loop
+
+        for (size_t bi = chunkBegin; bi < chunkEnd; ++bi) {
+            const auto& res = chunkResults[bi - chunkBegin];
+            const TileInfo& blk = blocks_[bi];
+            IndexEntryF outEntry = blk.idx;
+            outEntry.st = currentOffset;
+            outEntry.n = res.nOut;
+            if (!res.data.empty()) {
+                if (!write_all(fdMain, res.data.data(), res.data.size())) {
+                    close(fdMain);
+                    close(fdIndex);
+                    error("%s: Failed writing output data", __func__);
+                }
+            }
+            outEntry.ed = currentOffset + res.data.size();
+            currentOffset = outEntry.ed;
+            if (!write_all(fdIndex, &outEntry, sizeof(outEntry))) {
+                close(fdMain);
+                close(fdIndex);
+                error("%s: Failed writing output index entry", __func__);
+            }
+            if (res.nCollisionIgnored > 0) {
+                warning("%s: Ignored %lu colliding records in tile (%d, %d)",
+                    __func__, res.nCollisionIgnored, res.row, res.col);
+            }
+            if (res.nOutOfRangeIgnored > 0) {
+                warning("%s: Ignored %lu out-of-tile records in tile (%d, %d)",
+                    __func__, res.nOutOfRangeIgnored, res.row, res.col);
+            }
+            ++nProcessed;
+            if (nProcessed % 10 == 0) {
+                notice("%s: Processing tile %lu/%lu", __func__, nProcessed, nTiles);
+            }
+        }
+    }
 
     close(fdMain); close(fdIndex);
     notice("%s: Wrote smoothed output to %s (index: %s)", __func__, outFile.c_str(), outIndex.c_str());

@@ -54,7 +54,7 @@ void draw_worker(
         std::string line;
         while (iter->next(line)) {
             RecordT<float> rec;
-            if (parser.parse(rec, line) < 0 || rec.ct <= 0) continue;
+            if (parser.parse(rec, line, true) < 0 || rec.ct <= 0) continue;
 
             int xpix = static_cast<int>((rec.x - xmin) / scale) - left;
             int ypix = static_cast<int>((rec.y - ymin) / scale) - top;
@@ -146,8 +146,11 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
     if (xmin >= xmax || ymin >= ymax)
         error("Invalid range: xmin >= xmax or ymin >= ymax. Please set --range or x/y min/max options.");
 
+    std::vector<Rectangle<double>> query_rects;
+    query_rects.emplace_back(xmin, ymin, xmax, ymax);
+
     std::unordered_map<uint32_t, std::vector<int32_t>> feature_color_map;
-    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile, &query_rects);
 
     if (!featureColorFile.empty()) {
         std::ifstream fc_file(featureColorFile);
@@ -188,7 +191,7 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
         error("No color information provided. Use --feature-color-map or --feature-list/--color-list.");
     }
 
-    TileReader tileReader(dataFile, indexFile);
+    TileReader tileReader(dataFile, indexFile, &query_rects);
     if (!tileReader.isValid()) {
         error("Failed to initialize TileReader. Check input TSV and index files.");
     }
@@ -201,7 +204,7 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
 
     std::vector<TileKey> tiles;
     tileReader.getTileList(tiles);
-    notice("Processing %zu tiles with %d threads...", tiles.size(), n_threads);
+    notice("Processing %zu tiles overlapping the query rectangle with %d threads...", tiles.size(), n_threads);
 
     ThreadSafeQueue<TileKey> tileQueue;
     for (const auto& tile_key : tiles) {

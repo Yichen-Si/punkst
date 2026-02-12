@@ -10,10 +10,10 @@ Prerequisites
 
 - Git
 - CMake: 3.15 to 3.23
-- C++17 compiler* (GCC ≥8, Clang ≥5, MSVC 2017+)
+- C++20 compiler* (GCC/Clang/MSVC with C++20 support)
 - TBB, OpenCV
 
-*We do assume your compiler properly supports C++17. Consider updating your compiler if you encounter issues.
+*We assume your compiler properly supports C++20. Consider updating your compiler if you encounter issues.
 
 ```bash
 # 1) Clone the repository
@@ -26,6 +26,8 @@ cmake ..
 # 4) Build
 cmake --build . --parallel # or make
 ```
+
+For single-config generators (for example Unix Makefiles and Ninja), `cmake ..` now defaults to a `Release` build to prioritize runtime performance.
 
 If you did not clone the submodule (Eigen) initially, you can do
 ```bash
@@ -89,10 +91,10 @@ make -j$(nproc) && make install
 
 ### Build Options for Performance and Portability
 
-By default, **punkst** builds a portable binary. You can customize the build using the following CMake flags:
+The default options prioritizes runtime performance (`Release`, `ENABLE_LTO=ON`, `ENABLE_NATIVE_ARCH=ON`). You can customize the build with the following CMake flags:
 
 | Goal | CMake Command | Description |
 | :--- | :--- | :--- |
-| **Local Performance** | `cmake -DENABLE_NATIVE_ARCH=ON ..` | Optimizes the binary for your specific CPU (AVX2, AVX-512, etc.) |
-| **Maximum Portability**| `cmake -DENABLE_NATIVE_ARCH=OFF ..` | (Default) Ensures the binary runs on any 64-bit machine |
-| **Modern CPU Fleet** | `cmake -DENABLE_X86_64_V3=ON ..` | Targets x86-64-v3 (Haswell/2013+). Supports AVX2 but remains portable to most modern machines |
+| **Default / Local Performance** | `cmake ..` | Defaults to `Release` and enables `-march=native` when supported |
+| **Maximum Portability**| `cmake -DENABLE_PORTABLE_BUILD=ON ..` | Disables architecture-specific tuning flags for broader CPU compatibility |
+| **Modern CPU Fleet** | `cmake -DENABLE_NATIVE_ARCH=OFF -DENABLE_X86_64_V3=ON ..` | Targets x86-64-v3 (Haswell/2013+), useful when deploying to a known modern x86_64 baseline |

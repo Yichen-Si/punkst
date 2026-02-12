@@ -183,7 +183,7 @@ Key parameters:
 
 `--n-moves`: Number of sliding moves to generate anchors
 
-`--pixel-res`: Resolution for the analysis (in the same unit as coordinates)
+`--pixel-res`: Resolution for the analysis (in the same unit as coordinates). Set to `2` for Visium HD.
 
 `--output-original`: Write each transcript/input pixel as a separate line in the output. This will be slower and generates a bigger file, so only use it if matching the inference with the original input is useful. (Excluding this flag for Visium HD data is more sensible)
 

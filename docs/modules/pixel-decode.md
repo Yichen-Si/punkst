@@ -70,7 +70,7 @@ The pixel-level inference result (in this case `${path}/pixel.tsv`, see below "O
 
 ### Processing Parameters
 
-`--pixel-res` - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense.
+`--pixel-res` - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense. For Visium HD (where the pixel size is 2μm), use `--pixel-res 2`.
 
 `--radius` - Specifies the radius within which to search for anchors. Default: `anchor-dist * 1.2`.
 
