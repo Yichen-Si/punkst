@@ -1360,7 +1360,7 @@
 <p><code>--ext-col-floats</code> - Additional float columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices.</p>
 <p><code>--ext-col-strs</code> - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings.</p>
 <h3 id="processing-parameters">Processing Parameters<a class="headerlink" href="#processing-parameters" title="Permanent link">&para;</a></h3>
-<p><code>--pixel-res</code> - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense.</p>
+<p><code>--pixel-res</code> - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense. For Visium HD (where the pixel size is 2μm), use <code>--pixel-res 2</code>.</p>
 <p><code>--radius</code> - Specifies the radius within which to search for anchors. Default: <code>anchor-dist * 1.2</code>.</p>
 <p><code>--min-init-count</code> - Minimum total count within the hexagon around an anchor for it to be included. Filters out regions outside tissues with sparse noise. Default: 10.</p>
 <p><code>--mean-change-tol</code> - Tolerance for convergence in terms of the mean absolute change in the topic proportions of a document. Default: 1e-3.</p>

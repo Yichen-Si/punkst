@@ -1114,10 +1114,10 @@
 <ul>
 <li>Git</li>
 <li>CMake: 3.15 to 3.23</li>
-<li>C++17 compiler* (GCC ≥8, Clang ≥5, MSVC 2017+)</li>
+<li>C++20 compiler* (GCC/Clang/MSVC with C++20 support)</li>
 <li>TBB, OpenCV</li>
 </ul>
-<p>*We do assume your compiler properly supports C++17. Consider updating your compiler if you encounter issues.</p>
+<p>*We assume your compiler properly supports C++20. Consider updating your compiler if you encounter issues.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1) Clone the repository</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>clone<span class="w"> </span>--recursive<span class="w"> </span>https://github.com/your-org/punkst.git
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nb">cd</span><span class="w"> </span>punkst
@@ -1128,6 +1128,7 @@
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># 4) Build</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>cmake<span class="w"> </span>--build<span class="w"> </span>.<span class="w"> </span>--parallel<span class="w"> </span><span class="c1"># or make</span>
 </span></code></pre></div>
+<p>For single-config generators (for example Unix Makefiles and Ninja), <code>cmake ..</code> now defaults to a <code>Release</code> build to prioritize runtime performance.</p>
 <p>If you did not clone the submodule (Eigen) initially, you can do
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init
 </span></code></pre></div></p>
@@ -1200,7 +1201,7 @@ make -j$(nproc) && make install
 </tbody>
 </table>
 <h3 id="build-options-for-performance-and-portability">Build Options for Performance and Portability<a class="headerlink" href="#build-options-for-performance-and-portability" title="Permanent link">&para;</a></h3>
-<p>By default, <strong>punkst</strong> builds a portable binary. You can customize the build using the following CMake flags:</p>
+<p>The default options prioritizes runtime performance (<code>Release</code>, <code>ENABLE_LTO=ON</code>, <code>ENABLE_NATIVE_ARCH=ON</code>). You can customize the build with the following CMake flags:</p>
 <table>
 <thead>
 <tr>
@@ -1211,19 +1212,19 @@ make -j$(nproc) && make install
 </thead>
 <tbody>
 <tr>
-<td style="text-align: left;"><strong>Local Performance</strong></td>
-<td style="text-align: left;"><code>cmake -DENABLE_NATIVE_ARCH=ON ..</code></td>
-<td style="text-align: left;">Optimizes the binary for your specific CPU (AVX2, AVX-512, etc.)</td>
+<td style="text-align: left;"><strong>Default / Local Performance</strong></td>
+<td style="text-align: left;"><code>cmake ..</code></td>
+<td style="text-align: left;">Defaults to <code>Release</code> and enables <code>-march=native</code> when supported</td>
 </tr>
 <tr>
 <td style="text-align: left;"><strong>Maximum Portability</strong></td>
-<td style="text-align: left;"><code>cmake -DENABLE_NATIVE_ARCH=OFF ..</code></td>
-<td style="text-align: left;">(Default) Ensures the binary runs on any 64-bit machine</td>
+<td style="text-align: left;"><code>cmake -DENABLE_PORTABLE_BUILD=ON ..</code></td>
+<td style="text-align: left;">Disables architecture-specific tuning flags for broader CPU compatibility</td>
 </tr>
 <tr>
 <td style="text-align: left;"><strong>Modern CPU Fleet</strong></td>
-<td style="text-align: left;"><code>cmake -DENABLE_X86_64_V3=ON ..</code></td>
-<td style="text-align: left;">Targets x86-64-v3 (Haswell/2013+). Supports AVX2 but remains portable to most modern machines</td>
+<td style="text-align: left;"><code>cmake -DENABLE_NATIVE_ARCH=OFF -DENABLE_X86_64_V3=ON ..</code></td>
+<td style="text-align: left;">Targets x86-64-v3 (Haswell/2013+), useful when deploying to a known modern x86_64 baseline</td>
 </tr>
 </tbody>
 </table>
