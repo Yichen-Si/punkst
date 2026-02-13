@@ -6,6 +6,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     std::vector<std::string> anchorFiles;
     std::vector<float> radius;
     int nThreads = 1, debug = 0, verbose = 1000000;
+    int32_t seed = -1;
     int icol_x, icol_y, icol_feature;
     double hexSize = -1, hexGridDist = -1;
     std::vector<int32_t> icol_ints;
@@ -31,6 +32,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         .add_option("hex-size", "Hexagon size (size length)", hexSize)
         .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
         .add_option("temp-dir", "Directory to store temporary files", tmpDir)
+        .add_option("seed", "Random seed for randomized output keys", seed)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads);
     // Output Options
     pl.add_option("out", "Output TSV file", outFile)
@@ -79,13 +81,13 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     }
 
     if (anchorFiles.empty()) {
-        Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, min_counts);
+        Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, min_counts, seed);
         if (!tiles2Hex.run()) {
             return 1;
         }
         tiles2Hex.writeMetadata();
     } else {
-        Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, anchorFiles, radius, min_counts, noBackground);
+        Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, anchorFiles, radius, min_counts, noBackground, seed);
         if (!tiles2Hex.run()) {
             return 1;
         }

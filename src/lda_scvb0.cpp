@@ -14,6 +14,9 @@ void LatentDirichletAllocation::scvb0_partial_fit(
             auto& localNkw = hatNkw_acc.local();
 
             for (int d = range.begin(); d < range.end(); ++d) {
+                // Use document-indexed RNG stream to avoid schedule-dependent randomness.
+                set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
+                    0x2d8f19bULL ^ static_cast<uint64_t>(update_count_)));
                 const Document& doc = docs[d];
                 scvb0_fit_one_document(localNkw, doc);
             }

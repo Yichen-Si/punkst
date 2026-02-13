@@ -456,9 +456,16 @@ protected:
                 warning("Error opening output file for writing: %s", outFile.c_str());
                 return false;
             }
+            std::vector<std::string> featureNames;
+            featureNames.reserve(featureCounts_.size());
             for (const auto& pair : featureCounts_) {
-                out << pair.first;
-                for (const auto& val : pair.second) {
+                featureNames.push_back(pair.first);
+            }
+            std::sort(featureNames.begin(), featureNames.end());
+            for (const auto& feature : featureNames) {
+                const auto& vals = featureCounts_.at(feature);
+                out << feature;
+                for (const auto& val : vals) {
                     out << "\t" << val;
                 }
                 out << "\n";

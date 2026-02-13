@@ -91,6 +91,9 @@ def main():
     cfg = json.load(open(args.config))
     job = cfg.get('job', {})
     wf  = cfg.get('workflow', {})
+    # Backward-compatible defaults for optional workflow switches.
+    if "use_fixed_color_table" not in wf:
+        wf["use_fixed_color_table"] = True
     # Render Makefile
     render_makefile(args.template, args.makefile, wf)
     # Emit sbatch wrapper

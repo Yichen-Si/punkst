@@ -11,7 +11,7 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/trans
 --feature-dict ${path}/features.txt \
 --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
 --min-count 20 --hex-grid-dist 12 \
---out ${path}/hex_12.txt --randomize \
+--out ${path}/hex_12.txt --randomize --seed 1 \
 --temp-dir ${tmpdir} --threads ${threads}
 ```
 
@@ -37,6 +37,8 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/trans
 
 `--randomize` if set, the order of hexagons in the output will be randomized.
 
+`--seed` sets the random seed used for the output random key generation. If not provided (or <=0), a random seed is generated automatically and written to the metadata JSON.
+
 `--temp-dir` specifies the directory for temporary files.
 
 `--threads` specifies the number of threads to use.
@@ -45,11 +47,13 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/trans
 
 The output is a plain tab-delimited text file. It is not a table: each line contains data for one unit and lines have different number of tokens.
 
-The first element in each line of the output is a random key, which is used to shuffle the data before model training. When `--randomize` is not set when you run `tiles2hex`, you can do the following
+The first element in each line of the output is a random key, which is used to shuffle the data before model training. With the same input data and the same `--seed`, this key generation is reproducible. When `--randomize` is not set when you run `tiles2hex`, you can do the following
 ```bash
 sort -k1,1 --parallel ${threads} -S 1G ${path}/hex.txt -o ${path}/hex.txt
 ```
 If you use `topic-model`, you should always shuffle the hexagon file.
+
+The metadata JSON also stores the seed used by `tiles2hex` as `seed`.
 
 The remaining of each line is structured as follows:
 

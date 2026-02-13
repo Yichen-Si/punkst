@@ -189,6 +189,8 @@ private:
         RowMajorMatrixXd gamma(n_docs, ncol);
 
         auto process_doc = [&](int d) {
+            set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
+                                  0x41f2c7d3ULL ^ static_cast<uint64_t>(update_count_)));
             const Document& doc = doc_of(docs[d]);
             switch (algo_) {
                 case InferenceType::SCVB0: {
@@ -300,6 +302,11 @@ private:
     }
 
     std::mt19937& thread_rng();
+    uint64_t doc_stream(uint64_t doc_index, uint64_t phase) const {
+        uint64_t base = static_cast<uint64_t>(static_cast<uint32_t>(seed_));
+        uint64_t mixed = base ^ (phase * 0x9e3779b97f4a7c15ULL) ^ (doc_index + 1ULL);
+        return ::splitmix64(mixed);
+    }
 
     // SCVB0 specific
     // SCVB0 latent variable update (Eq. 5 for gamma_{ijk} in the paper)

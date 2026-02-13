@@ -43,6 +43,12 @@ Then `make -f Makefile` exectutes the workflow.
 
 (The parameters in the example config file works for the example data, where the coordinates are in microns.)
 
+`threads`: number of threads for parallel processing. (If you are submitting the workflow to a cluster, make sure the same number of CPUs is available)
+
+`seed`: random seed for reproducibility. This seed is propagated to all steps in the workflow that involve randomness.
+
+`use_fixed_color_table`: controls how colors are assigned when rendering pixel maps. Default is `true`, which uses the fixed color table at `ext/py/cmap.48.tsv`. Set to `false` to run `ext/py/color_helper.py` and derive colors from model results (may be slow for a large dataset).
+
 `"datadir"`: the path to store all output
 
 `"tmpdir"`: the path to store temporary files (those files will be deleted automatically by the program). This directory must be empty or creatable.
@@ -122,7 +128,7 @@ punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv \
   --feature-dict ${path}/transcripts.tiled.features.tsv \
   --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
   --min-count 20 --hex-size 7 \
-  --out ${path}/hex_12.txt --randomize \
+  --out ${path}/hex_12.txt --randomize --seed 1 \
   --temp-dir ${tmpdir} --threads ${threads}
 ```
 
@@ -135,6 +141,8 @@ Key parameters:
 `--min-count`: Minimum count for a hexagon to be included
 
 `--randomize`: If set, the order of hexagons in the output will be randomized. You should always shuffle hexagons before running `topic-model`.
+
+`--seed`: Seed for reproducible random keys and shuffled ordering in `tiles2hex`.
 
 [Detailed documentation for tiles2hex](../modules/tiles2hex.md)
 
@@ -193,10 +201,12 @@ Key parameters:
 
 Visualize the pixel decoding results:
 
-Optional: choose a color table based on the intermediate results. Otherwise, you need to create a RGB table with the following columns: R, G, B (including the header). So each row represents the RGB color for a factor, with integer values from 0 to 255. (Python dependency: [jinja2](https://pypi.org/project/Jinja2/), pandas, matplotlib.)
+The example Makefiles use a fixed color table (`ext/py/cmap.48.tsv`) by default (`"use_fixed_color_table": true` in `config.json`).
+
+Optional: set `"use_fixed_color_table": false` and generate a color table from model results using `color_helper.py`. (Python dependency: [jinja2](https://pypi.org/project/Jinja2/), pandas, matplotlib. It may be slow for a large dataset.)
 
 ```bash
-python punkst/ext/py/color_helper.py --input ${path}/hex_12.results.tsv --output ${path}/color
+python punkst/ext/py/color_helper.py --input ${path}/hex_12.results.tsv --output ${path}/color --seed 1
 ```
 
 **Generate an image** for the pixel level factor assignment

@@ -15,6 +15,7 @@ SEED         := {SEED}
 TILESIZE     := {TILESIZE}
 HEXGRIDS     := {HEXGRIDS}
 TOPICS       := {TOPICS}
+USE_FIXED_COLOR_TABLE := {USE_FIXED_COLOR_TABLE}
 NEPOCHS	     := {NEPOCHS}
 PIXHEX       := {PIXHEX}
 NMOVE        := {NMOVE}
@@ -26,6 +27,7 @@ TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
 COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv
 FEATURES     := $(DATADIR)/transcripts.tiled.features.tsv
+DEFAULT_COLOR_TABLE := $(GITPATH)/ext/py/cmap.48.tsv
 
 # ─── Compute the full list of final report files ──────────────────────────
 REPORTS := \
@@ -65,6 +67,7 @@ $(DATADIR)/hex_$(1).txt: \
 	  --icol-int $(ICOL_COUNT) \
 	  --hex-grid-dist $(1) \
 	  --out $(DATADIR)/hex_$(1).txt --randomize \
+	  --seed $(SEED) \
 	  --temp-dir $(TMPDIR) --threads $(THREADS)
 endef
 $(foreach H,$(HEXGRIDS),$(eval $(call HEX_RULE,$H)))
@@ -94,11 +97,17 @@ $(foreach H,$(HEXGRIDS),\
 define COLOR_RULE
 $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv: \
     $(DATADIR)/hex_$(1).k$(2).model.stamp
+ifneq ($(filter True true 1 yes YES,$(USE_FIXED_COLOR_TABLE)),)
+	@echo "[3/6] fixed color table (K=$(2), hex=$(1)) → $$@"
+	cp $(DEFAULT_COLOR_TABLE) $$@
+else
 	@echo "[3/6] color_helper (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/color_helper.py \
 	  --input $(DATADIR)/hex_$(1).k$(2).results.tsv \
 	  --output $(DATADIR)/hex_$(1).k$(2).color \
-	  --cmap-name nipy_spectral
+	  --cmap-name nipy_spectral \
+	  --seed $(SEED)
+endif
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\

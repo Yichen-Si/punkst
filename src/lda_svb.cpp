@@ -18,6 +18,9 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
         auto& local_nits = niters_acc.local();
         VectorXd phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
+            // Use document-indexed RNG stream to avoid schedule-dependent randomness.
+            set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
+                0x13a5be1ULL ^ static_cast<uint64_t>(update_count_)));
             // document level variational parameters.
             const auto& doc = docs[d];
             int n_ids = doc.ids.size();
@@ -35,7 +38,7 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
         }
     });
 
-    // 4) Merge thread‐local ss and niters into the global buffers
+    // Merge thread‐local ss and niters into the global buffers
     MatrixXd ss = ss_acc.combine(
         [](const MatrixXd &A, const MatrixXd &B) {
             return A + B;
@@ -383,6 +386,9 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
         auto& local_phi1 = phi1_acc.local();
         VectorXd phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
+            // Use document-indexed RNG stream to avoid schedule-dependent randomness.
+            set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
+                0x77c3de5ULL ^ static_cast<uint64_t>(update_count_)));
             // document level variational parameters.
             const auto& doc = docs[d];
             int n_ids = doc.ids.size();
@@ -406,7 +412,7 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
         }
     });
 
-    // 4) Merge thread‐local ss and niters into the global buffers
+    // Merge thread‐local ss and niters into the global buffers
     MatrixXd ss = ss_acc.combine(
         [](const MatrixXd &A, const MatrixXd &B) {return A + B;}
     );

@@ -21,7 +21,7 @@ class Tiles2Hex {
 
 public:
 
-    Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts = {});
+    Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts = {}, int32_t _seed = -1);
     ~Tiles2Hex() {
         if (mainOut.is_open()) {
             mainOut.close();
@@ -48,6 +48,7 @@ protected:
     std::vector<std::thread> threads;
     std::mutex mainOutMutex;
     std::ofstream mainOut;
+    uint32_t randomSeed = 0;
 
     // Process one tile at a time
     virtual void worker(int threadId);
@@ -84,6 +85,15 @@ protected:
         }
     }
 
+    uint32_t makeRandomKey(const UnitValues& unit) const {
+        // Deterministic pseudo-random key from seed + unit identity.
+        uint64_t x = static_cast<uint64_t>(randomSeed);
+        x ^= static_cast<uint64_t>(static_cast<uint32_t>(unit.x)) * 0xD2B74407B1CE6E93ULL;
+        x ^= static_cast<uint64_t>(static_cast<uint32_t>(unit.y)) * 0x9E3779B97F4A7C15ULL;
+        x ^= static_cast<uint64_t>(static_cast<uint32_t>(unit.label + 1)) * 0xCA5A826395121157ULL;
+        return static_cast<uint32_t>(splitmix64(x));
+    }
+
     void writeUnit(const UnitValues& unit, uint32_t key) {
         double x, y;
         hexGrid.axial_to_cart(x, y, unit.x, unit.y);
@@ -107,8 +117,8 @@ class Tiles2UnitsByAnchor : public Tiles2Hex {
 
 public:
 
-    Tiles2UnitsByAnchor(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<std::string>& anchorFiles, std::vector<float>& radius, std::vector<int32_t> _minCounts = {}, bool _noBackground = false)
-        : Tiles2Hex(nThreads, _tmpDir, _outFile, hexGrid, tileReader, parser, _minCounts), noBackground(_noBackground) {
+    Tiles2UnitsByAnchor(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<std::string>& anchorFiles, std::vector<float>& radius, std::vector<int32_t> _minCounts = {}, bool _noBackground = false, int32_t _seed = -1)
+        : Tiles2Hex(nThreads, _tmpDir, _outFile, hexGrid, tileReader, parser, _minCounts, _seed), noBackground(_noBackground) {
         assert(!anchorFiles.empty() && anchorFiles.size() == radius.size());
         for (auto& f : anchorFiles) {
             readAnchors(f);

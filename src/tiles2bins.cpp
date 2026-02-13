@@ -1,6 +1,6 @@
 #include "tiles2bins.hpp"
 
-Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts)
+Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts, int32_t _seed)
 : nThreads(nThreads), tmpDir(_tmpDirPath), outFile(_outFile), hexGrid(hexGrid), tileReader(tileReader), parser(parser), minCounts(_minCounts), nUnits(0), nFeatures(0) {
     nModal = parser.n_ct;
     mainOut.open(outFile, std::ios::out);
@@ -21,6 +21,13 @@ Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _o
     meta["icol_y"] = 2;
     meta["offset_data"] = 3;
     meta["header_info"] = {"random_key", "x", "y"};
+    if (_seed <= 0) {
+        randomSeed = std::random_device{}();
+        notice("Using random seed %u", randomSeed);
+    } else {
+        randomSeed = static_cast<uint32_t>(_seed);
+    }
+    meta["seed"] = randomSeed;
 }
 
 void Tiles2Hex::writeMetadata() {
@@ -42,10 +49,6 @@ void Tiles2Hex::writeMetadata() {
 }
 
 void Tiles2Hex::worker(int threadId) {
-    // Set up a per-thread random engine.
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
     // temporary file
     auto partialFile = tmpDir.path / (std::to_string(threadId) + ".txt");
     std::ofstream outFile(partialFile, std::ios::out);
@@ -119,7 +122,7 @@ void Tiles2Hex::worker(int threadId) {
                     if (!flag) {
                         continue;
                     }
-                    writeUnit(entry.second, rdUnif(gen));
+                    writeUnit(entry.second, makeRandomKey(entry.second));
                     nUnits++;
                 } else {
                     entry.second.writeToFile(outFile, 0);
@@ -208,9 +211,6 @@ bool Tiles2Hex::mergeBoundaryHexagons() {
     // Append merged boundary units to main output.
     {
         std::lock_guard<std::mutex> lock(mainOutMutex);
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
         int32_t nUnits0 = nUnits;
         for (const auto &entry : mergedUnits) {
             bool flag = false;
@@ -223,7 +223,7 @@ bool Tiles2Hex::mergeBoundaryHexagons() {
             if (!flag) {
                 continue;
             }
-            writeUnit(entry.second, rdUnif(gen));
+            writeUnit(entry.second, makeRandomKey(entry.second));
             nUnits++;
         }
         mainOut.flush();
@@ -253,10 +253,6 @@ void Tiles2UnitsByAnchor::readAnchors(std::string& anchorFile) {
 }
 
 void Tiles2UnitsByAnchor::worker(int threadId) {
-    // Set up a per-thread random engine.
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
     // temporary file
     auto partialFile = tmpDir.path / (std::to_string(threadId) + ".txt");
     std::ofstream outFile(partialFile, std::ios::out);
@@ -355,7 +351,7 @@ void Tiles2UnitsByAnchor::worker(int threadId) {
                     if (!flag) {
                         continue;
                     }
-                    writeUnit(entry.second, rdUnif(gen));
+                    writeUnit(entry.second, makeRandomKey(entry.second));
                     nUnits++;
                 }
             }
@@ -414,9 +410,6 @@ bool Tiles2UnitsByAnchor::mergeBoundaryHexagons() {
     // Append merged boundary units to main output.
     {
         std::lock_guard<std::mutex> lock(mainOutMutex);
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<uint32_t> rdUnif(0, UINT32_MAX);
         int32_t nUnits0 = nUnits, nTot = 0;
         for (auto &mergedUnits : mergedUnitsList) {
             for (const auto &entry : mergedUnits) {
@@ -430,7 +423,7 @@ bool Tiles2UnitsByAnchor::mergeBoundaryHexagons() {
                 if (!flag) {
                     continue;
                 }
-                writeUnit(entry.second, rdUnif(gen));
+                writeUnit(entry.second, makeRandomKey(entry.second));
                 nUnits++;
             }
             nTot += mergedUnits.size();
