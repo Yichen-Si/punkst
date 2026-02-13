@@ -39,10 +39,9 @@ public:
         }
         if ((mode_ & 0x1) == 0) {
             if (!headerFile.empty()) {
-                parseHeaderFile(headerFile);
-            } else {
-                parseHeaderLine();
+                warning("%s: --header is ignored for TSV input; parsing header line from TSV file", __func__);
             }
+            parseHeaderLine();
         }
     }
     ~TileOperator() {
@@ -195,8 +194,6 @@ private:
     void classifyBlocks(int32_t tileSize);
     // Parse header from data file
     void parseHeaderLine();
-    // Parse header from json file
-    void parseHeaderFile(const std::string& headerFile);
     // Load index
     void loadIndex(const std::string& indexFile);
     void loadIndexLegacy(const std::string& indexFile);

@@ -588,6 +588,9 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
         error("Error writing header to index output file: %s", outIndex.c_str());
     }
 
+    if (headerLine_.empty()) {
+        error("%s: Missing TSV header line; cannot reorganize text input", __func__);
+    }
     if (!write_all(fdMain, headerLine_.data(), headerLine_.size())) {
         error("Error writing header");
     }

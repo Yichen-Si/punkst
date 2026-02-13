@@ -534,7 +534,7 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs<float>& R) con
 bool TileOperator::parseLine(const std::string& line, PixTopProbs<int32_t>& R) const {
     std::vector<std::string> tokens;
     split(tokens, "\t", line);
-    if (tokens.size() <= icol_max_ + 1) return false;
+    if (tokens.size() < icol_max_ + 1) return false;
     if (!str2int32(tokens[icol_x_], R.x) ||
         !str2int32(tokens[icol_y_], R.y)) {
         return false;
@@ -590,7 +590,7 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<float>& R) c
 bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const {
     std::vector<std::string> tokens;
     split(tokens, "\t", line);
-    if (tokens.size() <= icol_max_ + 1) return false;
+    if (tokens.size() < icol_max_ + 1) return false;
     if (!str2int32(tokens[icol_x_], R.x) ||
         !str2int32(tokens[icol_y_], R.y)) {
         return false;
@@ -1180,104 +1180,105 @@ void TileOperator::parseHeaderLine() {
     if (!ss.is_open()) {
         error("Error opening data file: %s", dataFile_.c_str());
     }
-    std::string line, headerLine_;
-    int32_t nline = 0;
+    std::string line;
+    std::string parsedHeaderLine;
     while (std::getline(ss, line)) {
-        nline++;
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
         if (line.empty() || line.substr(0, 2) == "##") {
             continue;
         }
         if (line[0] == '#') {
-            headerLine_ = line;
+            parsedHeaderLine = line;
         } else {
             break;
         }
     }
-    if (headerLine_.empty()) {
-        return;
+    if (parsedHeaderLine.empty()) {
+        error("%s: TSV input requires a header line starting with '#': %s", __func__, dataFile_.c_str());
     }
 
-    line = headerLine_.substr(1); // skip initial '#'
+    headerLine_ = parsedHeaderLine;
+    if (headerLine_.back() != '\n') {
+        headerLine_.push_back('\n');
+    }
+
+    line = parsedHeaderLine.substr(1); // skip initial '#'
     std::vector<std::string> tokens;
     split(tokens, "\t", line);
     std::unordered_map<std::string, uint32_t> header;
     for (uint32_t i = 0; i < tokens.size(); ++i) {
-        if (tokens[i] == "X" || tokens[i] == "Y" || tokens[i] == "Z") {
-            std::transform(tokens[i].begin(), tokens[i].end(), tokens[i].begin(), ::tolower);
+        std::string key = tokens[i];
+        if (key == "X" || key == "Y" || key == "Z") {
+            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+        } else if (key.size() > 1 && (key[0] == 'k' || key[0] == 'p')) {
+            key[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(key[0])));
         }
-        header[tokens[i]] = i;
+        header[key] = i;
     }
     if (header.find("x") == header.end() || header.find("y") == header.end()) {
-        return;
+        error("%s: tsv input must has x and y columns for coordinates\n%s", __func__, parsedHeaderLine.c_str());
     }
-    icol_x_ = header["x"];
-    icol_y_ = header["y"];
-    has_z_ = (header.find("z") != header.end());
-    if (has_z_) {
-        icol_z_ = header["z"];
-        coord_dim_ = 3;
-    } else {
-        coord_dim_ = 2;
-    }
-    int32_t k = 1;
-    while (header.find("K" + std::to_string(k)) != header.end() && header.find("P" + std::to_string(k)) != header.end()) {
-        icol_ks_.push_back(header["K" + std::to_string(k)]);
-        icol_ps_.push_back(header["P" + std::to_string(k)]);
-        k++;
-    }
-    if (icol_ks_.empty()) {
-        warning("No K and P columns found in the header");
-    }
-    k_ = k - 1;
-    kvec_.clear(); kvec_.push_back(k_);
-    icol_max_ = std::max(icol_x_, icol_y_);
-    if (has_z_) {
-        icol_max_ = std::max(icol_max_, icol_z_);
-    }
-    for (int i = 0; i < k_; ++i) {
-        icol_max_ = std::max(icol_max_, std::max(icol_ks_[i], icol_ps_[i]));
-    }
-}
 
-void TileOperator::parseHeaderFile(const std::string& headerFile) {
-    std::string line;
-    int32_t k = 1;
-    std::ifstream headerStream(headerFile);
-    if (!headerStream.is_open()) {
-        error("Error opening header file: %s", headerFile.c_str());
-    }
-    // Load the JSON header file.
-    nlohmann::json header;
-    try {
-        headerStream >> header;
-    } catch (const std::exception& idx) {
-        error("Error parsing JSON header: %s", idx.what());
-    }
-    headerStream.close();
+    const bool indexed_tsv = (formatInfo_.magic == PUNKST_INDEX_MAGIC) && ((mode_ & 0x1) == 0);
     icol_x_ = header["x"];
     icol_y_ = header["y"];
-    has_z_ = header.contains("z");
-    if (has_z_) {
-        icol_z_ = header["z"];
-        coord_dim_ = 3;
+
+    if (indexed_tsv) {
+        has_z_ = (coord_dim_ == 3);
+        if (has_z_) {
+            auto zit = header.find("z");
+            if (zit == header.end()) {
+                error("%s: 3D indexed TSV requires z column in header: %s", __func__, parsedHeaderLine.c_str());
+            }
+            icol_z_ = zit->second;
+        }
     } else {
-        coord_dim_ = 2;
+        has_z_ = (header.find("z") != header.end());
+        coord_dim_ = has_z_ ? 3 : 2;
+        if (has_z_) {
+            icol_z_ = header["z"];
+        }
     }
-    while (header.contains("K" + std::to_string(k)) && header.contains("P" + std::to_string(k))) {
-        icol_ks_.push_back(header["K" + std::to_string(k)]);
-        icol_ps_.push_back(header["P" + std::to_string(k)]);
-        k++;
+
+    icol_ks_.clear();
+    icol_ps_.clear();
+    for (int32_t k = 1; ; ++k) {
+        const std::string kcol = "K" + std::to_string(k);
+        const std::string pcol = "P" + std::to_string(k);
+        bool has_k = (header.find(kcol) != header.end());
+        bool has_p = (header.find(pcol) != header.end());
+        if (!has_k && !has_p) {
+            break;
+        }
+        if (!has_k || !has_p) {
+            error("%s: Header must include both %s and %s", __func__, kcol.c_str(), pcol.c_str());
+        }
+        icol_ks_.push_back(header[kcol]);
+        icol_ps_.push_back(header[pcol]);
     }
-    if (icol_ks_.empty()) {
-        error("No K and P columns found in the header");
+
+    if (indexed_tsv) {
+        if (static_cast<int32_t>(icol_ks_.size()) != k_) {
+            error("%s: Header has %lu K/P pairs, but index requires %d", __func__, icol_ks_.size(), k_);
+        }
+    } else {
+        if (icol_ks_.empty()) {
+            warning("%s: No K/P columns found in header", __func__);
+        }
+        k_ = static_cast<int32_t>(icol_ks_.size());
+        kvec_.clear();
+        if (k_ > 0) {
+            kvec_.push_back(k_);
+        }
     }
-    k_ = k - 1;
-    kvec_.clear(); kvec_.push_back(k_);
+
     icol_max_ = std::max(icol_x_, icol_y_);
     if (has_z_) {
         icol_max_ = std::max(icol_max_, icol_z_);
     }
-    for (int i = 0; i < k_; ++i) {
+    for (size_t i = 0; i < icol_ks_.size() && i < icol_ps_.size(); ++i) {
         icol_max_ = std::max(icol_max_, std::max(icol_ks_[i], icol_ps_[i]));
     }
 }
