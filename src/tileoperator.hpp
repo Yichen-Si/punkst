@@ -140,7 +140,9 @@ public:
         uint32_t minCompSize = 10, uint32_t minPixPerTilePerLabel = 0);
 
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
-    void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1);
+    void annotate(const std::string& ptPrefix, const std::string& outPrefix,
+        uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1,
+        const std::string& headerFile = "");
 
     void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
