@@ -149,10 +149,10 @@ def de_bulk(_args):
                 chi2, p, dof, ex = scipy.stats.chi2_contingency(tab, correction=False)
                 res.append([name,kname,chi2,p,fd,v["gene_tot"]])
 
-    chidf=pd.DataFrame(res,columns=['gene','factor','Chi2','pval','FoldChange','gene_total'])
-    chidf["Rank"] = chidf.groupby(by = "factor")["Chi2"].rank(ascending=False)
+    chidf=pd.DataFrame(res,columns=['gene','Factor','Chi2','pval','FoldChange','gene_total'])
+    chidf["Rank"] = chidf.groupby(by = "Factor")["Chi2"].rank(ascending=False)
     chidf = chidf.loc[((chidf.pval<pcut)&(chidf.FoldChange>fcut)) | (chidf.Rank < args.min_output_per_factor), :]
-    chidf.sort_values(by=['factor','Chi2'],ascending=[True,False],inplace=True)
+    chidf.sort_values(by=['Factor','Chi2'],ascending=[True,False],inplace=True)
     chidf.Chi2 = chidf.Chi2.map(lambda x : "{:.1f}".format(x) )
     chidf.FoldChange = chidf.FoldChange.map(lambda x : "{:.2f}".format(x) )
     chidf.gene_total = chidf.gene_total.astype(int)
