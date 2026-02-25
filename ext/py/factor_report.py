@@ -11,6 +11,7 @@ def factor_report(_args):
     parser.add_argument('--de_neighbor', type=str, default='', help='')
     parser.add_argument('--pseudobulk', type=str, help='')
     parser.add_argument('--feature_label', type=str, default="Feature", help='')
+    parser.add_argument('--factor_label', type=str, default="Factor", help='')
     parser.add_argument('--color_table', type=str, default='', help='')
     parser.add_argument('--n_top_gene', type=int, default=20, help='')
     parser.add_argument('--min_top_gene', type=int, default=10, help='')
@@ -43,7 +44,7 @@ def factor_report(_args):
     def load_de(path):
         if not os.path.exists(path):
             sys.exit(f"Cannot find DE file")
-        df = pd.read_csv(path, sep='\t', dtype={'Factor':str})
+        df = pd.read_csv(path, sep='\t', dtype={args.factor_label:str})
         df.rename(columns = {"logPval":"log10pval", "ApproxFC":"FoldChange", "gene":"Feature", "Gene":"Feautre", "Pval":"pval"}, inplace=True)
         sortby = "log10pval"
         if sortby not in df.columns:
@@ -83,10 +84,10 @@ def factor_report(_args):
     top_gene = []
     top_gene_neighbor = []
     # Top genes by Chi2
-    de.sort_values(by=['Factor', sortby],ascending=False,inplace=True)
-    de["Rank"] = de.groupby(by = "Factor")[sortby].rank(ascending=False, method = "min").astype(int)
+    de.sort_values(by=[args.factor_label, sortby],ascending=False,inplace=True)
+    de["Rank"] = de.groupby(by = args.factor_label)[sortby].rank(ascending=False, method = "min").astype(int)
     for k, kname in enumerate(factor_header):
-        indx = de.Factor.eq(kname)
+        indx = de[args.factor_label].eq(kname)
         v = de.loc[indx & ( (de.Rank < mtop) | \
                 ((de.log10pval > min_log10p) & (de.FoldChange >= args.min_fc)) ), \
                 'Feature'].iloc[:ntop].values
@@ -95,10 +96,10 @@ def factor_report(_args):
         else:
             top_gene.append([kname, ', '.join(v)])
     if neighbor_de is not None:
-        neighbor_de.sort_values(by=['Factor', neighbor_sortby],ascending=False,inplace=True)
-        neighbor_de["Rank"] = neighbor_de.groupby(by = "Factor")[neighbor_sortby].rank(ascending=False, method = "min").astype(int)
+        neighbor_de.sort_values(by=[args.factor_label, neighbor_sortby],ascending=False,inplace=True)
+        neighbor_de["Rank"] = neighbor_de.groupby(by = args.factor_label)[neighbor_sortby].rank(ascending=False, method = "min").astype(int)
         for k, kname in enumerate(factor_header):
-            indx = neighbor_de.Factor.eq(kname)
+            indx = neighbor_de[args.factor_label].eq(kname)
             v = neighbor_de.loc[indx & ( (neighbor_de.Rank < mtop) | \
                     ((neighbor_de.log10pval > min_log10p) & (neighbor_de.FoldChange >= args.min_fc)) ), \
                     'Feature'].iloc[:ntop].values
@@ -107,10 +108,10 @@ def factor_report(_args):
             else:
                 top_gene_neighbor.append(', '.join(v))
     # Top genes by fold change
-    de.sort_values(by=['Factor','FoldChange'],ascending=False,inplace=True)
-    de["Rank"] = de.groupby(by = "Factor").FoldChange.rank(ascending=False, method = "min").astype(int)
+    de.sort_values(by=[args.factor_label,'FoldChange'],ascending=False,inplace=True)
+    de["Rank"] = de.groupby(by = args.factor_label).FoldChange.rank(ascending=False, method = "min").astype(int)
     for k, kname in enumerate(factor_header):
-        indx = de.Factor.eq(kname)
+        indx = de[args.factor_label].eq(kname)
         v = de.loc[indx & ( (de.Rank < mtop) | \
                 ((de.log10pval > min_log10p) & (de.FoldChange >= args.min_fc)) ), \
                 'Feature'].iloc[:ntop].values
