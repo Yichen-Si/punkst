@@ -165,7 +165,7 @@ def factor_report(_args):
         if nanno > 0:
             table["Factor"] = table["Factor"].map(anno)
 
-    f = output_pref+".info.tsv"
+    f = output_pref+".tsv"
     table.loc[table.PostUMI.ge(10), oheader].to_csv(f, sep='\t', index=False, header=True, float_format="%.5f")
     with open(f, 'r') as rf:
         lines = rf.readlines()
