@@ -89,7 +89,107 @@ void TileOperator::printIndex() const {
     }
 }
 
+void TileOperator::openDataStream() {
+    if (mode_ & 0x1) {
+        if (dataStream_.is_open()) {
+            dataStream_.close();
+        }
+        dataStream_.open(dataFile_, std::ios::binary);
+        if (!dataStream_.is_open()) {
+            error("Error opening data file: %s", dataFile_.c_str());
+        }
+        return;
+    }
+
+    // Streaming text sources (stdin/gzip) are opened once and consumed sequentially.
+    if (isStreamingTextInput()) {
+        if (textStreamOpen_) {
+            return;
+        }
+        if (isTextStdinInput()) {
+            if (!std::cin.good()) {
+                std::cin.clear();
+            }
+            textStreamOpen_ = true;
+            return;
+        }
+        if (isTextGzipInput()) {
+            gzDataStream_.reset(gzopen(dataFile_.c_str(), "rb"));
+            if (!gzDataStream_) {
+                error("Error opening gzipped input file: %s", dataFile_.c_str());
+            }
+            textStreamOpen_ = true;
+            return;
+        }
+    }
+
+    if (dataStream_.is_open()) {
+        dataStream_.close();
+    }
+    dataStream_.open(dataFile_);
+    if (!dataStream_.is_open()) {
+        error("Error opening data file: %s", dataFile_.c_str());
+    }
+    std::streampos pos = dataStream_.tellg();
+    std::string line;
+    while (std::getline(dataStream_, line)) {
+        if (!(line.empty() || line[0] == '#')) {
+            break;
+        }
+        pos = dataStream_.tellg();
+    }
+    dataStream_.clear();
+    dataStream_.seekg(pos);
+    hasPendingTextLine_ = false;
+    textStreamOpen_ = true;
+}
+
+bool TileOperator::readNextTextLine(std::string& line) {
+    if (hasPendingTextLine_) {
+        line = std::move(pendingTextLine_);
+        pendingTextLine_.clear();
+        hasPendingTextLine_ = false;
+        return true;
+    }
+
+    if (isTextStdinInput()) {
+        return static_cast<bool>(std::getline(std::cin, line));
+    }
+
+    if (isTextGzipInput()) {
+        if (!gzDataStream_) {
+            return false;
+        }
+        line.clear();
+        constexpr int32_t BUF_SZ = 1 << 16;
+        char buf[BUF_SZ];
+        while (true) {
+            char* ret = gzgets(gzDataStream_.get(), buf, BUF_SZ);
+            if (ret == nullptr) {
+                return !line.empty();
+            }
+            line.append(ret);
+            if (!line.empty() && line.back() == '\n') {
+                break;
+            }
+        }
+        if (!line.empty() && line.back() == '\n') {
+            line.pop_back();
+        }
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        return true;
+    }
+
+    return static_cast<bool>(std::getline(dataStream_, line));
+}
+
 int32_t TileOperator::query(float qxmin,float qxmax,float qymin,float qymax) {
+    if ((mode_ & 0x1) == 0 && !canSeekTextInput()) {
+        error("%s: --filter/query requires a seekable text file. Input '%s' is a stream (stdin/gzip).",
+            __func__, dataFile_.c_str());
+    }
     queryBox_ = Rectangle<float>(qxmin, qymin, qxmax, qymax);
     bounded_ = true;
     blocks_.clear();
@@ -670,7 +770,7 @@ int32_t TileOperator::next(PixTopProbs<float>& out, bool rawCoord) {
     // Text mode
     std::string line;
     while (true) {
-        if (!std::getline(dataStream_, line)) {
+        if (!readNextTextLine(line)) {
             done_ = true;
             return -1;
         }
@@ -716,7 +816,7 @@ int32_t TileOperator::next(PixTopProbs<int32_t>& out) {
     // Text mode
     std::string line;
     while (true) {
-        if (!std::getline(dataStream_, line)) {
+        if (!readNextTextLine(line)) {
             done_ = true;
             return -1;
         }
@@ -785,7 +885,7 @@ int32_t TileOperator::next(PixTopProbs3D<float>& out, bool rawCoord) {
     // Text mode
     std::string line;
     while (true) {
-        if (!std::getline(dataStream_, line)) {
+        if (!readNextTextLine(line)) {
             done_ = true;
             return -1;
         }
@@ -833,7 +933,7 @@ int32_t TileOperator::next(PixTopProbs3D<int32_t>& out) {
     // Text mode
     std::string line;
     while (true) {
-        if (!std::getline(dataStream_, line)) {
+        if (!readNextTextLine(line)) {
             done_ = true;
             return -1;
         }
@@ -916,7 +1016,7 @@ int32_t TileOperator::nextBounded(PixTopProbs<float>& out, bool rawCoord) {
     std::string line;
     while (true) {
         auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed || !std::getline(dataStream_, line)) {
+        if (pos_ >= blk.idx.ed || !readNextTextLine(line)) {
             if (++idx_block_ >= (int32_t) blocks_.size()) {
                 done_ = true;
                 return -1;
@@ -974,7 +1074,7 @@ int32_t TileOperator::nextBounded(PixTopProbs<int32_t>& out) {
             }
             pos_ += formatInfo_.recordSize;
         } else {
-            if (!std::getline(dataStream_, line))
+            if (!readNextTextLine(line))
                 error("%s: Corrupted data or invalid index", __func__);
             pos_ += line.size() + 1; // +1 for newline
             if (line.empty() || line[0] == '#') {continue;}
@@ -1073,7 +1173,7 @@ int32_t TileOperator::nextBounded(PixTopProbs3D<float>& out, bool rawCoord) {
     std::string line;
     while (true) {
         auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed || !std::getline(dataStream_, line)) {
+        if (pos_ >= blk.idx.ed || !readNextTextLine(line)) {
             if (++idx_block_ >= (int32_t) blocks_.size()) {
                 done_ = true;
                 return -1;
@@ -1133,7 +1233,7 @@ int32_t TileOperator::nextBounded(PixTopProbs3D<int32_t>& out) {
             }
             pos_ += formatInfo_.recordSize;
         } else {
-            if (!std::getline(dataStream_, line))
+            if (!readNextTextLine(line))
                 error("%s: Corrupted data or invalid index", __func__);
             pos_ += line.size() + 1; // +1 for newline
             if (line.empty() || line[0] == '#') {continue;}
@@ -1176,13 +1276,19 @@ void TileOperator::loadIndexLegacy(const std::string& indexFile) {
 }
 
 void TileOperator::parseHeaderLine() {
-    std::ifstream ss(dataFile_);
-    if (!ss.is_open()) {
-        error("Error opening data file: %s", dataFile_.c_str());
+    std::ifstream ss;
+    const bool streamingInput = isStreamingTextInput();
+    if (streamingInput) {
+        openDataStream();
+    } else {
+        ss.open(dataFile_);
+        if (!ss.is_open()) {
+            error("Error opening data file: %s", dataFile_.c_str());
+        }
     }
     std::string line;
     std::string parsedHeaderLine;
-    while (std::getline(ss, line)) {
+    while ((streamingInput && readNextTextLine(line)) || (!streamingInput && std::getline(ss, line))) {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
@@ -1192,6 +1298,10 @@ void TileOperator::parseHeaderLine() {
         if (line[0] == '#') {
             parsedHeaderLine = line;
         } else {
+            if (streamingInput) {
+                hasPendingTextLine_ = true;
+                pendingTextLine_ = line;
+            }
             break;
         }
     }

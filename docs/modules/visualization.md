@@ -12,6 +12,10 @@ punkst draw-pixel-factors --in ${path}/pixel.decode --in-color ${path}/color.rgb
 
 `--binary` indicates the input data is in binary format (if you used `punkst pixel-decode` with `--output-binary`)
 
+`--in-tsv`/`--in-data` can also accept a gzipped TSV (`.tsv.gz`) or `-` for stdin stream input.
+
+`--filter` requires a seekable TSV with index and is not supported for stdin or gzipped stream input.
+
 `--out` specifies the output png file.
 
 `--in-color` specifies a tsv file with the colors for each factor. The first three columns will be interpreted as R, G, B values in the range $0-255$. The valid lines will be assigned to factors in the order they appear in this file. An example color table can be found in `punkst/ext/py/cmap.48.tsv`.

@@ -21,11 +21,11 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
     ParamList pl;
     // Input options
-    pl.add_option("in-data", "Input data file. Lines begin with # will be ignored", dataFile)
+    pl.add_option("in-data", "Input data file (.tsv/.tsv.gz, or '-' for stdin). Lines beginning with # are ignored", dataFile)
       .add_option("index", "Index file", indexFile)
       .add_option("in", "Input prefix (equal to --in-tsv <in>.tsv/.bin --index <in>.index)", inPrefix)
       .add_option("binary", "Data file is in binary format", isBinary)
-      .add_option("in-tsv", "Input TSV file. Lines begin with # will be ignored", dataFile) // backward compatible
+      .add_option("in-tsv", "Input TSV file (.tsv/.tsv.gz, or '-' for stdin). Lines beginning with # are ignored", dataFile) // backward compatible
       .add_option("header-json", "Header JSON file", headerFile) // to deprecate
       .add_option("in-color", "Input color file (RGB triples)", colorFile)
       .add_option("scale", "Scale factor: (x-xmin)/scale → pixel_x", scale)
@@ -67,6 +67,11 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         indexFile = inPrefix + ".index";
     } else if (dataFile.empty()) {
         error("One of --in --in-tsv or --in-data must be specified");
+    }
+    const bool streamingTsv = !isBinary &&
+        (dataFile == "-" || dataFile == "/dev/stdin" || ends_with(dataFile, ".gz"));
+    if (filter && streamingTsv) {
+        error("--filter requires seekable TSV input and is not supported for stdin or .gz input");
     }
     if (filter && indexFile.empty())
         error("Index file is required when --filter is set");

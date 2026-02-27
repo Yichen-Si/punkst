@@ -32,6 +32,14 @@ struct SparseObsDict {
 class TileOperator {
 
 public:
+    struct GzCloser {
+        void operator()(gzFile_s* fp) const noexcept {
+            if (fp) {
+                gzclose(fp);
+            }
+        }
+    };
+    using GzHandle = std::unique_ptr<gzFile_s, GzCloser>;
     using PixelKey3 = std::tuple<int32_t, int32_t, int32_t>;
     TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "", int32_t threads = 1) : dataFile_(dataFile), indexFile_(indexFile), threads_(std::max(0, threads)) {
         if (!indexFile.empty()) {
@@ -45,9 +53,7 @@ public:
         }
     }
     ~TileOperator() {
-        if (dataStream_.is_open()) {
-            dataStream_.close();
-        }
+        closeTextStream();
     }
     TileOperator(const TileOperator&) = delete;
     TileOperator& operator=(const TileOperator&) = delete;
@@ -86,30 +92,25 @@ public:
     }
     void setFactorCount(int32_t K) {K_ = K;}
 
-    void openDataStream() {
-        dataStream_.open(dataFile_);
-        if (!dataStream_.is_open()) {
-            error("Error opening data file: %s", dataFile_.c_str());
-        }
-        if ((mode_ & 0x1) == 0) {
-            size_t pos = dataStream_.tellg();
-            std::string line;
-            while (std::getline(dataStream_, line)) {
-                if (!(line.empty() || line[0] == '#')) {
-                    break;
-                }
-                pos = dataStream_.tellg();
-            }
-            dataStream_.seekg(pos);
-        }
-    }
+    void openDataStream();
 
     void resetReader() {
-        if (dataStream_.is_open()) {
-            dataStream_.clear();
-            dataStream_.seekg(0);
-        } else {
+        if ((mode_ & 0x1) == 0 && isTextStdinInput()) {
+            error("%s: Cannot reset reader for stdin stream input", __func__);
+        }
+
+        if ((mode_ & 0x1) == 0 && isTextGzipInput()) {
+            closeTextStream();
+            hasPendingTextLine_ = false;
             openDataStream();
+        } else {
+            if (dataStream_.is_open()) {
+                dataStream_.clear();
+                dataStream_.seekg(0);
+            } else {
+                openDataStream();
+            }
+            hasPendingTextLine_ = false;
         }
         done_ = false;
         idx_block_ = 0;
@@ -170,6 +171,10 @@ public:
 private:
     std::string dataFile_, indexFile_;
     std::ifstream dataStream_;
+    GzHandle gzDataStream_ = nullptr;
+    bool textStreamOpen_ = false;
+    bool hasPendingTextLine_ = false;
+    std::string pendingTextLine_;
     std::string headerLine_;
     uint32_t icol_x_, icol_y_, icol_z_, icol_max_ = 0;
     bool has_z_ = false;
@@ -189,6 +194,20 @@ private:
     std::unordered_map<TileKey, size_t, TileKeyHash> tile_lookup_;
     int32_t threads_ = 1;
     bool regular_labeled_raster_ = false;
+
+    bool isTextInput() const { return ((mode_ & 0x1) == 0); }
+    bool isTextStdinInput() const { return dataFile_ == "-" || dataFile_ == "/dev/stdin"; }
+    bool isTextGzipInput() const { return ends_with(dataFile_, ".gz"); }
+    bool isStreamingTextInput() const { return isTextInput() && (isTextStdinInput() || isTextGzipInput()); }
+    bool canSeekTextInput() const { return isTextInput() && !isStreamingTextInput(); }
+    void closeTextStream() {
+        gzDataStream_.reset();
+        if (dataStream_.is_open()) {
+            dataStream_.close();
+        }
+        textStreamOpen_ = false;
+    }
+    bool readNextTextLine(std::string& line);
 
     // Determine if a block is strictly within a tile or a boundary block
     void classifyBlocks(int32_t tileSize);
