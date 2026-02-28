@@ -16,6 +16,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool isBinary = false;
     bool reorganize = false;
     bool printIndex = false;
+    bool extractRegion = false;
     bool dumpTSV = false;
     bool probDot = false;
     bool cellAnno = false;
@@ -36,6 +37,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     int32_t kOut = 0;
     int32_t K = -1;
     float maxCellDiameter = 50;
+    float xmin = 0.0f, xmax = -1.0f, ymin = 0.0f, ymax = -1.0f;
     int32_t threads = 1;
     int32_t debug_ = 0;
 
@@ -47,6 +49,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("K", "Total number of factors in the data", K)
       .add_option("tile-size", "Tile size in the original data", tileSize);
     pl.add_option("print-index", "Print the index entries to stdout", printIndex)
+      .add_option("extract-region", "Extract all records within --xmin/--xmax/--ymin/--ymax and write a new indexed file pair", extractRegion)
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
       .add_option("smooth-top-labels", "Per-tile island smoothing of top labels (>0 to enable)", smoothTopLabelsRounds)
@@ -70,7 +73,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
-      .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter);
+      .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter)
+      .add_option("xmin", "Minimum x coordinate for --extract-region", xmin)
+      .add_option("xmax", "Maximum x coordinate for --extract-region", xmax)
+      .add_option("ymin", "Minimum y coordinate for --extract-region", ymin)
+      .add_option("ymax", "Maximum y coordinate for --extract-region", ymax);
     pl.add_option("out", "Output prefix", outPrefix)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates (for dump-tsv)", coordDigits)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities (for dump-tsv)", probDigits)
@@ -110,6 +117,14 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     if (reorganize) {
         tileOp.reorgTiles(outPrefix, tileSize);
+        return 0;
+    }
+
+    if (extractRegion) {
+        if (xmin >= xmax || ymin >= ymax) {
+            error("Valid --xmin/--xmax/--ymin/--ymax are required for --extract-region");
+        }
+        tileOp.extractRegion(outPrefix, xmin, xmax, ymin, ymax);
         return 0;
     }
 

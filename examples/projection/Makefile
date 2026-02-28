@@ -28,7 +28,7 @@ COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv
 
 # --- Compute the full list of final report files ---
 REPORTS := \
-  $(OUTPREF).pixel.html \
+  $(OUTPREF).pixel.info.html \
   $(OUTPREF).pixel.png
 
 .PHONY: all clean clean_all
@@ -85,7 +85,7 @@ $(OUTPREF).pixel.de_bulk.tsv: \
 	  --out $(OUTPREF).pixel.de_bulk.tsv \
 	  --threads $(THREADS)
 
-$(OUTPREF).pixel.html: \
+$(OUTPREF).pixel.info.html: \
     $(OUTPREF).pixel.decode.stamp \
     $(OUTPREF).pixel.de_bulk.tsv \
     $(COLOR_TABLE)

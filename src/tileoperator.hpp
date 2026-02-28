@@ -130,6 +130,8 @@ public:
 
     void printIndex() const;
 
+    void extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax);
+
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
 
     void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
@@ -228,6 +230,7 @@ private:
     bool parseLine(const std::string& line, PixTopProbs<int32_t>& R) const;
     bool parseLine(const std::string& line, PixTopProbs3D<float>& R) const;
     bool parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const;
+    void decodeBinaryXY(const char* recBuf, float& x, float& y) const;
     // Read one 2D record and convert coordinates to integer pixel space.
     bool readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos,
         int32_t& recX, int32_t& recY, TopProbs& rec) const;

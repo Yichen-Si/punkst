@@ -40,7 +40,7 @@ TAB := $(shell printf '\t')
 REPORTS := \
   $(foreach H,$(HEXGRIDS),\
     $(foreach K,$(TOPICS),\
-      $(DATADIR)/hex_$(H)_$(NUR).k$(K).pixel.html \
+      $(DATADIR)/hex_$(H)_$(NUR).k$(K).pixel.info.html \
       $(DATADIR)/hex_$(H)_$(NUR).k$(K).pixel.png \
     )\
   )
@@ -185,7 +185,7 @@ $(foreach H,$(HEXGRIDS),\
 )
 
 define REPORT_RULE
-$(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.html: \
+$(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.info.html: \
     $(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.decode.stamp \
 	$(DATADIR)/hex_$(1)_$(NUR).k$(2).pixel.de_bulk.tsv \
     $(DATADIR)/hex_$(1)_$(NUR).k$(2).color.rgb.tsv

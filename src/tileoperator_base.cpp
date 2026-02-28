@@ -89,6 +89,249 @@ void TileOperator::printIndex() const {
     }
 }
 
+void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax) {
+    if (qxmin >= qxmax || qymin >= qymax) {
+        error("%s: Invalid rectangle [%.3f, %.3f) x [%.3f, %.3f)", __func__, qxmin, qxmax, qymin, qymax);
+    }
+    const Rectangle<float> queryRect(qxmin, qymin, qxmax, qymax);
+    const int32_t nSelected = query(qxmin, qxmax, qymin, qymax);
+    if (nSelected <= 0) {
+        warning("%s: No indexed blocks intersect the queried region", __func__);
+        return;
+    }
+    notice("%s: Found %d intersecting tiles", __func__, nSelected);
+    const std::vector<TileInfo>& selected = blocks_;
+    const int32_t outTileSize = formatInfo_.tileSize;
+    if (outTileSize <= 0) {
+        error("%s: Invalid tileSize=%d; cannot write regular tiled output", __func__, outTileSize);
+    }
+
+    const bool binaryInput = (mode_ & 0x1) != 0;
+    const std::string outData = outPrefix + (binaryInput ? ".bin" : ".tsv");
+    const std::string outIndex = outPrefix + ".index";
+
+    std::ifstream in(dataFile_, std::ios::binary);
+    if (!in.is_open()) {
+        error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+    }
+    IndexHeader outHeader = formatInfo_;
+    if (outHeader.magic != PUNKST_INDEX_MAGIC) {
+        outHeader = IndexHeader();
+        outHeader.tileSize = formatInfo_.tileSize;
+        outHeader.pixelResolution = formatInfo_.pixelResolution;
+        outHeader.coordType = (mode_ & 0x4) ? 1 : 0;
+        outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
+        if (!kvec_.empty()) {
+            outHeader.packKvec(kvec_);
+        } else if (k_ > 0) {
+            outHeader.packKvec(std::vector<uint32_t>{static_cast<uint32_t>(k_)});
+        }
+    }
+    outHeader.magic = PUNKST_INDEX_MAGIC;
+    outHeader.xmin = queryRect.xmin;
+    outHeader.xmax = queryRect.xmax;
+    outHeader.ymin = queryRect.ymin;
+    outHeader.ymax = queryRect.ymax;
+
+    Rectangle<float> outBox;
+    std::ofstream out;
+    std::ofstream idxOut;
+    bool outputOpen = false;
+    uint64_t currentOffset = 0;
+    size_t nEntries = 0;
+    auto ensureOutputReady = [&]() {
+        if (outputOpen) {
+            return;
+        }
+        out.open(outData, std::ios::binary);
+        if (!out.is_open()) {
+            error("%s: Error opening output data file: %s", __func__, outData.c_str());
+        }
+        idxOut.open(outIndex, std::ios::binary);
+        if (!idxOut.is_open()) {
+            error("%s: Error opening output index file: %s", __func__, outIndex.c_str());
+        }
+        if (!binaryInput) {
+            if (headerLine_.empty()) {
+                error("%s: TSV input is missing a parsed header line", __func__);
+            }
+            out.write(headerLine_.data(), static_cast<std::streamsize>(headerLine_.size()));
+            if (!out) {
+                error("%s: Error writing header to %s", __func__, outData.c_str());
+            }
+        }
+        idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
+        if (!idxOut) {
+            error("%s: Error writing placeholder header to %s", __func__, outIndex.c_str());
+        }
+        currentOffset = static_cast<uint64_t>(out.tellp());
+        outputOpen = true;
+    };
+    for (const auto& blk : selected) {
+        TileKey tile{
+            blk.row,
+            blk.col
+        };
+        if (tile.row == std::numeric_limits<int32_t>::lowest() ||
+            tile.col == std::numeric_limits<int32_t>::lowest()) {
+            tile.row = static_cast<int32_t>(std::floor(static_cast<float>(blk.idx.ymin) / outTileSize));
+            tile.col = static_cast<int32_t>(std::floor(static_cast<float>(blk.idx.xmin) / outTileSize));
+        }
+        IndexEntryF newEntry(tile.row, tile.col);
+        tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, outTileSize);
+        newEntry.st = currentOffset;
+        newEntry.ed = currentOffset;
+        newEntry.n = 0;
+
+        if (blk.contained) {
+            if (blk.idx.n == 0 || blk.idx.ed <= blk.idx.st) {
+                continue;
+            }
+            ensureOutputReady();
+            newEntry.st = currentOffset;
+            newEntry.ed = currentOffset;
+            if (!copy_stream_range(in, out, blk.idx.st, blk.idx.ed)) {
+                error("%s: Error copying input bytes from %" PRIu64 " to %" PRIu64, __func__, blk.idx.st, blk.idx.ed);
+            }
+            const uint64_t copied = blk.idx.ed - blk.idx.st;
+            currentOffset += copied;
+            newEntry.ed = currentOffset;
+            newEntry.n = blk.idx.n;
+            idxOut.write(reinterpret_cast<const char*>(&newEntry), sizeof(newEntry));
+            if (!idxOut) {
+                error("%s: Error writing index entry", __func__);
+            }
+            outBox.extendToInclude(Rectangle<float>(
+                static_cast<float>(newEntry.xmin), static_cast<float>(newEntry.ymin),
+                static_cast<float>(newEntry.xmax), static_cast<float>(newEntry.ymax)));
+            ++nEntries;
+            continue;
+        }
+
+        in.clear();
+        in.seekg(static_cast<std::streamoff>(blk.idx.st));
+        if (!in) {
+            error("%s: Error seeking input stream to %" PRIu64, __func__, blk.idx.st);
+        }
+
+        if (binaryInput) {
+            const size_t recSize = formatInfo_.recordSize;
+            if (recSize == 0) {
+                error("%s: Binary input requires a positive record size", __func__);
+            }
+            std::vector<char> recBuf(recSize);
+            uint64_t pos = blk.idx.st;
+            while (pos < blk.idx.ed) {
+                in.read(recBuf.data(), static_cast<std::streamsize>(recSize));
+                if (in.gcount() != static_cast<std::streamsize>(recSize)) {
+                    error("%s: Corrupted data or invalid index", __func__);
+                }
+                pos += recSize;
+                float x = 0.0f;
+                float y = 0.0f;
+                decodeBinaryXY(recBuf.data(), x, y);
+                if (!queryRect.contains(x, y)) {
+                    continue;
+                }
+                if (newEntry.n == 0) {
+                    ensureOutputReady();
+                    newEntry.st = currentOffset;
+                    newEntry.ed = currentOffset;
+                }
+                out.write(recBuf.data(), static_cast<std::streamsize>(recSize));
+                if (!out) {
+                    error("%s: Error writing binary record to %s", __func__, outData.c_str());
+                }
+                currentOffset += recSize;
+                newEntry.ed = currentOffset;
+                ++newEntry.n;
+            }
+        } else {
+            std::string line;
+            uint64_t pos = blk.idx.st;
+            while (pos < blk.idx.ed) {
+                if (!std::getline(in, line)) {
+                    error("%s: Corrupted data or invalid index", __func__);
+                }
+                pos += static_cast<uint64_t>(line.size()) + 1;
+                if (line.empty() || line[0] == '#') {
+                    continue;
+                }
+
+                float x = 0.0f;
+                float y = 0.0f;
+                if (coord_dim_ == 3) {
+                    PixTopProbs3D<float> rec;
+                    if (!parseLine(line, rec)) {
+                        error("%s: Invalid text record", __func__);
+                    }
+                    x = rec.x;
+                    y = rec.y;
+                } else {
+                    PixTopProbs<float> rec;
+                    if (!parseLine(line, rec)) {
+                        error("%s: Invalid text record", __func__);
+                    }
+                    x = rec.x;
+                    y = rec.y;
+                }
+
+                if (!queryRect.contains(x, y)) {
+                    continue;
+                }
+                if (newEntry.n == 0) {
+                    ensureOutputReady();
+                    newEntry.st = currentOffset;
+                    newEntry.ed = currentOffset;
+                }
+                out << line << "\n";
+                if (!out) {
+                    error("%s: Error writing text record to %s", __func__, outData.c_str());
+                }
+                currentOffset = static_cast<uint64_t>(out.tellp());
+                newEntry.ed = currentOffset;
+                ++newEntry.n;
+            }
+        }
+
+        if (newEntry.n == 0) {
+            continue;
+        }
+        idxOut.write(reinterpret_cast<const char*>(&newEntry), sizeof(newEntry));
+        if (!idxOut) {
+            error("%s: Error writing index entry", __func__);
+        }
+        outBox.extendToInclude(Rectangle<float>(
+            static_cast<float>(newEntry.xmin), static_cast<float>(newEntry.ymin),
+            static_cast<float>(newEntry.xmax), static_cast<float>(newEntry.ymax)));
+        ++nEntries;
+    }
+
+    if (nEntries == 0) {
+        warning("%s: No records found in the queried region", __func__);
+        return;
+    }
+
+    uint32_t outMode = ((static_cast<uint32_t>(K_) & 0xFFFFu) << 16) | (mode_ & 0xFFFFu);
+    outMode &= ~0x8u;
+    outHeader.mode = outMode;
+    outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
+    outHeader.coordType = (mode_ & 0x4) ? 1 : 0;
+    outHeader.xmin = outBox.xmin;
+    outHeader.xmax = outBox.xmax;
+    outHeader.ymin = outBox.ymin;
+    outHeader.ymax = outBox.ymax;
+    idxOut.seekp(0);
+    idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
+    if (!idxOut) {
+        error("%s: Error finalizing output index header", __func__);
+    }
+
+    out.close();
+    idxOut.close();
+    notice("%s: Wrote %zu indexed block(s) to %s (index: %s)", __func__, nEntries, outData.c_str(), outIndex.c_str());
+}
+
 void TileOperator::openDataStream() {
     if (mode_ & 0x1) {
         if (dataStream_.is_open()) {
@@ -713,6 +956,24 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<int32_t>& R)
         }
     }
     return true;
+}
+
+void TileOperator::decodeBinaryXY(const char* recBuf, float& x, float& y) const {
+    if (mode_ & 0x4) {
+        int32_t xi = 0;
+        int32_t yi = 0;
+        std::memcpy(&xi, recBuf, sizeof(xi));
+        std::memcpy(&yi, recBuf + sizeof(xi), sizeof(yi));
+        x = static_cast<float>(xi);
+        y = static_cast<float>(yi);
+        if (mode_ & 0x2) {
+            x *= formatInfo_.pixelResolution;
+            y *= formatInfo_.pixelResolution;
+        }
+        return;
+    }
+    std::memcpy(&x, recBuf, sizeof(x));
+    std::memcpy(&y, recBuf + sizeof(x), sizeof(y));
 }
 
 int32_t TileOperator::next(PixTopProbs<float>& out, bool rawCoord) {

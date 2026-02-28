@@ -699,19 +699,7 @@ void TileOperator::reorgTilesBinary(const std::string& outPrefix, int32_t tileSi
                 error("%s: Read error block %lu", __func__, i);
 
             float x, y;
-            if (mode_ & 0x4) {
-                int32_t xi = *reinterpret_cast<int32_t*>(recBuf.data());
-                int32_t yi = *reinterpret_cast<int32_t*>(recBuf.data() + 4);
-                x = static_cast<float>(xi);
-                y = static_cast<float>(yi);
-            } else {
-                x = *reinterpret_cast<float*>(recBuf.data());
-                y = *reinterpret_cast<float*>(recBuf.data() + 4);
-            }
-            if (mode_ & 0x2) {
-                x *= formatInfo_.pixelResolution;
-                y *= formatInfo_.pixelResolution;
-            }
+            decodeBinaryXY(recBuf.data(), x, y);
 
             int32_t c = static_cast<int32_t>(std::floor(x / tileSize));
             int32_t r = static_cast<int32_t>(std::floor(y / tileSize));

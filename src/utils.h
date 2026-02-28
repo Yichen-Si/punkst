@@ -43,6 +43,33 @@ static bool ends_with(const std::string &s, const std::string &suffix) {
         && 0 == s.compare(s.size()-suffix.size(), suffix.size(), suffix);
 }
 
+inline bool copy_stream_range(std::istream& in, std::ostream& out, uint64_t st, uint64_t ed) {
+    if (ed < st) {
+        return false;
+    }
+    in.clear();
+    in.seekg(static_cast<std::streamoff>(st));
+    if (!in) {
+        return false;
+    }
+    char buf[1 << 16];
+    uint64_t remaining = ed - st;
+    while (remaining > 0) {
+        const uint64_t chunk64 = (remaining < sizeof(buf)) ? remaining : static_cast<uint64_t>(sizeof(buf));
+        const std::streamsize chunk = static_cast<std::streamsize>(chunk64);
+        in.read(buf, chunk);
+        if (in.gcount() != chunk) {
+            return false;
+        }
+        out.write(buf, chunk);
+        if (!out) {
+            return false;
+        }
+        remaining -= chunk64;
+    }
+    return true;
+}
+
 // String to number conversion functions
 template<typename T>
 bool str2num(const std::string &str, T &value) {

@@ -75,9 +75,12 @@ struct IndexHeader {
 
 // Index entry for one tile (or block)
 struct IndexEntryF {
-    uint64_t st, ed;
-    uint32_t n;
-    int32_t xmin, xmax, ymin, ymax; // Global coordinate, original units
+    uint64_t st = 0, ed = 0;
+    uint32_t n = 0;
+    int32_t xmin = std::numeric_limits<int32_t>::max();
+    int32_t xmax = std::numeric_limits<int32_t>::lowest();
+    int32_t ymin = std::numeric_limits<int32_t>::max();
+    int32_t ymax = std::numeric_limits<int32_t>::lowest(); // Global coordinate, original units
     // row/col may not apply for generic rectangular blocks
     int32_t row = std::numeric_limits<int32_t>::lowest();
     int32_t col = std::numeric_limits<int32_t>::lowest();
@@ -86,6 +89,25 @@ struct IndexEntryF {
     IndexEntryF(uint64_t s, uint64_t e, uint32_t nn,
                 int32_t x0=-1, int32_t x1=-1, int32_t y0=-1, int32_t y1=-1)
         : st(s), ed(e), n(nn), xmin(x0), xmax(x1), ymin(y0), ymax(y1) {}
+    void resetBounds() {
+        xmin = std::numeric_limits<int32_t>::max();
+        xmax = std::numeric_limits<int32_t>::lowest();
+        ymin = std::numeric_limits<int32_t>::max();
+        ymax = std::numeric_limits<int32_t>::lowest();
+    }
+    bool hasBounds() const {
+        return xmin < xmax && ymin < ymax;
+    }
+    void extendToInclude(float x, float y) {
+        const int32_t x0 = static_cast<int32_t>(std::floor(x));
+        const int32_t x1 = x0 + 1;
+        const int32_t y0 = static_cast<int32_t>(std::floor(y));
+        const int32_t y1 = y0 + 1;
+        if (x0 < xmin) xmin = x0;
+        if (x1 > xmax) xmax = x1;
+        if (y0 < ymin) ymin = y0;
+        if (y1 > ymax) ymax = y1;
+    }
 };
 
 // Identify a tile by (row, col)

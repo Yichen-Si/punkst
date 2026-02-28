@@ -374,7 +374,7 @@ def factor_report(_args):
         tree_image_caption=None,
     )
 
-    out_html = args.output_pref + ".html"
+    out_html = args.output_pref + ".info.html"
     with open(out_html, "w") as html_file:
         html_file.write(html_output)
 

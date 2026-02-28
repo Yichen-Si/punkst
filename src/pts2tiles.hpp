@@ -53,7 +53,7 @@ public:
         }
     }
 
-    const std::unordered_map<uint64_t, uint64_t>& getGlobalTiles() const {
+    const std::unordered_map<TileKey, uint64_t, TileKeyHash>& getGlobalTiles() const {
         return globalTiles_;
     }
 
@@ -102,7 +102,7 @@ protected:
     std::unordered_map<std::string, std::vector<int32_t>> featureCounts_;
     std::mutex minmaxMutex_;
 
-    std::unordered_map<uint64_t, uint64_t> globalTiles_;
+    std::unordered_map<TileKey, uint64_t, TileKeyHash> globalTiles_;
     std::mutex globalTilesMutex_;
 
     std::vector<std::thread> threads_;
@@ -150,8 +150,13 @@ protected:
         }
     }
 
-    // Parse a line, extract coordinates and return the tile ID
-    virtual uint64_t parse(std::string& line, PtRecord& pt) {
+    std::filesystem::path getTmpFilename(const TileKey& tile, int threadId) const {
+        return tmpDir_.path / (std::to_string(tile.row) + "_" + std::to_string(tile.col)
+            + "_" + std::to_string(threadId) + ".tsv");
+    }
+
+    // Parse a line, extract coordinates and return the tile key
+    virtual TileKey parse(std::string& line, PtRecord& pt) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < ntokens_) {
@@ -177,11 +182,12 @@ protected:
                 }
             }
         }
-        uint32_t row = static_cast<uint32_t>(std::floor(pt.y / tileSize_));
-        uint32_t col = static_cast<uint32_t>(std::floor(pt.x / tileSize_));
-        return ((static_cast<uint64_t>(row) << 32) | col);
+        TileKey tile;
+        tile.row = static_cast<int32_t>(std::floor(pt.y / tileSize_));
+        tile.col = static_cast<int32_t>(std::floor(pt.x / tileSize_));
+        return tile;
     }
-    virtual uint64_t parse(std::string& line, float& x, float& y) {
+    virtual TileKey parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < ntokens_) {
@@ -196,20 +202,20 @@ protected:
             tokens[icol_y_] = fp_to_string(y, digits_);
             line = join(tokens, "\t");
         }
-        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize_));
-        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize_));
-        return ((static_cast<uint64_t>(row) << 32) | col);
+        TileKey tile;
+        tile.row = static_cast<int32_t>(std::floor(y / tileSize_));
+        tile.col = static_cast<int32_t>(std::floor(x / tileSize_));
+        return tile;
     }
 
     // Process one line: parse, assign, update stats, buffer and flush
     void consumeLine(int threadId, std::string &line,
-            std::unordered_map<uint64_t, std::vector<std::string>> &buffers,
-            std::unordered_map<uint64_t, Rectangle<float>> &tileBoxes,
+            std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> &buffers,
+            std::unordered_map<TileKey, Rectangle<float>, TileKeyHash> &tileBoxes,
             Rectangle<float>& localBox,
             std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
         PtRecord pt;
-        uint64_t tileId = parse(line, pt);
-        if (tileId == uint64_t(-1)) return;
+        TileKey tile = parse(line, pt);
 
         // feature counts
         if (icol_feature_ >= 0) {
@@ -220,30 +226,29 @@ protected:
         }
         // update min/max
         localBox.extendToInclude(pt.x, pt.y);
-        tileBoxes[tileId].extendToInclude(pt.x, pt.y);
+        tileBoxes[tile].extendToInclude(pt.x, pt.y);
         // buffer + flush
-        auto &buf = buffers[tileId];
+        auto &buf = buffers[tile];
         buf.push_back(line);
         if (buf.size() >= static_cast<size_t>(tileBuffer_))
-            flushBuffer(threadId, tileId, buf);
+            flushBuffer(threadId, tile, buf);
     }
 
-    // Write buffered lines to a temporary file defined by (threadId, tileId)
-    void flushBuffer(int threadId, uint64_t tileId,
+    // Write buffered lines to a temporary file defined by (threadId, tile)
+    void flushBuffer(int threadId, const TileKey& tile,
                      std::vector<std::string> &buf) {
         {
             std::lock_guard lk(globalTilesMutex_);
-            globalTiles_[tileId] += buf.size();
+            globalTiles_[tile] += buf.size();
         }
-        auto fn = tmpDir_.path / (std::to_string(tileId) + "_"
-                                + std::to_string(threadId) + ".tsv");
+        auto fn = getTmpFilename(tile, threadId);
         std::ofstream out(fn, std::ios::app);
         for (auto &l : buf) out << l << "\n";
         out.close();
         buf.clear();
     }
     void flushAll(int threadId,
-            std::unordered_map<uint64_t,std::vector<std::string>> &buffers) {
+            std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> &buffers) {
         for (auto &p : buffers)
         if (!p.second.empty())
             flushBuffer(threadId, p.first, p.second);
@@ -251,8 +256,8 @@ protected:
 
     // Non-stream mode - Read and process a chunk of the input file
     virtual void worker(int threadId, std::streampos start, std::streampos end) {
-        std::unordered_map<uint64_t,std::vector<std::string>> buffers;
-        std::unordered_map<uint64_t,Rectangle<float>> localTileMinMax;
+        std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> buffers;
+        std::unordered_map<TileKey, Rectangle<float>, TileKeyHash> localTileMinMax;
         std::unordered_map<std::string,std::vector<int32_t>> localCounts;
         Rectangle<float> localMinMax;
 
@@ -288,8 +293,8 @@ protected:
     }
     // Stream mode - Read the next chunk from the input stream and process
     void streamingWorker(int threadId) {
-        std::unordered_map<uint64_t,std::vector<std::string>> buffers;
-        std::unordered_map<uint64_t,Rectangle<float>> localTileMinMax;
+        std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> buffers;
+        std::unordered_map<TileKey, Rectangle<float>, TileKeyHash> localTileMinMax;
         std::unordered_map<std::string,std::vector<int32_t>> localCounts;
         Rectangle<float> localMinMax;
 
@@ -375,9 +380,9 @@ protected:
     }
 
     // Merge temporary files belonging to one tile
-    void mergeTmpFileToOutput(uint64_t tileId, std::ofstream& outfile) {
+    void mergeTmpFileToOutput(const TileKey& tile, std::ofstream& outfile) {
         for (uint32_t threadId = 0; threadId < nThreads_; ++threadId) {
-            auto tmpFilename = tmpDir_.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv");
+            auto tmpFilename = getTmpFilename(tile, static_cast<int>(threadId));
             std::ifstream tmpFile(tmpFilename, std::ios::binary);
             if (tmpFile) {
                 outfile << tmpFile.rdbuf();
@@ -411,23 +416,21 @@ protected:
         header.ymin = globalBox_.ymin; header.ymax = globalBox_.ymax;
         indexfile.write(reinterpret_cast<const char*>(&header), sizeof(header));
 
-        std::vector<uint64_t> sortedTiles;
+        std::vector<TileKey> sortedTiles;
         for (const auto& pair : globalTiles_) {
             sortedTiles.push_back(pair.first);
         }
         std::sort(sortedTiles.begin(), sortedTiles.end());
 
-        for (const auto& tileId : sortedTiles) {
+        for (const auto& tile : sortedTiles) {
             std::streampos startOffset = outfile.tellp();
-            mergeTmpFileToOutput(tileId, outfile);
+            mergeTmpFileToOutput(tile, outfile);
             std::streampos endOffset = outfile.tellp();
-            int32_t row = static_cast<int32_t>(tileId >> 32);
-            int32_t col = static_cast<int32_t>(tileId & 0xFFFFFFFFULL);
-            IndexEntryF entry(row, col);
+            IndexEntryF entry(tile.row, tile.col);
             entry.st = startOffset;
             entry.ed = endOffset;
-            entry.n = static_cast<uint32_t>(globalTiles_[tileId]);
-            tile2bound(row, col, entry.xmin, entry.xmax, entry.ymin, entry.ymax, tileSize_);
+            entry.n = static_cast<uint32_t>(globalTiles_[tile]);
+            tile2bound(tile.row, tile.col, entry.xmin, entry.xmax, entry.ymin, entry.ymax, tileSize_);
             indexfile.write(reinterpret_cast<const char*>(&entry), sizeof(entry));
         }
 
@@ -520,7 +523,7 @@ public:
     ~Pts2TilesAnno2D() {}
 
 protected:
-    uint64_t parse(std::string& line, float& x, float& y) {
+    TileKey parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
         split(tokens, "\t", line);
         if (tokens.size() < ntokens_) {
@@ -535,9 +538,10 @@ protected:
             tokens[icol_y_] = fp_to_string(y, digits_);
             line = join(tokens, "\t");
         }
-        uint32_t row = static_cast<uint32_t>(std::floor(y / tileSize_));
-        uint32_t col = static_cast<uint32_t>(std::floor(x / tileSize_));
-        return ((static_cast<uint64_t>(row) << 32) | col);
+        TileKey tile;
+        tile.row = static_cast<int32_t>(std::floor(y / tileSize_));
+        tile.col = static_cast<int32_t>(std::floor(x / tileSize_));
+        return tile;
     }
 
     // Worker thread function
@@ -549,13 +553,10 @@ protected:
         file.seekg(start);
         std::string line;
         // Map: tile id -> vector of lines (buffer)
-        std::unordered_map<uint64_t, std::vector<std::string>> buffers;
+        std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> buffers;
         while (file.tellg() < end && std::getline(file, line)) {
             float pt[2];
-            uint64_t tileId = parse(line, pt[0], pt[1]);
-            if (tileId == -1) {
-                continue;
-            }
+            TileKey tile = parse(line, pt[0], pt[1]);
             std::ostringstream oss;
             oss << std::fixed << std::setprecision(dist_out_precision);
             // fine the distance to the nearest reference point in each kdtree
@@ -566,25 +567,20 @@ protected:
                 oss << "\t" << std::pow(dists[0], 0.5f);
             }
             line += oss.str();
-            buffers[tileId].push_back(line);
+            buffers[tile].push_back(line);
             // Flush if the buffer is large enough.
-            if (buffers[tileId].size() >= tileBuffer_) {
+            if (buffers[tile].size() >= tileBuffer_) {
                 { // update globalTiles_
                     std::lock_guard<std::mutex> lock(globalTilesMutex_);
-                    uint64_t npt = buffers[tileId].size();
-                    if (globalTiles_.find(tileId) == globalTiles_.end()) {
-                        globalTiles_[tileId] = npt;
-                    } else {
-                        globalTiles_[tileId] += npt;
-                    }
+                    globalTiles_[tile] += buffers[tile].size();
                 }
-                auto tmpFilename = tmpDir_.path / (std::to_string(tileId) + "_" + std::to_string(threadId) + ".tsv");
+                auto tmpFilename = getTmpFilename(tile, threadId);
                 std::ofstream out(tmpFilename, std::ios::app);
-                for (const auto& bufferedLine : buffers[tileId]) {
+                for (const auto& bufferedLine : buffers[tile]) {
                     out << bufferedLine << "\n";
                 }
                 out.close();
-                buffers[tileId].clear();
+                buffers[tile].clear();
             }
         }
         // Flush any remaining data in the buffers.
@@ -592,14 +588,9 @@ protected:
             if (!pair.second.empty()) {
                 { // update globalTiles_
                     std::lock_guard<std::mutex> lock(globalTilesMutex_);
-                    uint64_t npt = pair.second.size();
-                    if (globalTiles_.find(pair.first) == globalTiles_.end()) {
-                        globalTiles_[pair.first] = npt;
-                    } else {
-                        globalTiles_[pair.first] += npt;
-                    }
+                    globalTiles_[pair.first] += pair.second.size();
                 }
-                auto tmpFilename = tmpDir_.path / (std::to_string(pair.first) + "_" + std::to_string(threadId) + ".tsv");
+                auto tmpFilename = getTmpFilename(pair.first, threadId);
                 std::ofstream out(tmpFilename, std::ios::app);
                 for (const auto& bufferedLine : pair.second) {
                     out << bufferedLine << "\n";

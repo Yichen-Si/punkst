@@ -1,8 +1,8 @@
 # Notes on processing data from different technologies/platforms
 
-Here are instructions on how to convert raw data from different platforms to the generic pixel/transcript level input format for punkst.
+Here are instructions on how to convert raw data from different platforms to the generic pixel/transcript level input format for punkst. This input format is a plain tsv file storing transcripts/pixels by spatial tiles, accompanied by an index file. The minimum information is x and y coordinates (in microns), transcript IDs (gene names), and counts. If you have auxiliary information or annotations that may be useful for downstream analysis, such as z-plane, cell IDs, subcellular compartment annotions, etc., keep them as additional columns.
 
-(For spot/single cell level data, `topic-model` now accepts 10X style DGE files directly, but you can also convert them to our custom format (see the last section below))
+For spot/single cell level data, `topic-model` now accepts 10X style DGE files directly, but you can also convert them to our custom format (see the last section below)
 
 <!-- Except for Visium HD (see below), we provide a pair of template `Makefile` and `config_prepare.json` files in the `examples/format_input` directory for each platform. You can copy `config_prepare.json` to your directory and modify the parameters, then generate the concrete `Makefile` by
 ```bash
@@ -88,7 +88,7 @@ cut -d',' -f 1,2,3,7,8 ${RAW_META} | tail -n +2 | sed 's/"//g' | \
   '{printf "%.2f\t%.2f\t%s_%s\t%s\n", $4*mu, $5*mu, $1, $2, $3}' > cell_centers.tsv
 
 # Extract transcripts
-awk -F',' -v mu=${MICRONS_PER_PIXEL} '\
+awk -F',' -v OFS=$'\t' -v mu=${MICRONS_PER_PIXEL} '\
 NR==1{gsub(/"/, "", $0); print "#" $3, $4, $8, "count", $7, "CellID", $9 }\
 NR>1{gsub(/"/, "", $8); gsub(/"/, "", $9); printf "%.2f\t%.2f\t%s\t%d\t%s\t%s_%s\t%s\n", mu*$3, mu*$4, $8, 1, $7, $1, $2, $9 } ' ${RAW_TX} > transcripts.tsv
 ```
