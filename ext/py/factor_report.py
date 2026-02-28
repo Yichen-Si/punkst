@@ -354,7 +354,7 @@ def factor_report(_args):
                 "Annotation file has fewer than 2 columns; ignoring: %s", args.annotation
             )
 
-    out_tsv = args.output_pref + ".info.tsv"
+    out_tsv = args.output_pref + ".tsv"
     table.loc[table["PostUMI"].ge(10), out_header].to_csv(
         out_tsv, sep="\t", index=False, header=True, float_format="%.5f"
     )
