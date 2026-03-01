@@ -400,7 +400,7 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
     ResultBuf result = Base::formatPixelResult(tileData, topVals, topIds, ticket, &phi0);
-    resultQueue.push(std::move(result));
+    Base::submitPixelResult(std::move(result), threadId);
     if (Base::outputAnchor_) {
         MatrixXf anchorTopVals;
         MatrixXi anchorTopIds;

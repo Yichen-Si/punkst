@@ -349,7 +349,7 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     MatrixXi topIds;
     findTopK(topVals, topIds, minibatch.phi, topk_);
     ResultBuf result = Base::formatPixelResult(tileData, topVals, topIds, ticket, phi0_ptr);
-    resultQueue.push(std::move(result));
+    Base::submitPixelResult(std::move(result), threadId);
     if (Base::outputAnchor_) {
         MatrixXf prob = rowNormalize(minibatch.gamma);
         MatrixXf anchorTopVals;

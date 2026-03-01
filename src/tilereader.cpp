@@ -385,8 +385,7 @@ int32_t lineParserUnival::parse(RecordT3D<T>& rec, std::string& line, bool check
     if (tokens.size() < n_tokens) {
         return -2;
     }
-    if (!str2num<T>(tokens[icol_x], rec.x) || !str2num<T>(tokens[icol_y], rec.y) ||
-        !str2num<T>(tokens[icol_z], rec.z)) {
+    if (!str2num<T>(tokens[icol_x], rec.x) || !str2num<T>(tokens[icol_y], rec.y) || !str2num<T>(tokens[icol_z], rec.z)) {
         return -2;
     }
     if (checkBounds) {
@@ -452,30 +451,9 @@ template int32_t lineParserUnival::parse<float>( RecordExtendedT3D<float>& rec, 
 template int32_t lineParserUnival::parse<int32_t>( RecordExtendedT3D<int32_t>& rec, std::string &line ) const;
 
 /*
-    TileReader
+    TileReaderBase
 */
-std::unique_ptr<BoundedReadline> TileReader::get_tile_iterator(int tileRow, int tileCol) const {
-    TileKey key {tileRow, tileCol};
-    auto it = tile_map_.find(key);
-    if (it == tile_map_.end()) {
-        warning("%s: Tile (%d, %d) not found in index", __FUNCTION__, tileRow, tileCol);
-        return nullptr;
-    }
-    const TileInfo &info = it->second;
-    return std::make_unique<BoundedReadline>(tsvFilename, info.idx.st, info.idx.ed);
-}
-
-void TileReader::loadIndex(const std::string &indexFilename) {
-    std::ifstream indexFile(indexFilename, std::ios::binary);
-    if (!indexFile.is_open()) {
-        throw std::runtime_error("Unable to open index file: " + indexFilename);
-    }
-    if (loadIndexBinary(indexFilename)) {return;}
-    // Fallback to text format
-    loadIndexText(indexFilename);
-}
-
-bool TileReader::loadIndexBinary(const std::string &indexFilename) {
+bool TileReaderBase::loadIndexBinary(const std::string &indexFilename) {
     std::ifstream indexFile(indexFilename, std::ios::binary);
     if (!indexFile.is_open()) {
         error("%s: Unable to open index file %s", __func__, indexFilename.c_str());
@@ -490,9 +468,10 @@ bool TileReader::loadIndexBinary(const std::string &indexFilename) {
     IndexHeader header;
     indexFile.seekg(0);
     indexFile.read(reinterpret_cast<char*>(&header), sizeof(header));
-    tileSize = header.tileSize;
-    if (tileSize <= 0) error("%s: invalid tileSize", __func__);
+    tileSize_ = header.tileSize;
+    if (tileSize_ <= 0) error("%s: invalid tileSize", __func__);
     globalBox_ = Rectangle<float>(header.xmin, header.ymin, header.xmax, header.ymax);
+    recordSize_ = static_cast<size_t>(header.recordSize);
 
     IndexEntryF entry;
     std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
@@ -522,6 +501,30 @@ bool TileReader::loadIndexBinary(const std::string &indexFilename) {
     return true;
 }
 
+/*
+    TileReader
+*/
+std::unique_ptr<BoundedReadline> TileReader::get_tile_iterator(int tileRow, int tileCol) const {
+    TileKey key {tileRow, tileCol};
+    auto it = tile_map_.find(key);
+    if (it == tile_map_.end()) {
+        warning("%s: Tile (%d, %d) not found in index", __FUNCTION__, tileRow, tileCol);
+        return nullptr;
+    }
+    const TileInfo &info = it->second;
+    return std::make_unique<BoundedReadline>(inputFile_, info.idx.st, info.idx.ed);
+}
+
+void TileReader::loadIndex(const std::string &indexFilename) {
+    std::ifstream indexFile(indexFilename, std::ios::binary);
+    if (!indexFile.is_open()) {
+        throw std::runtime_error("Unable to open index file: " + indexFilename);
+    }
+    if (loadIndexBinary(indexFilename)) {return;}
+    // Fallback to text format
+    loadIndexText(indexFilename);
+}
+
 bool TileReader::loadIndexText(const std::string &indexFilename) {
     std::ifstream indexFile(indexFilename, std::ios::binary);
     if (!indexFile.is_open()) {
@@ -541,7 +544,7 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
             std::string hashtag, key;
             metaStream >> hashtag >> key;
             if (key == "tilesize") {
-                if (!(metaStream >> tileSize)) error("%s: Invalid tileSize", __func__);
+                if (!(metaStream >> tileSize_)) error("%s: Invalid tileSize", __func__);
             }
             continue;
         }
@@ -564,156 +567,16 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
         if (row > maxrow) maxrow = row;
         if (col > maxcol) maxcol = col;
         globalBox_.extendToInclude(Rectangle<int32_t>(
-            col * tileSize, row * tileSize,
-            (col + 1) * tileSize, (row + 1) * tileSize));
+            col * tileSize_, row * tileSize_,
+            (col + 1) * tileSize_, (row + 1) * tileSize_));
     }
-    if (tileSize <= 0) {error("%s: Cannot identify tileSize", __func__);}
+    if (tileSize_ <= 0) {error("%s: Cannot identify tileSize", __func__);}
 
     nTiles = tile_map_.size();
     indexFile.close();
-    notice("%s: Read %zu tiles from index file, tilesize=%d", __func__, nTiles, tileSize);
+    notice("%s: Read %zu tiles from index file, tilesize=%d", __func__, nTiles, tileSize_);
     return true;
 }
-
-/*
-    BoundedBinaryTileIterator
-*/
-bool BoundedBinaryTileIterator::next(BoundedBinaryTileIterator::Record &record) {
-    if (!file || file->tellg() >= endOffset) {
-        return false;
-    }
-    std::vector<char> buffer(recordSize);
-    file->read(buffer.data(), recordSize);
-    if (file->gcount() != static_cast<std::streamsize>(recordSize)) {
-        return false;
-    }
-    size_t offset = 0;
-    record.resize(numCat, numInt, numFloat);
-    // Decode x and y coordinates (doubles)
-    std::memcpy(&record.x, buffer.data() + offset, sizeof(double));
-    offset += sizeof(double);
-    std::memcpy(&record.y, buffer.data() + offset, sizeof(double));
-    offset += sizeof(double);
-    // Decode categorical fields (each stored as int32_t)
-    for (int32_t i = 0; i < numCat; ++i) {
-        std::memcpy(&record.catFields[i], buffer.data() + offset, sizeof(int32_t));
-        offset += sizeof(int32_t);
-    }
-    // Decode integer fields (each int32_t)
-    for (int i = 0; i < numInt; ++i) {
-        std::memcpy(&record.intFields[i], buffer.data() + offset, sizeof(int32_t));
-        offset += sizeof(int32_t);
-    }
-    // Decode float fields (each float)
-    for (int i = 0; i < numFloat; ++i) {
-        std::memcpy(&record.floatFields, buffer.data() + offset, sizeof(float));
-        offset += sizeof(float);
-    }
-    return true;
-}
-
-/*
-    BinaryTileReader
-*/
-std::unique_ptr<BoundedBinaryTileIterator> BinaryTileReader::get_tile_iterator(int tileRow, int tileCol) const {
-    TileKey key {tileRow, tileCol};
-    auto it = tile_map_.find(key);
-    if (it == tile_map_.end()) {
-        return nullptr; // Tile not found
-    }
-    const TileInfo &info = it->second;
-    return std::make_unique<BoundedBinaryTileIterator>(tsvFilename, info.idx.st, info.idx.ed, recordSize, numCat, numInt, numFloat);
-}
-
-void BinaryTileReader::loadIndex(const std::string &indexFilename) {
-        std::ifstream indexFile(indexFilename);
-        if (!indexFile.is_open()) {
-            throw std::runtime_error("Unable to open index file: " + indexFilename);
-        }
-        std::string line;
-        // First metadata line: "# tilesize<TAB><tileSize>"
-        while (std::getline(indexFile, line)) {
-            if (line[0] != '#') {
-                break;
-            }
-            std::istringstream metaStream(line);
-            std::string hashtag, key;
-            metaStream >> hashtag >> key;
-            if (key == "tilesize") {
-                if (!(metaStream >> tileSize)) {
-                    throw std::runtime_error("Failed to read tile size from metadata");
-                }
-            } else if (key == "recordsize") {
-                if (!(metaStream >> recordSize)) {
-                    throw std::runtime_error("Failed to read record size from metadata");
-                }
-            } else if (key == "nvalues") {
-                if (!(metaStream >> numCat >> numInt >> numFloat)) {
-                    throw std::runtime_error("Failed to read number of values from metadata");
-                }
-            } else if (key == "dictionaries") {
-                if (!(metaStream >> dictStartOffset >> dictEndOffset)) {
-                    throw std::runtime_error("Failed to read dictionary offsets from metadata");
-                }
-            }
-        }
-        // Read remaining lines for tile index.
-        while (!line.empty()) {
-            std::istringstream iss(line);
-            int row, col;
-            std::uint64_t start, end;
-            int count;
-            if (!(iss >> row >> col >> start >> end >> count)) {
-                throw std::runtime_error("Malformed index line: " + line);
-            }
-            tile_map_.emplace(TileKey{row, col}, TileInfo(start, end));
-            if (row < minrow) minrow = row;
-            if (col < mincol) mincol = col;
-            if (row > maxrow) maxrow = row;
-            if (col > maxcol) maxcol = col;
-            if (!std::getline(indexFile, line)) {
-                break;  // End of file
-            }
-        }
-        nTiles = tile_map_.size();
-        indexFile.close();
-    }
-
-void BinaryTileReader::readDictionaries() {
-        std::ifstream infile(tsvFilename, std::ios::binary);
-        if (!infile.is_open()) {
-            throw std::runtime_error("Unable to open binary file: " + tsvFilename);
-        }
-        infile.seekg(dictStartOffset);
-        uint32_t numDict = 0;
-        infile.read(reinterpret_cast<char*>(&numDict), sizeof(numDict));
-        catDictionaries.resize(numDict);
-        for (uint32_t i = 0; i < numDict; ++i) {
-            uint32_t dictSize = 0;
-            infile.read(reinterpret_cast<char*>(&dictSize), sizeof(dictSize));
-            uint64_t totalLength = 0;
-            infile.read(reinterpret_cast<char*>(&totalLength), sizeof(totalLength));
-            std::string dictStr(totalLength, '\0');
-            infile.read(&dictStr[0], totalLength);
-            // Split the dictionary string using '\t' as delimiter.
-            catDictionaries[i].resize(dictSize);
-            auto& entries = catDictionaries[i];
-            size_t pos = 0, j = 0;
-            while (true) {
-                size_t tabPos = dictStr.find('\t', pos);
-                if (tabPos == std::string::npos) {
-                    entries[j] = dictStr.substr(pos);
-                    break;
-                }
-                entries[j++] = dictStr.substr(pos, tabPos - pos);
-                pos = tabPos + 1;
-            }
-            if (entries.size() != dictSize) {
-                throw std::runtime_error("Dictionary entries count mismatch");
-            }
-        }
-        infile.close();
-    }
 
 /*
     Other

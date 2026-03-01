@@ -60,6 +60,7 @@ struct MinibatchIoConfig {
     MinibatchOutputMode output = MinibatchOutputMode::Standard;
     bool outputAnchor = false;
     bool useTicketSystem = false;
+    bool nativeRegularTiles = false;
     MinibatchCoordDim coordDim = MinibatchCoordDim::Dim2;
 };
 
@@ -289,6 +290,7 @@ public:
       useTicketSystem_(ioConfig.useTicketSystem),
       outputAnchor_(ioConfig.outputAnchor),
       inputMode_(ioConfig.input), outputMode_(ioConfig.output),
+      nativeRegularTiles_(ioConfig.nativeRegularTiles),
       coordDim_(ioConfig.coordDim) {
         tileSize = tileReader.getTileSize();
         if (opt && !(*opt).empty()) {
@@ -310,6 +312,8 @@ public:
         }
         configureInputMode();
         configureOutputMode();
+        nativeBinaryRegularTiles_ = nativeRegularTiles_ && outputBinary_;
+        workerOutputContext_.resize(static_cast<size_t>(std::max(1, nThreads)));
     }
 
     virtual ~Tiles2MinibatchBase() {
@@ -330,6 +334,47 @@ public:
     virtual int32_t getFactorCount() const = 0;
 
 protected:
+
+    enum class OutputSourceKind : uint8_t { None = 0, MainTile = 1, Boundary = 2 };
+
+    struct ShardFragmentIndex {
+        uint8_t kind = 0;
+        uint8_t reserved0 = 0;
+        uint8_t reserved1 = 0;
+        uint8_t reserved2 = 0;
+        int32_t row = 0;
+        int32_t col = 0;
+        uint32_t boundaryKey = 0;
+        uint32_t npts = 0;
+        uint64_t dataOffset = 0;
+        uint64_t dataBytes = 0;
+    };
+
+    struct FragmentSpan {
+        size_t shardId = 0;
+        uint64_t dataOffset = 0;
+        uint64_t dataBytes = 0;
+        uint32_t npts = 0;
+    };
+
+    struct WorkerShardFiles {
+        std::string mainDataPath;
+        std::string mainIndexPath;
+        std::string boundaryDataPath;
+        std::string boundaryIndexPath;
+        int fdMainData = -1;
+        int fdMainIndex = -1;
+        int fdBoundaryData = -1;
+        int fdBoundaryIndex = -1;
+        uint64_t mainDataSize = 0;
+        uint64_t boundaryDataSize = 0;
+    };
+
+    struct WorkerOutputContext {
+        OutputSourceKind kind = OutputSourceKind::None;
+        TileKey tile{0, 0};
+        uint32_t boundaryKey = 0;
+    };
 
     // buffer output results (for one tile)
     struct ResultBuf {
@@ -383,6 +428,8 @@ protected:
     std::unordered_map<uint32_t, vec2f_t> fixedAnchorForBoundary;
     // Output/formatting related
     bool outputBinary_ = false;
+    bool nativeRegularTiles_ = false;
+    bool nativeBinaryRegularTiles_ = false;
     size_t outputRecordSize_ = 0;
     bool outputOriginalData_ = false;
     bool outputBackgroundProbDense_ = false;
@@ -404,6 +451,8 @@ protected:
     std::vector<FieldDef> schema_;
     size_t recordSize_ = 0;
     int32_t M_ = 0;
+    std::vector<WorkerShardFiles> workerShards_;
+    std::vector<WorkerOutputContext> workerOutputContext_;
 
     /* Worker */
 
@@ -413,10 +462,17 @@ protected:
     void boundaryWorker(int threadId);
     void writerWorker();
     void anchorWriterWorker();
+    void submitPixelResult(ResultBuf&& result, int threadId);
 
     /* Key logic */
     void configureInputMode();
     void configureOutputMode();
+    void setupNativeBinaryShards();
+    void closeNativeBinaryShards();
+    void mergeNativeBinaryShards();
+    IndexHeader buildIndexHeader(bool fragmented) const;
+    std::vector<char> serializeBinaryResult(const ResultBuf& result) const;
+    void appendNativeBinaryResult(const ResultBuf& result, int threadId);
 
     std::shared_ptr<BoundaryBuffer> getBoundaryBuffer(uint32_t key) {
         std::lock_guard<std::mutex> lock(boundaryBuffersMapMutex);

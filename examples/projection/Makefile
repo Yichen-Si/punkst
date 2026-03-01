@@ -51,7 +51,7 @@ $(OUTPREF).pixel.decode.stamp: \
     $(DATADIR)/prepare.stamp \
     $(MODEL_TSV)
 	@echo "[2/4] pixel-decode -> $@"
-	 $(PUNKST) pixel-decode \
+	$(PUNKST) pixel-decode \
 	  --model $(MODEL_TSV) \
 	  --in-tsv $(TILETSV) --in-index $(TILEINDEX) \
 	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) \
@@ -60,9 +60,6 @@ $(OUTPREF).pixel.decode.stamp: \
 	  --min-init-count 20 \
 	  --out-pref $(OUTPREF).pixel --output-binary \
 	  --temp-dir $(TMPDIR) --threads $(THREADS) --seed $(SEED)
-	$(PUNKST) tile-op --reorganize --binary --in $(OUTPREF).pixel --out $(OUTPREF).pixel.reorg
-	mv $(OUTPREF).pixel.reorg.bin $(OUTPREF).pixel.bin
-	mv $(OUTPREF).pixel.reorg.index $(OUTPREF).pixel.index
 	touch $(OUTPREF).pixel.decode.stamp
 
 # --- Step 3: draw-pixel-factors -> png ---

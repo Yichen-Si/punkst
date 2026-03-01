@@ -12,45 +12,36 @@ void Tiles2MinibatchBase<T>::setupOutput() {
         // ensure includes present
     #endif
     assert(!(outputBackgroundProbDense_ && outputBackgroundProbExpand_));
-    std::string outputFile = outPref + (outputBinary_ ? ".bin" : ".tsv");
-    fdMain = ::open(outputFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdMain < 0) {
-        error("Error opening main output file: %s", outputFile.c_str());
-    }
-    if (!outputBinary_) {
-        std::string header_str = composeHeader();
-        if (!write_all(fdMain, header_str.data(), header_str.size())) {
-            error("Error writing header_str to main output file: %s", outputFile.c_str());
-        }
-        headerSize = header_str.size();
-        outputSize = headerSize;
-    }
-    std::string indexFile = outPref + ".index";
-    fdIndex = ::open(indexFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdIndex < 0) {
-        error("Error opening index output file: %s", indexFile.c_str());
-    }
-    int32_t K = getFactorCount();
-    // Write index header
-    IndexHeader idxHeader;
-    idxHeader.magic = PUNKST_INDEX_MAGIC;
-    idxHeader.mode = (K << 16) | 0x8;
-    idxHeader.tileSize = tileSize;
-    idxHeader.topK = topk_;
-    idxHeader.pixelResolution = pixelResolution_;
-    const auto& box = tileReader.getGlobalBox();
-    idxHeader.xmin = box.xmin; idxHeader.xmax = box.xmax;
-    idxHeader.ymin = box.ymin; idxHeader.ymax = box.ymax;
     if (outputBinary_) {
-        idxHeader.mode |= 0x7;
         size_t coordBytes = (coordDim_ == MinibatchCoordDim::Dim3 ? 3u : 2u) * sizeof(int32_t);
         outputRecordSize_ = coordBytes + topk_ * sizeof(int32_t) + topk_ * sizeof(float);
-        idxHeader.coordType = 1;
-        idxHeader.recordSize = outputRecordSize_;
     }
+    if (nativeBinaryRegularTiles_) {
+        setupNativeBinaryShards();
+    } else {
+        std::string outputFile = outPref + (outputBinary_ ? ".bin" : ".tsv");
+        fdMain = ::open(outputFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdMain < 0) {
+            error("Error opening main output file: %s", outputFile.c_str());
+        }
+        if (!outputBinary_) {
+            std::string header_str = composeHeader();
+            if (!write_all(fdMain, header_str.data(), header_str.size())) {
+                error("Error writing header_str to main output file: %s", outputFile.c_str());
+            }
+            headerSize = header_str.size();
+            outputSize = headerSize;
+        }
+        std::string indexFile = outPref + ".index";
+        fdIndex = ::open(indexFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) {
+            error("Error opening index output file: %s", indexFile.c_str());
+        }
 
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
-        error("Error writing header to index output file: %s", indexFile.c_str());
+        IndexHeader idxHeader = buildIndexHeader(true);
+        if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+            error("Error writing header to index output file: %s", indexFile.c_str());
+        }
     }
 
     if (!outputAnchor_) return;

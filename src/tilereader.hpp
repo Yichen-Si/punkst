@@ -94,29 +94,32 @@ struct lineParserUnival : public lineParser {
 
 class TileReaderBase {
 protected:
-    std::string tsvFilename;
-    int tileSize;
+    std::string inputFile_;
+    int tileSize_;
     size_t nTiles;
+    size_t recordSize_;
+    Rectangle<float> globalBox_;
+    std::vector<Rectangle<double>> rects;
     // Map from TileKey to TileInfo.
     std::unordered_map<TileKey, TileInfo, TileKeyHash> tile_map_;
     // Helper function to load the index file.
     virtual void loadIndex(const std::string &indexFilename) = 0;
-    std::vector<Rectangle<double>> rects;
+    bool loadIndexBinary(const std::string &indexFilename);
 
 public:
     int32_t minrow = INT32_MAX; // inclusive
     int32_t mincol = INT32_MAX;
     int32_t maxrow = INT32_MIN; // inclusive
     int32_t maxcol = INT32_MIN;
-    TileReaderBase(const std::string &tsvFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1)
-        : tsvFilename(tsvFilename), tileSize(tileSize) {
+    TileReaderBase(const std::string &inputFile, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1)
+        : inputFile_(inputFile), tileSize_(tileSize) {
         if (_rects != nullptr) {
             rects = *_rects;
         }
     }
 
     int32_t getTileSize() const {
-        return tileSize;
+        return tileSize_;
     }
     size_t getNumTiles() const {
         return nTiles;
@@ -124,8 +127,8 @@ public:
     // given (x, y) compute the tile key and whether the tile is in the data
     template<typename T>
     bool pt2tile(T x, T y, TileKey &tile) const {
-        tile.row = static_cast<int32_t>(std::floor(y / tileSize));
-        tile.col = static_cast<int32_t>(std::floor(x / tileSize));
+        tile.row = static_cast<int32_t>(std::floor(y / tileSize_));
+        tile.col = static_cast<int32_t>(std::floor(x / tileSize_));
         return tile_map_.find(tile) != tile_map_.end();
     }
 
@@ -151,16 +154,16 @@ public:
         for (const auto& r : _rects) {
             if (!r.proper()) continue;
             // Compute candidate tile‐row/col ranges
-            int rowMin = static_cast<int>( std::floor(static_cast<double>(r.ymin) / tileSize) );
-            int rowMax = static_cast<int>( std::floor(static_cast<double>(r.ymax) / tileSize) );
-            int colMin = static_cast<int>( std::floor(static_cast<double>(r.xmin) / tileSize) );
-            int colMax = static_cast<int>( std::floor(static_cast<double>(r.xmax) / tileSize) );
+            int rowMin = static_cast<int>( std::floor(static_cast<double>(r.ymin) / tileSize_) );
+            int rowMax = static_cast<int>( std::floor(static_cast<double>(r.ymax) / tileSize_) );
+            int colMin = static_cast<int>( std::floor(static_cast<double>(r.xmin) / tileSize_) );
+            int colMax = static_cast<int>( std::floor(static_cast<double>(r.xmax) / tileSize_) );
 
             for (int row = rowMin; row <= rowMax; ++row) {
                 for (int col = colMin; col <= colMax; ++col) {
                     TileKey key{row, col};
                     // the exact bounds of this tile in world‐space
-                    Rectangle<T> tileRect = tile2bound<T>(row, col, tileSize);
+                    Rectangle<T> tileRect = tile2bound<T>(row, col, tileSize_);
                     int32_t code = tileRect.intersect(r);
                     if (code == 0) continue; // no overlap
                     bool fullyInThisRect = (code == 2);
@@ -200,7 +203,7 @@ public:
     }
 
     bool isValid() const {
-        return !tile_map_.empty() && tileSize > 0;
+        return !tile_map_.empty() && tileSize_ > 0;
     }
 
     // Given a focal tile returns a vector of TileKey for adjacent tiles.
@@ -226,14 +229,14 @@ public:
 
     std::string headerLine;
 
-    TileReader(const std::string &tsvFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1, bool isInt = false)
-        : TileReaderBase(tsvFilename, indexFilename, _rects, tileSize) {
+    TileReader(const std::string &inputFile, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1, bool isInt = false)
+        : TileReaderBase(inputFile, indexFilename, _rects, tileSize) {
         loadIndex(indexFilename);
         coordType = isInt ? CoordType::INTEGER : CoordType::FLOAT;
         { // Read and store header/metadata lines
-            std::ifstream tsvFile(tsvFilename);
+            std::ifstream tsvFile(inputFile_);
             if (!tsvFile.is_open()) {
-                throw std::runtime_error("Unable to open TSV file: " + tsvFilename);
+                throw std::runtime_error("Unable to open TSV file: " + inputFile_);
             }
             std::string line;
             headerLine.clear();
@@ -258,111 +261,9 @@ public:
 
     CoordType getCoordType() const { return coordType; }
 private:
-    Rectangle<float> globalBox_;
     CoordType coordType;
     void loadIndex(const std::string &indexFilename) override;
     bool loadIndexText(const std::string &indexFilename);
-    bool loadIndexBinary(const std::string &indexFilename);
-};
-
-class BoundedBinaryTileIterator {
-public:
-    //   filename: the binary file name,
-    //   start, end: byte offsets for this tile's records,
-    //   recordSize: fixed size of one record,
-    //   numCat: number of categorical fields,
-    //   numInt: number of integer fields,
-    //   numFloat: number of float fields.
-    BoundedBinaryTileIterator(const std::string &filename,
-        std::streampos start, std::streampos end, size_t recordSize,
-        int32_t numCat, int32_t numInt, int32_t numFloat)
-        : filename(filename), startOffset(start), endOffset(end), recordSize(recordSize), numCat(numCat), numInt(numInt), numFloat(numFloat) {
-        file = std::make_unique<std::ifstream>(filename, std::ios::binary);
-        if (!file || !file->is_open()) {
-            throw std::runtime_error("Failed to open binary file: " + filename);
-        }
-        file->seekg(startOffset);
-    }
-
-    struct Record {
-        double x;
-        double y;
-        std::vector<int32_t> catFields;
-        std::vector<int32_t> intFields;
-        std::vector<float> floatFields;
-        Record() {}
-        Record(size_t numCat, size_t numInt, size_t numFloat)
-            : catFields(numCat), intFields(numInt), floatFields(numFloat) {}
-        Record(double x, double y, size_t numCat, size_t numInt, size_t numFloat)
-            : x(x), y(y), catFields(numCat), intFields(numInt), floatFields(numFloat) {}
-        void resize(size_t numCat, size_t numInt, size_t numFloat) {
-            catFields.resize(numCat);
-            intFields.resize(numInt);
-            floatFields.resize(numFloat);
-        }
-    };
-
-    // next() decodes the next fixed-size record into a tab-delimited string.
-    bool next(BoundedBinaryTileIterator::Record &record);
-
-private:
-    std::string filename;
-    std::streampos startOffset;
-    std::streampos endOffset;
-    size_t recordSize;
-    int32_t numCat;
-    int32_t numInt;
-    int32_t numFloat;
-    std::unique_ptr<std::ifstream> file;
-};
-
-// currently only for integer coordinates
-class BinaryTileReader : public TileReaderBase {
-public:
-    // The constructor takes:
-    //   binFilename: the binary file produced by the writer,
-    //   indexFilename: the corresponding index file,
-    //   numInt: number of integer fields,
-    //   numFloat: number of float fields.
-    // The number of categorical fields is deduced from the dictionary header.
-    BinaryTileReader(const std::string &binFilename, const std::string &indexFilename, std::vector<Rectangle<double>>* _rects = nullptr, int32_t tileSize = -1)
-        : TileReaderBase(binFilename, indexFilename, _rects, tileSize),
-            numCat(0), numInt(0), numFloat(0) {
-        loadIndex(indexFilename);
-        readDictionaries();
-    }
-
-    // Return an iterator that decodes records for the given tile.
-    std::unique_ptr<BoundedBinaryTileIterator> get_tile_iterator(int tileRow, int tileCol) const;
-
-protected:
-    // Reads the index file. Expected index file format:
-    //   # tilesize    <tileSize>
-    //   # recordsize  <recordSize>
-    //   # nvalues     <nCategorical>\t<nInteger>\t<nFloat>
-    //   # dictionaries    <startDictOffset>    <endDictOffset>
-    //   then one line per tile: row col startOffset endOffset count
-    void loadIndex(const std::string &indexFilename) override;
-
-private:
-    int32_t numInt;
-    int32_t numFloat;
-    int32_t numCat;
-    size_t recordSize;
-    // Categorical dictionaries: one vector<string> per categorical column.
-    std::vector<std::vector<std::string>> catDictionaries;
-    // Offsets for dictionary region in the binary file.
-    std::streamoff dictStartOffset;
-    std::streamoff dictEndOffset;
-
-    // Reads the dictionaries from the binary file.
-    // The format is:
-    //   [uint32_t: number of dictionaries]
-    //   For each dictionary:
-    //     [uint32_t: number of entries]
-    //     [uint64_t: total length of the rest of this record (including delimiters)]
-    //     Entries: a single string where each entry is separated by '\t'
-    void readDictionaries();
 };
 
 // Helper for multisample pipelien

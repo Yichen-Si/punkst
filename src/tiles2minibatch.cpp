@@ -2,14 +2,22 @@
 #include "numerical_utils.hpp"
 #include <cmath>
 #include <numeric>
+#include <cstring>
 #include <fcntl.h>
+#include <filesystem>
+#include <fstream>
 #include <thread>
+#include <map>
 #include <algorithm>
 
 template<typename T>
 void Tiles2MinibatchBase<T>::run() {
     setupOutput();
-    std::thread writer(&Tiles2MinibatchBase<T>::writerWorker, this);
+    const bool useLegacyWriter = !nativeBinaryRegularTiles_;
+    std::thread writer;
+    if (useLegacyWriter) {
+        writer = std::thread(&Tiles2MinibatchBase<T>::writerWorker, this);
+    }
     std::thread anchorWriter;
     if (outputAnchor_) {
         anchorWriter = std::thread(&Tiles2MinibatchBase<T>::anchorWriterWorker, this);
@@ -62,15 +70,23 @@ void Tiles2MinibatchBase<T>::run() {
     }
     workThreads.clear();
 
-    resultQueue.set_done();
+    if (useLegacyWriter) {
+        resultQueue.set_done();
+    }
     if (outputAnchor_) {
         anchorQueue.set_done();
     }
     notice("%s: all workers done", __func__);
 
-    writer.join();
+    if (useLegacyWriter && writer.joinable()) {
+        writer.join();
+    }
     if (anchorWriter.joinable()) {
         anchorWriter.join();
+    }
+    if (nativeBinaryRegularTiles_) {
+        closeNativeBinaryShards();
+        mergeNativeBinaryShards();
     }
     closeOutput();
     notice("%s: writer threads done", __func__);
@@ -158,6 +174,11 @@ void Tiles2MinibatchBase<T>::tileWorker(int threadId) {
     while (tileQueue.pop(tileTicket)) {
         tile = tileTicket.first;
         ticket = tileTicket.second;
+        if (nativeBinaryRegularTiles_) {
+            workerOutputContext_[static_cast<size_t>(threadId)].kind = OutputSourceKind::MainTile;
+            workerOutputContext_[static_cast<size_t>(threadId)].tile = tile;
+            workerOutputContext_[static_cast<size_t>(threadId)].boundaryKey = 0;
+        }
         TileData<T> tileData;
         int32_t ret = parseOneTile(tileData, tile);
         notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels",
@@ -179,6 +200,10 @@ void Tiles2MinibatchBase<T>::boundaryWorker(int threadId) {
     while (bufferQueue.pop(bufferTicket)) {
         bufferPtr = bufferTicket.first;
         ticket = bufferTicket.second;
+        if (nativeBinaryRegularTiles_) {
+            workerOutputContext_[static_cast<size_t>(threadId)].kind = OutputSourceKind::Boundary;
+            workerOutputContext_[static_cast<size_t>(threadId)].boundaryKey = bufferPtr->key;
+        }
         TileData<T> tileData;
         int32_t ret = 0;
 
@@ -431,49 +456,405 @@ void Tiles2MinibatchBase<T>::writerWorker() {
                (!useTicketSystem_ ||
                 outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
             const auto& readyToWrite = outOfOrderBuffer.top();
-            if (readyToWrite.npts > 0) {
-                size_t st = outputSize;
-                size_t ed = st;
-                if (readyToWrite.useObj) {
-                    if (coordDim_ == MinibatchCoordDim::Dim3) {
-                        for (const auto& obj : readyToWrite.outputObjs3d) {
-                            int32_t s0 = obj.write(fdMain);
-                            if (s0 < 0) {
-                                error("Error writing to main output file");
-                            }
-                            ed += s0;
-                        }
-                    } else {
-                        for (const auto& obj : readyToWrite.outputObjs) {
-                            int32_t s0 = obj.write(fdMain);
-                            if (s0 < 0) {
-                                error("Error writing to main output file");
-                            }
-                            ed += s0;
-                        }
-                    }
-                } else {
-                    for (const auto& line : readyToWrite.outputLines) {
-                        if (!write_all(fdMain, line.data(), line.size())) {
+            if (readyToWrite.npts == 0) {
+                outOfOrderBuffer.pop();
+                nextTicketToWrite++;
+                continue;
+            }
+            size_t st = outputSize;
+            size_t ed = st;
+            if (readyToWrite.useObj) {
+                if (coordDim_ == MinibatchCoordDim::Dim3) {
+                    for (const auto& obj : readyToWrite.outputObjs3d) {
+                        int32_t s0 = obj.write(fdMain);
+                        if (s0 < 0) {
                             error("Error writing to main output file");
                         }
-                        ed += line.size();
+                        ed += s0;
+                    }
+                } else {
+                    for (const auto& obj : readyToWrite.outputObjs) {
+                        int32_t s0 = obj.write(fdMain);
+                        if (s0 < 0) {
+                            error("Error writing to main output file");
+                        }
+                        ed += s0;
                     }
                 }
-                IndexEntryF e(st, ed, readyToWrite.npts,
-                    (int32_t) std::floor(readyToWrite.xmin),
-                    (int32_t) std::ceil(readyToWrite.xmax),
-                    (int32_t) std::floor(readyToWrite.ymin),
-                    (int32_t) std::ceil(readyToWrite.ymax));
-                if (!write_all(fdIndex, &e, sizeof(e))) {
-                    error("Error writing to index output file");
+            } else {
+                for (const auto& line : readyToWrite.outputLines) {
+                    if (!write_all(fdMain, line.data(), line.size())) {
+                        error("Error writing to main output file");
+                    }
+                    ed += line.size();
                 }
-                outputSize = ed;
             }
+            IndexEntryF e(st, ed, readyToWrite.npts,
+                (int32_t) std::floor(readyToWrite.xmin),
+                (int32_t) std::ceil(readyToWrite.xmax),
+                (int32_t) std::floor(readyToWrite.ymin),
+                (int32_t) std::ceil(readyToWrite.ymax));
+            if (!write_all(fdIndex, &e, sizeof(e))) {
+                error("Error writing to index output file");
+            }
+            outputSize = ed;
             outOfOrderBuffer.pop();
             nextTicketToWrite++;
         }
     }
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::submitPixelResult(ResultBuf&& result, int threadId) {
+    if (!nativeBinaryRegularTiles_) {
+        resultQueue.push(std::move(result));
+        return;
+    }
+    appendNativeBinaryResult(result, threadId);
+}
+
+template<typename T>
+IndexHeader Tiles2MinibatchBase<T>::buildIndexHeader(bool fragmented) const {
+    IndexHeader idxHeader;
+    idxHeader.magic = PUNKST_INDEX_MAGIC;
+    idxHeader.mode = (getFactorCount() << 16);
+    if (fragmented) {
+        idxHeader.mode |= 0x8;
+    }
+    idxHeader.tileSize = tileSize;
+    idxHeader.topK = topk_;
+    idxHeader.pixelResolution = pixelResolution_;
+    const auto& box = tileReader.getGlobalBox();
+    idxHeader.xmin = box.xmin;
+    idxHeader.xmax = box.xmax;
+    idxHeader.ymin = box.ymin;
+    idxHeader.ymax = box.ymax;
+    if (outputBinary_) {
+        idxHeader.mode |= 0x7;
+        idxHeader.coordType = 1;
+        idxHeader.recordSize = outputRecordSize_;
+    }
+    if (coordDim_ == MinibatchCoordDim::Dim3) {
+        idxHeader.mode |= 0x10;
+    }
+    return idxHeader;
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::setupNativeBinaryShards() {
+    if (!nativeBinaryRegularTiles_) {
+        return;
+    }
+    if (!outputBinary_) {
+        error("%s: native regular tile mode currently supports binary output only", __func__);
+    }
+    if (coordDim_ != MinibatchCoordDim::Dim2) {
+        error("%s: native regular tile mode currently supports 2D output only", __func__);
+    }
+    if (!tmpDir.enabled) {
+        tmpDir.init(std::filesystem::temp_directory_path());
+        notice("Created temporary directory: %s", tmpDir.path.string().c_str());
+    }
+    const size_t nWorkers = static_cast<size_t>(std::max(1, nThreads));
+    workerShards_.assign(nWorkers, WorkerShardFiles{});
+    for (size_t i = 0; i < nWorkers; ++i) {
+        WorkerShardFiles& shard = workerShards_[i];
+        shard.mainDataPath = (tmpDir.path / ("worker." + std::to_string(i) + ".main.dat")).string();
+        shard.mainIndexPath = (tmpDir.path / ("worker." + std::to_string(i) + ".main.idx")).string();
+        shard.boundaryDataPath = (tmpDir.path / ("worker." + std::to_string(i) + ".boundary.dat")).string();
+        shard.boundaryIndexPath = (tmpDir.path / ("worker." + std::to_string(i) + ".boundary.idx")).string();
+        shard.fdMainData = ::open(shard.mainDataPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        shard.fdMainIndex = ::open(shard.mainIndexPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        shard.fdBoundaryData = ::open(shard.boundaryDataPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        shard.fdBoundaryIndex = ::open(shard.boundaryIndexPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (shard.fdMainData < 0 || shard.fdMainIndex < 0 ||
+            shard.fdBoundaryData < 0 || shard.fdBoundaryIndex < 0) {
+            error("%s: failed opening native shard files in %s", __func__, tmpDir.path.c_str());
+        }
+    }
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::closeNativeBinaryShards() {
+    for (auto& shard : workerShards_) {
+        if (shard.fdMainData >= 0) {
+            ::close(shard.fdMainData);
+            shard.fdMainData = -1;
+        }
+        if (shard.fdMainIndex >= 0) {
+            ::close(shard.fdMainIndex);
+            shard.fdMainIndex = -1;
+        }
+        if (shard.fdBoundaryData >= 0) {
+            ::close(shard.fdBoundaryData);
+            shard.fdBoundaryData = -1;
+        }
+        if (shard.fdBoundaryIndex >= 0) {
+            ::close(shard.fdBoundaryIndex);
+            shard.fdBoundaryIndex = -1;
+        }
+    }
+}
+
+template<typename T>
+std::vector<char> Tiles2MinibatchBase<T>::serializeBinaryResult(const ResultBuf& result) const {
+    if (!result.useObj || coordDim_ != MinibatchCoordDim::Dim2) {
+        error("%s: native binary serialization expects 2D object records", __func__);
+    }
+    std::vector<char> bytes;
+    bytes.reserve(static_cast<size_t>(result.npts) * outputRecordSize_);
+    for (const auto& obj : result.outputObjs) {
+        const size_t off = bytes.size();
+        bytes.resize(off + outputRecordSize_);
+        char* dst = bytes.data() + off;
+        std::memcpy(dst, &obj.x, sizeof(obj.x));
+        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+        if (!obj.ks.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y),
+                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+        }
+        if (!obj.ps.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + obj.ks.size() * sizeof(int32_t),
+                obj.ps.data(), obj.ps.size() * sizeof(float));
+        }
+    }
+    return bytes;
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, int threadId) {
+    if (result.npts == 0) {
+        return;
+    }
+    const size_t workerId = static_cast<size_t>(threadId);
+    if (workerId >= workerShards_.size()) {
+        error("%s: invalid worker id %d", __func__, threadId);
+    }
+    const WorkerOutputContext& ctx = workerOutputContext_[workerId];
+    if (ctx.kind == OutputSourceKind::None) {
+        error("%s: missing output context for worker %d", __func__, threadId);
+    }
+    WorkerShardFiles& shard = workerShards_[workerId];
+    auto appendObjectBytes = [&](std::vector<char>& bytes, const PixTopProbs<int32_t>& obj) {
+        const size_t off = bytes.size();
+        bytes.resize(off + outputRecordSize_);
+        char* dst = bytes.data() + off;
+        std::memcpy(dst, &obj.x, sizeof(obj.x));
+        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+        if (!obj.ks.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y),
+                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+        }
+        if (!obj.ps.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + obj.ks.size() * sizeof(int32_t),
+                obj.ps.data(), obj.ps.size() * sizeof(float));
+        }
+    };
+    if (ctx.kind == OutputSourceKind::MainTile) {
+        std::vector<char> bytes = serializeBinaryResult(result);
+        if (bytes.empty()) {
+            return;
+        }
+        ShardFragmentIndex idx;
+        idx.kind = static_cast<uint8_t>(ctx.kind);
+        idx.npts = result.npts;
+        idx.boundaryKey = 0;
+        idx.row = ctx.tile.row;
+        idx.col = ctx.tile.col;
+        idx.dataOffset = shard.mainDataSize;
+        idx.dataBytes = bytes.size();
+        if (!write_all(shard.fdMainData, bytes.data(), bytes.size()) ||
+            !write_all(shard.fdMainIndex, &idx, sizeof(idx))) {
+            error("%s: failed writing main shard data for worker %d", __func__, threadId);
+        }
+        shard.mainDataSize += idx.dataBytes;
+    } else if (ctx.kind == OutputSourceKind::Boundary) {
+        std::map<TileKey, std::pair<std::vector<char>, uint32_t>> buckets;
+        for (const auto& obj : result.outputObjs) {
+            const float x = static_cast<float>(obj.x) * pixelResolution_;
+            const float y = static_cast<float>(obj.y) * pixelResolution_;
+            TileKey tile{
+                static_cast<int32_t>(std::floor(y / tileSize)),
+                static_cast<int32_t>(std::floor(x / tileSize))
+            };
+            auto& bucket = buckets[tile];
+            appendObjectBytes(bucket.first, obj);
+            bucket.second++;
+        }
+        for (const auto& kv : buckets) {
+            const auto& tile = kv.first;
+            const auto& bytes = kv.second.first;
+            if (bytes.empty()) {
+                continue;
+            }
+            ShardFragmentIndex idx;
+            idx.kind = static_cast<uint8_t>(ctx.kind);
+            idx.row = tile.row;
+            idx.col = tile.col;
+            idx.boundaryKey = ctx.boundaryKey;
+            idx.npts = kv.second.second;
+            idx.dataOffset = shard.boundaryDataSize;
+            idx.dataBytes = bytes.size();
+            if (!write_all(shard.fdBoundaryData, bytes.data(), bytes.size()) ||
+                !write_all(shard.fdBoundaryIndex, &idx, sizeof(idx))) {
+                error("%s: failed writing boundary shard data for worker %d", __func__, threadId);
+            }
+            shard.boundaryDataSize += idx.dataBytes;
+        }
+    } else {
+        error("%s: unsupported output source kind", __func__);
+    }
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::mergeNativeBinaryShards() {
+    if (!nativeBinaryRegularTiles_) {
+        return;
+    }
+
+    std::map<TileKey, std::vector<FragmentSpan>> tileMainSpans;
+    std::map<TileKey, std::vector<FragmentSpan>> tileBoundarySpans;
+    for (size_t shardId = 0; shardId < workerShards_.size(); ++shardId) {
+        std::ifstream idxIn(workerShards_[shardId].mainIndexPath, std::ios::binary);
+        if (!idxIn.is_open()) {
+            error("%s: failed opening shard index %s", __func__, workerShards_[shardId].mainIndexPath.c_str());
+        }
+        ShardFragmentIndex idx;
+        while (idxIn.read(reinterpret_cast<char*>(&idx), sizeof(idx))) {
+            if (idx.kind != static_cast<uint8_t>(OutputSourceKind::MainTile)) {
+                error("%s: invalid fragment kind in main shard index", __func__);
+            }
+            TileKey tile{idx.row, idx.col};
+            tileMainSpans[tile].push_back(FragmentSpan{shardId, idx.dataOffset, idx.dataBytes, idx.npts});
+        }
+    }
+    for (size_t shardId = 0; shardId < workerShards_.size(); ++shardId) {
+        std::ifstream idxIn(workerShards_[shardId].boundaryIndexPath, std::ios::binary);
+        if (!idxIn.is_open()) {
+            error("%s: failed opening boundary shard index %s", __func__, workerShards_[shardId].boundaryIndexPath.c_str());
+        }
+        ShardFragmentIndex idx;
+        while (idxIn.read(reinterpret_cast<char*>(&idx), sizeof(idx))) {
+            if (idx.kind != static_cast<uint8_t>(OutputSourceKind::Boundary)) {
+                error("%s: invalid fragment kind in boundary shard index", __func__);
+            }
+            if (idx.dataBytes == 0 || idx.npts == 0) {
+                continue;
+            }
+            TileKey tile{idx.row, idx.col};
+            tileBoundarySpans[tile].push_back(FragmentSpan{shardId, idx.dataOffset, idx.dataBytes, idx.npts});
+        }
+    }
+
+    std::string outFile = outPref + ".bin";
+    std::string outIndex = outPref + ".index";
+    int fdOut = ::open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    int fdIdx = ::open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdOut < 0 || fdIdx < 0) {
+        if (fdOut >= 0) ::close(fdOut);
+        if (fdIdx >= 0) ::close(fdIdx);
+        error("%s: failed opening final output %s / %s", __func__, outFile.c_str(), outIndex.c_str());
+    }
+    IndexHeader idxHeader = buildIndexHeader(false);
+    if (!write_all(fdIdx, &idxHeader, sizeof(idxHeader))) {
+        ::close(fdOut);
+        ::close(fdIdx);
+        error("%s: failed writing final index header", __func__);
+    }
+
+    std::vector<std::ifstream> mainInputs;
+    std::vector<std::ifstream> boundaryInputs;
+    mainInputs.reserve(workerShards_.size());
+    boundaryInputs.reserve(workerShards_.size());
+    for (const auto& shard : workerShards_) {
+        mainInputs.emplace_back(shard.mainDataPath, std::ios::binary);
+        if (!mainInputs.back().is_open()) {
+            ::close(fdOut);
+            ::close(fdIdx);
+            error("%s: failed opening main shard data %s", __func__, shard.mainDataPath.c_str());
+        }
+        boundaryInputs.emplace_back(shard.boundaryDataPath, std::ios::binary);
+        if (!boundaryInputs.back().is_open()) {
+            ::close(fdOut);
+            ::close(fdIdx);
+            error("%s: failed opening boundary shard data %s", __func__, shard.boundaryDataPath.c_str());
+        }
+    }
+
+    auto copySpan = [&](std::ifstream& in, const FragmentSpan& span) {
+        static constexpr size_t kBufSize = 1 << 20;
+        std::vector<char> buf(kBufSize);
+        in.clear();
+        in.seekg(static_cast<std::streamoff>(span.dataOffset));
+        if (!in.good()) {
+            error("%s: failed seeking shard input", __func__);
+        }
+        uint64_t copied = 0;
+        while (copied < span.dataBytes) {
+            const size_t toRead = static_cast<size_t>(
+                std::min<uint64_t>(static_cast<uint64_t>(buf.size()), span.dataBytes - copied));
+            if (!in.read(buf.data(), static_cast<std::streamsize>(toRead))) {
+                error("%s: failed reading shard payload", __func__);
+            }
+            if (!write_all(fdOut, buf.data(), toRead)) {
+                error("%s: failed writing final payload", __func__);
+            }
+            copied += static_cast<uint64_t>(toRead);
+        }
+    };
+
+    std::set<TileKey> allTiles;
+    std::vector<TileKey> sourceTiles;
+    tileReader.getTileList(sourceTiles);
+    for (const auto& tile : sourceTiles) {
+        allTiles.insert(tile);
+    }
+    for (const auto& kv : tileMainSpans) {
+        allTiles.insert(kv.first);
+    }
+    for (const auto& kv : tileBoundarySpans) {
+        allTiles.insert(kv.first);
+    }
+
+    uint64_t currentOffset = 0;
+    int32_t nTiles = 0;
+    for (const auto& tile : allTiles) {
+        IndexEntryF outEntry(tile.row, tile.col);
+        outEntry.st = currentOffset;
+        outEntry.n = 0;
+        tile2bound(tile, outEntry.xmin, outEntry.xmax, outEntry.ymin, outEntry.ymax, tileSize);
+
+        auto mainIt = tileMainSpans.find(tile);
+        if (mainIt != tileMainSpans.end()) {
+            for (const auto& span : mainIt->second) {
+                copySpan(mainInputs[span.shardId], span);
+                currentOffset += span.dataBytes;
+                outEntry.n += span.npts;
+            }
+        }
+        auto boundaryIt = tileBoundarySpans.find(tile);
+        if (boundaryIt != tileBoundarySpans.end()) {
+            for (const auto& span : boundaryIt->second) {
+                copySpan(boundaryInputs[span.shardId], span);
+                currentOffset += span.dataBytes;
+                outEntry.n += span.npts;
+            }
+        }
+
+        outEntry.ed = currentOffset;
+        if (outEntry.n > 0) {
+            if (!write_all(fdIdx, &outEntry, sizeof(outEntry))) {
+                ::close(fdOut);
+                ::close(fdIdx);
+                error("%s: failed writing final tile index", __func__);
+            }
+            ++nTiles;
+        }
+    }
+
+    ::close(fdOut);
+    ::close(fdIdx);
+    notice("%s: native regularization wrote %d tiles to %s", __func__, nTiles, outFile.c_str());
 }
 
 template<typename T>
@@ -555,6 +936,7 @@ void Tiles2MinibatchBase<T>::closeOutput() {
     if (fdMain >= 0) { ::close(fdMain); fdMain = -1; }
     if (fdIndex >= 0) { ::close(fdIndex); fdIndex = -1; }
     if (fdAnchor >= 0) { ::close(fdAnchor); fdAnchor = -1; }
+    closeNativeBinaryShards();
 }
 
 // Include template implementations to keep definitions in one TU.

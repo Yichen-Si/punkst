@@ -219,6 +219,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
     ioConfig.outputAnchor = outputAnchor;
     ioConfig.useTicketSystem = useTicketSystem;
+    ioConfig.nativeRegularTiles = outputBinary && !parser.hasZCoord();
     ioConfig.coordDim = parser.hasZCoord() ? MinibatchCoordDim::Dim3 : MinibatchCoordDim::Dim2;
 
     VectorXf eta0;

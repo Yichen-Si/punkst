@@ -121,7 +121,7 @@ $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp: \
 	$(DATADIR)/prepare.stamp \
     $(DATADIR)/hex_$(1).k$(2).model.stamp
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$*.tsv"
-	 $(PUNKST) pixel-decode \
+	$(PUNKST) pixel-decode \
 	  --model $(DATADIR)/hex_$(1).k$(2).model.tsv \
 	  --in-tsv $(TILETSV) --in-index $(TILEINDEX) \
 	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) \
@@ -130,9 +130,6 @@ $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp: \
 	  --min-init-count 20 \
 	  --out-pref $(DATADIR)/hex_$(1).k$(2).pixel --output-binary \
 	  --temp-dir $(TMPDIR) --threads $(THREADS) --seed $(SEED)
-	$(PUNKST) tile-op --reorganize --binary --in $(DATADIR)/hex_$(1).k$(2).pixel --out $(DATADIR)/hex_$(1).k$(2).pixel.reorg
-	mv $(DATADIR)/hex_$(1).k$(2).pixel.reorg.bin $(DATADIR)/hex_$(1).k$(2).pixel.bin
-	mv $(DATADIR)/hex_$(1).k$(2).pixel.reorg.index $(DATADIR)/hex_$(1).k$(2).pixel.index
 	touch $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp
 endef
 $(foreach H,$(HEXGRIDS),\

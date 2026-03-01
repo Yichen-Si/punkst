@@ -68,6 +68,7 @@ set(SOURCE_FILES
     src/threads.hpp
     src/tilereader.hpp
     src/tilereader.cpp
+    src/tilereader_binary.hpp
     src/tiles2bins.hpp
     src/tiles2bins.cpp
     src/dataunits.hpp
