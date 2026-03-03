@@ -14,11 +14,12 @@ void LatentDirichletAllocation::scvb0_partial_fit(
             auto& localNkw = hatNkw_acc.local();
 
             for (int d = range.begin(); d < range.end(); ++d) {
-                // Use document-indexed RNG stream to avoid schedule-dependent randomness.
-                set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
-                    0x2d8f19bULL ^ static_cast<uint64_t>(update_count_)));
+                const uint64_t rng_stream = deterministic_rng_
+                    ? doc_stream(static_cast<uint64_t>(d),
+                        0x2d8f19bULL ^ static_cast<uint64_t>(update_count_))
+                    : 0;
                 const Document& doc = docs[d];
-                scvb0_fit_one_document(localNkw, doc);
+                scvb0_fit_one_document(localNkw, doc, rng_stream);
             }
         });
     // Combine
@@ -37,7 +38,7 @@ void LatentDirichletAllocation::scvb0_partial_fit(
 }
 
 void LatentDirichletAllocation::scvb0_fit_one_document(
-        MatrixXd& hatNkw, const Document& doc)
+        MatrixXd& hatNkw, const Document& doc, uint64_t rng_stream)
 {
     int Cj = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0);
     VectorXd NTheta = VectorXd::Constant(n_topics_, alpha_);
@@ -46,8 +47,12 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
     // generate a random order of words to process
     std::vector<int> word_order(doc.ids.size());
     std::iota(word_order.begin(), word_order.end(), 0);
-    auto& rng = thread_rng();
-    std::shuffle(word_order.begin(), word_order.end(), rng);
+    if (deterministic_rng_) {
+        SplitMix64Engine rng(rng_stream);
+        std::shuffle(word_order.begin(), word_order.end(), rng);
+    } else {
+        std::shuffle(word_order.begin(), word_order.end(), random_engine_);
+    }
     for (int epoch = 0; epoch < burn_in_ + 1; ++epoch) {
         for (size_t i = 0; i < doc.ids.size(); ++i) {
             const uint32_t w = doc.ids[word_order[i]];
@@ -67,7 +72,7 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
 
 // for transform (don't need sufficient statistics for global update)
 void LatentDirichletAllocation::scvb0_fit_one_document(
-        VectorXd& hatNk, const Document& doc)
+        VectorXd& hatNk, const Document& doc, uint64_t rng_stream)
 {
     hatNk.resize(n_topics_);
     hatNk.setZero();
@@ -78,8 +83,12 @@ void LatentDirichletAllocation::scvb0_fit_one_document(
     // generate a random order of words to process
     std::vector<int> word_order(doc.ids.size());
     std::iota(word_order.begin(), word_order.end(), 0);
-    auto& rng = thread_rng();
-    std::shuffle(word_order.begin(), word_order.end(), rng);
+    if (deterministic_rng_) {
+        SplitMix64Engine rng(rng_stream);
+        std::shuffle(word_order.begin(), word_order.end(), rng);
+    } else {
+        std::shuffle(word_order.begin(), word_order.end(), random_engine_);
+    }
     for (int epoch = 0; epoch < burn_in_ + 1; ++epoch) {
         for (size_t i = 0; i < doc.ids.size(); ++i) {
             const uint32_t w = doc.ids[word_order[i]];

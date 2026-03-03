@@ -161,6 +161,12 @@ public:
         }
         lda->get_topic_abundance(topic_weights);
     }
+    void set_reproducible_init(bool enabled = true) {
+        if (!initialized || !lda) {
+            error("%s: LDA4Hex is not initialized", __FUNCTION__);
+        }
+        lda->set_deterministic_rng(enabled);
+    }
     void writeBackgroundModel(std::string& outFile) {
         if (lda->get_algorithm() != InferenceType::SVB_DN) {
             return;
@@ -279,14 +285,13 @@ protected:
         setupPriorMapping(priorFeatureNames, kept_indices);
 
         // Create subset matrix for only the intersected features
-        MatrixXd priorMatrix_ = MatrixXd(K_, M_);
+        priorMatrix.resize(K_, M_);
         // Map columns from full prior matrix to subset matrix
         for (size_t i = 0; i < kept_indices.size(); ++i) {
-            priorMatrix_.col(i) = fullPriorMatrix.col(kept_indices[i]);
+            priorMatrix.col(i) = fullPriorMatrix.col(kept_indices[i]);
         }
         notice("Created subset prior matrix: %d topics x %d features (from original %d features)",
-                (int)priorMatrix_.rows(), (int)priorMatrix_.cols(), (int)priorFeatureNames.size());
-        priorMatrix = priorMatrix_;
+                (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
         // Apply scaling if specified
         if (priorScaleRel > 0 && reader.readFullSums) {
             const std::vector<double>& featureSumsRaw = reader.getFeatureSumsRaw();
@@ -314,7 +319,7 @@ protected:
 
             notice("%s: total count of the overlapping features in the prior matrix is %.2fX that in the data, %.2fX after scaling each factor to be <= %.2f/K (%.2e) of the data total", __func__, globalScale0, globalScale1, priorScaleRel, priorScaleRel/K_);
         } else if (priorScale > 0. && priorScale != 1.) {
-            priorMatrix_ *= priorScale;
+            priorMatrix *= priorScale;
         }
 
     }

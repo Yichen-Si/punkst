@@ -63,6 +63,7 @@ void Tiles2MinibatchBase<T>::setupOutput() {
         error("Error writing header_str to anchor output file: %s", anchorFile.c_str());
     }
     anchorHeaderSize = header_str.size();
+    anchorOutputSize += anchorHeaderSize;
 }
 
 template<typename T>

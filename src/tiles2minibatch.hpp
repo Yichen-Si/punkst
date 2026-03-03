@@ -6,6 +6,8 @@
 #include <cassert>
 #include <stdexcept>
 #include <atomic>
+#include <functional>
+#include <limits>
 #include <tuple>
 #include <variant>
 #include <cassert>
@@ -291,7 +293,7 @@ public:
       outputAnchor_(ioConfig.outputAnchor),
       inputMode_(ioConfig.input), outputMode_(ioConfig.output),
       nativeRegularTiles_(ioConfig.nativeRegularTiles),
-      coordDim_(ioConfig.coordDim) {
+      coordDim_(MinibatchCoordDim::Dim2) {
         tileSize = tileReader.getTileSize();
         if (opt && !(*opt).empty()) {
             useMemoryBuffer_ = false;
@@ -316,9 +318,7 @@ public:
         workerOutputContext_.resize(static_cast<size_t>(std::max(1, nThreads)));
     }
 
-    virtual ~Tiles2MinibatchBase() {
-        closeOutput();
-    }
+    virtual ~Tiles2MinibatchBase() {closeOutput();}
 
     void run();
     // Load fixed anchor points from a file and assign to tiles/boundaries
@@ -331,9 +331,17 @@ public:
     }
     void setOutputProbDigits(int32_t digits) { probDigits = digits; }
     void setOutputCoordDigits(int32_t digits) { floatCoordDigits = digits; }
+    void set3Dparameters(bool isThin,
+        double zMin = std::numeric_limits<double>::quiet_NaN(),
+        double zMax = std::numeric_limits<double>::quiet_NaN(),
+        float zScale = 1.0f, float zRes = -1.0f,
+        int32_t n = 0, bool enforceZrange = false);
     virtual int32_t getFactorCount() const = 0;
 
 protected:
+
+    using AnchorKey2D = std::tuple<int32_t, int32_t, int32_t, int32_t>;
+    using AnchorKey3D = std::tuple<int32_t, int32_t, int32_t, int32_t, int32_t, int32_t>;
 
     enum class OutputSourceKind : uint8_t { None = 0, MainTile = 1, Boundary = 2 };
 
@@ -384,7 +392,7 @@ protected:
         std::vector<PixTopProbs<int32_t>> outputObjs;
         std::vector<PixTopProbs3D<int32_t>> outputObjs3d;
         uint32_t npts;
-        bool useObj = false;
+        bool useObj = false; // true for binary output
         ResultBuf(int32_t t=0, float x1=0, float x2=0, float y1=0, float y2=0)
         : ticket(t), xmin(x1), xmax(x2), ymin(y1), ymax(y2), npts(0) {}
         bool operator>(const ResultBuf& other) const {
@@ -438,12 +446,19 @@ protected:
     MinibatchInputMode inputMode_ = MinibatchInputMode::Standard;
     MinibatchOutputMode outputMode_ = MinibatchOutputMode::Standard;
     MinibatchCoordDim coordDim_ = MinibatchCoordDim::Dim2;
+    int32_t nInitAnchorPerPix_ = 0;
+    bool ignoreOutsideZrange_ = false;
+    bool useThin3DAnchors_ = false;
+    double zMin_ = std::numeric_limits<double>::quiet_NaN();
+    double zMax_ = std::numeric_limits<double>::quiet_NaN();
+    float zScale_ = 1.0;
     ParseTileFn parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard;
     ParseBoundaryFileFn parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile;
     ParseBoundaryMemoryFn parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandardWrapper;
     FormatPixelFn formatPixelFn_ = &Tiles2MinibatchBase::formatPixelResultStandard;
     std::vector<std::string> featureNames;
     float pixelResolution_ = 1.0f;
+    float pixelResolutionZ_ = 1.0f;
     int32_t floatCoordDigits = 2, probDigits = 4;
     int32_t topk_ = 3;
     bool useExtended_ = false;
@@ -653,7 +668,6 @@ protected:
         return &it->second;
     }
 
-    /* I/O */
     // Given data and anchor pos, build pixels & pixel-anchor relations
     int32_t buildMinibatchCore(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
@@ -661,9 +675,23 @@ protected:
     int32_t buildMinibatchCore3D(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
         double distR, double distNu);
-    // Create anchor grid and initialize anchor level counts
+    // Given data, choose anchor points
+    void forEachAnchorCandidate2D(const TileData<T>& tileData, HexGrid& hexGrid_, int32_t nMoves_,
+        const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const;
+    void forEachAnchorCandidate3D(const TileData<T>& tileData, HexGrid& hexGrid_, int32_t nMoves_,
+        const std::function<void(uint32_t, float, const AnchorKey3D&)>& emit) const;
+    void forEachAnchorCandidateThin3D(const TileData<T>& tileData, HexGrid& hexGrid_, int32_t nMoves_,
+        const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const;
+    // Anchor key helper
+    void anchorKeyToCoord2D(float& x, float& y, const AnchorKey2D& key, HexGrid& hexGrid_, int32_t nMoves_) const;
+    void anchorKeyToCoord3D(float& x, float& y, float& z, const AnchorKey3D& key, HexGrid& hexGrid_, int32_t nMoves_) const;
+    void anchorKeyToCoordThin3D(float& x, float& y, float& z, const AnchorKey2D& key, HexGrid& hexGrid_, int32_t nMoves_) const;
+    // Build anchor and aggregate counts
     int32_t buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
     int32_t buildAnchors3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
+    int32_t buildAnchorsThin3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
+
+    /* I/O */
     // Parsing helpers
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
     int32_t parseOneTileStandard(TileData<T>& tileData, TileKey tile);

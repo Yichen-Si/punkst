@@ -99,9 +99,7 @@ void Tiles2MinibatchBase<T>::configureInputMode() {
     if (!lineParserPtr) {
         error("%s: lineParser is required", __func__);
     }
-    if (lineParserPtr->hasZCoord()) {
-        coordDim_ = MinibatchCoordDim::Dim3;
-    } else if (coordDim_ == MinibatchCoordDim::Dim3) {
+    if (coordDim_ == MinibatchCoordDim::Dim3 && !lineParserPtr->hasZCoord()) {
         error("%s: 3D mode requires a z column", __func__);
     }
     if (inputMode_ == MinibatchInputMode::Extended) {
@@ -272,20 +270,15 @@ int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
-    if (coordDim_ == MinibatchCoordDim::Dim3) {
-        return buildAnchors3D(tileData, anchors, documents, hexGrid_, nMoves_, minCount);
-    }
-    anchors.clear();
-    documents.clear();
-    std::map<std::tuple<int32_t, int32_t, int32_t, int32_t>, std::unordered_map<uint32_t, float>> hexAggregation;
+void Tiles2MinibatchBase<T>::forEachAnchorCandidate2D(const TileData<T>& tileData, HexGrid& hexGrid_, int32_t nMoves_,
+    const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const
+{
     auto assign_pt = [&](const auto& pt) {
         for (int32_t ir = 0; ir < nMoves_; ++ir) {
             for (int32_t ic = 0; ic < nMoves_; ++ic) {
                 int32_t hx, hy;
-                hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1. / nMoves_, ir * 1. / nMoves_);
-                auto key = std::make_tuple(hx, hy, ic, ir);
-                hexAggregation[key][pt.idx] += pt.ct;
+                hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1.0 / nMoves_, ir * 1.0 / nMoves_);
+                emit(pt.idx, static_cast<float>(pt.ct), AnchorKey2D{hx, hy, ic, ir});
             }
         }
     };
@@ -298,6 +291,31 @@ int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<
             assign_pt(pt);
         }
     }
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::anchorKeyToCoord2D(float& x, float& y, const AnchorKey2D& key, HexGrid& hexGrid_, int32_t nMoves_) const {
+    const int32_t hx = std::get<0>(key);
+    const int32_t hy = std::get<1>(key);
+    const int32_t ic = std::get<2>(key);
+    const int32_t ir = std::get<3>(key);
+    hexGrid_.axial_to_cart(x, y, hx, hy, ic * 1.0 / nMoves_, ir * 1.0 / nMoves_);
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
+    if (coordDim_ == MinibatchCoordDim::Dim3) {
+        if (useThin3DAnchors_) {
+            return buildAnchorsThin3D(tileData, anchors, documents, hexGrid_, nMoves_, minCount);
+        }
+        return buildAnchors3D(tileData, anchors, documents, hexGrid_, nMoves_, minCount);
+    }
+    anchors.clear();
+    documents.clear();
+    std::map<AnchorKey2D, std::unordered_map<uint32_t, float>> hexAggregation;
+    forEachAnchorCandidate2D(tileData, hexGrid_, nMoves_, [&](uint32_t idx, float ct, const AnchorKey2D& key) {
+        hexAggregation[key][idx] += ct;
+    });
 
     for (auto& entry : hexAggregation) {
         float sum = std::accumulate(entry.second.begin(), entry.second.end(), 0.0f,
@@ -319,12 +337,8 @@ int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<
         }
         documents.push_back(std::move(obs));
         const auto& key = entry.first;
-        int32_t hx = std::get<0>(key);
-        int32_t hy = std::get<1>(key);
-        int32_t ic = std::get<2>(key);
-        int32_t ir = std::get<3>(key);
         float x, y;
-        hexGrid_.axial_to_cart(x, y, hx, hy, ic * 1. / nMoves_, ir * 1. / nMoves_);
+        anchorKeyToCoord2D(x, y, key, hexGrid_, nMoves_);
         anchors.emplace_back(x, y);
     }
     return documents.size();
@@ -339,7 +353,7 @@ template<typename T>
 int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     double distR, double distNu) {
-
+    debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts.size() + tileData.extPts.size());
     if (minibatch.n <= 0) {
         return 0;
     }
@@ -425,6 +439,8 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
         ++npt;
     }
     anchors = std::move(pc.pts);
+    double avgDegree = static_cast<double>(tripletsWij.size()) / static_cast<double>(npt);
+    debug("%s: created %zu edges between %zu pixels and %zu anchors, average degree %.2f", __func__, tripletsWij.size(), npt, anchors.size(), avgDegree);
 
     minibatch.N = static_cast<int32_t>(npt);
     minibatch.M = M_;
@@ -524,6 +540,7 @@ IndexHeader Tiles2MinibatchBase<T>::buildIndexHeader(bool fragmented) const {
     idxHeader.tileSize = tileSize;
     idxHeader.topK = topk_;
     idxHeader.pixelResolution = pixelResolution_;
+    idxHeader.pixelResolutionZ = pixelResolution_;
     const auto& box = tileReader.getGlobalBox();
     idxHeader.xmin = box.xmin;
     idxHeader.xmax = box.xmax;
@@ -531,11 +548,12 @@ IndexHeader Tiles2MinibatchBase<T>::buildIndexHeader(bool fragmented) const {
     idxHeader.ymax = box.ymax;
     if (outputBinary_) {
         idxHeader.mode |= 0x7;
-        idxHeader.coordType = 1;
         idxHeader.recordSize = outputRecordSize_;
     }
     if (coordDim_ == MinibatchCoordDim::Dim3) {
         idxHeader.mode |= 0x10;
+        idxHeader.mode |= 0x20u;
+        idxHeader.pixelResolutionZ = pixelResolutionZ_;
     }
     return idxHeader;
 }
@@ -869,39 +887,39 @@ void Tiles2MinibatchBase<T>::anchorWriterWorker() {
                (!useTicketSystem_ ||
                 outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
             const auto& readyToWrite = outOfOrderBuffer.top();
-            if (readyToWrite.npts > 0) {
-                size_t totalLen = 0;
-                if (readyToWrite.useObj) {
-                    if (coordDim_ == MinibatchCoordDim::Dim3) {
-                        for (const auto& obj : readyToWrite.outputObjs3d) {
-                            int32_t s0 = obj.write(fdAnchor);
-                            if (s0 < 0) {
-                                error("Error writing to anchor output file");
-                            }
-                            totalLen += s0;
-                        }
-                    } else {
-                        for (const auto& obj : readyToWrite.outputObjs) {
-                            int32_t s0 = obj.write(fdAnchor);
-                            if (s0 < 0) {
-                                error("Error writing to anchor output file");
-                            }
-                            totalLen += s0;
-                        }
-                    }
-                } else {
-                    for (const auto& line : readyToWrite.outputLines) {
-                        if (!write_all(fdAnchor, line.data(), line.size())) {
+            if (readyToWrite.npts == 0) {
+                outOfOrderBuffer.pop();
+                nextTicketToWrite++;
+                continue;
+            }
+            size_t totalLen = 0;
+            if (readyToWrite.useObj) { // currently always false
+                if (coordDim_ == MinibatchCoordDim::Dim3) {
+                    for (const auto& obj : readyToWrite.outputObjs3d) {
+                        int32_t s0 = obj.write(fdAnchor);
+                        if (s0 < 0) {
                             error("Error writing to anchor output file");
                         }
-                        totalLen += line.size();
+                        totalLen += s0;
+                    }
+                } else {
+                    for (const auto& obj : readyToWrite.outputObjs) {
+                        int32_t s0 = obj.write(fdAnchor);
+                        if (s0 < 0) {
+                            error("Error writing to anchor output file");
+                        }
+                        totalLen += s0;
                     }
                 }
-                if (totalLen > 0 && anchorHeaderSize > 0 && anchorOutputSize == 0) {
-                    anchorOutputSize += anchorHeaderSize;
+            } else {
+                for (const auto& line : readyToWrite.outputLines) {
+                    if (!write_all(fdAnchor, line.data(), line.size())) {
+                        error("Error writing to anchor output file");
+                    }
+                    totalLen += line.size();
                 }
-                anchorOutputSize += totalLen;
             }
+            anchorOutputSize += totalLen;
             outOfOrderBuffer.pop();
             nextTicketToWrite++;
         }

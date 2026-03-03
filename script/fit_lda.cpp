@@ -18,6 +18,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double defaultWeight = 1.;
     bool transform = false;
     bool sort_topics = false;
+    bool reproducible_init = false;
     // --- Algorithm Parameters ---
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1., eta = -1.;
@@ -91,6 +92,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       // LDA Options
       .add_option("n-topics", "(LDA) Number of topics", nTopics)
       .add_option("alpha", "(LDA) Document-topic prior (default: 1/K)", alpha)
+      .add_option("reproducible-init", "(LDA) Enable deterministic per-document random initialization (slower)", reproducible_init)
       .add_option("scvb0", "(LDA) Use SCVB0 inference instead of SVB", useSCVB0)
       // HDP Options
       .add_option("max-topics", "(HDP) Maximum number of topics (K)", max_topics_K)
@@ -206,6 +208,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
                 alpha, eta, kappa, tau0, nUnits,
                 priorFile, priorScale, priorScaleRel, maxIter, mDelta);
         }
+        lda4hex->set_reproducible_init(reproducible_init);
         if (use_10x) {
             int32_t n_overlap = dge_ptr->setFeatureIndexRemap(lda4hex->getFeatureNames(), false);
             if (n_overlap == 0) {

@@ -1,8 +1,6 @@
 #include "tiles2nmf.hpp"
-#include "bccgrid.hpp"
 #include <map>
 
-#include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <type_traits>
@@ -288,83 +286,47 @@ template<typename T>
 int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     anchors.clear();
     if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
-        BCCGrid bccGrid(hexGrid_.size);
-        using GridKey3 = std::tuple<int32_t, int32_t, int32_t, int32_t, int32_t, int32_t>;
-        std::map<GridKey3, uint32_t> gridPts;
-        auto assign_pt = [&](const auto& pt) {
-            for (int32_t ir = 0; ir < nMoves_; ++ir) {
-                for (int32_t ic = 0; ic < nMoves_; ++ic) {
-                    for (int32_t iz = 0; iz < nMoves_; ++iz) {
-                        int32_t q1, q2, q3;
-                        double offset_x = (static_cast<double>(ic) / nMoves_) * bccGrid.size;
-                        double offset_y = (static_cast<double>(ir) / nMoves_) * bccGrid.size;
-                        double offset_z = (static_cast<double>(iz) / nMoves_) * bccGrid.size;
-                        bccGrid.cart_to_lattice(q1, q2, q3, pt.x, pt.y, pt.z, offset_x, offset_y, offset_z);
-                        gridPts[std::make_tuple(q1, q2, q3, ic, ir, iz)] += pt.ct;
-                    }
+        if (Base::useThin3DAnchors_) {
+            std::map<typename Base::AnchorKey2D, float> gridPts;
+            Base::forEachAnchorCandidateThin3D(tileData, hexGrid_, nMoves_, [&](uint32_t, float ct, const typename Base::AnchorKey2D& key) {
+                gridPts[key] += ct;
+            });
+            for (auto& kv : gridPts) {
+                if (kv.second < anchorMinCount_) {
+                    continue;
                 }
+                float x, y, z;
+                Base::anchorKeyToCoordThin3D(x, y, z, kv.first, hexGrid_, nMoves_);
+                anchors.emplace_back(x, y, z);
             }
-        };
-        if (useExtended_) {
-            for (const auto& pt : tileData.extPts3d) {
-                assign_pt(pt.recBase);
-            }
-        } else {
-            for (const auto& pt : tileData.pts3d) {
-                assign_pt(pt);
-            }
+            minibatch.n = anchors.size();
+            return anchors.size();
         }
+        std::map<typename Base::AnchorKey3D, float> gridPts;
+        Base::forEachAnchorCandidate3D(tileData, hexGrid_, nMoves_, [&](uint32_t, float ct, const typename Base::AnchorKey3D& key) {
+            gridPts[key] += ct;
+        });
         for (auto& kv : gridPts) {
             if (kv.second < anchorMinCount_) {
                 continue;
             }
-            auto& key = kv.first;
-            int32_t q1 = std::get<0>(key);
-            int32_t q2 = std::get<1>(key);
-            int32_t q3 = std::get<2>(key);
-            int32_t ic = std::get<3>(key);
-            int32_t ir = std::get<4>(key);
-            int32_t iz = std::get<5>(key);
-            double offset_x = (static_cast<double>(ic) / nMoves_) * bccGrid.size;
-            double offset_y = (static_cast<double>(ir) / nMoves_) * bccGrid.size;
-            double offset_z = (static_cast<double>(iz) / nMoves_) * bccGrid.size;
-            double x, y, z;
-            bccGrid.lattice_to_cart(x, y, z, q1, q2, q3, offset_x, offset_y, offset_z);
-            anchors.emplace_back(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+            float x, y, z;
+            Base::anchorKeyToCoord3D(x, y, z, kv.first, hexGrid_, nMoves_);
+            anchors.emplace_back(x, y, z);
         }
         minibatch.n = anchors.size();
         return anchors.size();
     }
-    std::unordered_map<HexGrid::GridKey, uint32_t, HexGrid::GridKeyHash> GridPts;
-    auto assign_pt = [&](const auto& pt) {
-        for (int32_t ir = 0; ir < nMoves_; ++ir) {
-            for (int32_t ic = 0; ic < nMoves_; ++ic) {
-                int32_t hx, hy;
-                hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1. / nMoves_, ir * 1. / nMoves_);
-                GridPts[std::make_tuple(hx, hy, ic, ir)] += pt.ct;
-            }
-        }
-    };
-    if (useExtended_) {
-        for (const auto& pt : tileData.extPts) {
-            assign_pt(pt.recBase);
-        }
-    } else {
-        for (const auto& pt : tileData.pts) {
-            assign_pt(pt);
-        }
-    }
-    for (auto& kv : GridPts) {
+    std::map<typename Base::AnchorKey2D, float> gridPts;
+    Base::forEachAnchorCandidate2D(tileData, hexGrid_, nMoves_, [&](uint32_t, float ct, const typename Base::AnchorKey2D& key) {
+        gridPts[key] += ct;
+    });
+    for (auto& kv : gridPts) {
         if (kv.second < anchorMinCount_) {
             continue;
         }
-        auto& key = kv.first;
-        int32_t hx = std::get<0>(key);
-        int32_t hy = std::get<1>(key);
-        int32_t ic = std::get<2>(key);
-        int32_t ir = std::get<3>(key);
         float x, y;
-        hexGrid_.axial_to_cart(x, y, hx, hy, ic * 1. / nMoves_, ir * 1. / nMoves_);
+        Base::anchorKeyToCoord2D(x, y, kv.first, hexGrid_, nMoves_);
         anchors.emplace_back(x, y);
     }
     minibatch.n = anchors.size();

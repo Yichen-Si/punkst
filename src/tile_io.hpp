@@ -12,7 +12,6 @@
 
 // Magic for binary index
 #define PUNKST_INDEX_MAGIC 0x50554E4B53544958ULL
-
 // Index header
 struct IndexHeader {
     uint64_t magic = 0;
@@ -22,10 +21,11 @@ struct IndexHeader {
     // mode & 0x4: 0 for float coordinates, 1 for int32 coordinates
     // mode & 0x8: 0 for regular grid, 1 for generic rectangular blocks
     // mode & 0x10: 0 for 2D, 1 for 3D
+    // mode & 0x20: 0 for isotropic/implicit z resolution, 1 for explicit pixelResolutionZ
     uint32_t mode = 0;
     int32_t tileSize = 0;
     float pixelResolution = -1; // Must be > 0 if mode & 0x2 or mode & 0x4
-    int32_t coordType = 0; // 0: float, 1: int32 (redundant now, for future use)
+    float pixelResolutionZ = -1; // Must be > 0 if mode & 0x20
     uint32_t topK = 0; // how many (factor, probability) pairs are kept per record (per inference set)
     uint32_t recordSize = 0; // <= 0 for tsv
     float xmin = -1.0f, xmax = -1.0f, ymin = -1.0f, ymax = -1.0f;

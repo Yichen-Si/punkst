@@ -24,11 +24,12 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     mode_ = formatInfo_.mode;
     K_ = mode_ >> 16;
     mode_ &= 0xFFFF;
+    coord_dim_ = (mode_ & 0x10) ? 3 : 2;
     if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
     if (mode_ & 0x2) {assert((mode_ & 0x4) != 0 && (formatInfo_.pixelResolution > 0.0f));}
+    if ((mode_ & 0x20u) && coord_dim_ == 3) {assert(formatInfo_.pixelResolutionZ > 0.0f);}
     if (mode_ & 0x1) {assert(formatInfo_.recordSize > 0);}
     k_ = formatInfo_.parseKvec(kvec_);
-    coord_dim_ = (mode_ & 0x10) ? 3 : 2;
     if (mode_ & 0x1) {
         size_t kBytes = k_ * (sizeof(int32_t) + sizeof(float));
         size_t cBytes = (mode_ & 0x4) ? sizeof(int32_t) : sizeof(float);
@@ -65,6 +66,9 @@ void TileOperator::printIndex() const {
         printf("##Flag: 0x%x\n", formatInfo_.mode);
         printf("##Tile size: %d\n", formatInfo_.tileSize);
         printf("##Pixel resolution: %.2f\n", formatInfo_.pixelResolution);
+        if ((mode_ & 0x10) && (mode_ & 0x20u)) {
+            printf("##Z pixel resolution: %.2f\n", formatInfo_.pixelResolutionZ);
+        }
         printf("##Coordinate type: %s\n", (mode_ & 0x4) ? "int32" : "float");
         if (k_ > 0) {
             printf("##Result set: %u", kvec_[0]);
@@ -119,7 +123,7 @@ void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, floa
         outHeader = IndexHeader();
         outHeader.tileSize = formatInfo_.tileSize;
         outHeader.pixelResolution = formatInfo_.pixelResolution;
-        outHeader.coordType = (mode_ & 0x4) ? 1 : 0;
+        outHeader.pixelResolutionZ = outHeader.pixelResolution;
         outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
         if (!kvec_.empty()) {
             outHeader.packKvec(kvec_);
@@ -316,7 +320,6 @@ void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, floa
     outMode &= ~0x8u;
     outHeader.mode = outMode;
     outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
-    outHeader.coordType = (mode_ & 0x4) ? 1 : 0;
     outHeader.xmin = outBox.xmin;
     outHeader.xmax = outBox.xmax;
     outHeader.ymin = outBox.ymin;
@@ -730,7 +733,6 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
         IndexHeader idxHeader = formatInfo_;
         idxHeader.mode &= ~0x7;
         idxHeader.recordSize = 0; // 0 for TSV
-        idxHeader.coordType = 0; // 0 for float
         if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
             error("Error writing header to index output file");
         }
@@ -915,7 +917,7 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<float>& R) c
     if (mode_ & 0x2) {
         R.x *= formatInfo_.pixelResolution;
         R.y *= formatInfo_.pixelResolution;
-        R.z *= formatInfo_.pixelResolution;
+        R.z *= getPixelResolutionZ();
     }
     if (k_ <= 0) return true;
 
@@ -1139,7 +1141,7 @@ int32_t TileOperator::next(PixTopProbs3D<float>& out, bool rawCoord) {
         if (!rawCoord && (mode_ & 0x2)) {
             out.x *= formatInfo_.pixelResolution;
             out.y *= formatInfo_.pixelResolution;
-            out.z *= formatInfo_.pixelResolution;
+            out.z *= getPixelResolutionZ();
         }
         return 1;
     }
@@ -1157,7 +1159,7 @@ int32_t TileOperator::next(PixTopProbs3D<float>& out, bool rawCoord) {
         if (rawCoord && (mode_ & 0x2)) {
             out.x /= formatInfo_.pixelResolution;
             out.y /= formatInfo_.pixelResolution;
-            out.z /= formatInfo_.pixelResolution;
+            out.z /= getPixelResolutionZ();
         }
         return 1;
     }
@@ -1453,7 +1455,7 @@ int32_t TileOperator::nextBounded(PixTopProbs3D<float>& out, bool rawCoord) {
             if (rawCoord && (mode_ & 0x2)) {
                 out.x /= formatInfo_.pixelResolution;
                 out.y /= formatInfo_.pixelResolution;
-                out.z /= formatInfo_.pixelResolution;
+                out.z /= getPixelResolutionZ();
             }
             return 1;
         }

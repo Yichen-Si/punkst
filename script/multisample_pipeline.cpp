@@ -10,8 +10,9 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     int nThreads0 = 1, tileSize = -1;
     int tileBuffer = 1000, batchSize = 10000;
     int debug = 0, verbose = 1000000;
-    int icol_x, icol_y, icol_feature, icol_int;
+    int icol_x, icol_y, icol_z = -1, icol_feature, icol_int;
     int nskip = 0;
+    bool skip_last_is_header = false;
     int minTotalCountPerSample = 1;
 
     std::vector<double> hexSizes, hexGridDists;
@@ -33,9 +34,11 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         .add_option("in-tsv-list", "A file containing the ID and the path to the input transcript file for each sample (tab/space delimited, one sample per line)", inTsvListFile)
         .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x, true)
         .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y, true)
+        .add_option("icol-z", "Column index for z coordinate (0-based, optional)", icol_z)
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, true)
         .add_option("icol-int", "Column index for integer value (0-based)", icol_int, true)
         .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
+        .add_option("skip-last-is-header", "Treat the last skipped line as the header line", skip_last_is_header)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads0)
         .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
         .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex)
@@ -84,6 +87,9 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     // Check parameters
     if (inTsvList.empty() && inTsvListFile.empty()) {
         error("No input specified. Use --in-tsv or --in-tsv-list to specify input files.");
+    }
+    if (skip_last_is_header && nskip <= 0) {
+        error("--skip-last-is-header requires --skip to be greater than 0");
     }
     if (tiles2hex_only) {
         if (!inTsvList.empty())
@@ -253,7 +259,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         }
         bool streaming = inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0;
         notice("[multisample] Running pts2tiles for sample %s", sn.c_str());
-        Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, streaming, tileBuffer, batchSize);
+        Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip, skip_last_is_header, streaming, tileBuffer, batchSize);
         if (!pts2Tiles.run()) {
             return 1;
         }

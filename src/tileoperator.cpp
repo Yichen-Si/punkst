@@ -184,7 +184,6 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     // Index metadata
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode |= 0x4; // int32
-    idxHeader.coordType = 1;
     if (!idxHeader.packKvec(k2keep)) {
         warning("%s: Too many input fields", __func__);
     }
@@ -815,7 +814,6 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     std::vector<uint32_t> outKvec{1};
     idxHeader.packKvec(outKvec);
     idxHeader.mode = (K_ << 16) | (mode_ & 0x2) | 0x5;
-    idxHeader.coordType = 1;
     idxHeader.recordSize = sizeof(int32_t) * 2 + sizeof(int32_t) + sizeof(float);
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
         close(fdMain);

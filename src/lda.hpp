@@ -6,11 +6,10 @@
 #include <cstdlib>
 #include <iostream>
 #include <random>
-#include <atomic>
 #include <cstdint>
-#include <unordered_map>
 #include <optional>
 #include <numeric>
+#include <unordered_map>
 #include "numerical_utils.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"
@@ -48,13 +47,14 @@ public:
                               int total_doc_count = 1000000,
             const std::string* mfile = nullptr,
             const std::optional<RowMajorMatrixXd>& topic_word_distr = std::nullopt, double pariorScale = -1.)
-        : n_topics_(n_topics), n_features_(n_features), seed_(seed),
+        : n_topics_(n_topics), n_features_(n_features), seed_(normalize_seed(seed)),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
         alpha_(doc_topic_prior),
         eta_(topic_word_prior),
         learning_decay_(learning_decay), learning_offset_(learning_offset),
         total_doc_count_(total_doc_count),
         update_count_(0) {
+        random_engine_.seed(seed_);
         if (mfile && !(*mfile).empty()) {
             set_model_from_tsv(*mfile, pariorScale);
         } else {
@@ -67,18 +67,20 @@ public:
     LatentDirichletAllocation(
         const std::string& modelFile,
         int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
-        InferenceType algo = InferenceType::SVB) : seed_(seed),
+        InferenceType algo = InferenceType::SVB) : seed_(normalize_seed(seed)),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
         total_doc_count_(-1), update_count_(0) {
+        random_engine_.seed(seed_);
         set_model_from_tsv(modelFile);
         init();
     }
     LatentDirichletAllocation(
         RowMajorMatrixXd& modelMtx,
         int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
-        InferenceType algo = InferenceType::SVB) : seed_(seed),
+        InferenceType algo = InferenceType::SVB) : seed_(normalize_seed(seed)),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
         total_doc_count_(-1), update_count_(0) {
+        random_engine_.seed(seed_);
         set_model_from_matrix(modelMtx);
         init();
     }
@@ -122,7 +124,12 @@ public:
     void sort_topics();
 
     void set_nthreads(int nThreads);
-    void set_thread_rng_stream(uint64_t stream);
+    void set_thread_rng_stream(uint64_t stream) {
+        thread_stream_map()[this] = stream;
+    }
+    void set_deterministic_rng(bool enabled = true) {
+        deterministic_rng_ = enabled;
+    }
 
     // Set engine specific parameters
     void set_svb_parameters(int32_t max_iter = 100, double tol = -1.);
@@ -181,6 +188,9 @@ public:
     }
 
 private:
+    static int normalize_seed(int seed) {
+        return seed > 0 ? seed : static_cast<int>(std::random_device{}());
+    }
 
     template <typename Docs, typename DocAccessor>
     RowMajorMatrixXd transform_common(const Docs& docs, DocAccessor&& doc_of) {
@@ -189,13 +199,15 @@ private:
         RowMajorMatrixXd gamma(n_docs, ncol);
 
         auto process_doc = [&](int d) {
-            set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
-                                  0x41f2c7d3ULL ^ static_cast<uint64_t>(update_count_)));
+            const uint64_t stream = deterministic_rng_
+                ? doc_stream(static_cast<uint64_t>(d),
+                    0x41f2c7d3ULL ^ static_cast<uint64_t>(update_count_))
+                : 0;
             const Document& doc = doc_of(docs[d]);
             switch (algo_) {
                 case InferenceType::SCVB0: {
                     VectorXd hatNk;
-                    scvb0_fit_one_document(hatNk, doc);
+                    scvb0_fit_one_document(hatNk, doc, stream);
                     hatNk /= hatNk.sum();
                     gamma.row(d) = hatNk.transpose();
                     break;
@@ -203,7 +215,7 @@ private:
                 case InferenceType::SVB_DN: {
                     VectorXd gamma_d, exp_Elog_theta_d;
                     ArrayXd fg_counts;
-                    (void)svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts);
+                    (void)svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts, stream);
                     gamma_d /= gamma_d.sum();
                     double c = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
                     double bg = 1. - fg_counts.sum() / c;
@@ -215,7 +227,7 @@ private:
                 }
                 case InferenceType::SVB: {
                     VectorXd gamma_d, exp_Elog_theta_d;
-                    (void)svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc);
+                    (void)svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc, stream);
                     gamma_d /= gamma_d.sum();
                     gamma.row(d) = gamma_d.transpose();
                     break;
@@ -246,8 +258,8 @@ private:
     double learning_offset_ = -1; // tau
     int update_count_; // number of processed minibatches
     int32_t verbose_;
+    bool deterministic_rng_ = false;
     std::mt19937 random_engine_;
-    std::atomic<uint64_t> rng_stream_{0};
     std::unique_ptr<tbb::global_control> tbb_ctrl_;
 
     // SVB specific parameters
@@ -272,38 +284,50 @@ private:
     // doc_topic: current/prior document-topic vector (K x 1).
     // Returns the updated document-topic vectors (K x 1).
     int32_t svb_fit_one_document(VectorXd& gamma, VectorXd& exp_Elog_theta,
-        const Document &doc);
+        const Document &doc, uint64_t rng_stream = 0);
     int32_t svbdn_fit_one_document(VectorXd& gamma, VectorXd& exp_Elog_theta,
-        const Document &doc, ArrayXd& fg_counts);
-    void scvb0_fit_one_document(MatrixXd& hatNkw, const Document& doc);
-    void scvb0_fit_one_document(VectorXd& hatNk, const Document& doc);
+        const Document &doc, ArrayXd& fg_counts, uint64_t rng_stream = 0);
+    void scvb0_fit_one_document(MatrixXd& hatNkw, const Document& doc, uint64_t rng_stream = 0);
+    void scvb0_fit_one_document(VectorXd& hatNk, const Document& doc, uint64_t rng_stream = 0);
 
     void init_model(const std::optional<RowMajorMatrixXd>& topic_word_distr = std::nullopt, double scalar = -1.);
     void compute_global_mtx();
     void init();
 
-    struct RngState {
-        std::mt19937 rng;
-        uint64_t stream;
+    struct SplitMix64Engine {
+        using result_type = uint64_t;
+
+        explicit SplitMix64Engine(uint64_t seed) : state(seed) {}
+
+        static constexpr result_type min() {
+            return 0;
+        }
+
+        static constexpr result_type max() {
+            return std::numeric_limits<result_type>::max();
+        }
+
+        result_type operator()() {
+            return ::splitmix64(state++);
+        }
+
+        uint64_t state;
     };
 
-    static std::mt19937 make_rng(uint64_t seed, uint64_t stream) {
-        uint64_t mixed = ::splitmix64(seed + (stream + 1) * 0x9e3779b97f4a7c15ULL);
-        std::seed_seq seq{
-            static_cast<uint32_t>(mixed),
-            static_cast<uint32_t>(mixed >> 32)
-        };
-        return std::mt19937(seq);
+    static std::unordered_map<const LatentDirichletAllocation*, uint64_t>& thread_stream_map() {
+        thread_local std::unordered_map<const LatentDirichletAllocation*, uint64_t> streams;
+        return streams;
     }
 
-    static std::unordered_map<const LatentDirichletAllocation*, RngState>& thread_rng_map() {
-        thread_local std::unordered_map<const LatentDirichletAllocation*, RngState> rngs;
-        return rngs;
+    uint64_t thread_rng_stream() const {
+        const auto& streams = thread_stream_map();
+        auto it = streams.find(this);
+        return it == streams.end() ? 0 : it->second;
     }
 
-    std::mt19937& thread_rng();
     uint64_t doc_stream(uint64_t doc_index, uint64_t phase) const {
         uint64_t base = static_cast<uint64_t>(static_cast<uint32_t>(seed_));
+        base ^= (thread_rng_stream() + 1ULL) * 0xd2b74407b1ce6e93ULL;
         uint64_t mixed = base ^ (phase * 0x9e3779b97f4a7c15ULL) ^ (doc_index + 1ULL);
         return ::splitmix64(mixed);
     }

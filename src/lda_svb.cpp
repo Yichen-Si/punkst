@@ -18,14 +18,15 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
         auto& local_nits = niters_acc.local();
         VectorXd phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
-            // Use document-indexed RNG stream to avoid schedule-dependent randomness.
-            set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
-                0x13a5be1ULL ^ static_cast<uint64_t>(update_count_)));
+            const uint64_t rng_stream = deterministic_rng_
+                ? doc_stream(static_cast<uint64_t>(d),
+                    0x13a5be1ULL ^ static_cast<uint64_t>(update_count_))
+                : 0;
             // document level variational parameters.
             const auto& doc = docs[d];
             int n_ids = doc.ids.size();
             VectorXd gamma_d, exp_Elog_theta_d;
-            int iter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc);
+            int iter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc, rng_stream);
             gamma.row(d) = gamma_d.transpose();
             local_nits.push_back(iter);
             // update sufficient statistics.
@@ -88,17 +89,23 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
 }
 
 int32_t LatentDirichletAllocation::svb_fit_one_document(
-    VectorXd& gamma, VectorXd& exp_Elog_theta, const Document &doc) {
+    VectorXd& gamma, VectorXd& exp_Elog_theta, const Document &doc, uint64_t rng_stream) {
     int n_ids = doc.ids.size();
     if (gamma.size() != n_topics_) {
         gamma.resize(n_topics_);
         if (n_ids == 0) {
             std::fill(gamma.data(), gamma.data() + n_topics_, alpha_);
         } else {
-            auto& rng = thread_rng();
             std::gamma_distribution<double> gamma_dist(100.0, 0.01);
-            for (int k = 0; k < n_topics_; k++) {
-                gamma[k] = gamma_dist(rng);
+            if (deterministic_rng_) {
+                SplitMix64Engine rng(rng_stream);
+                for (int k = 0; k < n_topics_; k++) {
+                    gamma[k] = gamma_dist(rng);
+                }
+            } else {
+                for (int k = 0; k < n_topics_; k++) {
+                    gamma[k] = gamma_dist(random_engine_);
+                }
             }
         }
     }
@@ -292,17 +299,23 @@ double LatentDirichletAllocation::_perplexity_precomp_distr(const std::vector<Do
 }
 
 int32_t LatentDirichletAllocation::svbdn_fit_one_document(
-    VectorXd& gamma, VectorXd& exp_Elog_theta, const Document &doc, ArrayXd& fg_counts) {
+    VectorXd& gamma, VectorXd& exp_Elog_theta, const Document &doc, ArrayXd& fg_counts, uint64_t rng_stream) {
     int n_ids = doc.ids.size();
     if (gamma.size() != n_topics_) {
         gamma.resize(n_topics_);
         if (n_ids == 0) {
             std::fill(gamma.data(), gamma.data() + n_topics_, alpha_);
         } else {
-            auto& rng = thread_rng();
             std::gamma_distribution<double> gamma_dist(100.0, 0.01);
-            for (int k = 0; k < n_topics_; k++) {
-                gamma[k] = gamma_dist(rng);
+            if (deterministic_rng_) {
+                SplitMix64Engine rng(rng_stream);
+                for (int k = 0; k < n_topics_; k++) {
+                    gamma[k] = gamma_dist(rng);
+                }
+            } else {
+                for (int k = 0; k < n_topics_; k++) {
+                    gamma[k] = gamma_dist(random_engine_);
+                }
             }
         }
     }
@@ -386,15 +399,16 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
         auto& local_phi1 = phi1_acc.local();
         VectorXd phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
-            // Use document-indexed RNG stream to avoid schedule-dependent randomness.
-            set_thread_rng_stream(doc_stream(static_cast<uint64_t>(d),
-                0x77c3de5ULL ^ static_cast<uint64_t>(update_count_)));
+            const uint64_t rng_stream = deterministic_rng_
+                ? doc_stream(static_cast<uint64_t>(d),
+                    0x77c3de5ULL ^ static_cast<uint64_t>(update_count_))
+                : 0;
             // document level variational parameters.
             const auto& doc = docs[d];
             int n_ids = doc.ids.size();
             VectorXd gamma_d, exp_Elog_theta_d;
             ArrayXd fg_counts;
-            int iter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts);
+            int iter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts, rng_stream);
             gamma.row(d) = gamma_d.transpose();
             local_nits.push_back(iter);
             double c = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);

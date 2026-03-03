@@ -7,8 +7,9 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     int nThreads0 = 1, tileSize = -1;
     int tileBuffer = 1000, batchSize = 10000;
     int debug = 0, verbose = 1000000;
-    int icol_x, icol_y, nskip = 0;
+    int icol_x, icol_y, icol_z = -1, nskip = 0;
     int icol_feature = -1;
+    bool skip_last_is_header = false;
     double scale = 1;
     int digits = 2;
     std::vector<int32_t> icol_ints;
@@ -18,9 +19,11 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     pl.add_option("in-tsv", "Input TSV file.", inTsv)
       .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
       .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
+      .add_option("icol-z", "Column index for z coordinate (0-based, optional)", icol_z)
       .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
       .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
       .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
+      .add_option("skip-last-is-header", "Treat the last skipped line as the header line", skip_last_is_header)
       .add_option("temp-dir", "Directory to store temporary files", tmpDir)
       .add_option("tile-size", "Tile size (in the same unit as the input coordinates)", tileSize)
       .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
@@ -45,6 +48,9 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     if (tileSize <= 0) {
         error("Tile size is required to be a positive integer");
     }
+    if (skip_last_is_header && nskip <= 0) {
+        error("--skip-last-is-header requires --skip to be greater than 0");
+    }
 
     // Determine the number of threads to use.
     unsigned int nThreads = std::thread::hardware_concurrency();
@@ -59,7 +65,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
         (inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0))
     streaming = true;
 
-    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_feature, icol_ints, nskip, streaming, tileBuffer, batchSize, scale, digits);
+    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip, skip_last_is_header, streaming, tileBuffer, batchSize, scale, digits);
     if (!pts2Tiles.run()) {
         return 1;
     }

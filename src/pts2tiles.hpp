@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <map>
 #include <unordered_map>
 #include <memory>
 #include <array>
@@ -20,20 +21,24 @@ public:
     Pts2Tiles(int32_t nthreads,
         const std::string& inFile, std::string& tmpDir,
         const std::string& outPref, int32_t tileSize,
-        int32_t icol_x, int32_t icol_y, int32_t icol_g = -1, std::vector<int32_t> icol_ints = {}, int32_t nskip = 0,
+        int32_t icol_x, int32_t icol_y, int32_t icol_z = -1, int32_t icol_g = -1, std::vector<int32_t> icol_ints = {}, int32_t nskip = 0,
+        bool skipLastLineIsHeader = false,
         bool streamingMode = false,
         int32_t tileBuffer = 1000, int32_t batchSize = 10000,
         double scale = 1, int digits=2) :
         nThreads_(nthreads),
         inFile_(inFile), tmpDir_(tmpDir),
         outPref_(outPref), tileSize_(tileSize),
-        icol_x_(icol_x), icol_y_(icol_y), icol_feature_(icol_g),
-        icol_ints_(icol_ints), nskip_(nskip),
+        icol_x_(icol_x), icol_y_(icol_y), icol_z_(icol_z), icol_feature_(icol_g),
+        icol_ints_(icol_ints), nskip_(nskip), skipLastLineIsHeader_(skipLastLineIsHeader),
         streamingMode_(streamingMode),
         tileBuffer_(tileBuffer), batchSize_(batchSize),
         scale_(scale), digits_(digits)
     {
         ntokens_ = std::max(icol_x_, icol_y_);
+        if (icol_z_ >= 0) {
+            ntokens_ = std::max(ntokens_, icol_z_);
+        }
         if (icol_feature_ >= 0) {
             ntokens_ = std::max(ntokens_, icol_feature_);
             for (const auto& icol : icol_ints_) {
@@ -59,6 +64,7 @@ public:
 
     bool run() {
         if (!streamingMode_) {
+            collectSkippedLinesFromFile();
             if (!launchWorkerThreads()) {
                 error("Error launching worker threads_");
             }
@@ -89,17 +95,21 @@ protected:
     ScopedTempDir tmpDir_;
     int32_t tileBuffer_, batchSize_;
     int32_t tileSize_;
-    int32_t icol_x_, icol_y_, icol_feature_;
+    int32_t icol_x_, icol_y_, icol_z_, icol_feature_;
     std::vector<int32_t> icol_ints_;
     int32_t ntokens_;
     int32_t nskip_, nskipped_ = 0;
+    bool skipLastLineIsHeader_;
     double scale_;
     bool scaling_;
     int32_t digits_;
     Rectangle<float> globalBox_;
+    bool hasGlobalZRange_ = false;
+    float globalZMin_ = 0, globalZMax_ = 0;
     std::string metaLines_;
 
     std::unordered_map<std::string, std::vector<int32_t>> featureCounts_;
+    std::map<int64_t, uint64_t> zHist_;
     std::mutex minmaxMutex_;
 
     std::unordered_map<TileKey, uint64_t, TileKeyHash> globalTiles_;
@@ -113,9 +123,86 @@ protected:
 
     struct PtRecord {
         float x, y;
+        float z = 0;
         std::string feature;
         std::vector<int32_t> vals;
     };
+
+    std::string normalizeSkippedLine(std::string line, bool isHeader) const {
+        size_t nhash = 0;
+        while (nhash < line.size() && line[nhash] == '#') {
+            ++nhash;
+        }
+        if (isHeader) {
+            line.erase(0, nhash);
+            return "#" + line;
+        }
+        if (nhash >= 2) {
+            return line;
+        }
+        return std::string(2 - nhash, '#') + line;
+    }
+
+    void appendSkippedLineAsMeta(const std::string& line, bool isHeader) {
+        metaLines_ += normalizeSkippedLine(line, isHeader);
+        metaLines_ += "\n";
+    }
+
+    bool readNextInputLine(std::string& line) {
+        if (gz_) {
+            char buf[1<<16];
+            if (!gzgets(gz_, buf, sizeof(buf))) {
+                return false;
+            }
+            size_t len = strlen(buf);
+            if (len > 0 && buf[len - 1] == '\n') {
+                buf[--len] = '\0';
+                if (len > 0 && buf[len - 1] == '\r') {
+                    buf[--len] = '\0';
+                }
+                line.assign(buf, len);
+                return true;
+            }
+            line.assign(buf, len);
+            while (true) {
+                if (!gzgets(gz_, buf, sizeof(buf))) {
+                    break;
+                }
+                const size_t chunkLen = strlen(buf);
+                const bool gotNL = chunkLen > 0 && buf[chunkLen - 1] == '\n';
+                line.append(buf, gotNL ? chunkLen - 1 : chunkLen);
+                if (gotNL) {
+                    break;
+                }
+            }
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            return true;
+        }
+        if (!std::getline(*inPtr_, line)) {
+            return false;
+        }
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        return true;
+    }
+
+    void collectSkippedLinesFromFile() {
+        if (nskip_ <= 0) return;
+        std::ifstream inFile(inFile_);
+        if (!inFile) {
+            error("Error opening input file: %s", inFile_.c_str());
+        }
+        std::string line;
+        for (int32_t i = 0; i < nskip_ && std::getline(inFile, line); ++i) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            appendSkippedLineAsMeta(line, skipLastLineIsHeader_ && i + 1 == nskip_);
+        }
+    }
 
     // Open input stream from stdin or a gzipped file
     void openInput() {
@@ -136,17 +223,10 @@ protected:
         }
         if (nskip_ <= 0) return;
 
-        // Skip initial lines
-        if (gz_) {
-            char buf[1<<16];
-            while (nskipped_ < nskip_ && gzgets(gz_, buf, sizeof(buf))) {
-                nskipped_++;
-            }
-        } else {
-            std::string line;
-            while (nskipped_ < nskip_ && std::getline(*inPtr_, line)) {
-                nskipped_++;
-            }
+        std::string line;
+        while (nskipped_ < nskip_ && readNextInputLine(line)) {
+            ++nskipped_;
+            appendSkippedLineAsMeta(line, skipLastLineIsHeader_ && nskipped_ == nskip_);
         }
     }
 
@@ -164,6 +244,9 @@ protected:
         }
         pt.x = std::stof(tokens[icol_x_]);
         pt.y = std::stof(tokens[icol_y_]);
+        if (icol_z_ >= 0) {
+            pt.z = std::stof(tokens[icol_z_]);
+        }
         if (scaling_) {
             pt.x *= scale_;
             pt.y *= scale_;
@@ -213,7 +296,11 @@ protected:
             std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> &buffers,
             std::unordered_map<TileKey, Rectangle<float>, TileKeyHash> &tileBoxes,
             Rectangle<float>& localBox,
-            std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
+            std::unordered_map<std::string,std::vector<int32_t>> &localCounts,
+            bool& hasLocalZRange,
+            float& localZMin,
+            float& localZMax,
+            std::unordered_map<int64_t, uint64_t>& localZHist) {
         PtRecord pt;
         TileKey tile = parse(line, pt);
 
@@ -227,6 +314,17 @@ protected:
         // update min/max
         localBox.extendToInclude(pt.x, pt.y);
         tileBoxes[tile].extendToInclude(pt.x, pt.y);
+        if (icol_z_ >= 0) {
+            if (!hasLocalZRange) {
+                hasLocalZRange = true;
+                localZMin = pt.z;
+                localZMax = pt.z;
+            } else {
+                if (pt.z < localZMin) localZMin = pt.z;
+                if (pt.z > localZMax) localZMax = pt.z;
+            }
+            ++localZHist[static_cast<int64_t>(std::floor(pt.z))];
+        }
         // buffer + flush
         auto &buf = buffers[tile];
         buf.push_back(line);
@@ -259,7 +357,10 @@ protected:
         std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> buffers;
         std::unordered_map<TileKey, Rectangle<float>, TileKeyHash> localTileMinMax;
         std::unordered_map<std::string,std::vector<int32_t>> localCounts;
+        std::unordered_map<int64_t, uint64_t> localZHist;
         Rectangle<float> localMinMax;
+        bool hasLocalZRange = false;
+        float localZMin = 0, localZMax = 0;
 
         std::ifstream file(inFile_);
         if (!file) {
@@ -277,10 +378,11 @@ protected:
             }
             consumeLine(threadId, line,
                         buffers, localTileMinMax,
-                        localMinMax, localCounts);
+                        localMinMax, localCounts,
+                        hasLocalZRange, localZMin, localZMax, localZHist);
         }
         flushAll(threadId, buffers);
-        mergeLocalStats(localMinMax, localCounts);
+        mergeLocalStats(localMinMax, localCounts, hasLocalZRange, localZMin, localZMax, localZHist);
     }
     // Non-stream mode - Decide chunk boundaries and dispatch worker threads
     bool launchWorkerThreads() {
@@ -296,7 +398,10 @@ protected:
         std::unordered_map<TileKey, std::vector<std::string>, TileKeyHash> buffers;
         std::unordered_map<TileKey, Rectangle<float>, TileKeyHash> localTileMinMax;
         std::unordered_map<std::string,std::vector<int32_t>> localCounts;
+        std::unordered_map<int64_t, uint64_t> localZHist;
         Rectangle<float> localMinMax;
+        bool hasLocalZRange = false;
+        float localZMin = 0, localZMax = 0;
 
         std::vector<std::string> batch;
         batch.reserve(batchSize_);
@@ -304,41 +409,10 @@ protected:
             batch.clear();
             { // —— fill one batch under lock ——
                 std::lock_guard lk(readMutex_);
-                if (gz_) {
-                    for (int i = 0; i < batchSize_; ++i) {
-                        char buf[1<<16];
-                        if (!gzgets(gz_, buf, sizeof(buf))) break;
-                        size_t len = strlen(buf);
-                        if (len > 0 && buf[len-1] == '\n') {
-                            buf[--len] = '\0';
-                            if (len > 0 && buf[len-1] == '\r')
-                                buf[--len] = '\0';
-                            batch.emplace_back(buf);
-                        } else {
-                            // Continue reading
-                            std::string line(buf, len);
-                            while (true) {
-                                if (!gzgets(gz_, buf, sizeof(buf))) break;
-                                size_t chunkLen = strlen(buf);
-                                bool gotNL = chunkLen > 0 && buf[chunkLen-1] == '\n';
-                                // append without the trailing '\n'
-                                line.append(buf, gotNL ? chunkLen-1 : chunkLen);
-                                if (gotNL) break;
-                            }
-                            // strip a final '\r' if present
-                            if (!line.empty() && line.back() == '\r')
-                                line.pop_back();
-                            batch.push_back(std::move(line));
-                        }
-                    }
-                } else {
-                    for (int i = 0; i < batchSize_; ++i) {
-                        std::string line;
-                        if (!std::getline(*inPtr_, line)) break;
-                        if (!line.empty() && line.back()=='\r')
-                            line.pop_back();
-                        batch.push_back(std::move(line));
-                    }
+                for (int i = 0; i < batchSize_; ++i) {
+                    std::string line;
+                    if (!readNextInputLine(line)) break;
+                    batch.push_back(std::move(line));
                 }
             }
             if (batch.empty()) break;
@@ -349,11 +423,12 @@ protected:
                     continue;
                 }
                 consumeLine(threadId, ln, buffers, localTileMinMax,
-                            localMinMax, localCounts);
+                            localMinMax, localCounts,
+                            hasLocalZRange, localZMin, localZMax, localZHist);
             }
             flushAll(threadId, buffers);
         }
-        mergeLocalStats(localMinMax,localCounts);
+        mergeLocalStats(localMinMax, localCounts, hasLocalZRange, localZMin, localZMax, localZHist);
     }
 
     bool joinWorkerThreads() {
@@ -365,9 +440,23 @@ protected:
 
     // Update global coordinate range & feature counts
     void mergeLocalStats(const Rectangle<float>& box,
-            std::unordered_map<std::string,std::vector<int32_t>> &localCounts) {
+            std::unordered_map<std::string,std::vector<int32_t>> &localCounts,
+            bool hasLocalZRange,
+            float localZMin,
+            float localZMax,
+            std::unordered_map<int64_t, uint64_t>& localZHist) {
         std::lock_guard lk(minmaxMutex_);
         globalBox_.extendToInclude(box);
+        if (hasLocalZRange) {
+            if (!hasGlobalZRange_) {
+                hasGlobalZRange_ = true;
+                globalZMin_ = localZMin;
+                globalZMax_ = localZMax;
+            } else {
+                if (localZMin < globalZMin_) globalZMin_ = localZMin;
+                if (localZMax > globalZMax_) globalZMax_ = localZMax;
+            }
+        }
         for (auto &p : localCounts) {
             auto &glob = featureCounts_[p.first];
             if (glob.empty()) {
@@ -376,6 +465,9 @@ protected:
                 for (size_t i = 0; i < glob.size(); ++i) {
                     glob[i] += p.second[i];}
             }
+        }
+        for (const auto& p : localZHist) {
+            zHist_[p.first] += p.second;
         }
     }
 
@@ -451,7 +543,29 @@ protected:
             << "xmax\t" << globalBox_.xmax << "\n"
             << "ymin\t" << globalBox_.ymin << "\n"
             << "ymax\t" << globalBox_.ymax << "\n";
+        if (icol_z_ >= 0 && hasGlobalZRange_) {
+            out << "zmin\t" << globalZMin_ << "\n"
+                << "zmax\t" << globalZMax_ << "\n";
+        }
         out.close();
+        if (icol_z_ >= 0) {
+            outFile = outPref_ + ".z_hist.tsv";
+            out.open(outFile);
+            if (!out) {
+                warning("Error opening output file for writing: %s", outFile.c_str());
+                return false;
+            }
+            if (hasGlobalZRange_) {
+                const int64_t zminBin = static_cast<int64_t>(std::floor(globalZMin_));
+                const int64_t zmaxBin = static_cast<int64_t>(std::floor(globalZMax_));
+                for (int64_t z = zminBin; z <= zmaxBin; ++z) {
+                    const auto it = zHist_.find(z);
+                    const uint64_t count = (it == zHist_.end()) ? 0 : it->second;
+                    out << z << "\t" << count << "\n";
+                }
+            }
+            out.close();
+        }
         if (icol_feature_ >= 0) {
             std::string outFile = outPref_ + ".features.tsv";
             out.open(outFile);

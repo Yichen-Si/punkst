@@ -1,6 +1,7 @@
 #include "punkst.h"
 #include "tiles2slda.hpp"
 #include "tiles2nmf.hpp"
+#include <limits>
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
@@ -10,9 +11,15 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     int icol_x, icol_y, icol_z = -1, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1;
     double radius = -1, anchorDist = -1;
+    double zMin = std::numeric_limits<double>::quiet_NaN();
+    double zMax = std::numeric_limits<double>::quiet_NaN();
+    bool ignoreOutsideZrange = false;
+    float zScale = 1.0;
+    int32_t nInitAnchorPerPix = 2;
     int32_t nMoves = -1, minInitCount = 10, topK = 3;
     double minCountAnchor = 5;
     double pixelResolution = 1, defaultWeight = 0.;
+    double pixelResolutionZ = 1.0;
     bool inMemory = false;
     bool outputBinary = false;
     bool outputOritinalData = false;
@@ -57,9 +64,15 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("default-weight", "Default weight for features not in the weight file", defaultWeight)
       .add_option("feature-weights", "Input weights file", weightFile)
       .add_option("pixel-res", "Resolution of pixel level inference", pixelResolution)
+      .add_option("pixel-res-z", "Resolution of pixel level inference in z dimension", pixelResolutionZ)
       .add_option("hex-size", "Hexagon size (side length)", hexSize)
       .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
       .add_option("anchor-dist", "Distance between adjacent anchors", anchorDist)
+      .add_option("zmin", "Minimum z coordinate", zMin)
+      .add_option("zmax", "Maximum z coordinate", zMax)
+      .add_option("ignore-outside-zrange", "Ignore observations with z coordinates outside the specified [zmin, zmax] range", ignoreOutsideZrange)
+      .add_option("z-scale", "Scaling factor for z coordinates", zScale)
+      .add_option("n-init-anchor-per-pix", "(Only for 3D) Number of anchors closest on z axis to assign each pixel to during initialization", nInitAnchorPerPix)
       .add_option("max-iter", "Maximum number of iterations (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("radius", "Radius", radius)
@@ -148,6 +161,17 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (nMoves <= 0 && anchorDist <= 0) {
         error("Number of grid shifts (--n-moves) or anchor distance (--anchor-dist) must be provided");
     }
+    const bool use3D = icol_z >= 0;
+    const bool useThin3D = std::isfinite(zMin) || std::isfinite(zMax);
+    if (useThin3D && (!std::isfinite(zMin) || !std::isfinite(zMax))) {
+        error("Both --zmin and --zmax must be provided together");
+    }
+    if (useThin3D && icol_z < 0) {
+        error("--zmin/--zmax require 3D input (--icol-z)");
+    }
+    if (useThin3D && !(zMax > zMin)) {
+        error("--zmax must be greater than --zmin");
+    }
     if (hexSize <= 0) {
         hexSize = hexGridDist / std::sqrt(3.0);
     } else {
@@ -160,8 +184,18 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     } else {
         anchorDist = hexGridDist / nMoves;
     }
+    if (useThin3D && nMoves <= 1) {
+        error("Thin 3D anchor initialization requires nMoves > 1");
+    }
     if (radius <= 0) {
-        radius = anchorDist * 1.2;
+        if (useThin3D) {
+            double zDist = (zMax - zMin) / (nMoves * nMoves) * zScale;
+            zDist *= nInitAnchorPerPix * 0.5 + 0.5;
+            radius = std::sqrt(anchorDist * anchorDist + zDist * zDist) * 1.2;
+        } else {
+            radius = anchorDist * 1.2;
+        }
+        notice("Using radius %.2f", radius);
     }
 
     if (seed <= 0) {
@@ -220,7 +254,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     ioConfig.outputAnchor = outputAnchor;
     ioConfig.useTicketSystem = useTicketSystem;
     ioConfig.nativeRegularTiles = outputBinary && !parser.hasZCoord();
-    ioConfig.coordDim = parser.hasZCoord() ? MinibatchCoordDim::Dim3 : MinibatchCoordDim::Dim2;
+    ioConfig.coordDim = MinibatchCoordDim::Dim2;
 
     VectorXf eta0;
     bool fit_background = false;
@@ -245,14 +279,21 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         fit_background = true;
     }
 
-    auto configure_decoder = [&](auto& decoder, const std::string& anchorFile) {
+    auto configure_decoder = [&](auto& decoder, const std::string& anchorFile, bool allowExternalAnchors) {
         decoder.setOutputCoordDigits(floatCoordDigits);
         decoder.setOutputProbDigits(probDigits);
-        if (!anchorFile.empty()) {
-            int32_t nAnchors = decoder.loadAnchors(anchorFile);
-            notice("Loaded %d valid anchors", nAnchors);
+        if (use3D) {
+            decoder.set3Dparameters(useThin3D, zMin, zMax, zScale, pixelResolutionZ, nInitAnchorPerPix, ignoreOutsideZrange);
         }
         decoder.setFeatureNames(featureNames);
+        if (!anchorFile.empty()) {
+            if (allowExternalAnchors) {
+                int32_t nAnchors = decoder.loadAnchors(anchorFile);
+                notice("Loaded %d valid anchors", nAnchors);
+            } else {
+                notice("Ignoring --anchor for 3D input with --algo slda");
+            }
+        }
     };
 
     if (algo == "nmf") {
@@ -289,7 +330,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 if (fit_background) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
                 }
-                configure_decoder(decoder, ds.anchorFile);
+                configure_decoder(decoder, ds.anchorFile, true);
                 decoder.run();
             } else {
                 Tiles2NMF<float> decoder(
@@ -300,7 +341,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 if (fit_background) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
                 }
-                configure_decoder(decoder, ds.anchorFile);
+                configure_decoder(decoder, ds.anchorFile, true);
                 decoder.run();
             }
         }
@@ -327,14 +368,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
-            configure_decoder(tiles2slda, ds.anchorFile);
+            configure_decoder(tiles2slda, ds.anchorFile, !use3D);
             tiles2slda.run();
         } else {
             Tiles2SLDA<float> tiles2slda(nThreads, radius, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, hexGrid, nMoves, seed, minInitCount, 0.7, pixelResolution, 0, topK, verbose, debug_);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
-            configure_decoder(tiles2slda, ds.anchorFile);
+            configure_decoder(tiles2slda, ds.anchorFile, !use3D);
             tiles2slda.run();
         }
     }

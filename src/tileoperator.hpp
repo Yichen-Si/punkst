@@ -63,6 +63,12 @@ public:
     int32_t getK() const { return k_; }
     int32_t getTileSize() const { return formatInfo_.tileSize; }
     float getPixelResolution() const { return formatInfo_.pixelResolution; }
+    float getPixelResolutionZ() const {
+        if ((mode_ & 0x10) && (mode_ & 0x20u) && formatInfo_.pixelResolutionZ > 0.0f) {
+            return formatInfo_.pixelResolutionZ;
+        }
+        return formatInfo_.pixelResolution;
+    }
     const std::vector<TileInfo>& getTileInfo() const { return blocks_; }
 
     bool getBoundingBox(float& xmin, float& xmax, float& ymin, float& ymax) const {

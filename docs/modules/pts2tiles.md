@@ -29,7 +29,11 @@ punkst pts2tiles --in-tsv ${path}/transcripts.tsv \
 
 ### Optional Parameters
 
-`--skip` - The number of lines to skip in the input file (if your input file contains headers, set it to the number of header lines). Default: 0.
+`--skip` - The number of lines to skip at the beginning of the input file. These skipped lines are still copied to the output as metadata: by default each skipped line is normalized to start with at least two `#` characters. Default: 0.
+
+`--skip-last-is-header` - Treat the last skipped line as the header line. In that case the last skipped line is normalized to start with exactly one `#`, while the earlier skipped lines still start with at least two `#`. Requires `--skip > 0`.
+
+`--icol-z` - Optional column index for a third coordinate dimension (0-based). Tiling still uses only X and Y, but if this is provided `pts2tiles` also records `zmin` / `zmax` in the coordinate-range file and writes a histogram of the z distribution with bin size 1.
 
 `--tile-buffer` - The per-thread per-tile buffer size in terms of the number of lines before writing to disk. Default: 1000. If the number of tiles may be huge and you are using a large number of threads so that the total memory usage is too high, choose a smaller number.
 
@@ -42,5 +46,6 @@ punkst pts2tiles --in-tsv ${path}/transcripts.tsv \
 #### Output Files
 - `prefix.tsv`: the tiled tsv file.
 - `prefix.index`: an index file that stores the offsets of each tile in the tiled tsv file. This will be used for fast access.
-- `prefix.coord_range.tsv`: a text file that contains the range of coordinates (xmin, xmax, ymin, ymax).
+- `prefix.coord_range.tsv`: a text file that contains the range of coordinates (`xmin`, `xmax`, `ymin`, `ymax`). If `--icol-z` is provided, it also includes `zmin` and `zmax`.
+- `prefix.z_hist.tsv`: a two-column tsv file containing the z histogram (`bin_start`, `count`) using unit-width bins aligned to integer boundaries. This file is only generated if `--icol-z` is specified.
 - `prefix.features.tsv`: a tsv file containing the feature names and their aggregated values. This file is only generated if `--icol-feature` is specified.
