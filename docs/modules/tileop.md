@@ -8,6 +8,8 @@
 
 - converting binary tiled files to TSV
 
+- extracting records inside a rectangular or multi-polygon query region
+
 - reorganizing fragmented tiles to a regular grid
 
 - merging multiple inference results
@@ -53,6 +55,52 @@ punkst tile-op --dump-tsv --in path/prefix --binary --out path/prefix.dump
 ```
 
 The output include `path/prefix.dump.tsv` and `path/prefix.dump.index`.
+
+### Region Query
+
+You can extract a spatial subset of a tiled file and write it out as another indexed tiled file pair.
+
+Output:
+
+- `path/prefix.region.tsv` or `path/prefix.region.bin`
+- `path/prefix.region.index`
+
+The output remains in regular tiled format and contains only tiles with at least one retained record.
+
+#### Rectangle query
+
+To extract all records inside one axis-aligned rectangle:
+
+```bash
+punkst tile-op --extract-region --in path/prefix [--binary] \
+  --xmin 1000 --xmax 2000 --ymin 500 --ymax 1500 \
+  --out path/prefix.region
+```
+
+This keeps all records whose `(x, y)` coordinates fall inside the half-open rectangle `[xmin, xmax) x [ymin, ymax)`.
+
+#### GeoJSON region query
+
+To extract all records inside the union of multiple polygons:
+
+```bash
+punkst tile-op --extract-region-geojson path/region.geojson \
+  --in path/prefix [--binary] \
+  --out path/prefix.region
+```
+
+Optional:
+
+- `--extract-region-scale` controls the integer snapping scale used internally for polygon processing. Default is `10`, which corresponds to `0.1` units.
+
+**Requirements**
+
+Tiled input data: GeoJSON region query currently only supports tiled inputs in **regular tile mode**:
+
+- the input index must have `mode & 0x8 == 0`, generic rectangular block mode is rejected
+- the input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation
+
+GeoJSON / JSON file: see [GeoJSON Region Input](../input/geojson-region.md) for requirements and polygon validity handling.
 
 ### Fix fragmented Tiles
 

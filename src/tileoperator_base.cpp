@@ -1,4 +1,5 @@
 #include "tileoperator.hpp"
+#include "region_query.hpp"
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -6,6 +7,22 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <tbb/blocked_range.h>
+#include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
+
+namespace {
+
+struct RegionTileResult {
+    RegionTileState state = RegionTileState::Outside;
+    uint32_t nOut = 0;
+    uint64_t copySt = 0;
+    uint64_t copyEd = 0;
+    std::vector<char> binaryData;
+    std::string textData;
+};
+
+} // namespace
 
 void TileOperator::loadIndex(const std::string& indexFile) {
     std::ifstream in(indexFile, std::ios::binary);
@@ -51,6 +68,10 @@ void TileOperator::loadIndex(const std::string& indexFile) {
         error("No index entries loaded from %s", indexFile.c_str());
     blocks_ = blocks_all_;
     if ((mode_ & 0x8) == 0) { // regular grid
+        for (size_t i = 0; i < blocks_all_.size(); ++i) {
+            blocks_all_[i].row = blocks_all_[i].idx.row;
+            blocks_all_[i].col = blocks_all_[i].idx.col;
+        }
         for (size_t i = 0; i < blocks_.size(); ++i) {
             auto& b = blocks_[i];
             b.row = b.idx.row; b.col = b.idx.col;
@@ -91,6 +112,354 @@ void TileOperator::printIndex() const {
             b.idx.st, b.idx.ed, b.idx.row, b.idx.col, b.idx.n,
             b.idx.xmin, b.idx.xmax, b.idx.ymin, b.idx.ymax);
     }
+}
+
+void TileOperator::extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale) {
+    if ((mode_ & 0x8) != 0) {
+        error("%s: GeoJSON region query requires regular tile mode input (mode & 0x8 == 0)", __func__);
+    }
+    if ((mode_ & 0x1) == 0 && !canSeekTextInput()) {
+        error("%s: GeoJSON region query requires a seekable text file. Input '%s' is a stream (stdin/gzip).",
+            __func__, dataFile_.c_str());
+    }
+    PreparedRegion2D region;
+    try {
+        region = loadPreparedRegionGeoJSON(geojsonFile, formatInfo_.tileSize, scale);
+    } catch (const std::exception& ex) {
+        error("%s: %s", __func__, ex.what());
+    }
+    notice("Prepared region loaded from %s: bounding box [%.2f, %.2f, %.2f, %.2f], %lu union paths, %lu component bboxes",
+        geojsonFile.c_str(), region.bbox_f.xmin, region.bbox_f.ymin, region.bbox_f.xmax, region.bbox_f.ymax,
+        region.union_paths.size(), region.comp_bbox.size());
+
+    extractRegionPrepared(outPrefix, region);
+}
+
+void TileOperator::extractRegionPrepared(const std::string& outPrefix, const PreparedRegion2D& region) {
+    if ((mode_ & 0x8) != 0) {
+        error("%s: Prepared polygon region query requires regular tile mode input (mode & 0x8 == 0)", __func__);
+    }
+    if (formatInfo_.tileSize <= 0) {
+        error("%s: Invalid tileSize=%d; cannot write regular tiled output", __func__, formatInfo_.tileSize);
+    }
+    if (region.empty()) {
+        warning("%s: Prepared region is empty", __func__);
+        return;
+    }
+
+    std::vector<size_t> order;
+    order.reserve(blocks_.size());
+    for (size_t i = 0; i < blocks_.size(); ++i) {
+        const auto& blk = blocks_[i];
+        if (region.bbox_f.intersect(Rectangle<float>(
+                static_cast<float>(blk.idx.xmin), static_cast<float>(blk.idx.ymin),
+                static_cast<float>(blk.idx.xmax), static_cast<float>(blk.idx.ymax))) == 0) {
+            continue;
+        }
+        order.push_back(i);
+    }
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        const TileInfo& lhs = blocks_[a];
+        const TileInfo& rhs = blocks_[b];
+        if (lhs.row != rhs.row) return lhs.row < rhs.row;
+        return lhs.col < rhs.col;
+    });
+    if (order.empty()) {
+        warning("%s: No indexed tiles intersect the region bounding box", __func__);
+        return;
+    }
+    notice("%s: %lu tiles intersect the region bounding box", __func__, order.size());
+
+    std::vector<size_t> activeOrder;
+    std::vector<RegionTileState> activeStates;
+    activeOrder.reserve(order.size());
+    activeStates.reserve(order.size());
+    for (size_t idx : order) {
+        const TileInfo& blk = blocks_[idx];
+        const TileKey tile{blk.row, blk.col};
+        const RegionTileState state = region.classifyTile(tile);
+        if (state == RegionTileState::Outside) {
+            continue;
+        }
+        activeOrder.push_back(idx);
+        activeStates.push_back(state);
+    }
+    if (activeOrder.empty()) {
+        warning("%s: No indexed tiles intersect the queried region", __func__);
+        return;
+    }
+
+    const bool binaryInput = (mode_ & 0x1) != 0;
+    const std::string outData = outPrefix + (binaryInput ? ".bin" : ".tsv");
+    const std::string outIndex = outPrefix + ".index";
+    std::ifstream copyIn(dataFile_, std::ios::binary);
+    if (!copyIn.is_open()) {
+        error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+    }
+
+    IndexHeader outHeader = formatInfo_;
+    if (outHeader.magic != PUNKST_INDEX_MAGIC) {
+        outHeader = IndexHeader();
+        outHeader.tileSize = formatInfo_.tileSize;
+        outHeader.pixelResolution = formatInfo_.pixelResolution;
+        outHeader.pixelResolutionZ = formatInfo_.pixelResolutionZ;
+        outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
+        if (!kvec_.empty()) {
+            outHeader.packKvec(kvec_);
+        } else if (k_ > 0) {
+            outHeader.packKvec(std::vector<uint32_t>{static_cast<uint32_t>(k_)});
+        }
+    }
+    outHeader.magic = PUNKST_INDEX_MAGIC;
+    outHeader.mode = ((static_cast<uint32_t>(K_) & 0xFFFFu) << 16) | (mode_ & 0xFFFFu);
+    outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
+    outHeader.xmin = region.bbox_f.xmin;
+    outHeader.xmax = region.bbox_f.xmax;
+    outHeader.ymin = region.bbox_f.ymin;
+    outHeader.ymax = region.bbox_f.ymax;
+
+    Rectangle<float> outBox;
+    std::ofstream out;
+    std::ofstream idxOut;
+    bool outputOpen = false;
+    uint64_t currentOffset = 0;
+    size_t nEntries = 0;
+    size_t nProcessed = 0;
+
+    auto ensureOutputReady = [&]() {
+        if (outputOpen) {
+            return;
+        }
+        out.open(outData, std::ios::binary);
+        if (!out.is_open()) {
+            error("%s: Error opening output data file: %s", __func__, outData.c_str());
+        }
+        idxOut.open(outIndex, std::ios::binary);
+        if (!idxOut.is_open()) {
+            error("%s: Error opening output index file: %s", __func__, outIndex.c_str());
+        }
+        if (!binaryInput) {
+            if (headerLine_.empty()) {
+                error("%s: TSV input is missing a parsed header line", __func__);
+            }
+            out.write(headerLine_.data(), static_cast<std::streamsize>(headerLine_.size()));
+            if (!out) {
+                error("%s: Error writing header to %s", __func__, outData.c_str());
+            }
+        }
+        idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
+        if (!idxOut) {
+            error("%s: Error writing placeholder header to %s", __func__, outIndex.c_str());
+        }
+        currentOffset = static_cast<uint64_t>(out.tellp());
+        outputOpen = true;
+    };
+
+    auto processTile = [&](size_t activeIdx, std::ifstream& workerIn, RegionTileResult& result) {
+        const size_t blkIdx = activeOrder[activeIdx];
+        const TileInfo& blk = blocks_[blkIdx];
+        const TileKey tile{blk.row, blk.col};
+        const RegionTileState state = activeStates[activeIdx];
+        result.state = state;
+        if (state == RegionTileState::Inside) {
+            result.copySt = blk.idx.st;
+            result.copyEd = blk.idx.ed;
+            result.nOut = blk.idx.n;
+            return;
+        }
+        if (binaryInput) {
+            const size_t recSize = formatInfo_.recordSize;
+            if (recSize == 0) {
+                error("%s: Binary input requires a positive record size", __func__);
+            }
+            std::vector<char> recBuf(recSize);
+            workerIn.clear();
+            workerIn.seekg(static_cast<std::streamoff>(blk.idx.st));
+            if (!workerIn.good()) {
+                error("%s: Error seeking input stream to %" PRIu64, __func__, blk.idx.st);
+            }
+            uint64_t pos = blk.idx.st;
+            while (pos < blk.idx.ed) {
+                workerIn.read(recBuf.data(), static_cast<std::streamsize>(recSize));
+                if (workerIn.gcount() != static_cast<std::streamsize>(recSize)) {
+                    error("%s: Corrupted data or invalid index", __func__);
+                }
+                pos += recSize;
+                float x = 0.0f;
+                float y = 0.0f;
+                decodeBinaryXY(recBuf.data(), x, y);
+                if (!region.containsPoint(x, y, &tile)) {
+                    continue;
+                }
+                const size_t off = result.binaryData.size();
+                result.binaryData.resize(off + recSize);
+                std::memcpy(result.binaryData.data() + off, recBuf.data(), recSize);
+                ++result.nOut;
+            }
+            return;
+        }
+
+        workerIn.clear();
+        workerIn.seekg(static_cast<std::streamoff>(blk.idx.st));
+        if (!workerIn.good()) {
+            error("%s: Error seeking input stream to %" PRIu64, __func__, blk.idx.st);
+        }
+        std::string line;
+        uint64_t pos = blk.idx.st;
+        while (pos < blk.idx.ed) {
+            if (!std::getline(workerIn, line)) {
+                error("%s: Corrupted data or invalid index", __func__);
+            }
+            pos += static_cast<uint64_t>(line.size()) + 1;
+            if (line.empty() || line[0] == '#') {
+                continue;
+            }
+
+            float x = 0.0f;
+            float y = 0.0f;
+            if (coord_dim_ == 3) {
+                PixTopProbs3D<float> rec;
+                if (!parseLine(line, rec)) {
+                    error("%s: Invalid text record", __func__);
+                }
+                x = rec.x;
+                y = rec.y;
+            } else {
+                PixTopProbs<float> rec;
+                if (!parseLine(line, rec)) {
+                    error("%s: Invalid text record", __func__);
+                }
+                x = rec.x;
+                y = rec.y;
+            }
+
+            if (!region.containsPoint(x, y, &tile)) {
+                continue;
+            }
+            result.textData += line;
+            result.textData.push_back('\n');
+            ++result.nOut;
+        }
+    };
+
+    const bool useParallel = (threads_ > 1 && activeOrder.size() > 1);
+    const size_t chunkTileCount = useParallel
+        ? std::max<size_t>(static_cast<size_t>(threads_) * 4, 1)
+        : static_cast<size_t>(1);
+    std::unique_ptr<tbb::global_control> globalLimit;
+    if (useParallel) {
+        globalLimit = std::make_unique<tbb::global_control>(
+            tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+    }
+
+    for (size_t chunkBegin = 0; chunkBegin < activeOrder.size(); chunkBegin += chunkTileCount) {
+        const size_t chunkEnd = std::min(activeOrder.size(), chunkBegin + chunkTileCount);
+        std::vector<RegionTileResult> chunkResults(chunkEnd - chunkBegin);
+
+        if (useParallel && (chunkEnd - chunkBegin) > 1) {
+            tbb::parallel_for(tbb::blocked_range<size_t>(chunkBegin, chunkEnd),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    std::ifstream workerIn;
+                    if (binaryInput) {
+                        workerIn.open(dataFile_, std::ios::binary);
+                    } else {
+                        workerIn.open(dataFile_);
+                    }
+                    if (!workerIn.is_open()) {
+                        error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+                    }
+                    for (size_t ai = range.begin(); ai < range.end(); ++ai) {
+                        processTile(ai, workerIn, chunkResults[ai - chunkBegin]);
+                    }
+                });
+        } else {
+            std::ifstream workerIn;
+            if (binaryInput) {
+                workerIn.open(dataFile_, std::ios::binary);
+            } else {
+                workerIn.open(dataFile_);
+            }
+            if (!workerIn.is_open()) {
+                error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+            }
+            for (size_t ai = chunkBegin; ai < chunkEnd; ++ai) {
+                processTile(ai, workerIn, chunkResults[ai - chunkBegin]);
+            }
+        }
+
+        for (size_t ai = chunkBegin; ai < chunkEnd; ++ai) {
+            const size_t blkIdx = activeOrder[ai];
+            const TileKey tile{blocks_[blkIdx].row, blocks_[blkIdx].col};
+            const RegionTileResult& result = chunkResults[ai - chunkBegin];
+            if (result.nOut == 0) {
+                continue;
+            }
+
+            IndexEntryF outEntry(tile.row, tile.col);
+            tile2bound(tile, outEntry.xmin, outEntry.xmax, outEntry.ymin, outEntry.ymax, formatInfo_.tileSize);
+            ensureOutputReady();
+            outEntry.st = currentOffset;
+            outEntry.n = result.nOut;
+
+            if (result.state == RegionTileState::Inside) {
+                if (!copy_stream_range(copyIn, out, result.copySt, result.copyEd)) {
+                    error("%s: Error copying input bytes from %" PRIu64 " to %" PRIu64,
+                        __func__, result.copySt, result.copyEd);
+                }
+                currentOffset += result.copyEd - result.copySt;
+            } else if (binaryInput) {
+                if (!result.binaryData.empty()) {
+                    out.write(result.binaryData.data(),
+                        static_cast<std::streamsize>(result.binaryData.size()));
+                    if (!out) {
+                        error("%s: Error writing binary record buffer to %s", __func__, outData.c_str());
+                    }
+                    currentOffset += static_cast<uint64_t>(result.binaryData.size());
+                }
+            } else {
+                if (!result.textData.empty()) {
+                    out.write(result.textData.data(),
+                        static_cast<std::streamsize>(result.textData.size()));
+                    if (!out) {
+                        error("%s: Error writing text record buffer to %s", __func__, outData.c_str());
+                    }
+                    currentOffset += static_cast<uint64_t>(result.textData.size());
+                }
+            }
+
+            outEntry.ed = currentOffset;
+            idxOut.write(reinterpret_cast<const char*>(&outEntry), sizeof(outEntry));
+            if (!idxOut) {
+                error("%s: Error writing index entry", __func__);
+            }
+            outBox.extendToInclude(Rectangle<float>(
+                static_cast<float>(outEntry.xmin), static_cast<float>(outEntry.ymin),
+                static_cast<float>(outEntry.xmax), static_cast<float>(outEntry.ymax)));
+            ++nEntries;
+            ++nProcessed;
+            if (nProcessed % 10 == 0) {
+                notice("%s: Processed %zu/%zu region tiles", __func__, nProcessed, activeOrder.size());
+            }
+        }
+    }
+
+    if (nEntries == 0) {
+        warning("%s: No records found in the queried region", __func__);
+        return;
+    }
+
+    outHeader.xmin = outBox.xmin;
+    outHeader.xmax = outBox.xmax;
+    outHeader.ymin = outBox.ymin;
+    outHeader.ymax = outBox.ymax;
+    idxOut.seekp(0);
+    idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
+    if (!idxOut) {
+        error("%s: Error finalizing output index header", __func__);
+    }
+    out.close();
+    idxOut.close();
+    notice("%s: Wrote %zu indexed tile(s) to %s (index: %s)", __func__, nEntries, outData.c_str(), outIndex.c_str());
 }
 
 void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax) {

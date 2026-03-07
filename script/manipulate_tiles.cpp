@@ -17,6 +17,8 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool reorganize = false;
     bool printIndex = false;
     bool extractRegion = false;
+    std::string extractRegionGeoJSON;
+    int64_t extractRegionScale = 10;
     bool dumpTSV = false;
     bool probDot = false;
     bool cellAnno = false;
@@ -50,6 +52,8 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("tile-size", "Tile size in the original data", tileSize);
     pl.add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("extract-region", "Extract all records within --xmin/--xmax/--ymin/--ymax and write a new indexed file pair", extractRegion)
+      .add_option("extract-region-geojson", "Extract all records inside a GeoJSON Polygon/MultiPolygon region", extractRegionGeoJSON)
+      .add_option("extract-region-scale", "Integer scale for GeoJSON region snapping", extractRegionScale)
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
       .add_option("smooth-top-labels", "Per-tile island smoothing of top labels (>0 to enable)", smoothTopLabelsRounds)
@@ -121,10 +125,18 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (extractRegion) {
+        if (!extractRegionGeoJSON.empty()) {
+            error("--extract-region and --extract-region-geojson are mutually exclusive");
+        }
         if (xmin >= xmax || ymin >= ymax) {
             error("Valid --xmin/--xmax/--ymin/--ymax are required for --extract-region");
         }
         tileOp.extractRegion(outPrefix, xmin, xmax, ymin, ymax);
+        return 0;
+    }
+
+    if (!extractRegionGeoJSON.empty()) {
+        tileOp.extractRegionGeoJSON(outPrefix, extractRegionGeoJSON, extractRegionScale);
         return 0;
     }
 

@@ -14,6 +14,8 @@
 #include "tilereader.hpp"
 #include "hexgrid.h"
 
+struct PreparedRegion2D;
+
 struct SparseObsDict {
     double totalCount = 0;
     std::unordered_map<int32_t, double> featureCounts;
@@ -137,6 +139,8 @@ public:
     void printIndex() const;
 
     void extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax);
+    void extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale = 10);
+    void extractRegionPrepared(const std::string& outPrefix, const PreparedRegion2D& region);
 
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
 

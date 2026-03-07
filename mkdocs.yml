@@ -55,7 +55,9 @@ nav:
     - visualize: modules/visualization.md
     - co-occurrence: modules/coexp.md
     - tile-op: modules/tileop.md
-  - Input: input/index.md
+  - Input:
+    - Overview: input/index.md
+    - Region query: input/geojson-region.md
 
 plugins:
   - blog

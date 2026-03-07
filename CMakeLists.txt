@@ -52,6 +52,21 @@ set_target_properties(Eigen3::Eigen PROPERTIES
 find_package(OpenCV REQUIRED HINTS ../opencv/build /usr/lib /usr/local)
 message(STATUS "Found OpenCV version ${OpenCV_VERSION} with include dirs: ${OpenCV_INCLUDE_DIRS}")
 
+# Clipper2
+set(CLIPPER2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ext/clipper2")
+if (NOT EXISTS "${CLIPPER2_DIR}/CPP/Clipper2Lib/include/clipper2/clipper.h")
+  message(FATAL_ERROR "Clipper2 submodule missing. Did you run 'git submodule update --init --recursive'?")
+endif()
+add_library(Clipper2_core STATIC
+  ${CLIPPER2_DIR}/CPP/Clipper2Lib/src/clipper.engine.cpp
+  ${CLIPPER2_DIR}/CPP/Clipper2Lib/src/clipper.offset.cpp
+  ${CLIPPER2_DIR}/CPP/Clipper2Lib/src/clipper.rectclip.cpp
+  ${CLIPPER2_DIR}/CPP/Clipper2Lib/src/clipper.triangulation.cpp
+)
+target_include_directories(Clipper2_core PUBLIC
+  ${CLIPPER2_DIR}/CPP/Clipper2Lib/include
+)
+
 set(SOURCE_FILES
     script/test.cpp
     src/commands.hpp
@@ -121,6 +136,8 @@ set(SOURCE_FILES
     script/feature_selection.cpp
     src/tiles2nmf.hpp
     src/tiles2nmf.cpp
+    src/region_query.hpp
+    src/region_query.cpp
     script/de_chisq.cpp
     src/tileoperator.hpp
     src/tileoperator_base.cpp
@@ -152,6 +169,26 @@ find_package(LibLZMA)
 target_compile_options(${APP_EXE} PRIVATE
   $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O3>
 )
+
+# Faster Debug builds
+#   cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DFAST_DEBUG_BUILD=ON
+option(FAST_DEBUG_BUILD "Enable faster Debug builds (lld/split-dwarf/reduced debug info where available)" OFF)
+if (FAST_DEBUG_BUILD AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+  # Reduce debug info volume
+  target_compile_options(${APP_EXE} PRIVATE $<$<CONFIG:Debug>:-Og -g1>)
+  target_compile_options(Clipper2_core PRIVATE $<$<CONFIG:Debug>:-Og -g0>)
+  # Split DWARF
+  check_cxx_compiler_flag("-gsplit-dwarf" HAS_GSPLIT_DWARF)
+  if (HAS_GSPLIT_DWARF)
+    target_compile_options(${APP_EXE} PRIVATE $<$<CONFIG:Debug>:-gsplit-dwarf>)
+    target_compile_options(Clipper2_core PRIVATE $<$<CONFIG:Debug>:-gsplit-dwarf>)
+  endif()
+  # Prefer lld for faster links
+  find_program(LLD_LINKER ld.lld)
+  if (LLD_LINKER)
+    target_link_options(${APP_EXE} PRIVATE $<$<CONFIG:Debug>:-fuse-ld=lld>)
+  endif()
+endif()
 
 option(ENABLE_LTO "Enable link-time optimization (IPO/LTO) in Release" ON)
 if (ENABLE_LTO)
@@ -198,6 +235,7 @@ endif()
 target_link_libraries(${APP_EXE} PRIVATE
     ${OpenCV_LIBRARIES}
     Eigen3::Eigen
+    Clipper2_core
     TBB::tbb
     Threads::Threads
     ZLIB::ZLIB
