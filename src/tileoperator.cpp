@@ -1,4 +1,5 @@
 #include "tileoperator.hpp"
+#include "region_query.hpp"
 #include "numerical_utils.hpp"
 #include "img_utils.hpp"
 #include <cstdio>
@@ -2115,6 +2116,107 @@ std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTile(
         }
         unitIt->second.add(rec.idx, rec.ct);
     }
+    return tileAgg;
+}
+
+std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTileRegion(
+    const std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
+    const std::unordered_map<std::pair<int32_t, int32_t>, RegionPixelState, PairHash>& pixelState,
+    TileReader& reader, lineParserUnival& parser, TileKey tile,
+    const PreparedRegionMask2D& region, double gridSize, double minProb,
+    int32_t union_key, Eigen::MatrixXd* confusion, double* residualAccum) const {
+    if (coord_dim_ == 3) {
+        error("%s does not support 3D data yet", __func__);
+    }
+    assert(reader.getTileSize() == formatInfo_.tileSize);
+
+    std::unordered_map<int32_t, Slice> tileAgg;
+    if (pixelMap.empty()) {
+        return tileAgg;
+    }
+    auto it = reader.get_tile_iterator(tile.row, tile.col);
+    if (!it) {
+        return tileAgg;
+    }
+    auto aggIt0 = tileAgg.emplace(union_key, Slice()).first;
+    auto& oneSlice0 = aggIt0->second;
+
+    const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
+    auto add_confusion = [&](const TopProbs& anno) {
+        if (confusion == nullptr || residualAccum == nullptr) {
+            return;
+        }
+        double residual = 1.0;
+        for (size_t ii = 0; ii < anno.ks.size(); ++ii) {
+            residual -= anno.ps[ii];
+            for (size_t jj = ii; jj < anno.ks.size(); ++jj) {
+                (*confusion)(anno.ks[ii], anno.ks[jj]) += anno.ps[ii] * anno.ps[jj];
+            }
+        }
+        if (residual > 0.0) {
+            *residualAccum += residual * residual;
+        }
+    };
+
+    std::string line;
+    RecordT<float> rec;
+    while (it->next(line)) {
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        const int32_t idx = parser.parse(rec, line);
+        if (idx < 0) {
+            continue;
+        }
+        const int32_t ix = static_cast<int32_t>(std::floor(rec.x / res));
+        const int32_t iy = static_cast<int32_t>(std::floor(rec.y / res));
+        const auto pixIt = pixelMap.find({ix, iy});
+        if (pixIt == pixelMap.end()) {
+            continue;
+        }
+        const auto stateIt = pixelState.find({ix, iy});
+        RegionPixelState state = RegionPixelState::Boundary;
+        if (stateIt != pixelState.end()) {
+            state = stateIt->second;
+        }
+        if (state == RegionPixelState::Outside) {
+            continue;
+        }
+        if (state == RegionPixelState::Boundary && !region.containsPoint(rec.x, rec.y, &tile)) {
+            continue;
+        }
+
+        const auto& anno = pixIt->second;
+        add_confusion(anno);
+        const int32_t ux = static_cast<int32_t>(std::floor(rec.x / gridSize));
+        const int32_t uy = static_cast<int32_t>(std::floor(rec.y / gridSize));
+        for (size_t i = 0; i < anno.ks.size(); ++i) {
+            if (anno.ps[i] < minProb) {
+                continue;
+            }
+            const int32_t k = anno.ks[i];
+            const float p = anno.ps[i];
+            auto aggIt = tileAgg.find(k);
+            if (aggIt == tileAgg.end()) {
+                aggIt = tileAgg.emplace(k, Slice()).first;
+            }
+            auto& oneSlice = aggIt->second;
+            auto unitIt = oneSlice.find({ux, uy});
+            if (unitIt == oneSlice.end()) {
+                unitIt = oneSlice.emplace(std::make_pair(ux, uy), SparseObsDict()).first;
+            }
+            unitIt->second.add(rec.idx, rec.ct * p);
+        }
+        if (union_key == 0) {
+            continue;
+        }
+        auto unitIt = oneSlice0.find({ux, uy});
+        if (unitIt == oneSlice0.end()) {
+            unitIt = oneSlice0.emplace(std::make_pair(ux, uy), SparseObsDict()).first;
+        }
+        unitIt->second.add(rec.idx, rec.ct);
+    }
+
     return tileAgg;
 }
 

@@ -14,7 +14,9 @@
 #include "tilereader.hpp"
 #include "hexgrid.h"
 
-struct PreparedRegion2D;
+struct PreparedRegionMask2D;
+struct PreparedRegionRasterMask2D;
+enum class RegionPixelState : uint8_t;
 
 struct SparseObsDict {
     double totalCount = 0;
@@ -140,7 +142,7 @@ public:
 
     void extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax);
     void extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale = 10);
-    void extractRegionPrepared(const std::string& outPrefix, const PreparedRegion2D& region);
+    void extractRegionPrepared(const std::string& outPrefix, const PreparedRegionMask2D& region);
 
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
 
@@ -166,7 +168,8 @@ public:
     void probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, int32_t probDigits = 4);
 
     int32_t loadTileToMap(const TileKey& key,
-        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap) const;
+        std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
+        const std::vector<Rectangle<float>>* rects = nullptr) const;
     int32_t loadTileToMap3D(const TileKey& key,
         std::map<PixelKey3, TopProbs>& pixelMap) const;
 
@@ -174,6 +177,13 @@ public:
     std::unordered_map<int32_t, Slice> aggOneTile(
         std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
         TileReader& reader, lineParserUnival& parser, TileKey tile, double gridSize, double minProb = 0.01, int32_t union_key = 0) const;
+    std::unordered_map<int32_t, Slice> aggOneTileRegion(
+        const std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
+        const std::unordered_map<std::pair<int32_t, int32_t>, RegionPixelState, PairHash>& pixelState,
+        TileReader& reader, lineParserUnival& parser, TileKey tile,
+        const PreparedRegionMask2D& region, double gridSize, double minProb = 0.01,
+        int32_t union_key = 0, Eigen::MatrixXd* confusion = nullptr,
+        double* residualAccum = nullptr) const;
 
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
         computeConfusionMatrix(double resolution, const char* outPref = nullptr, int32_t probDigits = 4) const;

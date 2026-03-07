@@ -27,6 +27,7 @@ int32_t cmdDeconvPseudobulk(int argc, char** argv);
 int32_t cmdPseudoBulk(int argc, char** argv);
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
 int32_t cmdConditionalTest(int32_t argc, char** argv);
+int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv);
 
 int32_t main(int32_t argc, char** argv) {
 
@@ -51,6 +52,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("multi-conditional-de-pois", "Multi-sample cell type specific DE test by Poisson regression (use --link=log|log1p)", cmdConditionalTestPoisReg)
         .add_command("multi-conditional-de-nb", "Multi-sample cell type specific DE test by Poisson regression with over-dispersion (NB) (use --link=log|log1p)", cmdConditionalTestNbReg)
         .add_command("multi-conditional-de-pixel", "Multi-sample cell type specific DE test based on pixel level cell type inference", cmdConditionalTest)
+        .add_command("conditional-de-region-pixel", "Conditional DE test between two GeoJSON-defined regions using pixel annotations", cmdConditionalTestRegionPixel)
         .add_command("nmf-pois-log1p", "Fit Poisson log1p NMF", cmdNmfPoisLog1p)
         .add_command("nmf-pois-log1p-transform", "Transform data using fitted Poisson log1p NMF model", cmdNmfTransform)
         .add_command("draw-pixel-features", "Draw pixel level features/genes", cmdDrawPixelFeatures)

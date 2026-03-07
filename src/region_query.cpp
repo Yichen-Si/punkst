@@ -14,7 +14,9 @@ namespace {
 using json = nlohmann::json;
 using Clipper2Lib::Difference;
 using Clipper2Lib::FillRule;
+using Clipper2Lib::InflatePaths;
 using Clipper2Lib::IsPositive;
+using Clipper2Lib::JoinType;
 using Clipper2Lib::Path64;
 using Clipper2Lib::Paths64;
 using Clipper2Lib::Point64;
@@ -25,6 +27,7 @@ using Clipper2Lib::RectClip;
 using Clipper2Lib::SegmentsIntersect;
 using Clipper2Lib::TrimCollinear;
 using Clipper2Lib::Union;
+using Clipper2Lib::EndType;
 
 constexpr int64_t kDefaultScale = 10;
 
@@ -198,6 +201,12 @@ bool append_polygon_rings(Paths64& rings, const json& polygon, int64_t scale) {
         if (std::llround(std::abs(Clipper2Lib::Area(path))) == 0) {
             return false;
         }
+        // Standalone polygon rings are treated as filled regions regardless of
+        // input winding. Normalize them before union so overlapping polygons
+        // never cancel each other under FillRule::NonZero.
+        if (!IsPositive(path)) {
+            std::reverse(path.begin(), path.end());
+        }
         polygon_rings.push_back(std::move(path));
     }
     if (polygon_rings.empty()) {
@@ -277,7 +286,7 @@ Rect64 tile_to_scaled_rect(const TileKey& tile, int64_t tileSizeScaled) {
 }
 
 std::vector<uint32_t> collect_candidates(
-    const PreparedRegion2D& region, const TileKey& tile) {
+    const PreparedRegionMask2D& region, const TileKey& tile) {
     const auto it = region.tile_bins.find(tile);
     if (it == region.tile_bins.end()) {
         return {};
@@ -304,37 +313,26 @@ bool point_in_region_paths(const Point64& pt, const Paths64& paths, const std::v
 
 } // namespace
 
-PreparedRegion2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
-                                           int32_t tileSize,
-                                           int64_t scale) {
+PreparedRegionMask2D prepareRegionFromPaths(const Paths64& paths,
+                                        int32_t tileSize,
+                                        int64_t scale) {
     if (tileSize <= 0) {
         throw std::runtime_error("tileSize must be positive");
     }
     if (scale <= 0) {
         scale = kDefaultScale;
     }
-
-    std::ifstream in(geojsonFile);
-    if (!in.is_open()) {
-        throw std::runtime_error("Failed to open GeoJSON file: " + geojsonFile);
+    if (paths.empty()) {
+        PreparedRegionMask2D emptyRegion;
+        emptyRegion.scale = scale;
+        emptyRegion.tileSize = tileSize;
+        return emptyRegion;
     }
 
-    json root;
-    in >> root;
-
-    Paths64 input_rings;
-    append_geometry_rings(input_rings, root, scale);
-    if (input_rings.empty()) {
-        throw std::runtime_error("No valid Polygon or MultiPolygon rings found in GeoJSON");
-    }
-
-    PreparedRegion2D region;
+    PreparedRegionMask2D region;
     region.scale = scale;
     region.tileSize = tileSize;
-    region.union_paths = Union(input_rings, FillRule::NonZero);
-    if (region.union_paths.empty()) {
-        throw std::runtime_error("Polygon union is empty after preprocessing");
-    }
+    region.union_paths = paths;
 
     const int64_t tileSizeScaled = static_cast<int64_t>(tileSize) * scale;
     int64_t global_xmin = std::numeric_limits<int64_t>::max();
@@ -371,7 +369,38 @@ PreparedRegion2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
     return region;
 }
 
-bool PreparedRegion2D::containsPoint(float x, float y, const TileKey* tile_hint) const {
+PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
+                                           int32_t tileSize,
+                                           int64_t scale) {
+    if (tileSize <= 0) {
+        throw std::runtime_error("tileSize must be positive");
+    }
+    if (scale <= 0) {
+        scale = kDefaultScale;
+    }
+
+    std::ifstream in(geojsonFile);
+    if (!in.is_open()) {
+        throw std::runtime_error("Failed to open GeoJSON file: " + geojsonFile);
+    }
+
+    json root;
+    in >> root;
+
+    Paths64 input_rings;
+    append_geometry_rings(input_rings, root, scale);
+    if (input_rings.empty()) {
+        throw std::runtime_error("No valid Polygon or MultiPolygon rings found in GeoJSON");
+    }
+
+    const Paths64 region_union = Union(input_rings, FillRule::NonZero);
+    if (region_union.empty()) {
+        throw std::runtime_error("Polygon union is empty after preprocessing");
+    }
+    return prepareRegionFromPaths(region_union, tileSize, scale);
+}
+
+bool PreparedRegionMask2D::containsPoint(float x, float y, const TileKey* tile_hint) const {
     if (empty()) {
         return false;
     }
@@ -386,7 +415,7 @@ bool PreparedRegion2D::containsPoint(float x, float y, const TileKey* tile_hint)
     return point_in_region_paths(pt, union_paths, ids);
 }
 
-RegionTileState PreparedRegion2D::classifyTile(const TileKey& tile) const {
+RegionTileState PreparedRegionMask2D::classifyTile(const TileKey& tile) const {
     const auto cache_it = tile_state_cache.find(tile);
     if (cache_it != tile_state_cache.end()) {
         return cache_it->second;
@@ -451,4 +480,33 @@ RegionTileState PreparedRegion2D::classifyTile(const TileKey& tile) const {
 
     tile_state_cache[tile] = RegionTileState::Outside;
     return RegionTileState::Outside;
+}
+
+PreparedRegionRasterMask2D prepareRegionRasterMask2D(const PreparedRegionMask2D& region,
+                                                     float pixelResolution,
+                                                     double delta) {
+    PreparedRegionRasterMask2D mask;
+    mask.pixelResolution = pixelResolution > 0.0f ? pixelResolution : 1.0f;
+    mask.delta = (delta > 0.0) ? delta : (2.0 * static_cast<double>(mask.pixelResolution));
+    if (region.empty()) {
+        return mask;
+    }
+    const Paths64 outer = InflatePaths(region.union_paths, mask.delta, JoinType::Round, EndType::Polygon);
+    const Paths64 inner = InflatePaths(region.union_paths, -mask.delta, JoinType::Round, EndType::Polygon);
+    mask.outer_mask = prepareRegionFromPaths(outer, region.tileSize, region.scale);
+    mask.inner_mask = prepareRegionFromPaths(inner, region.tileSize, region.scale);
+    return mask;
+}
+
+RegionPixelState PreparedRegionRasterMask2D::classifyPixel(int32_t pixX, int32_t pixY,
+                                                           const TileKey* tile_hint) const {
+    const float x = static_cast<float>(pixX) * pixelResolution;
+    const float y = static_cast<float>(pixY) * pixelResolution;
+    if (outer_mask.empty() || !outer_mask.containsPoint(x, y, tile_hint)) {
+        return RegionPixelState::Outside;
+    }
+    if (!inner_mask.empty() && inner_mask.containsPoint(x, y, tile_hint)) {
+        return RegionPixelState::Interior;
+    }
+    return RegionPixelState::Boundary;
 }

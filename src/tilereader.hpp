@@ -150,7 +150,7 @@ public:
 
     template<typename T>
     void getTilesInBounds(const std::vector<Rectangle<T>>& _rects,
-        std::unordered_map<TileKey,bool,TileKeyHash>& tileMap) {
+        std::unordered_map<TileKey,bool,TileKeyHash>& tileMap) const {
         for (const auto& r : _rects) {
             if (!r.proper()) continue;
             // Compute candidate tile‐row/col ranges
@@ -162,6 +162,9 @@ public:
             for (int row = rowMin; row <= rowMax; ++row) {
                 for (int col = colMin; col <= colMax; ++col) {
                     TileKey key{row, col};
+                    if (tile_map_.find(key) == tile_map_.end()) {
+                        continue;
+                    }
                     // the exact bounds of this tile in world‐space
                     Rectangle<T> tileRect = tile2bound<T>(row, col, tileSize_);
                     int32_t code = tileRect.intersect(r);

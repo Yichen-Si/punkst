@@ -78,7 +78,7 @@ void TileOperator::loadIndex(const std::string& indexFile) {
             tile_lookup_[{b.row, b.col}] = i;
         }
     }
-    notice("Loaded index with %lu tiles", blocks_all_.size());
+    notice("Read index with %lu tiles", blocks_all_.size());
 }
 
 void TileOperator::printIndex() const {
@@ -122,7 +122,7 @@ void TileOperator::extractRegionGeoJSON(const std::string& outPrefix, const std:
         error("%s: GeoJSON region query requires a seekable text file. Input '%s' is a stream (stdin/gzip).",
             __func__, dataFile_.c_str());
     }
-    PreparedRegion2D region;
+    PreparedRegionMask2D region;
     try {
         region = loadPreparedRegionGeoJSON(geojsonFile, formatInfo_.tileSize, scale);
     } catch (const std::exception& ex) {
@@ -135,7 +135,7 @@ void TileOperator::extractRegionGeoJSON(const std::string& outPrefix, const std:
     extractRegionPrepared(outPrefix, region);
 }
 
-void TileOperator::extractRegionPrepared(const std::string& outPrefix, const PreparedRegion2D& region) {
+void TileOperator::extractRegionPrepared(const std::string& outPrefix, const PreparedRegionMask2D& region) {
     if ((mode_ & 0x8) != 0) {
         error("%s: Prepared polygon region query requires regular tile mode input (mode & 0x8 == 0)", __func__);
     }
@@ -928,7 +928,8 @@ bool TileOperator::readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& p
 }
 
 int32_t TileOperator::loadTileToMap(const TileKey& key,
-    std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap) const {
+    std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
+    const std::vector<Rectangle<float>>* rects) const {
     if (coord_dim_ == 3) {
         error("%s: 3D data requires loadTileToMap3D", __func__);
     }
@@ -961,6 +962,21 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
     int32_t recX = 0;
     int32_t recY = 0;
     while (readNextRecord2DAsPixel(dataStream, pos, blk.idx.ed, recX, recY, rec)) {
+        if (rects != nullptr && !rects->empty()) {
+            const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
+            const float x = static_cast<float>(recX) * res;
+            const float y = static_cast<float>(recY) * res;
+            bool keep = false;
+            for (const auto& rect : *rects) {
+                if (rect.contains(x, y)) {
+                    keep = true;
+                    break;
+                }
+            }
+            if (!keep) {
+                continue;
+            }
+        }
         pixelMap[{recX, recY}] = std::move(rec);
     }
     return static_cast<int32_t>(pixelMap.size());

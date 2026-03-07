@@ -1,6 +1,7 @@
 # Differential expression tests
 
 - `punkst multi-conditional-de-pixel`: Multi-sample (pairwise), cell type-specific DE using pixel-level annotations.
+- `punkst conditional-de-region-pixel`: Cell type-specific DE between two GeoJSON-defined regions using one annotation file and one transcript file.
 - `punkst multi-conditional-de-pois`: Multi-sample (pairwise), cell type-specific DE using Poisson regression on spot-level data.
 - `punkst de-chisq`: Chi-squared DE on pseudobulk matrices.
 
@@ -70,7 +71,7 @@ Rows are sorted by factor (ascending) and Chi2 (descending) within each factor.
 ## multi-conditional-de-pixel
 
 `multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between dataset groups. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests for each cell type using a Binomial model. By default it builds all pairwise contrasts from `--labels` (or numeric indices); for more general comparisons, use a contrast design file.
-The p-values are computed both by permutation and by robust sandwich estimators of the standard errors of the estimated effect sizes.
+The main p-values are computed from robust sandwich estimators of the standard errors of the estimated effect sizes. Optional permutation p-values can also be added with `--perm`.
 
 $X^{(k)}_{im} \sim$ Binom $(N^{(k)}_{im}, \pi^{(k)}_{im})$ for cell type $k$, bin $i$ and gene $m$, where both $X$ and $N$ are soft-aggregated counts from pixel level cell type assignments.
 
@@ -139,11 +140,13 @@ Annotation and transcript tiles must use the same tile size for each dataset pai
 
 `--binary` - Indicates the annotation data files are binary (`.bin`).
 
+`--confusion` - Optional per-dataset confusion matrices (`K x K` TSV). When omitted, the command estimates one confusion matrix from each annotation dataset on the fly.
+
 `--min-count-per-feature` - Minimum total count (in each pairwise comparison) for a feature to be considered. Default: 100.
 
 `--max-pval` - Max p-value for output. Default: 1 (output all).
 
-`--max-pval-deconv` - If at least two cell types (slices) have a p-value less than this threshold, the tool runs a deconvolution to estimate effects adjusted for other cell types. Default: 1e-3.
+`--max-pval-deconv` - If at least two cell types (slices) have a p-value less than this threshold, the tool runs a deconvolution to estimate effects adjusted for other cell types. Default: 0.05.
 
 `--min-or` - Minimum odds ratio for output (bidirectional, so OR$>x$ and OR$<1/x$ are kept). Default: 1 (output all).
 
@@ -157,33 +160,133 @@ Annotation and transcript tiles must use the same tile size for each dataset pai
 
 `--threads` - Number of threads. Default: 1. Almost the entire runtime is spent in data loading, so multi-threading is very useful for large datasets since tiles of data are loaded simultaneously.
 
+`--bounded`, `--xmin`, `--xmax`, `--ymin`, `--ymax` - Optional transcript-side bounding-box subsetting before aggregation.
+
 `--debug` - Enable debug logging.
 
 ### Output Files
 
 Given `--out PREFIX`, the tool generates one main output file per contrast, plus auxiliary files.
 
-- When permutation is enabled (`--perm > 0`), for each contrast:
-  - `PREFIX.CONTRAST.perm_N.tsv` is generated, where `CONTRAST` is from the `--contrast` file header or `labelA_vs_labelB` for auto-pairwise, and `N` is the number of permutations. It contains permutation-based p-values for significant associations. Columns are: `Slice`, `Feature`, `Beta`, `Pi0`, `Pi1`, `TotalCount`, `log10p`, `p_perm`.
-
-- When permutation is not enabled (`--perm 0`), for each contrast:
-  - `PREFIX.CONTRAST.tsv` is generated.
-  - **Columns**:
-    - `Slice`: Cell type index (0-based).
-    - `Feature`: Feature name.
-    - `Beta`: Marginal log odds ratio for the feature.
-    - `log10p`: -log10(p-value) for `Beta`.
-    - `Pi0`, `Pi1`: Estimated feature prevalence in group 0 and 1.
-    - `TotalCount`: Total feature count in this cell type and contrast.
-    - `Beta_global`: Weighted average of `Beta` across cell types.
-    - `log10p_global`: -log10(p-value) for `Beta_global`.
-    - `log10p_deviation`: -log10(p-value) for the deviation of `Beta` from `Beta_global`.
-    - `Beta_deconv`: Deconvolved `Beta`, adjusted for other cell types. This is experimental and computed only when deconvolution is triggered (see `--max-pval-deconv`).
-    - `log10p_deconv`: -log10(p-value) for `Beta_deconv`.
+- For each contrast, `PREFIX.CONTRAST.tsv` is generated, where `CONTRAST` is from the `--contrast` file header or `labelA_vs_labelB` for auto-pairwise.
+- Main output columns:
+  - `Slice`: Cell type index (0-based).
+  - `Feature`: Feature name.
+  - `Beta`: Observed log odds ratio, i.e. `logit(Pi1) - logit(Pi0)`.
+  - `log10p`: `-log10(p-value)` for `Beta`.
+  - `Pi0`, `Pi1`: Observed feature proportions in group 0 and group 1.
+  - `TotalCount`: Total feature count in this cell type and contrast.
+  - `Beta_deconv`: Deconvolved log odds ratio adjusted for cell type mixing. This is experimental and is only non-zero when deconvolution is triggered and succeeds.
+  - `FC_deconv`: Deconvolved fold change computed from the deconvolved latent proportions.
+  - `log10p_deconv`: `-log10(p-value)` for `Beta_deconv`.
+  - `p_perm`: Included only when `--perm > 0`.
 
 - Auxiliary files:
   - `PREFIX.nobs.tsv`: The number of units and total pixel counts per cell type and dataset.
   - `PREFIX.sums.tsv`: Total feature counts per cell type and dataset for units passing filters.
+
+## conditional-de-region-pixel
+
+`conditional-de-region-pixel` runs the same pixel-based conditional DE test, but for a single annotation dataset and a single transcript dataset split into two groups by two polygon-defined regions. The two groups are defined by `--region-neg` and `--region-pos`, and the command computes one confusion matrix from each region on the fly from the annotation probabilities that are actually used during aggregation.
+
+Region membership is defined by transcript coordinates. Annotation pixels are used to annotate transcripts after region filtering, with a raster-assisted fast path to avoid exact polygon checks for most transcripts.
+
+Example usage:
+```bash
+punkst conditional-de-region-pixel \
+  --anno sample/pixel --binary \
+  --pts sample/transcripts.tiled \
+  --region-neg regions/control.geojson \
+  --region-pos regions/treatment.geojson \
+  --region-label-neg control \
+  --region-label-pos treatment \
+  --K 12 --features features.tsv \
+  --grid-size 20 --min-count 10 --perm 2000 \
+  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
+  --out de/region_de --threads 8
+```
+
+### Required Parameters
+
+Provide either `--anno` or both `--anno-data` and `--anno-index`.
+
+`--anno` - Prefix of the pixel annotation files. The tool expects `<prefix>.tsv` (or `<prefix>.bin` if `--binary`) and `<prefix>.index`.
+
+`--anno-data`, `--anno-index` - Alternative to `--anno`. Provide the explicit annotation data and index files.
+
+`--pts` - Prefix of the transcript tiled dataset. The tool expects `<prefix>.tsv` and `<prefix>.index`.
+
+`--region-neg`, `--region-pos` - GeoJSON files defining the negative/reference and positive/comparison regions. See [GeoJSON Region Input](../input/geojson-region.md) for the accepted file format.
+
+`--K` - Number of factors in the annotation file.
+
+`--features` - A list of features to test, one feature name per line (lines starting with `#` are ignored).
+
+`--grid-size` - Grid size used to aggregate transcripts into units.
+
+`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in the transcript file (0-based).
+
+`--out` - Output prefix.
+
+The annotation and transcript tiled inputs must use the same tile size.
+
+### Optional Parameters
+
+`--region-label-neg`, `--region-label-pos` - Labels used in the contrast name and auxiliary outputs. Defaults: `0`, `1`.
+
+`--region-scale` - Integer coordinate scale used during GeoJSON preprocessing. Default: 10.
+
+`--binary` - Indicates the annotation data file is binary (`.bin`).
+
+`--pseudo-rel` - Relative pseudo count fraction used in the Binomial model. Default: 0.05.
+
+`--min-prob` - Minimum annotation probability for a pixel to contribute to a slice. Default: 0.01.
+
+`--min-count-per-feature` - Minimum total count for a feature to be considered. Default: 100.
+
+`--max-pval` - Max p-value for output. Default: 1.
+
+`--max-pval-deconv` - If at least two cell types reach this p-value threshold, run deconvolution. Default: 0.05.
+
+`--min-or` - Minimum odds ratio for output. Default: 1.
+
+`--min-or-perm` - Minimum odds ratio for doing permutation. Default: 1.2.
+
+`--min-count` - Minimum observed factor-specific count for a unit to be included. Default: 10.
+
+`--perm` - Number of permutations for beta calibration. Default: 0.
+
+`--seed` - Random seed for permutation.
+
+`--threads` - Number of threads. Default: 1.
+
+`--aux-suff` - Optional suffix inserted before `.nobs.tsv` and `.sums.tsv`.
+
+`--debug` - Enable debug logging.
+
+### Output Files
+
+Given `--out PREFIX`, the command generates:
+
+- `PREFIX.REGIONNEG_vs_REGIONPOS.tsv`, where the names come from `--region-label-neg` and `--region-label-pos`.
+- `PREFIX.nobs.tsv`
+- `PREFIX.sums.tsv`
+
+The main output columns are the same as `multi-conditional-de-pixel`:
+
+- `Slice`
+- `Feature`
+- `Beta`
+- `log10p`
+- `Pi0`
+- `Pi1`
+- `TotalCount`
+- `Beta_deconv`
+- `FC_deconv`
+- `log10p_deconv`
+- `p_perm` when `--perm > 0`
+
+If the two regions overlap, transcripts in the overlap contribute to both groups.
 
 ## multi-conditional-de-pois
 

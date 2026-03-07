@@ -497,7 +497,7 @@ bool TileReaderBase::loadIndexBinary(const std::string &indexFilename) {
     }
     nTiles = tile_map_.size();
     indexFile.close();
-    notice("Read %zu tiles from binary index file", nTiles);
+    notice("Read index with %zu tiles", nTiles);
     return true;
 }
 

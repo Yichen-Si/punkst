@@ -231,6 +231,8 @@ struct MultiSliceOneResult {
     Eigen::VectorXd log10p_obs;  // size K, -log10 p-value from beta_obs/varb_obs
     // Deconvolution output
     bool deconv_ok = false;
+    Eigen::VectorXd pi0_deconv;  // size K (decontaminated negative-group proportions)
+    Eigen::VectorXd pi1_deconv;  // size K (decontaminated positive-group proportions)
     Eigen::VectorXd beta_deconv; // size K (decontaminated beta)
     // Convenience
     double tot_sum = 0.0; // sum_k (Y0_k + Y1_k) for slices that were ok
@@ -241,6 +243,7 @@ struct MultiSliceOneResult {
         pi0_obs.setZero(K); pi1_obs.setZero(K);
         beta_obs.setZero(K); varb_obs.setZero(K);
         log10p_obs.setConstant(K, -1);
+        pi0_deconv.setZero(K); pi1_deconv.setZero(K);
         beta_deconv.setZero(K);
         tot_sum = 0.0; deconv_ok = false;
     }
@@ -304,7 +307,8 @@ public:
         double lambda_beta = 1e-2, double lambda_alpha = 1e-6,
         double lm_damping = 1e-4) const;
 
-    bool deconvolution(ContrastPrecomp& pc, Eigen::VectorXd& beta_out);
+    bool deconvolution(ContrastPrecomp& pc, Eigen::VectorXd& beta_out,
+        Eigen::VectorXd* p0_out = nullptr, Eigen::VectorXd* p1_out = nullptr);
 
     bool compute_one_test_aggregate(int f,
         const std::vector<int32_t>& g0s, const std::vector<int32_t>& g1s,

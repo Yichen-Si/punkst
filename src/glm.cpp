@@ -325,7 +325,8 @@ ContrastPrecomp MultiSlicePairwiseBinom::prepare_contrast(
 //   beta is the desired logit-diff per slice: logit(p1_true)-logit(p0_true)
 // Weighted NLS + ridge + LM damping
 // Returns false on failure
-bool MultiSlicePairwiseBinom::deconvolution(ContrastPrecomp& pc, Eigen::VectorXd& beta_out)
+bool MultiSlicePairwiseBinom::deconvolution(ContrastPrecomp& pc, Eigen::VectorXd& beta_out,
+    Eigen::VectorXd* p0_out, Eigen::VectorXd* p1_out)
 {
     const int K = pc.K;
 
@@ -406,6 +407,8 @@ bool MultiSlicePairwiseBinom::deconvolution(ContrastPrecomp& pc, Eigen::VectorXd
     }
 
     beta_out = pc.beta;
+    if (p0_out) *p0_out = pc.p0;
+    if (p1_out) *p1_out = pc.p1;
     return beta_out.allFinite();
 }
 
@@ -469,6 +472,8 @@ bool MultiSlicePairwiseBinom::compute_one_test_aggregate(int f,
     if (n_ok == 0) return false;
 
     out.beta_deconv = out.beta_obs;
+    out.pi0_deconv = out.pi0_obs;
+    out.pi1_deconv = out.pi1_obs;
     out.deconv_ok = false;
 
     const bool do_deconv = check_hits && (n_hit >= 2);
@@ -484,9 +489,13 @@ bool MultiSlicePairwiseBinom::compute_one_test_aggregate(int f,
         }
         pc.compute_CtWC();
         Eigen::VectorXd beta_deconv(K_);
-        const bool ok = deconvolution(pc, beta_deconv);
+        Eigen::VectorXd pi0_deconv(K_);
+        Eigen::VectorXd pi1_deconv(K_);
+        const bool ok = deconvolution(pc, beta_deconv, &pi0_deconv, &pi1_deconv);
         if (ok) {
             out.beta_deconv = beta_deconv;
+            out.pi0_deconv = pi0_deconv;
+            out.pi1_deconv = pi1_deconv;
             out.deconv_ok = true;
         }
     }

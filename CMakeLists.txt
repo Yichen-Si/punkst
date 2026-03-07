@@ -146,7 +146,9 @@ set(SOURCE_FILES
     script/manipulate_tiles.cpp
     script/multi_cde_lowres.cpp
     script/multi_cde_lowres_nb.cpp
+    script/multi_cde_pixel_common.cpp
     script/multi_cde_pixel.cpp
+    script/multi_cde_region_pixel.cpp
   )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})

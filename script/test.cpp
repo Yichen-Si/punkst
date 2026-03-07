@@ -176,7 +176,7 @@ int32_t test(int32_t argc, char** argv) {
             throw std::runtime_error("No valid polygons found in the input JSON");
         }
 
-        PreparedRegion2D region = loadPreparedRegionGeoJSON(inFile, tileSize, scale);
+        PreparedRegionMask2D region = loadPreparedRegionGeoJSON(inFile, tileSize, scale);
         if (region.empty()) {
             throw std::runtime_error("Prepared region is empty");
         }

@@ -10,6 +10,7 @@
 #include "tile_io.hpp"
 
 enum class RegionTileState : uint8_t { Outside, Inside, Partial };
+enum class RegionPixelState : uint8_t { Outside, Interior, Boundary };
 
 struct RegionBox64 {
     int64_t xmin = 0;
@@ -22,7 +23,7 @@ struct RegionBox64 {
     }
 };
 
-struct PreparedRegion2D {
+struct PreparedRegionMask2D {
     int64_t scale = 10;
     int32_t tileSize = 0;
     Rectangle<float> bbox_f;
@@ -37,6 +38,24 @@ struct PreparedRegion2D {
     RegionTileState classifyTile(const TileKey& tile) const;
 };
 
-PreparedRegion2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
+struct PreparedRegionRasterMask2D {
+    PreparedRegionMask2D outer_mask;
+    PreparedRegionMask2D inner_mask;
+    float pixelResolution = 1.0f;
+    double delta = 0.0;
+
+    RegionPixelState classifyPixel(int32_t pixX, int32_t pixY,
+                                   const TileKey* tile_hint = nullptr) const;
+};
+
+PreparedRegionMask2D prepareRegionFromPaths(const Clipper2Lib::Paths64& paths,
+                                        int32_t tileSize,
+                                        int64_t scale = 10);
+
+PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
                                            int32_t tileSize,
                                            int64_t scale = 10);
+
+PreparedRegionRasterMask2D prepareRegionRasterMask2D(const PreparedRegionMask2D& region,
+                                                     float pixelResolution,
+                                                     double delta = -1.0);
