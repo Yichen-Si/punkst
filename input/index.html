@@ -14,6 +14,8 @@
         <link rel="prev" href="../modules/tileop/">
       
       
+        <link rel="next" href="geojson-region/">
+      
       
         
       
@@ -23,7 +25,7 @@
     
     
       
-        <title>Input - punkst</title>
+        <title>Overview - punkst</title>
       
     
     
@@ -110,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Input
+              Overview
             
           </span>
         </div>
@@ -292,17 +294,20 @@
     
   
   
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="./" class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
   
   
     
   
   Input
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -893,16 +898,37 @@
   
   
   
-    <li class="md-nav__item md-nav__item--active">
+    
+    
       
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
       
       
         
       
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
-        <label class="md-nav__link md-nav__link--active" for="__toc">
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
           
+          <div class="md-nav__link md-nav__container">
+            <a href="./" class="md-nav__link md-nav__link--active">
+              
   
   
   <span class="md-ellipsis">
@@ -916,17 +942,43 @@
   
   
 
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+            </a>
+            
+              
+              <label class="md-nav__link md-nav__link--active" for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Input
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="geojson-region/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Input
+    Region query
   
 
     
@@ -935,80 +987,13 @@
   
 
       </a>
-      
-        
+    </li>
+  
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#visium-hd" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Visium HD
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#cosmx-smi" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        CosMx SMI
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#merscope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MERSCOPE
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#xenium" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Xenium
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#10x-single-cell" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        10X Single cell
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
+              
+            
+          </ul>
+        </nav>
       
     </li>
   
@@ -1116,8 +1101,8 @@
 
 
 <h1 id="notes-on-processing-data-from-different-technologiesplatforms">Notes on processing data from different technologies/platforms<a class="headerlink" href="#notes-on-processing-data-from-different-technologiesplatforms" title="Permanent link">&para;</a></h1>
-<p>Here are instructions on how to convert raw data from different platforms to the generic pixel/transcript level input format for punkst.</p>
-<p>(For spot/single cell level data, <code>topic-model</code> now accepts 10X style DGE files directly, but you can also convert them to our custom format (see the last section below))</p>
+<p>Here are instructions on how to convert raw data from different platforms to the generic pixel/transcript level input format for punkst. This input format is a plain tsv file storing transcripts/pixels by spatial tiles, accompanied by an index file. The minimum information is x and y coordinates (in microns), transcript IDs (gene names), and counts. If you have auxiliary information or annotations that may be useful for downstream analysis, such as z-plane, cell IDs, subcellular compartment annotions, etc., keep them as additional columns.</p>
+<p>For spot/single cell level data, <code>topic-model</code> now accepts 10X style DGE files directly, but you can also convert them to our custom format (see the last section below)</p>
 <!-- Except for Visium HD (see below), we provide a pair of template `Makefile` and `config_prepare.json` files in the `examples/format_input` directory for each platform. You can copy `config_prepare.json` to your directory and modify the parameters, then generate the concrete `Makefile` by
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>/path/to/punkst/ext/py/generate_workflow.py<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>-t<span class="w"> </span>/path/to/punkst/examples/format_input/cosmx/Makefile<span class="w"> </span><span class="se">\</span>
@@ -1180,7 +1165,7 @@ Copy the config file to your directory and set the raw file names. For example, 
 </span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="s2">  &#39;{printf &quot;</span><span class="err">%.</span><span class="mi">2</span><span class="kc">f</span><span class="err">\</span><span class="kc">t</span><span class="err">%.</span><span class="mi">2</span><span class="kc">f</span><span class="err">\</span><span class="kc">t</span><span class="err">%s_%s\</span><span class="kc">t</span><span class="err">%s\</span><span class="kc">n</span><span class="s2">&quot;, $4*mu, $5*mu, $1, $2, $3}&#39; &gt; cell_centers.tsv</span>
 </span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>
 </span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="s2"># Extract transcripts</span>
-</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="s2">awk -F&#39;,&#39; -v mu=${MICRONS_PER_PIXEL} &#39;\</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="s2">awk -F&#39;,&#39; -v OFS=$&#39;\t&#39; -v mu=${MICRONS_PER_PIXEL} &#39;\</span>
 </span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="s2">NR==1{gsub(/&quot;</span><span class="err">/</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">0</span><span class="err">);</span><span class="w"> </span><span class="err">pri</span><span class="kc">nt</span><span class="w"> </span><span class="s2">&quot;#&quot;</span><span class="w"> </span><span class="err">$</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;count&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;CellID&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">9</span><span class="w"> </span><span class="p">}</span><span class="err">\</span>
 </span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a><span class="err">NR&gt;</span><span class="mi">1</span><span class="p">{</span><span class="err">gsub(/</span><span class="s2">&quot;/, &quot;&quot;, $8); gsub(/&quot;</span><span class="err">/</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">9</span><span class="err">);</span><span class="w"> </span><span class="err">pri</span><span class="kc">ntf</span><span class="w"> </span><span class="s2">&quot;%.2f\t%.2f\t%s\t%d\t%s\t%s_%s\t%s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="err">mu*$</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="err">mu*$</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">8</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">7</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="err">$</span><span class="mi">9</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="err">&#39;</span><span class="w"> </span><span class="err">$</span><span class="p">{</span><span class="err">RAW_TX</span><span class="p">}</span><span class="w"> </span><span class="err">&gt;</span><span class="w"> </span><span class="kc">trans</span><span class="err">crip</span><span class="kc">ts</span><span class="err">.</span><span class="kc">ts</span><span class="err">v</span>
 </span></code></pre></div>
@@ -1278,6 +1263,22 @@ Since normally the matrix is sorted by barcode indices, adding <code>--sorted-by
             </div>
           </a>
         
+        
+          
+          <a href="geojson-region/" class="md-footer__link md-footer__link--next" aria-label="Next: Region query">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Region query
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
         
       </nav>
     

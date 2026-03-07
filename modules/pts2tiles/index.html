@@ -294,17 +294,20 @@
   
   
   
-    <li class="md-tabs__item">
-      <a href="../../input/" class="md-tabs__link">
-        
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../input/" class="md-tabs__link">
+          
   
   
     
   
   Input
 
-      </a>
-    </li>
+        </a>
+      </li>
+    
   
 
       
@@ -993,9 +996,36 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../input/" class="md-nav__link">
+    
+    
+      
         
+          
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../input/" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -1009,7 +1039,59 @@
   
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Input
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../input/geojson-region/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Region query
+  
+
+    
+  </span>
+  
+  
+
       </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -1127,7 +1209,9 @@
 <p><code>--icol-feature</code> - The column index for feature names/IDs (0-based). If provided, the module will generate a file including feature names and counts. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features.)</p>
 <p><code>--icol-int</code> - Column indices for integer values to aggregate per feature. Can be specified multiple times to track multiple integer columns. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features, preferably excluding the extremely low count features.)</p>
 <h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
-<p><code>--skip</code> - The number of lines to skip in the input file (if your input file contains headers, set it to the number of header lines). Default: 0.</p>
+<p><code>--skip</code> - The number of lines to skip at the beginning of the input file. These skipped lines are still copied to the output as metadata: by default each skipped line is normalized to start with at least two <code>#</code> characters. Default: 0.</p>
+<p><code>--skip-last-is-header</code> - Treat the last skipped line as the header line. In that case the last skipped line is normalized to start with exactly one <code>#</code>, while the earlier skipped lines still start with at least two <code>#</code>. Requires <code>--skip &gt; 0</code>.</p>
+<p><code>--icol-z</code> - Optional column index for a third coordinate dimension (0-based). Tiling still uses only X and Y, but if this is provided <code>pts2tiles</code> also records <code>zmin</code> / <code>zmax</code> in the coordinate-range file and writes a histogram of the z distribution with bin size 1.</p>
 <p><code>--tile-buffer</code> - The per-thread per-tile buffer size in terms of the number of lines before writing to disk. Default: 1000. If the number of tiles may be huge and you are using a large number of threads so that the total memory usage is too high, choose a smaller number.</p>
 <p><code>--threads</code> - The number of threads to use for parallel processing. Default: 1.</p>
 <p><code>--verbose</code> - Controls the verbosity level of output messages.</p>
@@ -1136,7 +1220,8 @@
 <ul>
 <li><code>prefix.tsv</code>: the tiled tsv file.</li>
 <li><code>prefix.index</code>: an index file that stores the offsets of each tile in the tiled tsv file. This will be used for fast access.</li>
-<li><code>prefix.coord_range.tsv</code>: a text file that contains the range of coordinates (xmin, xmax, ymin, ymax).</li>
+<li><code>prefix.coord_range.tsv</code>: a text file that contains the range of coordinates (<code>xmin</code>, <code>xmax</code>, <code>ymin</code>, <code>ymax</code>). If <code>--icol-z</code> is provided, it also includes <code>zmin</code> and <code>zmax</code>.</li>
+<li><code>prefix.z_hist.tsv</code>: a two-column tsv file containing the z histogram (<code>bin_start</code>, <code>count</code>) using unit-width bins aligned to integer boundaries. This file is only generated if <code>--icol-z</code> is specified.</li>
 <li><code>prefix.features.tsv</code>: a tsv file containing the feature names and their aggregated values. This file is only generated if <code>--icol-feature</code> is specified.</li>
 </ul>
 

@@ -8,31 +8,29 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/install/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/input/geojson-region/">
       
       
-        <link rel="prev" href="..">
+        <link rel="prev" href="../">
       
-      
-        <link rel="next" href="../workflows/">
       
       
         
       
       
-      <link rel="icon" href="../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
     
     
       
-        <title>Install - punkst</title>
+        <title>Region query - punkst</title>
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -51,7 +49,7 @@
       
     
     
-    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -76,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#installation-guide-for-punkst" class="md-skip">
+        <a href="#geojson-region-input" class="md-skip">
           Skip to content
         </a>
       
@@ -92,7 +90,7 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="punkst" class="md-header__button md-logo" aria-label="punkst" data-md-component="logo">
+    <a href="../.." title="punkst" class="md-header__button md-logo" aria-label="punkst" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Install
+              Region query
             
           </span>
         </div>
@@ -225,13 +223,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href=".." class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../.." class="md-tabs__link">
           
   
   
@@ -253,7 +249,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../workflows/" class="md-tabs__link">
+        <a href="../../workflows/" class="md-tabs__link">
           
   
   
@@ -275,7 +271,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../modules/" class="md-tabs__link">
+        <a href="../../modules/" class="md-tabs__link">
           
   
   
@@ -293,11 +289,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../input/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
           
   
   
@@ -339,7 +337,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="punkst" class="md-nav__button md-logo" aria-label="punkst" data-md-component="logo">
+    <a href="../.." title="punkst" class="md-nav__button md-logo" aria-label="punkst" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -366,8 +364,6 @@
       
   
   
-    
-  
   
   
     
@@ -383,23 +379,22 @@
     
     
       
-        
-        
-      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href=".." class="md-nav__link ">
+            <a href="../.." class="md-nav__link ">
               
   
   
@@ -417,13 +412,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_1" id="__nav_1_label" tabindex="">
+              <label class="md-nav__link " for="__nav_1" id="__nav_1_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -440,35 +435,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Install
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../install/" class="md-nav__link">
         
   
   
@@ -484,74 +454,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#installation-guide-for-punkst" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Installation Guide for punkst
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#build" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Build
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Build">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required-libraries" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required Libraries
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#build-options-for-performance-and-portability" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Build Options for Performance and Portability
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -598,7 +500,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../workflows/" class="md-nav__link ">
+            <a href="../../workflows/" class="md-nav__link ">
               
   
   
@@ -642,7 +544,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../workflows/multisample/" class="md-nav__link">
+      <a href="../../workflows/multisample/" class="md-nav__link">
         
   
   
@@ -718,7 +620,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../modules/" class="md-nav__link ">
+            <a href="../../modules/" class="md-nav__link ">
               
   
   
@@ -762,7 +664,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/pts2tiles/" class="md-nav__link">
+      <a href="../../modules/pts2tiles/" class="md-nav__link">
         
   
   
@@ -790,7 +692,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/tiles2hex/" class="md-nav__link">
+      <a href="../../modules/tiles2hex/" class="md-nav__link">
         
   
   
@@ -818,7 +720,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/lda4hex/" class="md-nav__link">
+      <a href="../../modules/lda4hex/" class="md-nav__link">
         
   
   
@@ -846,7 +748,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/pixel-decode/" class="md-nav__link">
+      <a href="../../modules/pixel-decode/" class="md-nav__link">
         
   
   
@@ -874,7 +776,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/de/" class="md-nav__link">
+      <a href="../../modules/de/" class="md-nav__link">
         
   
   
@@ -902,7 +804,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/visualization/" class="md-nav__link">
+      <a href="../../modules/visualization/" class="md-nav__link">
         
   
   
@@ -930,7 +832,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/coexp/" class="md-nav__link">
+      <a href="../../modules/coexp/" class="md-nav__link">
         
   
   
@@ -958,7 +860,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../modules/tileop/" class="md-nav__link">
+      <a href="../../modules/tileop/" class="md-nav__link">
         
   
   
@@ -990,6 +892,8 @@
       
   
   
+    
+  
   
   
     
@@ -1005,22 +909,23 @@
     
     
       
+        
+        
+      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../input/" class="md-nav__link ">
+            <a href="../" class="md-nav__link ">
               
   
   
@@ -1038,13 +943,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1061,10 +966,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../input/geojson-region/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Region query
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1080,6 +1012,92 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#accepted-top-level-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accepted top-level structures
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coordinate-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordinate requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#polygon-and-ring-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Polygon and ring requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validity-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validity handling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#boundary-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Boundary semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dimensionality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dimensionality
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1109,6 +1127,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -1117,10 +1137,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#installation-guide-for-punkst" class="md-nav__link">
+  <a href="#accepted-top-level-structures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Installation Guide for punkst
+        Accepted top-level structures
       
     </span>
   </a>
@@ -1128,41 +1148,57 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#build" class="md-nav__link">
+  <a href="#coordinate-requirements" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Build
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Build">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required-libraries" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required Libraries
+        Coordinate requirements
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#build-options-for-performance-and-portability" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#polygon-and-ring-requirements" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Build Options for Performance and Portability
+        Polygon and ring requirements
       
     </span>
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
+      
+        <li class="md-nav__item">
+  <a href="#validity-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validity handling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#boundary-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Boundary semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dimensionality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dimensionality
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1186,130 +1222,54 @@
   
 
 
-  <h1>Install</h1>
-
-<h2 id="installation-guide-for-punkst">Installation Guide for <strong>punkst</strong><a class="headerlink" href="#installation-guide-for-punkst" title="Permanent link">&para;</a></h2>
-<p>This guide walks you through building <strong>punkst</strong> on Linux and macOS, including environments without root access.</p>
-<hr />
-<h2 id="build">Build<a class="headerlink" href="#build" title="Permanent link">&para;</a></h2>
-<p>Prerequisites</p>
+<h1 id="geojson-region-input">GeoJSON Region Input<a class="headerlink" href="#geojson-region-input" title="Permanent link">&para;</a></h1>
+<p>This page describes the JSON / GeoJSON input format currently accepted by commands that use polygon-based region query.</p>
+<h2 id="accepted-top-level-structures">Accepted top-level structures<a class="headerlink" href="#accepted-top-level-structures" title="Permanent link">&para;</a></h2>
+<p>The parser accepts either standard GeoJSON objects or larger wrapper JSON objects that contain GeoJSON under nested <code>geometry</code> or <code>features</code> fields.</p>
+<p>Accepted cases:</p>
 <ul>
-<li>Git</li>
-<li>CMake: 3.15 to 3.23</li>
-<li>C++20 compiler* (GCC/Clang/MSVC with C++20 support)</li>
-<li>TBB, OpenCV</li>
+<li>a root <code>Polygon</code></li>
+<li>a root <code>MultiPolygon</code></li>
+<li>a root <code>Feature</code> whose geometry is <code>Polygon</code> or <code>MultiPolygon</code></li>
+<li>a root <code>FeatureCollection</code></li>
+<li>a wrapper JSON object that contains one of the above under a nested <code>geometry</code> field</li>
+<li>a wrapper JSON object that contains an array of features under a nested <code>features</code> field</li>
 </ul>
-<p>*We assume your compiler properly supports C++20. Consider updating your compiler if you encounter issues.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1) Clone the repository</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>git<span class="w"> </span>clone<span class="w"> </span>--recursive<span class="w"> </span>https://github.com/your-org/punkst.git
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nb">cd</span><span class="w"> </span>punkst
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># 2) Create and enter a build directory</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>mkdir<span class="w"> </span>build<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>build
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># 3) Configure</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>cmake<span class="w"> </span>..
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># 4) Build</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>cmake<span class="w"> </span>--build<span class="w"> </span>.<span class="w"> </span>--parallel<span class="w"> </span><span class="c1"># or make</span>
-</span></code></pre></div>
-<p>For single-config generators (for example Unix Makefiles and Ninja), <code>cmake ..</code> now defaults to a <code>Release</code> build to prioritize runtime performance.</p>
-<p>If you did not clone the submodule (Eigen) initially, you can do
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init
-</span></code></pre></div></p>
-<p>If an error occurs due to TBB not found, see below for installation options.</p>
-<p>If you installed some dependencies locally, you may need to specify their paths like
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cmake<span class="w"> </span>..<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>-DOpenCV_DIR<span class="o">=</span><span class="nv">$HOME</span>/.local/lib/cmake/opencv4<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>-DTBB_DIR<span class="o">=</span><span class="nv">$HOME</span>/user/opt/tbb/lib/cmake/tbb<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-DCMAKE_PREFIX_PATH<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/.local&quot;</span>
-</span></code></pre></div>
-(On mac, if CMake fails to locate OpenCV (installed with brew), pass: <code>-DOpenCV_DIR=$(brew --prefix opencv)/lib/cmake/opencv4</code> or wherever OpenCV is installed.)</p>
-<p>The <code>punkst</code> binary will be placed in <code>bin/</code> under the project root.</p>
-<p>Verifying the Build</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst/bin/punkst<span class="w"> </span>--help
-</span></code></pre></div>
-<p>You should see a message starting with
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Available Commands
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>The following commands are available:
-</span></code></pre></div></p>
-<h3 id="required-libraries">Required Libraries<a class="headerlink" href="#required-libraries" title="Permanent link">&para;</a></h3>
+<p>This means files exported by other tools may still work even if the root object is not itself a GeoJSON geometry, as long as the actual GeoJSON object is reachable by recursively following <code>geometry</code> and <code>features</code>.</p>
+<h2 id="coordinate-requirements">Coordinate requirements<a class="headerlink" href="#coordinate-requirements" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>TBB</strong></li>
+<li>coordinates are interpreted in 2D using the first two numeric values of each vertex: <code>[x, y]</code></li>
+<li>additional ordinates, if present, are ignored</li>
+<li>coordinates are interpreted in the same spatial coordinate system and units as the tiled input data</li>
 </ul>
-<p>System: <code>sudo apt-get install libtbb-dev</code> or <code>yum install tbb-devel</code> on linux and <code>brew install tbb</code> on macOS.</p>
-<p>Local: <a href="https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md">install oneTBB</a> (or find more information <a href="https://www.intel.com/content/www/us/en/docs/onetbb/get-started-guide/2022-2/overview.html">here</a>).</p>
-<!-- Local: `git clone` from [oneTBB](https://github.com/uxlfoundation/oneTBB) then build locally. -->
-<!-- (Building TBB from source takes a significant amount of time)
-```bash
-git clone https://github.com/oneapi-src/oneTBB.git
-mkdir oneTBB/build && cd oneTBB/build
-cmake ..  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$HOME/.local
-make -j$(nproc) && make install
-``` -->
-
+<h2 id="polygon-and-ring-requirements">Polygon and ring requirements<a class="headerlink" href="#polygon-and-ring-requirements" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>OpenCV</strong></li>
+<li>polygons may be convex or non-convex</li>
+<li>each ring must contain at least 4 coordinate tuples</li>
+<li>each coordinate tuple must contain at least two numeric values</li>
+<li>rings are expected to be closed</li>
 </ul>
-<p><code>sudo apt-get install libopencv-dev</code>or <code>sudo yum install opencv-devel</code> on linux, <code>brew install opencv</code> on macOS. See <a href="https://docs.opencv.org/4.x/d7/d9f/tutorial_linux_install.html">OpenCV installation guide</a> for more details on how to install from source.</p>
+<h2 id="validity-handling">Validity handling<a class="headerlink" href="#validity-handling" title="Permanent link">&para;</a></h2>
+<p>The query region is built from the union of all valid polygons found in the file.</p>
+<p>Current behavior:</p>
 <ul>
-<li>Other dependencies</li>
+<li>all rings are treated as filled areas</li>
+<li>holes are effectively ignored</li>
+<li>degenerate polygons with zero area are ignored</li>
+<li>self-intersecting polygons are ignored</li>
+<li>if the file contains both valid and invalid polygons, invalid polygons are skipped and valid polygons are still used</li>
+<li>the command fails only if no valid polygons remain after filtering</li>
 </ul>
-<table>
-<thead>
-<tr>
-<th>Library</th>
-<th>Ubuntu / Debian</th>
-<th>CentOS / RHEL</th>
-<th>macOS (Homebrew)</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>zlib</strong></td>
-<td><code>sudo apt-get install zlib1g-dev</code></td>
-<td><code>sudo yum install zlib-devel</code></td>
-<td><code>brew install zlib</code></td>
-</tr>
-<tr>
-<td><strong>BZip2</strong></td>
-<td><code>sudo apt-get install libbz2-dev</code></td>
-<td><code>sudo yum install bzip2-devel</code></td>
-<td><code>brew install bzip2</code></td>
-</tr>
-<tr>
-<td><strong>LibLZMA</strong></td>
-<td><code>sudo apt-get install liblzma-dev</code></td>
-<td><code>sudo yum install xz-devel</code></td>
-<td><code>brew install xz</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="build-options-for-performance-and-portability">Build Options for Performance and Portability<a class="headerlink" href="#build-options-for-performance-and-portability" title="Permanent link">&para;</a></h3>
-<p>The default options prioritizes runtime performance (<code>Release</code>, <code>ENABLE_LTO=ON</code>, <code>ENABLE_NATIVE_ARCH=ON</code>). You can customize the build with the following CMake flags:</p>
-<table>
-<thead>
-<tr>
-<th style="text-align: left;">Goal</th>
-<th style="text-align: left;">CMake Command</th>
-<th style="text-align: left;">Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align: left;"><strong>Default / Local Performance</strong></td>
-<td style="text-align: left;"><code>cmake ..</code></td>
-<td style="text-align: left;">Defaults to <code>Release</code> and enables <code>-march=native</code> when supported</td>
-</tr>
-<tr>
-<td style="text-align: left;"><strong>Maximum Portability</strong></td>
-<td style="text-align: left;"><code>cmake -DENABLE_PORTABLE_BUILD=ON ..</code></td>
-<td style="text-align: left;">Disables architecture-specific tuning flags for broader CPU compatibility</td>
-</tr>
-<tr>
-<td style="text-align: left;"><strong>Modern CPU Fleet</strong></td>
-<td style="text-align: left;"><code>cmake -DENABLE_NATIVE_ARCH=OFF -DENABLE_X86_64_V3=ON ..</code></td>
-<td style="text-align: left;">Targets x86-64-v3 (Haswell/2013+), useful when deploying to a known modern x86_64 baseline</td>
-</tr>
-</tbody>
-</table>
+<h2 id="boundary-semantics">Boundary semantics<a class="headerlink" href="#boundary-semantics" title="Permanent link">&para;</a></h2>
+<ul>
+<li>points on polygon boundaries are treated as inside</li>
+</ul>
+<h2 id="dimensionality">Dimensionality<a class="headerlink" href="#dimensionality" title="Permanent link">&para;</a></h2>
+<ul>
+<li>polygons are always interpreted in 2D</li>
+<li>if the tiled point data is 3D, region membership is tested using only <code>(x, y)</code></li>
+<li>accepted output records keep their original <code>z</code> coordinate and any other original fields unchanged</li>
+</ul>
 
 
 
@@ -1345,7 +1305,7 @@ make -j$(nproc) && make install
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href=".." class="md-footer__link md-footer__link--prev" aria-label="Previous: Intro">
+          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: Overview">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1355,27 +1315,11 @@ make -j$(nproc) && make install
                 Previous
               </span>
               <div class="md-ellipsis">
-                Intro
+                Overview
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../workflows/" class="md-footer__link md-footer__link--next" aria-label="Next: Quickstart">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Quickstart
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
         
       </nav>
     
@@ -1405,12 +1349,12 @@ make -j$(nproc) && make install
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.annotate", "content.code.copy", "content.tooltips", "navigation.expand", "navigation.footer", "navigation.indexes", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tooltips", "navigation.expand", "navigation.footer", "navigation.indexes", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
-        <script src="../javascripts/mathjax.js"></script>
+        <script src="../../javascripts/mathjax.js"></script>
       
         <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
       
