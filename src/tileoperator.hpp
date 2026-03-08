@@ -133,10 +133,12 @@ public:
     int32_t query(float qxmin, float qxmax, float qymin, float qymax);
 
     // Return -1 for EOF, 0 for parse error, 1 for success
-    int32_t next(PixTopProbs<float>& out, bool rawCoord = false);
+    // w/ dimension (2<->3) conversion & w/o coord scaling
     int32_t next(PixTopProbs<int32_t>& out);
-    int32_t next(PixTopProbs3D<float>& out, bool rawCoord = false);
     int32_t next(PixTopProbs3D<int32_t>& out);
+    // (if rawCoord = false) int (pixel) ->float (world) conversion
+    int32_t next(PixTopProbs<float>& out, bool rawCoord = false);
+    int32_t next(PixTopProbs3D<float>& out, bool rawCoord = false);
 
     void printIndex() const;
 
@@ -222,6 +224,10 @@ private:
     bool isTextGzipInput() const { return ends_with(dataFile_, ".gz"); }
     bool isStreamingTextInput() const { return isTextInput() && (isTextStdinInput() || isTextGzipInput()); }
     bool canSeekTextInput() const { return isTextInput() && !isStreamingTextInput(); }
+    bool storesIntegerCoordinates() const { return (mode_ & 0x4) != 0; }
+    bool storesFloatCoordinates() const { return (mode_ & 0x4) == 0; }
+    bool rawCoordinatesArePixels() const { return (mode_ & 0x2) != 0; }
+    void validateCoordinateEncoding() const;
     void closeTextStream() {
         gzDataStream_.reset();
         if (dataStream_.is_open()) {
@@ -240,23 +246,47 @@ private:
     void loadIndexLegacy(const std::string& indexFile);
     // Jump to the beginning of a block
     void openBlock(TileInfo& blk);
+
+    /* Helpers for parsing a record */
     // Get the next record within the bounded query region
     int32_t nextBounded(PixTopProbs<float>& out, bool rawCoord = false);
     int32_t nextBounded(PixTopProbs<int32_t>& out);
     int32_t nextBounded(PixTopProbs3D<float>& out, bool rawCoord = false);
     int32_t nextBounded(PixTopProbs3D<int32_t>& out);
-    // Parse a line to extract factor results
+    // Parse one text line (without coordinate scaling)
     bool parseLine(const std::string& line, PixTopProbs<float>& R) const;
     bool parseLine(const std::string& line, PixTopProbs<int32_t>& R) const;
     bool parseLine(const std::string& line, PixTopProbs3D<float>& R) const;
     bool parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const;
+    // Wrapper of parseLine, w/ dimension (2<->3) & w/o coord scaling
+    bool decodeTextRecord2DInt(const std::string& line, PixTopProbs<int32_t>& out) const;
+    bool decodeTextRecord3DInt(const std::string& line, PixTopProbs3D<int32_t>& out) const;
+    // Wrapper of parseLine, with dimension (2<->3) and
+    //       (if rawCoord = false) int (pixel) ->float (world) conversion
+    bool decodeTextRecord2D(const std::string& line, PixTopProbs<float>& out,
+        bool rawCoord = false) const;
+    bool decodeTextRecord3D(const std::string& line, PixTopProbs3D<float>& out,
+        bool rawCoord = false) const;
+    // Read one binary record, w/ dimension (2<->3) & w/o coord scaling
+    bool readBinaryRecord2DInt(std::istream& dataStream, PixTopProbs<int32_t>& out) const;
+    bool readBinaryRecord3DInt(std::istream& dataStream, PixTopProbs3D<int32_t>& out) const;
+    // Read one binary record, with dimension (2<->3) and
+    //        (if rawCoord = false) int (pixel) ->float (world) conversion
+    bool readBinaryRecord2D(std::istream& dataStream, PixTopProbs<float>& out,
+        bool rawCoord = false) const;
+    bool readBinaryRecord3D(std::istream& dataStream, PixTopProbs3D<float>& out,
+        bool rawCoord = false) const;
+    // Read one record and convert coordinates to integer pixel space.
+    bool readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos, int32_t& recX, int32_t& recY, TopProbs& rec) const;
+    bool readNextRecord3DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos, int32_t& recX, int32_t& recY, int32_t& recZ, TopProbs& rec) const;
+    // Parse only 2 coordinates with int->float conversion
+    // (store world coordinates regardless of the input data type)
     void decodeBinaryXY(const char* recBuf, float& x, float& y) const;
-    // Read one 2D record and convert coordinates to integer pixel space.
-    bool readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos,
-        int32_t& recX, int32_t& recY, TopProbs& rec) const;
 
+    // Impl for reorgTiles
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
 
+    // Impl for merge
     void mergeTiles2D(const std::set<TileKey>& commonTiles,
         const std::vector<TileOperator*>& opPtrs,
         const std::vector<uint32_t>& k2keep,
@@ -269,6 +299,7 @@ private:
         bool binaryOutput,
         FILE* fp, int fdMain, int fdIndex,
         long& currentOffset);
+    // Impl for probDot
     void probDotTiles2D(const std::set<TileKey>& commonTiles,
         const std::vector<TileOperator*>& opPtrs,
         const std::vector<uint32_t>& k2keep,
@@ -285,6 +316,7 @@ private:
         std::vector<std::map<std::pair<int32_t, int32_t>, double>>& internalDots,
         std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>>& crossDots,
         size_t& count);
+    // Impl for annotate
     void annotateTiles2D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y,
         uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);

@@ -17,6 +17,10 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     int32_t minCountTrain = 20, minCountFeature = 1;
     double defaultWeight = 1.;
     bool transform = false;
+    bool append_topk = false;
+    std::string topk_colname = "topK";
+    std::string topp_colname = "topP";
+    bool drop_random_key = false;
     bool sort_topics = false;
     bool reproducible_init = false;
     // --- Algorithm Parameters ---
@@ -58,6 +62,10 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("in-meta", "Metadata file", metaFile)
       .add_option("out-prefix", "Output prefix for model and results files", outPrefix, true)
       .add_option("transform", "Transform data to topic space after training", transform)
+      .add_option("append-topk", "Append topK/topP columns to transform output", append_topk)
+      .add_option("topk-colname", "Column name for topK output", topk_colname)
+      .add_option("topp-colname", "Column name for topP output", topp_colname)
+      .add_option("drop-random-key", "Drop random_key column from transform output", drop_random_key)
       .add_option("sort-topics", "Sort topics by weight after training", sort_topics);
 
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
@@ -310,6 +318,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     }
 
     if (transform) {
+        append_topk = true;
+        model_runner->setTransformOutputOptions(append_topk, topk_colname, topp_colname, drop_random_key);
         if (use_10x) {
             model_runner->fitAndWriteToFile10X(*dge_ptr, outPrefix, batchSize);
         } else {

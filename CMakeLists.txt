@@ -140,6 +140,7 @@ set(SOURCE_FILES
     src/region_query.cpp
     script/de_chisq.cpp
     src/tileoperator.hpp
+    src/tileoperator_io.cpp
     src/tileoperator_base.cpp
     src/tileoperator_inner.cpp
     src/tileoperator.cpp

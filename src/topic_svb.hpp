@@ -9,6 +9,14 @@
  */
 class TopicModelWrapper {
 public:
+    struct TransformOutputOptions {
+        bool appendTopK = false;
+        bool dropRandomKey = false;
+        int32_t randomKeyIndex = -1;
+        std::string topKColname = "topK";
+        std::string topPColname = "topP";
+    };
+
     TopicModelWrapper(HexReader& _reader, int32_t modal = 0, int32_t verbose = 0) : modal(modal), verbose_(verbose) {
         reader = std::move(_reader);
         if (modal >= reader.getNmodal()) {
@@ -42,11 +50,22 @@ public:
     }
     void printTopicAbundance();
     void writeModelToFile(const std::string& outFile);
-    void writeModelHeader(std::ofstream& outFileStream);
+    void writeModelHeader(std::ostream& outFileStream);
+    void writeUnitHeader(std::ostream& outFileStream);
+    void setTransformOutputOptions(bool appendTopK,
+                                   const std::string& topKColname = "topK",
+                                   const std::string& topPColname = "topP",
+                                   bool dropRandomKey = false) {
+        transformOutputOptions_.appendTopK = appendTopK;
+        transformOutputOptions_.dropRandomKey = dropRandomKey;
+        transformOutputOptions_.randomKeyIndex = dropRandomKey ? reader.getIndex("random_key") : -1;
+        transformOutputOptions_.topKColname = topKColname.empty() ? "topK" : topKColname;
+        transformOutputOptions_.topPColname = topPColname.empty() ? "topP" : topPColname;
+    }
 
     virtual int32_t getNumTopics() const = 0;
     virtual void sortTopicsByWeight() = 0;
-    virtual void writeUnitHeader(std::ofstream& outFileStream) = 0;
+    virtual void getUnitHeaderCols(std::vector<std::string>& outCols) = 0;
     virtual const RowMajorMatrixXd& get_model_matrix() const = 0;
     virtual RowMajorMatrixXd copy_model_matrix() const = 0;
     virtual const std::vector<std::string>& get_topic_names() = 0;
@@ -68,6 +87,7 @@ protected:
     std::vector<Document> minibatch;
     int32_t batchSize;
     int32_t verbose_;
+    TransformOutputOptions transformOutputOptions_;
     std::vector<Document> dge_docs_cache_;
     std::vector<int32_t> dge_barcode_idx_cache_;
     std::vector<int32_t> dge_train_idx_cache_;
@@ -187,11 +207,13 @@ public:
         }
         outFileStream.close();
     }
-    void writeUnitHeader(std::ofstream& outFileStream) override {
+    void getUnitHeaderCols(std::vector<std::string>& outCols) override {
+        outCols.clear();
         if (lda->get_algorithm() == InferenceType::SVB_DN) {
-            outFileStream << "Background\t";
+            outCols.push_back("Background");
         }
-        writeModelHeader(outFileStream);
+        const auto& topicNames = get_topic_names();
+        outCols.insert(outCols.end(), topicNames.begin(), topicNames.end());
     }
 
     void set_background_prior(std::string& bgPriorFile, double a0, double b0, double scale = 1., bool fixed = false) {
@@ -414,8 +436,8 @@ public:
     void sortTopicsByWeight() override {
         if (hdp) hdp->sort_topics();
     }
-    void writeUnitHeader(std::ofstream& outFileStream) override {
-        writeModelHeader(outFileStream);
+    void getUnitHeaderCols(std::vector<std::string>& outCols) override {
+        outCols = get_topic_names();
     }
     void filterTopics(double threshold, double coverage) override {
         if (!initialized || !hdp) {

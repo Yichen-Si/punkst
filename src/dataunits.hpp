@@ -244,6 +244,9 @@ public:
     int32_t getOffset() const {
         return offset_data;
     }
+    const std::vector<std::string>& getInfoHeaderCols() const {
+        return header_info;
+    }
     void getInfoHeaderStr(std::string &header) const {
         header.clear();
         for (size_t i = 0; i < header_info.size(); ++i) {

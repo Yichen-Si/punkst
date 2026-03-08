@@ -369,6 +369,32 @@ PreparedRegionMask2D prepareRegionFromPaths(const Paths64& paths,
     return region;
 }
 
+PreparedRegionMask2D prepareRegionFromRectangle(const Rectangle<float>& rect,
+                                                int32_t tileSize,
+                                                int64_t scale) {
+    if (!rect.proper()) {
+        throw std::runtime_error("Rectangle region must be proper");
+    }
+    if (scale <= 0) {
+        scale = kDefaultScale;
+    }
+    Path64 ring;
+    ring.reserve(4);
+    ring.emplace_back(
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.xmin) * static_cast<double>(scale))),
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.ymin) * static_cast<double>(scale))));
+    ring.emplace_back(
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.xmax) * static_cast<double>(scale))),
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.ymin) * static_cast<double>(scale))));
+    ring.emplace_back(
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.xmax) * static_cast<double>(scale))),
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.ymax) * static_cast<double>(scale))));
+    ring.emplace_back(
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.xmin) * static_cast<double>(scale))),
+        static_cast<int64_t>(std::llround(static_cast<double>(rect.ymax) * static_cast<double>(scale))));
+    return prepareRegionFromPaths(Paths64{std::move(ring)}, tileSize, scale);
+}
+
 PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
                                            int32_t tileSize,
                                            int64_t scale) {

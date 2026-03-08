@@ -125,6 +125,24 @@ Alternatively, you can specify the three files directly by `--in-barcodes`, `--i
 
 `--transform` - Transform the data to the LDA space after training. If set, an output file `<prefix>.results.tsv` will be created. For 10X input, identifiers are 0-based barcode indices (in the input `barcodes.tsv.gz`).
 
+With `--transform`, the result table now includes two appended columns by default:
+- `topK`: topic label (column name) with maximum probability in that row.
+- `topP`: the corresponding maximum probability.
+
+For custom-format input, the output header is:
+- `#<header_info...>\t<topic columns...>\ttopK\ttopP`
+
+For 10X input, the output header is:
+- `#barcode\t<topic columns...>\ttopK\ttopP`
+
+`--append-topk` - Explicitly request appending `topK` and `topP` columns in transform output. (Current behavior: `--transform` already enables this by default.)
+
+`--topk-colname` - Column name for the top-topic label field. Default: `topK`.
+
+`--topp-colname` - Column name for the top-topic probability field. Default: `topP`.
+
+`--drop-random-key` - For custom-format input, drop `random_key` from carried-over prefix columns in `<prefix>.results.tsv` when present in `header_info`. Default: off.
+
 `--projection-only` - Transform the data using the prior model without further training. Implies `--transform`.
 
 `--sort-topics` - Order the topics with decreasing abundance.

@@ -1,6 +1,96 @@
 #include "topic_svb.hpp"
 #include <algorithm>
+#include <iomanip>
 #include <random>
+
+namespace {
+
+bool writeColumnsWithOptionalDrop(std::ostream& os,
+                                  const std::vector<std::string>& cols,
+                                  int32_t dropIdx) {
+    bool wrote = false;
+    for (int32_t i = 0; i < static_cast<int32_t>(cols.size()); ++i) {
+        if (i == dropIdx) {
+            continue;
+        }
+        if (wrote) {
+            os << '\t';
+        }
+        os << cols[i];
+        wrote = true;
+    }
+    return wrote;
+}
+
+bool writeTabLineWithOptionalDrop(std::ostream& os,
+                                  const std::string& line,
+                                  int32_t dropIdx) {
+    if (line.empty()) {
+        return false;
+    }
+    if (dropIdx < 0) {
+        os << line;
+        return true;
+    }
+
+    bool wrote = false;
+    size_t start = 0;
+    int32_t idx = 0;
+    while (true) {
+        size_t pos = line.find('\t', start);
+        std::string_view tok;
+        if (pos == std::string::npos) {
+            tok = std::string_view(line).substr(start);
+        } else {
+            tok = std::string_view(line).substr(start, pos - start);
+        }
+        if (idx != dropIdx) {
+            if (wrote) {
+                os << '\t';
+            }
+            os << tok;
+            wrote = true;
+        }
+        if (pos == std::string::npos) {
+            break;
+        }
+        start = pos + 1;
+        ++idx;
+    }
+    return wrote;
+}
+
+void writeTopicVectorWithTopK(std::ostream& os,
+                              const Eigen::MatrixXd& doc_topic,
+                              int32_t row,
+                              const std::vector<std::string>& unitCols,
+                              const TopicModelWrapper::TransformOutputOptions& outOpts) {
+    os << std::fixed << std::setprecision(4);
+    os << doc_topic(row, 0);
+    int32_t imax = 0;
+    double maxP = doc_topic(row, 0);
+    const int32_t K = static_cast<int32_t>(doc_topic.cols());
+    for (int32_t k = 1; k < K; ++k) {
+        const double p = doc_topic(row, k);
+        os << "\t" << p;
+        if (p > maxP) {
+            maxP = p;
+            imax = k;
+        }
+    }
+    if (outOpts.appendTopK) {
+        const std::string topLabel =
+            (imax >= 0 && imax < static_cast<int32_t>(unitCols.size())) ? unitCols[imax] : std::to_string(imax);
+        os << "\t" << topLabel << "\t";
+        std::ios::fmtflags oldFlags = os.flags();
+        std::streamsize oldPrec = os.precision();
+        os << std::defaultfloat << std::setprecision(5) << maxP;
+        os.flags(oldFlags);
+        os.precision(oldPrec);
+    }
+}
+
+} // namespace
 
 int32_t TopicModelWrapper::trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits) {
     if (!initialized) error("Model must be initialized before training");
@@ -109,11 +199,25 @@ int32_t TopicModelWrapper::trainOnline10X(int32_t _bsize, int32_t maxUnits, int3
     return ntot;
 }
 
-void TopicModelWrapper::writeModelHeader(std::ofstream& outFileStream) {
+void TopicModelWrapper::writeModelHeader(std::ostream& outFileStream) {
     const auto& t_names = get_topic_names();
     outFileStream << t_names[0];
     for (size_t i = 1; i < t_names.size(); ++i) {
         outFileStream << "\t" << t_names[i];
+    }
+    outFileStream << "\n";
+}
+
+void TopicModelWrapper::writeUnitHeader(std::ostream& outFileStream) {
+    std::vector<std::string> cols;
+    getUnitHeaderCols(cols);
+    if (cols.empty()) {
+        outFileStream << "\n";
+        return;
+    }
+    outFileStream << cols[0];
+    for (size_t i = 1; i < cols.size(); ++i) {
+        outFileStream << "\t" << cols[i];
     }
     outFileStream << "\n";
 }
@@ -146,10 +250,26 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
     std::ofstream outFileStream(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
 
-    std::string header;
-    reader.getInfoHeaderStr(header);
-    outFileStream << "#" << header << "\t";
-    writeUnitHeader(outFileStream);
+    const auto& infoCols = reader.getInfoHeaderCols();
+    std::vector<std::string> unitCols;
+    getUnitHeaderCols(unitCols);
+    outFileStream << "#";
+    bool wroteAny = writeColumnsWithOptionalDrop(outFileStream, infoCols, transformOutputOptions_.randomKeyIndex);
+    for (const auto& c : unitCols) {
+        if (wroteAny) {
+            outFileStream << "\t";
+        }
+        outFileStream << c;
+        wroteAny = true;
+    }
+    if (transformOutputOptions_.appendTopK) {
+        if (wroteAny) {
+            outFileStream << "\t";
+        }
+        outFileStream << transformOutputOptions_.topKColname
+                      << "\t" << transformOutputOptions_.topPColname;
+    }
+    outFileStream << "\n";
 
     bool fileopen = true;
     Eigen::MatrixXd pseudobulk;
@@ -163,12 +283,11 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
             pseudobulk = Eigen::MatrixXd::Zero(M_, doc_topic.cols());
         }
         for (int i = 0; i < minibatch.size(); ++i) {
-            outFileStream << idens[i] << std::fixed << std::setprecision(4);
-            if (idens[i].size() > 0) outFileStream << "\t";
-            outFileStream << doc_topic(i, 0);
-            for (int k = 1; k < doc_topic.cols(); ++k) {
-                outFileStream << "\t" << doc_topic(i, k);
+            bool wroteInfo = writeTabLineWithOptionalDrop(outFileStream, idens[i], transformOutputOptions_.randomKeyIndex);
+            if (wroteInfo) {
+                outFileStream << "\t";
             }
+            writeTopicVectorWithTopK(outFileStream, doc_topic, i, unitCols, transformOutputOptions_);
             outFileStream << "\n";
             // Update pseudobulk
             Document& doc = minibatch[i];
@@ -208,8 +327,17 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
     std::ofstream outFileStream(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
 
-    outFileStream << "#barcode\t";
-    writeUnitHeader(outFileStream);
+    std::vector<std::string> unitCols;
+    getUnitHeaderCols(unitCols);
+    outFileStream << "#barcode";
+    for (const auto& c : unitCols) {
+        outFileStream << "\t" << c;
+    }
+    if (transformOutputOptions_.appendTopK) {
+        outFileStream << "\t" << transformOutputOptions_.topKColname
+                      << "\t" << transformOutputOptions_.topPColname;
+    }
+    outFileStream << "\n";
 
     Eigen::MatrixXd pseudobulk;
     std::vector<Document> minibatch_local;
@@ -239,12 +367,8 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
                 pseudobulk = Eigen::MatrixXd::Zero(M_, doc_topic.cols());
             }
             for (int i = 0; i < minibatch_local.size(); ++i) {
-                outFileStream << idens[i] << std::fixed << std::setprecision(4);
-                if (idens[i].size() > 0) outFileStream << "\t";
-                outFileStream << doc_topic(i, 0);
-                for (int k = 1; k < doc_topic.cols(); ++k) {
-                    outFileStream << "\t" << doc_topic(i, k);
-                }
+                outFileStream << idens[i] << "\t";
+                writeTopicVectorWithTopK(outFileStream, doc_topic, i, unitCols, transformOutputOptions_);
                 outFileStream << "\n";
                 Document& doc = minibatch_local[i];
                 for (int j = 0; j < doc.ids.size(); ++j) {
@@ -286,12 +410,8 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
                 pseudobulk = Eigen::MatrixXd::Zero(M_, doc_topic.cols());
             }
             for (int i = 0; i < minibatch_local.size(); ++i) {
-                outFileStream << idens[i] << std::fixed << std::setprecision(4);
-                if (idens[i].size() > 0) outFileStream << "\t";
-                outFileStream << doc_topic(i, 0);
-                for (int k = 1; k < doc_topic.cols(); ++k) {
-                    outFileStream << "\t" << doc_topic(i, k);
-                }
+                outFileStream << idens[i] << "\t";
+                writeTopicVectorWithTopK(outFileStream, doc_topic, i, unitCols, transformOutputOptions_);
                 outFileStream << "\n";
                 Document& doc = minibatch_local[i];
                 for (int j = 0; j < doc.ids.size(); ++j) {

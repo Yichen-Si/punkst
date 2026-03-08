@@ -22,7 +22,103 @@ struct RegionTileResult {
     std::string textData;
 };
 
+template<typename Rec, typename ReadTextLineFn, typename DecodeTextFn>
+int32_t nextTextRecordImpl(bool& done,
+    ReadTextLineFn&& readNextTextLine,
+    DecodeTextFn&& decodeText,
+    Rec& out) {
+    std::string line;
+    while (true) {
+        if (!readNextTextLine(line)) {
+            done = true;
+            return -1;
+        }
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        return decodeText(line, out) ? 1 : 0;
+    }
+}
+
+template<typename Rec, typename OpenBlockFn, typename ReadBinaryFn, typename ToWorldFn>
+int32_t nextBoundedBinaryRecordImpl(bool& done, int32_t& idxBlock, uint64_t& pos,
+    std::vector<TileInfo>& blocks, uint32_t recordSize, const Rectangle<float>& queryBox,
+    OpenBlockFn&& openBlock, ReadBinaryFn&& readBinary, ToWorldFn&& toWorld, Rec& out) {
+    if (done || idxBlock < 0) {
+        return -1;
+    }
+    while (true) {
+        auto& blk = blocks[idxBlock];
+        if (pos >= blk.idx.ed) {
+            if (++idxBlock >= static_cast<int32_t>(blocks.size())) {
+                done = true;
+                return -1;
+            }
+            openBlock(blocks[idxBlock]);
+            continue;
+        }
+        readBinary(out);
+        pos += recordSize;
+        if (blk.contained) {
+            return 1;
+        }
+        const auto xy = toWorld(out);
+        if (queryBox.contains(xy.first, xy.second)) {
+            return 1;
+        }
+    }
+}
+
+template<typename Rec, typename ReadTextLineFn, typename OpenBlockFn, typename DecodeTextFn, typename ToWorldFn>
+int32_t nextBoundedTextRecordImpl(bool& done, int32_t& idxBlock, uint64_t& pos,
+    std::vector<TileInfo>& blocks, const Rectangle<float>& queryBox,
+    ReadTextLineFn&& readNextTextLine, OpenBlockFn&& openBlock,
+    DecodeTextFn&& decodeText, ToWorldFn&& toWorld, Rec& out) {
+    if (done || idxBlock < 0) {
+        return -1;
+    }
+    std::string line;
+    while (true) {
+        auto& blk = blocks[idxBlock];
+        if (pos >= blk.idx.ed || !readNextTextLine(line)) {
+            if (++idxBlock >= static_cast<int32_t>(blocks.size())) {
+                done = true;
+                return -1;
+            }
+            openBlock(blocks[idxBlock]);
+            continue;
+        }
+        pos += line.size() + 1;
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        if (!decodeText(line, out)) {
+            return 0;
+        }
+        if (blk.contained) {
+            return 1;
+        }
+        const auto xy = toWorld(out);
+        if (queryBox.contains(xy.first, xy.second)) {
+            return 1;
+        }
+    }
+}
+
 } // namespace
+
+void TileOperator::validateCoordinateEncoding() const {
+    if (storesIntegerCoordinates()) {
+        if (!rawCoordinatesArePixels()) {
+            error("%s: Integer coordinate storage requires mode & 0x2 so raw records are pixel coordinates", __func__);
+        }
+        if (formatInfo_.pixelResolution <= 0.0f) {
+            error("%s: Integer coordinate storage requires positive pixelResolution", __func__);
+        }
+    } else if (rawCoordinatesArePixels()) {
+        error("%s: Float coordinate storage requires mode & 0x2 == 0 so raw records are world coordinates", __func__);
+    }
+}
 
 void TileOperator::loadIndex(const std::string& indexFile) {
     std::ifstream in(indexFile, std::ios::binary);
@@ -43,11 +139,11 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     mode_ &= 0xFFFF;
     coord_dim_ = (mode_ & 0x10) ? 3 : 2;
     if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
-    if (mode_ & 0x2) {assert((mode_ & 0x4) != 0 && (formatInfo_.pixelResolution > 0.0f));}
+    validateCoordinateEncoding();
     if ((mode_ & 0x20u) && coord_dim_ == 3) {assert(formatInfo_.pixelResolutionZ > 0.0f);}
-    if (mode_ & 0x1) {assert(formatInfo_.recordSize > 0);}
     k_ = formatInfo_.parseKvec(kvec_);
     if (mode_ & 0x1) {
+        assert(formatInfo_.recordSize > 0);
         size_t kBytes = k_ * (sizeof(int32_t) + sizeof(float));
         size_t cBytes = (mode_ & 0x4) ? sizeof(int32_t) : sizeof(float);
         if (formatInfo_.recordSize != kBytes + coord_dim_ * cBytes) {
@@ -315,25 +411,12 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
                 continue;
             }
 
-            float x = 0.0f;
-            float y = 0.0f;
-            if (coord_dim_ == 3) {
-                PixTopProbs3D<float> rec;
-                if (!parseLine(line, rec)) {
-                    error("%s: Invalid text record", __func__);
-                }
-                x = rec.x;
-                y = rec.y;
-            } else {
-                PixTopProbs<float> rec;
-                if (!parseLine(line, rec)) {
-                    error("%s: Invalid text record", __func__);
-                }
-                x = rec.x;
-                y = rec.y;
+            PixTopProbs<float> rec;
+            if (!decodeTextRecord2D(line, rec, false)) {
+                error("%s: Invalid text record", __func__);
             }
 
-            if (!region.containsPoint(x, y, &tile)) {
+            if (!region.containsPoint(rec.x, rec.y, &tile)) {
                 continue;
             }
             result.textData += line;
@@ -466,242 +549,14 @@ void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, floa
     if (qxmin >= qxmax || qymin >= qymax) {
         error("%s: Invalid rectangle [%.3f, %.3f) x [%.3f, %.3f)", __func__, qxmin, qxmax, qymin, qymax);
     }
-    const Rectangle<float> queryRect(qxmin, qymin, qxmax, qymax);
-    const int32_t nSelected = query(qxmin, qxmax, qymin, qymax);
-    if (nSelected <= 0) {
-        warning("%s: No indexed blocks intersect the queried region", __func__);
-        return;
+    PreparedRegionMask2D region;
+    try {
+        region = prepareRegionFromRectangle(Rectangle<float>(qxmin, qymin, qxmax, qymax),
+            formatInfo_.tileSize);
+    } catch (const std::exception& ex) {
+        error("%s: %s", __func__, ex.what());
     }
-    notice("%s: Found %d intersecting tiles", __func__, nSelected);
-    const std::vector<TileInfo>& selected = blocks_;
-    const int32_t outTileSize = formatInfo_.tileSize;
-    if (outTileSize <= 0) {
-        error("%s: Invalid tileSize=%d; cannot write regular tiled output", __func__, outTileSize);
-    }
-
-    const bool binaryInput = (mode_ & 0x1) != 0;
-    const std::string outData = outPrefix + (binaryInput ? ".bin" : ".tsv");
-    const std::string outIndex = outPrefix + ".index";
-
-    std::ifstream in(dataFile_, std::ios::binary);
-    if (!in.is_open()) {
-        error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
-    }
-    IndexHeader outHeader = formatInfo_;
-    if (outHeader.magic != PUNKST_INDEX_MAGIC) {
-        outHeader = IndexHeader();
-        outHeader.tileSize = formatInfo_.tileSize;
-        outHeader.pixelResolution = formatInfo_.pixelResolution;
-        outHeader.pixelResolutionZ = outHeader.pixelResolution;
-        outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
-        if (!kvec_.empty()) {
-            outHeader.packKvec(kvec_);
-        } else if (k_ > 0) {
-            outHeader.packKvec(std::vector<uint32_t>{static_cast<uint32_t>(k_)});
-        }
-    }
-    outHeader.magic = PUNKST_INDEX_MAGIC;
-    outHeader.xmin = queryRect.xmin;
-    outHeader.xmax = queryRect.xmax;
-    outHeader.ymin = queryRect.ymin;
-    outHeader.ymax = queryRect.ymax;
-
-    Rectangle<float> outBox;
-    std::ofstream out;
-    std::ofstream idxOut;
-    bool outputOpen = false;
-    uint64_t currentOffset = 0;
-    size_t nEntries = 0;
-    auto ensureOutputReady = [&]() {
-        if (outputOpen) {
-            return;
-        }
-        out.open(outData, std::ios::binary);
-        if (!out.is_open()) {
-            error("%s: Error opening output data file: %s", __func__, outData.c_str());
-        }
-        idxOut.open(outIndex, std::ios::binary);
-        if (!idxOut.is_open()) {
-            error("%s: Error opening output index file: %s", __func__, outIndex.c_str());
-        }
-        if (!binaryInput) {
-            if (headerLine_.empty()) {
-                error("%s: TSV input is missing a parsed header line", __func__);
-            }
-            out.write(headerLine_.data(), static_cast<std::streamsize>(headerLine_.size()));
-            if (!out) {
-                error("%s: Error writing header to %s", __func__, outData.c_str());
-            }
-        }
-        idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
-        if (!idxOut) {
-            error("%s: Error writing placeholder header to %s", __func__, outIndex.c_str());
-        }
-        currentOffset = static_cast<uint64_t>(out.tellp());
-        outputOpen = true;
-    };
-    for (const auto& blk : selected) {
-        TileKey tile{
-            blk.row,
-            blk.col
-        };
-        if (tile.row == std::numeric_limits<int32_t>::lowest() ||
-            tile.col == std::numeric_limits<int32_t>::lowest()) {
-            tile.row = static_cast<int32_t>(std::floor(static_cast<float>(blk.idx.ymin) / outTileSize));
-            tile.col = static_cast<int32_t>(std::floor(static_cast<float>(blk.idx.xmin) / outTileSize));
-        }
-        IndexEntryF newEntry(tile.row, tile.col);
-        tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, outTileSize);
-        newEntry.st = currentOffset;
-        newEntry.ed = currentOffset;
-        newEntry.n = 0;
-
-        if (blk.contained) {
-            if (blk.idx.n == 0 || blk.idx.ed <= blk.idx.st) {
-                continue;
-            }
-            ensureOutputReady();
-            newEntry.st = currentOffset;
-            newEntry.ed = currentOffset;
-            if (!copy_stream_range(in, out, blk.idx.st, blk.idx.ed)) {
-                error("%s: Error copying input bytes from %" PRIu64 " to %" PRIu64, __func__, blk.idx.st, blk.idx.ed);
-            }
-            const uint64_t copied = blk.idx.ed - blk.idx.st;
-            currentOffset += copied;
-            newEntry.ed = currentOffset;
-            newEntry.n = blk.idx.n;
-            idxOut.write(reinterpret_cast<const char*>(&newEntry), sizeof(newEntry));
-            if (!idxOut) {
-                error("%s: Error writing index entry", __func__);
-            }
-            outBox.extendToInclude(Rectangle<float>(
-                static_cast<float>(newEntry.xmin), static_cast<float>(newEntry.ymin),
-                static_cast<float>(newEntry.xmax), static_cast<float>(newEntry.ymax)));
-            ++nEntries;
-            continue;
-        }
-
-        in.clear();
-        in.seekg(static_cast<std::streamoff>(blk.idx.st));
-        if (!in) {
-            error("%s: Error seeking input stream to %" PRIu64, __func__, blk.idx.st);
-        }
-
-        if (binaryInput) {
-            const size_t recSize = formatInfo_.recordSize;
-            if (recSize == 0) {
-                error("%s: Binary input requires a positive record size", __func__);
-            }
-            std::vector<char> recBuf(recSize);
-            uint64_t pos = blk.idx.st;
-            while (pos < blk.idx.ed) {
-                in.read(recBuf.data(), static_cast<std::streamsize>(recSize));
-                if (in.gcount() != static_cast<std::streamsize>(recSize)) {
-                    error("%s: Corrupted data or invalid index", __func__);
-                }
-                pos += recSize;
-                float x = 0.0f;
-                float y = 0.0f;
-                decodeBinaryXY(recBuf.data(), x, y);
-                if (!queryRect.contains(x, y)) {
-                    continue;
-                }
-                if (newEntry.n == 0) {
-                    ensureOutputReady();
-                    newEntry.st = currentOffset;
-                    newEntry.ed = currentOffset;
-                }
-                out.write(recBuf.data(), static_cast<std::streamsize>(recSize));
-                if (!out) {
-                    error("%s: Error writing binary record to %s", __func__, outData.c_str());
-                }
-                currentOffset += recSize;
-                newEntry.ed = currentOffset;
-                ++newEntry.n;
-            }
-        } else {
-            std::string line;
-            uint64_t pos = blk.idx.st;
-            while (pos < blk.idx.ed) {
-                if (!std::getline(in, line)) {
-                    error("%s: Corrupted data or invalid index", __func__);
-                }
-                pos += static_cast<uint64_t>(line.size()) + 1;
-                if (line.empty() || line[0] == '#') {
-                    continue;
-                }
-
-                float x = 0.0f;
-                float y = 0.0f;
-                if (coord_dim_ == 3) {
-                    PixTopProbs3D<float> rec;
-                    if (!parseLine(line, rec)) {
-                        error("%s: Invalid text record", __func__);
-                    }
-                    x = rec.x;
-                    y = rec.y;
-                } else {
-                    PixTopProbs<float> rec;
-                    if (!parseLine(line, rec)) {
-                        error("%s: Invalid text record", __func__);
-                    }
-                    x = rec.x;
-                    y = rec.y;
-                }
-
-                if (!queryRect.contains(x, y)) {
-                    continue;
-                }
-                if (newEntry.n == 0) {
-                    ensureOutputReady();
-                    newEntry.st = currentOffset;
-                    newEntry.ed = currentOffset;
-                }
-                out << line << "\n";
-                if (!out) {
-                    error("%s: Error writing text record to %s", __func__, outData.c_str());
-                }
-                currentOffset = static_cast<uint64_t>(out.tellp());
-                newEntry.ed = currentOffset;
-                ++newEntry.n;
-            }
-        }
-
-        if (newEntry.n == 0) {
-            continue;
-        }
-        idxOut.write(reinterpret_cast<const char*>(&newEntry), sizeof(newEntry));
-        if (!idxOut) {
-            error("%s: Error writing index entry", __func__);
-        }
-        outBox.extendToInclude(Rectangle<float>(
-            static_cast<float>(newEntry.xmin), static_cast<float>(newEntry.ymin),
-            static_cast<float>(newEntry.xmax), static_cast<float>(newEntry.ymax)));
-        ++nEntries;
-    }
-
-    if (nEntries == 0) {
-        warning("%s: No records found in the queried region", __func__);
-        return;
-    }
-
-    uint32_t outMode = ((static_cast<uint32_t>(K_) & 0xFFFFu) << 16) | (mode_ & 0xFFFFu);
-    outMode &= ~0x8u;
-    outHeader.mode = outMode;
-    outHeader.recordSize = binaryInput ? formatInfo_.recordSize : 0;
-    outHeader.xmin = outBox.xmin;
-    outHeader.xmax = outBox.xmax;
-    outHeader.ymin = outBox.ymin;
-    outHeader.ymax = outBox.ymax;
-    idxOut.seekp(0);
-    idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
-    if (!idxOut) {
-        error("%s: Error finalizing output index header", __func__);
-    }
-
-    out.close();
-    idxOut.close();
-    notice("%s: Wrote %zu indexed block(s) to %s (index: %s)", __func__, nEntries, outData.c_str(), outIndex.c_str());
+    extractRegionPrepared(outPrefix, region);
 }
 
 void TileOperator::openDataStream() {
@@ -854,79 +709,6 @@ void TileOperator::sampleTilesToDebug(int32_t ntiles) {
     }
 }
 
-bool TileOperator::readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos, int32_t& recX, int32_t& recY, TopProbs& rec) const {
-    if (coord_dim_ != 2) {
-        error("%s: Only 2D records are supported by this helper", __func__);
-    }
-    if (pos >= endPos) {
-        return false;
-    }
-    if (mode_ & 0x1) {
-        if (mode_ & 0x4) {
-            PixTopProbs<int32_t> temp;
-            if (!temp.read(dataStream, k_)) {
-                if (dataStream.eof()) return false;
-                error("%s: Corrupted binary data", __func__);
-            }
-            recX = temp.x;
-            recY = temp.y;
-            rec.ks = std::move(temp.ks);
-            rec.ps = std::move(temp.ps);
-            pos += formatInfo_.recordSize;
-            return true;
-        }
-        PixTopProbs<float> temp;
-        if (!temp.read(dataStream, k_)) {
-            if (dataStream.eof()) return false;
-            error("%s: Corrupted binary data", __func__);
-        }
-        if (formatInfo_.pixelResolution <= 0) {
-            error("%s: Float coordinates require positive pixelResolution", __func__);
-        }
-        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
-        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
-        rec.ks = std::move(temp.ks);
-        rec.ps = std::move(temp.ps);
-        pos += formatInfo_.recordSize;
-        return true;
-    }
-
-    std::string line;
-    while (pos < endPos) {
-        if (!std::getline(dataStream, line)) {
-            return false;
-        }
-        pos += line.size() + 1;
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        if (mode_ & 0x4) {
-            PixTopProbs<int32_t> temp;
-            if (!parseLine(line, temp)) {
-                error("%s: Invalid text record", __func__);
-            }
-            recX = temp.x;
-            recY = temp.y;
-            rec.ks = std::move(temp.ks);
-            rec.ps = std::move(temp.ps);
-            return true;
-        }
-        PixTopProbs<float> temp;
-        if (!parseLine(line, temp)) {
-            error("%s: Invalid text record", __func__);
-        }
-        if (formatInfo_.pixelResolution <= 0) {
-            error("%s: Float coordinates require positive pixelResolution", __func__);
-        }
-        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
-        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
-        rec.ks = std::move(temp.ks);
-        rec.ps = std::move(temp.ps);
-        return true;
-    }
-    return false;
-}
-
 int32_t TileOperator::loadTileToMap(const TileKey& key,
     std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
     const std::vector<Rectangle<float>>* rects) const {
@@ -1010,67 +792,12 @@ int32_t TileOperator::loadTileToMap3D(const TileKey& key,
     dataStream.clear();
     dataStream.seekg(blk.idx.st);
     uint64_t pos = blk.idx.st;
-    float res = formatInfo_.pixelResolution;
     TopProbs rec;
-    while (pos < blk.idx.ed) {
-        bool success = false;
-        int32_t recX = 0;
-        int32_t recY = 0;
-        int32_t recZ = 0;
-        if (mode_ & 0x4) { // int32
-            if (mode_ & 0x1) { // Binary
-                PixTopProbs3D<int32_t> temp;
-                if (temp.read(dataStream, k_)) {
-                    recX = temp.x;
-                    recY = temp.y;
-                    recZ = temp.z;
-                    rec.ks = std::move(temp.ks);
-                    rec.ps = std::move(temp.ps);
-                    pos += formatInfo_.recordSize;
-                    success = true;
-                }
-            } else {
-                std::string line;
-                if (std::getline(dataStream, line)) {
-                    pos += line.size() + 1;
-                    PixTopProbs3D<int32_t> temp;
-                    success = parseLine(line, temp);
-                    if (success) {
-                        recX = temp.x;
-                        recY = temp.y;
-                        recZ = temp.z;
-                        rec.ks = std::move(temp.ks);
-                        rec.ps = std::move(temp.ps);
-                    }
-                }
-            }
-        } else { // float, scale then round to int
-            PixTopProbs3D<float> temp;
-            if (mode_ & 0x1) { // Binary
-                if (temp.read(dataStream, k_)) {
-                    pos += formatInfo_.recordSize;
-                    success = true;
-                }
-            } else {
-                std::string line;
-                if (std::getline(dataStream, line)) {
-                    pos += line.size() + 1;
-                    success = parseLine(line, temp);
-                }
-            }
-            if (success) {
-                recX = static_cast<int32_t>(std::floor(temp.x / res));
-                recY = static_cast<int32_t>(std::floor(temp.y / res));
-                recZ = static_cast<int32_t>(std::floor(temp.z / res));
-                rec.ks = std::move(temp.ks);
-                rec.ps = std::move(temp.ps);
-            }
-        }
-        if (success) {
-            pixelMap[std::make_tuple(recX, recY, recZ)] = std::move(rec);
-        } else if (!dataStream.eof()) {
-            error("%s: Corrupted data", __func__);
-        }
+    int32_t recX = 0;
+    int32_t recY = 0;
+    int32_t recZ = 0;
+    while (readNextRecord3DAsPixel(dataStream, pos, blk.idx.ed, recX, recY, recZ, rec)) {
+        pixelMap[std::make_tuple(recX, recY, recZ)] = std::move(rec);
     }
     return static_cast<int32_t>(pixelMap.size());
 }
@@ -1149,49 +876,24 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
 
         for(size_t i=0; i<nRecs; ++i) {
             float x, y, z = 0.0f;
-            std::vector<int32_t> ks(k_);
-            std::vector<float> ps(k_);
+            std::vector<int32_t> ks;
+            std::vector<float> ps;
 
-            if (isInt32) {
-                if (coord_dim_ == 3) {
-                    PixTopProbs3D<int32_t> temp;
-                    if (!temp.read(dataStream_, k_)) break;
-                    x = static_cast<float>(temp.x);
-                    y = static_cast<float>(temp.y);
-                    z = static_cast<float>(temp.z);
-                    ks = std::move(temp.ks);
-                    ps = std::move(temp.ps);
-                } else {
-                    PixTopProbs<int32_t> temp;
-                    if (!temp.read(dataStream_, k_)) break;
-                    x = static_cast<float>(temp.x);
-                    y = static_cast<float>(temp.y);
-                    ks = std::move(temp.ks);
-                    ps = std::move(temp.ps);
-                }
+            if (coord_dim_ == 3) {
+                PixTopProbs3D<float> temp;
+                if (!readBinaryRecord3D(dataStream_, temp, false)) break;
+                x = temp.x;
+                y = temp.y;
+                z = temp.z;
+                ks = std::move(temp.ks);
+                ps = std::move(temp.ps);
             } else {
-                if (coord_dim_ == 3) {
-                    PixTopProbs3D<float> temp;
-                    if (!temp.read(dataStream_, k_)) break;
-                    x = temp.x;
-                    y = temp.y;
-                    z = temp.z;
-                    ks = std::move(temp.ks);
-                    ps = std::move(temp.ps);
-                } else {
-                    PixTopProbs<float> temp;
-                    if (!temp.read(dataStream_, k_)) break;
-                    x = temp.x;
-                    y = temp.y;
-                    ks = std::move(temp.ks);
-                    ps = std::move(temp.ps);
-                }
-            }
-
-            if (applyRes) {
-                x *= res;
-                y *= res;
-                z *= res;
+                PixTopProbs<float> temp;
+                if (!readBinaryRecord2D(dataStream_, temp, false)) break;
+                x = temp.x;
+                y = temp.y;
+                ks = std::move(temp.ks);
+                ps = std::move(temp.ps);
             }
 
             if (checkBound && !queryBox_.contains(x, y)) {
@@ -1235,203 +937,23 @@ void TileOperator::openBlock(TileInfo& blk) {
     pos_ = blk.idx.st;
 }
 
-bool TileOperator::parseLine(const std::string& line, PixTopProbs<float>& R) const {
-    std::vector<std::string> tokens;
-    split(tokens, "\t", line);
-    if (tokens.size() < icol_max_+1) return false;
-    if (!str2float(tokens[icol_x_], R.x) ||
-        !str2float(tokens[icol_y_], R.y)) {
-        warning("%s: Error parsing x,y from line: %s", __func__, line.c_str());
-        return false;
-    }
-    if (mode_ & 0x2) {
-        R.x *= formatInfo_.pixelResolution;
-        R.y *= formatInfo_.pixelResolution;
-    }
-    if (k_ <= 0) return true;
-
-    R.ks.resize(k_);
-    R.ps.resize(k_);
-    for (int i = 0; i < k_; ++i) {
-        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
-            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
-        }
-    }
-    return true;
-}
-
-bool TileOperator::parseLine(const std::string& line, PixTopProbs<int32_t>& R) const {
-    std::vector<std::string> tokens;
-    split(tokens, "\t", line);
-    if (tokens.size() < icol_max_ + 1) return false;
-    if (!str2int32(tokens[icol_x_], R.x) ||
-        !str2int32(tokens[icol_y_], R.y)) {
-        return false;
-    }
-    if (k_ <= 0) return true;
-
-    R.ks.resize(k_);
-    R.ps.resize(k_);
-    for (int i = 0; i < k_; ++i) {
-        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
-            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<float>& R) const {
-    std::vector<std::string> tokens;
-    split(tokens, "\t", line);
-    if (tokens.size() < icol_max_ + 1) return false;
-    if (!str2float(tokens[icol_x_], R.x) ||
-        !str2float(tokens[icol_y_], R.y)) {
-        warning("%s: Error parsing x,y from line: %s", __func__, line.c_str());
-        return false;
-    }
-    if (has_z_) {
-        if (!str2float(tokens[icol_z_], R.z)) {
-            warning("%s: Error parsing z from line: %s", __func__, line.c_str());
-            return false;
-        }
-    } else {
-        R.z = 0;
-    }
-    if (mode_ & 0x2) {
-        R.x *= formatInfo_.pixelResolution;
-        R.y *= formatInfo_.pixelResolution;
-        R.z *= getPixelResolutionZ();
-    }
-    if (k_ <= 0) return true;
-
-    R.ks.resize(k_);
-    R.ps.resize(k_);
-    for (int i = 0; i < k_; ++i) {
-        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
-            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
-        }
-    }
-    return true;
-}
-
-bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<int32_t>& R) const {
-    std::vector<std::string> tokens;
-    split(tokens, "\t", line);
-    if (tokens.size() < icol_max_ + 1) return false;
-    if (!str2int32(tokens[icol_x_], R.x) ||
-        !str2int32(tokens[icol_y_], R.y)) {
-        return false;
-    }
-    if (has_z_) {
-        if (!str2int32(tokens[icol_z_], R.z)) {
-            return false;
-        }
-    } else {
-        R.z = 0;
-    }
-    if (k_ <= 0) return true;
-
-    R.ks.resize(k_);
-    R.ps.resize(k_);
-    for (int i = 0; i < k_; ++i) {
-        if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
-            !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            return false;
-        }
-    }
-    return true;
-}
-
-void TileOperator::decodeBinaryXY(const char* recBuf, float& x, float& y) const {
-    if (mode_ & 0x4) {
-        int32_t xi = 0;
-        int32_t yi = 0;
-        std::memcpy(&xi, recBuf, sizeof(xi));
-        std::memcpy(&yi, recBuf + sizeof(xi), sizeof(yi));
-        x = static_cast<float>(xi);
-        y = static_cast<float>(yi);
-        if (mode_ & 0x2) {
-            x *= formatInfo_.pixelResolution;
-            y *= formatInfo_.pixelResolution;
-        }
-        return;
-    }
-    std::memcpy(&x, recBuf, sizeof(x));
-    std::memcpy(&y, recBuf + sizeof(x), sizeof(y));
-}
-
 int32_t TileOperator::next(PixTopProbs<float>& out, bool rawCoord) {
     if (done_) return -1;
     if (bounded_) {
-        return nextBounded(out);
+        return nextBounded(out, rawCoord);
     }
     if (mode_ & 0x1) { // Binary mode
-        if (mode_ & 0x4) { // int32
-            if (coord_dim_ == 3) {
-                PixTopProbs3D<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-                out.x = static_cast<float>(temp.x);
-                out.y = static_cast<float>(temp.y);
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            } else {
-                PixTopProbs<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-                out.x = static_cast<float>(temp.x);
-                out.y = static_cast<float>(temp.y);
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            }
-        } else { // float
-            if (coord_dim_ == 3) {
-                PixTopProbs3D<float> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-                out.x = temp.x;
-                out.y = temp.y;
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            } else {
-                if (!out.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-            }
-        }
-        if (!rawCoord && (mode_ & 0x2)) {
-            out.x *= formatInfo_.pixelResolution;
-            out.y *= formatInfo_.pixelResolution;
-        }
-        return 1;
-    }
-    // Text mode
-    std::string line;
-    while (true) {
-        if (!readNextTextLine(line)) {
+        if (!readBinaryRecord2D(dataStream_, out, rawCoord)) {
             done_ = true;
             return -1;
         }
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        if (!parseLine(line, out)) return 0;
-        if (rawCoord && (mode_ & 0x2)) {
-            out.x /= formatInfo_.pixelResolution;
-            out.y /= formatInfo_.pixelResolution;
-        }
         return 1;
     }
+    return nextTextRecordImpl(done_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](const std::string& line, PixTopProbs<float>& rec) {
+            return decodeTextRecord2D(line, rec, rawCoord);
+        }, out);
 }
 
 int32_t TileOperator::next(PixTopProbs<int32_t>& out) {
@@ -1441,19 +963,8 @@ int32_t TileOperator::next(PixTopProbs<int32_t>& out) {
         return nextBounded(out);
     }
     if (mode_ & 0x1) { // Binary mode
-        if (coord_dim_ == 3) {
-            PixTopProbs3D<int32_t> temp;
-            if (temp.read(dataStream_, k_)) {
-                out.x = temp.x;
-                out.y = temp.y;
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-                return 1;
-            }
-        } else {
-            if (out.read(dataStream_, k_)) {
-                return 1;
-            }
+        if (readBinaryRecord2DInt(dataStream_, out)) {
+            return 1;
         }
         if (dataStream_.eof()) {
             done_ = true;
@@ -1461,17 +972,11 @@ int32_t TileOperator::next(PixTopProbs<int32_t>& out) {
         }
         error("%s: Corrupted data", __func__);
     }
-    // Text mode
-    std::string line;
-    while (true) {
-        if (!readNextTextLine(line)) {
-            done_ = true;
-            return -1;
-        }
-        if (line.empty() || line[0] == '#') {continue;}
-        if (!parseLine(line, out)) return 0;
-        return 1;
-    }
+    return nextTextRecordImpl(done_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](const std::string& line, PixTopProbs<int32_t>& rec) {
+            return decodeTextRecord2DInt(line, rec);
+        }, out);
 }
 
 int32_t TileOperator::next(PixTopProbs3D<float>& out, bool rawCoord) {
@@ -1480,74 +985,17 @@ int32_t TileOperator::next(PixTopProbs3D<float>& out, bool rawCoord) {
         return nextBounded(out, rawCoord);
     }
     if (mode_ & 0x1) { // Binary mode
-        if (mode_ & 0x4) { // int32
-            if (coord_dim_ == 3) {
-                PixTopProbs3D<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-                out.x = static_cast<float>(temp.x);
-                out.y = static_cast<float>(temp.y);
-                out.z = static_cast<float>(temp.z);
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            } else {
-                PixTopProbs<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-                out.x = static_cast<float>(temp.x);
-                out.y = static_cast<float>(temp.y);
-                out.z = 0.0f;
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            }
-        } else { // float
-            if (coord_dim_ == 3) {
-                if (!out.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-            } else {
-                PixTopProbs<float> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    done_ = true;
-                    return -1;
-                }
-                out.x = temp.x;
-                out.y = temp.y;
-                out.z = 0.0f;
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            }
-        }
-        if (!rawCoord && (mode_ & 0x2)) {
-            out.x *= formatInfo_.pixelResolution;
-            out.y *= formatInfo_.pixelResolution;
-            out.z *= getPixelResolutionZ();
-        }
-        return 1;
-    }
-    // Text mode
-    std::string line;
-    while (true) {
-        if (!readNextTextLine(line)) {
+        if (!readBinaryRecord3D(dataStream_, out, rawCoord)) {
             done_ = true;
             return -1;
         }
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        if (!parseLine(line, out)) return 0;
-        if (rawCoord && (mode_ & 0x2)) {
-            out.x /= formatInfo_.pixelResolution;
-            out.y /= formatInfo_.pixelResolution;
-            out.z /= getPixelResolutionZ();
-        }
         return 1;
     }
+    return nextTextRecordImpl(done_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](const std::string& line, PixTopProbs3D<float>& rec) {
+            return decodeTextRecord3D(line, rec, rawCoord);
+        }, out);
 }
 
 int32_t TileOperator::next(PixTopProbs3D<int32_t>& out) {
@@ -1557,20 +1005,8 @@ int32_t TileOperator::next(PixTopProbs3D<int32_t>& out) {
         return nextBounded(out);
     }
     if (mode_ & 0x1) { // Binary mode
-        if (coord_dim_ == 3) {
-            if (out.read(dataStream_, k_)) {
-                return 1;
-            }
-        } else {
-            PixTopProbs<int32_t> temp;
-            if (temp.read(dataStream_, k_)) {
-                out.x = temp.x;
-                out.y = temp.y;
-                out.z = 0;
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-                return 1;
-            }
+        if (readBinaryRecord3DInt(dataStream_, out)) {
+            return 1;
         }
         if (dataStream_.eof()) {
             done_ = true;
@@ -1578,328 +1014,165 @@ int32_t TileOperator::next(PixTopProbs3D<int32_t>& out) {
         }
         error("%s: Corrupted data", __func__);
     }
-    // Text mode
-    std::string line;
-    while (true) {
-        if (!readNextTextLine(line)) {
-            done_ = true;
-            return -1;
-        }
-        if (line.empty() || line[0] == '#') {continue;}
-        if (!parseLine(line, out)) return 0;
-        return 1;
-    }
+    return nextTextRecordImpl(done_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](const std::string& line, PixTopProbs3D<int32_t>& rec) {
+            return decodeTextRecord3DInt(line, rec);
+        }, out);
 }
 
 int32_t TileOperator::nextBounded(PixTopProbs<float>& out, bool rawCoord) {
-    if (done_ || idx_block_ < 0) return -1;
-
     if (mode_ & 0x1) { // Binary mode
-        while (true) {
-            auto &blk = blocks_[idx_block_];
-            if (pos_ >= blk.idx.ed) {
-                if (++idx_block_ >= (int32_t) blocks_.size()) {
-                    done_ = true;
-                    return -1;
+        return nextBoundedBinaryRecordImpl(done_, idx_block_, pos_, blocks_,
+            formatInfo_.recordSize, queryBox_,
+            [&](TileInfo& blk) { openBlock(blk); },
+            [&](PixTopProbs<float>& rec) {
+                if (!readBinaryRecord2D(dataStream_, rec, rawCoord)) {
+                    error("%s: Corrupted data or invalid index", __func__);
                 }
-                openBlock(blocks_[idx_block_]);
-                continue;
-            }
-            // Read one record
-            if (mode_ & 0x4) {
-                if (coord_dim_ == 3) {
-                    PixTopProbs3D<int32_t> temp;
-                    if (!temp.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                    out.x = static_cast<float>(temp.x);
-                    out.y = static_cast<float>(temp.y);
-                    out.ks = std::move(temp.ks);
-                    out.ps = std::move(temp.ps);
-                } else {
-                    PixTopProbs<int32_t> temp;
-                    if (!temp.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                    out.x = static_cast<float>(temp.x);
-                    out.y = static_cast<float>(temp.y);
-                    out.ks = std::move(temp.ks);
-                    out.ps = std::move(temp.ps);
+            },
+            [&](const PixTopProbs<float>& rec) {
+                float x = rec.x;
+                float y = rec.y;
+                if (rawCoord && (mode_ & 0x2)) {
+                    x *= formatInfo_.pixelResolution;
+                    y *= formatInfo_.pixelResolution;
                 }
-            } else {
-                if (coord_dim_ == 3) {
-                    PixTopProbs3D<float> temp;
-                    if (!temp.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                    out.x = temp.x;
-                    out.y = temp.y;
-                    out.ks = std::move(temp.ks);
-                    out.ps = std::move(temp.ps);
-                } else {
-                    if (!out.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                }
-            }
-            pos_ += formatInfo_.recordSize;
-            if (blk.contained && rawCoord) {
-                return 1;
-            }
-            float x = out.x, y = out.y;
-            if (mode_ & 0x2) {
+                return std::make_pair(x, y);
+            }, out);
+    }
+
+    return nextBoundedTextRecordImpl(done_, idx_block_, pos_, blocks_, queryBox_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](TileInfo& blk) { openBlock(blk); },
+        [&](const std::string& line, PixTopProbs<float>& rec) {
+            return decodeTextRecord2D(line, rec, rawCoord);
+        },
+        [&](const PixTopProbs<float>& rec) {
+            float x = rec.x;
+            float y = rec.y;
+            if (rawCoord && (mode_ & 0x2)) {
                 x *= formatInfo_.pixelResolution;
                 y *= formatInfo_.pixelResolution;
-                if (!rawCoord) {
-                    out.x = x;
-                    out.y = y;
-                }
             }
-            if (blk.contained || queryBox_.contains(x, y)) {
-                return 1;
-            }
-        }
-    }
-
-    std::string line;
-    while (true) {
-        auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed || !readNextTextLine(line)) {
-            if (++idx_block_ >= (int32_t) blocks_.size()) {
-                done_ = true;
-                return -1;
-            }
-            openBlock(blocks_[idx_block_]);
-            continue;
-        }
-        pos_ += line.size() + 1; // +1 for newline
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        PixTopProbs<float> rec;
-        if (!parseLine(line, rec)) return 0;
-        if (blk.contained || queryBox_.contains(rec.x, rec.y)) {
-            out = std::move(rec);
-            if (rawCoord && (mode_ & 0x2)) {
-                out.x /= formatInfo_.pixelResolution;
-                out.y /= formatInfo_.pixelResolution;
-            }
-            return 1;
-        }
-        // else skip it, keep reading
-    }
+            return std::make_pair(x, y);
+        }, out);
 }
 
 int32_t TileOperator::nextBounded(PixTopProbs<int32_t>& out) {
     if (mode_ & 0x1) {assert(mode_ & 0x4);}
-    if (done_ || idx_block_ < 0) return -1;
-    std::string line;
-    while (true) {
-        auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed) {
-            if (++idx_block_ >= (int32_t) blocks_.size()) {
-                done_ = true;
-                return -1;
-            }
-            openBlock(blocks_[idx_block_]);
-            continue;
-        }
-
-        if (mode_ & 0x1) { // Binary mode
-            if (coord_dim_ == 3) {
-                PixTopProbs3D<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    error("%s: Corrupted data or invalid index", __func__);
-                }
-                out.x = temp.x;
-                out.y = temp.y;
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            } else {
-                if (!out.read(dataStream_, k_)) {
-                    error("%s: Corrupted data or invalid index", __func__);
-                }
-            }
-            pos_ += formatInfo_.recordSize;
-        } else {
-            if (!readNextTextLine(line))
-                error("%s: Corrupted data or invalid index", __func__);
-            pos_ += line.size() + 1; // +1 for newline
-            if (line.empty() || line[0] == '#') {continue;}
-            if (!parseLine(line, out))
-                error("%s: Corrupted data or invalid index", __func__);
-        }
-
-        if (blk.contained) {return 1;}
-        float x = static_cast<float>(out.x);
-        float y = static_cast<float>(out.y);
-        if (mode_ & 0x2) {
-            x *= formatInfo_.pixelResolution;
-            y *= formatInfo_.pixelResolution;
-        }
-        if (blk.contained || queryBox_.contains(x, y)) {
-            return 1;
-        }
-    }
-}
-
-int32_t TileOperator::nextBounded(PixTopProbs3D<float>& out, bool rawCoord) {
-    if (done_ || idx_block_ < 0) return -1;
-
     if (mode_ & 0x1) { // Binary mode
-        while (true) {
-            auto &blk = blocks_[idx_block_];
-            if (pos_ >= blk.idx.ed) {
-                if (++idx_block_ >= (int32_t) blocks_.size()) {
-                    done_ = true;
-                    return -1;
+        return nextBoundedBinaryRecordImpl(done_, idx_block_, pos_, blocks_,
+            formatInfo_.recordSize, queryBox_,
+            [&](TileInfo& blk) { openBlock(blk); },
+            [&](PixTopProbs<int32_t>& rec) {
+                if (!readBinaryRecord2DInt(dataStream_, rec)) {
+                    error("%s: Corrupted data or invalid index", __func__);
                 }
-                openBlock(blocks_[idx_block_]);
-                continue;
-            }
-            // Read one record
-            if (mode_ & 0x4) {
-                if (coord_dim_ == 3) {
-                    PixTopProbs3D<int32_t> temp;
-                    if (!temp.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                    out.x = static_cast<float>(temp.x);
-                    out.y = static_cast<float>(temp.y);
-                    out.z = static_cast<float>(temp.z);
-                    out.ks = std::move(temp.ks);
-                    out.ps = std::move(temp.ps);
-                } else {
-                    PixTopProbs<int32_t> temp;
-                    if (!temp.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                    out.x = static_cast<float>(temp.x);
-                    out.y = static_cast<float>(temp.y);
-                    out.z = 0.0f;
-                    out.ks = std::move(temp.ks);
-                    out.ps = std::move(temp.ps);
+            },
+            [&](const PixTopProbs<int32_t>& rec) {
+                float x = static_cast<float>(rec.x);
+                float y = static_cast<float>(rec.y);
+                if (mode_ & 0x2) {
+                    x *= formatInfo_.pixelResolution;
+                    y *= formatInfo_.pixelResolution;
                 }
-            } else {
-                if (coord_dim_ == 3) {
-                    if (!out.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                } else {
-                    PixTopProbs<float> temp;
-                    if (!temp.read(dataStream_, k_)) {
-                        error("%s: Corrupted data or invalid index", __func__);
-                    }
-                    out.x = temp.x;
-                    out.y = temp.y;
-                    out.z = 0.0f;
-                    out.ks = std::move(temp.ks);
-                    out.ps = std::move(temp.ps);
-                }
-            }
-            pos_ += formatInfo_.recordSize;
-            if (blk.contained && rawCoord) {
-                return 1;
-            }
-            float x = out.x, y = out.y, z = out.z;
+                return std::make_pair(x, y);
+            }, out);
+    }
+
+    return nextBoundedTextRecordImpl(done_, idx_block_, pos_, blocks_, queryBox_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](TileInfo& blk) { openBlock(blk); },
+        [&](const std::string& line, PixTopProbs<int32_t>& rec) {
+            return decodeTextRecord2DInt(line, rec);
+        },
+        [&](const PixTopProbs<int32_t>& rec) {
+            float x = static_cast<float>(rec.x);
+            float y = static_cast<float>(rec.y);
             if (mode_ & 0x2) {
                 x *= formatInfo_.pixelResolution;
                 y *= formatInfo_.pixelResolution;
-                z *= formatInfo_.pixelResolution;
-                if (!rawCoord) {
-                    out.x = x;
-                    out.y = y;
-                    out.z = z;
+            }
+            return std::make_pair(x, y);
+        }, out);
+}
+
+int32_t TileOperator::nextBounded(PixTopProbs3D<float>& out, bool rawCoord) {
+    if (mode_ & 0x1) { // Binary mode
+        return nextBoundedBinaryRecordImpl(done_, idx_block_, pos_, blocks_,
+            formatInfo_.recordSize, queryBox_,
+            [&](TileInfo& blk) { openBlock(blk); },
+            [&](PixTopProbs3D<float>& rec) {
+                if (!readBinaryRecord3D(dataStream_, rec, rawCoord)) {
+                    error("%s: Corrupted data or invalid index", __func__);
                 }
-            }
-            if (blk.contained || queryBox_.contains(x, y)) {
-                return 1;
-            }
-        }
+            },
+            [&](const PixTopProbs3D<float>& rec) {
+                float x = rec.x;
+                float y = rec.y;
+                if (rawCoord && (mode_ & 0x2)) {
+                    x *= formatInfo_.pixelResolution;
+                    y *= formatInfo_.pixelResolution;
+                }
+                return std::make_pair(x, y);
+            }, out);
     }
 
-    std::string line;
-    while (true) {
-        auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed || !readNextTextLine(line)) {
-            if (++idx_block_ >= (int32_t) blocks_.size()) {
-                done_ = true;
-                return -1;
-            }
-            openBlock(blocks_[idx_block_]);
-            continue;
-        }
-        pos_ += line.size() + 1; // +1 for newline
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        PixTopProbs3D<float> rec;
-        if (!parseLine(line, rec)) return 0;
-        if (blk.contained || queryBox_.contains(rec.x, rec.y)) {
-            out = std::move(rec);
+    return nextBoundedTextRecordImpl(done_, idx_block_, pos_, blocks_, queryBox_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](TileInfo& blk) { openBlock(blk); },
+        [&](const std::string& line, PixTopProbs3D<float>& rec) {
+            return decodeTextRecord3D(line, rec, rawCoord);
+        },
+        [&](const PixTopProbs3D<float>& rec) {
+            float x = rec.x;
+            float y = rec.y;
             if (rawCoord && (mode_ & 0x2)) {
-                out.x /= formatInfo_.pixelResolution;
-                out.y /= formatInfo_.pixelResolution;
-                out.z /= getPixelResolutionZ();
+                x *= formatInfo_.pixelResolution;
+                y *= formatInfo_.pixelResolution;
             }
-            return 1;
-        }
-        // else skip it, keep reading
-    }
+            return std::make_pair(x, y);
+        }, out);
 }
 
 int32_t TileOperator::nextBounded(PixTopProbs3D<int32_t>& out) {
     if (mode_ & 0x1) {assert(mode_ & 0x4);}
-    if (done_ || idx_block_ < 0) return -1;
-    std::string line;
-    while (true) {
-        auto &blk = blocks_[idx_block_];
-        if (pos_ >= blk.idx.ed) {
-            if (++idx_block_ >= (int32_t) blocks_.size()) {
-                done_ = true;
-                return -1;
-            }
-            openBlock(blocks_[idx_block_]);
-            continue;
-        }
-
-        if (mode_ & 0x1) { // Binary mode
-            if (coord_dim_ == 3) {
-                if (!out.read(dataStream_, k_)) {
+    if (mode_ & 0x1) { // Binary mode
+        return nextBoundedBinaryRecordImpl(done_, idx_block_, pos_, blocks_,
+            formatInfo_.recordSize, queryBox_,
+            [&](TileInfo& blk) { openBlock(blk); },
+            [&](PixTopProbs3D<int32_t>& rec) {
+                if (!readBinaryRecord3DInt(dataStream_, rec)) {
                     error("%s: Corrupted data or invalid index", __func__);
                 }
-            } else {
-                PixTopProbs<int32_t> temp;
-                if (!temp.read(dataStream_, k_)) {
-                    error("%s: Corrupted data or invalid index", __func__);
+            },
+            [&](const PixTopProbs3D<int32_t>& rec) {
+                float x = static_cast<float>(rec.x);
+                float y = static_cast<float>(rec.y);
+                if (mode_ & 0x2) {
+                    x *= formatInfo_.pixelResolution;
+                    y *= formatInfo_.pixelResolution;
                 }
-                out.x = temp.x;
-                out.y = temp.y;
-                out.z = 0;
-                out.ks = std::move(temp.ks);
-                out.ps = std::move(temp.ps);
-            }
-            pos_ += formatInfo_.recordSize;
-        } else {
-            if (!readNextTextLine(line))
-                error("%s: Corrupted data or invalid index", __func__);
-            pos_ += line.size() + 1; // +1 for newline
-            if (line.empty() || line[0] == '#') {continue;}
-            if (!parseLine(line, out))
-                error("%s: Corrupted data or invalid index", __func__);
-        }
-
-        if (blk.contained) {return 1;}
-        float x = static_cast<float>(out.x);
-        float y = static_cast<float>(out.y);
-        if (mode_ & 0x2) {
-            x *= formatInfo_.pixelResolution;
-            y *= formatInfo_.pixelResolution;
-        }
-        if (blk.contained || queryBox_.contains(x, y)) {
-            return 1;
-        }
+                return std::make_pair(x, y);
+            }, out);
     }
+
+    return nextBoundedTextRecordImpl(done_, idx_block_, pos_, blocks_, queryBox_,
+        [&](std::string& line) { return readNextTextLine(line); },
+        [&](TileInfo& blk) { openBlock(blk); },
+        [&](const std::string& line, PixTopProbs3D<int32_t>& rec) {
+            return decodeTextRecord3DInt(line, rec);
+        },
+        [&](const PixTopProbs3D<int32_t>& rec) {
+            float x = static_cast<float>(rec.x);
+            float y = static_cast<float>(rec.y);
+            if (mode_ & 0x2) {
+                x *= formatInfo_.pixelResolution;
+                y *= formatInfo_.pixelResolution;
+            }
+            return std::make_pair(x, y);
+        }, out);
 }
 
 void TileOperator::loadIndexLegacy(const std::string& indexFile) {
@@ -2038,5 +1311,9 @@ void TileOperator::parseHeaderLine() {
     }
     for (size_t i = 0; i < icol_ks_.size() && i < icol_ps_.size(); ++i) {
         icol_max_ = std::max(icol_max_, std::max(icol_ks_[i], icol_ps_[i]));
+    }
+
+    if (indexed_tsv) {
+        validateCoordinateEncoding();
     }
 }

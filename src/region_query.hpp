@@ -51,6 +51,9 @@ struct PreparedRegionRasterMask2D {
 PreparedRegionMask2D prepareRegionFromPaths(const Clipper2Lib::Paths64& paths,
                                         int32_t tileSize,
                                         int64_t scale = 10);
+PreparedRegionMask2D prepareRegionFromRectangle(const Rectangle<float>& rect,
+                                                int32_t tileSize,
+                                                int64_t scale = 10);
 
 PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
                                            int32_t tileSize,
