@@ -64,6 +64,71 @@ void write_cell_row(FILE* fp, const std::string& cellId, const std::string& comp
     fprintf(fp, "\n");
 }
 
+void write_factor_mask_info(const std::string& outHist,
+    const std::vector<uint64_t>& tileCount,
+    const std::vector<uint64_t>& maskArea,
+    const std::vector<uint64_t>& nComponents) {
+    FILE* fp = fopen(outHist.c_str(), "w");
+    if (!fp) {
+        error("%s: Cannot open output file %s", __func__, outHist.c_str());
+    }
+    fprintf(fp, "k\tn_tiles\tmask_area_pix\tn_components\n");
+    for (size_t k = 0; k < maskArea.size(); ++k) {
+        fprintf(fp, "%zu\t%llu\t%llu\t%llu\n",
+            k,
+            static_cast<unsigned long long>(tileCount[k]),
+            static_cast<unsigned long long>(maskArea[k]),
+            static_cast<unsigned long long>(nComponents[k]));
+    }
+    fclose(fp);
+}
+
+void write_factor_mask_component_histogram(const std::string& outHist,
+    const std::vector<std::unordered_map<uint64_t, uint64_t>>& perFactorHist) {
+    FILE* fp = fopen(outHist.c_str(), "w");
+    if (!fp) {
+        error("%s: Cannot open output file %s", __func__, outHist.c_str());
+    }
+    fprintf(fp, "k\tsize\tn_components\n");
+    for (size_t k = 0; k < perFactorHist.size(); ++k) {
+        std::vector<std::pair<uint64_t, uint64_t>> entries(
+            perFactorHist[k].begin(), perFactorHist[k].end());
+        std::sort(entries.begin(), entries.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& kv : entries) {
+            fprintf(fp, "%zu\t%llu\t%llu\n",
+                k,
+                static_cast<unsigned long long>(kv.first),
+                static_cast<unsigned long long>(kv.second));
+        }
+    }
+    fclose(fp);
+}
+
+nlohmann::json load_template_json(const std::string& templateFile) {
+    std::ifstream in(templateFile);
+    if (!in.is_open()) {
+        error("%s: Cannot open template GeoJSON file %s", __func__, templateFile.c_str());
+    }
+    nlohmann::json j;
+    in >> j;
+    return j;
+}
+
+void write_factor_template_json(const std::string& outFile, const nlohmann::json& templateJson,
+    int32_t factor, const nlohmann::json& feature) {
+    nlohmann::json outJson = templateJson;
+    outJson["title"] = std::to_string(factor);
+    outJson["geometry"] = feature;
+    std::ofstream out(outFile);
+    if (!out.is_open()) {
+        error("%s: Cannot open output file %s", __func__, outFile.c_str());
+    }
+    out << outJson.dump();
+    out << "\n";
+    out.close();
+}
+
 struct SpatialMetricsAccum {
     int32_t K = 0;
     std::vector<uint64_t> area; // pixel count
@@ -104,6 +169,10 @@ inline void spatialAccumulateEdge(SpatialMetricsAccum& m, uint8_t a, uint8_t b) 
     if (b < BG) m.perim[b]++;
     if (a == BG && b < BG) m.perim_bg[b]++;
     else if (b == BG && a < BG) m.perim_bg[a]++;
+}
+
+size_t pair_index_upper(size_t i, size_t j, size_t n) {
+    return i * (2 * n - i - 1) / 2 + (j - i - 1);
 }
 
 } // namespace
@@ -1009,6 +1078,762 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     notice("%s: Wrote smoothed output to %s (index: %s)", __func__, outFile.c_str(), outIndex.c_str());
 }
 
+void TileOperator::profileSoftFactorMasks(const std::string& outPrefix,
+    int32_t focalK, int32_t radius, double neighborhoodThreshold,
+    double minFactorFrac, float minPixelProb, uint32_t minComponentArea, bool skipMaskOverlap) {
+    if (blocks_.empty()) {
+        warning("%s: No tiles to process", __func__);
+        return;
+    }
+    if (coord_dim_ != 2 || (mode_ & 0x8) != 0) {
+        error("%s: Only 2D regular tiles are supported", __func__);
+    }
+    if (isTextInput() && !canSeekTextInput()) {
+        error("%s: This operation requires seekable input", __func__);
+    }
+    if (K_ <= 0) {
+        error("%s: K must be known and positive", __func__);
+    }
+    if (focalK < 0 || focalK >= K_) {
+        error("%s: focalK=%d out of range [0, %d)", __func__, focalK, K_);
+    }
+    if (radius < 0) {
+        error("%s: radius must be >= 0", __func__);
+    }
+    if (neighborhoodThreshold < 0.0) {
+        error("%s: neighborhoodThreshold must be >= 0", __func__);
+    }
+    if (minFactorFrac < 0.0 || minFactorFrac >= 1.0) {
+        error("%s: minFactorFrac must be in [0,1)", __func__);
+    }
+    if (minPixelProb < 0.0) {
+        error("%s: minPixelProb must be >= 0", __func__);
+    }
+
+    struct Stage1Accum {
+        std::vector<double> histMask;
+        std::vector<double> histGlobal;
+        uint64_t focalArea = 0;
+        uint64_t outOfRange = 0;
+        uint64_t badFactor = 0;
+        uint64_t collisions = 0;
+
+        explicit Stage1Accum(int32_t K)
+            : histMask(static_cast<size_t>(K), 0.0),
+              histGlobal(static_cast<size_t>(K), 0.0) {}
+    };
+
+    const auto t0 = std::chrono::steady_clock::now();
+    Stage1Accum stage1Global(K_);
+
+    auto openTileStream = [&]() {
+        std::ifstream in;
+        if (mode_ & 0x1) in.open(dataFile_, std::ios::binary);
+        else in.open(dataFile_);
+        if (!in.is_open()) {
+            error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+        }
+        return in;
+    };
+
+    auto processStage1Tile = [&](size_t bi, std::ifstream& in, Stage1Accum& accum) {
+        const TileInfo& blk = blocks_[bi];
+        SoftMaskTileData tileData;
+        loadSoftMaskTileData(blk, in, minPixelProb, true, tileData,
+            accum.outOfRange, accum.badFactor, &accum.collisions, &accum.histGlobal);
+        const size_t nPix = tileData.geom.W * tileData.geom.H;
+        std::vector<float> denseFocal;
+        std::vector<uint8_t> focalMask;
+        auto focalIt = tileData.factorEntries.find(focalK);
+        if (focalIt != tileData.factorEntries.end()) {
+            buildDenseFactorRaster(focalIt->second, nPix, denseFocal);
+        } else {
+            denseFocal.assign(nPix, 0.0f);
+        }
+        buildSoftMaskBinary(denseFocal, tileData.seenLocal, tileData.geom.W, tileData.geom.H,
+            radius, neighborhoodThreshold, SoftMaskThresholdConfig{}, focalMask);
+        const uint64_t keptArea = filterMaskByMinComponentArea4(
+            focalMask, tileData.geom.W, tileData.geom.H, minComponentArea);
+        accum.focalArea += keptArea;
+        for (const auto& stored : tileData.records) {
+            if (!focalMask[stored.localIdx]) continue;
+            const TopProbs& top = stored.rec;
+            for (size_t i = 0; i < top.ks.size() && i < top.ps.size(); ++i) {
+                const int32_t k = top.ks[i];
+                if (k < 0 || k >= K_) continue;
+                accum.histMask[static_cast<size_t>(k)] += static_cast<double>(top.ps[i]);
+            }
+        }
+
+    };
+
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<Stage1Accum> tls([&] { return Stage1Accum(K_); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in = openTileStream();
+                auto& local = tls.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    processStage1Tile(bi, in, local);
+                }
+            });
+        tls.combine_each([&](const Stage1Accum& local) {
+            for (size_t k = 0; k < stage1Global.histMask.size(); ++k) {
+                stage1Global.histMask[k] += local.histMask[k];
+                stage1Global.histGlobal[k] += local.histGlobal[k];
+            }
+            stage1Global.focalArea += local.focalArea;
+            stage1Global.outOfRange += local.outOfRange;
+            stage1Global.badFactor += local.badFactor;
+            stage1Global.collisions += local.collisions;
+        });
+    } else {
+        std::ifstream in = openTileStream();
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            processStage1Tile(bi, in, stage1Global);
+        }
+    }
+    const auto tStage1 = std::chrono::steady_clock::now();
+
+    double histMaskTotal = std::accumulate(stage1Global.histMask.begin(), stage1Global.histMask.end(), 0.0);
+    double histGlobalTotal = std::accumulate(stage1Global.histGlobal.begin(), stage1Global.histGlobal.end(), 0.0);
+    std::string outHist = outPrefix + ".factor_hist.tsv";
+    FILE* fpHist = fopen(outHist.c_str(), "w");
+    if (!fpHist) {
+        error("%s: Cannot open output file %s", __func__, outHist.c_str());
+    }
+    fprintf(fpHist, "k\tmass_in_mask\tfrac_in_mask\tmass_global\tfrac_global\n");
+    for (int32_t k = 0; k < K_; ++k) {
+        const double fracMask = (histMaskTotal > 0.0) ? stage1Global.histMask[static_cast<size_t>(k)] / histMaskTotal : 0.0;
+        const double fracGlobal = (histGlobalTotal > 0.0) ? stage1Global.histGlobal[static_cast<size_t>(k)] / histGlobalTotal : 0.0;
+        fprintf(fpHist, "%d\t%.3e\t%.3e\t%.3e\t%.3e\n",
+            k,
+            stage1Global.histMask[static_cast<size_t>(k)],
+            fracMask,
+            stage1Global.histGlobal[static_cast<size_t>(k)],
+            fracGlobal);
+    }
+    fclose(fpHist);
+
+    if (skipMaskOverlap) {
+        return;
+    }
+
+    std::vector<int32_t> selectedFactors;
+    selectedFactors.reserve(static_cast<size_t>(K_));
+    selectedFactors.push_back(focalK);
+    if (histMaskTotal > 0.0) {
+        for (int32_t k = 0; k < K_; ++k) {
+            if (k == focalK) continue;
+            if (stage1Global.histMask[static_cast<size_t>(k)] / histMaskTotal > minFactorFrac) {
+                selectedFactors.push_back(k);
+            }
+        }
+    }
+    const size_t nSelected = selectedFactors.size();
+    if (nSelected < 2) {
+        notice("%s: No factors passed the minFactorFrac threshold", __func__);
+        return;
+    }
+
+    std::string outPairwise = outPrefix + ".pairwise.tsv";
+    FILE* fpPairwise = fopen(outPairwise.c_str(), "w");
+    if (!fpPairwise) {
+        error("%s: Cannot open output file %s", __func__, outPairwise.c_str());
+    }
+    fprintf(fpPairwise, "k1\tk2\tarea1_pix\tarea2_pix\tarea_ovlp_pix\tarea_ovlp_f1\tarea_ovlp_f2\tarea_jaccard\tmass1_in_ovlp\tmass2_in_ovlp\tmass_ovlp_f1\tmass_ovlp_f2\n");
+
+    if (histMaskTotal <= 0.0 || nSelected < 2) {
+        fclose(fpPairwise);
+        const auto tDone = std::chrono::steady_clock::now();
+        notice("%s: Wrote histogram to %s", __func__, outHist.c_str());
+        notice("%s: Wrote empty pairwise summary to %s", __func__, outPairwise.c_str());
+        notice("%s: timing(ms): stage1=%lld total=%lld n_selected=%zu focal_area=%llu",
+            __func__,
+            static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tStage1 - t0).count()),
+            static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tDone - t0).count()),
+            nSelected,
+            static_cast<unsigned long long>(stage1Global.focalArea));
+        if (stage1Global.outOfRange > 0) {
+            warning("%s: Ignored %llu out-of-tile records", __func__, static_cast<unsigned long long>(stage1Global.outOfRange));
+        }
+        if (stage1Global.badFactor > 0) {
+            warning("%s: Ignored %llu invalid factor entries", __func__, static_cast<unsigned long long>(stage1Global.badFactor));
+        }
+        if (stage1Global.collisions > 0) {
+            warning("%s: Encountered %llu duplicate pixel records", __func__, static_cast<unsigned long long>(stage1Global.collisions));
+        }
+        return;
+    }
+
+
+    const size_t nPairs = nSelected * (nSelected - 1) / 2;
+    std::vector<int32_t> factorToSelected(static_cast<size_t>(K_), -1);
+    for (size_t s = 0; s < nSelected; ++s) {
+        factorToSelected[static_cast<size_t>(selectedFactors[s])] = static_cast<int32_t>(s);
+    }
+
+    struct Stage3Accum {
+        std::vector<uint64_t> maskArea;
+        std::vector<uint64_t> areaIntersection;
+        std::vector<double> mass1Intersection;
+        std::vector<double> mass2Intersection;
+        uint64_t outOfRange = 0;
+        uint64_t badFactor = 0;
+
+        Stage3Accum(size_t nSel, size_t nPair)
+            : maskArea(nSel, 0),
+              areaIntersection(nPair, 0),
+              mass1Intersection(nPair, 0.0),
+              mass2Intersection(nPair, 0.0) {}
+    };
+
+    Stage3Accum stage3Global(nSelected, nPairs);
+
+    auto processStage3Tile = [&](size_t bi, std::ifstream& in, Stage3Accum& accum) {
+        const TileInfo& blk = blocks_[bi];
+        SoftMaskTileData tileData;
+        loadSoftMaskTileData(blk, in, minPixelProb, true, tileData,
+            accum.outOfRange, accum.badFactor, nullptr, nullptr);
+        const size_t nPix = tileData.geom.W * tileData.geom.H;
+        if (nPix == 0) return;
+
+        std::vector<std::vector<std::pair<uint32_t, float>>> entries(nSelected);
+        for (size_t s = 0; s < nSelected; ++s) {
+            auto it = tileData.factorEntries.find(selectedFactors[s]);
+            if (it != tileData.factorEntries.end()) {
+                entries[s] = it->second;
+            }
+        }
+
+        std::vector<std::vector<uint8_t>> builtMasks(nSelected);
+        std::vector<const std::vector<uint8_t>*> maskPtrs(nSelected, nullptr);
+
+        std::vector<float> dense;
+        for (size_t s = 0; s < nSelected; ++s) {
+            buildDenseFactorRaster(entries[s], nPix, dense);
+            buildSoftMaskBinary(dense, tileData.seenLocal, tileData.geom.W, tileData.geom.H,
+                radius, neighborhoodThreshold, SoftMaskThresholdConfig{}, builtMasks[s]);
+            const uint64_t keptArea = filterMaskByMinComponentArea4(
+                builtMasks[s], tileData.geom.W, tileData.geom.H, minComponentArea);
+            accum.maskArea[s] += keptArea;
+            maskPtrs[s] = &builtMasks[s];
+        }
+
+        for (size_t idx = 0; idx < nPix; ++idx) {
+            for (size_t i = 0; i < nSelected; ++i) {
+                if (!(*maskPtrs[i])[idx]) continue;
+                for (size_t j = i + 1; j < nSelected; ++j) {
+                    if ((*maskPtrs[j])[idx]) {
+                        accum.areaIntersection[pair_index_upper(i, j, nSelected)]++;
+                    }
+                }
+            }
+        }
+
+        std::vector<double> selectedProb(nSelected, 0.0);
+        for (const auto& stored : tileData.records) {
+            const uint32_t localIdx = stored.localIdx;
+            std::fill(selectedProb.begin(), selectedProb.end(), 0.0);
+            const TopProbs& top = stored.rec;
+            for (size_t i = 0; i < top.ks.size() && i < top.ps.size(); ++i) {
+                const int32_t k = top.ks[i];
+                if (k < 0 || k >= K_) continue;
+                const double p = static_cast<double>(top.ps[i]);
+                const int32_t selIdx = factorToSelected[static_cast<size_t>(k)];
+                if (selIdx >= 0) {
+                    selectedProb[static_cast<size_t>(selIdx)] += p;
+                }
+            }
+            for (size_t i = 0; i < nSelected; ++i) {
+                if (!(*maskPtrs[i])[localIdx]) continue;
+                for (size_t j = i + 1; j < nSelected; ++j) {
+                    if (!(*maskPtrs[j])[localIdx]) continue;
+                    const size_t pidx = pair_index_upper(i, j, nSelected);
+                    accum.mass1Intersection[pidx] += selectedProb[i];
+                    accum.mass2Intersection[pidx] += selectedProb[j];
+                }
+            }
+        }
+    };
+
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<Stage3Accum> tls([&] { return Stage3Accum(nSelected, nPairs); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in = openTileStream();
+                auto& local = tls.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    processStage3Tile(bi, in, local);
+                }
+            });
+        tls.combine_each([&](const Stage3Accum& local) {
+            for (size_t i = 0; i < nSelected; ++i) {
+                stage3Global.maskArea[i] += local.maskArea[i];
+            }
+            for (size_t i = 0; i < nPairs; ++i) {
+                stage3Global.areaIntersection[i] += local.areaIntersection[i];
+                stage3Global.mass1Intersection[i] += local.mass1Intersection[i];
+                stage3Global.mass2Intersection[i] += local.mass2Intersection[i];
+            }
+            stage3Global.outOfRange += local.outOfRange;
+            stage3Global.badFactor += local.badFactor;
+        });
+    } else {
+        std::ifstream in = openTileStream();
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            processStage3Tile(bi, in, stage3Global);
+        }
+    }
+    const auto tStage3 = std::chrono::steady_clock::now();
+
+    auto safe_ratio = [](double num, double den) {
+        return (den > 0.0) ? (num / den) : 0.0;
+    };
+    for (size_t i = 0; i < nSelected; ++i) {
+        for (size_t j = i + 1; j < nSelected; ++j) {
+            const size_t pidx = pair_index_upper(i, j, nSelected);
+            const double area1 = static_cast<double>(stage3Global.maskArea[i]);
+            const double area2 = static_cast<double>(stage3Global.maskArea[j]);
+            const double areaI = static_cast<double>(stage3Global.areaIntersection[pidx]);
+            const double areaJ = safe_ratio(areaI, area1 + area2 - areaI);
+            const double mass1I = stage3Global.mass1Intersection[pidx];
+            const double mass2I = stage3Global.mass2Intersection[pidx];
+            const double totalMass1 = stage1Global.histGlobal[static_cast<size_t>(selectedFactors[i])];
+            const double totalMass2 = stage1Global.histGlobal[static_cast<size_t>(selectedFactors[j])];
+            fprintf(fpPairwise, "%d\t%d\t%llu\t%llu\t%llu\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\t%.3e\n",
+                selectedFactors[i], selectedFactors[j],
+                static_cast<unsigned long long>(stage3Global.maskArea[i]),
+                static_cast<unsigned long long>(stage3Global.maskArea[j]),
+                static_cast<unsigned long long>(stage3Global.areaIntersection[pidx]),
+                safe_ratio(areaI, area1), safe_ratio(areaI, area2), areaJ,
+                mass1I, mass2I,
+                safe_ratio(mass1I, totalMass1),
+                safe_ratio(mass2I, totalMass2));
+        }
+    }
+    fclose(fpPairwise);
+
+    const auto tDone = std::chrono::steady_clock::now();
+    notice("%s: Wrote histogram to %s", __func__, outHist.c_str());
+    notice("%s: Wrote pairwise mask summary to %s", __func__, outPairwise.c_str());
+    notice("%s: timing(ms): stage1=%lld stage3=%lld total=%lld n_selected=%zu focal_area=%llu",
+        __func__,
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tStage1 - t0).count()),
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tStage3 - tStage1).count()),
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tDone - t0).count()),
+        nSelected,
+        static_cast<unsigned long long>(stage3Global.maskArea[0]));
+    if (stage1Global.outOfRange + stage3Global.outOfRange > 0) {
+        warning("%s: Ignored %llu out-of-tile records",
+            __func__, static_cast<unsigned long long>(stage1Global.outOfRange + stage3Global.outOfRange));
+    }
+    if (stage1Global.badFactor + stage3Global.badFactor > 0) {
+        warning("%s: Ignored %llu invalid factor entries",
+            __func__, static_cast<unsigned long long>(stage1Global.badFactor + stage3Global.badFactor));
+    }
+    if (stage1Global.collisions > 0) {
+        warning("%s: Encountered %llu duplicate pixel records",
+            __func__, static_cast<unsigned long long>(stage1Global.collisions));
+    }
+}
+
+void TileOperator::softFactorMask(const std::string& outPrefix,
+    int32_t radius, double neighborhoodThreshold,
+    float minPixelProb, double minTileFactorMass,
+    uint32_t minComponentArea, uint32_t minHoleArea,
+    double simplifyTolerance, bool skipBoundaries,
+    const std::string& templateGeoJSON, const std::string& templateOutPrefix) {
+    if (blocks_.empty()) {
+        warning("%s: No tiles to process", __func__);
+        return;
+    }
+    if (coord_dim_ != 2 || (mode_ & 0x8) != 0) {
+        error("%s: Only 2D regular tiles are supported", __func__);
+    }
+    if (isTextInput() && !canSeekTextInput()) {
+        error("%s: This operation requires seekable input", __func__);
+    }
+    if (K_ <= 0) {
+        error("%s: K must be known and positive", __func__);
+    }
+    if (radius < 0) {
+        error("%s: radius must be >= 0", __func__);
+    }
+    if (neighborhoodThreshold < 0.0 || neighborhoodThreshold > 1.0) {
+        error("%s: neighborhoodThreshold must be in [0,1]", __func__);
+    }
+    if (minPixelProb < 0.0f) {
+        error("%s: minPixelProb must be >= 0", __func__);
+    }
+    if (minTileFactorMass < 0.0) {
+        error("%s: minTileFactorMass must be >= 0", __func__);
+    }
+    if (simplifyTolerance < 0.0) {
+        error("%s: simplifyTolerance must be >= 0", __func__);
+    }
+
+    struct StageAccum {
+        std::vector<uint64_t> tileCount;
+        uint64_t outOfRange = 0;
+        uint64_t badFactor = 0;
+        uint64_t collisions = 0;
+
+        explicit StageAccum(int32_t K)
+            : tileCount(static_cast<size_t>(K), 0) {}
+    };
+
+    const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<SoftMaskTileResult> perTile(blocks_.size());
+    StageAccum globalAccum(K_);
+
+    auto openTileStream = [&]() {
+        std::ifstream in;
+        if (mode_ & 0x1) in.open(dataFile_, std::ios::binary);
+        else in.open(dataFile_);
+        if (!in.is_open()) {
+            error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
+        }
+        return in;
+    };
+
+    auto processTile = [&](size_t bi, std::ifstream& in, StageAccum& accum) {
+        const TileInfo& blk = blocks_[bi];
+        SoftMaskTileResult tileOut;
+        initTileGeom(blk, tileOut.geom);
+        const size_t nPix = tileOut.geom.W * tileOut.geom.H;
+        if (nPix == 0) {
+            perTile[bi] = std::move(tileOut);
+            return;
+        }
+
+        SoftMaskTileData tileData;
+        loadSoftMaskTileData(blk, in, minPixelProb, false, tileData,
+            accum.outOfRange, accum.badFactor, &accum.collisions, nullptr);
+
+        std::vector<int32_t> factorsToProcess;
+        factorsToProcess.reserve(tileData.factorMass.size());
+        for (const auto& kv : tileData.factorMass) {
+            if (kv.second >= minTileFactorMass) {
+                factorsToProcess.push_back(kv.first);
+                accum.tileCount[static_cast<size_t>(kv.first)] += 1;
+            }
+        }
+        std::sort(factorsToProcess.begin(), factorsToProcess.end());
+        if (factorsToProcess.empty()) {
+            perTile[bi] = std::move(tileOut);
+            return;
+        }
+
+        std::vector<float> dense;
+        std::vector<uint8_t> mask;
+        const SoftMaskThresholdConfig maskConfig{true, true, 0.4, 1.0};
+
+        for (int32_t factor : factorsToProcess) {
+            auto it = tileData.factorEntries.find(factor);
+            if (it == tileData.factorEntries.end()) {
+                continue;
+            }
+            buildDenseFactorRaster(it->second, nPix, dense);
+            buildSoftMaskBinary(dense, tileData.seenLocal, tileOut.geom.W, tileOut.geom.H,
+                radius, neighborhoodThreshold, maskConfig, mask);
+
+            BinaryMaskCCL ccl = buildBinaryMaskCCL4(mask, dense, tileOut.geom.W, tileOut.geom.H,
+                static_cast<double>(minComponentArea));
+            if (ccl.ncomp == 0 || ccl.keptArea == 0) continue;
+
+            SoftMaskTileFactorResult factorOut;
+            factorOut.factor = factor;
+            factorOut.maskArea = ccl.keptArea;
+            std::vector<uint32_t> borderRemap(ccl.ncomp, INVALID);
+            std::vector<uint32_t> borderCidOrder;
+            if (!skipBoundaries) {
+                factorOut.borderPolys.resize(ccl.ncomp);
+            }
+            for (uint32_t cid = 0; cid < ccl.ncomp; ++cid) {
+                if (ccl.compTouchesBorder[cid]) {
+                    borderRemap[cid] = static_cast<uint32_t>(factorOut.borderCompAreas.size());
+                    borderCidOrder.push_back(cid);
+                    factorOut.borderCompAreas.push_back(ccl.compArea[cid]);
+                } else {
+                    factorOut.interiorCompAreas.push_back(ccl.compArea[cid]);
+                }
+                if (!skipBoundaries) {
+                    Clipper2Lib::Paths64 polys = buildMaskComponentPolygons(ccl, cid, tileOut.geom, minHoleArea, simplifyTolerance);
+                    if (ccl.compTouchesBorder[cid]) factorOut.borderPolys[static_cast<size_t>(cid)] = std::move(polys);
+                    else if (!polys.empty()) factorOut.interiorPolys.push_back(std::move(polys));
+                }
+            }
+            if (factorOut.interiorCompAreas.empty() && factorOut.borderCompAreas.empty()) continue;
+
+            factorOut.leftCid.assign(ccl.leftCid.size(), INVALID);
+            factorOut.rightCid.assign(ccl.rightCid.size(), INVALID);
+            factorOut.topCid.assign(ccl.topCid.size(), INVALID);
+            factorOut.bottomCid.assign(ccl.bottomCid.size(), INVALID);
+            for (size_t i = 0; i < ccl.leftCid.size(); ++i) {
+                const uint32_t cid = ccl.leftCid[i];
+                if (cid != INVALID && cid < borderRemap.size()) factorOut.leftCid[i] = borderRemap[cid];
+            }
+            for (size_t i = 0; i < ccl.rightCid.size(); ++i) {
+                const uint32_t cid = ccl.rightCid[i];
+                if (cid != INVALID && cid < borderRemap.size()) factorOut.rightCid[i] = borderRemap[cid];
+            }
+            for (size_t i = 0; i < ccl.topCid.size(); ++i) {
+                const uint32_t cid = ccl.topCid[i];
+                if (cid != INVALID && cid < borderRemap.size()) factorOut.topCid[i] = borderRemap[cid];
+            }
+            for (size_t i = 0; i < ccl.bottomCid.size(); ++i) {
+                const uint32_t cid = ccl.bottomCid[i];
+                if (cid != INVALID && cid < borderRemap.size()) factorOut.bottomCid[i] = borderRemap[cid];
+            }
+
+            if (!skipBoundaries && !factorOut.borderCompAreas.empty()) {
+                std::vector<Clipper2Lib::Paths64> compactBorderPolys(factorOut.borderCompAreas.size());
+                for (size_t i = 0; i < borderCidOrder.size(); ++i) {
+                    compactBorderPolys[i] = std::move(factorOut.borderPolys[borderCidOrder[i]]);
+                }
+                factorOut.borderPolys.swap(compactBorderPolys);
+            } else {
+                factorOut.borderPolys.clear();
+            }
+
+            tileOut.factorToIndex[factor] = tileOut.factors.size();
+            tileOut.factors.push_back(std::move(factorOut));
+        }
+
+        perTile[bi] = std::move(tileOut);
+    };
+
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<StageAccum> tls([&] { return StageAccum(K_); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in = openTileStream();
+                auto& local = tls.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    processTile(bi, in, local);
+                }
+            });
+        tls.combine_each([&](const StageAccum& local) {
+            for (size_t k = 0; k < globalAccum.tileCount.size(); ++k) {
+                globalAccum.tileCount[k] += local.tileCount[k];
+            }
+            globalAccum.outOfRange += local.outOfRange;
+            globalAccum.badFactor += local.badFactor;
+            globalAccum.collisions += local.collisions;
+        });
+    } else {
+        std::ifstream in = openTileStream();
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            processTile(bi, in, globalAccum);
+        }
+    }
+    const auto tStage1 = std::chrono::steady_clock::now();
+
+    std::vector<Clipper2Lib::Paths64> finalPathsByFactor(static_cast<size_t>(K_));
+    std::vector<uint64_t> finalArea(static_cast<size_t>(K_), 0);
+    std::vector<uint64_t> finalComponents(static_cast<size_t>(K_), 0);
+    std::vector<std::unordered_map<uint64_t, uint64_t>> componentHist(static_cast<size_t>(K_));
+    std::vector<std::vector<size_t>> borderBase(perTile.size());
+    size_t totalBorderComps = 0;
+
+    for (size_t ti = 0; ti < perTile.size(); ++ti) {
+        const SoftMaskTileResult& tile = perTile[ti];
+        borderBase[ti].assign(tile.factors.size(), std::numeric_limits<size_t>::max());
+        for (size_t fi = 0; fi < tile.factors.size(); ++fi) {
+            const SoftMaskTileFactorResult& factorRes = tile.factors[fi];
+            finalArea[static_cast<size_t>(factorRes.factor)] += factorRes.maskArea;
+            for (uint32_t area : factorRes.interiorCompAreas) {
+                finalComponents[static_cast<size_t>(factorRes.factor)] += 1;
+                componentHist[static_cast<size_t>(factorRes.factor)][static_cast<uint64_t>(area)] += 1;
+            }
+            if (!skipBoundaries) {
+                for (const auto& polys : factorRes.interiorPolys) {
+                    finalPathsByFactor[static_cast<size_t>(factorRes.factor)].insert(
+                        finalPathsByFactor[static_cast<size_t>(factorRes.factor)].end(),
+                        polys.begin(), polys.end());
+                }
+            }
+            if (!factorRes.borderCompAreas.empty()) {
+                borderBase[ti][fi] = totalBorderComps;
+                totalBorderComps += factorRes.borderCompAreas.size();
+            }
+        }
+    }
+
+    DisjointSet dsu(totalBorderComps);
+    for (size_t ti = 0; ti < perTile.size(); ++ti) {
+        const SoftMaskTileResult& aTile = perTile[ti];
+        const TileKey key{blocks_[ti].idx.row, blocks_[ti].idx.col};
+        const auto rightIt = tile_lookup_.find(TileKey{key.row, key.col + 1});
+        if (rightIt != tile_lookup_.end()) {
+            const size_t tj = rightIt->second;
+            const SoftMaskTileResult& bTile = perTile[tj];
+            for (size_t afi = 0; afi < aTile.factors.size(); ++afi) {
+                const SoftMaskTileFactorResult& a = aTile.factors[afi];
+                if (a.borderCompAreas.empty()) continue;
+                const auto bIt = bTile.factorToIndex.find(a.factor);
+                if (bIt == bTile.factorToIndex.end()) continue;
+                const size_t bfi = bIt->second;
+                const SoftMaskTileFactorResult& b = bTile.factors[bfi];
+                if (b.borderCompAreas.empty()) continue;
+                const int32_t y0 = std::max(aTile.geom.pixY0, bTile.geom.pixY0);
+                const int32_t y1 = std::min(aTile.geom.pixY1, bTile.geom.pixY1);
+                uint32_t lastA = INVALID, lastB = INVALID;
+                for (int32_t gy = y0; gy < y1; ++gy) {
+                    const uint32_t ca = a.rightCid[static_cast<size_t>(gy - aTile.geom.pixY0)];
+                    const uint32_t cb = b.leftCid[static_cast<size_t>(gy - bTile.geom.pixY0)];
+                    if (ca == INVALID || cb == INVALID || (ca == lastA && cb == lastB)) continue;
+                    lastA = ca;
+                    lastB = cb;
+                    dsu.unite(borderBase[ti][afi] + static_cast<size_t>(ca),
+                        borderBase[tj][bfi] + static_cast<size_t>(cb));
+                }
+            }
+        }
+
+        const auto downIt = tile_lookup_.find(TileKey{key.row + 1, key.col});
+        if (downIt != tile_lookup_.end()) {
+            const size_t tj = downIt->second;
+            const SoftMaskTileResult& bTile = perTile[tj];
+            for (size_t afi = 0; afi < aTile.factors.size(); ++afi) {
+                const SoftMaskTileFactorResult& a = aTile.factors[afi];
+                if (a.borderCompAreas.empty()) continue;
+                const auto bIt = bTile.factorToIndex.find(a.factor);
+                if (bIt == bTile.factorToIndex.end()) continue;
+                const size_t bfi = bIt->second;
+                const SoftMaskTileFactorResult& b = bTile.factors[bfi];
+                if (b.borderCompAreas.empty()) continue;
+                const int32_t x0 = std::max(aTile.geom.pixX0, bTile.geom.pixX0);
+                const int32_t x1 = std::min(aTile.geom.pixX1, bTile.geom.pixX1);
+                uint32_t lastA = INVALID, lastB = INVALID;
+                for (int32_t gx = x0; gx < x1; ++gx) {
+                    const uint32_t ca = a.bottomCid[static_cast<size_t>(gx - aTile.geom.pixX0)];
+                    const uint32_t cb = b.topCid[static_cast<size_t>(gx - bTile.geom.pixX0)];
+                    if (ca == INVALID || cb == INVALID || (ca == lastA && cb == lastB)) continue;
+                    lastA = ca;
+                    lastB = cb;
+                    dsu.unite(borderBase[ti][afi] + static_cast<size_t>(ca),
+                        borderBase[tj][bfi] + static_cast<size_t>(cb));
+                }
+            }
+        }
+    }
+    if (totalBorderComps > 0) dsu.compress_all();
+
+    std::vector<uint64_t> rootArea(totalBorderComps, 0);
+    std::vector<Clipper2Lib::Paths64> rootPaths(totalBorderComps);
+    std::vector<int32_t> rootFactor(totalBorderComps, -1);
+    for (size_t ti = 0; ti < perTile.size(); ++ti) {
+        const SoftMaskTileResult& tile = perTile[ti];
+        for (size_t fi = 0; fi < tile.factors.size(); ++fi) {
+            const SoftMaskTileFactorResult& factorRes = tile.factors[fi];
+            if (factorRes.borderCompAreas.empty()) continue;
+            const size_t base = borderBase[ti][fi];
+            for (size_t cid = 0; cid < factorRes.borderCompAreas.size(); ++cid) {
+                const size_t gid = base + cid;
+                const size_t root = dsu.parent[gid];
+                rootArea[root] += static_cast<uint64_t>(factorRes.borderCompAreas[cid]);
+                if (rootFactor[root] < 0) rootFactor[root] = factorRes.factor;
+                else if (rootFactor[root] != factorRes.factor) {
+                    error("%s: Border component factor mismatch after DSU merge", __func__);
+                }
+                if (!skipBoundaries && cid < factorRes.borderPolys.size()) {
+                    rootPaths[root].insert(rootPaths[root].end(),
+                        factorRes.borderPolys[cid].begin(), factorRes.borderPolys[cid].end());
+                }
+            }
+        }
+    }
+    for (size_t root = 0; root < rootFactor.size(); ++root) {
+        if (rootFactor[root] < 0 || rootArea[root] == 0) continue;
+        finalComponents[static_cast<size_t>(rootFactor[root])] += 1;
+        componentHist[static_cast<size_t>(rootFactor[root])][rootArea[root]] += 1;
+        if (skipBoundaries || rootPaths[root].empty()) continue;
+        Clipper2Lib::Paths64 merged = cleanupMaskPolygons(rootPaths[root], minHoleArea, simplifyTolerance);
+        if (merged.empty()) continue;
+        finalPathsByFactor[static_cast<size_t>(rootFactor[root])].insert(
+            finalPathsByFactor[static_cast<size_t>(rootFactor[root])].end(),
+            merged.begin(), merged.end());
+    }
+    const auto tStage2 = std::chrono::steady_clock::now();
+
+    std::string outHist = outPrefix + ".factor_summary.tsv";
+    write_factor_mask_info(outHist, globalAccum.tileCount, finalArea, finalComponents);
+    std::string outCompHist = outPrefix + ".component_hist.tsv";
+    write_factor_mask_component_histogram(outCompHist, componentHist);
+
+    std::string outGeoJSON = outPrefix + ".geojson";
+    if (!skipBoundaries) {
+        nlohmann::json templateJson;
+        const bool writeTemplateJSON = !templateGeoJSON.empty();
+        const std::string factorOutPrefix = templateOutPrefix.empty() ? outPrefix : templateOutPrefix;
+        if (writeTemplateJSON) {
+            templateJson = load_template_json(templateGeoJSON);
+        }
+        nlohmann::json features = nlohmann::json::array();
+        for (int32_t k = 0; k < K_; ++k) {
+            if (finalPathsByFactor[static_cast<size_t>(k)].empty()) continue;
+            Clipper2Lib::Paths64 factorPaths = cleanupMaskPolygons(
+                finalPathsByFactor[static_cast<size_t>(k)], minHoleArea, simplifyTolerance);
+            if (factorPaths.empty()) continue;
+            nlohmann::json feature;
+            feature["type"] = "Feature";
+            feature["properties"] = {
+                {"Factor", k},
+                {"n_tiles", globalAccum.tileCount[static_cast<size_t>(k)]},
+                {"mask_area_pix", finalArea[static_cast<size_t>(k)]},
+                {"n_components", finalComponents[static_cast<size_t>(k)]}
+            };
+            feature["geometry"] = maskPathsToMultiPolygonGeoJSON(factorPaths);
+            if (writeTemplateJSON) {
+                const std::string outFactor = factorOutPrefix + ".k" + std::to_string(k) + ".json";
+                write_factor_template_json(outFactor, templateJson, k, feature);
+            }
+            features.push_back(std::move(feature));
+        }
+        nlohmann::json featureCollection;
+        featureCollection["type"] = "FeatureCollection";
+        featureCollection["features"] = std::move(features);
+
+        std::ofstream geojsonOut(outGeoJSON);
+        if (!geojsonOut.is_open()) {
+            error("%s: Cannot open output file %s", __func__, outGeoJSON.c_str());
+        }
+        geojsonOut << featureCollection.dump();
+        geojsonOut << "\n";
+        geojsonOut.close();
+    }
+
+    const auto tDone = std::chrono::steady_clock::now();
+    notice("%s: Wrote factor histogram to %s", __func__, outHist.c_str());
+    notice("%s: Wrote component size histogram to %s", __func__, outCompHist.c_str());
+    if (!skipBoundaries) {
+        notice("%s: Wrote soft-mask GeoJSON to %s", __func__, outGeoJSON.c_str());
+    }
+    notice("%s: timing(ms): stage1=%lld stage2=%lld total=%lld",
+        __func__,
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tStage1 - t0).count()),
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tStage2 - tStage1).count()),
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tDone - t0).count()));
+    if (globalAccum.outOfRange > 0) {
+        warning("%s: Ignored %llu out-of-tile records",
+            __func__, static_cast<unsigned long long>(globalAccum.outOfRange));
+    }
+    if (globalAccum.badFactor > 0) {
+        warning("%s: Ignored %llu invalid factor entries",
+            __func__, static_cast<unsigned long long>(globalAccum.badFactor));
+    }
+    if (globalAccum.collisions > 0) {
+        warning("%s: Encountered %llu duplicate pixel records",
+            __func__, static_cast<unsigned long long>(globalAccum.collisions));
+    }
+}
+
 void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
@@ -1027,8 +1852,8 @@ void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
             uint64_t& nOutOfRangeIgnored, uint64_t& nBadLabelIgnored) {
         DenseTile dense;
         loadDenseTile(blk, in, dense, BG, nOutOfRangeIgnored, nBadLabelIgnored);
-        const size_t width = dense.W;
-        const size_t height = dense.H;
+        const size_t width = dense.geom.W;
+        const size_t height = dense.geom.H;
         const size_t nPixels = width * height;
         const std::vector<uint8_t>& labels = dense.lab;
 
@@ -1151,7 +1976,7 @@ void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
     }
 }
 
-void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t minSize) {
+void TileOperator::hardFactorMask(const std::string& outPrefix, uint32_t minSize, bool skipBoundaries, const std::string& templateGeoJSON, const std::string& templateOutPrefix) {
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;
@@ -1165,172 +1990,347 @@ void TileOperator::connectedComponents(const std::string& outPrefix, uint32_t mi
     const int32_t K = K_;
     const uint8_t BG = static_cast<uint8_t>(K);
     const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
-    const auto tStage1Start = std::chrono::steady_clock::now();
+    const auto t0 = std::chrono::steady_clock::now();
+
+    struct StageAccum {
+        std::vector<uint64_t> tileCount;
+        uint64_t outOfRange = 0;
+        uint64_t badLabel = 0;
+
+        explicit StageAccum(int32_t K_) : tileCount(static_cast<size_t>(K_), 0) {}
+    };
 
     std::vector<TileCCL> perTile(blocks_.size());
-    uint64_t totalOutOfRangeIgnored = 0;
-    uint64_t totalBadLabelIgnored = 0;
-    // Stage 1: tile-local CCL
-    if (threads_ > 1 && blocks_.size() > 1) {
-        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
-        tbb::combinable<std::pair<uint64_t, uint64_t>> tlsIgnored(
-            [] { return std::make_pair(0ULL, 0ULL); });
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
-            [&](const tbb::blocked_range<size_t>& range) {
-                std::ifstream in;
-                if (mode_ & 0x1) {
-                    in.open(dataFile_, std::ios::binary);
-                } else {
-                    in.open(dataFile_);
-                }
-                if (!in.is_open()) {
-                    error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
-                }
-                auto& localIgnored = tlsIgnored.local();
-                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
-                    DenseTile dense;
-                    loadDenseTile(blocks_[bi], in, dense, BG, localIgnored.first, localIgnored.second);
-                    perTile[bi] = tileLocalCCL(dense, BG);
-                }
-            });
-        tlsIgnored.combine_each([&](const std::pair<uint64_t, uint64_t>& localIgnored) {
-            totalOutOfRangeIgnored += localIgnored.first;
-            totalBadLabelIgnored += localIgnored.second;
-        });
-    } else {
+    StageAccum globalAccum(K_);
+
+    auto openTileStream = [&]() {
         std::ifstream in;
-        if (mode_ & 0x1) {
-            in.open(dataFile_, std::ios::binary);
-        } else {
-            in.open(dataFile_);
-        }
+        if (mode_ & 0x1) in.open(dataFile_, std::ios::binary);
+        else in.open(dataFile_);
         if (!in.is_open()) {
             error("%s: Error opening input data file: %s", __func__, dataFile_.c_str());
         }
-        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
-            DenseTile dense;
-            loadDenseTile(blocks_[bi], in, dense, BG, totalOutOfRangeIgnored, totalBadLabelIgnored);
-            perTile[bi] = tileLocalCCL(dense, BG);
-        }
-    }
-    const auto tStage1End = std::chrono::steady_clock::now();
-
-    struct CCOutRec {
-        uint64_t size = 0;
-        uint64_t sumX = 0;
-        uint64_t sumY = 0;
-        PixBox box;
+        return in;
     };
-    std::vector<std::vector<CCOutRec>> perLabelComponents(static_cast<size_t>(K));
-    std::vector<std::unordered_map<uint64_t, uint64_t>> perLabelHist(static_cast<size_t>(K));
-    auto addFinalComponent = [&](uint8_t lbl, uint64_t size,
-                                 uint64_t sumX, uint64_t sumY,
-                                 const PixBox& box) {
-        if (lbl >= BG || size == 0) return;
-        perLabelHist[static_cast<size_t>(lbl)][size] += 1;
-        if (size >= static_cast<uint64_t>(minSize)) {
-            perLabelComponents[static_cast<size_t>(lbl)].push_back(CCOutRec{size, sumX, sumY, box});
+
+    auto processTile = [&](size_t bi, std::ifstream& in, StageAccum& accum) {
+        DenseTile dense;
+        loadDenseTile(blocks_[bi], in, dense, BG, accum.outOfRange, accum.badLabel);
+        perTile[bi] = tileLocalCCL(dense, BG);
+        std::vector<uint8_t> seen(static_cast<size_t>(K), 0);
+        for (uint8_t lbl : dense.lab) {
+            if (lbl < BG) seen[static_cast<size_t>(lbl)] = 1;
+        }
+        for (size_t k = 0; k < seen.size(); ++k) {
+            accum.tileCount[k] += static_cast<uint64_t>(seen[k]);
         }
     };
 
-    // Stage 1.5: local-finalize non-border components
-    const auto tStage15Start = std::chrono::steady_clock::now();
-    for (size_t i = 0; i < perTile.size(); ++i) {
-        auto& t = perTile[i];
-        if (t.ncomp == 0) continue;
-        const BorderRemapInfo remapInfo = remapTileToBorderComponents(t, INVALID);
-        for (uint32_t cid = 0; cid < remapInfo.remap.size(); ++cid) {
-            if (remapInfo.remap[cid] != INVALID) continue;
-            addFinalComponent(
-                remapInfo.oldCompLabel[cid],
-                static_cast<uint64_t>(remapInfo.oldCompSize[cid]),
-                remapInfo.oldCompSumX[cid],
-                remapInfo.oldCompSumY[cid],
-                remapInfo.oldCompBox[cid]);
-        }
-    }
-    const auto tStage15End = std::chrono::steady_clock::now();
-
-    // Stage 2: seam union on border-touching components only
-    const auto tStage2Start = std::chrono::steady_clock::now();
-    const BorderDSUState dsuState = mergeBorderComponentsWithDSU(perTile, BG, INVALID);
-    for (size_t i = 0; i < dsuState.rootSize.size(); ++i) {
-        if (dsuState.rootSize[i] == 0 || dsuState.rootLabel[i] >= BG) continue;
-        addFinalComponent(
-            dsuState.rootLabel[i],
-            dsuState.rootSize[i],
-            dsuState.rootSumX[i],
-            dsuState.rootSumY[i],
-            dsuState.rootBox[i]);
-    }
-    const auto tStage2End = std::chrono::steady_clock::now();
-    const auto stage1Ms = std::chrono::duration_cast<std::chrono::milliseconds>(tStage1End - tStage1Start).count();
-    const auto stage15Ms = std::chrono::duration_cast<std::chrono::milliseconds>(tStage15End - tStage15Start).count();
-    const auto stage2Ms = std::chrono::duration_cast<std::chrono::milliseconds>(tStage2End - tStage2Start).count();
-    notice("%s: timing(ms): stage1=%lld stage1.5=%lld stage2=%lld",
-        __func__,
-        static_cast<long long>(stage1Ms),
-        static_cast<long long>(stage15Ms),
-        static_cast<long long>(stage2Ms));
-
-    std::string outCc = outPrefix + ".connected_components.tsv";
-    FILE* fpCc = fopen(outCc.c_str(), "w");
-    if (!fpCc) {
-        error("%s: Cannot open output file %s", __func__, outCc.c_str());
-    }
-    fprintf(fpCc, "#k\tcc_idx\tsize\tcentroid_x\tcentroid_y\txmin\txmax\tymin\tymax\n");
-    for (int32_t k = 0; k < K; ++k) {
-        auto& vec = perLabelComponents[static_cast<size_t>(k)];
-        std::sort(vec.begin(), vec.end(),
-            [](const CCOutRec& a, const CCOutRec& b) {
-                if (a.size != b.size) return a.size > b.size;
-                if (a.box.minX != b.box.minX) return a.box.minX < b.box.minX;
-                if (a.box.minY != b.box.minY) return a.box.minY < b.box.minY;
-                if (a.box.maxX != b.box.maxX) return a.box.maxX < b.box.maxX;
-                return a.box.maxY < b.box.maxY;
+    if (threads_ > 1 && blocks_.size() > 1) {
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<StageAccum> tls([&] { return StageAccum(K_); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream in = openTileStream();
+                auto& local = tls.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    processTile(bi, in, local);
+                }
             });
-        for (size_t i = 0; i < vec.size(); ++i) {
-            const double cx = static_cast<double>(vec[i].sumX) / static_cast<double>(vec[i].size);
-            const double cy = static_cast<double>(vec[i].sumY) / static_cast<double>(vec[i].size);
-            fprintf(fpCc, "%d\t%zu\t%llu\t%.6f\t%.6f\t%d\t%d\t%d\t%d\n",
-                k, i,
-                static_cast<unsigned long long>(vec[i].size),
-                cx,
-                cy,
-                vec[i].box.minX,
-                vec[i].box.maxX,
-                vec[i].box.minY,
-                vec[i].box.maxY);
+        tls.combine_each([&](const StageAccum& local) {
+            for (size_t k = 0; k < globalAccum.tileCount.size(); ++k) {
+                globalAccum.tileCount[k] += local.tileCount[k];
+            }
+            globalAccum.outOfRange += local.outOfRange;
+            globalAccum.badLabel += local.badLabel;
+        });
+    } else {
+        std::ifstream in = openTileStream();
+        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+            processTile(bi, in, globalAccum);
         }
     }
-    fclose(fpCc);
-    notice("%s: Wrote connected components to %s", __func__, outCc.c_str());
+    const auto tStage1 = std::chrono::steady_clock::now();
 
-    std::string outHist = outPrefix + ".connected_components_hist.tsv";
-    FILE* fpHist = fopen(outHist.c_str(), "w");
-    if (!fpHist) {
-        error("%s: Cannot open output file %s", __func__, outHist.c_str());
+    std::vector<Clipper2Lib::Paths64> finalPathsByFactor(static_cast<size_t>(K), Clipper2Lib::Paths64{});
+    std::vector<uint64_t> finalArea(static_cast<size_t>(K), 0);
+    std::vector<uint64_t> finalComponents(static_cast<size_t>(K), 0);
+    std::vector<std::unordered_map<uint64_t, uint64_t>> componentHist(static_cast<size_t>(K));
+    std::vector<SoftMaskTileResult> borderTiles(blocks_.size());
+
+    for (size_t ti = 0; ti < perTile.size(); ++ti) {
+        TileCCL& t = perTile[ti];
+        if (t.ncomp == 0) continue;
+        TileGeom geom;
+        initTileGeom(blocks_[ti], geom);
+
+        std::vector<Clipper2Lib::Paths64> oldPolys;
+        if (!skipBoundaries) {
+            oldPolys.resize(t.ncomp);
+            for (uint32_t cid = 0; cid < t.ncomp; ++cid) {
+                oldPolys[cid] = buildLabelComponentPolygons(
+                    t.pixelCid, geom.W, cid, t.compBox[cid], geom, 0, 0.0);
+            }
+        }
+
+        const BorderRemapInfo remapInfo = remapTileToBorderComponents(t, INVALID);
+        SoftMaskTileResult tileOut;
+        tileOut.geom = geom;
+        std::vector<uint32_t> newCidToOld(t.ncomp, INVALID);
+        for (uint32_t oldCid = 0; oldCid < remapInfo.remap.size(); ++oldCid) {
+            const uint8_t lbl = remapInfo.oldCompLabel[oldCid];
+            const uint64_t size = static_cast<uint64_t>(remapInfo.oldCompSize[oldCid]);
+            if (lbl >= BG || size == 0) continue;
+            const uint32_t newCid = remapInfo.remap[oldCid];
+            if (newCid == INVALID) {
+                if (size < static_cast<uint64_t>(minSize)) continue;
+                finalArea[static_cast<size_t>(lbl)] += size;
+                finalComponents[static_cast<size_t>(lbl)] += 1;
+                componentHist[static_cast<size_t>(lbl)][size] += 1;
+                if (!skipBoundaries && oldCid < oldPolys.size() && !oldPolys[oldCid].empty()) {
+                    finalPathsByFactor[static_cast<size_t>(lbl)].insert(
+                        finalPathsByFactor[static_cast<size_t>(lbl)].end(),
+                        oldPolys[oldCid].begin(), oldPolys[oldCid].end());
+                }
+            } else if (newCid < newCidToOld.size()) {
+                newCidToOld[newCid] = oldCid;
+            }
+        }
+
+        std::vector<uint32_t> newCidToFactorLocal(t.ncomp, INVALID);
+        std::vector<int32_t> newCidToFactorIndex(t.ncomp, -1);
+        for (uint32_t cid = 0; cid < t.ncomp; ++cid) {
+            const uint8_t lbl = t.compLabel[cid];
+            if (lbl >= BG) continue;
+            auto it = tileOut.factorToIndex.find(static_cast<int32_t>(lbl));
+            size_t fi = 0;
+            if (it == tileOut.factorToIndex.end()) {
+                fi = tileOut.factors.size();
+                tileOut.factorToIndex[static_cast<int32_t>(lbl)] = fi;
+                tileOut.factors.push_back(SoftMaskTileFactorResult{});
+                tileOut.factors.back().factor = static_cast<int32_t>(lbl);
+                tileOut.factors.back().leftCid.assign(geom.H, INVALID);
+                tileOut.factors.back().rightCid.assign(geom.H, INVALID);
+                tileOut.factors.back().topCid.assign(geom.W, INVALID);
+                tileOut.factors.back().bottomCid.assign(geom.W, INVALID);
+            } else {
+                fi = it->second;
+            }
+            SoftMaskTileFactorResult& factorRes = tileOut.factors[fi];
+            newCidToFactorIndex[cid] = static_cast<int32_t>(fi);
+            newCidToFactorLocal[cid] = static_cast<uint32_t>(factorRes.borderCompAreas.size());
+            factorRes.borderCompAreas.push_back(t.compSize[cid]);
+            factorRes.maskArea += static_cast<uint64_t>(t.compSize[cid]);
+            if (!skipBoundaries && cid < newCidToOld.size()) {
+                const uint32_t oldCid = newCidToOld[cid];
+                if (oldCid != INVALID && oldCid < oldPolys.size()) {
+                    factorRes.borderPolys.push_back(std::move(oldPolys[oldCid]));
+                } else {
+                    factorRes.borderPolys.emplace_back();
+                }
+            }
+        }
+
+        for (size_t y = 0; y < t.leftCid.size(); ++y) {
+            const uint32_t cid = t.leftCid[y];
+            if (cid != INVALID && cid < newCidToFactorIndex.size() && newCidToFactorIndex[cid] >= 0) {
+                tileOut.factors[static_cast<size_t>(newCidToFactorIndex[cid])].leftCid[y] = newCidToFactorLocal[cid];
+            }
+        }
+        for (size_t y = 0; y < t.rightCid.size(); ++y) {
+            const uint32_t cid = t.rightCid[y];
+            if (cid != INVALID && cid < newCidToFactorIndex.size() && newCidToFactorIndex[cid] >= 0) {
+                tileOut.factors[static_cast<size_t>(newCidToFactorIndex[cid])].rightCid[y] = newCidToFactorLocal[cid];
+            }
+        }
+        for (size_t x = 0; x < t.topCid.size(); ++x) {
+            const uint32_t cid = t.topCid[x];
+            if (cid != INVALID && cid < newCidToFactorIndex.size() && newCidToFactorIndex[cid] >= 0) {
+                tileOut.factors[static_cast<size_t>(newCidToFactorIndex[cid])].topCid[x] = newCidToFactorLocal[cid];
+            }
+        }
+        for (size_t x = 0; x < t.bottomCid.size(); ++x) {
+            const uint32_t cid = t.bottomCid[x];
+            if (cid != INVALID && cid < newCidToFactorIndex.size() && newCidToFactorIndex[cid] >= 0) {
+                tileOut.factors[static_cast<size_t>(newCidToFactorIndex[cid])].bottomCid[x] = newCidToFactorLocal[cid];
+            }
+        }
+
+        borderTiles[ti] = std::move(tileOut);
     }
-    fprintf(fpHist, "#k\tsize\tn_components\n");
-    for (int32_t k = 0; k < K; ++k) {
-        const auto& hist = perLabelHist[static_cast<size_t>(k)];
-        for (const auto& kv : hist) {
-            fprintf(fpHist, "%d\t%llu\t%llu\n",
-                k,
-                static_cast<unsigned long long>(kv.first),
-                static_cast<unsigned long long>(kv.second));
+
+    std::vector<std::vector<size_t>> borderBase(borderTiles.size());
+    size_t totalBorderComps = 0;
+    for (size_t ti = 0; ti < borderTiles.size(); ++ti) {
+        const SoftMaskTileResult& tile = borderTiles[ti];
+        borderBase[ti].assign(tile.factors.size(), std::numeric_limits<size_t>::max());
+        for (size_t fi = 0; fi < tile.factors.size(); ++fi) {
+            const auto& factorRes = tile.factors[fi];
+            if (factorRes.borderCompAreas.empty()) continue;
+            borderBase[ti][fi] = totalBorderComps;
+            totalBorderComps += factorRes.borderCompAreas.size();
         }
     }
-    fclose(fpHist);
-    notice("%s: Wrote connected component size histogram to %s", __func__, outHist.c_str());
 
-    if (totalOutOfRangeIgnored > 0) {
+    DisjointSet dsu(totalBorderComps);
+    for (size_t ti = 0; ti < borderTiles.size(); ++ti) {
+        const SoftMaskTileResult& aTile = borderTiles[ti];
+        const TileKey key{blocks_[ti].idx.row, blocks_[ti].idx.col};
+        const auto rightIt = tile_lookup_.find(TileKey{key.row, key.col + 1});
+        if (rightIt != tile_lookup_.end()) {
+            const size_t tj = rightIt->second;
+            const SoftMaskTileResult& bTile = borderTiles[tj];
+            for (size_t afi = 0; afi < aTile.factors.size(); ++afi) {
+                const SoftMaskTileFactorResult& a = aTile.factors[afi];
+                if (a.borderCompAreas.empty()) continue;
+                const auto bIt = bTile.factorToIndex.find(a.factor);
+                if (bIt == bTile.factorToIndex.end()) continue;
+                const SoftMaskTileFactorResult& b = bTile.factors[bIt->second];
+                if (b.borderCompAreas.empty()) continue;
+                const int32_t y0 = std::max(aTile.geom.pixY0, bTile.geom.pixY0);
+                const int32_t y1 = std::min(aTile.geom.pixY1, bTile.geom.pixY1);
+                uint32_t lastA = INVALID, lastB = INVALID;
+                for (int32_t gy = y0; gy < y1; ++gy) {
+                    const uint32_t ca = a.rightCid[static_cast<size_t>(gy - aTile.geom.pixY0)];
+                    const uint32_t cb = b.leftCid[static_cast<size_t>(gy - bTile.geom.pixY0)];
+                    if (ca == INVALID || cb == INVALID || (ca == lastA && cb == lastB)) continue;
+                    lastA = ca;
+                    lastB = cb;
+                    dsu.unite(borderBase[ti][afi] + static_cast<size_t>(ca),
+                        borderBase[tj][bIt->second] + static_cast<size_t>(cb));
+                }
+            }
+        }
+        const auto downIt = tile_lookup_.find(TileKey{key.row + 1, key.col});
+        if (downIt != tile_lookup_.end()) {
+            const size_t tj = downIt->second;
+            const SoftMaskTileResult& bTile = borderTiles[tj];
+            for (size_t afi = 0; afi < aTile.factors.size(); ++afi) {
+                const SoftMaskTileFactorResult& a = aTile.factors[afi];
+                if (a.borderCompAreas.empty()) continue;
+                const auto bIt = bTile.factorToIndex.find(a.factor);
+                if (bIt == bTile.factorToIndex.end()) continue;
+                const SoftMaskTileFactorResult& b = bTile.factors[bIt->second];
+                if (b.borderCompAreas.empty()) continue;
+                const int32_t x0 = std::max(aTile.geom.pixX0, bTile.geom.pixX0);
+                const int32_t x1 = std::min(aTile.geom.pixX1, bTile.geom.pixX1);
+                uint32_t lastA = INVALID, lastB = INVALID;
+                for (int32_t gx = x0; gx < x1; ++gx) {
+                    const uint32_t ca = a.bottomCid[static_cast<size_t>(gx - aTile.geom.pixX0)];
+                    const uint32_t cb = b.topCid[static_cast<size_t>(gx - bTile.geom.pixX0)];
+                    if (ca == INVALID || cb == INVALID || (ca == lastA && cb == lastB)) continue;
+                    lastA = ca;
+                    lastB = cb;
+                    dsu.unite(borderBase[ti][afi] + static_cast<size_t>(ca),
+                        borderBase[tj][bIt->second] + static_cast<size_t>(cb));
+                }
+            }
+        }
+    }
+    if (totalBorderComps > 0) dsu.compress_all();
+
+    std::vector<uint64_t> rootArea(totalBorderComps, 0);
+    std::vector<Clipper2Lib::Paths64> rootPaths(totalBorderComps);
+    std::vector<int32_t> rootFactor(totalBorderComps, -1);
+    for (size_t ti = 0; ti < borderTiles.size(); ++ti) {
+        const SoftMaskTileResult& tile = borderTiles[ti];
+        for (size_t fi = 0; fi < tile.factors.size(); ++fi) {
+            const auto& factorRes = tile.factors[fi];
+            if (factorRes.borderCompAreas.empty()) continue;
+            const size_t base = borderBase[ti][fi];
+            for (size_t cid = 0; cid < factorRes.borderCompAreas.size(); ++cid) {
+                const size_t gid = base + cid;
+                const size_t root = dsu.parent[gid];
+                rootArea[root] += static_cast<uint64_t>(factorRes.borderCompAreas[cid]);
+                if (rootFactor[root] < 0) rootFactor[root] = factorRes.factor;
+                else if (rootFactor[root] != factorRes.factor) {
+                    error("%s: Label mismatch after seam union", __func__);
+                }
+                if (!skipBoundaries && cid < factorRes.borderPolys.size()) {
+                    rootPaths[root].insert(rootPaths[root].end(),
+                        factorRes.borderPolys[cid].begin(), factorRes.borderPolys[cid].end());
+                }
+            }
+        }
+    }
+
+    for (size_t root = 0; root < rootFactor.size(); ++root) {
+        if (rootFactor[root] < 0 || rootArea[root] < static_cast<uint64_t>(minSize)) continue;
+        finalArea[static_cast<size_t>(rootFactor[root])] += rootArea[root];
+        finalComponents[static_cast<size_t>(rootFactor[root])] += 1;
+        componentHist[static_cast<size_t>(rootFactor[root])][rootArea[root]] += 1;
+        if (skipBoundaries || rootPaths[root].empty()) continue;
+        Clipper2Lib::Paths64 merged = cleanupMaskPolygons(rootPaths[root], 0, 0.0);
+        if (merged.empty()) continue;
+        finalPathsByFactor[static_cast<size_t>(rootFactor[root])].insert(
+            finalPathsByFactor[static_cast<size_t>(rootFactor[root])].end(),
+            merged.begin(), merged.end());
+    }
+    const auto tStage2 = std::chrono::steady_clock::now();
+
+    std::string outHist = outPrefix + ".factor_summary.tsv";
+    write_factor_mask_info(outHist, globalAccum.tileCount, finalArea, finalComponents);
+    std::string outCompHist = outPrefix + ".component_hist.tsv";
+    write_factor_mask_component_histogram(outCompHist, componentHist);
+
+    std::string outGeoJSON = outPrefix + ".geojson";
+    if (!skipBoundaries) {
+        nlohmann::json templateJson;
+        const bool writeTemplateJSON = !templateGeoJSON.empty();
+        const std::string factorOutPrefix = templateOutPrefix.empty() ? outPrefix : templateOutPrefix;
+        if (writeTemplateJSON) {
+            templateJson = load_template_json(templateGeoJSON);
+        }
+        nlohmann::json features = nlohmann::json::array();
+        for (int32_t k = 0; k < K; ++k) {
+            if (finalPathsByFactor[static_cast<size_t>(k)].empty()) continue;
+            Clipper2Lib::Paths64 factorPaths = cleanupMaskPolygons(finalPathsByFactor[static_cast<size_t>(k)], 0, 0.0);
+            if (factorPaths.empty()) continue;
+            nlohmann::json feature;
+            feature["type"] = "Feature";
+            feature["properties"] = {
+                {"Factor", k},
+                {"n_tiles", globalAccum.tileCount[static_cast<size_t>(k)]},
+                {"mask_area_pix", finalArea[static_cast<size_t>(k)]},
+                {"n_components", finalComponents[static_cast<size_t>(k)]}
+            };
+            feature["geometry"] = maskPathsToMultiPolygonGeoJSON(factorPaths);
+            if (writeTemplateJSON) {
+                const std::string outFactor = factorOutPrefix + ".k" + std::to_string(k) + ".json";
+                write_factor_template_json(outFactor, templateJson, k, feature);
+            }
+            features.push_back(std::move(feature));
+        }
+        nlohmann::json featureCollection;
+        featureCollection["type"] = "FeatureCollection";
+        featureCollection["features"] = std::move(features);
+        std::ofstream geojsonOut(outGeoJSON);
+        if (!geojsonOut.is_open()) {
+            error("%s: Cannot open output file %s", __func__, outGeoJSON.c_str());
+        }
+        geojsonOut << featureCollection.dump();
+        geojsonOut << "\n";
+        geojsonOut.close();
+    }
+
+    const auto tDone = std::chrono::steady_clock::now();
+    notice("%s: Wrote factor histogram to %s", __func__, outHist.c_str());
+    notice("%s: Wrote component size histogram to %s", __func__, outCompHist.c_str());
+    if (!skipBoundaries) {
+        notice("%s: Wrote hard-mask GeoJSON to %s", __func__, outGeoJSON.c_str());
+    }
+    notice("%s: timing(ms): stage1=%lld stage2=%lld total=%lld",
+        __func__,
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tStage1 - t0).count()),
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tStage2 - tStage1).count()),
+        static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(tDone - t0).count()));
+    if (globalAccum.outOfRange > 0) {
         warning("%s: Ignored %llu out-of-tile records",
-            __func__, static_cast<unsigned long long>(totalOutOfRangeIgnored));
+            __func__, static_cast<unsigned long long>(globalAccum.outOfRange));
     }
-    if (totalBadLabelIgnored > 0) {
+    if (globalAccum.badLabel > 0) {
         warning("%s: Ignored %llu records with invalid labels",
-            __func__, static_cast<unsigned long long>(totalBadLabelIgnored));
+            __func__, static_cast<unsigned long long>(globalAccum.badLabel));
     }
 }
 
@@ -1544,7 +2544,7 @@ void TileOperator::profileShellAndSurface(const std::string& outPrefix,
     std::vector<TileNeighbor> nbr(tiles.size());
     std::vector<TileSeamJump> seam(tiles.size());
     for (size_t i = 0; i < tiles.size(); ++i) {
-        const TileKey key = tiles[i].key;
+        const TileKey key = tiles[i].geom.key;
         auto it = tile_lookup_.find(TileKey{key.row, key.col - 1});
         if (it != tile_lookup_.end()) nbr[i].left = static_cast<int32_t>(it->second);
         it = tile_lookup_.find(TileKey{key.row, key.col + 1});
@@ -1555,53 +2555,53 @@ void TileOperator::profileShellAndSurface(const std::string& outPrefix,
         if (it != tile_lookup_.end()) nbr[i].down = static_cast<int32_t>(it->second);
 
         auto& sj = seam[i];
-        sj.left.assign(tiles[i].H, INVALID);
-        sj.right.assign(tiles[i].H, INVALID);
-        sj.up.assign(tiles[i].W, INVALID);
-        sj.down.assign(tiles[i].W, INVALID);
+        sj.left.assign(tiles[i].geom.H, INVALID);
+        sj.right.assign(tiles[i].geom.H, INVALID);
+        sj.up.assign(tiles[i].geom.W, INVALID);
+        sj.down.assign(tiles[i].geom.W, INVALID);
 
         if (nbr[i].left >= 0) {
             const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].left)];
-            for (size_t y = 0; y < tiles[i].H; ++y) {
-                const int32_t ngx = tiles[i].pixX0 - 1;
-                const int32_t ngy = tiles[i].pixY0 + static_cast<int32_t>(y);
-                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
-                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
-                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
-                sj.left[y] = static_cast<uint32_t>(ny * nt.W + nx);
+            for (size_t y = 0; y < tiles[i].geom.H; ++y) {
+                const int32_t ngx = tiles[i].geom.pixX0 - 1;
+                const int32_t ngy = tiles[i].geom.pixY0 + static_cast<int32_t>(y);
+                if (ngx < nt.geom.pixX0 || ngx >= nt.geom.pixX1 || ngy < nt.geom.pixY0 || ngy >= nt.geom.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.geom.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.geom.pixY0);
+                sj.left[y] = static_cast<uint32_t>(ny * nt.geom.W + nx);
             }
         }
         if (nbr[i].right >= 0) {
             const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].right)];
-            for (size_t y = 0; y < tiles[i].H; ++y) {
-                const int32_t ngx = tiles[i].pixX1;
-                const int32_t ngy = tiles[i].pixY0 + static_cast<int32_t>(y);
-                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
-                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
-                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
-                sj.right[y] = static_cast<uint32_t>(ny * nt.W + nx);
+            for (size_t y = 0; y < tiles[i].geom.H; ++y) {
+                const int32_t ngx = tiles[i].geom.pixX1;
+                const int32_t ngy = tiles[i].geom.pixY0 + static_cast<int32_t>(y);
+                if (ngx < nt.geom.pixX0 || ngx >= nt.geom.pixX1 || ngy < nt.geom.pixY0 || ngy >= nt.geom.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.geom.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.geom.pixY0);
+                sj.right[y] = static_cast<uint32_t>(ny * nt.geom.W + nx);
             }
         }
         if (nbr[i].up >= 0) {
             const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].up)];
-            for (size_t x = 0; x < tiles[i].W; ++x) {
-                const int32_t ngx = tiles[i].pixX0 + static_cast<int32_t>(x);
-                const int32_t ngy = tiles[i].pixY0 - 1;
-                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
-                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
-                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
-                sj.up[x] = static_cast<uint32_t>(ny * nt.W + nx);
+            for (size_t x = 0; x < tiles[i].geom.W; ++x) {
+                const int32_t ngx = tiles[i].geom.pixX0 + static_cast<int32_t>(x);
+                const int32_t ngy = tiles[i].geom.pixY0 - 1;
+                if (ngx < nt.geom.pixX0 || ngx >= nt.geom.pixX1 || ngy < nt.geom.pixY0 || ngy >= nt.geom.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.geom.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.geom.pixY0);
+                sj.up[x] = static_cast<uint32_t>(ny * nt.geom.W + nx);
             }
         }
         if (nbr[i].down >= 0) {
             const DenseTile& nt = tiles[static_cast<size_t>(nbr[i].down)];
-            for (size_t x = 0; x < tiles[i].W; ++x) {
-                const int32_t ngx = tiles[i].pixX0 + static_cast<int32_t>(x);
-                const int32_t ngy = tiles[i].pixY1;
-                if (ngx < nt.pixX0 || ngx >= nt.pixX1 || ngy < nt.pixY0 || ngy >= nt.pixY1) continue;
-                const size_t nx = static_cast<size_t>(ngx - nt.pixX0);
-                const size_t ny = static_cast<size_t>(ngy - nt.pixY0);
-                sj.down[x] = static_cast<uint32_t>(ny * nt.W + nx);
+            for (size_t x = 0; x < tiles[i].geom.W; ++x) {
+                const int32_t ngx = tiles[i].geom.pixX0 + static_cast<int32_t>(x);
+                const int32_t ngy = tiles[i].geom.pixY1;
+                if (ngx < nt.geom.pixX0 || ngx >= nt.geom.pixX1 || ngy < nt.geom.pixY0 || ngy >= nt.geom.pixY1) continue;
+                const size_t nx = static_cast<size_t>(ngx - nt.geom.pixX0);
+                const size_t ny = static_cast<size_t>(ngy - nt.geom.pixY0);
+                sj.down[x] = static_cast<uint32_t>(ny * nt.geom.W + nx);
             }
         }
     }
@@ -1708,8 +2708,8 @@ void TileOperator::profileShellAndSurface(const std::string& outPrefix,
                 }
                 if (d == D) continue;
 
-                const size_t x = li % tile.W;
-                const size_t y = li / tile.W;
+                const size_t x = li % tile.geom.W;
+                const size_t y = li / tile.geom.W;
                 const uint16_t nd = static_cast<uint16_t>(d + 1);
                 if (x > 0) {
                     tryPush(ref.tileIdx, static_cast<uint32_t>(li - 1), nd);
@@ -1719,7 +2719,7 @@ void TileOperator::profileShellAndSurface(const std::string& outPrefix,
                         tryPush(static_cast<uint32_t>(nbr[ref.tileIdx].left), nli, nd);
                     }
                 }
-                if (x + 1 < tile.W) {
+                if (x + 1 < tile.geom.W) {
                     tryPush(ref.tileIdx, static_cast<uint32_t>(li + 1), nd);
                 } else if (nbr[ref.tileIdx].right >= 0) {
                     const uint32_t nli = seam[ref.tileIdx].right[y];
@@ -1728,15 +2728,15 @@ void TileOperator::profileShellAndSurface(const std::string& outPrefix,
                     }
                 }
                 if (y > 0) {
-                    tryPush(ref.tileIdx, static_cast<uint32_t>(li - tile.W), nd);
+                    tryPush(ref.tileIdx, static_cast<uint32_t>(li - tile.geom.W), nd);
                 } else if (nbr[ref.tileIdx].up >= 0) {
                     const uint32_t nli = seam[ref.tileIdx].up[x];
                     if (nli != INVALID) {
                         tryPush(static_cast<uint32_t>(nbr[ref.tileIdx].up), nli, nd);
                     }
                 }
-                if (y + 1 < tile.H) {
-                    tryPush(ref.tileIdx, static_cast<uint32_t>(li + tile.W), nd);
+                if (y + 1 < tile.geom.H) {
+                    tryPush(ref.tileIdx, static_cast<uint32_t>(li + tile.geom.W), nd);
                 } else if (nbr[ref.tileIdx].down >= 0) {
                     const uint32_t nli = seam[ref.tileIdx].down[x];
                     if (nli != INVALID) {

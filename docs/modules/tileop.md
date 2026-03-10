@@ -28,6 +28,10 @@
 
 - profile shell occupancy and directional surface distance between labels
 
+- profile the area (softly) covered by a focal factor
+
+- build per-factor masks and export boundaries as GeoJSON
+
 (Except for printing the index, all operations are intended to be used separately)
 
 ## Usage
@@ -279,32 +283,44 @@ The output includes two files:
   - $L_{kl} / P_l$ (`frac2`)
   - $L_{kl} / (A_k + A_l)$ (`density`)
 
-### Connected Components
+### Hard factor mask
 
-Compute global connected components for each label (4-neighborhood on raster pixels), merged across tile boundaries.
+Build per-label hard masks from the top predicted factor at each raster pixel, merge connected components across tile boundaries, and write global summaries. By default this also writes one GeoJSON `MultiPolygon` feature per factor; use `--skip-boundaries` to disable boundary extraction and write only the summaries.
 
 ```bash
-punkst tile-op --connected-components --in path/result [--binary] \
+punkst tile-op --hard-factor-mask --in path/result [--binary] \
   --cc-min-size 25 --out path/out_prefix
 ```
 
-`--connected-components` - run connected component profiling.
+Main parameters:
 
-`--cc-min-size` - minimum component size to report in the main component table (histogram still includes all sizes).
+- `--cc-min-size` - minimum final connected-component size retained in the summaries and GeoJSON.
+- `--skip-boundaries` - skip GeoJSON generation and write only the summary tables.
+- `--template-geojson` - optional template JSON/GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra JSON file per factor with the template content, replacing only the top-level `title` and `geometry` fields. The title is set to the factor index, and `geometry` is set to the corresponding per-factor GeoJSON `Feature`.
+- `--template-out-prefix` - optional output prefix for the per-factor template-derived files. Defaults to `--out`.
 
 Output:
 
-- `path/out_prefix.connected_components.tsv`: one row per reported component with columns
-  - label index (`#k`)
-  - component rank within label by descending size (`cc_idx`)
-  - component size in pixels (`size`)
-  - centroid in pixel coordinates (`centroid_x`, `centroid_y`)
-  - inclusive coordinate range (`xmin`, `xmax`, `ymin`, `ymax`)
+- `path/out_prefix.factor_summary.tsv`: per-factor summary with columns
+  - factor index (`k`)
+  - number of tiles containing the factor (`n_tiles`)
+  - total retained mask area in pixels (`mask_area_pix`)
+  - number of retained final connected components (`n_components`)
 
-- `path/out_prefix.connected_components_hist.tsv`: size histogram for all components with columns
-  - label index (`#k`)
+- `path/out_prefix.component_hist.tsv`: retained component-size histogram with columns
+  - factor index (`k`)
   - component size (`size`)
   - number of components with that size (`n_components`)
+
+- `path/out_prefix.geojson`: optional `FeatureCollection` containing one `MultiPolygon` feature per factor with properties
+  - factor index (`Factor`)
+  - number of contributing tiles (`n_tiles`)
+  - total retained mask area in pixels (`mask_area_pix`)
+  - number of retained final connected components (`n_components`)
+
+- `path/out_prefix.k<factor>.json`: optional per-factor JSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file copies the template and replaces:
+  - `title` with the factor index
+  - `geometry` with the corresponding per-factor GeoJSON `Feature`
 
 ### Shell and Surface Profiles
 
@@ -341,3 +357,89 @@ Output:
   - target label (`to_K2`)
   - distance bin (`d`)
   - count (`count`)
+
+### Profile factor masks
+
+Build a raster mask for one focal factor using local neighborhood probability mass, optionally remove small connected components, then report the factor composition inside the focal mask and pairwise overlaps among the selected factor masks.
+
+```bash
+punkst tile-op --profile-factor-masks --in path/result [--binary] \
+  --focal-k 7 --mask-radius 2 --mask-threshold 0.35 \
+  --mask-min-frac 0.05 --mask-min-component-area 20 \
+  --out path/out_prefix
+```
+
+Main parameters:
+
+- `--focal-k` - focal factor index.
+- `--mask-radius` - size `r` (in pixel units) defining the `(2r+1) x (2r+1)` neighborhood.
+- `--mask-threshold` - threshold on the focal factor neighborhood score.
+- `--mask-min-frac` - keep a secondary factor if its mass inside the focal mask exceeds this fraction of the total focal-mask mass.
+- `--mask-min-pixel-prob` - optional per-pixel cutoff used only when constructing masks from factor probabilities.
+- `--mask-min-component-area` - optional 4-connected component size cutoff applied independently within each tile after thresholding.
+
+Output:
+
+- `path/out_prefix.factor_hist.tsv`: factor histogram for both the focal mask and the full processed region with columns
+  - factor index (`k`)
+  - total mass inside the focal mask (`mass_in_mask`)
+  - fraction of the total focal-mask mass (`frac_in_mask`)
+  - total mass in the full processed region (`mass_global`)
+  - fraction of the total global mass (`frac_global`)
+
+- `path/out_prefix.pairwise.tsv`: pairwise overlap summary for the selected factor set `{focal_k} U {significant secondary factors}` with columns
+  - factor indices (`k1`, `k2`)
+  - mask areas (`area1_pix`, `area2_pix`)
+  - area intersection (`area_ovlp_pix`)
+  - directional area overlap fractions (`area_ovlp_f1`, `area_ovlp_f2`)
+  - area Jaccard (`area_jaccard`)
+  - factor-specific mass in the intersection (`mass1_in_ovlp`, `mass2_in_ovlp`)
+  - directional mass overlap fractions relative to each factor's total global mass (`mass_ovlp_f1`, `mass_ovlp_f2`)
+
+### Soft factor mask
+
+Build a soft binary mask for every factor, remove small connected components, merge seam-crossing components across tiles, and write global summaries. By default this also polygonizes the kept mask and exports one GeoJSON `MultiPolygon` feature per factor; use `--skip-boundaries` to disable geometry export.
+
+```bash
+punkst tile-op --soft-factor-mask --in path/result [--binary] \
+  --mask-radius 2 --mask-threshold 0.35 \
+  --mask-min-pixel-prob 0.01 --mask-min-tile-mass 2 \
+  --mask-min-component-area 20 --mask-min-hole-area 4 \
+  --mask-simplify 2 --out path/out_prefix
+```
+
+Main parameters:
+
+- `--mask-radius` - size `r` (in pixel units) defining the `(2r+1) x (2r+1)` neighborhood.
+- `--mask-threshold` - threshold on the factor probabilities averaged over the observed pixels in the neighborhood. Pixels with no observation do not contribute to the denominator. An empty center pixel is still allowed into the mask unless observed coverage in its clipped neighborhood falls below half. The window must also contain at least total factor mass `1.0`.
+- `--mask-min-pixel-prob` - ignore sparse factor entries below this per-pixel probability before mask construction.
+- `--mask-min-tile-mass` - skip a factor in a tile if its retained sparse mass in that tile is below this threshold.
+- `--mask-min-component-area` - legacy-named cutoff applied independently within each tile after thresholding; in `--soft-factor-mask` it is compared against the total raw factor mass in each 4-connected component, not the pixel area.
+- `--mask-min-hole-area` - drop holes smaller than this area from the polygon output.
+- `--mask-simplify` - optional Clipper2 simplification tolerance; `0` keeps the exact raster-derived boundary after collinear trimming.
+- `--skip-boundaries` - skip GeoJSON generation and write only the summary tables.
+- `--template-geojson` - optional template JSON/GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra JSON file per factor with the template content, replacing only the top-level `title` and `geometry` fields. The title is set to the factor index, and `geometry` is set to the corresponding per-factor GeoJSON `Feature`.
+- `--template-out-prefix` - optional output prefix for the per-factor template-derived files. Defaults to `--out`.
+
+Output:
+
+- `path/out_prefix.factor_summary.tsv`: per-factor summary with columns
+  - factor index (`k`)
+  - number of tiles where the factor passed `--mask-min-tile-mass` (`n_tiles`)
+  - total kept soft-mask area in pixels (`mask_area_pix`)
+  - number of final connected components after seam merge (`n_components`)
+
+- `path/out_prefix.component_hist.tsv`: final component-size histogram with columns
+  - factor index (`k`)
+  - component size (`size`)
+  - number of components with that size (`n_components`)
+
+- `path/out_prefix.geojson`: optional `FeatureCollection` containing one `MultiPolygon` feature per factor with properties
+  - factor index (`Factor`)
+  - number of contributing tiles (`n_tiles`)
+  - total kept mask area in pixels (`mask_area_pix`)
+  - number of final connected components (`n_components`)
+
+- `path/out_prefix.k<factor>.json`: optional per-factor JSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file copies the template and replaces:
+  - `title` with the factor index
+  - `geometry` with the corresponding per-factor GeoJSON `Feature`

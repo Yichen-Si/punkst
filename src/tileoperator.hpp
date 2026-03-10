@@ -7,6 +7,7 @@
 #include <utility>
 #include <algorithm>
 #include <cmath>
+#include "clipper2/clipper.h"
 #include "utils.h"
 #include "utils_sys.hpp"
 #include "json.hpp"
@@ -151,10 +152,22 @@ public:
     void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
 
     void spatialMetricsBasic(const std::string& outPrefix);
-    void connectedComponents(const std::string& outPrefix, uint32_t minSize = 10);
     void profileShellAndSurface(const std::string& outPrefix,
         const std::vector<int32_t>& radii, int32_t dMax,
         uint32_t minCompSize = 10, uint32_t minPixPerTilePerLabel = 0);
+    void profileSoftFactorMasks(const std::string& outPrefix,
+        int32_t focalK, int32_t radius,
+        double neighborhoodThreshold, double minFactorFrac,
+        float minPixelProb = 0.01f, uint32_t minComponentArea = 5,
+        bool skipMaskOverlap = false);
+    void hardFactorMask(const std::string& outPrefix,
+        uint32_t minSize = 1, bool skipBoundaries = false, const std::string& templateGeoJSON = "", const std::string& templateOutPrefix = "");
+    void softFactorMask(const std::string& outPrefix,
+        int32_t radius, double neighborhoodThreshold,
+        float minPixelProb = 0.01f, double minTileFactorMass = 0.0,
+        uint32_t minComponentArea = 5, uint32_t minHoleArea = 0,
+        double simplifyTolerance = 0.0, bool skipBoundaries = false,
+        const std::string& templateGeoJSON = "", const std::string& templateOutPrefix = "");
 
     void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
     void annotate(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_x, uint32_t icol_y, int32_t icol_z = -1);
@@ -235,7 +248,6 @@ private:
         }
         textStreamOpen_ = false;
     }
-    bool readNextTextLine(std::string& line);
 
     // Determine if a block is strictly within a tile or a boundary block
     void classifyBlocks(int32_t tileSize);
@@ -248,6 +260,8 @@ private:
     void openBlock(TileInfo& blk);
 
     /* Helpers for parsing a record */
+    // Get the next line of text input
+    bool readNextTextLine(std::string& line);
     // Get the next record within the bounded query region
     int32_t nextBounded(PixTopProbs<float>& out, bool rawCoord = false);
     int32_t nextBounded(PixTopProbs<int32_t>& out);
@@ -324,7 +338,7 @@ private:
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
         uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
 
-    struct DenseTile {
+    struct TileGeom {
         TileKey key;
         int32_t pixX0 = 0;
         int32_t pixX1 = 0;
@@ -332,6 +346,12 @@ private:
         int32_t pixY1 = 0;
         size_t W = 0;
         size_t H = 0;
+    };
+    // Populate TileGeom from TileInfo
+    void initTileGeom(const TileInfo& blk, TileGeom& out) const;
+
+    struct DenseTile {
+        TileGeom geom;
         std::vector<uint8_t> lab;
         std::vector<uint8_t> boundary;
     };
@@ -372,6 +392,7 @@ private:
         std::vector<uint64_t> compSumX;
         std::vector<uint64_t> compSumY;
         std::vector<PixBox> compBox;
+        std::vector<uint32_t> pixelCid;
         std::vector<uint32_t> bndPix;
         std::vector<uint32_t> bndCid;
     };
@@ -430,13 +451,96 @@ private:
         uint32_t localIdx = 0;
     };
 
-    void loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTile& out, uint8_t bg, uint64_t& nOutOfRangeIgnored, uint64_t& nBadLabelIgnored) const;
-    // Connected component labeling within a tile
-    TileCCL tileLocalCCL(const DenseTile& tile, uint8_t bg, const std::vector<uint8_t>* boundaryMask = nullptr) const;
+    struct SoftMaskSparseRec {
+        uint32_t localIdx = 0;
+        TopProbs rec;
+    };
+
+    struct SoftMaskTileData {
+        TileGeom geom;
+        std::vector<uint8_t> seenLocal;
+        std::unordered_map<int32_t, std::vector<std::pair<uint32_t, float>>> factorEntries;
+        std::unordered_map<int32_t, double> factorMass;
+        std::vector<SoftMaskSparseRec> records;
+    };
+
+    struct SoftMaskThresholdConfig {
+        bool useObservedDenominator = false;
+        bool applySparseEmptyCenterRule = false;
+        double sparseEmptyCoverageFrac = 0.0;
+        double minWindowMass = 0.0;
+    };
+
+    struct BinaryMaskCCL {
+        size_t W = 0;
+        size_t H = 0;
+        uint32_t ncomp = 0;
+        uint64_t keptArea = 0;
+        std::vector<uint32_t> pixelCid;
+        std::vector<uint32_t> compArea;
+        std::vector<PixBox> compBox;
+        std::vector<uint8_t> compTouchesBorder;
+        std::vector<uint32_t> leftCid;
+        std::vector<uint32_t> rightCid;
+        std::vector<uint32_t> topCid;
+        std::vector<uint32_t> bottomCid;
+    };
+
+    struct SoftMaskTileFactorResult {
+        int32_t factor = -1;
+        uint64_t maskArea = 0;
+        std::vector<uint32_t> interiorCompAreas;
+        std::vector<uint32_t> borderCompAreas;
+        std::vector<Clipper2Lib::Paths64> interiorPolys;
+        std::vector<Clipper2Lib::Paths64> borderPolys;
+        std::vector<uint32_t> leftCid;
+        std::vector<uint32_t> rightCid;
+        std::vector<uint32_t> topCid;
+        std::vector<uint32_t> bottomCid;
+    };
+
+    struct SoftMaskTileResult {
+        TileGeom geom;
+        std::vector<SoftMaskTileFactorResult> factors;
+        std::unordered_map<int32_t, size_t> factorToIndex;
+    };
+
     // Mask boundary pixels: iff any of its 4 neighbors have a different label
     void computeTileBoundaryMasks(std::vector<DenseTile>& tiles) const;
-    // Detect border components and remap them to global IDs
+
+    // Given a single channel intensity in a tile (in), compute
+    // the sum of intensities within a (2r+1)^2 box centered at each pixel
+    void boxFilterSum2D(const std::vector<float>& in, size_t W, size_t H,
+        int32_t radius, std::vector<float>& out) const;
+    void loadSoftMaskTileData(const TileInfo& blk, std::ifstream& in, float minPixelProb, bool keepRecords,
+        SoftMaskTileData& out, uint64_t& nOutOfRangeIgnored, uint64_t& nBadFactorIgnored,
+        uint64_t* nCollisionIgnored = nullptr, std::vector<double>* histGlobal = nullptr) const;
+    void buildDenseFactorRaster(const std::vector<std::pair<uint32_t, float>>& entries,
+        size_t nPix, std::vector<float>& dense) const;
+    void buildSoftMaskBinary(const std::vector<float>& dense, const std::vector<uint8_t>& seenLocal,
+        size_t W, size_t H, int32_t radius, double neighborhoodThreshold,
+        const SoftMaskThresholdConfig& config, std::vector<uint8_t>& mask,
+        std::vector<float>* filteredOut = nullptr, std::vector<float>* observedFilteredOut = nullptr) const;
+    // Given a single channel mask, filter out small connected components
+    uint64_t filterMaskByMinComponentArea4(std::vector<uint8_t>& mask, size_t W, size_t H, uint32_t minComponentArea) const;
+    BinaryMaskCCL buildBinaryMaskCCL4(std::vector<uint8_t>& mask, const std::vector<float>& mass, size_t W, size_t H, double minComponentMass) const;
+    Clipper2Lib::Paths64 buildMaskComponentPolygons(const BinaryMaskCCL& ccl, uint32_t cid, const TileGeom& geom,
+        uint32_t minHoleArea, double simplifyTolerance) const;
+    Clipper2Lib::Paths64 buildLabelComponentPolygons(const std::vector<uint32_t>& pixelCid, size_t W, uint32_t cid,
+        const PixBox& box, const TileGeom& geom, uint32_t minHoleArea, double simplifyTolerance) const;
+    Clipper2Lib::Paths64 cleanupMaskPolygons(const Clipper2Lib::Paths64& paths,
+        uint32_t minHoleArea, double simplifyTolerance) const;
+    nlohmann::json maskPathsToMultiPolygonGeoJSON(const Clipper2Lib::Paths64& paths) const;
+
+    /* Connected component related functions */
+    // Read one tile, store the top label of each pixel in a dense array
+    //     (Populate DenseTile::lab but not DenseTile::boundary)
+    void loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTile& out, uint8_t bg, uint64_t& nOutOfRangeIgnored, uint64_t& nBadLabelIgnored) const;
+    // Compute CCs within a tile (With boundary info for merging globally)
+    TileCCL tileLocalCCL(const DenseTile& tile, uint8_t bg, const std::vector<uint8_t>* boundaryMask = nullptr) const;
+    // Detect CCs crossing tile borders adn remap them to global IDs
     BorderRemapInfo remapTileToBorderComponents(TileCCL& t, uint32_t invalid) const;
+    // Merge CCs across tile borders
     BorderDSUState mergeBorderComponentsWithDSU(const std::vector<TileCCL>& perTile, uint8_t bg, uint32_t invalid) const;
 
 };

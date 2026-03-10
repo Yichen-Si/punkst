@@ -23,9 +23,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool probDot = false;
     bool cellAnno = false;
     bool spatialMetrics = false;
-    bool cnctComponents = false;
     bool profileShellSurface = false;
+    bool oneFactorMask = false;
+    bool softMask = false;
+    bool hardMask = false;
+    bool skipMaskOverlap = false;
+    bool skipBoundaries = false;
     uint32_t ccMinSize = 1;
+    uint32_t maskMinComponentArea = 5;
+    uint32_t maskMinHoleArea = 5;
     std::vector<int32_t> shellRadii;
     int32_t surfaceDmax = -1;
     uint32_t spatialMinPixPerTilePerLabel = 0;
@@ -38,7 +44,16 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     int32_t coordDigits = 2, probDigits = 4;
     int32_t kOut = 0;
     int32_t K = -1;
+    int32_t focalK = -1;
+    int32_t maskRadius = 0;
     float maxCellDiameter = 50;
+    double maskThreshold = -1.0;
+    double maskMinFrac = 0.05;
+    float maskMinPixelProb = 0.01;
+    double maskMinTileMass = 10.;
+    double maskSimplify = 0.0;
+    std::string templateGeoJSON;
+    std::string templateOutPrefix;
     float xmin = 0.0f, xmax = -1.0f, ymin = 0.0f, ymax = -1.0f;
     int32_t threads = 1;
     int32_t debug_ = 0;
@@ -57,10 +72,16 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
       .add_option("smooth-top-labels", "Per-tile island smoothing of top labels (>0 to enable)", smoothTopLabelsRounds)
-      .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (only for --smooth-top-labels)", fillEmptyIslands)
+      .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (for --smooth-top-labels)", fillEmptyIslands)
       .add_option("spatial-metrics", "Compute area/perim metrics for single & pairwise channels", spatialMetrics)
-      .add_option("connected-components", "Compute global connected-component sizes per label", cnctComponents)
+      .add_option("hard-factor-mask", "Build per-label hard masks from the top factor and report global summaries", hardMask)
+      .add_option("profile-one-factor-mask", "Build thresholded neighborhood mask for one factor and report selected pairwise overlaps", oneFactorMask)
+      .add_option("soft-factor-mask", "Build per-factor soft masks, polygonize them, and export merged boundaries as GeoJSON", softMask)
+      .add_option("skip-mask-overlap", "Skip computing mask overlaps with top co-localized factors (for --profile-factor-masks)", skipMaskOverlap)
+      .add_option("skip-boundaries", "Skip GeoJSON export and write only summary tables for hard/soft factor mask commands", skipBoundaries)
       .add_option("cc-min-size", "Minimum size of connected components", ccMinSize)
+      .add_option("mask-min-component-area", "Minimum 4-connected component area retained in each per-factor mask", maskMinComponentArea)
+      .add_option("mask-min-hole-area", "Minimum hole area retained in output polygons for --soft-factor-mask", maskMinHoleArea)
       .add_option("shell-surface", "Compute shell occupancy and directional surface-distance histograms", profileShellSurface)
       .add_option("shell-radii", "Radii list for --spatial-shell-surface (pixel units)", shellRadii)
       .add_option("surface-dmax", "Maximum distance for surface histogram in --shell-surface", surfaceDmax)
@@ -77,6 +98,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
+      .add_option("focal-k", "Focal factor index for --profile-factor-masks", focalK)
+      .add_option("mask-radius", "Neighborhood radius in pixels for --profile-factor-masks", maskRadius)
+      .add_option("mask-threshold", "Neighborhood mass fraction threshold for --profile-factor-masks", maskThreshold)
+      .add_option("mask-min-frac", "Minimum focal-mask mass fraction to keep a secondary factor in --profile-factor-masks", maskMinFrac)
+      .add_option("mask-min-pixel-prob", "Minimum per-pixel factor probability used when constructing masks in --profile-factor-masks", maskMinPixelProb)
+      .add_option("mask-min-tile-mass", "Skip factors whose total mass in a tile is below this threshold for --soft-factor-mask", maskMinTileMass)
+      .add_option("mask-simplify", "Optional simplification tolerance applied to output polygons for --soft-factor-mask", maskSimplify)
+      .add_option("template-geojson", "Optional template JSON/GeoJSON file used to write one additional per-factor file with replaced geometry and title", templateGeoJSON)
+      .add_option("template-out-prefix", "Optional output prefix for per-factor files written from --template-geojson (defaults to --out)", templateOutPrefix)
       .add_option("max-cell-diameter", "Maximum cell diameter in microns (for pix2cell)", maxCellDiameter)
       .add_option("xmin", "Minimum x coordinate for --extract-region", xmin)
       .add_option("xmax", "Maximum x coordinate for --extract-region", xmax)
@@ -154,10 +184,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         tileOp.spatialMetricsBasic(outPrefix);
         return 0;
     }
-    if (cnctComponents) {
-        tileOp.connectedComponents(outPrefix, ccMinSize);
-        return 0;
-    }
     if (profileShellSurface) {
         if (shellRadii.empty()) {
             error("--spatial-radii is required for --shell-surface");
@@ -166,6 +192,50 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
             error("--spatial-dmax (>=0) is required for --shell-surface");
         }
         tileOp.profileShellAndSurface(outPrefix, shellRadii, surfaceDmax, ccMinSize, spatialMinPixPerTilePerLabel);
+        return 0;
+    }
+    if (oneFactorMask) {
+        if (focalK < 0) {
+            error("--focal-k is required for --profile-factor-masks");
+        }
+        if (maskRadius < 0) {
+            error("--mask-radius must be >= 0");
+        }
+        if (maskThreshold < 0.0 || maskThreshold > 1) {
+            error("--mask-threshold must be in (0, 1) for --profile-factor-masks");
+        }
+        if (maskMinFrac < 0.0 || maskMinFrac >= 1.0) {
+            error("--mask-min-frac must be in [0,1)");
+        }
+        maskThreshold = maskThreshold * (2 * maskRadius + 1) * (2 * maskRadius + 1); // convert from fraction to absolute mass
+        tileOp.profileSoftFactorMasks(outPrefix, focalK, maskRadius,
+            maskThreshold, maskMinFrac, maskMinPixelProb,
+            maskMinComponentArea, skipMaskOverlap);
+        return 0;
+    }
+    if (softMask) {
+        if (maskRadius < 0) {
+            error("--mask-radius must be >= 0");
+        }
+        if (maskThreshold < 0.0 || maskThreshold > 1.0) {
+            error("--mask-threshold must be in [0,1] for --soft-factor-mask");
+        }
+        if (maskMinPixelProb < 0.0f) {
+            error("--mask-min-pixel-prob must be >= 0");
+        }
+        if (maskMinTileMass < 0.0) {
+            error("--mask-min-tile-mass must be >= 0");
+        }
+        if (maskSimplify < 0.0) {
+            error("--mask-simplify must be >= 0");
+        }
+        tileOp.softFactorMask(outPrefix, maskRadius, maskThreshold,
+            maskMinPixelProb, maskMinTileMass, maskMinComponentArea,
+            maskMinHoleArea, maskSimplify, skipBoundaries, templateGeoJSON, templateOutPrefix);
+        return 0;
+    }
+    if (hardMask) {
+        tileOp.hardFactorMask(outPrefix, ccMinSize, skipBoundaries, templateGeoJSON, templateOutPrefix);
         return 0;
     }
 

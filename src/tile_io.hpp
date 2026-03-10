@@ -318,6 +318,15 @@ struct TopProbs {
         if (!is.read(reinterpret_cast<char*>(ps.data()), k * sizeof(float))) return false;
         return true;
     }
+    float extractFactorProb(int32_t k, float minPixelProb) const {
+        float total = 0.0f;
+        for (size_t i = 0; i < ks.size() && i < ps.size(); ++i) {
+            if (ks[i] != k) continue;
+            if (ps[i] >= minPixelProb) {return ps[i];}
+            break;
+        }
+        return total;
+    }
 };
 
 template<typename T>
