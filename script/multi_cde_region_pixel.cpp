@@ -213,10 +213,11 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
     tbb::parallel_for(tbb::blocked_range<size_t>(0, ntasks),
         [&](const tbb::blocked_range<size_t>& range) {
             auto& local = tls.local();
+            std::ifstream tileStream;
             for (size_t ti = range.begin(); ti != range.end(); ++ti) {
                 const TileKey tile = tileList[ti];
                 std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
-                tileOp.loadTileToMap(tile, pixelMap, &pixelRects);
+                tileOp.loadTileToMap(tile, pixelMap, &pixelRects, &tileStream);
                 if (pixelMap.empty()) {
                     const int32_t done = processed.fetch_add(1) + 1;
                     if (done % 10 == 0) {

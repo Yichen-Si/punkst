@@ -14,6 +14,7 @@
 #include <numeric>
 #include <limits>
 #include <chrono>
+#include <atomic>
 #include <tbb/blocked_range.h>
 #include <tbb/combinable.h>
 #include <tbb/global_control.h>
@@ -22,6 +23,20 @@
 namespace {
 
 using FactorSums = std::pair<std::unordered_map<int32_t, double>, int32_t>;
+
+template<typename K, typename V>
+void add_numeric_map(std::map<K, V>& dst, const std::map<K, V>& src) {
+    for (const auto& kv : src) {
+        dst[kv.first] += kv.second;
+    }
+}
+
+template<typename K1, typename K2, typename V>
+void add_nested_map(std::map<K1, std::map<K2, V>>& dst, const std::map<K1, std::map<K2, V>>& src) {
+    for (const auto& kv : src) {
+        add_numeric_map(dst[kv.first], kv.second);
+    }
+}
 
 struct CellAgg {
     FactorSums sums;
@@ -467,7 +482,9 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
     if (tileSize <= 0) {
         tileSize = formatInfo_.tileSize;
     }
-    assert(tileSize > 0);
+    if (tileSize <= 0) {
+        error("%s: Invalid tile size", __func__);
+    }
 
     classifyBlocks(tileSize);
     openDataStream();
@@ -477,6 +494,7 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
     std::map<TileKey, std::vector<size_t>> tileMainBlocks;
     std::map<TileKey, std::vector<std::string>> boundaryLines;
     std::map<TileKey, IndexEntryF> boundaryInfo;
+    notice("%s: Start reorganizing %lu blocks with original tile size %d", __func__, blocks_.size(), tileSize);
 
     int boundaryBlocksCount = 0;
     int mainBlocksCount = 0;
@@ -551,6 +569,15 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
 
     // Write index header
     IndexHeader idxHeader = formatInfo_;
+    if (idxHeader.magic != PUNKST_INDEX_MAGIC) {
+        // Normalize legacy metadata when creating a new index.
+        idxHeader.magic = PUNKST_INDEX_MAGIC;
+        idxHeader.topK = k_;
+        idxHeader.xmin = globalBox_.xmin;
+        idxHeader.xmax = globalBox_.xmax;
+        idxHeader.ymin = globalBox_.ymin;
+        idxHeader.ymax = globalBox_.ymax;
+    }
     idxHeader.mode &= ~0x8;
     idxHeader.tileSize = tileSize;
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
@@ -565,7 +592,7 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
     }
 
     size_t currentOffset = headerLine_.size();
-
+    int32_t nFinished = 0;
     // 1. Process tiles with main blocks
     for (const auto& kv : tileMainBlocks) {
         TileKey tile = kv.first;
@@ -612,8 +639,13 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
         currentOffset = newEntry.ed;
         if (newEntry.n > 0) {
             if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index write error");
+            nFinished++;
+            if (nFinished % 100 == 0) {
+                notice("%s: Processed %d/%lu tiles with main blocks", __func__, nFinished, tileMainBlocks.size());
+            }
         }
     }
+    notice("%s: Written %d tiles with main blocks; %lu boundary-only tiles remain", __func__, nFinished, boundaryLines.size());
 
     // 2. Process remaining boundary-only tiles
     for (const auto& kv : boundaryLines) {
@@ -776,38 +808,22 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
     std::vector<uint32_t> offsets(nSets + 1, 0);
     for (size_t s = 0; s < nSets; ++s) offsets[s+1] = offsets[s] + kvec_[s];
 
-    resetReader();
-    size_t count = 0;
-    while (true) {
-        int32_t ret = 0;
-        if (mode_ & 0x4) {
-            ret = next(recInt);
-            ksPtr = &recInt.ks;
-            psPtr = &recInt.ps;
-        } else {
-            ret = next(recFloat, true);
-            ksPtr = &recFloat.ks;
-            psPtr = &recFloat.ps;
-        }
-        if (ret == -1) break;
-        if (ret == 0) continue;
-        std::vector<int32_t>& ks = *ksPtr;
-        std::vector<float>& ps = *psPtr;
-
-        count++;
-
+    auto accumulate_record = [&](const std::vector<int32_t>& ks, const std::vector<float>& ps,
+                                 std::vector<std::map<int32_t, double>>& oneMarginals,
+                                 std::vector<std::map<std::pair<int32_t, int32_t>, double>>& oneInternalDots,
+                                 std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>>& oneCrossDots) {
         for (size_t s1 = 0; s1 < nSets; ++s1) {
             uint32_t off1 = offsets[s1];
             for (uint32_t i = 0; i < kvec_[s1]; ++i) {
                 int32_t k1 = ks[off1 + i];
                 float p1 = ps[off1 + i];
-                marginals[s1][k1] += p1;
+                oneMarginals[s1][k1] += p1;
                 // Internal
                 for (uint32_t j = i; j < kvec_[s1]; ++j) {
                     int32_t k2 = ks[off1 + j];
                     float p2 = ps[off1 + j];
                     std::pair<int32_t, int32_t> k12 = (k1 <= k2) ? std::make_pair(k1, k2) : std::make_pair(k2, k1);
-                    internalDots[s1][k12] += (double) p1 * p2;
+                    oneInternalDots[s1][k12] += static_cast<double>(p1) * p2;
                 }
                 // Cross with s2 > s1
                 for (size_t s2 = s1 + 1; s2 < nSets; ++s2) {
@@ -816,10 +832,115 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
                         int32_t k2 = ks[off2 + j];
                         float p2 = ps[off2 + j];
                         // Ordered pair (k1 from s1, k2 from s2)
-                        crossDots[std::make_pair(s1, s2)][std::make_pair(k1, k2)] += (double)p1 * p2;
+                        oneCrossDots[std::make_pair(s1, s2)][std::make_pair(k1, k2)] += static_cast<double>(p1) * p2;
                     }
                 }
             }
+        }
+    };
+
+    size_t count = 0;
+    const bool canParallelizeByBlock = !bounded_ && !blocks_.empty() &&
+        ((mode_ & 0x1) != 0 || canSeekTextInput());
+    if (canParallelizeByBlock && threads_ > 1 && blocks_.size() > 1) {
+        struct LocalAccum {
+            std::vector<std::map<int32_t, double>> marginals;
+            std::vector<std::map<std::pair<int32_t, int32_t>, double>> internalDots;
+            std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>> crossDots;
+            size_t count = 0;
+
+            explicit LocalAccum(size_t nSets_)
+                : marginals(nSets_), internalDots(nSets_) {}
+        };
+
+        const size_t chunkBlockCount = std::max<size_t>(
+            (blocks_.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
+        const size_t nChunks = (blocks_.size() + chunkBlockCount - 1) / chunkBlockCount;
+        std::vector<LocalAccum> partials;
+        partials.reserve(nChunks);
+        for (size_t i = 0; i < nChunks; ++i) {
+            partials.emplace_back(nSets);
+        }
+        std::atomic<int32_t> processed{0};
+
+        auto processChunk = [&](size_t chunkIdx) {
+            const size_t begin = chunkIdx * chunkBlockCount;
+            const size_t end = std::min(blocks_.size(), begin + chunkBlockCount);
+            LocalAccum& local = partials[chunkIdx];
+            std::ifstream in;
+            if (mode_ & 0x1) {
+                in.open(dataFile_, std::ios::binary);
+            } else {
+                in.open(dataFile_);
+            }
+            if (!in.is_open()) {
+                error("%s: Error opening data file: %s", __func__, dataFile_.c_str());
+            }
+            TopProbs rec;
+            for (size_t bi = begin; bi < end; ++bi) {
+                const auto& blk = blocks_[bi];
+                in.clear();
+                in.seekg(static_cast<std::streamoff>(blk.idx.st));
+                if (!in.good()) {
+                    error("%s: Error seeking input stream to block %zu", __func__, bi);
+                }
+                uint64_t pos = blk.idx.st;
+                if (coord_dim_ == 3) {
+                    int32_t recX = 0, recY = 0, recZ = 0;
+                    while (readNextRecord3DAsPixel(in, pos, blk.idx.ed, recX, recY, recZ, rec)) {
+                        accumulate_record(rec.ks, rec.ps, local.marginals, local.internalDots, local.crossDots);
+                        local.count++;
+                    }
+                } else {
+                    int32_t recX = 0, recY = 0;
+                    while (readNextRecord2DAsPixel(in, pos, blk.idx.ed, recX, recY, rec)) {
+                        accumulate_record(rec.ks, rec.ps, local.marginals, local.internalDots, local.crossDots);
+                        local.count++;
+                    }
+                }
+                const int32_t done = processed.fetch_add(1) + 1;
+                if (done % 10 == 0) {
+                    notice("%s: Processed %d blocks...", __func__, done);
+                }
+            }
+        };
+
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, nChunks),
+            [&](const tbb::blocked_range<size_t>& range) {
+                for (size_t chunkIdx = range.begin(); chunkIdx < range.end(); ++chunkIdx) {
+                    processChunk(chunkIdx);
+                }
+            });
+
+        for (const auto& local : partials) {
+            count += local.count;
+            for (size_t s = 0; s < nSets; ++s) {
+                add_numeric_map(marginals[s], local.marginals[s]);
+                add_numeric_map(internalDots[s], local.internalDots[s]);
+            }
+            add_nested_map(crossDots, local.crossDots);
+        }
+    } else {
+        resetReader();
+        while (true) {
+            int32_t ret = 0;
+            if (mode_ & 0x4) {
+                ret = next(recInt);
+                ksPtr = &recInt.ks;
+                psPtr = &recInt.ps;
+            } else {
+                ret = next(recFloat, true);
+                ksPtr = &recFloat.ks;
+                psPtr = &recFloat.ps;
+            }
+            if (ret == -1) break;
+            if (ret == 0) continue;
+            std::vector<int32_t>& ks = *ksPtr;
+            std::vector<float>& ps = *psPtr;
+
+            count++;
+            accumulate_record(ks, ps, marginals, internalDots, crossDots);
         }
     }
 
@@ -1196,24 +1317,17 @@ TileOperator::computeConfusionMatrix(double resolution, const char* outPref, int
     if (res <= 0) res = 1.0f;
     if (resolution > 0) res /= resolution;
     std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
-    int32_t nTiles = 0;
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> confusion;
     confusion.setZero(K, K);
-    for (const auto& tileInfo : blocks_) {
-        nTiles++;
-        if (nTiles % 10 == 0) {
-            notice("%s: Processed %d tiles...", __func__, nTiles);
-        }
-        TileKey tile{tileInfo.row, tileInfo.col};
-        if (loadTileToMap(tile, pixelMap) <= 0) {
-            continue;
-        }
+    auto accumulateTileConfusion = [&](
+        const std::map<std::pair<int32_t, int32_t>, TopProbs>& onePixelMap,
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>& out) {
         if (resolution > 0) {
             std::unordered_map<std::pair<int32_t, int32_t>, Eigen::VectorXd, PairHash> squareSums;
-            for (const auto& kv : pixelMap) {
+            for (const auto& kv : onePixelMap) {
                 const auto& coord = kv.first;
                 int32_t sx = static_cast<int32_t>(std::floor(coord.first * res));
-                int32_t sy = static_cast<int32_t>(std::floor(coord.second* res));
+                int32_t sy = static_cast<int32_t>(std::floor(coord.second * res));
                 auto& merged = squareSums[std::make_pair(sx, sy)];
                 if (merged.size() == 0) {
                     merged = Eigen::VectorXd::Zero(K);
@@ -1232,21 +1346,67 @@ TileOperator::computeConfusionMatrix(double resolution, const char* outPref, int
                 double w = merged.sum();
                 if (w == 0.0) continue;
                 merged = merged.array() / w;
-                confusion += merged * merged.transpose() * w;
+                out += merged * merged.transpose() * w;
             }
-        } else {
-            for (const auto& kv : pixelMap) {
-                const TopProbs& tp = kv.second;
-                for (size_t i = 0; i < tp.ks.size(); ++i) {
-                    int32_t k1 = tp.ks[i];
-                    float p1 = tp.ps[i];
-                    for (size_t j = 0; j < tp.ks.size(); ++j) {
-                        int32_t k2 = tp.ks[j];
-                        float p2 = tp.ps[j];
-                        confusion(k1, k2) += static_cast<double>(p1 * p2);
-                    }
+            return;
+        }
+
+        for (const auto& kv : onePixelMap) {
+            const TopProbs& tp = kv.second;
+            for (size_t i = 0; i < tp.ks.size(); ++i) {
+                int32_t k1 = tp.ks[i];
+                float p1 = tp.ps[i];
+                for (size_t j = 0; j < tp.ks.size(); ++j) {
+                    int32_t k2 = tp.ks[j];
+                    float p2 = tp.ps[j];
+                    out(k1, k2) += static_cast<double>(p1 * p2);
                 }
             }
+        }
+    };
+
+    if (threads_ > 1 && blocks_.size() > 1) {
+        using ConfusionMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
+        tbb::combinable<ConfusionMat> tls([&] {
+            ConfusionMat local;
+            local.setZero(K, K);
+            return local;
+        });
+        std::atomic<int32_t> processed{0};
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+                std::ifstream tileStream;
+                std::map<std::pair<int32_t, int32_t>, TopProbs> localPixelMap;
+                auto& localConfusion = tls.local();
+                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
+                    const auto& tileInfo = blocks_[bi];
+                    TileKey tile{tileInfo.row, tileInfo.col};
+                    if (loadTileToMap(tile, localPixelMap, nullptr, &tileStream) > 0) {
+                        accumulateTileConfusion(localPixelMap, localConfusion);
+                    }
+                    const int32_t done = processed.fetch_add(1) + 1;
+                    if (done % 10 == 0) {
+                        notice("%s: Processed %d tiles...", __func__, done);
+                    }
+                }
+            });
+        tls.combine_each([&](const ConfusionMat& local) {
+            confusion += local;
+        });
+    } else {
+        std::ifstream tileStream;
+        int32_t nTiles = 0;
+        for (const auto& tileInfo : blocks_) {
+            nTiles++;
+            if (nTiles % 10 == 0) {
+                notice("%s: Processed %d tiles...", __func__, nTiles);
+            }
+            TileKey tile{tileInfo.row, tileInfo.col};
+            if (loadTileToMap(tile, pixelMap, nullptr, &tileStream) <= 0) {
+                continue;
+            }
+            accumulateTileConfusion(pixelMap, confusion);
         }
     }
 

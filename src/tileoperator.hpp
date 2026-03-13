@@ -170,9 +170,11 @@ public:
 
     int32_t loadTileToMap(const TileKey& key,
         std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
-        const std::vector<Rectangle<float>>* rects = nullptr) const;
+        const std::vector<Rectangle<float>>* rects = nullptr,
+        std::ifstream* dataStream = nullptr) const;
     int32_t loadTileToMap3D(const TileKey& key,
-        std::map<PixelKey3, TopProbs>& pixelMap) const;
+        std::map<PixelKey3, TopProbs>& pixelMap,
+        std::ifstream* dataStream = nullptr) const;
 
     using Slice = std::unordered_map<std::pair<int32_t, int32_t>, SparseObsDict, PairHash>; // unitKey -> sparse feature counts
     std::unordered_map<int32_t, Slice> aggOneTile(

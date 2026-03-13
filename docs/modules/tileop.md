@@ -45,6 +45,32 @@ When using `--in`, without `--binary`, the tool assumes the data file is `<in>.t
 
 Use `--out` to specify the output prefix. In some operations use `--binary-out` to specify that the output is to be written in binary format.
 
+### Parallel Execution
+
+Most `tile-op` subcommands accept `--threads N`. The current CLI default is `--threads 1`, which keeps all operations single-threaded unless you explicitly request more threads.
+
+Current commands with meaningful parallel tile-local execution include:
+
+- `--merge-emb`
+- `--annotate-pts`
+- `--prob-dot`
+- `--confusion`
+- `--extract-region`
+- `--extract-region-geojson`
+- `--smooth-top-labels`
+- `--spatial-metrics`
+- `--shell-surface`
+- `--profile-one-factor-mask`
+- `--soft-factor-mask`
+- `--soft-mask-composition`
+- `--hard-factor-mask`
+
+Notes:
+
+- Some commands are only partially parallelized: tile-local work is parallel, but later reduction, polygon assembly, or final writeback is still serial.
+- `--merge-emb` and `--annotate-pts` use a dedicated writer thread in parallel mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.
+- `--prob-dot` without `--merge-emb` has a serial fallback for bounded query mode and non-seekable text input such as stdin or gzipped streaming text.
+
 ### Basic Inspection and Conversion
 
 To inspect the index of a tiled file (it prints one tile per line after the header, so could be quite long for large data):
@@ -123,7 +149,7 @@ You can merge multiple inference files (e.g., from fitting different models) con
 ```bash
 punkst tile-op --in path/result1 [--binary] \
   --merge-emb path/result2.tsv path/result3.bin --k2keep 3 1 2 \
-  --out path/merged_result --binary-out
+  --out path/merged_result --binary-out --threads 1
 ```
 
 `--merge-emb` - One or more other inference files (created by `pixel-decode`) to merge with the main input file. They can be in either TSV or binary format, but have to have proper index files stored ad `<prefix>.index`.
@@ -131,6 +157,8 @@ punkst tile-op --in path/result1 [--binary] \
 `--k2keep` - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all top in the input files are kept.
 
 `--binary-out` - (Optional) Save the merged output in binary format instead of TSV.
+
+`--threads` - (Optional) Number of worker threads for tile-local merge processing.
 
 In the above example, we keep top 3 factors from file `result1.bin` (or `.tsv`), top 1 from `result2.tsv`, and top 2 from `result3.bin`. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.
 
@@ -141,7 +169,7 @@ You can annotate a transcript file with the inference results. The query file is
 ```bash
 punkst tile-op --in path/prefix [--binary] \
   --annotate-pts path/transcripts --icol-x 0 --icol-y 1 \
-  --out path/merged
+  --out path/merged --threads 1
 ```
 
 `--annotate-pts` - Prefix of the points file (the tool expects `<prefix>.tsv` and `<prefix>.index`) to be annotated.
@@ -149,6 +177,8 @@ punkst tile-op --in path/prefix [--binary] \
 `--icol-x` - 0-based column index for X coordinate in the points file.
 
 `--icol-y` - 0-based column index for Y coordinate in the points file.
+
+`--threads` - (Optional) Number of worker threads for tile-local annotation.
 
 ### Compute Joint Probability Distributions
 
@@ -163,13 +193,15 @@ Likely use cases: comparing factor sets; comparing factors with cell types.
 For a single inference result file:
 
 ```bash
-punkst tile-op --prob-dot --in path/result [--binary] --out path/out_prefix
+punkst tile-op --prob-dot --in path/result [--binary] --out path/out_prefix --threads 1
 ```
 Output:
 
 - `path/out_prefix.marginal.tsv`: Marginal sums of probabilities (mass) for each factor. (This should be roughly the same as the auxilliary pseudobulk matrix from `pixel-decode`).
 
 - `path/out_prefix.joint.tsv`: Sum of products for each pair of factors.
+
+`--threads` - (Optional) Number of worker threads for the indexed / seekable-input path.
 
 If the file contains multiple sets of results (e.g. a merged file), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., `path/out_prefix.0v1.cross.tsv`).
 
@@ -180,10 +212,12 @@ You can also compute these statistics while merging multiple inference result fi
 ```bash
 punkst tile-op --prob-dot --in path/result1 [--binary] \
   --merge-emb path/result2.tsv path/result3.bin \
-  --out path/out_prefix
+  --out path/out_prefix --threads 1
 ```
 
 This supports `--k2keep` to reduce the number of top-K factors used in each source before computing the products.
+
+`--threads` - (Optional) Number of worker threads for shared-tile accumulation across input sources.
 
 Output:
 
@@ -198,10 +232,12 @@ Output:
 This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.
 
 ```bash
-punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix
+punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix --threads 1
 ```
 
 `--confusion` - The resolution (side length of square bins in microns) for computing the confusion matrix.
+
+`--threads` - (Optional) Number of worker threads for indexed tile-level confusion accumulation.
 
 Output:
 

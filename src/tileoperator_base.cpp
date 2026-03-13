@@ -737,7 +737,8 @@ void TileOperator::sampleTilesToDebug(int32_t ntiles) {
 
 int32_t TileOperator::loadTileToMap(const TileKey& key,
     std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
-    const std::vector<Rectangle<float>>* rects) const {
+    const std::vector<Rectangle<float>>* rects,
+    std::ifstream* dataStream) const {
     if (coord_dim_ == 3) {
         error("%s: 3D data requires loadTileToMap3D", __func__);
     }
@@ -751,25 +752,31 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
         return 0;
     }
 
-    std::ifstream dataStream;
-    if (mode_ & 0x1) {
-        dataStream.open(dataFile_, std::ios::binary);
-    } else {
-        dataStream.open(dataFile_);
+    std::ifstream localStream;
+    std::ifstream* stream = dataStream;
+    if (stream == nullptr) {
+        stream = &localStream;
     }
-    if (!dataStream.is_open()) {
+    if (!stream->is_open()) {
+        if (mode_ & 0x1) {
+            stream->open(dataFile_, std::ios::binary);
+        } else {
+            stream->open(dataFile_);
+        }
+    }
+    if (!stream->is_open()) {
         error("Error opening data file: %s", dataFile_.c_str());
     }
 
     size_t idx = lookup->second;
     const TileInfo& blk = blocks_[idx];
-    dataStream.clear();
-    dataStream.seekg(blk.idx.st);
+    stream->clear();
+    stream->seekg(blk.idx.st);
     uint64_t pos = blk.idx.st;
     TopProbs rec;
     int32_t recX = 0;
     int32_t recY = 0;
-    while (readNextRecord2DAsPixel(dataStream, pos, blk.idx.ed, recX, recY, rec)) {
+    while (readNextRecord2DAsPixel(*stream, pos, blk.idx.ed, recX, recY, rec)) {
         if (rects != nullptr && !rects->empty()) {
             const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
             const float x = static_cast<float>(recX) * res;
@@ -791,7 +798,8 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
 }
 
 int32_t TileOperator::loadTileToMap3D(const TileKey& key,
-    std::map<PixelKey3, TopProbs>& pixelMap) const {
+    std::map<PixelKey3, TopProbs>& pixelMap,
+    std::ifstream* dataStream) const {
     if (coord_dim_ != 3) {
         error("%s: 3D data required, but coord_dim_=%u", __func__, coord_dim_);
     }
@@ -803,26 +811,32 @@ int32_t TileOperator::loadTileToMap3D(const TileKey& key,
     auto lookup = tile_lookup_.find(key);
     if (lookup == tile_lookup_.end()) return 0;
 
-    std::ifstream dataStream;
-    if (mode_ & 0x1) {
-        dataStream.open(dataFile_, std::ios::binary);
-    } else {
-        dataStream.open(dataFile_);
+    std::ifstream localStream;
+    std::ifstream* stream = dataStream;
+    if (stream == nullptr) {
+        stream = &localStream;
     }
-    if (!dataStream.is_open()) {
+    if (!stream->is_open()) {
+        if (mode_ & 0x1) {
+            stream->open(dataFile_, std::ios::binary);
+        } else {
+            stream->open(dataFile_);
+        }
+    }
+    if (!stream->is_open()) {
         error("Error opening data file: %s", dataFile_.c_str());
     }
 
     size_t idx = lookup->second;
     const TileInfo& blk = blocks_[idx];
-    dataStream.clear();
-    dataStream.seekg(blk.idx.st);
+    stream->clear();
+    stream->seekg(blk.idx.st);
     uint64_t pos = blk.idx.st;
     TopProbs rec;
     int32_t recX = 0;
     int32_t recY = 0;
     int32_t recZ = 0;
-    while (readNextRecord3DAsPixel(dataStream, pos, blk.idx.ed, recX, recY, recZ, rec)) {
+    while (readNextRecord3DAsPixel(*stream, pos, blk.idx.ed, recX, recY, recZ, rec)) {
         pixelMap[std::make_tuple(recX, recY, recZ)] = std::move(rec);
     }
     return static_cast<int32_t>(pixelMap.size());

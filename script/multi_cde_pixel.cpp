@@ -204,6 +204,7 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
             [&](const tbb::blocked_range<size_t>& range)
         {
             auto& local = tls.local();
+            std::ifstream tileStream;
             Eigen::MatrixXd confusion;
             double p_residual = 0.0;
             if (!use_confusion) {
@@ -213,7 +214,7 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
                 const auto& tileInfo = tileList[ti];
                 TileKey tile{tileInfo.row, tileInfo.col};
                 std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
-                tileOp.loadTileToMap(tile, pixelMap);
+                tileOp.loadTileToMap(tile, pixelMap, nullptr, &tileStream);
                 if (!use_confusion) {
                     for (const auto& kv : pixelMap) {
                         accumulateConfusionFromTopProbs(kv.second, confusion, p_residual);
