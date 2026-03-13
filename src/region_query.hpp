@@ -7,6 +7,7 @@
 
 #include "clipper2/clipper.h"
 #include "img_utils.hpp"
+#include "json.hpp"
 #include "tile_io.hpp"
 
 enum class RegionTileState : uint8_t { Outside, Inside, Partial };
@@ -54,6 +55,9 @@ PreparedRegionMask2D prepareRegionFromPaths(const Clipper2Lib::Paths64& paths,
 PreparedRegionMask2D prepareRegionFromRectangle(const Rectangle<float>& rect,
                                                 int32_t tileSize,
                                                 int64_t scale = 10);
+PreparedRegionMask2D prepareRegionFromGeoJSONGeometry(const nlohmann::json& geometry,
+                                                      int32_t tileSize,
+                                                      int64_t scale = 10);
 
 PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
                                            int32_t tileSize,

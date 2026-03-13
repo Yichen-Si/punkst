@@ -395,6 +395,29 @@ PreparedRegionMask2D prepareRegionFromRectangle(const Rectangle<float>& rect,
     return prepareRegionFromPaths(Paths64{std::move(ring)}, tileSize, scale);
 }
 
+PreparedRegionMask2D prepareRegionFromGeoJSONGeometry(const json& geometry,
+                                                      int32_t tileSize,
+                                                      int64_t scale) {
+    if (tileSize <= 0) {
+        throw std::runtime_error("tileSize must be positive");
+    }
+    if (scale <= 0) {
+        scale = kDefaultScale;
+    }
+
+    Paths64 input_rings;
+    append_geometry_rings(input_rings, geometry, scale);
+    if (input_rings.empty()) {
+        throw std::runtime_error("No valid Polygon or MultiPolygon rings found in GeoJSON geometry");
+    }
+
+    const Paths64 region_union = Union(input_rings, FillRule::NonZero);
+    if (region_union.empty()) {
+        throw std::runtime_error("Polygon union is empty after preprocessing");
+    }
+    return prepareRegionFromPaths(region_union, tileSize, scale);
+}
+
 PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
                                            int32_t tileSize,
                                            int64_t scale) {
@@ -412,18 +435,7 @@ PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
 
     json root;
     in >> root;
-
-    Paths64 input_rings;
-    append_geometry_rings(input_rings, root, scale);
-    if (input_rings.empty()) {
-        throw std::runtime_error("No valid Polygon or MultiPolygon rings found in GeoJSON");
-    }
-
-    const Paths64 region_union = Union(input_rings, FillRule::NonZero);
-    if (region_union.empty()) {
-        throw std::runtime_error("Polygon union is empty after preprocessing");
-    }
-    return prepareRegionFromPaths(region_union, tileSize, scale);
+    return prepareRegionFromGeoJSONGeometry(root, tileSize, scale);
 }
 
 bool PreparedRegionMask2D::containsPoint(float x, float y, const TileKey* tile_hint) const {

@@ -154,6 +154,67 @@ inline Result smoothLabels8Neighborhood(std::vector<int32_t>& labels, std::vecto
 // compute percentiles of non-zero values in a cv::Mat
 void percentile(std::vector<uchar>& results, const cv::Mat& mat, std::vector<double>& percentiles);
 
+template <typename InT, typename OutT, typename AccT>
+inline void boxFilterSum2D(const std::vector<InT>& in, size_t W, size_t H,
+    int32_t radius, std::vector<OutT>& out) {
+    if (in.size() != W * H) {
+        error("%s: Input size mismatch", __func__);
+    }
+    if (W == 0 || H == 0) return;
+    if (radius <= 0) {
+        out.assign(in.begin(), in.end());
+        return;
+    }
+
+    out.resize(in.size());
+    const size_t r = static_cast<size_t>(radius);
+    std::vector<OutT> tmp(in.size());
+    std::vector<AccT> prefix(std::max(W, H) + 1, static_cast<AccT>(0));
+
+    for (size_t y = 0; y < H; ++y) {
+        const size_t row = y * W;
+        prefix[0] = static_cast<AccT>(0);
+        for (size_t x = 0; x < W; ++x) {
+            prefix[x + 1] = prefix[x] + static_cast<AccT>(in[row + x]);
+        }
+        for (size_t x = 0; x < W; ++x) {
+            const size_t x0 = (x > r) ? (x - r) : 0;
+            const size_t x1 = std::min(W - 1, x + r);
+            tmp[row + x] = static_cast<OutT>(prefix[x1 + 1] - prefix[x0]);
+        }
+    }
+
+    std::vector<AccT> colRunningSum(W, static_cast<AccT>(0));
+    for (size_t y = 0; y <= std::min(H - 1, r); ++y) {
+        const size_t row = y * W;
+        for (size_t x = 0; x < W; ++x) {
+            colRunningSum[x] += static_cast<AccT>(tmp[row + x]);
+        }
+    }
+
+    for (size_t y = 0; y < H; ++y) {
+        if (y > 0) {
+            const size_t addY = y + r;
+            if (addY < H) {
+                const size_t addRow = addY * W;
+                for (size_t x = 0; x < W; ++x) {
+                    colRunningSum[x] += static_cast<AccT>(tmp[addRow + x]);
+                }
+            }
+        }
+        if (y > r) {
+            const size_t subRow = (y - r - 1) * W;
+            for (size_t x = 0; x < W; ++x) {
+                colRunningSum[x] -= static_cast<AccT>(tmp[subRow + x]);
+            }
+        }
+        const size_t row = y * W;
+        for (size_t x = 0; x < W; ++x) {
+            out[row + x] = static_cast<OutT>(colRunningSum[x]);
+        }
+    }
+}
+
 // Shape related
 
 template <typename T>

@@ -614,6 +614,32 @@ void TileOperator::openDataStream() {
     textStreamOpen_ = true;
 }
 
+void TileOperator::resetReader() {
+    if ((mode_ & 0x1) == 0 && isTextStdinInput()) {
+        error("%s: Cannot reset reader for stdin stream input", __func__);
+    }
+
+    if ((mode_ & 0x1) == 0 && isTextGzipInput()) {
+        closeTextStream();
+        hasPendingTextLine_ = false;
+        openDataStream();
+    } else {
+        if (dataStream_.is_open()) {
+            dataStream_.clear();
+            dataStream_.seekg(0);
+        } else {
+            openDataStream();
+        }
+        hasPendingTextLine_ = false;
+    }
+    done_ = false;
+    idx_block_ = 0;
+    pos_ = 0;
+    if (bounded_ && !blocks_.empty()) {
+        openBlock(blocks_[0]);
+    }
+}
+
 bool TileOperator::readNextTextLine(std::string& line) {
     if (hasPendingTextLine_) {
         line = std::move(pendingTextLine_);

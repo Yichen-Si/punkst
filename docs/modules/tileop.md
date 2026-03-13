@@ -2,42 +2,43 @@
 
 **`tile-op` provides utilities to view and manipulate the tiled data files** created by `punkst pixel-decode` or `punkst pts2tiles`.
 
+This module is under active development and any suggestions or requests will be most welcome.
+
+Caution:
+
+Some operations related to factor masks currently assume the factor inference is performed on a grid, thus can be treated as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` or Visium HD data. If you run `pixel-decode` with a much smaller resolution parameter (perhaps to try strictly single molecule-level inference), smoothing, mask generation, and shell profiling do not work yet.
+
 ## Available Operations
 
-- inspecting the index
+- Basic inspection, conversion, and region query
+  - [Basic Inspection and Conversion](#basic-inspection-and-conversion)
+  - [Fix Fragmented Tiles](#fix-fragmented-tiles)
+  - [Region Query](#region-query)
 
-- converting binary tiled files to TSV
+- Joining, annotating, and aggregation
+  - [Merge Multiple Inference Results](#merge-multiple-inference-results)
+  - [Annotate Points with Inference Results](#annotate-points-with-inference-results)
+  - [Aggregate Results by Cell](#aggregate-results-by-cell)
 
-- extracting records inside a rectangular or multi-polygon query region
+- Factor-distribution summaries
+  - [Compute Joint Probability Distributions](#compute-joint-probability-distributions)
+  - [Compute Confusion Matrix](#compute-confusion-matrix)
 
-- reorganizing fragmented tiles to a regular grid
+- Spatial profiling and factor masks
+  - [Denoise Top Labels](#denoise-top-labels)
+  - [Compute Basic Spatial Metrics](#compute-basic-spatial-metrics)
+  - [Shell and Surface Profiles](#shell-and-surface-profiles)
+  - [Profile the Area Covered by One Focal Factor](#profile-the-area-covered-by-one-focal-factor)
+  - [Soft Factor Mask](#soft-factor-mask)
+  - [Soft Mask Composition](#soft-mask-composition)
+  - [Hard Factor Mask](#hard-factor-mask)
 
-- merging multiple inference results
-
-- annotating (tiled) point level file with inference results
-
-- compute joint probability distributions of factors
-
-- compute confusion matrix among factors at a given resolution
-
-- denoise and keep only the top predicted factor per pixel
-
-- aggregate pixel level inference results by cell and subcellular compartments based in transcript/pixel level annotations
-
-- compute global connected components per label with centroid and coordinate range
-
-- profile shell occupancy and directional surface distance between labels
-
-- profile the area (softly) covered by a focal factor
-
-- build per-factor masks and export boundaries as GeoJSON
-
-(Except for printing the index, all operations are intended to be used separately)
+(Each operation is intended to be used independently, though some operations can be combined, e.g. denoise the factor predictions then profile surface distance; merging multiple inference files before annotating all onto one transcript file)
 
 ## Usage
 
 ### Main input & output
-The main input are the tiled pixel level files created by `punkst pixel-decode`, either in the custom binary format or in plain TSV format.
+The main input are the tiled pixel level files created by `punkst pixel-decode` (either in the custom binary format or in plain TSV format) or `punkst pts2tiles`.
 
 You can specify the pair of data and index files using `--in-data` and `--in-index`, or specify the prefix using `--in`.
 When using `--in`, without `--binary`, the tool assumes the data file is `<in>.tsv` and the index file is `<in>.index`, and with `--binary` it assumes the data file is `<in>.bin` and the index file is `<in>.index`.
@@ -46,7 +47,7 @@ Use `--out` to specify the output prefix. In some operations use `--binary-out` 
 
 ### Basic Inspection and Conversion
 
-To inspect the index of a tiled file:
+To inspect the index of a tiled file (it prints one tile per line after the header, so could be quite long for large data):
 
 ```bash
 punkst tile-op --print-index --in path/prefix [--binary]
@@ -60,16 +61,28 @@ punkst tile-op --dump-tsv --in path/prefix --binary --out path/prefix.dump
 
 The output include `path/prefix.dump.tsv` and `path/prefix.dump.index`.
 
+### Fix fragmented Tiles
+
+The output of `punkst pixel-decode` is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.
+
+If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (`path/prefix.index`), currently we don't support generic reorganization)
+
+Note that this is **not** required for visualization `draw-pixel-factors`.
+
+```bash
+punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix
+```
+
 ### Region Query
 
-You can extract a spatial subset of a tiled file and write it out as another indexed tiled file pair.
+You can extract a spatial subset of a tiled file and write it out as another indexed tiled file.
 
 Output:
 
 - `path/prefix.region.tsv` or `path/prefix.region.bin`
 - `path/prefix.region.index`
 
-The output remains in regular tiled format and contains only tiles with at least one retained record.
+The output remains in regular tiled format even when the query region may partially overlap some tiles, and contains all and only tiles with at least one retained record.
 
 #### Rectangle query
 
@@ -99,28 +112,13 @@ Optional:
 
 **Requirements**
 
-Tiled input data: GeoJSON region query currently only supports tiled inputs in **regular tile mode**:
-
-- the input index must have `mode & 0x8 == 0`, generic rectangular block mode is rejected
-- the input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation
+Tiled input data: GeoJSON region query currently only supports tiled inputs in **regular square tile mode** (see [Fix Fragmented Tiles](#fix-fragmented-tiles) below). The input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation.
 
 GeoJSON / JSON file: see [GeoJSON Region Input](../input/geojson-region.md) for requirements and polygon validity handling.
 
-### Fix fragmented Tiles
-
-The output of `punkst pixel-decode` is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.
-
-If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (`path/prefix.index`), currently we don't support generic reorganization)
-
-Note that this is **not** required for visualization `draw-pixel-factors`.
-
-```bash
-punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix
-```
-
 ### Merge Multiple Inference Results
 
-You can merge multiple inference files (e.g., from different models) into a single file. This finds the intersection of tiles and concatenates the results ((factor, probability) pairs) for each pixel.
+You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. This finds the intersection of tiles and concatenates the results ((factor, probability) pairs) for each pixel.
 
 ```bash
 punkst tile-op --in path/result1 [--binary] \
@@ -130,15 +128,15 @@ punkst tile-op --in path/result1 [--binary] \
 
 `--merge-emb` - One or more other inference files (created by `pixel-decode`) to merge with the main input file. They can be in either TSV or binary format, but have to have proper index files stored ad `<prefix>.index`.
 
-`--k2keep` - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all factors are kept.
+`--k2keep` - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all top in the input files are kept.
 
 `--binary-out` - (Optional) Save the merged output in binary format instead of TSV.
 
-In the above example, from file `result1.bin` (or `.tsv`) we keep top 3 factors, from `result2.tsv` we keep top 1 factor, and from `result3.bin` we keep top 2 factors. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.
+In the above example, we keep top 3 factors from file `result1.bin` (or `.tsv`), top 1 from `result2.tsv`, and top 2 from `result3.bin`. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.
 
 ### Annotate Points with Inference Results
 
-You can annotate a transcript file with the inference results. The query file is required to be generated by `punkst pts2tiles` with the same tile structure as the result file so that the tool can efficiently join it with the inference results, but you can apply `pts2tiles` to any tsv file that contains X, Y coordinates as two of its columns.
+You can annotate a transcript file with the inference results. The query file is required to be generated by `punkst pts2tiles` with the same tile structure as the result file (since you normally run `pixel-decode` with the output from `pts2tiles` as the input), but you can apply `pts2tiles` to any tsv file that contains X, Y coordinates as two of its columns.
 
 ```bash
 punkst tile-op --in path/prefix [--binary] \
@@ -154,9 +152,11 @@ punkst tile-op --in path/prefix [--binary] \
 
 ### Compute Joint Probability Distributions
 
-You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from multiple models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file).
-To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.
+You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from different models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file). To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.
 
+Note: the pixel level factor probabilities are not to be interpreted as full Bayesian posterior probabilities as they are from approximated computation with mean-field variational inference.
+
+Likely use cases: comparing factor sets; comparing factors with cell types.
 
 #### Single Input
 
@@ -167,15 +167,15 @@ punkst tile-op --prob-dot --in path/result [--binary] --out path/out_prefix
 ```
 Output:
 
-- `path/out_prefix.marginal.tsv`: Marginal sums of posterior probabilities for each factor.
+- `path/out_prefix.marginal.tsv`: Marginal sums of probabilities (mass) for each factor. (This should be roughly the same as the auxilliary pseudobulk matrix from `pixel-decode`).
 
 - `path/out_prefix.joint.tsv`: Sum of products for each pair of factors.
 
-If the file contains multiple sets of results (e.g. a merged), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., `path/out_prefix.0v1.cross.tsv`).
+If the file contains multiple sets of results (e.g. a merged file), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., `path/out_prefix.0v1.cross.tsv`).
 
 #### Merging and Computing on the Fly
 
-You can also compute these statistics while merging multiple inference result files on the fly, without writing the large merged file to disk.
+You can also compute these statistics while merging multiple inference result files on the fly, without writing the merged file to disk.
 
 ```bash
 punkst tile-op --prob-dot --in path/result1 [--binary] \
@@ -195,7 +195,7 @@ Output:
 
 ### Compute Confusion Matrix
 
-This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, identifies the top factor for each square, and then builds a matrix of co-occurrences.
+This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.
 
 ```bash
 punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix
@@ -209,8 +209,8 @@ Output:
 
 ### Aggregate Results by Cell
 
-This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the tailed transcript file that contains cell/compartment annotations per transcript/pixel.
-If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have run `punkst pts2tiles` on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file already contains the necessary information.
+This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tailed) transcript file that contains cell/compartment annotations per transcript/pixel.
+If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run `punkst pts2tiles` on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file should contain the necessary information.
 
 ```bash
 punkst tile-op --annotate-cell --in path/result [--binary] \
@@ -259,12 +259,12 @@ Optional:
 
 `fill-empty-islands` - fill isolated empty pixels if they are surrounded by consistent neighbors. Default is to leave empty pixels unchanged. This may be helpful if you would like to get statistics like area and perimeter/edge per cell type later using `tile-op --spatial-metrics`
 
-### Compute basic spatial metrics
+### Compute Basic Spatial Metrics
 
 This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with `tile-op --smooth-top-labels r --fill-empty-islands` (see above).
 
 ```bash
-punkst tile-op --smooth-top-labels 2 --in path/result [--binary] --out path/prefix --spatial-metrics
+punkst tile-op --spatial-metrics --in path/result [--binary] --out path/prefix
 ```
 
 The output includes two files:
@@ -272,8 +272,9 @@ The output includes two files:
 - `path/prefix.stats.single.tsv` for per-channel (factor or cell type) metrics. Columns are:
   - channel index (`#k`)
   - total number of pixels (`area`)
-  - length of all boundaries shared with non-background pixels from other channels (`perim`)
-  - length of boundaries shared with background pixels (`perim_bg`)
+  - total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel `K` (`perim`)
+
+The single-channel table now includes one extra row with `#k = K`, representing empty/background area.
 
 - `path/prefix.stats.pairwise.tsv` for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be $A_k, P_k, A_l, P_l$, the columns are
   - channel indices for the pair (`#k`, `l`)
@@ -283,48 +284,18 @@ The output includes two files:
   - $L_{kl} / P_l$ (`frac2`)
   - $L_{kl} / (A_k + A_l)$ (`density`)
 
-### Hard factor mask
-
-Build per-label hard masks from the top predicted factor at each raster pixel, merge connected components across tile boundaries, and write global summaries. By default this also writes one GeoJSON `MultiPolygon` feature per factor; use `--skip-boundaries` to disable boundary extraction and write only the summaries.
-
-```bash
-punkst tile-op --hard-factor-mask --in path/result [--binary] \
-  --cc-min-size 25 --out path/out_prefix
-```
-
-Main parameters:
-
-- `--cc-min-size` - minimum final connected-component size retained in the summaries and GeoJSON.
-- `--skip-boundaries` - skip GeoJSON generation and write only the summary tables.
-- `--template-geojson` - optional template JSON/GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra JSON file per factor with the template content, replacing only the top-level `title` and `geometry` fields. The title is set to the factor index, and `geometry` is set to the corresponding per-factor GeoJSON `Feature`.
-- `--template-out-prefix` - optional output prefix for the per-factor template-derived files. Defaults to `--out`.
-
-Output:
-
-- `path/out_prefix.factor_summary.tsv`: per-factor summary with columns
-  - factor index (`k`)
-  - number of tiles containing the factor (`n_tiles`)
-  - total retained mask area in pixels (`mask_area_pix`)
-  - number of retained final connected components (`n_components`)
-
-- `path/out_prefix.component_hist.tsv`: retained component-size histogram with columns
-  - factor index (`k`)
-  - component size (`size`)
-  - number of components with that size (`n_components`)
-
-- `path/out_prefix.geojson`: optional `FeatureCollection` containing one `MultiPolygon` feature per factor with properties
-  - factor index (`Factor`)
-  - number of contributing tiles (`n_tiles`)
-  - total retained mask area in pixels (`mask_area_pix`)
-  - number of retained final connected components (`n_components`)
-
-- `path/out_prefix.k<factor>.json`: optional per-factor JSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file copies the template and replaces:
-  - `title` with the factor index
-  - `geometry` with the corresponding per-factor GeoJSON `Feature`
-
 ### Shell and Surface Profiles
 
-Profile pairwise spatial proximity between labels using boundary-seeded distance transforms.
+Profile the factor composition in the immediate neighborhood of a factor, and pairwise spatial proximity between factors.
+
+Here we only use the top predicted factor for each pixel, so the masks for factors are mutually exclusive.
+
+Shell composition: consider each focal factor as defining a binary mask, we first find the contour of each patch (connected component) of the foreground of the mask, a shell is defined as the set of pixels within a certain distance from the contour. For each of the specified shell radii, we report the composition of other factors within the shell.
+
+Surface distance: for each pair of factors, we compute a histogram of the distance from pixels of one factor to the nearest pixel of the other factor, and vice versa. This is a directional measure of spatial proximity between factors. It is approximated for efficiency and robustness by first extracting boundaries of the factor masks, then computing the distance from each boundary pixel to the nearest pixel on the other factor's boundary. The output is a histogram of these distances for each pair of factors with bin size `1` and up to the specified maximum distance.
+
+**CAUTION**: all length and area parameters are in "pixel" units, not in microns, because this operation views the data as a rasterized image. If you obtained the data with `pixel-decode --pixel-res 0.5`, then each pixel corresponds to `0.5` microns, so a shell radius of `10` means `5` microns and a size threshold of `20` means `5` square microns.
+(I'm not sure if this is the best way. We will add more flexible options to allow coarser rasterization scale than the input data's pixel resolution, but until now it is safer to accept pixel units)
 
 ```bash
 punkst tile-op --shell-surface --in path/result [--binary] \
@@ -335,13 +306,13 @@ punkst tile-op --shell-surface --in path/result [--binary] \
 
 `--shell-surface` - run shell occupancy and surface distance profiling.
 
-`--shell-radii` - one or more shell radii (pixels) for occupancy reporting.
+`--shell-radii` - one or more shell radii (in pixels, NOT microns) for occupancy reporting.
 
-`--surface-dmax` - maximum distance bin for the surface-distance histogram.
+`--surface-dmax` - maximum distance bin (in pixels) for the surface-distance histogram.
 
-`--cc-min-size` - minimum connected-component size used for boundary seed filtering.
+`--cc-min-size` - minimum connected-component size (number of pixels) used for boundary seed filtering.
 
-`--spatial-min-pix-per-tile-label` - require at least this many pixels of a label within a tile before that tile contributes seeds for the label.
+`--spatial-min-pix-per-tile-label` - require at least this many pixels of a label within a tile before that tile contributes to this label's boundary construction.
 
 Output:
 
@@ -356,14 +327,15 @@ Output:
   - source label (`#from_K1`)
   - target label (`to_K2`)
   - distance bin (`d`)
-  - count (`count`)
+  - number of `K1` boundary pixels that find the neraest boundary of `K2` at distance `d` (`count`)
 
-### Profile factor masks
+### Profile the area covered by one focal factor
 
-Build a raster mask for one focal factor using local neighborhood probability mass, optionally remove small connected components, then report the factor composition inside the focal mask and pairwise overlaps among the selected factor masks.
+Build a raster mask for one focal factor using local neighborhood probability mass, optionally remove isolated small spots/patches, then report the factor composition inside the mask. Optionally, it then creates a soft mask for each of the factors with a high total probability mass inside the focal mask and calculate pairwise overlaps among the focal and selected factor masks.
+(It currently does not output the boundaries. See `--soft-factor-mask` below for that)
 
 ```bash
-punkst tile-op --profile-factor-masks --in path/result [--binary] \
+punkst tile-op --profile-one-factor-mask --in path/result [--binary] \
   --focal-k 7 --mask-radius 2 --mask-threshold 0.35 \
   --mask-min-frac 0.05 --mask-min-component-area 20 \
   --out path/out_prefix
@@ -376,6 +348,7 @@ Main parameters:
 - `--mask-threshold` - threshold on the focal factor neighborhood score.
 - `--mask-min-frac` - keep a secondary factor if its mass inside the focal mask exceeds this fraction of the total focal-mask mass.
 - `--mask-min-pixel-prob` - optional per-pixel cutoff used only when constructing masks from factor probabilities.
+- `--mask-morphology` - optional post-threshold morphology sequence. Each value is an odd kernel size with sign indicating the operation: positive for dilation, negative for erosion. For example, `--mask-morphology 5 -3`.
 - `--mask-min-component-area` - optional 4-connected component size cutoff applied independently within each tile after thresholding.
 
 Output:
@@ -398,7 +371,7 @@ Output:
 
 ### Soft factor mask
 
-Build a soft binary mask for every factor, remove small connected components, merge seam-crossing components across tiles, and write global summaries. By default this also polygonizes the kept mask and exports one GeoJSON `MultiPolygon` feature per factor; use `--skip-boundaries` to disable geometry export.
+Build a soft binary mask for every factor, optionally remove small connected components, and write global summaries. By default this also polygonizes the kept mask and exports one GeoJSON `MultiPolygon` feature per factor; use `--skip-boundaries` to disable geometry export.
 
 ```bash
 punkst tile-op --soft-factor-mask --in path/result [--binary] \
@@ -411,15 +384,16 @@ punkst tile-op --soft-factor-mask --in path/result [--binary] \
 Main parameters:
 
 - `--mask-radius` - size `r` (in pixel units) defining the `(2r+1) x (2r+1)` neighborhood.
-- `--mask-threshold` - threshold on the factor probabilities averaged over the observed pixels in the neighborhood. Pixels with no observation do not contribute to the denominator. An empty center pixel is still allowed into the mask unless observed coverage in its clipped neighborhood falls below half. The window must also contain at least total factor mass `1.0`.
+- `--mask-threshold` - threshold on the factor probabilities averaged over the observed pixels in the neighborhood. Pixels with no observation do not contribute to the denominator. For an empty center pixel, if at most 2 of its 4 direct neighbors are observed, it is excluded immediately; otherwise it is evaluated by the same mass-based rule as any other pixel. The window must also contain at least total factor mass `1.0`.
 - `--mask-min-pixel-prob` - ignore sparse factor entries below this per-pixel probability before mask construction.
+- `--mask-morphology` - optional post-threshold morphology sequence. Each value is an odd kernel size with sign indicating the operation: positive for dilation, negative for erosion. For example, `--mask-morphology 5 -3`.
 - `--mask-min-tile-mass` - skip a factor in a tile if its retained sparse mass in that tile is below this threshold.
 - `--mask-min-component-area` - legacy-named cutoff applied independently within each tile after thresholding; in `--soft-factor-mask` it is compared against the total raw factor mass in each 4-connected component, not the pixel area.
 - `--mask-min-hole-area` - drop holes smaller than this area from the polygon output.
-- `--mask-simplify` - optional Clipper2 simplification tolerance; `0` keeps the exact raster-derived boundary after collinear trimming.
+- `--mask-simplify` - optional [Clipper2 SimplifyPaths](https://www.angusj.com/clipper2/Docs/Units/Clipper/Functions/SimplifyPaths.htm) tolerance; `0` keeps the exact raster-derived boundary after collinear trimming (which may have staircase-like boundaries due to rasterization). The unit is in pixel.
 - `--skip-boundaries` - skip GeoJSON generation and write only the summary tables.
-- `--template-geojson` - optional template JSON/GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra JSON file per factor with the template content, replacing only the top-level `title` and `geometry` fields. The title is set to the factor index, and `geometry` is set to the corresponding per-factor GeoJSON `Feature`.
-- `--template-out-prefix` - optional output prefix for the per-factor template-derived files. Defaults to `--out`.
+- `--template-geojson` - optional template GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra GeoJSON file per factor. The template's top-level metadata is preserved, `title` is set to the factor index, and the GeoJSON payload is replaced with a single factor-specific feature/geometry in a GeoJSON-valid way.
+- `--template-out-prefix` - optional output prefix for the per-factor template-derived GeoJSON files. Defaults to `--out`.
 
 Output:
 
@@ -440,6 +414,67 @@ Output:
   - total kept mask area in pixels (`mask_area_pix`)
   - number of final connected components (`n_components`)
 
-- `path/out_prefix.k<factor>.json`: optional per-factor JSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file copies the template and replaces:
-  - `title` with the factor index
-  - `geometry` with the corresponding per-factor GeoJSON `Feature`
+- `path/out_prefix.k<factor>.geojson`: optional per-factor GeoJSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file preserves the template's top-level metadata, sets `title` to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.
+
+### Soft mask composition
+
+Read the joined GeoJSON produced by `--soft-factor-mask`, treat each feature as one focal-factor mask, and compute the factor composition inside each mask as well as globally over the full processed input. Masks may overlap, so one pixel can contribute to multiple focal-mask histograms.
+
+```bash
+punkst tile-op --soft-mask-composition path/out_prefix.geojson \
+  --soft-mask-composition-focal 3 7 \
+  --in path/result [--binary] \
+  --out path/out_prefix
+```
+
+Main parameters:
+
+- `--soft-mask-composition` - path to the joined GeoJSON written by `--soft-factor-mask`.
+- `--soft-mask-composition-focal` - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. The global histogram is always included in the output.
+
+Output:
+
+- `path/out_prefix.mask_composition.tsv`: mask and global factor histograms with columns
+  - focal factor index (`k_focal`)
+  - factor index (`k`)
+  - total probability mass (`mass`)
+  - fraction of the total mass for that focal mask (`frac`)
+
+For the global histogram block, `k_focal` is written as `K`, the total number of factors in the input.
+
+### Hard factor mask
+
+Build per-label hard masks from the top predicted factor at each raster pixel, merge connected components across tile boundaries, and write global summaries. By default this also writes one GeoJSON `MultiPolygon` feature per factor; use `--skip-boundaries` to disable boundary extraction and write only the summaries.
+
+```bash
+punkst tile-op --hard-factor-mask --in path/result [--binary] \
+  --cc-min-size 25 --out path/out_prefix
+```
+
+Main parameters:
+
+- `--cc-min-size` - minimum final connected-component size retained in the summaries and GeoJSON.
+- `--skip-boundaries` - skip GeoJSON generation and write only the summary tables.
+- `--template-geojson` - optional template GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra GeoJSON file per factor. The template's top-level metadata is preserved, `title` is set to the factor index, and the GeoJSON payload is replaced with a single factor-specific feature/geometry in a GeoJSON-valid way.
+- `--template-out-prefix` - optional output prefix for the per-factor template-derived GeoJSON files. Defaults to `--out`.
+
+Output:
+
+- `path/out_prefix.factor_summary.tsv`: per-factor summary with columns
+  - factor index (`k`)
+  - number of tiles containing the factor (`n_tiles`)
+  - total retained mask area in pixels (`mask_area_pix`)
+  - number of retained final connected components (`n_components`)
+
+- `path/out_prefix.component_hist.tsv`: retained component-size histogram with columns
+  - factor index (`k`)
+  - component size (`size`)
+  - number of components with that size (`n_components`)
+
+- `path/out_prefix.geojson`: optional `FeatureCollection` containing one `MultiPolygon` feature per factor with properties
+  - factor index (`Factor`)
+  - number of contributing tiles (`n_tiles`)
+  - total retained mask area in pixels (`mask_area_pix`)
+  - number of retained final connected components (`n_components`)
+
+- `path/out_prefix.k<factor>.geojson`: optional per-factor GeoJSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file preserves the template's top-level metadata, sets `title` to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.

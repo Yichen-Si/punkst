@@ -133,7 +133,8 @@ void TileOperator::loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTi
     }
 }
 
-TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t bg, const std::vector<uint8_t>* boundaryMask) const {
+TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t bg,
+    const std::vector<uint8_t>* boundaryMask, bool keepPixelCid) const {
     const uint32_t INVALID = std::numeric_limits<uint32_t>::max();
     TileCCL out;
     out.pixX0 = tile.geom.pixX0;
@@ -180,7 +181,9 @@ TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t 
     }
     // 2nd pass: pixel -> compact component ID
     std::vector<uint32_t> root2cid(nPix, INVALID);
-    out.pixelCid.assign(nPix, INVALID);
+    if (keepPixelCid) {
+        out.pixelCid.assign(nPix, INVALID);
+    }
     for (size_t idx = 0; idx < nPix; ++idx) {
         if (parent[idx] == INVALID) continue;
         uint32_t r = findRoot(static_cast<uint32_t>(idx));
@@ -202,7 +205,9 @@ TileOperator::TileCCL TileOperator::tileLocalCCL(const DenseTile& tile, uint8_t 
         out.compSumX[cid] += static_cast<uint64_t>(gx);
         out.compSumY[cid] += static_cast<uint64_t>(gy);
         out.compBox[cid].include(gx, gy);
-        out.pixelCid[idx] = cid;
+        if (keepPixelCid) {
+            out.pixelCid[idx] = cid;
+        }
     }
     out.ncomp = static_cast<uint32_t>(out.compSize.size());
     auto cidAt = [&](size_t idx) -> uint32_t {
@@ -957,8 +962,9 @@ void TileOperator::initTileGeom(const TileInfo& blk, TileGeom& out) const {
     }
 }
 
-void TileOperator::loadSoftMaskTileData(const TileInfo& blk, std::ifstream& in, float minPixelProb, bool keepRecords,
-    SoftMaskTileData& out, uint64_t& nOutOfRangeIgnored, uint64_t& nBadFactorIgnored,
+void TileOperator::loadSoftMaskTileData(const TileInfo& blk, std::ifstream& in,
+    float minPixelProb, bool keepRecords, bool keepFactorEntries, bool keepFactorMass, SoftMaskTileData& out,
+    uint64_t& nOutOfRangeIgnored, uint64_t& nBadFactorIgnored,
     uint64_t* nCollisionIgnored, std::vector<double>* histGlobal) const {
     initTileGeom(blk, out.geom);
     const size_t nPix = out.geom.W * out.geom.H;
@@ -997,9 +1003,9 @@ void TileOperator::loadSoftMaskTileData(const TileInfo& blk, std::ifstream& in, 
             if (nCollisionIgnored) {
                 ++(*nCollisionIgnored);
             }
-        } else {
-            out.seenLocal[localIdx] = 1;
+            continue;
         }
+        out.seenLocal[localIdx] = 1;
 
         for (size_t i = 0; i < rec.ks.size() && i < rec.ps.size(); ++i) {
             const int32_t k = rec.ks[i];
@@ -1014,8 +1020,12 @@ void TileOperator::loadSoftMaskTileData(const TileInfo& blk, std::ifstream& in, 
             if (p < minPixelProb) {
                 continue;
             }
-            out.factorEntries[k].emplace_back(localIdx, p);
-            out.factorMass[k] += static_cast<double>(p);
+            if (keepFactorEntries) {
+                out.factorEntries[k].emplace_back(localIdx, p);
+            }
+            if (keepFactorMass) {
+                out.factorMass[k] += static_cast<double>(p);
+            }
         }
 
         if (keepRecords) {
@@ -1035,73 +1045,55 @@ void TileOperator::buildDenseFactorRaster(const std::vector<std::pair<uint32_t, 
     }
 }
 
-void TileOperator::boxFilterSum2D(const std::vector<float>& in, size_t W, size_t H, int32_t radius, std::vector<float>& out) const {
-    if (in.size() != W * H) {
-        error("%s: Input size mismatch", __func__);
+void TileOperator::applyBinaryMorphologyStep(std::vector<uint8_t>& mask, size_t W, size_t H, int32_t step) const {
+    if (mask.size() != W * H) {
+        error("%s: Mask size mismatch", __func__);
     }
-    if (W == 0 || H == 0) return;
-    if (radius <= 0) {
-        out = in;
+    if (step == 0) {
+        error("%s: morphology step must not be 0", __func__);
+    }
+    const int32_t kernelSize = std::abs(step);
+    if (kernelSize <= 0 || (kernelSize % 2) == 0) {
+        error("%s: morphology kernel size must be a positive odd integer", __func__);
+    }
+    if (kernelSize == 1 || W == 0 || H == 0) {
         return;
     }
-    out.resize(in.size());
+
+    const int32_t radius = (kernelSize - 1) / 2;
+    std::vector<uint32_t> summed;
+    ::boxFilterSum2D<uint8_t, uint32_t, uint32_t>(mask, W, H, radius, summed);
+
+    std::vector<uint8_t> out(mask.size(), 0);
     const size_t r = static_cast<size_t>(radius);
-    std::vector<float> tmp(in.size());
-    std::vector<double> prefix(std::max(W, H) + 1, 0.0);
-
-    for (size_t y = 0; y < H; ++y) {
-        const size_t row = y * W;
-        prefix[0] = 0.0;
-        for (size_t x = 0; x < W; ++x) {
-            prefix[x + 1] = prefix[x] + static_cast<double>(in[row + x]);
-        }
-        for (size_t x = 0; x < W; ++x) {
-            const size_t x0 = (x > r) ? (x - r) : 0;
-            const size_t x1 = std::min(W - 1, x + r);
-            tmp[row + x] = static_cast<float>(prefix[x1 + 1] - prefix[x0]);
-        }
-    }
-
-    std::vector<double> col_running_sum(W, 0.0);
-    for (size_t y = 0; y <= std::min(H - 1, r); ++y) {
-        const size_t row = y * W;
-        for (size_t x = 0; x < W; ++x) {
-            col_running_sum[x] += static_cast<double>(tmp[row + x]);
+    for (size_t idx = 0; idx < mask.size(); ++idx) {
+        const size_t y = idx / W;
+        const size_t x = idx - y * W;
+        const size_t x0 = (x > r) ? (x - r) : 0;
+        const size_t x1 = std::min(W - 1, x + r);
+        const size_t y0 = (y > r) ? (y - r) : 0;
+        const size_t y1 = std::min(H - 1, y + r);
+        const uint32_t clippedArea = static_cast<uint32_t>((x1 - x0 + 1) * (y1 - y0 + 1));
+        if (step > 0) {
+            out[idx] = (summed[idx] > 0) ? 1 : 0;
+        } else {
+            out[idx] = (summed[idx] == clippedArea) ? 1 : 0;
         }
     }
-
-    for (size_t y = 0; y < H; ++y) {
-        if (y > 0) {
-            const size_t addY = y + r;
-            if (addY < H) {
-                const size_t addRow = addY * W;
-                for (size_t x = 0; x < W; ++x) {
-                    col_running_sum[x] += static_cast<double>(tmp[addRow + x]);
-                }
-            }
-        }
-        if (y > r) {
-            const size_t subRow = (y - r - 1) * W;
-            for (size_t x = 0; x < W; ++x) {
-                col_running_sum[x] -= static_cast<double>(tmp[subRow + x]);
-            }
-        }
-        const size_t row = y * W;
-        for (size_t x = 0; x < W; ++x) {
-            out[row + x] = static_cast<float>(col_running_sum[x]);
-        }
-    }
+    mask.swap(out);
 }
 
-void TileOperator::buildSoftMaskBinary(const std::vector<float>& dense, const std::vector<uint8_t>& seenLocal,
+void TileOperator::buildSoftMaskBinary(const std::vector<float>& dense,
+    const std::vector<uint8_t>& seenLocal,
     size_t W, size_t H, int32_t radius, double neighborhoodThreshold,
-    const SoftMaskThresholdConfig& config, std::vector<uint8_t>& mask,
-    std::vector<float>* filteredOut, std::vector<float>* observedFilteredOut) const {
+    const SoftMaskThresholdConfig& config,
+    std::vector<uint8_t>& mask, std::vector<float>* filteredOut,
+    std::vector<float>* observedFilteredOut) const {
     if (dense.size() != W * H || seenLocal.size() != W * H) {
         error("%s: Input size mismatch", __func__);
     }
     std::vector<float> filtered;
-    boxFilterSum2D(dense, W, H, radius, filtered);
+    ::boxFilterSum2D<float, float, double>(dense, W, H, radius, filtered);
     if (filteredOut) {
         *filteredOut = filtered;
     }
@@ -1114,36 +1106,46 @@ void TileOperator::buildSoftMaskBinary(const std::vector<float>& dense, const st
         if (observedFilteredOut) {
             observedFilteredOut->clear();
         }
-        return;
+    } else {
+        std::vector<float> observed(mask.size(), 0.0f);
+        for (size_t idx = 0; idx < observed.size(); ++idx) {
+            observed[idx] = seenLocal[idx] ? 1.0f : 0.0f;
+        }
+        std::vector<float> observedFiltered;
+        ::boxFilterSum2D<float, float, double>(observed, W, H, radius, observedFiltered);
+        if (observedFilteredOut) {
+            *observedFilteredOut = observedFiltered;
+        }
+
+        const size_t r = static_cast<size_t>(std::max(radius, 0));
+        for (size_t idx = 0; idx < mask.size(); ++idx) {
+            const size_t y = idx / W;
+            const size_t x = idx - y * W;
+            const size_t x0 = (x > r) ? (x - r) : 0;
+            const size_t x1 = std::min(W - 1, x + r);
+            const size_t y0 = (y > r) ? (y - r) : 0;
+            const size_t y1 = std::min(H - 1, y + r);
+            const double observedCount = static_cast<double>(observedFiltered[idx]);
+            const double windowMass = static_cast<double>(filtered[idx]);
+            bool sparseEmptyCenter = false;
+            if (config.applySparseEmptyCenterRule && !seenLocal[idx]) {
+                int32_t nonEmptyAdjacent = 0;
+                if (x > 0 && seenLocal[idx - 1]) ++nonEmptyAdjacent;
+                if (x + 1 < W && seenLocal[idx + 1]) ++nonEmptyAdjacent;
+                if (y > 0 && seenLocal[idx - W]) ++nonEmptyAdjacent;
+                if (y + 1 < H && seenLocal[idx + W]) ++nonEmptyAdjacent;
+                sparseEmptyCenter = (nonEmptyAdjacent <= 2);
+            }
+            mask[idx] = (!sparseEmptyCenter && observedCount > 0.0 &&
+                windowMass >= config.minWindowMass &&
+                windowMass >= neighborhoodThreshold * observedCount) ? 1 : 0;
+        }
     }
 
-    std::vector<float> observed(mask.size(), 0.0f);
-    for (size_t idx = 0; idx < observed.size(); ++idx) {
-        observed[idx] = seenLocal[idx] ? 1.0f : 0.0f;
-    }
-    std::vector<float> observedFiltered;
-    boxFilterSum2D(observed, W, H, radius, observedFiltered);
-    if (observedFilteredOut) {
-        *observedFilteredOut = observedFiltered;
-    }
-
-    const size_t r = static_cast<size_t>(std::max(radius, 0));
-    for (size_t idx = 0; idx < mask.size(); ++idx) {
-        const size_t y = idx / W;
-        const size_t x = idx - y * W;
-        const size_t x0 = (x > r) ? (x - r) : 0;
-        const size_t x1 = std::min(W - 1, x + r);
-        const size_t y0 = (y > r) ? (y - r) : 0;
-        const size_t y1 = std::min(H - 1, y + r);
-        const double clippedArea = static_cast<double>((x1 - x0 + 1) * (y1 - y0 + 1));
-        const double observedCount = static_cast<double>(observedFiltered[idx]);
-        const double windowMass = static_cast<double>(filtered[idx]);
-        const bool sparseEmptyCenter = config.applySparseEmptyCenterRule &&
-            !seenLocal[idx] &&
-            (observedCount < config.sparseEmptyCoverageFrac * clippedArea);
-        mask[idx] = (!sparseEmptyCenter && observedCount > 0.0 &&
-            windowMass >= config.minWindowMass &&
-            windowMass >= neighborhoodThreshold * observedCount) ? 1 : 0;
+    for (int32_t step : config.morphologySteps) {
+        if (step != 0) {
+            applyBinaryMorphologyStep(mask, W, H, step);
+        }
     }
 }
 
@@ -1264,8 +1266,7 @@ TileOperator::BinaryMaskCCL TileOperator::buildBinaryMaskCCL4(std::vector<uint8_
     return out;
 }
 
-Clipper2Lib::Paths64 TileOperator::cleanupMaskPolygons(const Clipper2Lib::Paths64& paths,
-    uint32_t minHoleArea, double simplifyTolerance) const {
+Clipper2Lib::Paths64 TileOperator::normalizeMaskPolygons(const Clipper2Lib::Paths64& paths) const {
     Paths64 trimmed;
     trimmed.reserve(paths.size());
     for (const Path64& path : paths) {
@@ -1279,20 +1280,28 @@ Clipper2Lib::Paths64 TileOperator::cleanupMaskPolygons(const Clipper2Lib::Paths6
     }
 
     Paths64 cleaned = Clipper2Lib::Union(trimmed, FillRule::NonZero);
+    Paths64 out;
+    out.reserve(cleaned.size());
+    for (const Path64& path : cleaned) {
+        Path64 path2 = TrimCollinear(path, false);
+        if (path2.size() >= 3 && rounded_abs_area64(path2) > 0) {
+            out.push_back(std::move(path2));
+        }
+    }
+    return out;
+}
+
+Clipper2Lib::Paths64 TileOperator::cleanupMaskPolygons(const Clipper2Lib::Paths64& paths, uint32_t minHoleArea, double simplifyTolerance) const {
+    Paths64 cleaned = normalizeMaskPolygons(paths);
+    if (cleaned.empty()) {
+        return {};
+    }
     if (simplifyTolerance > 0.0) {
         cleaned = SimplifyPaths(cleaned, simplifyTolerance);
-        cleaned = Clipper2Lib::Union(cleaned, FillRule::NonZero);
+        cleaned = normalizeMaskPolygons(cleaned);
     }
     if (minHoleArea == 0) {
-        Paths64 out;
-        out.reserve(cleaned.size());
-        for (const Path64& path : cleaned) {
-            Path64 path2 = TrimCollinear(path, false);
-            if (path2.size() >= 3 && rounded_abs_area64(path2) > 0) {
-                out.push_back(std::move(path2));
-            }
-        }
-        return out;
+        return cleaned;
     }
 
     PolyTree64 tree;
@@ -1304,11 +1313,18 @@ Clipper2Lib::Paths64 TileOperator::cleanupMaskPolygons(const Clipper2Lib::Paths6
     for (const auto& child : tree) {
         append_filtered_polytree_paths(*child, minHoleArea, filtered);
     }
-    return filtered;
+    Paths64 out;
+    out.reserve(filtered.size());
+    for (const Path64& path : filtered) {
+        Path64 path2 = TrimCollinear(path, false);
+        if (path2.size() >= 3 && rounded_abs_area64(path2) > 0) {
+            out.push_back(std::move(path2));
+        }
+    }
+    return out;
 }
 
-Clipper2Lib::Paths64 TileOperator::buildMaskComponentPolygons(const BinaryMaskCCL& ccl, uint32_t cid, const TileGeom& geom,
-    uint32_t minHoleArea, double simplifyTolerance) const {
+Clipper2Lib::Paths64 TileOperator::buildMaskComponentRuns(const BinaryMaskCCL& ccl, uint32_t cid, const TileGeom& geom) const {
     if (cid >= ccl.ncomp) {
         error("%s: Component id out of range", __func__);
     }
@@ -1345,7 +1361,12 @@ Clipper2Lib::Paths64 TileOperator::buildMaskComponentPolygons(const BinaryMaskCC
             lx = lx1;
         }
     }
-    return cleanupMaskPolygons(runs, minHoleArea, simplifyTolerance);
+    return runs;
+}
+
+Clipper2Lib::Paths64 TileOperator::buildMaskComponentPolygons(const BinaryMaskCCL& ccl, uint32_t cid, const TileGeom& geom,
+    uint32_t minHoleArea, double simplifyTolerance) const {
+    return cleanupMaskPolygons(buildMaskComponentRuns(ccl, cid, geom), minHoleArea, simplifyTolerance);
 }
 
 Clipper2Lib::Paths64 TileOperator::buildLabelComponentPolygons(const std::vector<uint32_t>& pixelCid, size_t W, uint32_t cid,
