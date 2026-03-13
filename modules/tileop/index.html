@@ -970,6 +970,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#fix-fragmented-tiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fix fragmented Tiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#region-query" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1005,17 +1016,6 @@
         
       </ul>
     </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#fix-fragmented-tiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fix fragmented Tiles
-      
-    </span>
-  </a>
   
 </li>
         
@@ -1117,18 +1117,7 @@
   <a href="#compute-basic-spatial-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Compute basic spatial metrics
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#connected-components" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Connected Components
+        Compute Basic Spatial Metrics
       
     </span>
   </a>
@@ -1140,6 +1129,50 @@
     <span class="md-ellipsis">
       
         Shell and Surface Profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profile-the-area-covered-by-one-focal-factor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profile the area covered by one focal factor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#soft-factor-mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soft factor mask
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#soft-mask-composition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soft mask composition
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hard-factor-mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hard factor mask
       
     </span>
   </a>
@@ -1345,6 +1378,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#fix-fragmented-tiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fix fragmented Tiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#region-query" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1380,17 +1424,6 @@
         
       </ul>
     </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#fix-fragmented-tiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fix fragmented Tiles
-      
-    </span>
-  </a>
   
 </li>
         
@@ -1492,18 +1525,7 @@
   <a href="#compute-basic-spatial-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Compute basic spatial metrics
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#connected-components" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Connected Components
+        Compute Basic Spatial Metrics
       
     </span>
   </a>
@@ -1515,6 +1537,50 @@
     <span class="md-ellipsis">
       
         Shell and Surface Profiles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profile-the-area-covered-by-one-focal-factor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profile the area covered by one focal factor
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#soft-factor-mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soft factor mask
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#soft-mask-composition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soft mask composition
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hard-factor-mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hard factor mask
       
     </span>
   </a>
@@ -1548,110 +1614,104 @@
 
 <h1 id="tile-op">tile-op<a class="headerlink" href="#tile-op" title="Permanent link">&para;</a></h1>
 <p><strong><code>tile-op</code> provides utilities to view and manipulate the tiled data files</strong> created by <code>punkst pixel-decode</code> or <code>punkst pts2tiles</code>.</p>
+<p>This module is under active development and any suggestions or requests will be most welcome.</p>
+<p>Caution:</p>
+<p>Some operations related to factor masks currently assume the factor inference is performed on a grid, thus can be treated as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when <code>pixel-decode</code> is run with a moderate <code>--pixel-res</code>, like <code>0.5</code> or <code>1</code> for submicron resolution data, or <code>2</code> or Visium HD data. If you run <code>pixel-decode</code> with a much smaller resolution parameter (perhaps to try strictly single molecule-level inference), smoothing, mask generation, and shell profiling do not work yet.</p>
 <h2 id="available-operations">Available Operations<a class="headerlink" href="#available-operations" title="Permanent link">&para;</a></h2>
 <ul>
+<li>Basic inspection, conversion, and region query</li>
+<li><a href="#basic-inspection-and-conversion">Basic Inspection and Conversion</a></li>
+<li><a href="#fix-fragmented-tiles">Fix Fragmented Tiles</a></li>
 <li>
-<p>inspecting the index</p>
+<p><a href="#region-query">Region Query</a></p>
 </li>
 <li>
-<p>converting binary tiled files to TSV</p>
+<p>Joining, annotating, and aggregation</p>
+</li>
+<li><a href="#merge-multiple-inference-results">Merge Multiple Inference Results</a></li>
+<li><a href="#annotate-points-with-inference-results">Annotate Points with Inference Results</a></li>
+<li>
+<p><a href="#aggregate-results-by-cell">Aggregate Results by Cell</a></p>
 </li>
 <li>
-<p>extracting records inside a rectangular or multi-polygon query region</p>
+<p>Factor-distribution summaries</p>
+</li>
+<li><a href="#compute-joint-probability-distributions">Compute Joint Probability Distributions</a></li>
+<li>
+<p><a href="#compute-confusion-matrix">Compute Confusion Matrix</a></p>
 </li>
 <li>
-<p>reorganizing fragmented tiles to a regular grid</p>
+<p>Spatial profiling and factor masks</p>
 </li>
-<li>
-<p>merging multiple inference results</p>
-</li>
-<li>
-<p>annotating (tiled) point level file with inference results</p>
-</li>
-<li>
-<p>compute joint probability distributions of factors</p>
-</li>
-<li>
-<p>compute confusion matrix among factors at a given resolution</p>
-</li>
-<li>
-<p>denoise and keep only the top predicted factor per pixel</p>
-</li>
-<li>
-<p>aggregate pixel level inference results by cell and subcellular compartments based in transcript/pixel level annotations</p>
-</li>
-<li>
-<p>compute global connected components per label with centroid and coordinate range</p>
-</li>
-<li>
-<p>profile shell occupancy and directional surface distance between labels</p>
-</li>
+<li><a href="#denoise-top-labels">Denoise Top Labels</a></li>
+<li><a href="#compute-basic-spatial-metrics">Compute Basic Spatial Metrics</a></li>
+<li><a href="#shell-and-surface-profiles">Shell and Surface Profiles</a></li>
+<li><a href="#profile-the-area-covered-by-one-focal-factor">Profile the Area Covered by One Focal Factor</a></li>
+<li><a href="#soft-factor-mask">Soft Factor Mask</a></li>
+<li><a href="#soft-mask-composition">Soft Mask Composition</a></li>
+<li><a href="#hard-factor-mask">Hard Factor Mask</a></li>
 </ul>
-<p>(Except for printing the index, all operations are intended to be used separately)</p>
+<p>(Each operation is intended to be used independently, though some operations can be combined, e.g. denoise the factor predictions then profile surface distance; merging multiple inference files before annotating all onto one transcript file)</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
 <h3 id="main-input-output">Main input &amp; output<a class="headerlink" href="#main-input-output" title="Permanent link">&para;</a></h3>
-<p>The main input are the tiled pixel level files created by <code>punkst pixel-decode</code>, either in the custom binary format or in plain TSV format.</p>
+<p>The main input are the tiled pixel level files created by <code>punkst pixel-decode</code> (either in the custom binary format or in plain TSV format) or <code>punkst pts2tiles</code>.</p>
 <p>You can specify the pair of data and index files using <code>--in-data</code> and <code>--in-index</code>, or specify the prefix using <code>--in</code>.
 When using <code>--in</code>, without <code>--binary</code>, the tool assumes the data file is <code>&lt;in&gt;.tsv</code> and the index file is <code>&lt;in&gt;.index</code>, and with <code>--binary</code> it assumes the data file is <code>&lt;in&gt;.bin</code> and the index file is <code>&lt;in&gt;.index</code>.</p>
 <p>Use <code>--out</code> to specify the output prefix. In some operations use <code>--binary-out</code> to specify that the output is to be written in binary format.</p>
 <h3 id="basic-inspection-and-conversion">Basic Inspection and Conversion<a class="headerlink" href="#basic-inspection-and-conversion" title="Permanent link">&para;</a></h3>
-<p>To inspect the index of a tiled file:</p>
+<p>To inspect the index of a tiled file (it prints one tile per line after the header, so could be quite long for large data):</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--print-index<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span>
 </span></code></pre></div>
 <p>To dump a binary tiled file to a plain TSV file:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--dump-tsv<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span>--binary<span class="w"> </span>--out<span class="w"> </span>path/prefix.dump
 </span></code></pre></div>
 <p>The output include <code>path/prefix.dump.tsv</code> and <code>path/prefix.dump.index</code>.</p>
+<h3 id="fix-fragmented-tiles">Fix fragmented Tiles<a class="headerlink" href="#fix-fragmented-tiles" title="Permanent link">&para;</a></h3>
+<p>The output of <code>punkst pixel-decode</code> is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.</p>
+<p>If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (<code>path/prefix.index</code>), currently we don't support generic reorganization)</p>
+<p>Note that this is <strong>not</strong> required for visualization <code>draw-pixel-factors</code>.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--reorganize<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/reorg_prefix
+</span></code></pre></div>
 <h3 id="region-query">Region Query<a class="headerlink" href="#region-query" title="Permanent link">&para;</a></h3>
-<p>You can extract a spatial subset of a tiled file and write it out as another indexed tiled file pair.</p>
+<p>You can extract a spatial subset of a tiled file and write it out as another indexed tiled file.</p>
 <p>Output:</p>
 <ul>
 <li><code>path/prefix.region.tsv</code> or <code>path/prefix.region.bin</code></li>
 <li><code>path/prefix.region.index</code></li>
 </ul>
-<p>The output remains in regular tiled format and contains only tiles with at least one retained record.</p>
+<p>The output remains in regular tiled format even when the query region may partially overlap some tiles, and contains all and only tiles with at least one retained record.</p>
 <h4 id="rectangle-query">Rectangle query<a class="headerlink" href="#rectangle-query" title="Permanent link">&para;</a></h4>
 <p>To extract all records inside one axis-aligned rectangle:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--extract-region<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--xmin<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--xmax<span class="w"> </span><span class="m">2000</span><span class="w"> </span>--ymin<span class="w"> </span><span class="m">500</span><span class="w"> </span>--ymax<span class="w"> </span><span class="m">1500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--extract-region<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--xmin<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--xmax<span class="w"> </span><span class="m">2000</span><span class="w"> </span>--ymin<span class="w"> </span><span class="m">500</span><span class="w"> </span>--ymax<span class="w"> </span><span class="m">1500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region
 </span></code></pre></div>
 <p>This keeps all records whose <code>(x, y)</code> coordinates fall inside the half-open rectangle <code>[xmin, xmax) x [ymin, ymax)</code>.</p>
 <h4 id="geojson-region-query">GeoJSON region query<a class="headerlink" href="#geojson-region-query" title="Permanent link">&para;</a></h4>
 <p>To extract all records inside the union of multiple polygons:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--extract-region-geojson<span class="w"> </span>path/region.geojson<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--extract-region-geojson<span class="w"> </span>path/region.geojson<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region
 </span></code></pre></div>
 <p>Optional:</p>
 <ul>
 <li><code>--extract-region-scale</code> controls the integer snapping scale used internally for polygon processing. Default is <code>10</code>, which corresponds to <code>0.1</code> units.</li>
 </ul>
 <p><strong>Requirements</strong></p>
-<p>Tiled input data: GeoJSON region query currently only supports tiled inputs in <strong>regular tile mode</strong>:</p>
-<ul>
-<li>the input index must have <code>mode &amp; 0x8 == 0</code>, generic rectangular block mode is rejected</li>
-<li>the input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation</li>
-</ul>
+<p>Tiled input data: GeoJSON region query currently only supports tiled inputs in <strong>regular square tile mode</strong> (see <a href="#fix-fragmented-tiles">Fix Fragmented Tiles</a> below). The input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation.</p>
 <p>GeoJSON / JSON file: see <a href="../../input/geojson-region/">GeoJSON Region Input</a> for requirements and polygon validity handling.</p>
-<h3 id="fix-fragmented-tiles">Fix fragmented Tiles<a class="headerlink" href="#fix-fragmented-tiles" title="Permanent link">&para;</a></h3>
-<p>The output of <code>punkst pixel-decode</code> is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.</p>
-<p>If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (<code>path/prefix.index</code>), currently we don't support generic reorganization)</p>
-<p>Note that this is <strong>not</strong> required for visualization <code>draw-pixel-factors</code>.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--reorganize<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/reorg_prefix
-</span></code></pre></div>
 <h3 id="merge-multiple-inference-results">Merge Multiple Inference Results<a class="headerlink" href="#merge-multiple-inference-results" title="Permanent link">&para;</a></h3>
-<p>You can merge multiple inference files (e.g., from different models) into a single file. This finds the intersection of tiles and concatenates the results ((factor, probability) pairs) for each pixel.</p>
+<p>You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. This finds the intersection of tiles and concatenates the results ((factor, probability) pairs) for each pixel.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span>--k2keep<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged_result<span class="w"> </span>--binary-out
 </span></code></pre></div>
 <p><code>--merge-emb</code> - One or more other inference files (created by <code>pixel-decode</code>) to merge with the main input file. They can be in either TSV or binary format, but have to have proper index files stored ad <code>&lt;prefix&gt;.index</code>.</p>
-<p><code>--k2keep</code> - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all factors are kept.</p>
+<p><code>--k2keep</code> - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all top in the input files are kept.</p>
 <p><code>--binary-out</code> - (Optional) Save the merged output in binary format instead of TSV.</p>
-<p>In the above example, from file <code>result1.bin</code> (or <code>.tsv</code>) we keep top 3 factors, from <code>result2.tsv</code> we keep top 1 factor, and from <code>result3.bin</code> we keep top 2 factors. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.</p>
+<p>In the above example, we keep top 3 factors from file <code>result1.bin</code> (or <code>.tsv</code>), top 1 from <code>result2.tsv</code>, and top 2 from <code>result3.bin</code>. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.</p>
 <h3 id="annotate-points-with-inference-results">Annotate Points with Inference Results<a class="headerlink" href="#annotate-points-with-inference-results" title="Permanent link">&para;</a></h3>
-<p>You can annotate a transcript file with the inference results. The query file is required to be generated by <code>punkst pts2tiles</code> with the same tile structure as the result file so that the tool can efficiently join it with the inference results, but you can apply <code>pts2tiles</code> to any tsv file that contains X, Y coordinates as two of its columns.</p>
+<p>You can annotate a transcript file with the inference results. The query file is required to be generated by <code>punkst pts2tiles</code> with the same tile structure as the result file (since you normally run <code>pixel-decode</code> with the output from <code>pts2tiles</code> as the input), but you can apply <code>pts2tiles</code> to any tsv file that contains X, Y coordinates as two of its columns.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged
@@ -1660,8 +1720,9 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p><code>--icol-x</code> - 0-based column index for X coordinate in the points file.</p>
 <p><code>--icol-y</code> - 0-based column index for Y coordinate in the points file.</p>
 <h3 id="compute-joint-probability-distributions">Compute Joint Probability Distributions<a class="headerlink" href="#compute-joint-probability-distributions" title="Permanent link">&para;</a></h3>
-<p>You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from multiple models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file).
-To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.</p>
+<p>You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from different models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file). To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.</p>
+<p>Note: the pixel level factor probabilities are not to be interpreted as full Bayesian posterior probabilities as they are from approximated computation with mean-field variational inference.</p>
+<p>Likely use cases: comparing factor sets; comparing factors with cell types.</p>
 <h4 id="single-input">Single Input<a class="headerlink" href="#single-input" title="Permanent link">&para;</a></h4>
 <p>For a single inference result file:</p>
 <p><div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
@@ -1669,15 +1730,15 @@ To compute co-occurrence between factors in a single model at different spatial 
 Output:</p>
 <ul>
 <li>
-<p><code>path/out_prefix.marginal.tsv</code>: Marginal sums of posterior probabilities for each factor.</p>
+<p><code>path/out_prefix.marginal.tsv</code>: Marginal sums of probabilities (mass) for each factor. (This should be roughly the same as the auxilliary pseudobulk matrix from <code>pixel-decode</code>).</p>
 </li>
 <li>
 <p><code>path/out_prefix.joint.tsv</code>: Sum of products for each pair of factors.</p>
 </li>
 </ul>
-<p>If the file contains multiple sets of results (e.g. a merged), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., <code>path/out_prefix.0v1.cross.tsv</code>).</p>
+<p>If the file contains multiple sets of results (e.g. a merged file), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., <code>path/out_prefix.0v1.cross.tsv</code>).</p>
 <h4 id="merging-and-computing-on-the-fly">Merging and Computing on the Fly<a class="headerlink" href="#merging-and-computing-on-the-fly" title="Permanent link">&para;</a></h4>
-<p>You can also compute these statistics while merging multiple inference result files on the fly, without writing the large merged file to disk.</p>
+<p>You can also compute these statistics while merging multiple inference result files on the fly, without writing the merged file to disk.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
@@ -1696,7 +1757,7 @@ Output:</p>
 </li>
 </ul>
 <h3 id="compute-confusion-matrix">Compute Confusion Matrix<a class="headerlink" href="#compute-confusion-matrix" title="Permanent link">&para;</a></h3>
-<p>This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, identifies the top factor for each square, and then builds a matrix of co-occurrences.</p>
+<p>This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--confusion<span class="w"> </span><span class="m">10</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
 </span></code></pre></div>
 <p><code>--confusion</code> - The resolution (side length of square bins in microns) for computing the confusion matrix.</p>
@@ -1705,8 +1766,8 @@ Output:</p>
 <li><code>path/out_prefix.confusion.tsv</code>: A matrix of co-occurrence counts between factors.</li>
 </ul>
 <h3 id="aggregate-results-by-cell">Aggregate Results by Cell<a class="headerlink" href="#aggregate-results-by-cell" title="Permanent link">&para;</a></h3>
-<p>This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the tailed transcript file that contains cell/compartment annotations per transcript/pixel.
-If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have run <code>punkst pts2tiles</code> on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file already contains the necessary information.</p>
+<p>This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tailed) transcript file that contains cell/compartment annotations per transcript/pixel.
+If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run <code>punkst pts2tiles</code> on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file should contain the necessary information.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--annotate-cell<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts_with_cells<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-c<span class="w"> </span><span class="m">5</span><span class="w"> </span>--icol-s<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="se">\</span>
@@ -1733,22 +1794,20 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <p><code>--smooth-top-labels</code> - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.</p>
 <p>Optional:</p>
 <p><code>fill-empty-islands</code> - fill isolated empty pixels if they are surrounded by consistent neighbors. Default is to leave empty pixels unchanged. This may be helpful if you would like to get statistics like area and perimeter/edge per cell type later using <code>tile-op --spatial-metrics</code></p>
-<h3 id="compute-basic-spatial-metrics">Compute basic spatial metrics<a class="headerlink" href="#compute-basic-spatial-metrics" title="Permanent link">&para;</a></h3>
+<h3 id="compute-basic-spatial-metrics">Compute Basic Spatial Metrics<a class="headerlink" href="#compute-basic-spatial-metrics" title="Permanent link">&para;</a></h3>
 <p>This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with <code>tile-op --smooth-top-labels r --fill-empty-islands</code> (see above).</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--smooth-top-labels<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/prefix<span class="w"> </span>--spatial-metrics
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--spatial-metrics<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/prefix
 </span></code></pre></div>
 <p>The output includes two files:</p>
 <ul>
 <li><code>path/prefix.stats.single.tsv</code> for per-channel (factor or cell type) metrics. Columns are:</li>
 <li>channel index (<code>#k</code>)</li>
 <li>total number of pixels (<code>area</code>)</li>
-<li>length of all boundaries shared with non-background pixels from other channels (<code>perim</code>)</li>
-<li>
-<p>length of boundaries shared with background pixels (<code>perim_bg</code>)</p>
-</li>
-<li>
-<p><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are</p>
-</li>
+<li>total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel <code>K</code> (<code>perim</code>)</li>
+</ul>
+<p>The single-channel table now includes one extra row with <code>#k = K</code>, representing empty/background pixels. Exposed dataset boundaries are still not counted because this operation only considers intra-tile pixel adjacencies.</p>
+<ul>
+<li><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are</li>
 <li>channel indices for the pair (<code>#k</code>, <code>l</code>)</li>
 <li>length of shared boundary <span class="arithmatex">\(L_{kl}\)</span> (<code>contact</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / (P_k + P_l - L_{kl})\)</span> (<code>frac0</code>)</li>
@@ -1756,42 +1815,23 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <li><span class="arithmatex">\(L_{kl} / P_l\)</span> (<code>frac2</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / (A_k + A_l)\)</span> (<code>density</code>)</li>
 </ul>
-<h3 id="connected-components">Connected Components<a class="headerlink" href="#connected-components" title="Permanent link">&para;</a></h3>
-<p>Compute global connected components for each label (4-neighborhood on raster pixels), merged across tile boundaries.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--connected-components<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
-</span></code></pre></div>
-<p><code>--connected-components</code> - run connected component profiling.</p>
-<p><code>--cc-min-size</code> - minimum component size to report in the main component table (histogram still includes all sizes).</p>
-<p>Output:</p>
-<ul>
-<li><code>path/out_prefix.connected_components.tsv</code>: one row per reported component with columns</li>
-<li>label index (<code>#k</code>)</li>
-<li>component rank within label by descending size (<code>cc_idx</code>)</li>
-<li>component size in pixels (<code>size</code>)</li>
-<li>centroid in pixel coordinates (<code>centroid_x</code>, <code>centroid_y</code>)</li>
-<li>
-<p>inclusive coordinate range (<code>xmin</code>, <code>xmax</code>, <code>ymin</code>, <code>ymax</code>)</p>
-</li>
-<li>
-<p><code>path/out_prefix.connected_components_hist.tsv</code>: size histogram for all components with columns</p>
-</li>
-<li>label index (<code>#k</code>)</li>
-<li>component size (<code>size</code>)</li>
-<li>number of components with that size (<code>n_components</code>)</li>
-</ul>
 <h3 id="shell-and-surface-profiles">Shell and Surface Profiles<a class="headerlink" href="#shell-and-surface-profiles" title="Permanent link">&para;</a></h3>
-<p>Profile pairwise spatial proximity between labels using boundary-seeded distance transforms.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--shell-surface<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>--shell-radii<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="m">20</span><span class="w"> </span>--surface-dmax<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--spatial-min-pix-per-tile-label<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+<p>Profile the factor composition in the immediate neighborhood of a factor, and pairwise spatial proximity between factors.</p>
+<p>Here we only use the top predicted factor for each pixel, so the masks for factors are mutually exclusive.</p>
+<p>Shell composition: consider each focal factor as defining a binary mask, we first find the contour of each patch (connected component) of the foreground of the mask, a shell is defined as the set of pixels within a certain distance from the contour. For each of the specified shell radii, we report the composition of other factors within the shell.</p>
+<p>Surface distance: for each pair of factors, we compute a histogram of the distance from pixels of one factor to the nearest pixel of the other factor, and vice versa. This is a directional measure of spatial proximity between factors. It is approximated for efficiency and robustness by first extracting boundaries of the factor masks, then computing the distance from each boundary pixel to the nearest pixel on the other factor's boundary. The output is a histogram of these distances for each pair of factors with bin size <code>1</code> and up to the specified maximum distance.</p>
+<p><strong>CAUTION</strong>: all length and area parameters are in "pixel" units, not in microns, because this operation views the data as a rasterized image. If you obtained the data with <code>pixel-decode --pixel-res 0.5</code>, then each pixel corresponds to <code>0.5</code> microns, so a shell radius of <code>10</code> means <code>5</code> microns and a size threshold of <code>20</code> means <code>5</code> square microns.
+(I'm not sure if this is the best way. We will add more flexible options to allow coarser rasterization scale than the input data's pixel resolution, but until now it is safer to accept pixel units)</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--shell-surface<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>--shell-radii<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="m">20</span><span class="w"> </span>--surface-dmax<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--spatial-min-pix-per-tile-label<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
 </span></code></pre></div>
 <p><code>--shell-surface</code> - run shell occupancy and surface distance profiling.</p>
-<p><code>--shell-radii</code> - one or more shell radii (pixels) for occupancy reporting.</p>
-<p><code>--surface-dmax</code> - maximum distance bin for the surface-distance histogram.</p>
-<p><code>--cc-min-size</code> - minimum connected-component size used for boundary seed filtering.</p>
-<p><code>--spatial-min-pix-per-tile-label</code> - require at least this many pixels of a label within a tile before that tile contributes seeds for the label.</p>
+<p><code>--shell-radii</code> - one or more shell radii (in pixels, NOT microns) for occupancy reporting.</p>
+<p><code>--surface-dmax</code> - maximum distance bin (in pixels) for the surface-distance histogram.</p>
+<p><code>--cc-min-size</code> - minimum connected-component size (number of pixels) used for boundary seed filtering.</p>
+<p><code>--spatial-min-pix-per-tile-label</code> - require at least this many pixels of a label within a tile before that tile contributes to this label's boundary construction.</p>
 <p>Output:</p>
 <ul>
 <li><code>path/out_prefix.shell.tsv</code>: shell occupancy summary with columns</li>
@@ -1808,7 +1848,161 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <li>source label (<code>#from_K1</code>)</li>
 <li>target label (<code>to_K2</code>)</li>
 <li>distance bin (<code>d</code>)</li>
-<li>count (<code>count</code>)</li>
+<li>number of <code>K1</code> boundary pixels that find the neraest boundary of <code>K2</code> at distance <code>d</code> (<code>count</code>)</li>
+</ul>
+<h3 id="profile-the-area-covered-by-one-focal-factor">Profile the area covered by one focal factor<a class="headerlink" href="#profile-the-area-covered-by-one-focal-factor" title="Permanent link">&para;</a></h3>
+<p>Build a raster mask for one focal factor using local neighborhood probability mass, optionally remove isolated small spots/patches, then report the factor composition inside the mask. Optionally, it then creates a soft mask for each of the factors with a high total probability mass inside the focal mask and calculate pairwise overlaps among the focal and selected factor masks.
+(It currently does not output the boundaries. See <code>--soft-factor-mask</code> below for that)</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--profile-one-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>--focal-k<span class="w"> </span><span class="m">7</span><span class="w"> </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--mask-min-frac<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+<p>Main parameters:</p>
+<ul>
+<li><code>--focal-k</code> - focal factor index.</li>
+<li><code>--mask-radius</code> - size <code>r</code> (in pixel units) defining the <code>(2r+1) x (2r+1)</code> neighborhood.</li>
+<li><code>--mask-threshold</code> - threshold on the focal factor neighborhood score.</li>
+<li><code>--mask-min-frac</code> - keep a secondary factor if its mass inside the focal mask exceeds this fraction of the total focal-mask mass.</li>
+<li><code>--mask-min-pixel-prob</code> - optional per-pixel cutoff used only when constructing masks from factor probabilities.</li>
+<li><code>--mask-morphology</code> - optional post-threshold morphology sequence. Each value is an odd kernel size with sign indicating the operation: positive for dilation, negative for erosion. For example, <code>--mask-morphology 5 -3</code>.</li>
+<li><code>--mask-min-component-area</code> - optional 4-connected component size cutoff applied independently within each tile after thresholding.</li>
+</ul>
+<p>Output:</p>
+<ul>
+<li><code>path/out_prefix.factor_hist.tsv</code>: factor histogram for both the focal mask and the full processed region with columns</li>
+<li>factor index (<code>k</code>)</li>
+<li>total mass inside the focal mask (<code>mass_in_mask</code>)</li>
+<li>fraction of the total focal-mask mass (<code>frac_in_mask</code>)</li>
+<li>total mass in the full processed region (<code>mass_global</code>)</li>
+<li>
+<p>fraction of the total global mass (<code>frac_global</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.pairwise.tsv</code>: pairwise overlap summary for the selected factor set <code>{focal_k} U {significant secondary factors}</code> with columns</p>
+</li>
+<li>factor indices (<code>k1</code>, <code>k2</code>)</li>
+<li>mask areas (<code>area1_pix</code>, <code>area2_pix</code>)</li>
+<li>area intersection (<code>area_ovlp_pix</code>)</li>
+<li>directional area overlap fractions (<code>area_ovlp_f1</code>, <code>area_ovlp_f2</code>)</li>
+<li>area Jaccard (<code>area_jaccard</code>)</li>
+<li>factor-specific mass in the intersection (<code>mass1_in_ovlp</code>, <code>mass2_in_ovlp</code>)</li>
+<li>directional mass overlap fractions relative to each factor's total global mass (<code>mass_ovlp_f1</code>, <code>mass_ovlp_f2</code>)</li>
+</ul>
+<h3 id="soft-factor-mask">Soft factor mask<a class="headerlink" href="#soft-factor-mask" title="Permanent link">&para;</a></h3>
+<p>Build a soft binary mask for every factor, optionally remove small connected components, and write global summaries. By default this also polygonizes the kept mask and exports one GeoJSON <code>MultiPolygon</code> feature per factor; use <code>--skip-boundaries</code> to disable geometry export.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--soft-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>--mask-min-pixel-prob<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span>--mask-min-tile-mass<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span>--mask-min-hole-area<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">  </span>--mask-simplify<span class="w"> </span><span class="m">2</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+<p>Main parameters:</p>
+<ul>
+<li><code>--mask-radius</code> - size <code>r</code> (in pixel units) defining the <code>(2r+1) x (2r+1)</code> neighborhood.</li>
+<li><code>--mask-threshold</code> - threshold on the factor probabilities averaged over the observed pixels in the neighborhood. Pixels with no observation do not contribute to the denominator. For an empty center pixel, if at most 2 of its 4 direct neighbors are observed, it is excluded immediately; otherwise it is evaluated by the same mass-based rule as any other pixel. The window must also contain at least total factor mass <code>1.0</code>.</li>
+<li><code>--mask-min-pixel-prob</code> - ignore sparse factor entries below this per-pixel probability before mask construction.</li>
+<li><code>--mask-morphology</code> - optional post-threshold morphology sequence. Each value is an odd kernel size with sign indicating the operation: positive for dilation, negative for erosion. For example, <code>--mask-morphology 5 -3</code>.</li>
+<li><code>--mask-min-tile-mass</code> - skip a factor in a tile if its retained sparse mass in that tile is below this threshold.</li>
+<li><code>--mask-min-component-area</code> - legacy-named cutoff applied independently within each tile after thresholding; in <code>--soft-factor-mask</code> it is compared against the total raw factor mass in each 4-connected component, not the pixel area.</li>
+<li><code>--mask-min-hole-area</code> - drop holes smaller than this area from the polygon output.</li>
+<li><code>--mask-simplify</code> - optional <a href="https://www.angusj.com/clipper2/Docs/Units/Clipper/Functions/SimplifyPaths.htm">Clipper2 SimplifyPaths</a> tolerance; <code>0</code> keeps the exact raster-derived boundary after collinear trimming (which may have staircase-like boundaries due to rasterization). The unit is in pixel.</li>
+<li><code>--skip-boundaries</code> - skip GeoJSON generation and write only the summary tables.</li>
+<li><code>--template-geojson</code> - optional template GeoJSON file. When provided, <code>tile-op</code> still writes the generic <code>FeatureCollection</code> GeoJSON and also writes one extra GeoJSON file per factor. The template's top-level metadata is preserved, <code>title</code> is set to the factor index, and the GeoJSON payload is replaced with a single factor-specific feature/geometry in a GeoJSON-valid way.</li>
+<li><code>--template-out-prefix</code> - optional output prefix for the per-factor template-derived GeoJSON files. Defaults to <code>--out</code>.</li>
+</ul>
+<p>Output:</p>
+<ul>
+<li><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</li>
+<li>factor index (<code>k</code>)</li>
+<li>number of tiles where the factor passed <code>--mask-min-tile-mass</code> (<code>n_tiles</code>)</li>
+<li>total kept soft-mask area in pixels (<code>mask_area_pix</code>)</li>
+<li>
+<p>number of final connected components after seam merge (<code>n_components</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.component_hist.tsv</code>: final component-size histogram with columns</p>
+</li>
+<li>factor index (<code>k</code>)</li>
+<li>component size (<code>size</code>)</li>
+<li>
+<p>number of components with that size (<code>n_components</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.geojson</code>: optional <code>FeatureCollection</code> containing one <code>MultiPolygon</code> feature per factor with properties</p>
+</li>
+<li>factor index (<code>Factor</code>)</li>
+<li>number of contributing tiles (<code>n_tiles</code>)</li>
+<li>total kept mask area in pixels (<code>mask_area_pix</code>)</li>
+<li>
+<p>number of final connected components (<code>n_components</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.k&lt;factor&gt;.geojson</code>: optional per-factor GeoJSON files written only when <code>--template-geojson</code> is provided. If <code>--template-out-prefix</code> is set, that prefix is used instead of <code>out_prefix</code>. Each file preserves the template's top-level metadata, sets <code>title</code> to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.</p>
+</li>
+</ul>
+<h3 id="soft-mask-composition">Soft mask composition<a class="headerlink" href="#soft-mask-composition" title="Permanent link">&para;</a></h3>
+<p>Read the joined GeoJSON produced by <code>--soft-factor-mask</code>, treat each feature as one focal-factor mask, and compute the factor composition inside each mask as well as globally over the full processed input. Masks may overlap, so one pixel can contribute to multiple focal-mask histograms.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--soft-mask-composition<span class="w"> </span>path/out_prefix.geojson<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span>--soft-mask-composition-focal<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">7</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+<p>Main parameters:</p>
+<ul>
+<li><code>--soft-mask-composition</code> - path to the joined GeoJSON written by <code>--soft-factor-mask</code>.</li>
+<li><code>--soft-mask-composition-focal</code> - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. The global histogram is always included in the output.</li>
+</ul>
+<p>Output:</p>
+<ul>
+<li><code>path/out_prefix.mask_composition.tsv</code>: mask and global factor histograms with columns</li>
+<li>focal factor index (<code>k_focal</code>)</li>
+<li>factor index (<code>k</code>)</li>
+<li>total probability mass (<code>mass</code>)</li>
+<li>fraction of the total mass for that focal mask (<code>frac</code>)</li>
+</ul>
+<p>For the global histogram block, <code>k_focal</code> is written as <code>K</code>, the total number of factors in the input.</p>
+<h3 id="hard-factor-mask">Hard factor mask<a class="headerlink" href="#hard-factor-mask" title="Permanent link">&para;</a></h3>
+<p>Build per-label hard masks from the top predicted factor at each raster pixel, merge connected components across tile boundaries, and write global summaries. By default this also writes one GeoJSON <code>MultiPolygon</code> feature per factor; use <code>--skip-boundaries</code> to disable boundary extraction and write only the summaries.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--hard-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+</span></code></pre></div>
+<p>Main parameters:</p>
+<ul>
+<li><code>--cc-min-size</code> - minimum final connected-component size retained in the summaries and GeoJSON.</li>
+<li><code>--skip-boundaries</code> - skip GeoJSON generation and write only the summary tables.</li>
+<li><code>--template-geojson</code> - optional template GeoJSON file. When provided, <code>tile-op</code> still writes the generic <code>FeatureCollection</code> GeoJSON and also writes one extra GeoJSON file per factor. The template's top-level metadata is preserved, <code>title</code> is set to the factor index, and the GeoJSON payload is replaced with a single factor-specific feature/geometry in a GeoJSON-valid way.</li>
+<li><code>--template-out-prefix</code> - optional output prefix for the per-factor template-derived GeoJSON files. Defaults to <code>--out</code>.</li>
+</ul>
+<p>Output:</p>
+<ul>
+<li><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</li>
+<li>factor index (<code>k</code>)</li>
+<li>number of tiles containing the factor (<code>n_tiles</code>)</li>
+<li>total retained mask area in pixels (<code>mask_area_pix</code>)</li>
+<li>
+<p>number of retained final connected components (<code>n_components</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.component_hist.tsv</code>: retained component-size histogram with columns</p>
+</li>
+<li>factor index (<code>k</code>)</li>
+<li>component size (<code>size</code>)</li>
+<li>
+<p>number of components with that size (<code>n_components</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.geojson</code>: optional <code>FeatureCollection</code> containing one <code>MultiPolygon</code> feature per factor with properties</p>
+</li>
+<li>factor index (<code>Factor</code>)</li>
+<li>number of contributing tiles (<code>n_tiles</code>)</li>
+<li>total retained mask area in pixels (<code>mask_area_pix</code>)</li>
+<li>
+<p>number of retained final connected components (<code>n_components</code>)</p>
+</li>
+<li>
+<p><code>path/out_prefix.k&lt;factor&gt;.geojson</code>: optional per-factor GeoJSON files written only when <code>--template-geojson</code> is provided. If <code>--template-out-prefix</code> is set, that prefix is used instead of <code>out_prefix</code>. Each file preserves the template's top-level metadata, sets <code>title</code> to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.</p>
+</li>
 </ul>
 
 

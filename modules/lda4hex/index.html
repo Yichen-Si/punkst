@@ -1552,6 +1552,17 @@
 <p><code>--prior-scale-rel</code> - Scale the initial model matrix relative to the total feature counts in the data.</p>
 <h4 id="output-control">Output Control<a class="headerlink" href="#output-control" title="Permanent link">&para;</a></h4>
 <p><code>--transform</code> - Transform the data to the LDA space after training. If set, an output file <code>&lt;prefix&gt;.results.tsv</code> will be created. For 10X input, identifiers are 0-based barcode indices (in the input <code>barcodes.tsv.gz</code>).</p>
+<p>With <code>--transform</code>, the result table now includes two appended columns by default:
+- <code>topK</code>: topic label (column name) with maximum probability in that row.
+- <code>topP</code>: the corresponding maximum probability.</p>
+<p>For custom-format input, the output header is:
+- <code>#&lt;header_info...&gt;\t&lt;topic columns...&gt;\ttopK\ttopP</code></p>
+<p>For 10X input, the output header is:
+- <code>#barcode\t&lt;topic columns...&gt;\ttopK\ttopP</code></p>
+<p><code>--append-topk</code> - Explicitly request appending <code>topK</code> and <code>topP</code> columns in transform output. (Current behavior: <code>--transform</code> already enables this by default.)</p>
+<p><code>--topk-colname</code> - Column name for the top-topic label field. Default: <code>topK</code>.</p>
+<p><code>--topp-colname</code> - Column name for the top-topic probability field. Default: <code>topP</code>.</p>
+<p><code>--drop-random-key</code> - For custom-format input, drop <code>random_key</code> from carried-over prefix columns in <code>&lt;prefix&gt;.results.tsv</code> when present in <code>header_info</code>. Default: off.</p>
 <p><code>--projection-only</code> - Transform the data using the prior model without further training. Implies <code>--transform</code>.</p>
 <p><code>--sort-topics</code> - Order the topics with decreasing abundance.</p>
 <p><code>--verbose</code> - Control the verbosity level of output messages.</p>
