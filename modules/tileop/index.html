@@ -1641,30 +1641,32 @@
 <p>Some operations related to factor masks currently assume the factor inference is performed on a grid, thus can be treated as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when <code>pixel-decode</code> is run with a moderate <code>--pixel-res</code>, like <code>0.5</code> or <code>1</code> for submicron resolution data, or <code>2</code> or Visium HD data. If you run <code>pixel-decode</code> with a much smaller resolution parameter (perhaps to try strictly single molecule-level inference), smoothing, mask generation, and shell profiling do not work yet.</p>
 <h2 id="available-operations">Available Operations<a class="headerlink" href="#available-operations" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Basic inspection, conversion, and region query</li>
+<li>
+<p>Basic inspection, conversion, and region query</p>
+<ul>
 <li><a href="#basic-inspection-and-conversion">Basic Inspection and Conversion</a></li>
 <li><a href="#fix-fragmented-tiles">Fix Fragmented Tiles</a></li>
-<li>
-<p><a href="#region-query">Region Query</a></p>
+<li><a href="#region-query">Region Query</a></li>
+</ul>
 </li>
 <li>
 <p>Joining, annotating, and aggregation</p>
-</li>
+<ul>
 <li><a href="#merge-multiple-inference-results">Merge Multiple Inference Results</a></li>
 <li><a href="#annotate-points-with-inference-results">Annotate Points with Inference Results</a></li>
-<li>
-<p><a href="#aggregate-results-by-cell">Aggregate Results by Cell</a></p>
+<li><a href="#aggregate-results-by-cell">Aggregate Results by Cell</a></li>
+</ul>
 </li>
 <li>
 <p>Factor-distribution summaries</p>
-</li>
+<ul>
 <li><a href="#compute-joint-probability-distributions">Compute Joint Probability Distributions</a></li>
-<li>
-<p><a href="#compute-confusion-matrix">Compute Confusion Matrix</a></p>
+<li><a href="#compute-confusion-matrix">Compute Confusion Matrix</a></li>
+</ul>
 </li>
 <li>
 <p>Spatial profiling and factor masks</p>
-</li>
+<ul>
 <li><a href="#denoise-top-labels">Denoise Top Labels</a></li>
 <li><a href="#compute-basic-spatial-metrics">Compute Basic Spatial Metrics</a></li>
 <li><a href="#shell-and-surface-profiles">Shell and Surface Profiles</a></li>
@@ -1672,6 +1674,8 @@
 <li><a href="#soft-factor-mask">Soft Factor Mask</a></li>
 <li><a href="#soft-mask-composition">Soft Mask Composition</a></li>
 <li><a href="#hard-factor-mask">Hard Factor Mask</a></li>
+</ul>
+</li>
 </ul>
 <p>(Each operation is intended to be used independently, though some operations can be combined, e.g. denoise the factor predictions then profile surface distance; merging multiple inference files before annotating all onto one transcript file)</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
