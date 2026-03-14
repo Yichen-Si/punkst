@@ -299,6 +299,31 @@ void TileOperator::loadDenseTile(const TileInfo& blk, std::ifstream& in, DenseTi
     out.lab.assign(nPix, bg);
     out.boundary.clear();
 
+    if (usesRasterResolutionOverride()) {
+        std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+        loadTileToMap(out.geom.key, pixelMap, nullptr, &in);
+        for (const auto& kv : pixelMap) {
+            if (kv.second.ks.empty() || kv.second.ps.empty()) {
+                continue;
+            }
+            const int32_t xpix = kv.first.first;
+            const int32_t ypix = kv.first.second;
+            if (xpix < out.geom.pixX0 || xpix >= out.geom.pixX1 || ypix < out.geom.pixY0 || ypix >= out.geom.pixY1) {
+                ++nOutOfRangeIgnored;
+                continue;
+            }
+            const int32_t k = kv.second.ks[0];
+            if (k < 0 || k >= static_cast<int32_t>(bg)) {
+                ++nBadLabelIgnored;
+                continue;
+            }
+            const size_t x0 = static_cast<size_t>(xpix - out.geom.pixX0);
+            const size_t y0 = static_cast<size_t>(ypix - out.geom.pixY0);
+            out.lab[y0 * out.geom.W + x0] = static_cast<uint8_t>(k);
+        }
+        return;
+    }
+
     in.clear();
     in.seekg(blk.idx.st);
     if (!in.good()) {
@@ -1570,6 +1595,12 @@ void TileOperator::initTileGeom(const TileInfo& blk, TileGeom& out) const {
         out.pixY0 = coord2pix(out.pixY0);
         out.pixY1 = coord2pix(out.pixY1);
     }
+    if (usesRasterResolutionOverride()) {
+        out.pixX0 = mapPixelToRasterFloor(out.pixX0);
+        out.pixX1 = mapPixelToRasterCeil(out.pixX1);
+        out.pixY0 = mapPixelToRasterFloor(out.pixY0);
+        out.pixY1 = mapPixelToRasterCeil(out.pixY1);
+    }
     if (out.pixX1 <= out.pixX0 || out.pixY1 <= out.pixY0) {
         error("%s: Invalid raster bounds in tile (%d, %d)", __func__, out.key.row, out.key.col);
     }
@@ -1602,6 +1633,62 @@ void TileOperator::loadSoftMaskTileData(const TileInfo& blk, std::ifstream& in,
 
     if (histGlobal && histGlobal->size() != static_cast<size_t>(K_)) {
         error("%s: histGlobal size mismatch", __func__);
+    }
+
+    if (usesRasterResolutionOverride()) {
+        std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+        loadTileToMap(out.geom.key, pixelMap, nullptr, &in);
+        for (const auto& kv : pixelMap) {
+            const int32_t xpix = kv.first.first;
+            const int32_t ypix = kv.first.second;
+            if (xpix < out.geom.pixX0 || xpix >= out.geom.pixX1 ||
+                ypix < out.geom.pixY0 || ypix >= out.geom.pixY1) {
+                ++nOutOfRangeIgnored;
+                continue;
+            }
+            const size_t x0 = static_cast<size_t>(xpix - out.geom.pixX0);
+            const size_t y0 = static_cast<size_t>(ypix - out.geom.pixY0);
+            const uint32_t localIdx = static_cast<uint32_t>(y0 * out.geom.W + x0);
+            if (out.seenLocal[localIdx]) {
+                if (nCollisionIgnored) {
+                    ++(*nCollisionIgnored);
+                }
+                continue;
+            }
+            out.seenLocal[localIdx] = 1;
+
+            const TopProbs& rec = kv.second;
+            for (size_t i = 0; i < rec.ks.size() && i < rec.ps.size(); ++i) {
+                const int32_t k = rec.ks[i];
+                const float p = rec.ps[i];
+                if (k < 0 || k >= K_) {
+                    if (k >= 0) {
+                        ++nBadFactorIgnored;
+                    }
+                    continue;
+                }
+                if (histGlobal) {
+                    (*histGlobal)[static_cast<size_t>(k)] += static_cast<double>(p);
+                }
+                if (p < minPixelProb) {
+                    continue;
+                }
+                if (keepFactorEntries) {
+                    out.factorEntries[k].emplace_back(localIdx, p);
+                }
+                if (keepFactorMass) {
+                    out.factorMass[k] += static_cast<double>(p);
+                }
+            }
+
+            if (keepRecords) {
+                SoftMaskSparseRec stored;
+                stored.localIdx = localIdx;
+                stored.rec = rec;
+                out.records.push_back(std::move(stored));
+            }
+        }
+        return;
     }
 
     TopProbs rec;
@@ -2038,7 +2125,7 @@ nlohmann::json TileOperator::maskPathsToMultiPolygonGeoJSON(const Clipper2Lib::P
     if (paths.empty()) {
         return json{{"type", "MultiPolygon"}, {"coordinates", multipolygon}};
     }
-    const double scale = (formatInfo_.pixelResolution > 0.0f) ? static_cast<double>(formatInfo_.pixelResolution) : 1.0;
+    const double scale = static_cast<double>(getRasterPixelResolution() > 0.0f ? getRasterPixelResolution() : 1.0f);
     PolyTree64 tree;
     Paths64 open_paths;
     Clipper64 clipper;

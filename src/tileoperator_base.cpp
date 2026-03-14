@@ -640,6 +640,14 @@ void TileOperator::resetReader() {
     }
 }
 
+void TileOperator::closeTextStream() {
+    gzDataStream_.reset();
+    if (dataStream_.is_open()) {
+        dataStream_.close();
+    }
+    textStreamOpen_ = false;
+}
+
 bool TileOperator::readNextTextLine(std::string& line) {
     if (hasPendingTextLine_) {
         line = std::move(pendingTextLine_);
@@ -735,6 +743,120 @@ void TileOperator::sampleTilesToDebug(int32_t ntiles) {
     }
 }
 
+int32_t TileOperator::floorDivInt32(int32_t value, int32_t divisor) {
+    if (divisor <= 0) {
+        error("%s: divisor must be positive", __func__);
+    }
+    int32_t q = value / divisor;
+    const int32_t r = value % divisor;
+    if (r < 0) {
+        --q;
+    }
+    return q;
+}
+
+int32_t TileOperator::ceilDivInt32(int32_t value, int32_t divisor) {
+    return -floorDivInt32(-value, divisor);
+}
+
+int32_t TileOperator::mapPixelToRasterFloor(int32_t value) const {
+    if (!hasRasterResolutionOverride_) {
+        return value;
+    }
+    return floorDivInt32(value, rasterRatioXY_);
+}
+
+int32_t TileOperator::mapPixelToRasterCeil(int32_t value) const {
+    if (!hasRasterResolutionOverride_) {
+        return value;
+    }
+    return ceilDivInt32(value, rasterRatioXY_);
+}
+
+void TileOperator::accumulateRasterTopProbs(RasterTopProbAccum& accum, const TopProbs& rec) const {
+    const size_t nSets = kvec_.empty() ? size_t(1) : kvec_.size();
+    if (accum.size() != nSets) {
+        accum.assign(nSets, {});
+    }
+    size_t off = 0;
+    for (size_t s = 0; s < nSets; ++s) {
+        const uint32_t keepK = kvec_.empty() ? static_cast<uint32_t>(k_) : kvec_[s];
+        for (uint32_t i = 0; i < keepK && (off + i) < rec.ks.size() && (off + i) < rec.ps.size(); ++i) {
+            const int32_t k = rec.ks[off + i];
+            const float p = rec.ps[off + i];
+            if (k < 0 || p <= 0.0f) {
+                continue;
+            }
+            accum[s][k] += static_cast<double>(p);
+        }
+        off += keepK;
+    }
+}
+
+TopProbs TileOperator::finalizeRasterTopProbs(const RasterTopProbAccum& accum) const {
+    TopProbs out;
+    const size_t nSets = kvec_.empty() ? size_t(1) : kvec_.size();
+    for (size_t s = 0; s < nSets; ++s) {
+        const uint32_t keepK = kvec_.empty() ? static_cast<uint32_t>(k_) : kvec_[s];
+        std::vector<std::pair<int32_t, double>> items;
+        items.reserve(accum[s].size());
+        for (const auto& kv : accum[s]) {
+            if (kv.second > 0.0) {
+                items.emplace_back(kv.first, kv.second);
+            }
+        }
+        std::sort(items.begin(), items.end(),
+            [](const auto& a, const auto& b) {
+                if (a.second == b.second) {
+                    return a.first < b.first;
+                }
+                return a.second > b.second;
+            });
+        const size_t keep = std::min<size_t>(keepK, items.size());
+        for (size_t i = 0; i < keep; ++i) {
+            out.ks.push_back(items[i].first);
+            out.ps.push_back(static_cast<float>(items[i].second));
+        }
+        for (size_t i = keep; i < keepK; ++i) {
+            out.ks.push_back(-1);
+            out.ps.push_back(0.0f);
+        }
+    }
+    return out;
+}
+
+void TileOperator::setRasterPixelResolution(float resXY) {
+    if (!(resXY > 0.0f)) {
+        error("%s: raster pixel resolution must be positive", __func__);
+    }
+    const float dataRes = getPixelResolution();
+    if (!(dataRes > 0.0f)) {
+        error("%s: input pixelResolution must be positive", __func__);
+    }
+    if (resXY <= dataRes) {
+        error("%s: raster pixel resolution %.8g must be coarser than input pixelResolution %.8g",
+            __func__, resXY, dataRes);
+    }
+    const double ratio = static_cast<double>(resXY) / static_cast<double>(dataRes);
+    const int64_t rounded = static_cast<int64_t>(std::llround(ratio));
+    const double tol = 1e-6 * std::max(1.0, std::abs(ratio));
+    if (rounded < 2 || std::abs(ratio - static_cast<double>(rounded)) > tol) {
+        error("%s: raster pixel resolution ratio %.8g must be an integer greater than 1",
+            __func__, ratio);
+    }
+    int32_t tileSpanPixels = formatInfo_.tileSize;
+    if (rawCoordinatesArePixels()) {
+        tileSpanPixels = coord2pix(tileSpanPixels);
+    }
+    if (tileSpanPixels <= 0 || (tileSpanPixels % static_cast<int32_t>(rounded)) != 0) {
+        error("%s: tile size must align with requested raster resolution (tile span %d source pixels, ratio %lld)",
+            __func__, tileSpanPixels, static_cast<long long>(rounded));
+    }
+    hasRasterResolutionOverride_ = true;
+    rasterPixelResolution_ = resXY;
+    rasterRatioXY_ = static_cast<int32_t>(rounded);
+}
+
 int32_t TileOperator::loadTileToMap(const TileKey& key,
     std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
     const std::vector<Rectangle<float>>* rects,
@@ -776,6 +898,29 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
     TopProbs rec;
     int32_t recX = 0;
     int32_t recY = 0;
+    if (!hasRasterResolutionOverride_) {
+        while (readNextRecord2DAsPixel(*stream, pos, blk.idx.ed, recX, recY, rec)) {
+            if (rects != nullptr && !rects->empty()) {
+                const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
+                const float x = static_cast<float>(recX) * res;
+                const float y = static_cast<float>(recY) * res;
+                bool keep = false;
+                for (const auto& rect : *rects) {
+                    if (rect.contains(x, y)) {
+                        keep = true;
+                        break;
+                    }
+                }
+                if (!keep) {
+                    continue;
+                }
+            }
+            pixelMap[{recX, recY}] = std::move(rec);
+        }
+        return static_cast<int32_t>(pixelMap.size());
+    }
+
+    std::map<std::pair<int32_t, int32_t>, RasterTopProbAccum> accumMap;
     while (readNextRecord2DAsPixel(*stream, pos, blk.idx.ed, recX, recY, rec)) {
         if (rects != nullptr && !rects->empty()) {
             const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
@@ -792,7 +937,16 @@ int32_t TileOperator::loadTileToMap(const TileKey& key,
                 continue;
             }
         }
-        pixelMap[{recX, recY}] = std::move(rec);
+        const int32_t rasterX = mapPixelToRasterFloor(recX);
+        const int32_t rasterY = mapPixelToRasterFloor(recY);
+        RasterTopProbAccum& accum = accumMap[{rasterX, rasterY}];
+        if (accum.empty()) {
+            accum.resize(kvec_.empty() ? size_t(1) : kvec_.size());
+        }
+        accumulateRasterTopProbs(accum, rec);
+    }
+    for (auto& kv : accumMap) {
+        pixelMap[kv.first] = finalizeRasterTopProbs(kv.second);
     }
     return static_cast<int32_t>(pixelMap.size());
 }

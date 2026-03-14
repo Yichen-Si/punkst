@@ -50,6 +50,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     float maskMinPixelProb = 0.01;
     double minTileFactorMass = 10.;
     double maskSimplify = 0.0;
+    float rasterPixelRes = -1.0f;
     std::string templateGeoJSON;
     std::string templateOutPrefix;
     float xmin = 0.0f, xmax = -1.0f, ymin = 0.0f, ymax = -1.0f;
@@ -66,6 +67,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("binary-out", "Output in binary format (merge only)", binaryOut)
       .add_option("K", "Total number of factors in the data", K)
       .add_option("tile-size", "Tile size in the original data", tileSize)
+      .add_option("raster-pixel-res", "Optional coarser raster resolution in original units for raster-style tile-op commands", rasterPixelRes)
       .add_option("threads", "Number of threads to use", threads)
       .add_option("debug", "Debug", debug_);
 
@@ -151,6 +153,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     TileOperator tileOp(inData, inIndex);
     if (K > 0) {tileOp.setFactorCount(K);}
     tileOp.setThreads(threads);
+    const bool hasRasterPixelResOverride = (rasterPixelRes > 0.0f);
+    auto applyRasterPixelResOverride = [&]() {
+        if (hasRasterPixelResOverride) {
+            tileOp.setRasterPixelResolution(rasterPixelRes);
+        }
+    };
 
     if(printIndex) {
         tileOp.printIndex();
@@ -160,6 +168,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
     if (debug_ > 0) { // CAUTION
         tileOp.sampleTilesToDebug(debug_);
+    }
+    if (hasRasterPixelResOverride &&
+        !(smoothTopLabelsRounds > 0 || spatialMetrics || profileShellSurface ||
+          profileOneFactorMask || runSoftFactorMask || runHardFactorMask)) {
+        error("--raster-pixel-res is currently supported only with raster-style tile-op commands");
     }
 
     if (reorganize) {
@@ -186,25 +199,30 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (smoothTopLabelsRounds > 0) {
+        applyRasterPixelResOverride();
         tileOp.smoothTopLabels2D(outPrefix, smoothTopLabelsRounds, fillEmptyIslands);
         return 0;
     }
 
     if (spatialMetrics) {
+        applyRasterPixelResOverride();
         tileOp.spatialMetricsBasic(outPrefix);
         return 0;
     }
     if (profileShellSurface) {
+        applyRasterPixelResOverride();
         tileOp.profileShellAndSurface(outPrefix, shellRadii, surfaceDmax, minComponentSize, minPixPerTilePerLabel);
         return 0;
     }
     if (profileOneFactorMask) {
+        applyRasterPixelResOverride();
         tileOp.profileSoftFactorMasks(outPrefix, focalK, maskRadius,
             maskThreshold, maskMinFrac, maskMinPixelProb, maskMorphology,
             maskMinComponentArea, skipMaskOverlap);
         return 0;
     }
     if (runSoftFactorMask) {
+        applyRasterPixelResOverride();
         tileOp.softFactorMask(outPrefix, maskRadius, maskThreshold,
             maskMinPixelProb, maskMorphology, minTileFactorMass, maskMinComponentArea,
             maskMinHoleArea, maskSimplify, skipBoundaries, templateGeoJSON, templateOutPrefix);
@@ -215,6 +233,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         return 0;
     }
     if (runHardFactorMask) {
+        applyRasterPixelResOverride();
         tileOp.hardFactorMask(outPrefix, minComponentSize, skipBoundaries, templateGeoJSON, templateOutPrefix);
         return 0;
     }

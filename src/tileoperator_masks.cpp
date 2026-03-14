@@ -1183,8 +1183,8 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
               maskTotal(nMasks, 0.0) {}
     };
 
-    const double pixelResolution = (formatInfo_.pixelResolution > 0.0f) ?
-        static_cast<double>(formatInfo_.pixelResolution) : 1.0;
+    const double pixelResolution = static_cast<double>(
+        getRasterPixelResolution() > 0.0f ? getRasterPixelResolution() : 1.0f);
     const auto t0 = std::chrono::steady_clock::now();
     StageAccum globalAccum(K_, masks.size());
 

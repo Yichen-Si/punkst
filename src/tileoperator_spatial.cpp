@@ -60,8 +60,6 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
         warning("%s: No tiles to process", __func__);
         return;
     }
-    const bool coordScaled = (mode_ & 0x2) != 0;
-
     std::string outFile = outPrefix + ".bin";
     std::string outIndex = outPrefix + ".index";
     int fdMain = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
@@ -78,6 +76,7 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     std::vector<uint32_t> outKvec{1};
     idxHeader.packKvec(outKvec);
     idxHeader.mode = (K_ << 16) | (mode_ & 0x2) | 0x5;
+    idxHeader.pixelResolution = getRasterPixelResolution();
     idxHeader.recordSize = sizeof(int32_t) * 2 + sizeof(int32_t) + sizeof(float);
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
         close(fdMain);
@@ -102,55 +101,70 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
 
     auto processTile = [&](size_t bi, std::ifstream& in, SmoothTileResult& out) {
         const TileInfo& blk = blocks_[bi];
-        const TileKey tile{blk.idx.row, blk.idx.col};
-        out.row = tile.row;
-        out.col = tile.col;
-        int32_t pixX0, pixX1, pixY0, pixY1;
-        tile2bound(tile, pixX0, pixX1, pixY0, pixY1, formatInfo_.tileSize);
-        if (coordScaled) {
-            pixX0 = coord2pix(pixX0);
-            pixX1 = coord2pix(pixX1);
-            pixY0 = coord2pix(pixY0);
-            pixY1 = coord2pix(pixY1);
-        }
-        if (pixX1 <= pixX0 || pixY1 <= pixY0) {
-            error("%s: Invalid raster bounds in tile (%d, %d)", __func__, tile.row, tile.col);
-        }
-        const size_t width = static_cast<size_t>(pixX1 - pixX0);
-        const size_t height = static_cast<size_t>(pixY1 - pixY0);
+        TileGeom geom;
+        initTileGeom(blk, geom);
+        out.row = geom.key.row;
+        out.col = geom.key.col;
+        const size_t width = geom.W;
+        const size_t height = geom.H;
         if (height > 0 && width > std::numeric_limits<size_t>::max() / height) {
-            error("%s: Raster size overflow in tile (%d, %d)", __func__, tile.row, tile.col);
+            error("%s: Raster size overflow in tile (%d, %d)", __func__, geom.key.row, geom.key.col);
         }
         const size_t nPixels = width * height;
         std::vector<int32_t> labels(nPixels, -1);
         std::vector<float> probs(nPixels, 0.0f);
 
-        in.clear();
-        in.seekg(static_cast<std::streamoff>(blk.idx.st));
-        if (!in.good()) {
-            error("%s: Failed seeking input stream to tile %lu", __func__, bi);
-        }
-        TopProbs rec;
-        int32_t xpix = 0;
-        int32_t ypix = 0;
-        uint64_t pos = blk.idx.st;
-        while (readNextRecord2DAsPixel(in, pos, blk.idx.ed, xpix, ypix, rec)) {
-            if (rec.ks.empty() || rec.ps.empty()) {
-                continue;
+        if (usesRasterResolutionOverride()) {
+            std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+            loadTileToMap(geom.key, pixelMap, nullptr, &in);
+            for (const auto& kv : pixelMap) {
+                if (kv.second.ks.empty() || kv.second.ps.empty()) {
+                    continue;
+                }
+                const int32_t xpix = kv.first.first;
+                const int32_t ypix = kv.first.second;
+                if (xpix < geom.pixX0 || xpix >= geom.pixX1 || ypix < geom.pixY0 || ypix >= geom.pixY1) {
+                    ++out.nOutOfRangeIgnored;
+                    continue;
+                }
+                const size_t x0 = static_cast<size_t>(xpix - geom.pixX0);
+                const size_t y0 = static_cast<size_t>(ypix - geom.pixY0);
+                const size_t idx = y0 * width + x0;
+                if (labels[idx] != -1) {
+                    ++out.nCollisionIgnored;
+                    continue;
+                }
+                labels[idx] = kv.second.ks[0];
+                probs[idx] = kv.second.ps[0];
             }
-            if (xpix < pixX0 || xpix >= pixX1 || ypix < pixY0 || ypix >= pixY1) {
-                ++out.nOutOfRangeIgnored;
-                continue;
+        } else {
+            in.clear();
+            in.seekg(static_cast<std::streamoff>(blk.idx.st));
+            if (!in.good()) {
+                error("%s: Failed seeking input stream to tile %lu", __func__, bi);
             }
-            const size_t x0 = static_cast<size_t>(xpix - pixX0);
-            const size_t y0 = static_cast<size_t>(ypix - pixY0);
-            const size_t idx = y0 * width + x0;
-            if (labels[idx] != -1) {
-                ++out.nCollisionIgnored;
-                continue;
+            TopProbs rec;
+            int32_t xpix = 0;
+            int32_t ypix = 0;
+            uint64_t pos = blk.idx.st;
+            while (readNextRecord2DAsPixel(in, pos, blk.idx.ed, xpix, ypix, rec)) {
+                if (rec.ks.empty() || rec.ps.empty()) {
+                    continue;
+                }
+                if (xpix < geom.pixX0 || xpix >= geom.pixX1 || ypix < geom.pixY0 || ypix >= geom.pixY1) {
+                    ++out.nOutOfRangeIgnored;
+                    continue;
+                }
+                const size_t x0 = static_cast<size_t>(xpix - geom.pixX0);
+                const size_t y0 = static_cast<size_t>(ypix - geom.pixY0);
+                const size_t idx = y0 * width + x0;
+                if (labels[idx] != -1) {
+                    ++out.nCollisionIgnored;
+                    continue;
+                }
+                labels[idx] = rec.ks[0];
+                probs[idx] = rec.ps[0];
             }
-            labels[idx] = rec.ks[0];
-            probs[idx] = rec.ps[0];
         }
 
         island_smoothing::Options smoothOpts;
@@ -167,7 +181,7 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
             }
         }
         if (nOutLocal > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-            error("%s: Too many output records in tile (%d, %d)", __func__, tile.row, tile.col);
+            error("%s: Too many output records in tile (%d, %d)", __func__, geom.key.row, geom.key.col);
         }
         out.nOut = static_cast<uint32_t>(nOutLocal);
         out.data.resize(nOutLocal * recSize);
@@ -179,8 +193,8 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
                 if (label < 0) {
                     continue;
                 }
-                const int32_t outX = static_cast<int32_t>(x) + pixX0;
-                const int32_t outY = static_cast<int32_t>(y) + pixY0;
+                const int32_t outX = static_cast<int32_t>(x) + geom.pixX0;
+                const int32_t outY = static_cast<int32_t>(y) + geom.pixY0;
                 const float outP = probs[idx];
                 std::memcpy(out.data.data() + off, &outX, sizeof(int32_t));
                 std::memcpy(out.data.data() + off + sizeof(int32_t), &outY, sizeof(int32_t));

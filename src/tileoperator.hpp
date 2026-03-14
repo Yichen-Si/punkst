@@ -46,6 +46,7 @@ public:
     };
     using GzHandle = std::unique_ptr<gzFile_s, GzCloser>;
     using PixelKey3 = std::tuple<int32_t, int32_t, int32_t>;
+
     TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "", int32_t threads = 1) : dataFile_(dataFile), indexFile_(indexFile), threads_(std::max(0, threads)) {
         if (!indexFile.empty()) {
             loadIndex(indexFile);
@@ -65,6 +66,7 @@ public:
     TileOperator(TileOperator&&) noexcept = default;
     TileOperator& operator=(TileOperator&&) noexcept = default;
 
+    /* Small get/set helpers */
     int32_t getK() const { return k_; }
     int32_t getTileSize() const { return formatInfo_.tileSize; }
     float getPixelResolution() const { return formatInfo_.pixelResolution; }
@@ -75,7 +77,6 @@ public:
         return formatInfo_.pixelResolution;
     }
     const std::vector<TileInfo>& getTileInfo() const { return blocks_; }
-
     bool getBoundingBox(float& xmin, float& xmax, float& ymin, float& ymax) const {
         if (blocks_all_.empty()) return false;
         xmin = globalBox_.xmin; xmax = globalBox_.xmax;
@@ -96,21 +97,20 @@ public:
     void setThreads(int32_t threads) {
         threads_ = std::max(0, threads);
     }
+    void setRasterPixelResolution(float resXY);
     void setCoordinateColumns(int32_t icol_x, int32_t icol_y) {
         icol_x_ = icol_x;
         icol_y_ = icol_y;
         icol_max_ = std::max(icol_max_, std::max(icol_x_, icol_y_));
     }
     void setFactorCount(int32_t K) {K_ = K;}
-
-    void openDataStream();
-
-    void resetReader();
-
     void sampleTilesToDebug(int32_t ntiles = 1);
 
-    int32_t query(float qxmin, float qxmax, float qymin, float qymax);
+    /* Shared datastream */
+    void openDataStream();
+    void resetReader();
 
+    /* Streaming */
     // Return -1 for EOF, 0 for parse error, 1 for success
     // w/ dimension (2<->3) conversion & w/o coord scaling
     int32_t next(PixTopProbs<int32_t>& out);
@@ -119,26 +119,53 @@ public:
     int32_t next(PixTopProbs<float>& out, bool rawCoord = false);
     int32_t next(PixTopProbs3D<float>& out, bool rawCoord = false);
 
+    /* Basics */
+    // Print index
     void printIndex() const;
-
+    // Convert to plain TSV
+    void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2);
+    // Fix Fragmented Tiles
+    void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
+    // Region query
     void extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax);
     void extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale = 10);
     void extractRegionPrepared(const std::string& outPrefix, const PreparedRegionMask2D& region);
+    int32_t query(float qxmin, float qxmax, float qymin, float qymax);
 
-    void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
+    /* Joining, annotating, and aggregation */
+    void merge(const std::vector<std::string>& otherFiles,
+        const std::string& outPrefix, std::vector<uint32_t> k2keep = {},
+        bool binaryOutput = false, bool keepAllMain = false);
+    void annotate(const std::string& ptPrefix, const std::string& outPrefix, int32_t icol_x, int32_t icol_y, int32_t icol_z = -1);
+    void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
+        uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
+        int32_t icol_s = -1, int32_t icol_z = -1, uint32_t k_out = 0, float max_cell_diameter = 50);
 
+    /* Factor-distribution summaries */
+    // For each pair of (k1,k2) compute \sum_i p1_i * p2_i
+    void probDot(const std::string& outPrefix, int32_t probDigits = 4);
+    void probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, int32_t probDigits = 4);
+    // Compute confusion matrix among factors given a resolution
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+        computeConfusionMatrix(double resolution, const char* outPref = nullptr, int32_t probDigits = 4) const;
+
+    /* Spatial profiling and factor masks */
+    // Denoise top labels
     void smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds = 1, bool fillEmptyIslands = false);
-
+    // Compute basic spatial metrics
     void spatialMetricsBasic(const std::string& outPrefix);
+    // Profile shell occupancy and surface distance
     void profileShellAndSurface(const std::string& outPrefix,
         const std::vector<int32_t>& radii, int32_t dMax,
         uint32_t minComponentSize = 10, uint32_t minPixPerTilePerLabel = 0);
+    // Profile the soft mask of a focal factor
     void profileSoftFactorMasks(const std::string& outPrefix,
         int32_t focalK, int32_t radius,
         double neighborhoodThresholdFrac, double minFactorFrac,
-        float minPixelProb = 0.01f, const std::vector<int32_t>& morphologySteps = {},
-        uint32_t minComponentArea = 5,
-        bool skipMaskOverlap = false);
+        float minPixelProb = 0.01f,
+        const std::vector<int32_t>& morphologySteps = {},
+        uint32_t minComponentArea = 5, bool skipMaskOverlap = false);
+    // Compute hard and soft masks for all factors
     void hardFactorMask(const std::string& outPrefix,
         uint32_t minComponentSize = 1, bool skipBoundaries = false, const std::string& templateGeoJSON = "", const std::string& templateOutPrefix = "");
     void softFactorMask(const std::string& outPrefix,
@@ -151,25 +178,8 @@ public:
         const std::string& maskGeoJSON,
         const std::vector<int32_t>& focalFactors = {});
 
-    void merge(const std::vector<std::string>& otherFiles,
-        const std::string& outPrefix, std::vector<uint32_t> k2keep = {},
-        bool binaryOutput = false, bool keepAllMain = false);
-
-    void annotate(const std::string& ptPrefix, const std::string& outPrefix, int32_t icol_x, int32_t icol_y, int32_t icol_z = -1);
-
-    void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
-        uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
-        int32_t icol_s = -1, int32_t icol_z = -1, uint32_t k_out = 0, float max_cell_diameter = 50);
-
-    void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2);
-
-    // For each pair of (k1,k2) compute \sum_i p1_i * p2_i
-    void probDot(const std::string& outPrefix, int32_t probDigits = 4);
-    void probDot_multi(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, int32_t probDigits = 4);
-
-    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
-        computeConfusionMatrix(double resolution, const char* outPref = nullptr, int32_t probDigits = 4) const;
-
+    /* Tile loaders */
+    // Load raster tiles
     int32_t loadTileToMap(const TileKey& key,
         std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
         const std::vector<Rectangle<float>>* rects = nullptr,
@@ -177,7 +187,7 @@ public:
     int32_t loadTileToMap3D(const TileKey& key,
         std::map<PixelKey3, TopProbs>& pixelMap,
         std::ifstream* dataStream = nullptr) const;
-
+    // Aggregate (softly) observations by factor ("slice")
     using Slice = std::unordered_map<std::pair<int32_t, int32_t>, SparseObsDict, PairHash>; // unitKey -> sparse feature counts
     std::unordered_map<int32_t, Slice> aggOneTile(
         std::map<std::pair<int32_t, int32_t>, TopProbs>& pixelMap,
@@ -234,6 +244,9 @@ private:
     std::unordered_map<TileKey, size_t, TileKeyHash> tile_lookup_;
     int32_t threads_ = 1;
     bool regular_labeled_raster_ = false;
+    bool hasRasterResolutionOverride_ = false;
+    float rasterPixelResolution_ = -1.0f;
+    int32_t rasterRatioXY_ = 1;
 
     bool isTextInput() const { return ((mode_ & 0x1) == 0); }
     bool isTextStdinInput() const { return dataFile_ == "-" || dataFile_ == "/dev/stdin"; }
@@ -243,14 +256,19 @@ private:
     bool storesIntegerCoordinates() const { return (mode_ & 0x4) != 0; }
     bool storesFloatCoordinates() const { return (mode_ & 0x4) == 0; }
     bool rawCoordinatesArePixels() const { return (mode_ & 0x2) != 0; }
-    void validateCoordinateEncoding() const;
-    void closeTextStream() {
-        gzDataStream_.reset();
-        if (dataStream_.is_open()) {
-            dataStream_.close();
-        }
-        textStreamOpen_ = false;
+    bool usesRasterResolutionOverride() const { return hasRasterResolutionOverride_; }
+    float getRasterPixelResolution() const {
+        return hasRasterResolutionOverride_ ? rasterPixelResolution_ : getPixelResolution();
     }
+    static int32_t floorDivInt32(int32_t value, int32_t divisor);
+    static int32_t ceilDivInt32(int32_t value, int32_t divisor);
+    int32_t mapPixelToRasterFloor(int32_t value) const;
+    int32_t mapPixelToRasterCeil(int32_t value) const;
+    using RasterTopProbAccum = std::vector<std::unordered_map<int32_t, double>>;
+    void accumulateRasterTopProbs(RasterTopProbAccum& accum, const TopProbs& rec) const;
+    TopProbs finalizeRasterTopProbs(const RasterTopProbAccum& accum) const;
+    void validateCoordinateEncoding() const;
+    void closeTextStream();
 
     // Determine if a block is strictly within a tile or a boundary block
     void classifyBlocks(int32_t tileSize);
@@ -300,9 +318,9 @@ private:
     // (store world coordinates regardless of the input data type)
     void decodeBinaryXY(const char* recBuf, float& x, float& y) const;
 
+    /* Dispatched implementations */
     // Impl for reorgTiles
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
-
     // Impl for merge
     std::vector<MergeSourcePlan> validateMergeSources(
         const std::vector<const TileOperator*>& opPtrs,
@@ -344,6 +362,7 @@ private:
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
         uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
 
+    /* Geometry & spatial related */
     struct TileGeom {
         TileKey key;
         int32_t pixX0 = 0;

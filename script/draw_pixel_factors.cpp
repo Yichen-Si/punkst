@@ -136,8 +136,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     if (scale<=0) error("--scale must be >0");
 
     // image dims
-    int width  = int(std::floor((xmax-xmin)/scale))+1;
-    int height = int(std::floor((ymax-ymin)/scale))+1;
+    int width  = int(std::floor((xmax-xmin)/scale));
+    int height = int(std::floor((ymax-ymin)/scale));
     notice("Image size: %d x %d", width, height);
     if (width<=1||height<=1)
         error("Image dimensions are zero; check your bounds/scale");
@@ -166,6 +166,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         std::unordered_map<int, SmallCounts> extra; // only pixels with collisions end up here
         std::vector<int> coords;
         while ((ret = reader.next(rec)) >= 0) {
+            debug("Smooth path: read record: x=%.2f, y=%.2f", rec.x, rec.y);
             if (ret==0) {
                 if (nkept>10000) {
                     warning("Stopped at invalid line %d", nline);
@@ -183,11 +184,13 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             int ch = rec.ks[0];
             int lbl = -1;
             if (selected) {
+                if (ch < 0) continue;
                 auto it = selectedMap.find(ch);
                 if (it == selectedMap.end()) continue;
                 lbl = ch; // store channel id
             } else {
-                if (ch < 0 || ch >= (int)cmtx.size()) ch = ((ch % ncolor) + ncolor) % ncolor;
+                if (ch < 0) continue;
+                if (ch >= (int)cmtx.size()) ch = ch % ncolor;
                 lbl = ch; // store color index
             }
 
@@ -293,6 +296,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     PixTopProbs<float> rec;
     int32_t ret, nline=0, nskip=0, nkept=0;
     while ((ret = reader.next(rec)) >= 0) {
+        debug("Read record: x=%.2f, y=%.2f", rec.x, rec.y);
         if (ret==0) {
             if (nkept>10000) {
                 warning("Stopped at invalid line %d", nline);
@@ -318,6 +322,9 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         if (topOnly || k==1) {
             int ch = rec.ks[0];
             if (selected) {
+                if (ch < 0) {
+                    continue;
+                }
                 auto it = selectedMap.find(ch);
                 if (it == selectedMap.end()) { continue; }
                 auto& c = it->second;
@@ -325,9 +332,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 G = c[1];
                 B = c[2];
             } else {
-                if (ch<0 && ch>=(int)cmtx.size()) {
-                    // debug("Channel index out of range: %d", ch);
-                    // continue;
+                if (ch < 0) {
+                    continue;
+                }
+                if (ch >= (int)cmtx.size()) {
                     ch = ch % ncolor;
                 }
                 R = cmtx[ch][0];
@@ -346,6 +354,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             int ch = rec.ks[i];
             double p = rec.ps[i];
             if (p < minProb) continue;
+            if (ch < 0) continue;
             if (selected) {
                 auto it = selectedMap.find(ch);
                 if (it == selectedMap.end()) continue;
@@ -355,9 +364,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 B += c[2]*p;
                 valid = true;
             } else {
-                if (ch<0 || ch>= (int)cmtx.size()) {
-                    // warning("Channel index out of range: %d", ch);
-                    // continue;
+                if (ch >= (int)cmtx.size()) {
                     ch = ch % ncolor;
                 }
                 R += cmtx[ch][0]*p;

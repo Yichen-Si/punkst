@@ -6,34 +6,35 @@ This module is under active development and any suggestions or requests will be 
 
 Caution:
 
-Some operations related to factor masks currently assume the factor inference is performed on a grid, thus can be treated as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` or Visium HD data. If you run `pixel-decode` with a much smaller resolution parameter (perhaps to try strictly single molecule-level inference), smoothing, mask generation, and shell profiling do not work yet.
+Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` for Visium HD data. If the input was generated at a much finer grid, you can now request a coarser raster grid for these operations with `--raster-pixel-res`.
 
 ## Available Operations
 
 - Basic inspection, conversion, and region query
-  - [Basic Inspection and Conversion](#basic-inspection-and-conversion)
-  - [Fix Fragmented Tiles](#fix-fragmented-tiles)
-  - [Region Query](#region-query)
+    - [Print Index](#print-index)
+    - [Convert TSV](#convert-to-tsv)
+    - [Fix Fragmented Tiles](#fix-fragmented-tiles)
+    - [Region Query](#region-query)
 
 - Joining, annotating, and aggregation
-  - [Merge Multiple Inference Results](#merge-multiple-inference-results)
-  - [Annotate Points with Inference Results](#annotate-points-with-inference-results)
-  - [Aggregate Results by Cell](#aggregate-results-by-cell)
+    - [Merge Multiple Inference Results](#merge-multiple-inference-results)
+    - [Annotate Points with Inference Results](#annotate-points-with-inference-results)
+    - [Aggregate Results by Cell](#aggregate-results-by-cell)
 
 - Factor-distribution summaries
-  - [Compute Joint Probability Distributions](#compute-joint-probability-distributions)
-  - [Compute Confusion Matrix](#compute-confusion-matrix)
+    - [Compute Joint Probability Distributions](#compute-joint-probability-distributions)
+    - [Compute Confusion Matrix](#compute-confusion-matrix)
 
 - Spatial profiling and factor masks
-  - [Denoise Top Labels](#denoise-top-labels)
-  - [Compute Basic Spatial Metrics](#compute-basic-spatial-metrics)
-  - [Shell and Surface Profiles](#shell-and-surface-profiles)
-  - [Profile the Area Covered by One Focal Factor](#profile-the-area-covered-by-one-focal-factor)
-  - [Soft Factor Mask](#soft-factor-mask)
-  - [Soft Mask Composition](#soft-mask-composition)
-  - [Hard Factor Mask](#hard-factor-mask)
+    - [Denoise Top Labels](#denoise-top-labels)
+    - [Compute Basic Spatial Metrics](#compute-basic-spatial-metrics)
+    - [Shell and Surface Profiles](#shell-and-surface-profiles)
+    - [Profile the Area Covered by One Focal Factor](#profile-the-area-covered-by-one-focal-factor)
+    - [Soft Factor Mask](#soft-factor-mask)
+    - [Soft Mask Composition](#soft-mask-composition)
+    - [Hard Factor Mask](#hard-factor-mask)
 
-(Each operation is intended to be used independently, though some operations can be combined, e.g. denoise the factor predictions then profile surface distance; merging multiple inference files before annotating all onto one transcript file)
+(Each operation is intended to be used independently, though some operations can be combined to a pipeline, e.g. denoise the factor predictions then profile surface distance; merging multiple inference files before annotating all onto one transcript file)
 
 ## Usage
 
@@ -71,13 +72,38 @@ Notes:
 - `--merge-emb` and `--annotate-pts` use a dedicated writer thread in parallel mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.
 - `--prob-dot` without `--merge-emb` has a serial fallback for bounded query mode and non-seekable text input such as stdin or gzipped streaming text.
 
-### Basic Inspection and Conversion
+### Raster Resolution Override
+
+Raster-style commands can optionally run on a coarser 2D grid than the source data by passing:
+
+```bash
+--raster-pixel-res <value>
+```
+
+Current supported commands:
+
+- `--smooth-top-labels`
+- `--spatial-metrics`
+- `--shell-surface`
+- `--profile-one-factor-mask`
+- `--soft-factor-mask`
+- `--hard-factor-mask`
+
+Rules:
+
+- the requested value is in the original coordinate units, the same units stored in the input header
+- it must be strictly larger than and an integer times of the input `pixelResolution`
+- all raster-like sizes and distances for the command remain in pixel units, but now refer to the overridden raster grid
+
+### Print Index
 
 To inspect the index of a tiled file (it prints one tile per line after the header, so could be quite long for large data):
 
 ```bash
 punkst tile-op --print-index --in path/prefix [--binary]
 ```
+
+### Convert to TSV
 
 To dump a binary tiled file to a plain TSV file:
 
@@ -297,6 +323,8 @@ Optional:
 
 `fill-empty-islands` - fill isolated empty pixels if they are surrounded by consistent neighbors. Default is to leave empty pixels unchanged. This may be helpful if you would like to get statistics like area and perimeter/edge per cell type later using `tile-op --spatial-metrics`
 
+`--raster-pixel-res` - (Optional) run smoothing on a coarser raster grid. The output header records the requested pixel resolution.
+
 ### Compute Basic Spatial Metrics
 
 This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with `tile-op --smooth-top-labels r --fill-empty-islands` (see above).
@@ -332,8 +360,7 @@ Shell composition: consider each focal factor as defining a binary mask, we firs
 
 Surface distance: for each pair of factors, we compute a histogram of the distance from pixels of one factor to the nearest pixel of the other factor, and vice versa. This is a directional measure of spatial proximity between factors. It is approximated for efficiency and robustness by first extracting boundaries of the factor masks, then computing the distance from each boundary pixel to the nearest pixel on the other factor's boundary. The output is a histogram of these distances for each pair of factors with bin size `1` and up to the specified maximum distance.
 
-**CAUTION**: all length and area parameters are in "pixel" units, not in microns, because this operation views the data as a rasterized image. If you obtained the data with `pixel-decode --pixel-res 0.5`, then each pixel corresponds to `0.5` microns, so a shell radius of `10` means `5` microns and a size threshold of `20` means `5` square microns.
-(I'm not sure if this is the best way. We will add more flexible options to allow coarser rasterization scale than the input data's pixel resolution, but until now it is safer to accept pixel units)
+**CAUTION**: all length and area parameters are in pixel units because this operation views the data as a rasterized image. By default those pixels are the input pixels. If you pass `--raster-pixel-res`, the same parameters are interpreted on that coarser raster grid instead.
 
 ```bash
 punkst tile-op --shell-surface --in path/result [--binary] \
@@ -351,6 +378,8 @@ punkst tile-op --shell-surface --in path/result [--binary] \
 `--cc-min-size` - minimum connected-component size (number of pixels) used for boundary seed filtering.
 
 `--spatial-min-pix-per-tile-label` - require at least this many pixels of a label within a tile before that tile contributes to this label's boundary construction.
+
+`--raster-pixel-res` - (Optional) run shell and surface profiling on a coarser raster grid.
 
 Output:
 
@@ -388,6 +417,7 @@ Main parameters:
 - `--mask-min-pixel-prob` - optional per-pixel cutoff used only when constructing masks from factor probabilities.
 - `--mask-morphology` - optional post-threshold morphology sequence. Each value is an odd kernel size with sign indicating the operation: positive for dilation, negative for erosion. For example, `--mask-morphology 5 -3`.
 - `--mask-min-component-area` - optional 4-connected component size cutoff applied independently within each tile after thresholding.
+- `--raster-pixel-res` - (Optional) run the mask construction and overlap profiling on a coarser raster grid.
 
 Output:
 
@@ -432,6 +462,7 @@ Main parameters:
 - `--skip-boundaries` - skip GeoJSON generation and write only the summary tables.
 - `--template-geojson` - optional template GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra GeoJSON file per factor. The template's top-level metadata is preserved, `title` is set to the factor index, and the GeoJSON payload is replaced with a single factor-specific feature/geometry in a GeoJSON-valid way.
 - `--template-out-prefix` - optional output prefix for the per-factor template-derived GeoJSON files. Defaults to `--out`.
+- `--raster-pixel-res` - (Optional) run mask construction and polygonization on a coarser raster grid.
 
 Output:
 
@@ -495,6 +526,7 @@ Main parameters:
 - `--skip-boundaries` - skip GeoJSON generation and write only the summary tables.
 - `--template-geojson` - optional template GeoJSON file. When provided, `tile-op` still writes the generic `FeatureCollection` GeoJSON and also writes one extra GeoJSON file per factor. The template's top-level metadata is preserved, `title` is set to the factor index, and the GeoJSON payload is replaced with a single factor-specific feature/geometry in a GeoJSON-valid way.
 - `--template-out-prefix` - optional output prefix for the per-factor template-derived GeoJSON files. Defaults to `--out`.
+- `--raster-pixel-res` - (Optional) build the hard-label raster and connected components on a coarser grid.
 
 Output:
 
