@@ -137,12 +137,12 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoin
 }
 
 template<typename T>
-int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
-    int32_t nPixels = Base::buildMinibatchCore(
+double Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
+    double avgDegree = Base::buildMinibatchCore(
         tileData, anchors, minibatch, distR_, distNu_);
 
-    if (nPixels <= 0) {
-        return nPixels;
+    if (avgDegree <= 0.0) {
+        return avgDegree;
     }
 
     for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
@@ -151,7 +151,7 @@ int32_t Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPo
         }
     }
 
-    return nPixels;
+    return avgDegree;
 }
 
 template<typename T>
@@ -300,9 +300,12 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     if (nAnchors == 0) {
         return;
     }
-    int32_t nPixels = makeMinibatch(tileData, anchors, minibatch);
+    double avgDegree = makeMinibatch(tileData, anchors, minibatch);
+    const size_t nPixels = (Base::coordDim_ == MinibatchCoordDim::Dim3)
+        ? tileData.coords3d.size() : tileData.coords.size();
     if (debug_) {
-        std::cout << "Thread " << threadId << " made minibatch with " << nPixels << " pixels. ";
+        std::cout << "Thread " << threadId << " made minibatch with " << nPixels
+                  << " pixels and average degree " << avgDegree << ". ";
         int32_t nnz = minibatch.wij.nonZeros();
         std::cout << nnz << " " << (float) nnz / minibatch.n << std::endl << std::flush;
         std::vector<float> colsums(minibatch.n, 0.0f);
@@ -362,7 +365,9 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     }
 
     char buf[256];
-    int l = snprintf(buf, sizeof(buf), "Thread %d (ticket %d) fit minibatch with %d anchors and output %u internal pixels in %d iterations. Final mean max change in phi: %.1e", threadId, ticket, nAnchors, result.npts, n_iter, delta);
+    int l = snprintf(buf, sizeof(buf),
+        "Thread %d (ticket %d) fit minibatch with %d anchors, %zu pixels, average degree %.2f, and output %u internal pixels in %d iterations. Final mean max change in phi: %.1e",
+        threadId, ticket, nAnchors, nPixels, avgDegree, result.npts, n_iter, delta);
     if (fitBackground_) {
         l += snprintf(buf + l, sizeof(buf) - l, " (%.3f background)", f0);
     }

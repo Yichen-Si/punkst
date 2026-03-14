@@ -350,12 +350,12 @@ int32_t Tiles2MinibatchBase<T>::parseOneTile(TileData<T>& tileData, TileKey tile
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
+double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     double distR, double distNu) {
     debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts.size() + tileData.extPts.size());
     if (minibatch.n <= 0) {
-        return 0;
+        return 0.0;
     }
     assert(distR > 0.0 && distNu > 0.0);
 
@@ -439,7 +439,9 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
         ++npt;
     }
     anchors = std::move(pc.pts);
-    double avgDegree = static_cast<double>(tripletsWij.size()) / static_cast<double>(npt);
+    double avgDegree = (npt > 0)
+        ? static_cast<double>(tripletsWij.size()) / static_cast<double>(npt)
+        : 0.0;
     debug("%s: created %zu edges between %zu pixels and %zu anchors, average degree %.2f", __func__, tripletsWij.size(), npt, anchors.size(), avgDegree);
 
     minibatch.N = static_cast<int32_t>(npt);
@@ -455,7 +457,7 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     minibatch.psi = minibatch.wij;
     rowNormalizeInPlace(minibatch.psi);
 
-    return minibatch.N;
+    return avgDegree;
 }
 
 template<typename T>
@@ -566,9 +568,6 @@ void Tiles2MinibatchBase<T>::setupNativeBinaryShards() {
     if (!outputBinary_) {
         error("%s: native regular tile mode currently supports binary output only", __func__);
     }
-    if (coordDim_ != MinibatchCoordDim::Dim2) {
-        error("%s: native regular tile mode currently supports 2D output only", __func__);
-    }
     if (!tmpDir.enabled) {
         tmpDir.init(std::filesystem::temp_directory_path());
         notice("Created temporary directory: %s", tmpDir.path.string().c_str());
@@ -616,12 +615,12 @@ void Tiles2MinibatchBase<T>::closeNativeBinaryShards() {
 
 template<typename T>
 std::vector<char> Tiles2MinibatchBase<T>::serializeBinaryResult(const ResultBuf& result) const {
-    if (!result.useObj || coordDim_ != MinibatchCoordDim::Dim2) {
-        error("%s: native binary serialization expects 2D object records", __func__);
+    if (!result.useObj) {
+        error("%s: native binary serialization expects object records", __func__);
     }
     std::vector<char> bytes;
     bytes.reserve(static_cast<size_t>(result.npts) * outputRecordSize_);
-    for (const auto& obj : result.outputObjs) {
+    auto appendObjectBytes2D = [&](const PixTopProbs<int32_t>& obj) {
         const size_t off = bytes.size();
         bytes.resize(off + outputRecordSize_);
         char* dst = bytes.data() + off;
@@ -634,6 +633,31 @@ std::vector<char> Tiles2MinibatchBase<T>::serializeBinaryResult(const ResultBuf&
         if (!obj.ps.empty()) {
             std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + obj.ks.size() * sizeof(int32_t),
                 obj.ps.data(), obj.ps.size() * sizeof(float));
+        }
+    };
+    auto appendObjectBytes3D = [&](const PixTopProbs3D<int32_t>& obj) {
+        const size_t off = bytes.size();
+        bytes.resize(off + outputRecordSize_);
+        char* dst = bytes.data() + off;
+        std::memcpy(dst, &obj.x, sizeof(obj.x));
+        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
+        if (!obj.ks.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z),
+                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+        }
+        if (!obj.ps.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + obj.ks.size() * sizeof(int32_t),
+                obj.ps.data(), obj.ps.size() * sizeof(float));
+        }
+    };
+    if (coordDim_ == MinibatchCoordDim::Dim3) {
+        for (const auto& obj : result.outputObjs3d) {
+            appendObjectBytes3D(obj);
+        }
+    } else {
+        for (const auto& obj : result.outputObjs) {
+            appendObjectBytes2D(obj);
         }
     }
     return bytes;
@@ -653,7 +677,7 @@ void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, i
         error("%s: missing output context for worker %d", __func__, threadId);
     }
     WorkerShardFiles& shard = workerShards_[workerId];
-    auto appendObjectBytes = [&](std::vector<char>& bytes, const PixTopProbs<int32_t>& obj) {
+    auto appendObjectBytes2D = [&](std::vector<char>& bytes, const PixTopProbs<int32_t>& obj) {
         const size_t off = bytes.size();
         bytes.resize(off + outputRecordSize_);
         char* dst = bytes.data() + off;
@@ -665,6 +689,22 @@ void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, i
         }
         if (!obj.ps.empty()) {
             std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + obj.ks.size() * sizeof(int32_t),
+                obj.ps.data(), obj.ps.size() * sizeof(float));
+        }
+    };
+    auto appendObjectBytes3D = [&](std::vector<char>& bytes, const PixTopProbs3D<int32_t>& obj) {
+        const size_t off = bytes.size();
+        bytes.resize(off + outputRecordSize_);
+        char* dst = bytes.data() + off;
+        std::memcpy(dst, &obj.x, sizeof(obj.x));
+        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
+        if (!obj.ks.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z),
+                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+        }
+        if (!obj.ps.empty()) {
+            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + obj.ks.size() * sizeof(int32_t),
                 obj.ps.data(), obj.ps.size() * sizeof(float));
         }
     };
@@ -688,16 +728,30 @@ void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, i
         shard.mainDataSize += idx.dataBytes;
     } else if (ctx.kind == OutputSourceKind::Boundary) {
         std::map<TileKey, std::pair<std::vector<char>, uint32_t>> buckets;
-        for (const auto& obj : result.outputObjs) {
-            const float x = static_cast<float>(obj.x) * pixelResolution_;
-            const float y = static_cast<float>(obj.y) * pixelResolution_;
-            TileKey tile{
-                static_cast<int32_t>(std::floor(y / tileSize)),
-                static_cast<int32_t>(std::floor(x / tileSize))
-            };
-            auto& bucket = buckets[tile];
-            appendObjectBytes(bucket.first, obj);
-            bucket.second++;
+        if (coordDim_ == MinibatchCoordDim::Dim3) {
+            for (const auto& obj : result.outputObjs3d) {
+                const float x = static_cast<float>(obj.x) * pixelResolution_;
+                const float y = static_cast<float>(obj.y) * pixelResolution_;
+                TileKey tile{
+                    static_cast<int32_t>(std::floor(y / tileSize)),
+                    static_cast<int32_t>(std::floor(x / tileSize))
+                };
+                auto& bucket = buckets[tile];
+                appendObjectBytes3D(bucket.first, obj);
+                bucket.second++;
+            }
+        } else {
+            for (const auto& obj : result.outputObjs) {
+                const float x = static_cast<float>(obj.x) * pixelResolution_;
+                const float y = static_cast<float>(obj.y) * pixelResolution_;
+                TileKey tile{
+                    static_cast<int32_t>(std::floor(y / tileSize)),
+                    static_cast<int32_t>(std::floor(x / tileSize))
+                };
+                auto& bucket = buckets[tile];
+                appendObjectBytes2D(bucket.first, obj);
+                bucket.second++;
+            }
         }
         for (const auto& kv : buckets) {
             const auto& tile = kv.first;

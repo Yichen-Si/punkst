@@ -266,11 +266,11 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
 }
 
 template<typename T>
-int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
-    int32_t nPixels = Base::buildMinibatchCore(
+double Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
+    double avgDegree = Base::buildMinibatchCore(
         tileData, anchors, minibatch, distR_, distNu_);
-    if (nPixels <= 0) {
-        return nPixels;
+    if (avgDegree <= 0.0) {
+        return avgDegree;
     }
 
     for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
@@ -279,7 +279,7 @@ int32_t Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoi
         }
     }
 
-    return nPixels;
+    return avgDegree;
 }
 
 template<typename T>
@@ -347,8 +347,11 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     if (nAnchors <= 0) {
         return;
     }
-    int32_t nPixels = makeMinibatch(tileData, anchors, minibatch);
-    debug("%s: Thread %d (ticket %d) made minibatch with %d pixels", __func__, threadId, ticket, nPixels);
+    double avgDegree = makeMinibatch(tileData, anchors, minibatch);
+    const size_t nPixels = (Base::coordDim_ == MinibatchCoordDim::Dim3)
+        ? tileData.coords3d.size() : tileData.coords.size();
+    debug("%s: Thread %d (ticket %d) made minibatch with %zu pixels and average degree %.2f",
+        __func__, threadId, ticket, nPixels, avgDegree);
     if (nPixels < 10) {
         return;
     }
@@ -373,7 +376,8 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
         anchorQueue.push(std::move(anchorResult));
     }
 
-    notice("Thread %d (ticket %d) fit minibatch with %d anchors and output %lu internal pixels in %d iterations. Final mean max change in theta: %.1e (final averaged inner iterations %.1f)", threadId, ticket, nAnchors, result.npts, stats.niter, stats.last_change, stats.last_avg_internal_niters);
+    notice("Thread %d (ticket %d) fit minibatch with %d anchors, %zu pixels, average degree %.2f, and output %lu internal pixels in %d iterations. Final mean max change in theta: %.1e (final averaged inner iterations %.1f)",
+        threadId, ticket, nAnchors, nPixels, avgDegree, result.npts, stats.niter, stats.last_change, stats.last_avg_internal_niters);
 
 }
 

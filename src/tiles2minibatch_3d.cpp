@@ -7,6 +7,65 @@
 #include <thread>
 #include <algorithm>
 
+namespace {
+
+int32_t thin3d_modular_step(int32_t nLevels) {
+    if (nLevels <= 1) {
+        return 1;
+    }
+    int32_t step = (nLevels / 2) + 1;
+    while (std::gcd(step, nLevels) != 1) {
+        ++step;
+    }
+    return step;
+}
+
+int32_t thin3d_modular_offset(int32_t nLevels) {
+    if (nLevels <= 1) {
+        return 0;
+    }
+    return nLevels / 3;
+}
+
+int32_t thin3d_modular_inverse(int32_t a, int32_t mod) {
+    int32_t t = 0, newT = 1;
+    int32_t r = mod, newR = a;
+    while (newR != 0) {
+        const int32_t q = r / newR;
+        const int32_t tmpT = t - q * newT;
+        t = newT;
+        newT = tmpT;
+        const int32_t tmpR = r - q * newR;
+        r = newR;
+        newR = tmpR;
+    }
+    if (r != 1) {
+        error("%s: modular inverse does not exist", __func__);
+    }
+    if (t < 0) {
+        t += mod;
+    }
+    return t;
+}
+
+int32_t thin3d_phase_to_z_index(int32_t phaseIndex, int32_t nLevels) {
+    const int32_t step = thin3d_modular_step(nLevels);
+    const int32_t offset = thin3d_modular_offset(nLevels);
+    return (step * phaseIndex + offset) % nLevels;
+}
+
+int32_t thin3d_z_index_to_phase(int32_t zIndex, int32_t nLevels) {
+    const int32_t stepInv = thin3d_modular_inverse(thin3d_modular_step(nLevels), nLevels);
+    int32_t shifted = zIndex - thin3d_modular_offset(nLevels);
+    shifted %= nLevels;
+    if (shifted < 0) {
+        shifted += nLevels;
+    }
+    return (stepInv * shifted) % nLevels;
+}
+
+} // namespace
+
 template<typename T>
 void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zMax, float zScale, float zRes, int32_t n, bool enforceZrange) {
     const bool hasZMin = std::isfinite(zMin);
@@ -33,7 +92,7 @@ void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zM
     ignoreOutsideZrange_ = enforceZrange;
     configureInputMode();
     configureOutputMode();
-    nativeBinaryRegularTiles_ = nativeRegularTiles_ && outputBinary_ && coordDim_ == MinibatchCoordDim::Dim2;
+    nativeBinaryRegularTiles_ = nativeRegularTiles_ && outputBinary_;
 }
 
 template<typename T>
@@ -166,8 +225,9 @@ void Tiles2MinibatchBase<T>::forEachAnchorCandidateThin3D(const TileData<T>& til
                     zIndex = right++;
                 }
             }
-            const int32_t ir = zIndex / nMoves_;
-            const int32_t ic = zIndex % nMoves_;
+            const int32_t phaseIndex = thin3d_z_index_to_phase(zIndex, nZLevels);
+            const int32_t ir = phaseIndex / nMoves_;
+            const int32_t ic = phaseIndex % nMoves_;
             int32_t hx, hy;
             hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1.0 / nMoves_, ir * 1.0 / nMoves_);
             emit(pt.idx, static_cast<float>(pt.ct), AnchorKey2D{hx, hy, ic, ir});
@@ -189,8 +249,9 @@ void Tiles2MinibatchBase<T>::anchorKeyToCoordThin3D(float& x, float& y, float& z
     anchorKeyToCoord2D(x, y, key, hexGrid_, nMoves_);
     const int32_t ic = std::get<2>(key);
     const int32_t ir = std::get<3>(key);
-    const int32_t zIndex = ir * nMoves_ + ic;
+    const int32_t phaseIndex = ir * nMoves_ + ic;
     const int32_t nZLevels = nMoves_ * nMoves_;
+    const int32_t zIndex = thin3d_phase_to_z_index(phaseIndex, nZLevels);
     const double zStep = (zMax_ - zMin_) / static_cast<double>(nZLevels);
     z = static_cast<float>(zMin_ + (static_cast<double>(zIndex) + 0.5) * zStep);
 }
@@ -243,12 +304,12 @@ int32_t Tiles2MinibatchBase<T>::buildAnchorsThin3D(TileData<T>& tileData, std::v
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
+double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     double distR, double distNu) {
     debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts3d.size() + tileData.extPts3d.size());
     if (minibatch.n <= 0) {
-        return 0;
+        return 0.0;
     }
     assert(distR > 0.0 && distNu > 0.0);
 
@@ -361,7 +422,7 @@ int32_t Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     minibatch.psi = minibatch.wij;
     rowNormalizeInPlace(minibatch.psi);
 
-    return minibatch.N;
+    return avgDegree;
 }
 
 template<typename T>

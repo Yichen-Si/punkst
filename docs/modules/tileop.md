@@ -144,7 +144,7 @@ GeoJSON / JSON file: see [GeoJSON Region Input](../input/geojson-region.md) for 
 
 ### Merge Multiple Inference Results
 
-You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. This finds the intersection of tiles and concatenates the results ((factor, probability) pairs) for each pixel.
+You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. The main input (`--in`) defines the output lattice. Auxiliary inputs from `--merge-emb` are matched onto that lattice when they have the same tile size, the same or coarser resolution, and compatible dimensionality.
 
 ```bash
 punkst tile-op --in path/result1 [--binary] \
@@ -157,6 +157,8 @@ punkst tile-op --in path/result1 [--binary] \
 `--k2keep` - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all top in the input files are kept.
 
 `--binary-out` - (Optional) Save the merged output in binary format instead of TSV.
+
+`--merge-keep-all-main` - (Optional) Keep all records from the main input and fill any unmatched auxiliary source slots with `(-1, 0)`. By default, merge keeps only records that match in every source.
 
 `--threads` - (Optional) Number of worker threads for tile-local merge processing.
 

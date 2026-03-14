@@ -669,10 +669,10 @@ protected:
     }
 
     // Given data and anchor pos, build pixels & pixel-anchor relations
-    int32_t buildMinibatchCore(TileData<T>& tileData,
+    double buildMinibatchCore(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
         double distR, double distNu);
-    int32_t buildMinibatchCore3D(TileData<T>& tileData,
+    double buildMinibatchCore3D(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
         double distR, double distNu);
     // Given data, choose anchor points

@@ -151,7 +151,9 @@ public:
         const std::string& maskGeoJSON,
         const std::vector<int32_t>& focalFactors = {});
 
-    void merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep = {}, bool binaryOutput = false);
+    void merge(const std::vector<std::string>& otherFiles,
+        const std::string& outPrefix, std::vector<uint32_t> k2keep = {},
+        bool binaryOutput = false, bool keepAllMain = false);
 
     void annotate(const std::string& ptPrefix, const std::string& outPrefix, int32_t icol_x, int32_t icol_y, int32_t icol_z = -1);
 
@@ -189,6 +191,24 @@ public:
         double* residualAccum = nullptr) const;
 
 private:
+    enum class MergeSourceRelation {
+        Same2D,
+        Same3D,
+        Broadcast2DTo3D,
+    };
+
+    struct MergeSourcePlan {
+        const TileOperator* op = nullptr;
+        uint32_t keepK = 0;
+        uint32_t srcDim = 2;
+        float srcResXY = -1.0f;
+        float srcResZ = -1.0f;
+        int32_t tileSize = 0;
+        int32_t ratioXY = 1;
+        int32_t ratioZ = 1;
+        MergeSourceRelation relation = MergeSourceRelation::Same2D;
+    };
+
     std::string dataFile_, indexFile_;
     std::ifstream dataStream_;
     GzHandle gzDataStream_ = nullptr;
@@ -284,15 +304,18 @@ private:
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
 
     // Impl for merge
-    void mergeTiles2D(const std::set<TileKey>& commonTiles,
-        const std::vector<TileOperator*>& opPtrs,
-        const std::vector<uint32_t>& k2keep,
+    std::vector<MergeSourcePlan> validateMergeSources(
+        const std::vector<const TileOperator*>& opPtrs,
+        const std::vector<uint32_t>& k2keep) const;
+    void mergeTiles2D(const std::vector<TileKey>& mainTiles,
+        const std::vector<MergeSourcePlan>& mergePlans,
+        bool keepAllMain,
         bool binaryOutput,
         FILE* fp, int fdMain, int fdIndex,
         long& currentOffset);
-    void mergeTiles3D(const std::set<TileKey>& commonTiles,
-        const std::vector<TileOperator*>& opPtrs,
-        const std::vector<uint32_t>& k2keep,
+    void mergeTiles3D(const std::vector<TileKey>& mainTiles,
+        const std::vector<MergeSourcePlan>& mergePlans,
+        bool keepAllMain,
         bool binaryOutput,
         FILE* fp, int fdMain, int fdIndex,
         long& currentOffset);

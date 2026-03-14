@@ -108,6 +108,7 @@ private:
 
 struct TileWriteResult {
     TileKey tile;
+    uint32_t nMain = 0;
     uint32_t n = 0;
     std::string textData;
     std::vector<char> binaryData;
@@ -164,6 +165,36 @@ void append_pix_top_probs3d_binary(std::vector<char>& out,
     append_binary_value(out, z);
     append_binary_span(out, probs.ks);
     append_binary_span(out, probs.ps);
+}
+
+int32_t floor_div_int32(int32_t value, int32_t divisor) {
+    assert(divisor > 0);
+    int32_t q = value / divisor;
+    const int32_t r = value % divisor;
+    if (r != 0 && ((r > 0) != (divisor > 0))) {
+        --q;
+    }
+    return q;
+}
+
+void append_top_probs_prefix(TopProbs& out, const TopProbs& src, uint32_t keepK) {
+    const size_t keep = std::min<size_t>(keepK, std::min(src.ks.size(), src.ps.size()));
+    out.ks.insert(out.ks.end(), src.ks.begin(), src.ks.begin() + keep);
+    out.ps.insert(out.ps.end(), src.ps.begin(), src.ps.begin() + keep);
+}
+
+void append_placeholder_pairs(TopProbs& out, uint32_t keepK) {
+    out.ks.insert(out.ks.end(), keepK, -1);
+    out.ps.insert(out.ps.end(), keepK, 0.0f);
+}
+
+TileKey tile_key_from_source_xy(int32_t x, int32_t y, float resXY, int32_t tileSize) {
+    const double worldX = static_cast<double>(x) * static_cast<double>(resXY);
+    const double worldY = static_cast<double>(y) * static_cast<double>(resXY);
+    return TileKey{
+        static_cast<int32_t>(std::floor(worldY / static_cast<double>(tileSize))),
+        static_cast<int32_t>(std::floor(worldX / static_cast<double>(tileSize)))
+    };
 }
 
 void write_tile_result(const TileWriteResult& result, bool binaryOutput,
@@ -642,69 +673,90 @@ TileOperator::BorderDSUState TileOperator::mergeBorderComponentsWithDSU(
     return out;
 }
 
-void TileOperator::mergeTiles2D(const std::set<TileKey>& commonTiles,
-    const std::vector<TileOperator*>& opPtrs,
-    const std::vector<uint32_t>& k2keep, bool binaryOutput,
+void TileOperator::mergeTiles2D(const std::vector<TileKey>& mainTiles,
+    const std::vector<MergeSourcePlan>& mergePlans, bool keepAllMain, bool binaryOutput,
     FILE* fp, int fdMain, int fdIndex, long& currentOffset) {
     const char* funcName = __func__;
-    uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
-    const std::vector<TileKey> tileVec(commonTiles.begin(), commonTiles.end());
+    const size_t nSources = mergePlans.size();
+    const size_t totalK = std::accumulate(mergePlans.begin(), mergePlans.end(), size_t(0),
+        [](size_t sum, const MergeSourcePlan& plan) {
+            return sum + static_cast<size_t>(plan.keepK);
+        });
     auto buildTileResult = [&](const TileKey& tile, std::vector<std::ifstream>& streams) {
         TileWriteResult result;
         result.tile = tile;
-        std::map<std::pair<int32_t, int32_t>, TopProbs> mergedMap;
-        bool first = true;
-        for (uint32_t i = 0; i < nSources; ++i) {
-            TileOperator* op = opPtrs[i];
-            std::map<std::pair<int32_t, int32_t>, TopProbs> currentMap;
-            if (op->loadTileToMap(tile, currentMap, nullptr, &streams[i]) == 0) {
-                warning("%s: Tile (%d, %d) has no data in source %d", funcName, tile.row, tile.col, i);
-                return result;
-            }
-            if (first) {
-                if (op->getK() > static_cast<int32_t>(k2keep[i])) {
-                    for (auto& kv : currentMap) {
-                        kv.second.ks.resize(k2keep[i]);
-                        kv.second.ps.resize(k2keep[i]);
-                    }
-                }
-                mergedMap = std::move(currentMap);
-                first = false;
-                continue;
-            }
-            auto it = mergedMap.begin();
-            while (it != mergedMap.end()) {
-                auto it2 = currentMap.find(it->first);
-                if (it2 == currentMap.end()) {
-                    it = mergedMap.erase(it); // Intersect
-                    continue;
-                }
-                // Concatenate
-                it->second.ks.insert(it->second.ks.end(),
-                    it2->second.ks.begin(), it2->second.ks.begin() + k2keep[i]);
-                it->second.ps.insert(it->second.ps.end(),
-                    it2->second.ps.begin(), it2->second.ps.begin() + k2keep[i]);
-                ++it;
-            }
-        }
-        if (mergedMap.empty()) {
+        std::map<std::pair<int32_t, int32_t>, TopProbs> mainMap;
+        if (mergePlans[0].op->loadTileToMap(tile, mainMap, nullptr, &streams[0]) == 0) {
+            warning("%s: Main tile (%d, %d) has no data", funcName, tile.row, tile.col);
             return result;
         }
-        result.n = static_cast<uint32_t>(mergedMap.size());
-        if (binaryOutput) {
-            const size_t bytesPerRecord = 2 * sizeof(int32_t) +
-                static_cast<size_t>(std::accumulate(k2keep.begin(), k2keep.end(), uint32_t(0))) *
-                    (sizeof(int32_t) + sizeof(float));
-            result.binaryData.reserve(static_cast<size_t>(result.n) * bytesPerRecord);
-            for (const auto& kv : mergedMap) {
-                append_pix_top_probs_binary(result.binaryData, kv.first.first, kv.first.second, kv.second);
+        if (mainMap.empty()) {
+            return result;
+        }
+        result.nMain = static_cast<uint32_t>(mainMap.size());
+
+        std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxTileCaches(nSources);
+        std::vector<std::set<TileKey>> missingAuxTiles(nSources);
+        auto findAuxRecord = [&](size_t srcIdx, int32_t mainX, int32_t mainY) -> const TopProbs* {
+            const MergeSourcePlan& plan = mergePlans[srcIdx];
+            const std::pair<int32_t, int32_t> auxKey{
+                floor_div_int32(mainX, plan.ratioXY),
+                floor_div_int32(mainY, plan.ratioXY)
+            };
+            const TileKey auxTile = tile_key_from_source_xy(auxKey.first, auxKey.second,
+                plan.srcResXY, plan.tileSize);
+            if (missingAuxTiles[srcIdx].count(auxTile) > 0) {
+                return nullptr;
             }
-        } else {
-            for (const auto& kv : mergedMap) {
-                const auto& p = kv.second;
+            auto tileIt = auxTileCaches[srcIdx].find(auxTile);
+            if (tileIt == auxTileCaches[srcIdx].end()) {
+                std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
+                if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[srcIdx]) == 0) {
+                    missingAuxTiles[srcIdx].insert(auxTile);
+                    return nullptr;
+                }
+                tileIt = auxTileCaches[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+            }
+            auto recIt = tileIt->second.find(auxKey);
+            if (recIt == tileIt->second.end()) {
+                return nullptr;
+            }
+            return &recIt->second;
+        };
+
+        const size_t bytesPerRecord = 2 * sizeof(int32_t) +
+            totalK * (sizeof(int32_t) + sizeof(float));
+        if (binaryOutput) {
+            result.binaryData.reserve(mainMap.size() * bytesPerRecord);
+        }
+        for (const auto& kv : mainMap) {
+            TopProbs merged;
+            merged.ks.reserve(totalK);
+            merged.ps.reserve(totalK);
+            append_top_probs_prefix(merged, kv.second, mergePlans[0].keepK);
+            bool keep = true;
+            for (size_t i = 1; i < nSources; ++i) {
+                const TopProbs* aux = findAuxRecord(i, kv.first.first, kv.first.second);
+                if (aux == nullptr) {
+                    if (!keepAllMain) {
+                        keep = false;
+                        break;
+                    }
+                    append_placeholder_pairs(merged, mergePlans[i].keepK);
+                } else {
+                    append_top_probs_prefix(merged, *aux, mergePlans[i].keepK);
+                }
+            }
+            if (!keep) {
+                continue;
+            }
+            ++result.n;
+            if (binaryOutput) {
+                append_pix_top_probs_binary(result.binaryData, kv.first.first, kv.first.second, merged);
+            } else {
                 append_format(result.textData, "%d\t%d", kv.first.first, kv.first.second);
-                for (size_t i = 0; i < p.ks.size(); ++i) {
-                    append_format(result.textData, "\t%d\t%.4e", p.ks[i], p.ps[i]);
+                for (size_t i = 0; i < merged.ks.size(); ++i) {
+                    append_format(result.textData, "\t%d\t%.4e", merged.ks[i], merged.ps[i]);
                 }
                 result.textData.push_back('\n');
             }
@@ -712,24 +764,24 @@ void TileOperator::mergeTiles2D(const std::set<TileKey>& commonTiles,
         return result;
     };
 
-    const bool useParallel = (threads_ > 1 && tileVec.size() > 1);
+    const bool useParallel = (threads_ > 1 && mainTiles.size() > 1);
     if (!useParallel) {
         std::vector<std::ifstream> streams(nSources);
-        for (const auto& tile : tileVec) {
+        for (const auto& tile : mainTiles) {
             TileWriteResult result = buildTileResult(tile, streams);
             if (result.n == 0) {
                 continue;
             }
             write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-            notice("%s: Merged tile (%d, %d) with %u pixels shared by all sources",
-                funcName, tile.row, tile.col, result.n);
+            notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
+                funcName, tile.row, tile.col, result.n, result.nMain);
         }
         return;
     }
 
     const size_t chunkTileCount = std::max<size_t>(
-        (tileVec.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
-    const size_t nChunks = (tileVec.size() + chunkTileCount - 1) / chunkTileCount;
+        (mainTiles.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
+    const size_t nChunks = (mainTiles.size() + chunkTileCount - 1) / chunkTileCount;
     BoundedResultQueue<TileWriteResult> queue(std::max<size_t>(4, static_cast<size_t>(threads_) * 2));
     std::exception_ptr writerError;
     std::mutex writerErrorMutex;
@@ -738,8 +790,8 @@ void TileOperator::mergeTiles2D(const std::set<TileKey>& commonTiles,
             TileWriteResult result;
             while (queue.pop(result)) {
                 write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-                notice("%s: Merged tile (%d, %d) with %u pixels shared by all sources",
-                    funcName, result.tile.row, result.tile.col, result.n);
+                notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
+                    funcName, result.tile.row, result.tile.col, result.n, result.nMain);
             }
         } catch (...) {
             {
@@ -757,9 +809,9 @@ void TileOperator::mergeTiles2D(const std::set<TileKey>& commonTiles,
                 for (size_t chunkIdx = range.begin(); chunkIdx < range.end(); ++chunkIdx) {
                     std::vector<std::ifstream> streams(nSources);
                     const size_t begin = chunkIdx * chunkTileCount;
-                    const size_t end = std::min(tileVec.size(), begin + chunkTileCount);
+                    const size_t end = std::min(mainTiles.size(), begin + chunkTileCount);
                     for (size_t ti = begin; ti < end; ++ti) {
-                        TileWriteResult result = buildTileResult(tileVec[ti], streams);
+                        TileWriteResult result = buildTileResult(mainTiles[ti], streams);
                         if (result.n > 0 && !queue.push(std::move(result))) {
                             return;
                         }
@@ -784,71 +836,112 @@ void TileOperator::mergeTiles2D(const std::set<TileKey>& commonTiles,
     }
 }
 
-void TileOperator::mergeTiles3D(const std::set<TileKey>& commonTiles,
-    const std::vector<TileOperator*>& opPtrs,
-    const std::vector<uint32_t>& k2keep, bool binaryOutput,
+void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
+    const std::vector<MergeSourcePlan>& mergePlans, bool keepAllMain, bool binaryOutput,
     FILE* fp, int fdMain, int fdIndex, long& currentOffset) {
     const char* funcName = __func__;
-    uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
-    const std::vector<TileKey> tileVec(commonTiles.begin(), commonTiles.end());
+    const size_t nSources = mergePlans.size();
+    const size_t totalK = std::accumulate(mergePlans.begin(), mergePlans.end(), size_t(0),
+        [](size_t sum, const MergeSourcePlan& plan) {
+            return sum + static_cast<size_t>(plan.keepK);
+        });
     auto buildTileResult = [&](const TileKey& tile, std::vector<std::ifstream>& streams) {
         TileWriteResult result;
         result.tile = tile;
-        std::map<PixelKey3, TopProbs> mergedMap;
-        bool first = true;
-        for (uint32_t i = 0; i < nSources; ++i) {
-            TileOperator* op = opPtrs[i];
-            std::map<PixelKey3, TopProbs> currentMap;
-            if (op->loadTileToMap3D(tile, currentMap, &streams[i]) == 0) {
-                warning("%s: Tile (%d, %d) has no data in source %d", funcName, tile.row, tile.col, i);
-                return result;
-            }
-            if (first) {
-                if (op->getK() > static_cast<int32_t>(k2keep[i])) {
-                    for (auto& kv : currentMap) {
-                        kv.second.ks.resize(k2keep[i]);
-                        kv.second.ps.resize(k2keep[i]);
-                    }
-                }
-                mergedMap = std::move(currentMap);
-                first = false;
-                continue;
-            }
-            auto it = mergedMap.begin();
-            while (it != mergedMap.end()) {
-                auto it2 = currentMap.find(it->first);
-                if (it2 == currentMap.end()) {
-                    it = mergedMap.erase(it); // Intersect
-                    continue;
-                }
-                // Concatenate
-                it->second.ks.insert(it->second.ks.end(),
-                    it2->second.ks.begin(), it2->second.ks.begin() + k2keep[i]);
-                it->second.ps.insert(it->second.ps.end(),
-                    it2->second.ps.begin(), it2->second.ps.begin() + k2keep[i]);
-                ++it;
-            }
-        }
-        if (mergedMap.empty()) {
+        std::map<PixelKey3, TopProbs> mainMap;
+        if (mergePlans[0].op->loadTileToMap3D(tile, mainMap, &streams[0]) == 0) {
+            warning("%s: Main tile (%d, %d) has no data", funcName, tile.row, tile.col);
             return result;
         }
-        result.n = static_cast<uint32_t>(mergedMap.size());
-        if (binaryOutput) {
-            const size_t bytesPerRecord = 3 * sizeof(int32_t) +
-                static_cast<size_t>(std::accumulate(k2keep.begin(), k2keep.end(), uint32_t(0))) *
-                    (sizeof(int32_t) + sizeof(float));
-            result.binaryData.reserve(static_cast<size_t>(result.n) * bytesPerRecord);
-            for (const auto& kv : mergedMap) {
-                append_pix_top_probs3d_binary(result.binaryData,
-                    std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first), kv.second);
+        if (mainMap.empty()) {
+            return result;
+        }
+        result.nMain = static_cast<uint32_t>(mainMap.size());
+
+        std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxTileCaches2D(nSources);
+        std::vector<std::set<TileKey>> missingAuxTiles2D(nSources);
+        std::vector<std::map<TileKey, std::map<PixelKey3, TopProbs>>> auxTileCaches3D(nSources);
+        std::vector<std::set<TileKey>> missingAuxTiles3D(nSources);
+        auto findAuxRecord = [&](size_t srcIdx, int32_t mainX, int32_t mainY, int32_t mainZ) -> const TopProbs* {
+            const MergeSourcePlan& plan = mergePlans[srcIdx];
+            const int32_t auxX = floor_div_int32(mainX, plan.ratioXY);
+            const int32_t auxY = floor_div_int32(mainY, plan.ratioXY);
+            const TileKey auxTile = tile_key_from_source_xy(auxX, auxY, plan.srcResXY, plan.tileSize);
+            if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
+                if (missingAuxTiles2D[srcIdx].count(auxTile) > 0) {
+                    return nullptr;
+                }
+                auto tileIt = auxTileCaches2D[srcIdx].find(auxTile);
+                if (tileIt == auxTileCaches2D[srcIdx].end()) {
+                    std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
+                    if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[srcIdx]) == 0) {
+                        missingAuxTiles2D[srcIdx].insert(auxTile);
+                        return nullptr;
+                    }
+                    tileIt = auxTileCaches2D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                }
+                auto recIt = tileIt->second.find({auxX, auxY});
+                if (recIt == tileIt->second.end()) {
+                    return nullptr;
+                }
+                return &recIt->second;
             }
-        } else {
-            for (const auto& kv : mergedMap) {
-                const auto& p = kv.second;
+            const int32_t auxZ = floor_div_int32(mainZ, plan.ratioZ);
+            if (missingAuxTiles3D[srcIdx].count(auxTile) > 0) {
+                return nullptr;
+            }
+            auto tileIt = auxTileCaches3D[srcIdx].find(auxTile);
+            if (tileIt == auxTileCaches3D[srcIdx].end()) {
+                std::map<PixelKey3, TopProbs> auxMap;
+                if (plan.op->loadTileToMap3D(auxTile, auxMap, &streams[srcIdx]) == 0) {
+                    missingAuxTiles3D[srcIdx].insert(auxTile);
+                    return nullptr;
+                }
+                tileIt = auxTileCaches3D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+            }
+            auto recIt = tileIt->second.find({auxX, auxY, auxZ});
+            if (recIt == tileIt->second.end()) {
+                return nullptr;
+            }
+            return &recIt->second;
+        };
+
+        const size_t bytesPerRecord = 3 * sizeof(int32_t) +
+            totalK * (sizeof(int32_t) + sizeof(float));
+        if (binaryOutput) {
+            result.binaryData.reserve(mainMap.size() * bytesPerRecord);
+        }
+        for (const auto& kv : mainMap) {
+            TopProbs merged;
+            merged.ks.reserve(totalK);
+            merged.ps.reserve(totalK);
+            append_top_probs_prefix(merged, kv.second, mergePlans[0].keepK);
+            bool keep = true;
+            for (size_t i = 1; i < nSources; ++i) {
+                const TopProbs* aux = findAuxRecord(i,
+                    std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first));
+                if (aux == nullptr) {
+                    if (!keepAllMain) {
+                        keep = false;
+                        break;
+                    }
+                    append_placeholder_pairs(merged, mergePlans[i].keepK);
+                } else {
+                    append_top_probs_prefix(merged, *aux, mergePlans[i].keepK);
+                }
+            }
+            if (!keep) {
+                continue;
+            }
+            ++result.n;
+            if (binaryOutput) {
+                append_pix_top_probs3d_binary(result.binaryData,
+                    std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first), merged);
+            } else {
                 append_format(result.textData, "%d\t%d\t%d",
                     std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first));
-                for (size_t i = 0; i < p.ks.size(); ++i) {
-                    append_format(result.textData, "\t%d\t%.4e", p.ks[i], p.ps[i]);
+                for (size_t i = 0; i < merged.ks.size(); ++i) {
+                    append_format(result.textData, "\t%d\t%.4e", merged.ks[i], merged.ps[i]);
                 }
                 result.textData.push_back('\n');
             }
@@ -856,24 +949,24 @@ void TileOperator::mergeTiles3D(const std::set<TileKey>& commonTiles,
         return result;
     };
 
-    const bool useParallel = (threads_ > 1 && tileVec.size() > 1);
+    const bool useParallel = (threads_ > 1 && mainTiles.size() > 1);
     if (!useParallel) {
         std::vector<std::ifstream> streams(nSources);
-        for (const auto& tile : tileVec) {
+        for (const auto& tile : mainTiles) {
             TileWriteResult result = buildTileResult(tile, streams);
             if (result.n == 0) {
                 continue;
             }
             write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-            notice("%s: Merged tile (%d, %d) with %u pixels shared by all sources",
-                funcName, tile.row, tile.col, result.n);
+            notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
+                funcName, tile.row, tile.col, result.n, result.nMain);
         }
         return;
     }
 
     const size_t chunkTileCount = std::max<size_t>(
-        (tileVec.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
-    const size_t nChunks = (tileVec.size() + chunkTileCount - 1) / chunkTileCount;
+        (mainTiles.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
+    const size_t nChunks = (mainTiles.size() + chunkTileCount - 1) / chunkTileCount;
     BoundedResultQueue<TileWriteResult> queue(std::max<size_t>(4, static_cast<size_t>(threads_) * 2));
     std::exception_ptr writerError;
     std::mutex writerErrorMutex;
@@ -882,8 +975,8 @@ void TileOperator::mergeTiles3D(const std::set<TileKey>& commonTiles,
             TileWriteResult result;
             while (queue.pop(result)) {
                 write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-                notice("%s: Merged tile (%d, %d) with %u pixels shared by all sources",
-                    funcName, result.tile.row, result.tile.col, result.n);
+                notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
+                    funcName, result.tile.row, result.tile.col, result.n, result.nMain);
             }
         } catch (...) {
             {
@@ -901,9 +994,9 @@ void TileOperator::mergeTiles3D(const std::set<TileKey>& commonTiles,
                 for (size_t chunkIdx = range.begin(); chunkIdx < range.end(); ++chunkIdx) {
                     std::vector<std::ifstream> streams(nSources);
                     const size_t begin = chunkIdx * chunkTileCount;
-                    const size_t end = std::min(tileVec.size(), begin + chunkTileCount);
+                    const size_t end = std::min(mainTiles.size(), begin + chunkTileCount);
                     for (size_t ti = begin; ti < end; ++ti) {
-                        TileWriteResult result = buildTileResult(tileVec[ti], streams);
+                        TileWriteResult result = buildTileResult(mainTiles[ti], streams);
                         if (result.n > 0 && !queue.push(std::move(result))) {
                             return;
                         }
@@ -1255,10 +1348,12 @@ void TileOperator::probDotTiles2D(const std::set<TileKey>& commonTiles,
                     for (uint32_t i = 0; i < k2keep[s1]; ++i) {
                         const int32_t k1 = ks[off1 + i];
                         const float p1 = ps[off1 + i];
+                        if (k1 < 0 || p1 <= 0.0f) { continue; }
                         local.marginals[s1][k1] += p1;
                         for (uint32_t j = i; j < k2keep[s1]; ++j) {
                             const int32_t k2 = ks[off1 + j];
                             const float p2 = ps[off1 + j];
+                            if (k2 < 0 || p2 <= 0.0f) { continue; }
                             const auto k12 = (k1 <= k2) ? std::make_pair(k1, k2) : std::make_pair(k2, k1);
                             local.internalDots[s1][k12] += static_cast<double>(p1) * p2;
                         }
@@ -1268,6 +1363,7 @@ void TileOperator::probDotTiles2D(const std::set<TileKey>& commonTiles,
                             for (uint32_t j = 0; j < k2keep[s2]; ++j) {
                                 const int32_t k2 = ks[off2 + j];
                                 const float p2 = ps[off2 + j];
+                                if (k2 < 0 || p2 <= 0.0f) { continue; }
                                 cross[std::make_pair(k1, k2)] += static_cast<double>(p1) * p2;
                             }
                         }
@@ -1385,10 +1481,12 @@ void TileOperator::probDotTiles3D(const std::set<TileKey>& commonTiles,
                     for (uint32_t i = 0; i < k2keep[s1]; ++i) {
                         const int32_t k1 = ks[off1 + i];
                         const float p1 = ps[off1 + i];
+                        if (k1 < 0 || p1 <= 0.0f) { continue; }
                         local.marginals[s1][k1] += p1;
                         for (uint32_t j = i; j < k2keep[s1]; ++j) {
                             const int32_t k2 = ks[off1 + j];
                             const float p2 = ps[off1 + j];
+                            if (k2 < 0 || p2 <= 0.0f) { continue; }
                             const auto k12 = (k1 <= k2) ? std::make_pair(k1, k2) : std::make_pair(k2, k1);
                             local.internalDots[s1][k12] += static_cast<double>(p1) * p2;
                         }
@@ -1398,6 +1496,7 @@ void TileOperator::probDotTiles3D(const std::set<TileKey>& commonTiles,
                             for (uint32_t j = 0; j < k2keep[s2]; ++j) {
                                 const int32_t k2 = ks[off2 + j];
                                 const float p2 = ps[off2 + j];
+                                if (k2 < 0 || p2 <= 0.0f) { continue; }
                                 cross[std::make_pair(k1, k2)] += static_cast<double>(p1) * p2;
                             }
                         }

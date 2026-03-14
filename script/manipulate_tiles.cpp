@@ -5,6 +5,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string inPrefix, inData, inIndex, outPrefix;
     std::vector<std::string> inMergeEmbFiles;
     std::string inMergePtsPrefix;
+    bool mergeKeepAllMain = false;
     int32_t tileSize = -1;
     bool binaryOut = false;
     bool isBinary = false;
@@ -84,6 +85,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     // Merge, join, and aggregation operations.
     pl.add_option("merge-emb", "List of embedding files to merge", inMergeEmbFiles)
+      .add_option("merge-keep-all-main", "Keep all main-input records in --merge-emb and fill missing source slots with (-1, 0)", mergeKeepAllMain)
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
@@ -237,12 +239,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (!inMergeEmbFiles.empty()) {
-        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut);
+        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut, mergeKeepAllMain);
         return 0;
     }
 
     if (!inMergePtsPrefix.empty()) {
-        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y);
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z);
         return 0;
     }
 

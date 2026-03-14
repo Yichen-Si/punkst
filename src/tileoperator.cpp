@@ -79,9 +79,87 @@ void write_cell_row(FILE* fp, const std::string& cellId, const std::string& comp
     fprintf(fp, "\n");
 }
 
+int32_t checked_integer_ratio(float srcRes, float mainRes, const char* funcName,
+    uint32_t srcIdx, const char* axisName) {
+    if (!(mainRes > 0.0f)) {
+        error("%s: Main input must have positive %s resolution", funcName, axisName);
+    }
+    if (!(srcRes > 0.0f)) {
+        error("%s: Source %u must have positive %s resolution", funcName, srcIdx, axisName);
+    }
+    const double ratio = static_cast<double>(srcRes) / static_cast<double>(mainRes);
+    const int64_t rounded = static_cast<int64_t>(std::llround(ratio));
+    if (ratio < 1.0 - 1e-8) {
+        error("%s: Source %u has finer %s resolution (%.8g) than the main input (%.8g)",
+            funcName, srcIdx, axisName, srcRes, mainRes);
+    }
+    const double tol = 1e-6 * std::max(1.0, std::abs(ratio));
+    if (rounded < 1 || std::abs(ratio - static_cast<double>(rounded)) > tol) {
+        error("%s: Source %u has non-integer %s resolution ratio %.8g relative to the main input",
+            funcName, srcIdx, axisName, ratio);
+    }
+    return static_cast<int32_t>(rounded);
+}
+
 } // namespace
 
-void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix, std::vector<uint32_t> k2keep, bool binaryOutput) {
+std::vector<TileOperator::MergeSourcePlan> TileOperator::validateMergeSources(
+    const std::vector<const TileOperator*>& opPtrs,
+    const std::vector<uint32_t>& k2keep) const {
+    const char* funcName = __func__;
+    if (formatInfo_.tileSize <= 0) {
+        error("%s: Main input must have a positive tile size", funcName);
+    }
+    const float mainResXY = getPixelResolution();
+    const float mainResZ = (coord_dim_ == 3) ? getPixelResolutionZ() : -1.0f;
+    if (!(mainResXY > 0.0f)) {
+        error("%s: Main input must have positive x/y resolution", funcName);
+    }
+    if (coord_dim_ == 3 && !(mainResZ > 0.0f)) {
+        error("%s: Main input must have positive z resolution", funcName);
+    }
+
+    std::vector<MergeSourcePlan> plans(opPtrs.size());
+    for (size_t i = 0; i < opPtrs.size(); ++i) {
+        const TileOperator* op = opPtrs[i];
+        MergeSourcePlan& plan = plans[i];
+        plan.op = op;
+        plan.keepK = k2keep[i];
+        plan.srcDim = op->coord_dim_;
+        plan.srcResXY = op->getPixelResolution();
+        plan.srcResZ = (op->coord_dim_ == 3) ? op->getPixelResolutionZ() : -1.0f;
+        plan.tileSize = op->getTileSize();
+        if (plan.tileSize <= 0) {
+            error("%s: Source %zu must have a positive tile size", funcName, i);
+        }
+        if (plan.tileSize != formatInfo_.tileSize) {
+            error("%s: Source %zu has tile size %d, expected %d",
+                funcName, i, plan.tileSize, formatInfo_.tileSize);
+        }
+        if (plan.srcDim > coord_dim_) {
+            error("%s: Source %zu has higher dimension (%uD) than the main input (%uD)",
+                funcName, i, plan.srcDim, coord_dim_);
+        }
+        plan.ratioXY = checked_integer_ratio(plan.srcResXY, mainResXY, funcName,
+            static_cast<uint32_t>(i), "x/y");
+        if (coord_dim_ == 2) {
+            plan.relation = MergeSourceRelation::Same2D;
+            continue;
+        }
+        if (plan.srcDim == 3) {
+            plan.relation = MergeSourceRelation::Same3D;
+            plan.ratioZ = checked_integer_ratio(plan.srcResZ, mainResZ, funcName,
+                static_cast<uint32_t>(i), "z");
+        } else {
+            plan.relation = MergeSourceRelation::Broadcast2DTo3D;
+            plan.ratioZ = 1;
+        }
+    }
+    return plans;
+}
+
+void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix,
+    std::vector<uint32_t> k2keep, bool binaryOutput, bool keepAllMain) {
     std::string outIndex = outPrefix + ".index";
     int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
     if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
@@ -89,7 +167,7 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
 
     // 1. Setup operators
     std::vector<std::unique_ptr<TileOperator>> ops;
-    std::vector<TileOperator*> opPtrs;
+    std::vector<const TileOperator*> opPtrs;
     opPtrs.push_back(this); // current object
     for (const auto& f : otherFiles) {
         std::string idxFile = f.substr(0, f.find_last_of('.')) + ".index";
@@ -102,7 +180,7 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     }
     uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
     if (k2keep.size() == 0) {
-        for (auto* op : opPtrs) {
+        for (const auto* op : opPtrs) {
             k2keep.push_back(op->getK());
         }
     } else {
@@ -120,34 +198,19 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     }
     int32_t totalK = std::accumulate(k2keep.begin(), k2keep.end(), 0);
     bool use3d = (coord_dim_ == 3);
-    for (auto* op : opPtrs) {
-        if (op->coord_dim_ != coord_dim_) {
-            error("%s: Mixed 2D/3D inputs are not supported", __func__);
-        }
-    }
+    const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
 
-    // 2. Identify common tiles (Intersection)
-    std::set<TileKey> commonTiles;
-    if (opPtrs[0]->tile_lookup_.empty()) {
-        warning("%s: No tiles in the base dataset", __func__);
+    // 2. Identify main tiles
+    std::vector<TileKey> mainTiles;
+    if (tile_lookup_.empty()) {
+        warning("%s: No tiles in the main dataset", __func__);
         return;
     }
-    for (const auto& kv : opPtrs[0]->tile_lookup_) {
-        commonTiles.insert(kv.first);
+    mainTiles.reserve(tile_lookup_.size());
+    for (const auto& kv : tile_lookup_) {
+        mainTiles.push_back(kv.first);
     }
-    for (uint32_t i = 1; i < nSources; ++i) {
-        std::set<TileKey> currentTiles;
-        for (const auto& kv : opPtrs[i]->tile_lookup_) {
-            if (commonTiles.count(kv.first)) {
-                currentTiles.insert(kv.first);
-            }
-        }
-        commonTiles = currentTiles;
-    }
-    if (commonTiles.empty()) {
-        warning("%s: No overlapping tiles found for merge", __func__);
-        return;
-    }
+    std::sort(mainTiles.begin(), mainTiles.end());
 
     // 3. Prepare output
     std::string outFile;
@@ -197,11 +260,11 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index write error");
 
     // 4. Process tiles
-    notice("%s: Start merging %u files", __func__, nSources);
+    notice("%s: Start merging %u files across %lu main tiles", __func__, nSources, mainTiles.size());
     if (use3d) {
-        mergeTiles3D(commonTiles, opPtrs, k2keep, binaryOutput, fp, fdMain, fdIndex, currentOffset);
+        mergeTiles3D(mainTiles, mergePlans, keepAllMain, binaryOutput, fp, fdMain, fdIndex, currentOffset);
     } else {
-        mergeTiles2D(commonTiles, opPtrs, k2keep, binaryOutput, fp, fdMain, fdIndex, currentOffset);
+        mergeTiles2D(mainTiles, mergePlans, keepAllMain, binaryOutput, fp, fdMain, fdIndex, currentOffset);
     }
 
     if (binaryOutput) {
@@ -210,7 +273,7 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
         fclose(fp);
     }
     close(fdIndex);
-    notice("Merged %u files (%lu shared tiles) to %s", nSources, commonTiles.size(), outFile.c_str());
+    notice("Merged %u files across %lu main tiles to %s", nSources, mainTiles.size(), outFile.c_str());
 }
 
 void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix, int32_t icol_x, int32_t icol_y, int32_t icol_z) {
@@ -817,11 +880,13 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
             for (uint32_t i = 0; i < kvec_[s1]; ++i) {
                 int32_t k1 = ks[off1 + i];
                 float p1 = ps[off1 + i];
+                if (k1 < 0 || p1 <= 0.0f) { continue; }
                 oneMarginals[s1][k1] += p1;
                 // Internal
                 for (uint32_t j = i; j < kvec_[s1]; ++j) {
                     int32_t k2 = ks[off1 + j];
                     float p2 = ps[off1 + j];
+                    if (k2 < 0 || p2 <= 0.0f) { continue; }
                     std::pair<int32_t, int32_t> k12 = (k1 <= k2) ? std::make_pair(k1, k2) : std::make_pair(k2, k1);
                     oneInternalDots[s1][k12] += static_cast<double>(p1) * p2;
                 }
@@ -831,6 +896,7 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
                     for (uint32_t j = 0; j < kvec_[s2]; ++j) {
                         int32_t k2 = ks[off2 + j];
                         float p2 = ps[off2 + j];
+                        if (k2 < 0 || p2 <= 0.0f) { continue; }
                         // Ordered pair (k1 from s1, k2 from s2)
                         oneCrossDots[std::make_pair(s1, s2)][std::make_pair(k1, k2)] += static_cast<double>(p1) * p2;
                     }

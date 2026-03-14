@@ -190,7 +190,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (radius <= 0) {
         if (useThin3D) {
             double zDist = (zMax - zMin) / (nMoves * nMoves) * zScale;
-            zDist *= nInitAnchorPerPix * 0.5 + 0.5;
+            zDist = zDist * nInitAnchorPerPix * 0.5 + 0.5;
             radius = std::sqrt(anchorDist * anchorDist + zDist * zDist) * 1.2;
         } else {
             radius = anchorDist * 1.2;
@@ -253,7 +253,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
     ioConfig.outputAnchor = outputAnchor;
     ioConfig.useTicketSystem = useTicketSystem;
-    ioConfig.nativeRegularTiles = outputBinary && !parser.hasZCoord();
+    ioConfig.nativeRegularTiles = outputBinary;
     ioConfig.coordDim = MinibatchCoordDim::Dim2;
 
     VectorXf eta0;

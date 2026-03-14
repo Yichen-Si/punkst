@@ -212,7 +212,7 @@ protected:
     int32_t initAnchors(TileData<T>& tileData,
                         std::vector<AnchorPoint>& anchors,
                         Minibatch& minibatch);
-    int32_t makeMinibatch(TileData<T>& tileData,
+    double makeMinibatch(TileData<T>& tileData,
                           std::vector<AnchorPoint>& anchors,
                           Minibatch& minibatch);
     void processTile(TileData<T>& tileData,
