@@ -1,7 +1,9 @@
 #pragma once
 
 #include "utils.h"
+#include <array>
 #include <cmath>
+#include <vector>
 #include <unordered_map>
 
 /**
@@ -25,7 +27,8 @@ class BCCGrid {
 
 public:
     // A typedef for grouping point indices by the lattice cell.
-    typedef std::unordered_map<std::tuple<int32_t, int32_t, int32_t>, std::vector<uint32_t>, Tuple3Hash> bcc2idx_t;
+    typedef std::tuple<int32_t, int32_t, int32_t> cell_key_t;
+    typedef std::unordered_map<cell_key_t, std::vector<uint32_t>, Tuple3Hash> bcc2idx_t;
 
     double size;      // Scaling factor for the lattice cell size.
     double mtx_l2p[3][3]; // Lattice-to-Cartesian transformation matrix.
@@ -33,6 +36,31 @@ public:
 
     BCCGrid() {}
     BCCGrid(double s) {init(s);}
+
+    static cell_key_t make_key(int32_t q1, int32_t q2, int32_t q3) {
+        return std::make_tuple(q1, q2, q3);
+    }
+
+    std::vector<std::array<int32_t, 3>> face_adjacent_offsets() const {
+        std::vector<std::array<int32_t, 3>> offsets;
+        const double maxFaceNeighborDist = size + 1e-8;
+        for (int32_t dq1 = -1; dq1 <= 1; ++dq1) {
+            for (int32_t dq2 = -1; dq2 <= 1; ++dq2) {
+                for (int32_t dq3 = -1; dq3 <= 1; ++dq3) {
+                    if (dq1 == 0 && dq2 == 0 && dq3 == 0) {
+                        continue;
+                    }
+                    double x, y, z;
+                    lattice_to_cart(x, y, z, dq1, dq2, dq3);
+                    const double dist = std::sqrt(x * x + y * y + z * z);
+                    if (dist <= maxFaceNeighborDist) {
+                        offsets.push_back({dq1, dq2, dq3});
+                    }
+                }
+            }
+        }
+        return offsets;
+    }
 
     void init(double s) {
         assert(s > 0);
@@ -131,6 +159,34 @@ public:
         }
     }
 
+    // Axis-aligned bounding box of the truncated-octahedron Voronoi cell.
+    // The exact AABB is centered at the lattice point with half-width s/2
+    // along each Cartesian axis.
+    void cell_bounding_box_cart(double& xmin, double& xmax,
+                                double& ymin, double& ymax,
+                                double& zmin, double& zmax,
+                                int32_t q1, int32_t q2, int32_t q3,
+                                double offset_x = 0, double offset_y = 0, double offset_z = 0) const {
+        double x, y, z;
+        lattice_to_cart(x, y, z, q1, q2, q3, offset_x, offset_y, offset_z);
+        const double half = size / 2.0;
+        xmin = x - half;
+        xmax = x + half;
+        ymin = y - half;
+        ymax = y + half;
+        zmin = z - half;
+        zmax = z + half;
+    }
+
+    void projected_bounding_box_xy(double& xmin, double& xmax,
+                                   double& ymin, double& ymax,
+                                   int32_t q1, int32_t q2, int32_t q3,
+                                   double offset_x = 0, double offset_y = 0, double offset_z = 0) const {
+        double zmin, zmax;
+        cell_bounding_box_cart(xmin, xmax, ymin, ymax, zmin, zmax,
+                               q1, q2, q3, offset_x, offset_y, offset_z);
+    }
+
     // Groups indices of points by the lattice cell in which they fall.
     void group_by_cell(bcc2idx_t& cell_to_idx,
                        const std::vector<double>& x, const std::vector<double>& y, const std::vector<double>& z,
@@ -141,7 +197,7 @@ public:
         std::vector<int32_t> q1, q2, q3;
         cart_to_lattice(q1, q2, q3, x, y, z, offset_x, offset_y, offset_z);
         for (size_t i = 0; i < n; ++i) {
-            std::tuple<int32_t, int32_t, int32_t> key = std::make_tuple(q1[i], q2[i], q3[i]);
+            cell_key_t key = make_key(q1[i], q2[i], q3[i]);
             cell_to_idx[key].push_back(i);
         }
     }

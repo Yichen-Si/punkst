@@ -302,7 +302,7 @@ private:
     int32_t nModal = 1;
     int32_t nLayer = 1;
     int32_t offset_data = -1;
-    int32_t icol_layer = -1, icol_x = -1, icol_y = -1;
+    int32_t icol_layer = -1, icol_x = -1, icol_y = -1, icol_z = -1;
     int32_t mintokens = 0;
     std::vector<double> feature_sums;
     std::vector<double> feature_sums_raw;

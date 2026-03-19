@@ -7,8 +7,8 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     std::vector<float> radius;
     int nThreads = 1, debug = 0, verbose = 1000000;
     int32_t seed = -1;
-    int icol_x, icol_y, icol_feature;
-    double hexSize = -1, hexGridDist = -1;
+    int icol_x, icol_y, icol_z = -1, icol_feature;
+    double hexSize = -1, hexGridDist = -1, bccSize = -1, bccGridDist = -1;
     std::vector<int32_t> icol_ints;
     std::vector<int32_t> min_counts;
     bool noBackground = false;
@@ -23,6 +23,7 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         .add_option("in-index", "Input index file", inIndex)
         .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
         .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
+        .add_option("icol-z", "Column index for z coordinate (0-based, enables 3D BCC aggregation)", icol_z)
         .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
         .add_option("feature-dict", "If feature column is not integer, provide the list of feature names", dictFile)
         .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
@@ -31,6 +32,8 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         .add_option("radius", "Radius for each set of anchors", radius)
         .add_option("hex-size", "Hexagon size (size length)", hexSize)
         .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
+        .add_option("bcc-size", "BCC lattice size for 3D aggregation", bccSize)
+        .add_option("bcc-grid-dist", "BCC grid distance (nearest center-to-center distance) for 3D aggregation", bccGridDist)
         .add_option("temp-dir", "Directory to store temporary files", tmpDir)
         .add_option("seed", "Random seed for randomized output keys", seed)
         .add_option("threads", "Number of threads to use (default: 1)", nThreads);
@@ -53,14 +56,37 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         return 1;
     }
 
-    if (hexSize <= 0) {
-        if (hexGridDist <= 0) {
-            error("Hexagon size or hexagon grid distance must be specified");
-        } else {
-            hexSize = hexGridDist / sqrt(3);
+    const bool use3D = (icol_z >= 0);
+    if (use3D) {
+        if (!anchorFiles.empty()) {
+            error("Anchor-based aggregation is currently only supported for 2D input");
+        }
+        if (bccSize > 0 && bccGridDist > 0) {
+            warning("If both --bcc-size and --bcc-grid-dist are specified, only --bcc-size will be used");
+        }
+        if (bccSize <= 0) {
+            if (bccGridDist <= 0) {
+                error("3D input requires --bcc-size or --bcc-grid-dist");
+            } else {
+                bccSize = 2.0 * bccGridDist / sqrt(3.0);
+            }
+        }
+        if (hexSize > 0 || hexGridDist > 0) {
+            warning("Ignoring --hex-size/--hex-grid-dist for 3D input; using --bcc-size/--bcc-grid-dist");
+        }
+    } else {
+        if (bccSize > 0 || bccGridDist > 0) {
+            warning("Ignoring --bcc-size/--bcc-grid-dist for 2D input");
+        }
+        if (hexSize <= 0) {
+            if (hexGridDist <= 0) {
+                error("Hexagon size or hexagon grid distance must be specified");
+            } else {
+                hexSize = hexGridDist / sqrt(3);
+            }
         }
     }
-    HexGrid hexGrid(hexSize);
+    HexGrid hexGrid(use3D ? bccSize : hexSize);
 
     std::vector<Rectangle<double>> rects;
     if (boundingBoxes.size() > 0) {
@@ -76,12 +102,15 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         error("Error opening input file: %s", inTsv.c_str());
     }
     lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile, &rects);
+    if (use3D) {
+        parser.setZ(static_cast<size_t>(icol_z));
+    }
     if (parser.n_ct == 0) {
         error("No integer columns specified");
     }
 
     if (anchorFiles.empty()) {
-        Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, min_counts, seed);
+        Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, min_counts, seed, bccSize);
         if (!tiles2Hex.run()) {
             return 1;
         }

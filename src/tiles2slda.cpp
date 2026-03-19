@@ -2,17 +2,17 @@
 #include <algorithm>
 
 template<typename T>
-Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
+Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadius,
         const std::string& outPref, const std::string& tmpDir,
         LatentDirichletAllocation& lda,
         TileReader& tileReader, lineParserUnival& lineParser,
         const MinibatchIoConfig& ioConfig,
-        HexGrid& hexGrid, int32_t nMoves,
         unsigned int seed,
-        double c, double h, double res, int32_t N, int32_t k,
-        int32_t verbose, int32_t debug)
-    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug),
-      distR_(r), lda_(lda), lineParser_(lineParser), hexGrid_(hexGrid), nMoves_(nMoves), anchorMinCount_(c)
+        double c, double weightAtAnchorDist, double res, int32_t N, int32_t k,
+        int32_t verbose, int32_t debug,
+        double hexSize, int32_t nMoves)
+    : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug),
+      supportRadius_(supportRadius), weightAtAnchorDist_(weightAtAnchorDist), lda_(lda), lineParser_(lineParser), hexGrid_(hexSize), bccGrid_(hexSize), nMoves_(nMoves), anchorMinCount_(c)
 {
     topk_ = k;
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
@@ -34,7 +34,9 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
     }
     lda_.set_nthreads(1); // because we parallelize by tile
     K_ = lda_.get_n_topics();
-    distNu_ = std::log(0.5) / std::log(h);
+    if (!(weightAtAnchorDist_ > 0.0 && weightAtAnchorDist_ < 1.0)) {
+        error("%s: weight-at-anchor-dist must be in (0, 1)", __func__);
+    }
     if (N <= 0) {
         N = lda_.get_N_global() * 100;
     }
@@ -71,6 +73,17 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double r,
     }
 
     notice("Initialized Tiles2Minibatch");
+}
+
+template<typename T>
+double Tiles2SLDA<T>::referenceAnchorDistance() const {
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
+        if (Base::useThin3DAnchors_) {
+            return Base::thin3DReferenceAnchorDistance(hexGrid_, nMoves_);
+        }
+        return Base::standard3DBccGridDist_;
+    }
+    return hexGrid_.size * std::sqrt(3.0) / std::max<int32_t>(nMoves_, 1);
 }
 
 template<typename T>
@@ -118,7 +131,11 @@ void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, do
 template<typename T>
 int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     std::vector<SparseObs> documents;
-    Base::buildAnchors(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_);
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
+        Base::buildAnchors3D(tileData, anchors, documents, bccGrid_, anchorMinCount_);
+    } else {
+        Base::buildAnchors(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_);
+    }
     if (documents.empty()) {
         return 0;
     }
@@ -138,8 +155,16 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoin
 
 template<typename T>
 double Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
-    double avgDegree = Base::buildMinibatchCore(
-        tileData, anchors, minibatch, distR_, distNu_);
+    double avgDegree = 0.0;
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
+        avgDegree = Base::buildMinibatchCore3D(
+            tileData, anchors, minibatch, bccGrid_,
+            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+    } else {
+        avgDegree = Base::buildMinibatchCore(
+            tileData, anchors, minibatch,
+            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+    }
 
     if (avgDegree <= 0.0) {
         return avgDegree;

@@ -166,14 +166,14 @@ private:
 template<typename T>
 class Tiles2NMF : public Tiles2MinibatchBase<T> {
 public:
-    Tiles2NMF(int nThreads, double r,
+    Tiles2NMF(int nThreads, double supportRadius, double paddingRadius,
                const std::string& outPref, const std::string& tmpDir,
                PixelEM& empois, TileReader& tileReader,
                lineParserUnival& lineParser, const MinibatchIoConfig& ioConfig,
-               HexGrid& hexGrid, int32_t nMoves,
                unsigned int seed = std::random_device{}(),
-               double c = 20.0, double h = 0.7, double res = 1.0, int32_t topk = 3,
-               int32_t verbose = 0, int32_t debug = 0);
+               double c = 20.0, double weightAtAnchorDist = 0.3, double res = 1.0, int32_t topk = 3,
+               int32_t verbose = 0, int32_t debug = 0,
+               double hexSize = 1.0, int32_t nMoves = 1);
     void set_background_model(double pi0, VectorXf beta0, bool outputExpand = false) {
         empois_.set_background_model(pi0, beta0);
         Base::outputBackgroundProbDense_ = !outputExpand;
@@ -199,11 +199,12 @@ protected:
     int32_t K_;
     PixelEM&  empois_;
     lineParserUnival& lineParser_;
-    HexGrid&          hexGrid_;
-    int32_t           nMoves_;
+    HexGrid           hexGrid_;
+    const BCCGrid     bccGrid_;
+    int32_t           nMoves_ = 1;
     unsigned int      seed_;
     double            anchorMinCount_;
-    double            distNu_, distR_;
+    double            supportRadius_, weightAtAnchorDist_;
     int32_t           verbose_;
 
     // MatrixXf pseudobulk_;
@@ -215,6 +216,7 @@ protected:
     double makeMinibatch(TileData<T>& tileData,
                           std::vector<AnchorPoint>& anchors,
                           Minibatch& minibatch);
+    double referenceAnchorDistance() const;
     void processTile(TileData<T>& tileData,
                      int threadId, int ticket, vec2f_t* anchorPtr) override;
     // void writePseudobulkToTsv();

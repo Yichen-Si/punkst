@@ -208,16 +208,16 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
 }
 
 template<typename T>
-Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
+Tiles2NMF<T>::Tiles2NMF(int nThreads, double supportRadius, double paddingRadius,
         const std::string& outPref, const std::string& tmpDir,
         PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, const MinibatchIoConfig& ioConfig,
-        HexGrid& hexGrid, int32_t nMoves,
-        unsigned int seed, double c, double h, double res, int32_t topk,
-        int32_t verbose, int32_t debug)
-    : Tiles2MinibatchBase<T>(nThreads, r + hexGrid.size, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug), distR_(r),
+        unsigned int seed, double c, double weightAtAnchorDist, double res, int32_t topk,
+        int32_t verbose, int32_t debug,
+        double hexSize, int32_t nMoves)
+    : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug), supportRadius_(supportRadius),
         empois_(empois), lineParser_(lineParser),
-        hexGrid_(hexGrid), nMoves_(nMoves),
-        seed_(seed), anchorMinCount_(c),
+        hexGrid_(hexSize), bccGrid_(hexSize), nMoves_(nMoves),
+        seed_(seed), anchorMinCount_(c), weightAtAnchorDist_(weightAtAnchorDist),
         verbose_(verbose)
 {
     topk_ = topk;
@@ -229,10 +229,9 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
         error("%s: Unsupported coordinate type", __func__);
     }
 
-    if (h <= 0.0 || h >= 1.0) {
-        error("%s: smoothing parameter h must be in (0, 1)", __func__);
+    if (!(weightAtAnchorDist_ > 0.0 && weightAtAnchorDist_ < 1.0)) {
+        error("%s: weight-at-anchor-dist must be in (0, 1)", __func__);
     }
-    distNu_ = std::log(0.5) / std::log(h);
     M_ = empois_.get_M();
     K_ = empois_.get_K();
     if (M_ <= 0 || K_ <= 0) {
@@ -266,9 +265,28 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double r,
 }
 
 template<typename T>
+double Tiles2NMF<T>::referenceAnchorDistance() const {
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
+        if (Base::useThin3DAnchors_) {
+            return Base::thin3DReferenceAnchorDistance(hexGrid_, nMoves_);
+        }
+        return Base::standard3DBccGridDist_;
+    }
+    return hexGrid_.size * std::sqrt(3.0) / std::max<int32_t>(nMoves_, 1);
+}
+
+template<typename T>
 double Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
-    double avgDegree = Base::buildMinibatchCore(
-        tileData, anchors, minibatch, distR_, distNu_);
+    double avgDegree = 0.0;
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
+        avgDegree = Base::buildMinibatchCore3D(
+            tileData, anchors, minibatch, bccGrid_,
+            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+    } else {
+        avgDegree = Base::buildMinibatchCore(
+            tileData, anchors, minibatch,
+            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+    }
     if (avgDegree <= 0.0) {
         return avgDegree;
     }
@@ -303,7 +321,7 @@ int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint
             return anchors.size();
         }
         std::map<typename Base::AnchorKey3D, float> gridPts;
-        Base::forEachAnchorCandidate3D(tileData, hexGrid_, nMoves_, [&](uint32_t, float ct, const typename Base::AnchorKey3D& key) {
+        Base::forEachAnchorCandidate3D(tileData, bccGrid_, [&](uint32_t, float ct, const typename Base::AnchorKey3D& key) {
             gridPts[key] += ct;
         });
         for (auto& kv : gridPts) {
@@ -311,7 +329,7 @@ int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint
                 continue;
             }
             float x, y, z;
-            Base::anchorKeyToCoord3D(x, y, z, kv.first, hexGrid_, nMoves_);
+            Base::anchorKeyToCoord3D(x, y, z, kv.first, bccGrid_);
             anchors.emplace_back(x, y, z);
         }
         minibatch.n = anchors.size();

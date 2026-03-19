@@ -25,7 +25,8 @@ public:
         bool skipLastLineIsHeader = false,
         bool streamingMode = false,
         int32_t tileBuffer = 1000, int32_t batchSize = 10000,
-        double scale = 1, int digits=2) :
+        double scale_x = 1, double scale_y = 1, double scale_z = 1,
+        int digits=2, char inputDelimiter = '\t') :
         nThreads_(nthreads),
         inFile_(inFile), tmpDir_(tmpDir),
         outPref_(outPref), tileSize_(tileSize),
@@ -33,7 +34,8 @@ public:
         icol_ints_(icol_ints), nskip_(nskip), skipLastLineIsHeader_(skipLastLineIsHeader),
         streamingMode_(streamingMode),
         tileBuffer_(tileBuffer), batchSize_(batchSize),
-        scale_(scale), digits_(digits)
+        scale_x_(scale_x), scale_y_(scale_y), scale_z_(scale_z),
+        digits_(digits), inputDelimiter_(1, inputDelimiter)
     {
         ntokens_ = std::max(icol_x_, icol_y_);
         if (icol_z_ >= 0) {
@@ -45,7 +47,11 @@ public:
                 ntokens_ = std::max(ntokens_, icol);
             }
         }
-        scaling_ = std::abs(scale_ - 1) > 1e-8;
+        scaling_ = std::abs(scale_x_ - 1) > 1e-8
+            || std::abs(scale_y_ - 1) > 1e-8
+            || (icol_z_ >= 0 && std::abs(scale_z_ - 1) > 1e-8);
+        appendDummyCount_ = icol_ints_.empty();
+        rewriteLine_ = scaling_ || inputDelimiter_ != "\t" || appendDummyCount_;
         ntokens_ += 1;
         notice("Created temporary directory: %s", tmpDir_.path.string().c_str());
     }
@@ -100,9 +106,12 @@ protected:
     int32_t ntokens_;
     int32_t nskip_, nskipped_ = 0;
     bool skipLastLineIsHeader_;
-    double scale_;
+    double scale_x_, scale_y_, scale_z_;
     bool scaling_;
+    bool appendDummyCount_;
+    bool rewriteLine_;
     int32_t digits_;
+    std::string inputDelimiter_;
     Rectangle<float> globalBox_;
     bool hasGlobalZRange_ = false;
     float globalZMin_ = 0, globalZMax_ = 0;
@@ -125,17 +134,25 @@ protected:
         float x, y;
         float z = 0;
         std::string feature;
-        std::vector<int32_t> vals;
+        std::vector<int32_t> vals = {1};
     };
 
-    std::string normalizeSkippedLine(std::string line, bool isHeader) const {
+    std::string normalizeSkippedLine(const std::string& line, bool isHeader) const {
         size_t nhash = 0;
         while (nhash < line.size() && line[nhash] == '#') {
             ++nhash;
         }
         if (isHeader) {
-            line.erase(0, nhash);
-            return "#" + line;
+            std::string header = std::string(strip_str(line.substr(nhash)));
+            if (inputDelimiter_ != "\t" || appendDummyCount_) {
+                std::vector<std::string> tokens;
+                tokenizeLine(header, tokens);
+                if (appendDummyCount_) {
+                    tokens.push_back("count");
+                }
+                header = join(tokens, "\t");
+            }
+            return "#" + header;
         }
         if (nhash >= 2) {
             return line;
@@ -215,7 +232,7 @@ protected:
                 error("Error opening gzipped input file: %s", inFile_.c_str());
             }
         } else {
-            warning("%s: the input is not stdin or gzipped file but the streaming mode is used, assuming it is a plain tsv file", __FUNCTION__);
+            warning("%s: the input is not stdin or gzipped file but the streaming mode is used, assuming it is a plain text delimited file", __FUNCTION__);
             inPtr_ = new std::ifstream(inFile_);
             if (!inPtr_ || !static_cast<std::ifstream*>(inPtr_)->is_open()) {
                 error("Error opening input file: %s", inFile_.c_str());
@@ -230,6 +247,29 @@ protected:
         }
     }
 
+    void tokenizeLine(const std::string& line, std::vector<std::string>& tokens) const {
+        split(tokens, inputDelimiter_, line);
+    }
+
+    void rewriteCoordinates(std::vector<std::string>& tokens, std::string& line, float& x, float& y, float* z = nullptr) const {
+        if (appendDummyCount_) {
+            tokens.push_back("1");
+        }
+        if (scaling_) {
+            x *= scale_x_;
+            y *= scale_y_;
+            tokens[icol_x_] = fp_to_string(x, digits_);
+            tokens[icol_y_] = fp_to_string(y, digits_);
+            if (z != nullptr && icol_z_ >= 0) {
+                *z *= scale_z_;
+                tokens[icol_z_] = fp_to_string(*z, digits_);
+            }
+        }
+        if (rewriteLine_) {
+            line = join(tokens, "\t");
+        }
+    }
+
     std::filesystem::path getTmpFilename(const TileKey& tile, int threadId) const {
         return tmpDir_.path / (std::to_string(tile.row) + "_" + std::to_string(tile.col)
             + "_" + std::to_string(threadId) + ".tsv");
@@ -238,7 +278,7 @@ protected:
     // Parse a line, extract coordinates and return the tile key
     virtual TileKey parse(std::string& line, PtRecord& pt) {
         std::vector<std::string> tokens;
-        split(tokens, "\t", line);
+        tokenizeLine(line, tokens);
         if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
@@ -247,13 +287,7 @@ protected:
         if (icol_z_ >= 0) {
             pt.z = std::stof(tokens[icol_z_]);
         }
-        if (scaling_) {
-            pt.x *= scale_;
-            pt.y *= scale_;
-            tokens[icol_x_] = fp_to_string(pt.x, digits_);
-            tokens[icol_y_] = fp_to_string(pt.y, digits_);
-            line = join(tokens, "\t");
-        }
+        rewriteCoordinates(tokens, line, pt.x, pt.y, icol_z_ >= 0 ? &pt.z : nullptr);
         if (icol_feature_ >= 0) {
             pt.feature = tokens[icol_feature_];
             if (icol_ints_.size() > 0) {
@@ -272,19 +306,13 @@ protected:
     }
     virtual TileKey parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
-        split(tokens, "\t", line);
+        tokenizeLine(line, tokens);
         if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
         x = std::stof(tokens[icol_x_]);
         y = std::stof(tokens[icol_y_]);
-        if (scaling_) {
-            x *= scale_;
-            y *= scale_;
-            tokens[icol_x_] = fp_to_string(x, digits_);
-            tokens[icol_y_] = fp_to_string(y, digits_);
-            line = join(tokens, "\t");
-        }
+        rewriteCoordinates(tokens, line, x, y);
         TileKey tile;
         tile.row = static_cast<int32_t>(std::floor(y / tileSize_));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize_));
@@ -503,6 +531,7 @@ protected:
         IndexHeader header;
         header.magic = PUNKST_INDEX_MAGIC;
         header.mode = 0; // tsv, no scaling, float coords, regular tiles
+        if (icol_z_ >= 0) {header.mode |= 0x10;} // 3D
         header.tileSize = tileSize_;
         header.xmin = globalBox_.xmin; header.xmax = globalBox_.xmax;
         header.ymin = globalBox_.ymin; header.ymax = globalBox_.ymax;
@@ -639,19 +668,13 @@ public:
 protected:
     TileKey parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
-        split(tokens, "\t", line);
+        tokenizeLine(line, tokens);
         if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
         x = std::stof(tokens[icol_x_]);
         y = std::stof(tokens[icol_y_]);
-        if (scaling_) {
-            x *= scale_;
-            y *= scale_;
-            tokens[icol_x_] = fp_to_string(x, digits_);
-            tokens[icol_y_] = fp_to_string(y, digits_);
-            line = join(tokens, "\t");
-        }
+        rewriteCoordinates(tokens, line, x, y);
         TileKey tile;
         tile.row = static_cast<int32_t>(std::floor(y / tileSize_));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize_));

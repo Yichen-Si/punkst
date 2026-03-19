@@ -100,6 +100,7 @@ void HexReader::readMetadata(const std::string &metaFile) {
     icol_layer = meta.value("icol_layer", -1);
     icol_x = meta.value("icol_x", -1);
     icol_y = meta.value("icol_y", -1);
+    icol_z = meta.value("icol_z", -1);
     header_info = meta.value("header_info", std::vector<std::string>());
     features.resize(nFeatures);
     if (meta.contains("dictionary")) {

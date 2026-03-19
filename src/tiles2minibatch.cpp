@@ -10,6 +10,21 @@
 #include <map>
 #include <algorithm>
 
+namespace {
+
+float anchor_distance_weight(double dist, double refDist, double weightAtRefDist) {
+    if (!(refDist > 0)) {
+        error("%s: reference anchor distance must be positive", __func__);
+    }
+    if (!(weightAtRefDist > 0.0 && weightAtRefDist < 1.0)) {
+        error("%s: weight-at-anchor-dist must be in (0, 1)", __func__);
+    }
+    const double weight = std::exp(std::log(weightAtRefDist) * dist / refDist);
+    return static_cast<float>(std::clamp(weight, 1e-4, 1.0 - 1e-4));
+}
+
+} // namespace
+
 template<typename T>
 void Tiles2MinibatchBase<T>::run() {
     setupOutput();
@@ -270,7 +285,7 @@ int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
 }
 
 template<typename T>
-void Tiles2MinibatchBase<T>::forEachAnchorCandidate2D(const TileData<T>& tileData, HexGrid& hexGrid_, int32_t nMoves_,
+void Tiles2MinibatchBase<T>::forEachAnchorCandidate2D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_,
     const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const
 {
     auto assign_pt = [&](const auto& pt) {
@@ -294,7 +309,7 @@ void Tiles2MinibatchBase<T>::forEachAnchorCandidate2D(const TileData<T>& tileDat
 }
 
 template<typename T>
-void Tiles2MinibatchBase<T>::anchorKeyToCoord2D(float& x, float& y, const AnchorKey2D& key, HexGrid& hexGrid_, int32_t nMoves_) const {
+void Tiles2MinibatchBase<T>::anchorKeyToCoord2D(float& x, float& y, const AnchorKey2D& key, const HexGrid& hexGrid_, int32_t nMoves_) const {
     const int32_t hx = std::get<0>(key);
     const int32_t hy = std::get<1>(key);
     const int32_t ic = std::get<2>(key);
@@ -303,12 +318,12 @@ void Tiles2MinibatchBase<T>::anchorKeyToCoord2D(float& x, float& y, const Anchor
 }
 
 template<typename T>
-int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
+int32_t Tiles2MinibatchBase<T>::buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, const HexGrid& hexGrid_, int32_t nMoves_, double minCount) {
     if (coordDim_ == MinibatchCoordDim::Dim3) {
         if (useThin3DAnchors_) {
             return buildAnchorsThin3D(tileData, anchors, documents, hexGrid_, nMoves_, minCount);
         }
-        return buildAnchors3D(tileData, anchors, documents, hexGrid_, nMoves_, minCount);
+        return buildAnchors3D(tileData, anchors, documents, minCount);
     }
     anchors.clear();
     documents.clear();
@@ -352,15 +367,15 @@ int32_t Tiles2MinibatchBase<T>::parseOneTile(TileData<T>& tileData, TileKey tile
 template<typename T>
 double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-    double distR, double distNu) {
+    double supportRadius, double refDist, double weightAtRefDist) {
     debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts.size() + tileData.extPts.size());
     if (minibatch.n <= 0) {
         return 0.0;
     }
-    assert(distR > 0.0 && distNu > 0.0);
+    assert(supportRadius > 0.0 && refDist > 0.0 && weightAtRefDist > 0.0 && weightAtRefDist < 1.0);
 
     if (coordDim_ == MinibatchCoordDim::Dim3) {
-        return buildMinibatchCore3D(tileData, anchors, minibatch, distR, distNu);
+        return buildMinibatchCore3D(tileData, anchors, minibatch, supportRadius, refDist, weightAtRefDist);
     }
 
     PointCloud<float> pc;
@@ -369,9 +384,7 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
 
     const float res = pixelResolution_;
-    const float radius = static_cast<float>(distR);
-    const float l2radius = radius * radius;
-    const float nu = static_cast<float>(distNu);
+    const float l2radius = static_cast<float>(supportRadius * supportRadius);
 
     std::vector<Eigen::Triplet<float>> tripletsMtx;
     std::vector<Eigen::Triplet<float>> tripletsWij;
@@ -431,9 +444,10 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
 
         for (size_t i = 0; i < n; ++i) {
             uint32_t idx = indices_dists[i].first;
-            float dist = std::pow(indices_dists[i].second, 0.5f);
-            dist = std::max(std::min(1.f - std::pow(dist / radius, nu), 0.95f), 0.05f);
-            tripletsWij.emplace_back(npt, static_cast<int>(idx), dist);
+            const float dist = std::sqrt(indices_dists[i].second);
+            tripletsWij.emplace_back(
+                npt, static_cast<int>(idx),
+                anchor_distance_weight(dist, refDist, weightAtRefDist));
         }
 
         ++npt;

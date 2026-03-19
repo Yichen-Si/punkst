@@ -3,6 +3,14 @@
 ## Overview
 
 `pixel-decode` projects a trained factor model onto tiled pixel-level data and annotates each pixel (or collapsed pixel bin) with the top factors and their probabilities.
+
+It supports:
+
+- 2D decoding on overlapping shifted hex-anchor lattices
+- thin 3D decoding, which keeps the shifted hex-anchor construction and adds a finite set of z levels
+- standard 3D decoding, which uses a body-centered cubic (BCC) anchor lattice directly in the input 3D coordinate system
+
+In all cases, the input remains the x-y tiled output created by `pts2tiles`.
 <!-- The default decoder is `slda`; `--algo nmf` enables the EM-NMF decoder. -->
 
 ```bash
@@ -37,15 +45,16 @@ The main inference result in this example is written to `${path}/pixel.bin` toge
 
 `--out` - (Deprecated, for backward compatibility) Specifies the output file.
 
-**Hexagon grid parameters** - One of these must be provided:
+**Hexagon grid parameters** for 2D and thin 3D, one of these must be provided:
+
 `--hex-size` - Specifies the size (side length) of the hexagons for initializing anchors.
 
 `--hex-grid-dist` - Specifies center-to-center distance in the axial coordinate system used to place anchors. Equals `hex-size * sqrt(3)`.
 
-**Anchor spacing parameters** - One of these must be provided:
-`--anchor-dist` - Specifies the distance between adjacent anchors.
+**Anchor spacing parameters**
+`--anchor-dist` - Specifies the distance between adjacent anchors. Required for standard 3D. In 2D and thin 3D, it can be provided directly instead of `--n-moves`.
 
-`--n-moves` - Specifies the number of sliding moves in each axis to generate the anchors. If `--n-moves` is `n`, `anchor-dist` equals `hex-grid-dist` / `n`.
+`--n-moves` - (For 2D and thin-3D) Specifies the number of sliding moves in each axis to generate the anchors. If `--n-moves` is `n`, `anchor-dist` equals `hex-grid-dist` / `n`.
 
 ## Optional Parameters
 
@@ -53,7 +62,12 @@ The main inference result in this example is written to `${path}/pixel.bin` toge
 
 `--coords-are-int` - If set, indicates that the coordinates are integers; otherwise, they are treated as floating point values.
 
-<!-- `--icol-z` - Optional Z coordinate column (0-based). If provided, the command runs in 3D mode. -->
+`--icol-z` - Column index for the z coordinate (0-based). Requires either
+`--thin-3D` or `--standard-3D`.
+
+`--thin-3D` - Activates the thin 3D path.
+
+`--standard-3D` - Activates the standard 3D BCC path.
 
 `--feature-is-index` - If set, the values in `--icol-feature` are interpreted as feature indices. Otherwise, they are expected to be feature names.
 
@@ -61,7 +75,9 @@ The main inference result in this example is written to `${path}/pixel.bin` toge
 
 `--default-weight` - Specifies the default weight for features not present in the weights file (only if `--feature-weights` is specified). Default: 0.
 
-`--anchor` - Specifies a file containing fixed anchor points. If set, these anchors are loaded and used directly.
+`--anchor` - Specifies a file containing fixed anchor points. This is currently
+only supported for 2D `slda`. In 3D, fixed anchors are ignored. In `nmf`,
+externally loaded anchors are not currently used.
 
 `--sample-list` - Runs the same model and settings on multiple datasets listed in one TSV file. See "Process multiple samples" below.
 
@@ -105,9 +121,26 @@ The main inference result in this example is written to `${path}/pixel.bin` toge
 
 `--pixel-res` - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense. For Visium HD (where the pixel size is 2μm), use `--pixel-res 2`.
 
-`--radius` - Specifies the radius within which to search for anchors. Default: `anchor-dist * 1.2`.
+`--pixel-res-z` - Resolution for aggregating pixels in the z dimension. Used
+only in 3D mode. Default: 1.
+
+`--radius` - Support radius for 2D and thin 3D pixel-to-anchor assignment.
+Default: `anchor-dist * 1.2` in 2D. In thin 3D, a default is derived from the
+x-y anchor spacing and z-level spacing. This option is not used in standard 3D.
+
+`--weight-at-anchor-dist` - Relative weight assigned to an anchor one nearest
+anchor spacing away from the pixel. Used in 2D, thin 3D, and standard 3D.
 
 `--min-init-count` - Minimum total count within the hexagon around an anchor for it to be included. Filters out regions outside tissues with sparse noise. Default: 10.
+
+`--zmin`, `--zmax` - z range for 3D mode. Thin 3D requires both values.
+Standard 3D accepts them, but only uses them when
+`--ignore-outside-zrange` is set.
+
+`--ignore-outside-zrange` - Drop observations outside `[zmin, zmax]` in 3D mode.
+
+`--n-init-anchor-per-pix` - Thin-3D-only initialization parameter controlling
+how many nearby z levels each point contributes to when anchors are initialized.
 
 `--threads` - Number of threads to use for parallel processing. Default: 1.
 
@@ -130,6 +163,78 @@ The main inference result in this example is written to `${path}/pixel.bin` toge
 `--output-coord-digits` - Number of decimal digits to output for coordinates in text mode (used when input coordinates are float or `--output-original` is not set). Default: 2.
 
 `--output-prob-digits` - Number of decimal digits to output for probabilities. Default: 4.
+
+## 3D Modes
+
+3D mode is explicit.
+
+- Use `--icol-z --thin-3D` for thin 3D.
+- Use `--icol-z --standard-3D` for standard 3D.
+- `--icol-z` without one of those flags is rejected.
+
+### Standard 3D
+
+Standard 3D uses a BCC anchor lattice directly in the input coordinate system.
+This means x, y, and z are expected to already use compatible units.
+
+- `--anchor-dist` is the preferred way to define the BCC anchor spacing.
+- `--radius` is not used.
+- Each pixel is connected to anchors from a fixed local BCC neighborhood:
+  the focal BCC cell plus its 14 face-adjacent neighbors.
+- Anchor weights are still computed from the actual pixel-to-anchor distance.
+
+At the CLI level, standard 3D does not require `--hex-size`,
+`--hex-grid-dist`, or `--n-moves`. The required geometry control is
+`--anchor-dist`.
+
+If `--zmin` and `--zmax` are provided in standard 3D, they are ignored unless
+`--ignore-outside-zrange` is also set.
+
+Example:
+
+```bash
+punkst pixel-decode --model ${path}/bcc.model.tsv \
+--in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
+--temp-dir ${tmpdir} --out-pref ${path}/pixel_3d --output-binary \
+--icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
+--standard-3D --anchor-dist 6 \
+--pixel-res 0.5 --pixel-res-z 1 \
+--threads ${threads} --seed 1
+```
+
+### Thin 3D
+
+Thin 3D keeps the overlapping shifted hex-anchor construction in x-y and adds a
+finite set of z levels across `[zmin, zmax]`.
+
+- `--zmin` and `--zmax` are required.
+- `--radius` is still used for the pixel-to-anchor graph.
+- `--n-init-anchor-per-pix` controls how many nearby z levels each point
+  contributes to during anchor initialization.
+
+Example:
+
+```bash
+punkst pixel-decode --model ${path}/thin3d.model.tsv \
+--in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
+--temp-dir ${tmpdir} --out-pref ${path}/pixel_thin3d --output-binary \
+--icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
+--thin-3D --hex-grid-dist 12 --n-moves 3 \
+--zmin 0 --zmax 20 --n-init-anchor-per-pix 2 \
+--pixel-res 0.5 --pixel-res-z 1 \
+--threads ${threads} --seed 1
+```
+
+### Current 3D Scope
+
+Current 3D support should be understood as a 2D tiled pipeline with 3D-aware
+anchor geometry.
+
+- tile ownership and boundary handling are still defined only in x-y
+- standard 3D does not support external fixed anchors
+- standard 3D requires positive `--anchor-dist` and ignores `--radius`
+- thin 3D and standard 3D both use `--weight-at-anchor-dist` for
+  distance-based anchor weighting
 
 ## Process multiple samples
 

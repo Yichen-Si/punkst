@@ -1,6 +1,7 @@
 #pragma once
 
 #include "punkst.h"
+#include "bccgrid.hpp"
 #include "dataunits.hpp"
 #include "hexgrid.h"
 #include "tilereader.hpp"
@@ -9,6 +10,7 @@
 #include "utils_sys.hpp"
 #include <memory>
 #include <atomic>
+#include <map>
 #include <random>
 #include <utility>
 #include <iomanip>
@@ -21,7 +23,7 @@ class Tiles2Hex {
 
 public:
 
-    Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts = {}, int32_t _seed = -1);
+    Tiles2Hex(int32_t nThreads, std::string& _tmpDir, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts = {}, int32_t _seed = -1, double _bccSize = -1);
     ~Tiles2Hex() {
         if (mainOut.is_open()) {
             mainOut.close();
@@ -39,9 +41,11 @@ protected:
     int32_t nModal, nUnits, nFeatures;
     std::vector<int32_t> minCounts;
     nlohmann::json meta;
+    bool is3D;
 
     lineParser parser;
     HexGrid hexGrid;
+    BCCGrid bccGrid;
     TileReader tileReader;
 
     ThreadSafeQueue<TileKey> tileQueue;
@@ -49,11 +53,19 @@ protected:
     std::mutex mainOutMutex;
     std::ofstream mainOut;
     uint32_t randomSeed = 0;
+    uint32_t countHistBinSize = 5;
+    std::map<uint32_t, uint64_t> countHist;
 
     // Process one tile at a time
     virtual void worker(int threadId);
     // Merge boundary hexagons from all temporary files and append to mainOut
     virtual bool mergeBoundaryHexagons();
+    std::string outputPrefix() const;
+    void writeCountHistogram() const;
+    void worker2D(int threadId);
+    void worker3D(int threadId);
+    bool mergeBoundaryHexagons2D();
+    bool mergeBoundaryHexagons3D();
 
     virtual bool launchWorkerThreads() {
         for (int i = 0; i < nThreads; ++i) {
@@ -75,11 +87,44 @@ protected:
         return true;
     }
 
+    bool passesMinCount(const std::vector<uint32_t>& valsums) const {
+        for (size_t i = 0; i < valsums.size(); ++i) {
+            if (valsums[i] >= static_cast<uint32_t>(minCounts[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    uint64_t totalUnitCount(const std::vector<uint32_t>& valsums) const {
+        uint64_t total = 0;
+        for (uint32_t v : valsums) {
+            total += v;
+        }
+        return total;
+    }
+
+    void recordUnitCount(const std::vector<uint32_t>& valsums) {
+        const uint64_t total = totalUnitCount(valsums);
+        const uint32_t binStart = static_cast<uint32_t>((total / countHistBinSize) * countHistBinSize);
+        countHist[binStart] += 1;
+    }
+
     void addPixelToUnitMaps(PixelValues& pixel, uint32_t hx, uint32_t hy, std::unordered_map<int64_t, UnitValues>& Units, int32_t l = -1) {
         int64_t key = (static_cast<uint64_t>(hx) << 32) | hy;
         auto it = Units.find(key);
         if (it == Units.end()) {
             Units.insert({key, UnitValues(hx, hy, pixel, l)});
+        } else {
+            it->second.addPixel(pixel);
+        }
+    }
+
+    void addPixelToUnitMaps(PixelValues3D& pixel, int32_t q1, int32_t q2, int32_t q3, std::unordered_map<BCCGrid::cell_key_t, UnitValues3D, Tuple3Hash>& units, int32_t l = -1) {
+        BCCGrid::cell_key_t key = BCCGrid::make_key(q1, q2, q3);
+        auto it = units.find(key);
+        if (it == units.end()) {
+            units.insert({key, UnitValues3D(q1, q2, q3, pixel, l)});
         } else {
             it->second.addPixel(pixel);
         }
@@ -94,12 +139,41 @@ protected:
         return static_cast<uint32_t>(splitmix64(x));
     }
 
+    uint32_t makeRandomKey(const UnitValues3D& unit) const {
+        uint64_t x = static_cast<uint64_t>(randomSeed);
+        x ^= static_cast<uint64_t>(static_cast<uint32_t>(unit.x)) * 0xD2B74407B1CE6E93ULL;
+        x ^= static_cast<uint64_t>(static_cast<uint32_t>(unit.y)) * 0x9E3779B97F4A7C15ULL;
+        x ^= static_cast<uint64_t>(static_cast<uint32_t>(unit.z)) * 0x94D049BB133111EBULL;
+        x ^= static_cast<uint64_t>(static_cast<uint32_t>(unit.label + 1)) * 0xCA5A826395121157ULL;
+        return static_cast<uint32_t>(splitmix64(x));
+    }
+
     void writeUnit(const UnitValues& unit, uint32_t key) {
+        recordUnitCount(unit.valsums);
         double x, y;
         hexGrid.axial_to_cart(x, y, unit.x, unit.y);
         mainOut << uint32toHex(key) << "\t" << x << "\t" << y;
         if (unit.label >= 0)
             mainOut << "\t" << unit.label;
+        for (size_t i = 0; i < unit.vals.size(); ++i) {
+            mainOut << "\t" << unit.vals[i].size() << "\t" << unit.valsums[i];
+        }
+        for (const auto& val : unit.vals) {
+            for (const auto& entry : val) {
+                mainOut << "\t" << entry.first << " " << entry.second;
+            }
+        }
+        mainOut << "\n";
+    }
+
+    void writeUnit(const UnitValues3D& unit, uint32_t key) {
+        recordUnitCount(unit.valsums);
+        double x, y, z;
+        bccGrid.lattice_to_cart(x, y, z, unit.x, unit.y, unit.z);
+        mainOut << uint32toHex(key) << "\t" << x << "\t" << y << "\t" << z;
+        if (unit.label >= 0) {
+            mainOut << "\t" << unit.label;
+        }
         for (size_t i = 0; i < unit.vals.size(); ++i) {
             mainOut << "\t" << unit.vals[i].size() << "\t" << unit.valsums[i];
         }
