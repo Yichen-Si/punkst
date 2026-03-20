@@ -907,6 +907,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#3d-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3D Modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3D Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standard-3d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard 3D
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thin-3d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thin 3D
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-3d-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current 3D Scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#process-multiple-samples" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1311,6 +1361,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#3d-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3D Modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3D Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#standard-3d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard 3D
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#thin-3d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Thin 3D
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-3d-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current 3D Scope
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#process-multiple-samples" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1383,6 +1483,13 @@
 <h1 id="pixel-decode">pixel-decode<a class="headerlink" href="#pixel-decode" title="Permanent link">&para;</a></h1>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p><code>pixel-decode</code> projects a trained factor model onto tiled pixel-level data and annotates each pixel (or collapsed pixel bin) with the top factors and their probabilities.</p>
+<p>It supports:</p>
+<ul>
+<li>2D decoding on overlapping shifted hex-anchor lattices</li>
+<li>thin 3D decoding, which keeps the shifted hex-anchor construction and adds a finite set of z levels</li>
+<li>standard 3D decoding, which uses a body-centered cubic (BCC) anchor lattice directly in the input 3D coordinate system</li>
+</ul>
+<p>In all cases, the input remains the x-y tiled output created by <code>pts2tiles</code>.</p>
 <!-- The default decoder is `slda`; `--algo nmf` enables the EM-NMF decoder. -->
 
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.model.tsv<span class="w"> </span><span class="se">\</span>
@@ -1404,21 +1511,25 @@
 <p><strong>Output specification</strong> - One of these must be provided:
 <code>--out-pref</code> - Specifies the output prefix for all output files.</p>
 <p><code>--out</code> - (Deprecated, for backward compatibility) Specifies the output file.</p>
-<p><strong>Hexagon grid parameters</strong> - One of these must be provided:
-<code>--hex-size</code> - Specifies the size (side length) of the hexagons for initializing anchors.</p>
+<p><strong>Hexagon grid parameters</strong> for 2D and thin 3D, one of these must be provided:</p>
+<p><code>--hex-size</code> - Specifies the size (side length) of the hexagons for initializing anchors.</p>
 <p><code>--hex-grid-dist</code> - Specifies center-to-center distance in the axial coordinate system used to place anchors. Equals <code>hex-size * sqrt(3)</code>.</p>
-<p><strong>Anchor spacing parameters</strong> - One of these must be provided:
-<code>--anchor-dist</code> - Specifies the distance between adjacent anchors.</p>
-<p><code>--n-moves</code> - Specifies the number of sliding moves in each axis to generate the anchors. If <code>--n-moves</code> is <code>n</code>, <code>anchor-dist</code> equals <code>hex-grid-dist</code> / <code>n</code>.</p>
+<p><strong>Anchor spacing parameters</strong>
+<code>--anchor-dist</code> - Specifies the distance between adjacent anchors. Required for standard 3D. In 2D and thin 3D, it can be provided directly instead of <code>--n-moves</code>.</p>
+<p><code>--n-moves</code> - (For 2D and thin-3D) Specifies the number of sliding moves in each axis to generate the anchors. If <code>--n-moves</code> is <code>n</code>, <code>anchor-dist</code> equals <code>hex-grid-dist</code> / <code>n</code>.</p>
 <h2 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h2>
 <h3 id="input-parameters">Input Parameters<a class="headerlink" href="#input-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--coords-are-int</code> - If set, indicates that the coordinates are integers; otherwise, they are treated as floating point values.</p>
-<!-- `--icol-z` - Optional Z coordinate column (0-based). If provided, the command runs in 3D mode. -->
-
+<p><code>--icol-z</code> - Column index for the z coordinate (0-based). Requires either
+<code>--thin-3D</code> or <code>--standard-3D</code>.</p>
+<p><code>--thin-3D</code> - Activates the thin 3D path.</p>
+<p><code>--standard-3D</code> - Activates the standard 3D BCC path.</p>
 <p><code>--feature-is-index</code> - If set, the values in <code>--icol-feature</code> are interpreted as feature indices. Otherwise, they are expected to be feature names.</p>
 <p><code>--feature-weights</code> - Specifies a file to weight each feature. The first column should contain the feature names, and the second column should contain the weights.</p>
 <p><code>--default-weight</code> - Specifies the default weight for features not present in the weights file (only if <code>--feature-weights</code> is specified). Default: 0.</p>
-<p><code>--anchor</code> - Specifies a file containing fixed anchor points. If set, these anchors are loaded and used directly.</p>
+<p><code>--anchor</code> - Specifies a file containing fixed anchor points. This is currently
+only supported for 2D <code>slda</code>. In 3D, fixed anchors are ignored. In <code>nmf</code>,
+externally loaded anchors are not currently used.</p>
 <p><code>--sample-list</code> - Runs the same model and settings on multiple datasets listed in one TSV file. See "Process multiple samples" below.</p>
 <p><code>--in-memory</code> - Keeps boundary buffers in memory instead of writing temporary buffer files. If set, <code>--temp-dir</code> is not required.</p>
 <h3 id="algorithm-parameters">Algorithm Parameters<a class="headerlink" href="#algorithm-parameters" title="Permanent link">&para;</a></h3>
@@ -1448,8 +1559,28 @@
 <p><code>--ext-col-strs</code> - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings. Example: <code>--ext-col-strs 7:sample_id:20 8:batch:10</code>.</p>
 <h3 id="processing-parameters">Processing Parameters<a class="headerlink" href="#processing-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--pixel-res</code> - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense. For Visium HD (where the pixel size is 2μm), use <code>--pixel-res 2</code>.</p>
-<p><code>--radius</code> - Specifies the radius within which to search for anchors. Default: <code>anchor-dist * 1.2</code>.</p>
+<p><code>--pixel-res-z</code> - Resolution for aggregating pixels in the z dimension. Used
+only in 3D mode. Default: 1.</p>
+<p><code>--radius</code> - Support radius used in pixel-to-anchor weighting. In 2D and thin
+3D it also controls the anchor search neighborhood. Default: <code>anchor-dist *
+1.2</code> in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
+z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
+stencil, but it does control the weight decay scale and contributes to the
+x-y padding.</p>
+<p><code>--half-life-dist</code> - Ratio <code>h</code> in <code>(0, 1)</code> such that an anchor at distance
+<code>h * radius</code> receives weight <code>0.5</code>. Default: <code>0.7</code>. The implemented weighting
+rule is <code>w(d) = clamp(1 - (d / radius)^nu, 0.05, 0.95)</code> with
+<code>nu = log(0.5) / log(h)</code>.</p>
 <p><code>--min-init-count</code> - Minimum total count within the hexagon around an anchor for it to be included. Filters out regions outside tissues with sparse noise. Default: 10.</p>
+<p><code>--zmin</code>, <code>--zmax</code> - z range for 3D mode. Thin 3D requires both values.
+Standard 3D accepts them, but only uses them when
+<code>--ignore-outside-zrange</code> is set.</p>
+<p><code>--thin-3d-z-levels</code> - Explicit z coordinates for thin-3D anchor levels.</p>
+<p><code>--thin-3d-n-z-levels</code> - Number of evenly spaced thin-3D anchor levels to
+generate between <code>zmin</code> and <code>zmax</code>.</p>
+<p><code>--ignore-outside-zrange</code> - Drop observations outside <code>[zmin, zmax]</code> in 3D mode.</p>
+<p><code>--n-init-anchor-per-pix</code> - Thin-3D-only initialization parameter controlling
+how many nearby z levels each point contributes to when anchors are initialized.</p>
 <p><code>--threads</code> - Number of threads to use for parallel processing. Default: 1.</p>
 <p><code>--seed</code> - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.</p>
 <h3 id="output-parameters">Output Parameters<a class="headerlink" href="#output-parameters" title="Permanent link">&para;</a></h3>
@@ -1461,6 +1592,80 @@
 <p><code>--top-k</code> - Number of top factors to include in the output. Default: 3.</p>
 <p><code>--output-coord-digits</code> - Number of decimal digits to output for coordinates in text mode (used when input coordinates are float or <code>--output-original</code> is not set). Default: 2.</p>
 <p><code>--output-prob-digits</code> - Number of decimal digits to output for probabilities. Default: 4.</p>
+<h2 id="3d-modes">3D Modes<a class="headerlink" href="#3d-modes" title="Permanent link">&para;</a></h2>
+<p>3D mode is explicit.</p>
+<ul>
+<li>Use <code>--icol-z --thin-3D</code> for thin 3D.</li>
+<li>Use <code>--icol-z --standard-3D</code> for standard 3D.</li>
+<li><code>--icol-z</code> without one of those flags is rejected.</li>
+</ul>
+<h3 id="standard-3d">Standard 3D<a class="headerlink" href="#standard-3d" title="Permanent link">&para;</a></h3>
+<p>Standard 3D uses a BCC anchor lattice directly in the input coordinate system.
+This means x, y, and z are expected to already use compatible units.</p>
+<ul>
+<li><code>--anchor-dist</code> is the preferred way to define the BCC anchor spacing.</li>
+<li>Each pixel is connected to anchors from a fixed local BCC neighborhood:
+  the focal BCC cell plus its 14 face-adjacent neighbors.</li>
+<li><code>--radius</code> does not change that fixed neighborhood, but it does control the
+  anchor weight decay scale.</li>
+<li>If <code>--radius</code> is omitted, it defaults to <code>1.2 * (2 * anchor-dist / sqrt(3))</code>.</li>
+<li>Anchor weights are computed from the actual pixel-to-anchor distance and the
+  configured support radius.</li>
+</ul>
+<p>At the CLI level, standard 3D does not require <code>--hex-size</code>,
+<code>--hex-grid-dist</code>, or <code>--n-moves</code>. The required geometry control is
+<code>--anchor-dist</code>.</p>
+<p>If <code>--zmin</code> and <code>--zmax</code> are provided in standard 3D, they are ignored unless
+<code>--ignore-outside-zrange</code> is also set.</p>
+<p>Example:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/bcc.model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel_3d<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>--standard-3D<span class="w"> </span>--anchor-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div>
+<h3 id="thin-3d">Thin 3D<a class="headerlink" href="#thin-3d" title="Permanent link">&para;</a></h3>
+<p>Thin 3D keeps the overlapping shifted hex-anchor construction in x-y and adds a
+finite set of z levels across <code>[zmin, zmax]</code>.</p>
+<ul>
+<li><code>--zmin</code> and <code>--zmax</code> are required.</li>
+<li>One of <code>--thin-3d-z-levels</code> or <code>--thin-3d-n-z-levels</code> must be provided.</li>
+<li>If both are provided, <code>--thin-3d-z-levels</code> takes precedence and
+  <code>--thin-3d-n-z-levels</code> is ignored with a warning.</li>
+<li>When <code>--thin-3d-n-z-levels</code> is used, the z levels are placed evenly between
+  <code>zmin</code> and <code>zmax</code>.</li>
+<li><code>--radius</code> is still used for the pixel-to-anchor graph.</li>
+<li><code>--n-init-anchor-per-pix</code> controls how many nearby z levels each point
+  contributes to during anchor initialization.</li>
+<li>The x-y anchor coordinates are still generated from the shifted hex grids.</li>
+<li>The z coordinate of each anchor is assigned by a modular coloring of the
+  underlying fine axial lattice, so anchors from different z levels are mixed
+  across x-y while staying roughly balanced across levels.</li>
+</ul>
+<p>Example:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/thin3d.model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel_thin3d<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>--thin-3D<span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">18</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>--thin-3d-z-levels<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span>.5<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">4</span>.5<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="m">9</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>--zmin<span class="w"> </span><span class="m">0</span><span class="w"> </span>--zmax<span class="w"> </span><span class="m">20</span><span class="w"> </span>--n-init-anchor-per-pix<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div>
+<h3 id="current-3d-scope">Current 3D Scope<a class="headerlink" href="#current-3d-scope" title="Permanent link">&para;</a></h3>
+<p>Current 3D support should be understood as a 2D tiled pipeline with 3D-aware
+anchor geometry.</p>
+<ul>
+<li>tile ownership and boundary handling are still defined only in x-y</li>
+<li>standard 3D does not support external fixed anchors</li>
+<li>standard 3D requires positive <code>--anchor-dist</code>; <code>--radius</code> affects weighting
+  and padding but not the fixed BCC neighborhood</li>
+<li>thin 3D and standard 3D both use <code>--half-life-dist</code> for distance-based
+  anchor weighting</li>
+</ul>
 <h2 id="process-multiple-samples">Process multiple samples<a class="headerlink" href="#process-multiple-samples" title="Permanent link">&para;</a></h2>
 <p>If you want to project the same model onto multiple datasets/samples, you can use <code>--sample-list</code> to pass a tsv file containing all samples' information. (In this case, <code>--in-tsv</code> and <code>--in-index</code> are ignored.)
 Note: all other parameters are shared across samples, so the input files should have the same structure.</p>
@@ -1470,10 +1675,10 @@ sample_id, path to the transcript file created by <code>pts2tiles</code>, path t
 <p>Optional fourth column: output prefix.</p>
 <p>Optional fifth column: anchor file path.</p>
 <p>If there are headers, all header lines should start with "#".</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--sample-list<span class="w"> </span>multi.persample_file_list.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--sample-list<span class="w"> </span>multi.persample_file_list.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div>
 <h2 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h2>
 <p>Files are written with the prefix specified by <code>--out-pref</code> (or inferred from <code>--out</code>).</p>

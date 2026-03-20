@@ -769,10 +769,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required-parameters" class="md-nav__link">
+  <a href="#required-parameters-2d" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required Parameters
+        Required Parameters (2D)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-parameters-3d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Parameters (3D)
       
     </span>
   </a>
@@ -792,6 +803,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3d-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3D Usage
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1174,10 +1196,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required-parameters" class="md-nav__link">
+  <a href="#required-parameters-2d" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required Parameters
+        Required Parameters (2D)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-parameters-3d" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Parameters (3D)
       
     </span>
   </a>
@@ -1197,6 +1230,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3d-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3D Usage
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1271,23 +1315,45 @@
 
 
 <h1 id="tiles2hex">tiles2hex<a class="headerlink" href="#tiles2hex" title="Permanent link">&para;</a></h1>
-<p><strong><code>tiles2hex</code> groups pixels into nonoverlapping hexagons</strong> for spot level analysis.</p>
-<p>The input is the tiled data created by <code>pts2tiles</code>. The output is a plain tab-delimited text file, each line representing one hexagon intended for internal use. It also writes metadata to a json file.</p>
+<p><strong><code>tiles2hex</code> groups tiled point data into nonoverlapping spatial units</strong> for spot level analysis.</p>
+<p>For 2D input it creates hexagons. For 3D input it creates body-centered cubic (BCC) lattice cells with roughly equal volume. The input is the tiled data created by <code>pts2tiles</code>. The output is a plain tab-delimited text file, each line representing one unit intended for internal use. It also writes metadata to a json file and a count histogram file.</p>
 <h2 id="basic-usage">Basic Usage<a class="headerlink" href="#basic-usage" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/features.txt<span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">ptpref</span><span class="si">}</span>.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">ptpref</span><span class="si">}</span>.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">ptpref</span><span class="si">}</span>.features.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--min-count<span class="w"> </span><span class="m">20</span><span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt<span class="w"> </span>--randomize<span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
 </span></code></pre></div>
-<h3 id="required-parameters">Required Parameters<a class="headerlink" href="#required-parameters" title="Permanent link">&para;</a></h3>
+<h3 id="required-parameters-2d">Required Parameters (2D)<a class="headerlink" href="#required-parameters-2d" title="Permanent link">&para;</a></h3>
 <p><code>--in-tsv</code> specifies the tiled data created by <code>pts2tiles</code>.</p>
 <p><code>--in-index</code> specifies the index file created by <code>pts2tiles</code>.</p>
 <p><code>--icol-x</code>, <code>--icol-y</code>, <code>--icol-feature</code> specify the column indices corresponding to X and Y coordinates and feature (0-based).</p>
 <p><code>--icol-int</code> specifies the column index for count/value (0-based). You can specify multiple count columns with <code>--icol-int</code>, separated by space.</p>
 <p><code>--hex-size</code> specifies the <strong>side length</strong> of the hexagons. The unit is the same as the coordinates in the input file.</p>
 <p><code>--out</code> specifies the output file.</p>
+<h3 id="required-parameters-3d">Required Parameters (3D)<a class="headerlink" href="#required-parameters-3d" title="Permanent link">&para;</a></h3>
+<p>For 3D tiled input from <code>pts2tiles</code>, add:</p>
+<p><code>--icol-z</code> specifies the column index for the Z coordinate (0-based). Providing this option switches <code>tiles2hex</code> into 3D mode.</p>
+<p>Specify one of the following for 3D aggregation:</p>
+<p><code>--bcc-size</code> specifies the BCC lattice size used for 3D aggregation. The unit is the same as the coordinates in the input file.</p>
+<p><code>--bcc-grid-dist</code> specifies the nearest center-to-center distance between neighboring BCC units. This is often the more intuitive parameter if you want to control the spacing of unit centers directly.</p>
+<p>More intuitively, <code>--bcc-size</code> is the main length scale of the 3D grid:</p>
+<ul>
+<li>the volume of one aggregated unit is <code>bcc_size^3 / 2</code></li>
+<li>the nearest center-to-center distance between neighboring units is <code>sqrt(3) / 2 * bcc_size</code></li>
+<li>doubling <code>--bcc-size</code> makes each unit <code>8x</code> larger in volume</li>
+</ul>
+<p>So if you want each aggregated unit to have volume <code>V</code>, choose:</p>
+<p><code>bcc_size = cbrt(2V)</code></p>
+<p>If instead you want the nearest unit-center spacing to be <code>D</code>, choose:</p>
+<p><code>bcc_size = 2D / sqrt(3)</code></p>
+<p>or directly provide:</p>
+<p><code>--bcc-grid-dist D</code></p>
+<p>For example, <code>--bcc-size 10</code> gives units with volume <code>10^3 / 2 = 500</code> cubic coordinate units, which is the same volume as a cube with side length about <code>7.94</code>.</p>
+<p>The same grid can also be specified as <code>--bcc-grid-dist 8.66</code>, since <code>sqrt(3) / 2 * 10 = 8.66</code>.</p>
+<p>If both <code>--bcc-size</code> and <code>--bcc-grid-dist</code> are provided, <code>--bcc-size</code> is used.</p>
+<p>In 3D mode, <code>--hex-size</code> and <code>--hex-grid-dist</code> are ignored.</p>
 <h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--feature-dict</code> specifies a file with the names of features, one per line. It is used only if the values in <code>--icol-feature</code> are to be interpreted as feature names not indices. Features not present in the file will be ignored. (If the input file contains feature indices instead of names, all features will be included in the output)</p>
 <p><code>--min-count</code> specifies the minimum count for a hexagon to be included in the output.</p>
@@ -1295,22 +1361,37 @@
 <p><code>--seed</code> sets the random seed used for the output random key generation. If not provided (or &lt;=0), a random seed is generated automatically and written to the metadata JSON.</p>
 <p><code>--temp-dir</code> specifies the directory for temporary files.</p>
 <p><code>--threads</code> specifies the number of threads to use.</p>
+<h2 id="3d-usage">3D Usage<a class="headerlink" href="#3d-usage" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/features.txt<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>--min-count<span class="w"> </span><span class="m">20</span><span class="w"> </span>--bcc-grid-dist<span class="w"> </span><span class="m">10</span>.4<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/bcc_12.txt<span class="w"> </span>--randomize<span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
+</span></code></pre></div>
+<p>The 3D mode assumes the tiled input is still indexed by <code>(x, y)</code> tiles, as produced by <code>pts2tiles</code>. Each output unit is a BCC Voronoi cell, and the reported <code>(x, y, z)</code> coordinates are the Cartesian center of that cell.</p>
+<p>If you prefer to think in terms of the target unit volume rather than the lattice length scale, use the relation:</p>
+<p><code>volume = bcc_size^3 / 2</code></p>
+<p>This is usually the easiest way to choose <code>--bcc-size</code>: decide roughly how much physical volume you want to merge into one unit, then convert that target volume into <code>bcc_size</code>. If you already know the spacing you want between neighboring 3D unit centers, <code>--bcc-grid-dist</code> is the more direct option.</p>
 <h2 id="output-format">Output Format<a class="headerlink" href="#output-format" title="Permanent link">&para;</a></h2>
 <p>The output is a plain tab-delimited text file. It is not a table: each line contains data for one unit and lines have different number of tokens.</p>
 <p>The first element in each line of the output is a random key, which is used to shuffle the data before model training. With the same input data and the same <code>--seed</code>, this key generation is reproducible. When <code>--randomize</code> is not set when you run <code>tiles2hex</code>, you can do the following
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sort<span class="w"> </span>-k1,1<span class="w"> </span>--parallel<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>-S<span class="w"> </span>1G<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span>-o<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sort<span class="w"> </span>-k1,1<span class="w"> </span>--parallel<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>-S<span class="w"> </span>1G<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span>-o<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt
 </span></code></pre></div>
 If you use <code>topic-model</code>, you should always shuffle the hexagon file.</p>
+<p><code>tiles2hex</code> also writes <code>&lt;prefix&gt;.count_hist.tsv</code>, a tab-delimited histogram of the total feature count per output unit. By default the histogram uses bin size <code>5</code>, so the rows represent count ranges <code>0-4</code>, <code>5-9</code>, <code>10-14</code>, and so on.</p>
 <p>The metadata JSON also stores the seed used by <code>tiles2hex</code> as <code>seed</code>.</p>
 <p>The remaining of each line is structured as follows:</p>
-<p>In the basic case, the next two integers after the random key are coordinates (horizontal and vertical) in the axial hexagonal coordinate system.</p>
+<p>In 2D, the next two numbers after the random key are the Cartesian center coordinates <code>(x, y)</code> of the hexagon.</p>
+<p>In 3D, the next three numbers after the random key are the Cartesian center coordinates <code>(x, y, z)</code> of the BCC cell.</p>
 <p>The next 2K tokens (K pairs of non-negative integers) are the number of unique features (<span class="arithmatex">\(M_k\)</span>) and the total count (<span class="arithmatex">\(C_k\)</span>) for each modality. The number of modalities (K) is the same as the number of column indices specified in <code>--icol-int</code>.</p>
 <p>Then there are K chunks of feature values, the k-th chunk containing <span class="arithmatex">\(2M_k\)</span> (or <span class="arithmatex">\(M_k\)</span> values) of non-negative integers where <span class="arithmatex">\(M_k\)</span> is what you read from the previous tokens. The first number in each pair is the indices of the feature, the second is the count of that feature in the hexagon. The indices are 0-based and correspond to the order of features in the <code>--feature-dict</code> file. If <code>--feature-dict</code> is not provided (so the input already codes features as indices), the indices are the same as those in the input file.</p>
 <h2 id="advanced-usage-spatial-stratification-by-anchor-points">Advanced Usage: Spatial Stratification By Anchor Points<a class="headerlink" href="#advanced-usage-spatial-stratification-by-anchor-points" title="Permanent link">&para;</a></h2>
-<p><code>tiles2hex</code> can also create multiple sets of units that group pixels that are close to user-provided anchor points. This is useful for creating units stratified by known biological structures for downstream clustering or factorization. A tested use case is to provide nuclear centers as anchor points so likely-nuclear and likely-cytoplasmic pixels are grouped separately.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span>transcripts.tiled.index<span class="w"> </span>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/features.txt<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">20</span><span class="w"> </span>--hex-size<span class="w"> </span><span class="si">${</span><span class="nv">hex_size</span><span class="si">}</span><span class="w"> </span>--anchor-files<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/anchors1.txt<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/anchors2.txt<span class="w"> </span>--radius<span class="w"> </span><span class="si">${</span><span class="nv">radius1</span><span class="si">}</span><span class="w"> </span><span class="si">${</span><span class="nv">radius2</span><span class="si">}</span><span class="w"> </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
+<p><code>tiles2hex</code> can also create multiple sets of 2D hexagonal units that group pixels that are close to user-provided anchor points. This is useful for creating units stratified by known biological structures for downstream clustering or factorization. A tested use case is to provide nuclear centers as anchor points so likely-nuclear and likely-cytoplasmic pixels are grouped separately.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span>transcripts.tiled.index<span class="w"> </span>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/features.txt<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--min-count<span class="w"> </span><span class="m">20</span><span class="w"> </span>--hex-size<span class="w"> </span><span class="si">${</span><span class="nv">hex_size</span><span class="si">}</span><span class="w"> </span>--anchor-files<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/anchors1.txt<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/anchors2.txt<span class="w"> </span>--radius<span class="w"> </span><span class="si">${</span><span class="nv">radius1</span><span class="si">}</span><span class="w"> </span><span class="si">${</span><span class="nv">radius2</span><span class="si">}</span><span class="w"> </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex.txt<span class="w"> </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
 </span></code></pre></div>
 <h3 id="additional-parameters-for-anchor-based-analysis">Additional Parameters for Anchor-Based Analysis<a class="headerlink" href="#additional-parameters-for-anchor-based-analysis" title="Permanent link">&para;</a></h3>
+<p>Anchor-based analysis is currently supported only for 2D input. It cannot be combined with <code>--icol-z</code>.</p>
 <p><code>--anchor-files</code> specifies one or more files containing anchor points. Each anchor file should contain coordinates (x, y) separated by space, one anchor point per line. You can provide multiple anchor files to define different sets of anchor points, separated by space.</p>
 <p><code>--radius</code> specifies the radius around each anchor point within which pixels will be associated with that anchor. The unit is the same as the coordinates in the input file. You must provide one radius value for each anchor file, in the matched order.</p>
 <p><code>--ignore-background</code> if set, pixels that are not within the radius of any anchor point will be ignored. By default, these background pixels are included as a separate layer.</p>

@@ -729,10 +729,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#group-pixels-to-tiles-for-faster-processing" class="md-nav__link">
+  <a href="#group-points-into-square-tiles-for-faster-downstream-access" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Group pixels to tiles for faster processing
+        Group points into square tiles for faster downstream access
       
     </span>
   </a>
@@ -740,10 +740,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#required-parameters" class="md-nav__link">
+  <a href="#accepted-input-forms" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required Parameters
+        Accepted Input Forms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#main-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Main Parameters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#feature-and-value-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feature and Value Columns
       
     </span>
   </a>
@@ -759,10 +781,20 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Optional Parameters">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#output-files" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -770,11 +802,6 @@
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1123,10 +1150,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#group-pixels-to-tiles-for-faster-processing" class="md-nav__link">
+  <a href="#group-points-into-square-tiles-for-faster-downstream-access" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Group pixels to tiles for faster processing
+        Group points into square tiles for faster downstream access
       
     </span>
   </a>
@@ -1134,10 +1161,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#required-parameters" class="md-nav__link">
+  <a href="#accepted-input-forms" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required Parameters
+        Accepted Input Forms
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#main-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Main Parameters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#feature-and-value-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feature and Value Columns
       
     </span>
   </a>
@@ -1153,10 +1202,20 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Optional Parameters">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#output-files" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1164,11 +1223,6 @@
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1193,36 +1247,128 @@
 
 
 <h1 id="pts2tiles">pts2tiles<a class="headerlink" href="#pts2tiles" title="Permanent link">&para;</a></h1>
-<h3 id="group-pixels-to-tiles-for-faster-processing">Group pixels to tiles for faster processing<a class="headerlink" href="#group-pixels-to-tiles-for-faster-processing" title="Permanent link">&para;</a></h3>
-<p><code>pts2tiles</code> creates a plain tsv file that reorders the lines in the input file so that coordinates are grouped into non-overlapping square tiles. The ordering of lines within a tile is not guaranteed. It also creates an index file storing the offset of each tile to support fast access.</p>
-<p>Example usage
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">0</span><span class="w"> </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled<span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
-</span></code></pre></div></p>
-<h3 id="required-parameters">Required Parameters<a class="headerlink" href="#required-parameters" title="Permanent link">&para;</a></h3>
-<p><code>--in-tsv</code> - The input TSV file containing spatial data points. It could be a gzipped file ending with <code>.gz</code>. If the input is a stream from stdin, use <code>-</code> as the filename.</p>
-<p><code>--icol-x</code>, <code>--icol-y</code> - The column indices for X and Y coordinates (0-based).</p>
-<p><code>--tile-size</code> - The size (side length) of the square tiles. The unit is the same as the coordinates in the input file.</p>
-<p><code>--out-prefix</code> - The prefix for all output files.</p>
-<p><code>--temp-dir</code> - The directory for storing temporary files during processing.</p>
-<p><code>--icol-feature</code> - The column index for feature names/IDs (0-based). If provided, the module will generate a file including feature names and counts. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features.)</p>
-<p><code>--icol-int</code> - Column indices for integer values to aggregate per feature. Can be specified multiple times to track multiple integer columns. (Not strictly required, but otherwise you will need to prepare your own list of (filtered) features, preferably excluding the extremely low count features.)</p>
-<h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
-<p><code>--skip</code> - The number of lines to skip at the beginning of the input file. These skipped lines are still copied to the output as metadata: by default each skipped line is normalized to start with at least two <code>#</code> characters. Default: 0.</p>
-<p><code>--skip-last-is-header</code> - Treat the last skipped line as the header line. In that case the last skipped line is normalized to start with exactly one <code>#</code>, while the earlier skipped lines still start with at least two <code>#</code>. Requires <code>--skip &gt; 0</code>.</p>
-<p><code>--icol-z</code> - Optional column index for a third coordinate dimension (0-based). Tiling still uses only X and Y, but if this is provided <code>pts2tiles</code> also records <code>zmin</code> / <code>zmax</code> in the coordinate-range file and writes a histogram of the z distribution with bin size 1.</p>
-<p><code>--tile-buffer</code> - The per-thread per-tile buffer size in terms of the number of lines before writing to disk. Default: 1000. If the number of tiles may be huge and you are using a large number of threads so that the total memory usage is too high, choose a smaller number.</p>
-<p><code>--threads</code> - The number of threads to use for parallel processing. Default: 1.</p>
-<p><code>--verbose</code> - Controls the verbosity level of output messages.</p>
-<p><code>--debug</code> - Enables additional debug output.</p>
-<h4 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h4>
+<h3 id="group-points-into-square-tiles-for-faster-downstream-access">Group points into square tiles for faster downstream access<a class="headerlink" href="#group-points-into-square-tiles-for-faster-downstream-access" title="Permanent link">&para;</a></h3>
+<p><code>pts2tiles</code> rewrites a delimited text point file so records are grouped into non-overlapping square tiles in <code>(x, y)</code> space. It writes a tiled <code>.tsv</code> output file plus a binary index storing byte offsets for each tile to help faster region query.</p>
+<p>The row order is preserved only at the tile level. Records inside a tile may be arbitrary.</p>
+<p>Example usage:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
+</span></code></pre></div>
+<p>Example with per-axis scaling:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--scale-x<span class="w"> </span><span class="m">0</span>.108<span class="w"> </span>--scale-y<span class="w"> </span><span class="m">0</span>.108<span class="w"> </span>--scale-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled
+</span></code></pre></div>
+<p>Example with CSV input:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.csv.gz<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--csv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled
+</span></code></pre></div>
+<h3 id="accepted-input-forms">Accepted Input Forms<a class="headerlink" href="#accepted-input-forms" title="Permanent link">&para;</a></h3>
+<p><code>pts2tiles</code> currently accepts these input forms through <code>--in-tsv</code>:</p>
 <ul>
-<li><code>prefix.tsv</code>: the tiled tsv file.</li>
-<li><code>prefix.index</code>: an index file that stores the offsets of each tile in the tiled tsv file. This will be used for fast access.</li>
-<li><code>prefix.coord_range.tsv</code>: a text file that contains the range of coordinates (<code>xmin</code>, <code>xmax</code>, <code>ymin</code>, <code>ymax</code>). If <code>--icol-z</code> is provided, it also includes <code>zmin</code> and <code>zmax</code>.</li>
-<li><code>prefix.z_hist.tsv</code>: a two-column tsv file containing the z histogram (<code>bin_start</code>, <code>count</code>) using unit-width bins aligned to integer boundaries. This file is only generated if <code>--icol-z</code> is specified.</li>
-<li><code>prefix.features.tsv</code>: a tsv file containing the feature names and their aggregated values. This file is only generated if <code>--icol-feature</code> is specified.</li>
+<li>A plain text file on disk.</li>
+<li>A gzipped text file whose path ends with <code>.gz</code>.</li>
+<li>Standard input, using <code>--in-tsv -</code>.</li>
+</ul>
+<p>Delimiter handling:</p>
+<ul>
+<li>By default, input is parsed as tab-delimited text.</li>
+<li>With <code>--csv</code>, input is parsed as comma-delimited text.</li>
+<li>Output is always written as tab-delimited <code>.tsv</code>, even when the input is CSV.</li>
+</ul>
+<p>Current parser behavior:</p>
+<ul>
+<li>The parser splits each line on a single-character delimiter only.</li>
+<li>It does not implement full RFC-style CSV quoting or escaping.</li>
+<li>In practice, <code>--csv</code> should be used only for simple comma-delimited records where commas do not appear inside quoted fields.</li>
+</ul>
+<p>Header and metadata handling:</p>
+<p>Lines starting with <code>#</code> are automatically treated as metadata/header and copied directly to the output regardless of <code>--skip</code>, the following options are mainly for lines that do not start with <code>#</code> but should be treated as metadata/header.</p>
+<ul>
+<li><code>--skip N</code> skips the first <code>N</code> lines from parsing.</li>
+<li>Skipped lines are copied to the output as metadata comments.</li>
+<li><code>--skip-last-is-header</code> marks the last skipped line as the header row and rewrites it to start with a single <code>#</code>.</li>
+<li>Earlier skipped lines are normalized to start with at least two <code>#</code> characters.</li>
+</ul>
+<h3 id="main-parameters">Main Parameters<a class="headerlink" href="#main-parameters" title="Permanent link">&para;</a></h3>
+<dl>
+<dt><code>--in-tsv</code></dt>
+<dd>Input text file, gzipped text file, or <code>-</code> for stdin.</dd>
+<dt><code>--icol-x</code>, <code>--icol-y</code></dt>
+<dd>Zero-based column indices for the <code>x</code> and <code>y</code> coordinates used for tiling.</dd>
+<dt><code>--tile-size</code></dt>
+<dd>Side length of each square tile, in the same units as the effective coordinates after optional scaling.</dd>
+<dt><code>--out-prefix</code></dt>
+<dd>Prefix for output files.</dd>
+<dt><code>--temp-dir</code></dt>
+<dd>Directory used for temporary per-tile files during processing.</dd>
+</dl>
+<h3 id="feature-and-value-columns">Feature and Value Columns<a class="headerlink" href="#feature-and-value-columns" title="Permanent link">&para;</a></h3>
+<dl>
+<dt><code>--icol-feature</code></dt>
+<dd>Optional zero-based feature column. If provided, <code>pts2tiles</code> can also write <code>prefix.features.tsv</code>.</dd>
+<dt><code>--icol-int</code></dt>
+<dd>Optional zero-based integer column to aggregate per feature. Multiple columns can be provided as <code>--icol-int 3 4 5</code>. If not provided, a dummy value of <code>1</code> is used assuming each record is one transcript.</dd>
+</dl>
+<p>Behavior of <code>prefix.features.tsv</code>:</p>
+<ul>
+<li>If <code>--icol-feature</code> and one or more <code>--icol-int</code> columns are provided, each row contains the feature followed by aggregated integer totals for those columns.</li>
+</ul>
+<h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
+<dl>
+<dt><code>--icol-z</code></dt>
+<dd>Optional zero-based <code>z</code> coordinate column. Tiling still uses only <code>x</code> and <code>y</code>, but if <code>z</code> is provided the command also records <code>zmin</code>/<code>zmax</code> and writes <code>prefix.z_hist.tsv</code>.</dd>
+<dt><code>--csv</code></dt>
+<dd>Parse the input as comma-delimited text instead of tab-delimited text.</dd>
+<dt><code>--skip</code></dt>
+<dd>Number of initial lines to skip from parsing and preserve as metadata in the output. Default: <code>0</code>.</dd>
+<dt><code>--skip-last-is-header</code></dt>
+<dd>Treat the last skipped line as the header line. Requires <code>--skip &gt; 0</code>.</dd>
+<dt><code>--tile-buffer</code></dt>
+<dd>Per-thread, per-tile in-memory buffer size in number of records before flushing to disk. Default: <code>1000</code>.</dd>
+<dt><code>--batch-size</code></dt>
+<dd>Batch size in number of lines when reading from stdin or a gzipped input stream. Only relevant for <code>--in-tsv -</code> and inputs ending in <code>.gz</code>. Default: <code>10000</code>.</dd>
+<dt><code>--scale</code></dt>
+<dd>Uniform scaling factor applied to <code>x</code>, <code>y</code>, and <code>z</code> if present, unless axis-specific overrides are supplied. Default: <code>1</code>.</dd>
+<dt><code>--scale-x</code>, <code>--scale-y</code>, <code>--scale-z</code></dt>
+<dd>Axis-specific scaling factors. If an axis-specific scale is omitted, it falls back to <code>--scale</code>.</dd>
+<dt><code>--digits</code></dt>
+<dd>Decimal precision used when rewritten scaled coordinates are written to the output. Default: <code>2</code>.</dd>
+<dt><code>--threads</code></dt>
+<dd>Number of worker threads. Default: <code>1</code>.</dd>
+<dt><code>--verbose</code></dt>
+<dd>Verbosity level for logging.</dd>
+<dt><code>--debug</code></dt>
+<dd>Enable additional debug output.</dd>
+</dl>
+<h3 id="scaling-notes">Scaling Notes<a class="headerlink" href="#scaling-notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Tile assignment is computed from scaled coordinates.</li>
+<li>If no scaling is requested, coordinates are copied through unchanged.</li>
+<li>If scaling is requested, rewritten coordinate values are emitted using <code>--digits</code> decimal places.</li>
+<li><code>--scale-z</code> has an effect only when <code>--icol-z</code> is provided.</li>
+</ul>
+<h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>prefix.tsv</code>: tiled tab-delimited output records.</li>
+<li><code>prefix.index</code>: binary tile index with per-tile byte offsets and bounding boxes.</li>
+<li><code>prefix.coord_range.tsv</code>: global coordinate range containing <code>xmin</code>, <code>xmax</code>, <code>ymin</code>, <code>ymax</code>, and also <code>zmin</code>, <code>zmax</code> if <code>--icol-z</code> is provided.</li>
+<li><code>prefix.z_hist.tsv</code>: two-column tab-delimited histogram of <code>z</code> using unit-width bins. The unit is the same as the effective <code>z</code> after scaling. Written only when <code>--icol-z</code> is provided.</li>
+<li><code>prefix.features.tsv</code>: sorted feature summary file. Written only when <code>--icol-feature</code> is provided.</li>
 </ul>
 
 
