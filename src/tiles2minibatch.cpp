@@ -10,20 +10,14 @@
 #include <map>
 #include <algorithm>
 
-namespace {
-
-float anchor_distance_weight(double dist, double refDist, double weightAtRefDist) {
-    if (!(refDist > 0)) {
-        error("%s: reference anchor distance must be positive", __func__);
+template<typename T>
+float Tiles2MinibatchBase<T>::anchor_distance_weight(float dist, float radius, float nu) {
+    if (radius <= 0 || nu < 0) {
+        error("%s: invalid radius or nu parameters", __func__);
     }
-    if (!(weightAtRefDist > 0.0 && weightAtRefDist < 1.0)) {
-        error("%s: weight-at-anchor-dist must be in (0, 1)", __func__);
-    }
-    const double weight = std::exp(std::log(weightAtRefDist) * dist / refDist);
-    return static_cast<float>(std::clamp(weight, 1e-4, 1.0 - 1e-4));
+    float weight = 1. - std::pow(dist / radius, nu);
+    return std::clamp(weight, 0.05f, 0.95f);
 }
-
-} // namespace
 
 template<typename T>
 void Tiles2MinibatchBase<T>::run() {
@@ -367,15 +361,15 @@ int32_t Tiles2MinibatchBase<T>::parseOneTile(TileData<T>& tileData, TileKey tile
 template<typename T>
 double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-    double supportRadius, double refDist, double weightAtRefDist) {
+    double supportRadius, double distNu) {
     debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts.size() + tileData.extPts.size());
     if (minibatch.n <= 0) {
         return 0.0;
     }
-    assert(supportRadius > 0.0 && refDist > 0.0 && weightAtRefDist > 0.0 && weightAtRefDist < 1.0);
+    assert(supportRadius > 0.0 && distNu >= 0.0);
 
     if (coordDim_ == MinibatchCoordDim::Dim3) {
-        return buildMinibatchCore3D(tileData, anchors, minibatch, supportRadius, refDist, weightAtRefDist);
+        return buildMinibatchCore3D(tileData, anchors, minibatch, supportRadius, distNu);
     }
 
     PointCloud<float> pc;
@@ -447,7 +441,7 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
             const float dist = std::sqrt(indices_dists[i].second);
             tripletsWij.emplace_back(
                 npt, static_cast<int>(idx),
-                anchor_distance_weight(dist, refDist, weightAtRefDist));
+                anchor_distance_weight(dist, supportRadius, distNu));
         }
 
         ++npt;

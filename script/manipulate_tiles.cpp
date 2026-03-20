@@ -184,7 +184,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (!extractRegionGeoJSON.empty()) {
             error("--extract-region and --extract-region-geojson are mutually exclusive");
         }
-        tileOp.extractRegion(outPrefix, xmin, xmax, ymin, ymax);
+        tileOp.extractRegion(outPrefix, xmin, xmax - 1e-6, ymin, ymax - 1e-6);
         return 0;
     }
 

@@ -1,7 +1,56 @@
 #include "punkst.h"
 #include "tiles2slda.hpp"
 #include "tiles2nmf.hpp"
+#include <algorithm>
 #include <limits>
+
+namespace {
+
+std::vector<float> build_evenly_spaced_thin3d_zlevels(double zMin, double zMax, int32_t nLevels) {
+    if (!(zMax > zMin) || nLevels <= 1) {
+        error("%s: invalid thin 3D z-level configuration", __func__);
+    }
+    std::vector<float> zLevels(static_cast<size_t>(nLevels));
+    const double zStep = (zMax - zMin) / static_cast<double>(nLevels);
+    for (int32_t i = 0; i < nLevels; ++i) {
+        zLevels[static_cast<size_t>(i)] = static_cast<float>(zMin + (static_cast<double>(i) + 0.5) * zStep);
+    }
+    return zLevels;
+}
+
+double nth_nearest_zlevel_distance(const std::vector<float>& zLevels, double z, int32_t nPick) {
+    std::vector<double> dists;
+    dists.reserve(zLevels.size());
+    for (float level : zLevels) {
+        dists.push_back(std::abs(z - static_cast<double>(level)));
+    }
+    std::nth_element(dists.begin(), dists.begin() + (nPick - 1), dists.end());
+    return dists[static_cast<size_t>(nPick - 1)];
+}
+
+double thin3d_default_zreach(const std::vector<float>& zLevels, int32_t nPick, double zMin, double zMax) {
+    if (zLevels.size() <= 1) {
+        return 0.0;
+    }
+    nPick = std::min<int32_t>(std::max<int32_t>(nPick, 1), static_cast<int32_t>(zLevels.size()));
+    std::vector<double> probes;
+    probes.reserve(zLevels.size() * 2 + 2);
+    probes.push_back(zMin);
+    probes.push_back(zMax);
+    for (size_t i = 0; i < zLevels.size(); ++i) {
+        probes.push_back(static_cast<double>(zLevels[i]));
+        if (i + 1 < zLevels.size()) {
+            probes.push_back(0.5 * (static_cast<double>(zLevels[i]) + static_cast<double>(zLevels[i + 1])));
+        }
+    }
+    double maxDist = 0.0;
+    for (double z : probes) {
+        maxDist = std::max(maxDist, nth_nearest_zlevel_distance(zLevels, z, nPick));
+    }
+    return maxDist;
+}
+
+} // namespace
 
 int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
@@ -9,11 +58,12 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     std::string sampleList; // for multi-sample
     int nThreads = 1, seed = -1, debug_ = 0, verbose = 0;
     int icol_x, icol_y, icol_z = -1, icol_feature, icol_val;
-    double hexSize = -1, hexGridDist = -1;
-    double radius = -1, anchorDist = -1;
-    double weightAtAnchorDist = 0.3;
+    double hexSize = -1, hexGridDist = -1, anchorDist = -1;
+    double decoderRadius = -1, halfLifeDist = 0.7;
     double zMin = std::numeric_limits<double>::quiet_NaN();
     double zMax = std::numeric_limits<double>::quiet_NaN();
+    std::vector<float> thin3DZLevels;
+    int32_t thin3DNZLevels = -1;
     bool ignoreOutsideZrange = false;
     bool thin3D = false;
     bool standard3D = false;
@@ -71,16 +121,18 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("hex-size", "Hexagon size (side length)", hexSize)
       .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
       .add_option("anchor-dist", "Distance between adjacent anchors", anchorDist)
-      .add_option("weight-at-anchor-dist", "Relative weight assigned to an anchor one anchorDist away from the pixel", weightAtAnchorDist)
+      .add_option("half-life-dist", "Ratio to the radius where the anchor's weight decays to 0.5 (default: 0.7)", halfLifeDist)
       .add_option("thin-3D", "Activate the thin 3D path", thin3D)
       .add_option("standard-3D", "Activate the standard 3D path", standard3D)
       .add_option("zmin", "Minimum z coordinate", zMin)
       .add_option("zmax", "Maximum z coordinate", zMax)
+      .add_option("thin-3d-z-levels", "Explicit z coordinates for thin 3D anchor levels", thin3DZLevels)
+      .add_option("thin-3d-n-z-levels", "Number of evenly spaced z levels for thin 3D anchors", thin3DNZLevels)
       .add_option("ignore-outside-zrange", "Ignore observations with z coordinates outside the specified [zmin, zmax] range", ignoreOutsideZrange)
       .add_option("n-init-anchor-per-pix", "(Only for thin 3D) Number of anchors closest on z axis to assign each pixel to during initialization", nInitAnchorPerPix)
       .add_option("max-iter", "Maximum number of iterations (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
-      .add_option("radius", "Support radius for 2D and thin 3D pixel-to-anchor assignment", radius)
+      .add_option("radius", "Support radius", decoderRadius)
       .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
       .add_option("seed", "Random seed", seed);
@@ -176,7 +228,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     const bool hasZMax = std::isfinite(zMax);
     const bool hasZRange = hasZMin || hasZMax;
     double standard3DBccSize = -1.0;
-    double decoderRadius = radius;
     double decoderPadding = -1.0;
     if (use3D) { // Shared checks for both 3D modes
         if (icol_z < 0)
@@ -194,17 +245,34 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("--icol-z requires either --thin-3D or --standard-3D");
         if (hasZRange)
             error("--zmin/--zmax require 3D input");
+        if (!thin3DZLevels.empty() || thin3DNZLevels > 0)
+            error("--thin-3d-z-levels/--thin-3d-n-z-levels require --thin-3D");
+    }
+    if (thin3D) {
+        const bool hasExplicitThin3DZLevels = !thin3DZLevels.empty();
+        const bool hasThin3DNZLevels = thin3DNZLevels > 0;
+        if (!hasExplicitThin3DZLevels && !hasThin3DNZLevels) {
+            error("Thin 3D requires one of --thin-3d-z-levels or --thin-3d-n-z-levels");
+        }
+        if (hasExplicitThin3DZLevels) {
+            if (hasThin3DNZLevels) {
+                warning("Both --thin-3d-z-levels and --thin-3d-n-z-levels are set. Ignoring --thin-3d-n-z-levels.");
+            }
+        } else {
+            if (thin3DNZLevels <= 1)
+                error("--thin-3d-n-z-levels must be greater than 1");
+            thin3DZLevels = build_evenly_spaced_thin3d_zlevels(zMin, zMax, thin3DNZLevels);
+        }
     }
     if (standard3D) {
         if (anchorDist <= 0)
             error("Standard 3D: --anchor-dist is required");
-        if (radius > 0)
-            error("--radius is not used in standard 3D mode");
         if (hasZRange && !ignoreOutsideZrange)
             notice("Standard 3D: z range is accepted but ignored unless --ignore-outside-zrange is set");
         standard3DBccSize = 2.0 * anchorDist / std::sqrt(3.0);
-        decoderRadius = 0.5 * standard3DBccSize; // only for decoderPadding
-        notice("Standard 3D: using BCC grid with anchor distance %.2f and tile padding %.2f", anchorDist, decoderRadius + standard3DBccSize);
+        if (decoderRadius <= 0)
+            decoderRadius = standard3DBccSize * 1.2;
+        notice("Standard 3D: using BCC grid with anchor distance %.2f", anchorDist);
     } else { // Shared checks for 2D and thin 3D
         if (hexSize <= 0 && hexGridDist <= 0)
             error("Hexagon size (--hex-size) or hexagon grid distance (--hex-grid-dist) must be provided");
@@ -223,10 +291,12 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         if (thin3D && nMoves <= 1) {
             error("Thin 3D anchor initialization requires nMoves > 1");
         }
-        if (radius <= 0) {
+        if (decoderRadius <= 0) {
             if (thin3D) {
-                double zDist = (zMax - zMin) / (nMoves * nMoves);
-                zDist = zDist * 0.5 * (nInitAnchorPerPix + 0.5);
+                const int32_t nPerPixel = (nInitAnchorPerPix > 0)
+                    ? nInitAnchorPerPix
+                    : static_cast<int32_t>(thin3DZLevels.size() / 2);
+                const double zDist = thin3d_default_zreach(thin3DZLevels, nPerPixel, zMin, zMax);
                 decoderRadius = std::sqrt(anchorDist * anchorDist + zDist * zDist) * 1.2;
             } else {
                 decoderRadius = anchorDist * 1.2;
@@ -312,7 +382,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         decoder.setOutputCoordDigits(floatCoordDigits);
         decoder.setOutputProbDigits(probDigits);
         if (use3D) {
-            decoder.set3Dparameters(thin3D, zMin, zMax, 1.0f, pixelResolutionZ, nInitAnchorPerPix, ignoreOutsideZrange, anchorDist);
+            decoder.set3Dparameters(thin3D, zMin, zMax, pixelResolutionZ, nInitAnchorPerPix, ignoreOutsideZrange, anchorDist, thin3DZLevels);
         }
         decoder.setFeatureNames(featureNames);
         if (!anchorFile.empty()) {
@@ -354,7 +424,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 Tiles2NMF<int32_t> decoder(
                     nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath,
                     emPois, tileReader, parser, ioConfig,
-                    seed, minInitCount, weightAtAnchorDist, pixelResolution,
+                    seed, minInitCount, halfLifeDist, pixelResolution,
                     topK, verbose, debug_, geometryUnitSize, nMoves);
                 if (fit_background) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
@@ -365,7 +435,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 Tiles2NMF<float> decoder(
                     nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath,
                     emPois, tileReader, parser, ioConfig,
-                    seed, minInitCount, weightAtAnchorDist, pixelResolution,
+                    seed, minInitCount, halfLifeDist, pixelResolution,
                     topK, verbose, debug_, geometryUnitSize, nMoves);
                 if (fit_background) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
@@ -393,14 +463,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("Error in input tiles: %s", ds.inTsv.c_str());
         }
         if (coordsAreInt) {
-            Tiles2SLDA<int32_t> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, weightAtAnchorDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves);
+            Tiles2SLDA<int32_t> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
             configure_decoder(tiles2slda, ds.anchorFile, !use3D);
             tiles2slda.run();
         } else {
-            Tiles2SLDA<float> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, weightAtAnchorDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves);
+            Tiles2SLDA<float> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }

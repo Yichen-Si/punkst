@@ -335,9 +335,9 @@ public:
     void set3Dparameters(bool isThin,
         double zMin = std::numeric_limits<double>::quiet_NaN(),
         double zMax = std::numeric_limits<double>::quiet_NaN(),
-        float zScale = 1.0f, float zRes = -1.0f,
-        int32_t n = 0, bool enforceZrange = false,
-        float standard3DBccGridDist = -1.0f);
+        float zRes = -1.0f, int32_t n = 0, bool enforceZrange = false,
+        float standard3DBccGridDist = -1.0f,
+        const std::vector<float>& thin3DZLevels = {});
     virtual int32_t getFactorCount() const = 0;
 
 protected:
@@ -453,7 +453,8 @@ protected:
     bool useThin3DAnchors_ = false;
     double zMin_ = std::numeric_limits<double>::quiet_NaN();
     double zMax_ = std::numeric_limits<double>::quiet_NaN();
-    float zScale_ = 1.0;
+    std::vector<float> thin3DZLevels_;
+    int32_t nZLevels_ = 0, thin3Dstep_ = 0;
     float standard3DBccSize_ = -1.0f;
     float standard3DBccGridDist_ = -1.0f;
     mutable float thin3DAnchorRefDist_ = -1.0f;
@@ -676,14 +677,19 @@ protected:
     // Given data and anchor pos, build pixels & pixel-anchor relations
     double buildMinibatchCore(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-        double supportRadius, double refDist, double weightAtRefDist);
+        double supportRadius, double distNu);
     double buildMinibatchCore3D(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-        double supportRadius, double refDist, double weightAtRefDist);
+        double supportRadius, double distNu);
     double buildMinibatchCore3D(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-        const BCCGrid& bccGrid, double supportRadius, double refDist, double weightAtRefDist);
+        const BCCGrid& bccGrid, double supportRadius, double distNu);
     double thin3DReferenceAnchorDistance(const HexGrid& hexGrid_, int32_t nMoves_) const;
+    void thin3DAnchorKeyToFineAxial(int32_t& u, int32_t& v, const AnchorKey2D& key, int32_t nMoves_) const;
+    AnchorKey2D thin3DFineAxialToAnchorKey(int32_t u, int32_t v, int32_t nMoves_) const;
+    void thin3DSelectNearestZLevels(double z, int32_t nPerPixel, std::vector<int32_t>& zIndices) const;
+    AnchorKey2D thin3DNearestAnchorKeyForLevel(float x, float y, int32_t zIndex,
+        const HexGrid& hexGrid_, int32_t nMoves_) const;
     // Given data, choose anchor points
     void forEachAnchorCandidate2D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_,
         const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const;
@@ -732,6 +738,7 @@ protected:
     int32_t parseBoundaryMemoryExtended3DWrapper(TileData<T>& tileData,
         IBoundaryStorage* storage, uint32_t bufferKey);
     // Output helpers
+    float anchor_distance_weight(float dist, float radius, float nu = 1.943f);
     void setExtendedSchema(size_t offset);
     void setupOutput();
     void closeOutput();

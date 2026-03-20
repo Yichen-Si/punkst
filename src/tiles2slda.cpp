@@ -8,11 +8,11 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
         TileReader& tileReader, lineParserUnival& lineParser,
         const MinibatchIoConfig& ioConfig,
         unsigned int seed,
-        double c, double weightAtAnchorDist, double res, int32_t N, int32_t k,
+        double c, double h, double res, int32_t N, int32_t k,
         int32_t verbose, int32_t debug,
         double hexSize, int32_t nMoves)
     : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug),
-      supportRadius_(supportRadius), weightAtAnchorDist_(weightAtAnchorDist), lda_(lda), lineParser_(lineParser), hexGrid_(hexSize), bccGrid_(hexSize), nMoves_(nMoves), anchorMinCount_(c)
+      supportRadius_(supportRadius), lda_(lda), lineParser_(lineParser), hexGrid_(hexSize), bccGrid_(hexSize), nMoves_(nMoves), anchorMinCount_(c)
 {
     topk_ = k;
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
@@ -34,9 +34,9 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
     }
     lda_.set_nthreads(1); // because we parallelize by tile
     K_ = lda_.get_n_topics();
-    if (!(weightAtAnchorDist_ > 0.0 && weightAtAnchorDist_ < 1.0)) {
-        error("%s: weight-at-anchor-dist must be in (0, 1)", __func__);
-    }
+    if (h <= 0 || h >= 1)
+        error("%s: invalid parameter (%.2f) for anchor distance weighting", __func__, h);
+    distNu_ = std::log(0.5) / std::log(h);
     if (N <= 0) {
         N = lda_.get_N_global() * 100;
     }
@@ -159,11 +159,11 @@ double Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoi
     if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
         avgDegree = Base::buildMinibatchCore3D(
             tileData, anchors, minibatch, bccGrid_,
-            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+            supportRadius_, distNu_);
     } else {
         avgDegree = Base::buildMinibatchCore(
             tileData, anchors, minibatch,
-            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+            supportRadius_, distNu_);
     }
 
     if (avgDegree <= 0.0) {
@@ -428,19 +428,28 @@ void Tiles2SLDA<T>::writeGlobalMatrixToTsv() {
     write_matrix_to_file(outFile, confusion_, probDigits, true, factorNames, "K", &factorNames);
     notice("Wrote confusion matrix to %s", outFile.c_str());
 
-    Eigen::MatrixXd B = pseudobulk_.template cast<double>(); // M x K
-    Eigen::VectorXd colsums = B.colwise().sum();
-    colNormalizeInPlace(B);
-    Eigen::VectorXd w = colsums.array().sqrt();
-    w = w.array() / w.sum() * K_;
-    RowMajorMatrixXd C = confusion_.cast<double>();
-    rowNormalizeInPlace(C);
-    NonnegRidgeResult denoise = solve_nonneg_weighted_ridge(C, B, w);
-    for (int32_t k = 0; k < K_; ++k) {
-        denoise.A.col(k) *= colsums(k);
+    try {
+        Eigen::MatrixXd B = pseudobulk_.template cast<double>(); // M x K
+        Eigen::VectorXd colsums = B.colwise().sum();
+        if (colsums.maxCoeff() < 1) {
+            return;
+        }
+        colNormalizeInPlace(B);
+        colsums = colsums.array() + 1e-6;
+        Eigen::VectorXd w = colsums.array().sqrt();
+        w = w.array() / w.sum() * K_;
+        RowMajorMatrixXd C = confusion_.cast<double>();
+        rowNormalizeInPlace(C);
+        NonnegRidgeResult denoise = solve_nonneg_weighted_ridge(C, B, w);
+        for (int32_t k = 0; k < K_; ++k) {
+            denoise.A.col(k) *= colsums(k);
+        }
+        outFile = outPref + ".denoised_pseudobulk.tsv";
+        write_matrix_to_file(outFile, denoise.A, probDigits, true, featureNames, "Feature", &factorNames);
+    } catch (const std::exception& e) {
+        warning("Error during non-negative weighted ridge regression: %s", e.what());
+        return;
     }
-    outFile = outPref + ".denoised_pseudobulk.tsv";
-    write_matrix_to_file(outFile, denoise.A, probDigits, true, featureNames, "Feature", &factorNames);
 }
 
 // explicit instantiations

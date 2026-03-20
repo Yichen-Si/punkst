@@ -124,18 +124,28 @@ externally loaded anchors are not currently used.
 `--pixel-res-z` - Resolution for aggregating pixels in the z dimension. Used
 only in 3D mode. Default: 1.
 
-`--radius` - Support radius for 2D and thin 3D pixel-to-anchor assignment.
-Default: `anchor-dist * 1.2` in 2D. In thin 3D, a default is derived from the
-x-y anchor spacing and z-level spacing. This option is not used in standard 3D.
+`--radius` - Support radius used in pixel-to-anchor weighting. In 2D and thin
+3D it also controls the anchor search neighborhood. Default: `anchor-dist *
+1.2` in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
+z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
+stencil, but it does control the weight decay scale and contributes to the
+x-y padding.
 
-`--weight-at-anchor-dist` - Relative weight assigned to an anchor one nearest
-anchor spacing away from the pixel. Used in 2D, thin 3D, and standard 3D.
+`--half-life-dist` - Ratio `h` in `(0, 1)` such that an anchor at distance
+`h * radius` receives weight `0.5`. Default: `0.7`. The implemented weighting
+rule is `w(d) = clamp(1 - (d / radius)^nu, 0.05, 0.95)` with
+`nu = log(0.5) / log(h)`.
 
 `--min-init-count` - Minimum total count within the hexagon around an anchor for it to be included. Filters out regions outside tissues with sparse noise. Default: 10.
 
 `--zmin`, `--zmax` - z range for 3D mode. Thin 3D requires both values.
 Standard 3D accepts them, but only uses them when
 `--ignore-outside-zrange` is set.
+
+`--thin-3d-z-levels` - Explicit z coordinates for thin-3D anchor levels.
+
+`--thin-3d-n-z-levels` - Number of evenly spaced thin-3D anchor levels to
+generate between `zmin` and `zmax`.
 
 `--ignore-outside-zrange` - Drop observations outside `[zmin, zmax]` in 3D mode.
 
@@ -178,10 +188,13 @@ Standard 3D uses a BCC anchor lattice directly in the input coordinate system.
 This means x, y, and z are expected to already use compatible units.
 
 - `--anchor-dist` is the preferred way to define the BCC anchor spacing.
-- `--radius` is not used.
 - Each pixel is connected to anchors from a fixed local BCC neighborhood:
   the focal BCC cell plus its 14 face-adjacent neighbors.
-- Anchor weights are still computed from the actual pixel-to-anchor distance.
+- `--radius` does not change that fixed neighborhood, but it does control the
+  anchor weight decay scale.
+- If `--radius` is omitted, it defaults to `1.2 * (2 * anchor-dist / sqrt(3))`.
+- Anchor weights are computed from the actual pixel-to-anchor distance and the
+  configured support radius.
 
 At the CLI level, standard 3D does not require `--hex-size`,
 `--hex-grid-dist`, or `--n-moves`. The required geometry control is
@@ -197,8 +210,8 @@ punkst pixel-decode --model ${path}/bcc.model.tsv \
 --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
 --temp-dir ${tmpdir} --out-pref ${path}/pixel_3d --output-binary \
 --icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
---standard-3D --anchor-dist 6 \
---pixel-res 0.5 --pixel-res-z 1 \
+--standard-3D --anchor-dist 12 \
+--pixel-res 0.5 --pixel-res-z 0.5 \
 --threads ${threads} --seed 1
 ```
 
@@ -208,9 +221,18 @@ Thin 3D keeps the overlapping shifted hex-anchor construction in x-y and adds a
 finite set of z levels across `[zmin, zmax]`.
 
 - `--zmin` and `--zmax` are required.
+- One of `--thin-3d-z-levels` or `--thin-3d-n-z-levels` must be provided.
+- If both are provided, `--thin-3d-z-levels` takes precedence and
+  `--thin-3d-n-z-levels` is ignored with a warning.
+- When `--thin-3d-n-z-levels` is used, the z levels are placed evenly between
+  `zmin` and `zmax`.
 - `--radius` is still used for the pixel-to-anchor graph.
 - `--n-init-anchor-per-pix` controls how many nearby z levels each point
   contributes to during anchor initialization.
+- The x-y anchor coordinates are still generated from the shifted hex grids.
+- The z coordinate of each anchor is assigned by a modular coloring of the
+  underlying fine axial lattice, so anchors from different z levels are mixed
+  across x-y while staying roughly balanced across levels.
 
 Example:
 
@@ -219,8 +241,9 @@ punkst pixel-decode --model ${path}/thin3d.model.tsv \
 --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
 --temp-dir ${tmpdir} --out-pref ${path}/pixel_thin3d --output-binary \
 --icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
---thin-3D --hex-grid-dist 12 --n-moves 3 \
---zmin 0 --zmax 20 --n-init-anchor-per-pix 2 \
+--thin-3D --hex-grid-dist 18 --n-moves 3 \
+--thin-3d-z-levels 0 1.5 3 4.5 6 7.5 9 \
+--zmin 0 --zmax 20 --n-init-anchor-per-pix 4 \
 --pixel-res 0.5 --pixel-res-z 1 \
 --threads ${threads} --seed 1
 ```
@@ -232,9 +255,10 @@ anchor geometry.
 
 - tile ownership and boundary handling are still defined only in x-y
 - standard 3D does not support external fixed anchors
-- standard 3D requires positive `--anchor-dist` and ignores `--radius`
-- thin 3D and standard 3D both use `--weight-at-anchor-dist` for
-  distance-based anchor weighting
+- standard 3D requires positive `--anchor-dist`; `--radius` affects weighting
+  and padding but not the fixed BCC neighborhood
+- thin 3D and standard 3D both use `--half-life-dist` for distance-based
+  anchor weighting
 
 ## Process multiple samples
 

@@ -78,9 +78,10 @@ public:
 
     // Converts a Cartesian point (x,y,z) to lattice coordinates (q₁,q₂,q₃)
     // using the transformation and rounding to the nearest integer.
-    void cart_to_lattice(int32_t &q1, int32_t &q2, int32_t &q3,
-                         double x, double y, double z,
-        double offset_x = 0, double offset_y = 0, double offset_z = 0) const {
+    template<typename T>
+    void cart_to_lattice(int32_t &q1, int32_t &q2, int32_t &q3, T x, T y, T z,
+        double offset_x = 0, double offset_y = 0, double offset_z = 0) const
+    {
         const double s = size;
         double xp = x - offset_x;
         double yp = y - offset_y;
@@ -117,9 +118,10 @@ public:
     }
 
     // Vectorized conversion from Cartesian to lattice coordinates.
+    template<typename T>
     void cart_to_lattice(std::vector<int32_t>& q1, std::vector<int32_t>& q2,
-        std::vector<int32_t>& q3, const std::vector<double>& x,
-        const std::vector<double>& y, const std::vector<double>& z,
+        std::vector<int32_t>& q3, const std::vector<T>& x,
+        const std::vector<T>& y, const std::vector<T>& z,
         double offset_x = 0, double offset_y = 0, double offset_z = 0) const {
         size_t n = x.size();
         assert(x.size() == y.size() && y.size() == z.size());
@@ -134,7 +136,8 @@ public:
 
     // Converts lattice coordinates (q₁,q₂,q₃) to Cartesian coordinates (x,y,z)
     // returning the center of the corresponding cell.
-    void lattice_to_cart(double &x, double &y, double &z,
+    template<typename T>
+    void lattice_to_cart(T &x, T &y, T &z,
                          int32_t q1, int32_t q2, int32_t q3,
                          double offset_x = 0, double offset_y = 0, double offset_z = 0) const {
         x = mtx_l2p[0][0] * q1 + mtx_l2p[0][1] * q2 + mtx_l2p[0][2] * q3
@@ -146,7 +149,8 @@ public:
     }
 
     // Vectorized conversion from lattice coordinates to Cartesian coordinates.
-    void lattice_to_cart(std::vector<double>& x, std::vector<double>& y, std::vector<double>& z, const std::vector<int32_t>& q1, const std::vector<int32_t>& q2, const std::vector<int32_t>& q3, double offset_x = 0, double offset_y = 0, double offset_z = 0) const {
+    template<typename T>
+    void lattice_to_cart(std::vector<T>& x, std::vector<T>& y, std::vector<T>& z, const std::vector<int32_t>& q1, const std::vector<int32_t>& q2, const std::vector<int32_t>& q3, double offset_x = 0, double offset_y = 0, double offset_z = 0) const {
         size_t n = q1.size();
         assert(q2.size() == n && q3.size() == n);
         x.resize(n);

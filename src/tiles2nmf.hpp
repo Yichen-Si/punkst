@@ -171,7 +171,7 @@ public:
                PixelEM& empois, TileReader& tileReader,
                lineParserUnival& lineParser, const MinibatchIoConfig& ioConfig,
                unsigned int seed = std::random_device{}(),
-               double c = 20.0, double weightAtAnchorDist = 0.3, double res = 1.0, int32_t topk = 3,
+               double c = 20.0, double h = 0.7, double res = 1.0, int32_t topk = 3,
                int32_t verbose = 0, int32_t debug = 0,
                double hexSize = 1.0, int32_t nMoves = 1);
     void set_background_model(double pi0, VectorXf beta0, bool outputExpand = false) {
@@ -204,7 +204,7 @@ protected:
     int32_t           nMoves_ = 1;
     unsigned int      seed_;
     double            anchorMinCount_;
-    double            supportRadius_, weightAtAnchorDist_;
+    double            supportRadius_, distNu_;
     int32_t           verbose_;
 
     // MatrixXf pseudobulk_;

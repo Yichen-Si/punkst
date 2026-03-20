@@ -211,14 +211,13 @@ template<typename T>
 Tiles2NMF<T>::Tiles2NMF(int nThreads, double supportRadius, double paddingRadius,
         const std::string& outPref, const std::string& tmpDir,
         PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, const MinibatchIoConfig& ioConfig,
-        unsigned int seed, double c, double weightAtAnchorDist, double res, int32_t topk,
+        unsigned int seed, double c, double h, double res, int32_t topk,
         int32_t verbose, int32_t debug,
         double hexSize, int32_t nMoves)
     : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug), supportRadius_(supportRadius),
         empois_(empois), lineParser_(lineParser),
         hexGrid_(hexSize), bccGrid_(hexSize), nMoves_(nMoves),
-        seed_(seed), anchorMinCount_(c), weightAtAnchorDist_(weightAtAnchorDist),
-        verbose_(verbose)
+        seed_(seed), anchorMinCount_(c), verbose_(verbose)
 {
     topk_ = topk;
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
@@ -228,15 +227,13 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double supportRadius, double paddingRadius
     } else {
         error("%s: Unsupported coordinate type", __func__);
     }
-
-    if (!(weightAtAnchorDist_ > 0.0 && weightAtAnchorDist_ < 1.0)) {
-        error("%s: weight-at-anchor-dist must be in (0, 1)", __func__);
-    }
     M_ = empois_.get_M();
     K_ = empois_.get_K();
-    if (M_ <= 0 || K_ <= 0) {
+    if (M_ <= 0 || K_ <= 0)
         error("%s: Invalid beta dimensions (%d x %d)", __func__, M_, K_);
-    }
+    if (h <= 0 || h >= 1)
+        error("%s: invalid parameter (%.2f) for anchor distance weighting", __func__, h);
+    distNu_ = std::log(0.5) / std::log(h);
 
     if (lineParser_.isFeatureDict) {
         if (static_cast<int32_t>(lineParser_.featureDict.size()) != M_) {
@@ -281,11 +278,11 @@ double Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoin
     if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
         avgDegree = Base::buildMinibatchCore3D(
             tileData, anchors, minibatch, bccGrid_,
-            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+            supportRadius_, distNu_);
     } else {
         avgDegree = Base::buildMinibatchCore(
             tileData, anchors, minibatch,
-            supportRadius_, referenceAnchorDistance(), weightAtAnchorDist_);
+            supportRadius_, distNu_);
     }
     if (avgDegree <= 0.0) {
         return avgDegree;

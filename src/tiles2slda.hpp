@@ -16,7 +16,7 @@ public:
         TileReader& tileReader, lineParserUnival& lineParser,
         const MinibatchIoConfig& ioConfig,
         unsigned int seed = std::random_device{}(),
-        double c = 20, double weightAtAnchorDist = 0.3, double res = 1,
+        double c = 20, double h = 0.7, double res = 1,
         int32_t N = 0, int32_t k = 3,
         int32_t verbose = 0, int32_t debug = 0,
         double hexSize = 1.0, int32_t nMoves = 1);
@@ -49,7 +49,7 @@ public:
     HexGrid hexGrid_;
     const BCCGrid bccGrid_;
     int32_t nMoves_ = 1;
-    double anchorMinCount_, supportRadius_, weightAtAnchorDist_;
+    double anchorMinCount_, supportRadius_, distNu_;
     double eps_;
     int32_t nLloydIter_ = 1;
     MatrixXf pseudobulk_; // M x K

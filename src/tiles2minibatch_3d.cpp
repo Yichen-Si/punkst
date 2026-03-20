@@ -9,6 +9,14 @@
 
 namespace {
 
+int32_t floor_mod(int32_t value, int32_t mod) {
+    int32_t r = value % mod;
+    if (r < 0) {
+        r += mod;
+    }
+    return r;
+}
+
 int32_t thin3d_modular_step(int32_t nLevels) {
     if (nLevels <= 1) {
         return 1;
@@ -20,54 +28,10 @@ int32_t thin3d_modular_step(int32_t nLevels) {
     return step;
 }
 
-int32_t thin3d_modular_offset(int32_t nLevels) {
-    if (nLevels <= 1) {
-        return 0;
-    }
-    return nLevels / 3;
-}
-
-int32_t thin3d_modular_inverse(int32_t a, int32_t mod) {
-    int32_t t = 0, newT = 1;
-    int32_t r = mod, newR = a;
-    while (newR != 0) {
-        const int32_t q = r / newR;
-        const int32_t tmpT = t - q * newT;
-        t = newT;
-        newT = tmpT;
-        const int32_t tmpR = r - q * newR;
-        r = newR;
-        newR = tmpR;
-    }
-    if (r != 1) {
-        error("%s: modular inverse does not exist", __func__);
-    }
-    if (t < 0) {
-        t += mod;
-    }
-    return t;
-}
-
-int32_t thin3d_phase_to_z_index(int32_t phaseIndex, int32_t nLevels) {
-    const int32_t step = thin3d_modular_step(nLevels);
-    const int32_t offset = thin3d_modular_offset(nLevels);
-    return (step * phaseIndex + offset) % nLevels;
-}
-
-int32_t thin3d_z_index_to_phase(int32_t zIndex, int32_t nLevels) {
-    const int32_t stepInv = thin3d_modular_inverse(thin3d_modular_step(nLevels), nLevels);
-    int32_t shifted = zIndex - thin3d_modular_offset(nLevels);
-    shifted %= nLevels;
-    if (shifted < 0) {
-        shifted += nLevels;
-    }
-    return (stepInv * shifted) % nLevels;
-}
-
 } // namespace
 
 template<typename T>
-void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zMax, float zScale, float zRes, int32_t n, bool enforceZrange, float standard3DBccGridDist) {
+void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zMax, float zRes, int32_t n, bool enforceZrange, float standard3DBccGridDist, const std::vector<float>& thin3DZLevels) {
     const bool hasZMin = std::isfinite(zMin);
     const bool hasZMax = std::isfinite(zMax);
     if (hasZMin != hasZMax) {
@@ -83,7 +47,6 @@ void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zM
     useThin3DAnchors_ = isThin;
     zMin_ = zMin;
     zMax_ = zMax;
-    zScale_ = zScale > 0 ? zScale : 1.0;
     pixelResolutionZ_ = zRes > 0 ? zRes : pixelResolution_;
     nInitAnchorPerPix_ = n;
     ignoreOutsideZrange_ = enforceZrange;
@@ -93,7 +56,25 @@ void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zM
         if (nInitAnchorPerPix_ < 0) {
             error("Thin 3D anchor mode requires a non-negative number of initial anchors per pixel");
         }
+        if (thin3DZLevels.size() <= 1) {
+            error("Thin 3D anchor mode requires at least two z levels");
+        }
+        thin3DZLevels_ = thin3DZLevels;
+        std::sort(thin3DZLevels_.begin(), thin3DZLevels_.end());
+        for (size_t i = 1; i < thin3DZLevels_.size(); ++i) {
+            if (!(thin3DZLevels_[i] > thin3DZLevels_[i - 1])) {
+                error("z levels must be unique");
+            }
+        }
+        for (const auto& z : thin3DZLevels_) {
+            if (!std::isfinite(z) || (hasZMin && (z < zMin_ || z > zMax_))) {
+                error("Thin 3D z levels must be finite and within the specified z range");
+            }
+        }
+        nZLevels_ = static_cast<int32_t>(thin3DZLevels_.size());
+        thin3Dstep_ = thin3d_modular_step(nZLevels_);
     } else {
+        thin3DZLevels_.clear();
         if (standard3DBccGridDist_ <= 0) {
             error("Standard 3D mode requires a positive BCC lattice distance");
         }
@@ -120,7 +101,7 @@ void Tiles2MinibatchBase<T>::forEachAnchorCandidate3D(const TileData<T>& tileDat
             return;
         }
         int32_t q1, q2, q3;
-        bccGrid.cart_to_lattice(q1, q2, q3, pt.x, pt.y, pt.z * zScale_);
+        bccGrid.cart_to_lattice(q1, q2, q3, pt.x, pt.y, pt.z);
         emit(pt.idx, static_cast<float>(pt.ct), AnchorKey3D{q1, q2, q3, 0, 0, 0});
         for (const auto& delta : neighborOffsets) {
             emit(pt.idx, static_cast<float>(pt.ct),
@@ -153,7 +134,7 @@ void Tiles2MinibatchBase<T>::anchorKeyToCoord3D(float& x, float& y, float& z, co
     bccGrid.lattice_to_cart(xd, yd, zd, q1, q2, q3);
     x = static_cast<float>(xd);
     y = static_cast<float>(yd);
-    z = static_cast<float>(zd / zScale_);
+    z = static_cast<float>(zd);
 }
 
 template<typename T>
@@ -203,50 +184,20 @@ int32_t Tiles2MinibatchBase<T>::buildAnchors3D(TileData<T>& tileData, std::vecto
 template<typename T>
 void Tiles2MinibatchBase<T>::forEachAnchorCandidateThin3D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_,
     const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const {
-    const int32_t nZLevels = nMoves_ * nMoves_;
-    // assign each pixel to nPerPixel anchors with closest z
     const int32_t nPerPixel = std::min<int32_t>(
-        (nInitAnchorPerPix_ > 0) ? nInitAnchorPerPix_ : (nZLevels / 2),
-        nZLevels);
-    // distance between adjacent anchor levels in z
-    const double zStep = (zMax_ - zMin_) / static_cast<double>(nZLevels);
-    std::vector<double> zCenters(static_cast<size_t>(nZLevels));
-    for (int32_t zIndex = 0; zIndex < nZLevels; ++zIndex) {
-        zCenters[static_cast<size_t>(zIndex)] = zMin_ + (zIndex + 0.5) * zStep;
-    }
+        (nInitAnchorPerPix_ > 0) ? nInitAnchorPerPix_ : (nZLevels_ / 2),
+        nZLevels_);
+    std::vector<int32_t> zIndices;
+    zIndices.reserve(static_cast<size_t>(nPerPixel));
     auto assign_pt = [&](const auto& pt) {
         if (ignoreOutsideZrange_ && (pt.z < zMin_ || pt.z > zMax_)) {
             return;
         }
-        const double rel = (static_cast<double>(pt.z) - zMin_) / zStep - 0.5;
-        int32_t center = static_cast<int32_t>(std::llround(rel)); // nearest
-        center = std::max<int32_t>(0, std::min<int32_t>(center, nZLevels - 1));
-        int32_t left = center - 1;
-        int32_t right = center + 1;
-        // moving outwards
-        for (int32_t picked = 0; picked < nPerPixel; ++picked) {
-            int32_t zIndex = -1;
-            if (picked == 0) {
-                zIndex = center;
-            } else if (left < 0) {
-                zIndex = right++;
-            } else if (right >= nZLevels) {
-                zIndex = left--;
-            } else {
-                const double leftDist = std::abs(static_cast<double>(pt.z) - zCenters[static_cast<size_t>(left)]);
-                const double rightDist = std::abs(static_cast<double>(pt.z) - zCenters[static_cast<size_t>(right)]);
-                if (leftDist <= rightDist) {
-                    zIndex = left--;
-                } else {
-                    zIndex = right++;
-                }
-            }
-            const int32_t phaseIndex = thin3d_z_index_to_phase(zIndex, nZLevels);
-            const int32_t ir = phaseIndex / nMoves_;
-            const int32_t ic = phaseIndex % nMoves_;
-            int32_t hx, hy;
-            hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1.0 / nMoves_, ir * 1.0 / nMoves_);
-            emit(pt.idx, static_cast<float>(pt.ct), AnchorKey2D{hx, hy, ic, ir});
+        thin3DSelectNearestZLevels(static_cast<double>(pt.z), nPerPixel, zIndices);
+        for (int32_t zIndex : zIndices) {
+            emit(pt.idx, static_cast<float>(pt.ct),
+                thin3DNearestAnchorKeyForLevel(static_cast<float>(pt.x), static_cast<float>(pt.y),
+                    zIndex, hexGrid_, nMoves_));
         }
     };
     if (useExtended_) {
@@ -263,13 +214,104 @@ void Tiles2MinibatchBase<T>::forEachAnchorCandidateThin3D(const TileData<T>& til
 template<typename T>
 void Tiles2MinibatchBase<T>::anchorKeyToCoordThin3D(float& x, float& y, float& z, const AnchorKey2D& key, const HexGrid& hexGrid_, int32_t nMoves_) const {
     anchorKeyToCoord2D(x, y, key, hexGrid_, nMoves_);
+    int32_t u, v;
+    thin3DAnchorKeyToFineAxial(u, v, key, nMoves_);
+    const int32_t zIndex = floor_mod(u + thin3Dstep_ * v, nZLevels_);
+    z = thin3DZLevels_[static_cast<size_t>(zIndex)];
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::thin3DAnchorKeyToFineAxial(int32_t& u, int32_t& v, const AnchorKey2D& key, int32_t nMoves_) const {
+    const int32_t hx = std::get<0>(key);
+    const int32_t hy = std::get<1>(key);
     const int32_t ic = std::get<2>(key);
     const int32_t ir = std::get<3>(key);
-    const int32_t phaseIndex = ir * nMoves_ + ic;
-    const int32_t nZLevels = nMoves_ * nMoves_;
-    const int32_t zIndex = thin3d_phase_to_z_index(phaseIndex, nZLevels);
-    const double zStep = (zMax_ - zMin_) / static_cast<double>(nZLevels);
-    z = static_cast<float>(zMin_ + (static_cast<double>(zIndex) + 0.5) * zStep);
+    u = hx * nMoves_ - ic;
+    v = hy * nMoves_ - ir;
+}
+
+template<typename T>
+typename Tiles2MinibatchBase<T>::AnchorKey2D Tiles2MinibatchBase<T>::thin3DFineAxialToAnchorKey(int32_t u, int32_t v, int32_t nMoves_) const {
+    const int32_t ic = floor_mod(-u, nMoves_);
+    const int32_t ir = floor_mod(-v, nMoves_);
+    const int32_t hx = (u + ic) / nMoves_;
+    const int32_t hy = (v + ir) / nMoves_;
+    return AnchorKey2D{hx, hy, ic, ir};
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::thin3DSelectNearestZLevels(double z, int32_t nPerPixel, std::vector<int32_t>& zIndices) const {
+    zIndices.clear();
+    const int32_t nPick = std::min<int32_t>(std::max<int32_t>(nPerPixel, 1), nZLevels_);
+    auto it = std::lower_bound(thin3DZLevels_.begin(), thin3DZLevels_.end(), static_cast<float>(z));
+    int32_t right = static_cast<int32_t>(it - thin3DZLevels_.begin());
+    int32_t left = right - 1;
+    while (static_cast<int32_t>(zIndices.size()) < nPick) {
+        if (left < 0) {
+            zIndices.push_back(right++);
+        } else if (right >= nZLevels_) {
+            zIndices.push_back(left--);
+        } else {
+            const double leftDist = std::abs(z - static_cast<double>(thin3DZLevels_[static_cast<size_t>(left)]));
+            const double rightDist = std::abs(z - static_cast<double>(thin3DZLevels_[static_cast<size_t>(right)]));
+            if (leftDist <= rightDist) {
+                zIndices.push_back(left--);
+            } else {
+                zIndices.push_back(right++);
+            }
+        }
+    }
+}
+
+template<typename T>
+typename Tiles2MinibatchBase<T>::AnchorKey2D Tiles2MinibatchBase<T>::thin3DNearestAnchorKeyForLevel(float x, float y, int32_t zIndex,
+    const HexGrid& hexGrid_, int32_t nMoves_) const {
+    if (zIndex < 0 || zIndex >= nZLevels_) {
+        error("%s: invalid thin 3D z index %d", __func__, zIndex);
+    }
+    HexGrid fineGrid(hexGrid_.size / static_cast<double>(nMoves_), hexGrid_.pointy);
+    const int32_t residue = floor_mod(zIndex, nZLevels_);
+
+    float ox, oy;
+    fineGrid.axial_to_cart(ox, oy, residue, 0);
+    float b0x, b0y;
+    fineGrid.axial_to_cart(b0x, b0y, nZLevels_, 0);
+    float b1x, b1y;
+    fineGrid.axial_to_cart(b1x, b1y, -thin3Dstep_, 1);
+
+    const double dx = static_cast<double>(x) - static_cast<double>(ox);
+    const double dy = static_cast<double>(y) - static_cast<double>(oy);
+    const double det = static_cast<double>(b0x) * static_cast<double>(b1y) - static_cast<double>(b1x) * static_cast<double>(b0y);
+    if (std::abs(det) < 1e-8) {
+        error("%s: degenerate thin 3D lattice basis", __func__);
+    }
+    const double alpha = (dx * static_cast<double>(b1y) - dy * static_cast<double>(b1x)) / det;
+    const double beta = (dy * static_cast<double>(b0x) - dx * static_cast<double>(b0y)) / det;
+    const int32_t a0 = static_cast<int32_t>(std::llround(alpha));
+    const int32_t b0 = static_cast<int32_t>(std::llround(beta));
+
+    double bestDist = std::numeric_limits<double>::infinity();
+    int32_t bestU = 0;
+    int32_t bestV = 0;
+    for (int32_t da = -2; da <= 2; ++da) {
+        for (int32_t db = -2; db <= 2; ++db) {
+            const int32_t a = a0 + da;
+            const int32_t b = b0 + db;
+            const int32_t u = residue + a * nZLevels_ - thin3Dstep_ * b;
+            const int32_t v = b;
+            float ax, ay;
+            fineGrid.axial_to_cart(ax, ay, u, v);
+            const double ddx = static_cast<double>(ax) - static_cast<double>(x);
+            const double ddy = static_cast<double>(ay) - static_cast<double>(y);
+            const double dist = ddx * ddx + ddy * ddy;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestU = u;
+                bestV = v;
+            }
+        }
+    }
+    return thin3DFineAxialToAnchorKey(bestU, bestV, nMoves_);
 }
 
 template<typename T>
@@ -277,8 +319,8 @@ double Tiles2MinibatchBase<T>::thin3DReferenceAnchorDistance(const HexGrid& hexG
     if (thin3DAnchorRefDist_ > 0) {
         return thin3DAnchorRefDist_;
     }
-    if (nMoves_ <= 1) {
-        error("%s: thin 3D reference distance requires nMoves > 1", __func__);
+    if (nMoves_ <= 0 || thin3DZLevels_.size() <= 1) {
+        error("%s: thin 3D reference distance requires valid x-y and z anchor geometry", __func__);
     }
     const AnchorKey2D originKey{0, 0, 0, 0};
     float x0, y0, z0;
@@ -296,7 +338,7 @@ double Tiles2MinibatchBase<T>::thin3DReferenceAnchorDistance(const HexGrid& hexG
                     anchorKeyToCoordThin3D(x, y, z, key, hexGrid_, nMoves_);
                     const double dx = static_cast<double>(x) - x0;
                     const double dy = static_cast<double>(y) - y0;
-                    const double dz = (static_cast<double>(z) - z0) * zScale_;
+                    const double dz = static_cast<double>(z) - z0;
                     const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
                     if (dist > 1e-8 && dist < best) {
                         best = dist;
@@ -362,20 +404,20 @@ int32_t Tiles2MinibatchBase<T>::buildAnchorsThin3D(TileData<T>& tileData, std::v
 template<typename T>
 double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-    double supportRadius, double refDist, double weightAtRefDist) {
+    double supportRadius, double distNu) {
     BCCGrid bccGrid(standard3DBccSize_);
-    return buildMinibatchCore3D(tileData, anchors, minibatch, bccGrid, supportRadius, refDist, weightAtRefDist);
+    return buildMinibatchCore3D(tileData, anchors, minibatch, bccGrid, supportRadius, distNu);
 }
 
 template<typename T>
 double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-    const BCCGrid& bccGrid, double supportRadius, double refDist, double weightAtRefDist) {
+    const BCCGrid& bccGrid, double supportRadius, double distNu) {
     debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts3d.size() + tileData.extPts3d.size());
     if (minibatch.n <= 0) {
         return 0.0;
     }
-    assert(refDist > 0.0 && weightAtRefDist > 0.0 && weightAtRefDist < 1.0);
+    assert(supportRadius > 0.0 && distNu >= 0.0);
 
     const float res = pixelResolution_;
     const float resZ = pixelResolutionZ_;
@@ -427,16 +469,11 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
     if (useThin3DAnchors_) {
         pc.pts = anchors;
-        if (zScale_ != 1.0f) {
-            for (auto& pt : pc.pts) {
-                pt.z *= zScale_;
-            }
-        }
     } else {
         bccNeighborOffsets = bccGrid.face_adjacent_offsets();
         for (uint32_t i = 0; i < static_cast<uint32_t>(anchors.size()); ++i) {
             int32_t q1, q2, q3;
-            bccGrid.cart_to_lattice(q1, q2, q3, anchors[i].x, anchors[i].y, anchors[i].z * zScale_);
+            bccGrid.cart_to_lattice(q1, q2, q3, anchors[i].x, anchors[i].y, anchors[i].z);
             anchorKeyToIndex[AnchorKey3D{q1, q2, q3, 0, 0, 0}] = i;
         }
     }
@@ -453,15 +490,11 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
         int32_t pz = std::get<2>(kv.first);
         std::vector<std::pair<uint32_t, float>> candidates;
 
-        const double x = static_cast<double>(px) * res;
-        const double y = static_cast<double>(py) * res;
-        const double z = static_cast<double>(pz) * resZ;
+        const float x = static_cast<float>(px) * res;
+        const float y = static_cast<float>(py) * res;
+        const float z = static_cast<float>(pz) * resZ;
         if (useThin3DAnchors_) {
-            float xyz[3] = {
-                static_cast<float>(x),
-                static_cast<float>(y),
-                static_cast<float>(z * zScale_)
-            };
+            float xyz[3] = {x, y, z};
             size_t n = kdtree->radiusSearch(xyz, l2radius, indices_dists);
             if (n == 0) {
                 continue;
@@ -471,24 +504,24 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
                 const float dist = std::sqrt(indices_dists[i].second);
                 candidates.emplace_back(
                     idx,
-                    anchor_distance_weight(dist, refDist, weightAtRefDist));
+                    anchor_distance_weight(dist, supportRadius, distNu));
             }
         } else {
             int32_t q1, q2, q3;
-            bccGrid.cart_to_lattice(q1, q2, q3, x, y, z * zScale_);
+            bccGrid.cart_to_lattice(q1, q2, q3, x, y, z);
             auto emitCandidate = [&](int32_t cq1, int32_t cq2, int32_t cq3) {
                 auto it = anchorKeyToIndex.find(AnchorKey3D{cq1, cq2, cq3, 0, 0, 0});
                 if (it == anchorKeyToIndex.end()) {
                     return;
                 }
                 const AnchorPoint& anchor = originalAnchors[it->second];
-                const double dx = x - static_cast<double>(anchor.x);
-                const double dy = y - static_cast<double>(anchor.y);
-                const double dz = (z - static_cast<double>(anchor.z)) * zScale_;
-                const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                const float dx = x - anchor.x;
+                const float dy = y - anchor.y;
+                const float dz = z - anchor.z;
+                const double dist = static_cast<double>(std::sqrt(dx * dx + dy * dy + dz * dz));
                 candidates.emplace_back(
                     it->second,
-                    anchor_distance_weight(dist, refDist, weightAtRefDist));
+                    anchor_distance_weight(dist, supportRadius, distNu));
             };
             emitCandidate(q1, q2, q3);
             for (const auto& delta : bccNeighborOffsets) {
