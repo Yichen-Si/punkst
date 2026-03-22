@@ -901,6 +901,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#single-molecule-pixel-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-molecule Pixel Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1355,6 +1366,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#single-molecule-pixel-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Single-molecule Pixel Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1564,14 +1586,14 @@ only in 3D mode. Default: 1.</p>
 <p><code>--radius</code> - Support radius used in pixel-to-anchor weighting. In 2D and thin
 3D it also controls the anchor search neighborhood. Default: <code>anchor-dist *
 1.2</code> in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
-z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
+the nearest thin-3D z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
 stencil, but it does control the weight decay scale and contributes to the
 x-y padding.</p>
 <p><code>--half-life-dist</code> - Ratio <code>h</code> in <code>(0, 1)</code> such that an anchor at distance
 <code>h * radius</code> receives weight <code>0.5</code>. Default: <code>0.7</code>. The implemented weighting
 rule is <code>w(d) = clamp(1 - (d / radius)^nu, 0.05, 0.95)</code> with
 <code>nu = log(0.5) / log(h)</code>.</p>
-<p><code>--min-init-count</code> - Minimum total count within the hexagon around an anchor for it to be included. Filters out regions outside tissues with sparse noise. Default: 10.</p>
+<p><code>--min-init-count</code> - Minimum accumulated anchor support required for an anchor to be retained during initialization. In thin 3D this support is radius-based and distance-weighted. Default: 10.</p>
 <p><code>--zmin</code>, <code>--zmax</code> - z range for 3D mode. Thin 3D requires both values.
 Standard 3D accepts them, but only uses them when
 <code>--ignore-outside-zrange</code> is set.</p>
@@ -1579,12 +1601,19 @@ Standard 3D accepts them, but only uses them when
 <p><code>--thin-3d-n-z-levels</code> - Number of evenly spaced thin-3D anchor levels to
 generate between <code>zmin</code> and <code>zmax</code>.</p>
 <p><code>--ignore-outside-zrange</code> - Drop observations outside <code>[zmin, zmax]</code> in 3D mode.</p>
-<p><code>--n-init-anchor-per-pix</code> - Thin-3D-only initialization parameter controlling
-how many nearby z levels each point contributes to when anchors are initialized.</p>
 <p><code>--threads</code> - Number of threads to use for parallel processing. Default: 1.</p>
 <p><code>--seed</code> - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.</p>
 <h3 id="output-parameters">Output Parameters<a class="headerlink" href="#output-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--output-binary</code> - Writes the main output as <code>&lt;prefix&gt;.bin</code> plus <code>&lt;prefix&gt;.index</code>. This cannot be combined with <code>--output-original</code>.</p>
+<p><code>--single-molecule</code> - Switches from standard pixel-level output to a special single-molecule-style mode. Decoding still uses the user-specified <code>--pixel-res</code> / <code>--pixel-res-z</code>, but records are grouped by <code>(pixel-or-voxel, feature)</code> instead of by coordinate alone. Each output row therefore still represents exactly one feature identity, plus a count of how many observations of that feature were grouped into that local bin.</p>
+<p>Current restrictions for <code>--single-molecule</code>:</p>
+<ul>
+<li>requires <code>--output-binary</code></li>
+<li>does not support <code>--output-original</code></li>
+<li>does not support <code>--output-bg-prob-expand</code></li>
+<li>does not support <code>--ext-col-ints</code>, <code>--ext-col-floats</code>, or <code>--ext-col-strs</code></li>
+<li>does not support weighted-feature input via <code>--feature-weights</code></li>
+</ul>
 <p><code>--output-original</code> - Writes the main output as text and includes the original feature names and counts together with the factor results.</p>
 <p><code>--output-anchors</code> - Writes anchor-level top-factor assignments to <code>&lt;prefix&gt;.anchors.tsv</code>.</p>
 <p><code>--output-bg-prob-expand</code> - In text mode, writes one line per feature per pixel to include background probabilities. Ignored if <code>--output-original</code> is set.</p>
@@ -1592,6 +1621,15 @@ how many nearby z levels each point contributes to when anchors are initialized.
 <p><code>--top-k</code> - Number of top factors to include in the output. Default: 3.</p>
 <p><code>--output-coord-digits</code> - Number of decimal digits to output for coordinates in text mode (used when input coordinates are float or <code>--output-original</code> is not set). Default: 2.</p>
 <p><code>--output-prob-digits</code> - Number of decimal digits to output for probabilities. Default: 4.</p>
+<h3 id="single-molecule-pixel-mode">Single-molecule Pixel Mode<a class="headerlink" href="#single-molecule-pixel-mode" title="Permanent link">&para;</a></h3>
+<p>Use <code>--single-molecule</code> to make inference for each feature separately within each pixel/voxel. This mode may be suitable for image-based ST data with single molecule resolution and mostly informative genes.</p>
+<p>Compared with the standard pixel mode:</p>
+<ul>
+<li>standard mode jointly considers all observations in the same pixel / voxel and make inference at pixel/voxel level</li>
+<li>single-molecule mode makes inference for each feature separately within each pixel/voxel, so one pixel/voxel can be associated with multiple sets of factor probabilities</li>
+<li>the binary output record therefore includes one extra <code>uint32_t featureIdx</code></li>
+</ul>
+<p>This means only nearby repeated observations of the same feature can share one local inference result, while different features at the same coordinate can have different inference results.</p>
 <h2 id="3d-modes">3D Modes<a class="headerlink" href="#3d-modes" title="Permanent link">&para;</a></h2>
 <p>3D mode is explicit.</p>
 <ul>
@@ -1636,13 +1674,17 @@ finite set of z levels across <code>[zmin, zmax]</code>.</p>
   <code>--thin-3d-n-z-levels</code> is ignored with a warning.</li>
 <li>When <code>--thin-3d-n-z-levels</code> is used, the z levels are placed evenly between
   <code>zmin</code> and <code>zmax</code>.</li>
-<li><code>--radius</code> is still used for the pixel-to-anchor graph.</li>
-<li><code>--n-init-anchor-per-pix</code> controls how many nearby z levels each point
-  contributes to during anchor initialization.</li>
+<li>The z coordinate of each anchor is assigned deterministically but
+  pseudorandomly from its x-y anchor key, so z levels are mixed across x-y
+  without the old periodic stripe pattern.</li>
+<li><code>--radius</code> controls both thin-3D anchor initialization and the final
+  pixel-to-anchor graph.</li>
+<li>During initialization, each point contributes to every implicit thin-3D
+  anchor within the 3D support radius, using the same distance-decay rule that
+  is later used during iterative updates.</li>
 <li>The x-y anchor coordinates are still generated from the shifted hex grids.</li>
-<li>The z coordinate of each anchor is assigned by a modular coloring of the
-  underlying fine axial lattice, so anchors from different z levels are mixed
-  across x-y while staying roughly balanced across levels.</li>
+<li>Thin-3D anchor retention is therefore radius-based rather than “nearest z
+  planes” based.</li>
 </ul>
 <p>Example:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/thin3d.model.tsv<span class="w"> </span><span class="se">\</span>
@@ -1651,7 +1693,7 @@ finite set of z levels across <code>[zmin, zmax]</code>.</p>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>--thin-3D<span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">18</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>--thin-3d-z-levels<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span>.5<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">4</span>.5<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="m">9</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>--zmin<span class="w"> </span><span class="m">0</span><span class="w"> </span>--zmax<span class="w"> </span><span class="m">20</span><span class="w"> </span>--n-init-anchor-per-pix<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>--zmin<span class="w"> </span><span class="m">0</span><span class="w"> </span>--zmax<span class="w"> </span><span class="m">20</span><span class="w"> </span>--radius<span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
@@ -1684,6 +1726,7 @@ sample_id, path to the transcript file created by <code>pts2tiles</code>, path t
 <p>Files are written with the prefix specified by <code>--out-pref</code> (or inferred from <code>--out</code>).</p>
 <h3 id="main-output">Main output<a class="headerlink" href="#main-output" title="Permanent link">&para;</a></h3>
 <p><code>&lt;prefix&gt;.bin</code> - Main pixel-level output in binary format when <code>--output-binary</code> is set.</p>
+<p>When <code>--single-molecule</code> is enabled, each binary record stores coordinates, <code>featureIdx</code>, and the top-factor pairs.</p>
 <p><code>&lt;prefix&gt;.tsv</code> - Main pixel-level output in text format when <code>--output-binary</code> is not set.</p>
 <p><code>&lt;prefix&gt;.index</code> - Binary index for the main output. This is written for both text and binary modes. In 2D binary mode, the index describes regular square tiles directly.</p>
 <p><code>&lt;prefix&gt;.anchors.tsv</code> - Anchor-level top-factor assignments when <code>--output-anchors</code> is set.</p>
