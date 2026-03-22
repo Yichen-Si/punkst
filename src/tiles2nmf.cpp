@@ -262,22 +262,12 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double supportRadius, double paddingRadius
 }
 
 template<typename T>
-double Tiles2NMF<T>::referenceAnchorDistance() const {
-    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
-        if (Base::useThin3DAnchors_) {
-            return Base::thin3DReferenceAnchorDistance(hexGrid_, nMoves_);
-        }
-        return Base::standard3DBccGridDist_;
-    }
-    return hexGrid_.size * std::sqrt(3.0) / std::max<int32_t>(nMoves_, 1);
-}
-
-template<typename T>
 double Tiles2NMF<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     double avgDegree = 0.0;
-    if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
         avgDegree = Base::buildMinibatchCore3D(
-            tileData, anchors, minibatch, bccGrid_,
+            tileData, anchors, minibatch,
+            Base::useThin3DAnchors_ ? nullptr : &bccGrid_,
             supportRadius_, distNu_);
     } else {
         avgDegree = Base::buildMinibatchCore(
@@ -302,18 +292,9 @@ int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint
     anchors.clear();
     if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
         if (Base::useThin3DAnchors_) {
-            std::map<typename Base::AnchorKey2D, float> gridPts;
-            Base::forEachAnchorCandidateThin3D(tileData, hexGrid_, nMoves_, [&](uint32_t, float ct, const typename Base::AnchorKey2D& key) {
-                gridPts[key] += ct;
-            });
-            for (auto& kv : gridPts) {
-                if (kv.second < anchorMinCount_) {
-                    continue;
-                }
-                float x, y, z;
-                Base::anchorKeyToCoordThin3D(x, y, z, kv.first, hexGrid_, nMoves_);
-                anchors.emplace_back(x, y, z);
-            }
+            std::vector<SparseObs> documents;
+            Base::buildAnchorsThin3D(tileData, anchors, documents, hexGrid_, nMoves_,
+                anchorMinCount_, supportRadius_, distNu_);
             minibatch.n = anchors.size();
             return anchors.size();
         }

@@ -76,25 +76,22 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
 }
 
 template<typename T>
-double Tiles2SLDA<T>::referenceAnchorDistance() const {
-    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
-        if (Base::useThin3DAnchors_) {
-            return Base::thin3DReferenceAnchorDistance(hexGrid_, nMoves_);
-        }
-        return Base::standard3DBccGridDist_;
-    }
-    return hexGrid_.size * std::sqrt(3.0) / std::max<int32_t>(nMoves_, 1);
-}
-
-template<typename T>
 void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand) {
     if (eta0.size() != M_) {
         error("%s: size of background prior (%d) does not match feature number (%d)", __func__, (int32_t)eta0.size(), M_);
     }
+    if (Base::singleMolecule_ && outputExpand) {
+        error("%s: SingleMolecule mode does not support expanded background output", __func__);
+    }
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
-    Base::outputBackgroundProbDense_ = !outputExpand;
-    Base::outputBackgroundProbExpand_ = outputExpand;
+    if (Base::singleMolecule_) {
+        Base::outputBackgroundProbDense_ = false;
+        Base::outputBackgroundProbExpand_ = false;
+    } else {
+        Base::outputBackgroundProbDense_ = !outputExpand;
+        Base::outputBackgroundProbExpand_ = outputExpand;
+    }
     Base::configureOutputMode();
 }
 
@@ -121,17 +118,27 @@ void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, do
         }
     }
     fin.close();
+    if (Base::singleMolecule_ && outputExpand) {
+        error("%s: SingleMolecule mode does not support expanded background output", __func__);
+    }
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
-    Base::outputBackgroundProbDense_ = !outputExpand;
-    Base::outputBackgroundProbExpand_ = outputExpand;
+    if (Base::singleMolecule_) {
+        Base::outputBackgroundProbDense_ = false;
+        Base::outputBackgroundProbExpand_ = false;
+    } else {
+        Base::outputBackgroundProbDense_ = !outputExpand;
+        Base::outputBackgroundProbExpand_ = outputExpand;
+    }
     Base::configureOutputMode();
 }
 
 template<typename T>
 int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     std::vector<SparseObs> documents;
-    if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3 && Base::useThin3DAnchors_) {
+        Base::buildAnchorsThin3D(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_, supportRadius_, distNu_);
+    } else if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
         Base::buildAnchors3D(tileData, anchors, documents, bccGrid_, anchorMinCount_);
     } else {
         Base::buildAnchors(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_);
@@ -156,9 +163,10 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoin
 template<typename T>
 double Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
     double avgDegree = 0.0;
-    if (Base::coordDim_ == MinibatchCoordDim::Dim3 && !Base::useThin3DAnchors_) {
+    if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
         avgDegree = Base::buildMinibatchCore3D(
-            tileData, anchors, minibatch, bccGrid_,
+            tileData, anchors, minibatch,
+            Base::useThin3DAnchors_ ? nullptr : &bccGrid_,
             supportRadius_, distNu_);
     } else {
         avgDegree = Base::buildMinibatchCore(
@@ -170,9 +178,15 @@ double Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoi
         return avgDegree;
     }
 
-    for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
-        for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
-            it.valueRef() = logit(it.value());
+    if (minibatch.storageMode == Minibatch::StorageMode::GenericSparse) {
+        for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
+            for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+                it.valueRef() = logit(it.value());
+            }
+        }
+    } else if (minibatch.storageMode == Minibatch::StorageMode::SingleMolecule) {
+        for (float& val : minibatch.wijVal) {
+            val = logit(val);
         }
     }
 
@@ -331,12 +345,22 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     if (debug_) {
         std::cout << "Thread " << threadId << " made minibatch with " << nPixels
                   << " pixels and average degree " << avgDegree << ". ";
-        int32_t nnz = minibatch.wij.nonZeros();
+        int32_t nnz = (minibatch.storageMode == Minibatch::StorageMode::SingleMolecule)
+            ? static_cast<int32_t>(minibatch.edgeAnchorIdx.size())
+            : minibatch.wij.nonZeros();
         std::cout << nnz << " " << (float) nnz / minibatch.n << std::endl << std::flush;
         std::vector<float> colsums(minibatch.n, 0.0f);
-        for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
-            for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
-                colsums[it.col()] += it.value();
+        if (minibatch.storageMode == Minibatch::StorageMode::SingleMolecule) {
+            for (int32_t i = 0; i < minibatch.N; ++i) {
+                for (uint32_t e = minibatch.rowOffsets[i]; e < minibatch.rowOffsets[i + 1]; ++e) {
+                    colsums[minibatch.edgeAnchorIdx[e]] += minibatch.psiVal[e];
+                }
+            }
+        } else {
+            for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
+                for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
+                    colsums[it.col()] += it.value();
+                }
             }
         }
         std::cout << "  " << std::accumulate(colsums.begin(), colsums.end(), 0.0f) / minibatch.n << " " << std::max_element(colsums.begin(), colsums.end())[0] << std::endl << std::flush;
@@ -352,10 +376,10 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     std::vector<std::unordered_map<uint32_t, float>> phi0;
     std::vector<std::unordered_map<uint32_t, float>>* phi0_ptr = nullptr;
     if (fitBackground_) {
-        f0 = slda_.do_e_step_bg(minibatch, phi0, &smtx, &n_iter, &delta);
+        f0 = slda_.do_e_step(minibatch, &smtx, &phi0, &n_iter, &delta);
         phi0_ptr = &phi0;
     } else {
-        f0 = slda_.do_e_step_standard(minibatch, &smtx, &n_iter, &delta);
+        f0 = slda_.do_e_step(minibatch, &smtx, nullptr, &n_iter, &delta);
     }
     RowMajorMatrixXf local_cmtx = minibatch.phi.transpose() * minibatch.phi;
     {

@@ -46,6 +46,8 @@ public:
     };
     using GzHandle = std::unique_ptr<gzFile_s, GzCloser>;
     using PixelKey3 = std::tuple<int32_t, int32_t, int32_t>;
+    using PixelFeatureKey2 = std::tuple<int32_t, int32_t, uint32_t>;
+    using PixelFeatureKey3 = std::tuple<int32_t, int32_t, int32_t, uint32_t>;
 
     TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "", int32_t threads = 1) : dataFile_(dataFile), indexFile_(indexFile), threads_(std::max(0, threads)) {
         if (!indexFile.empty()) {
@@ -70,6 +72,7 @@ public:
     int32_t getK() const { return k_; }
     int32_t getTileSize() const { return formatInfo_.tileSize; }
     float getPixelResolution() const { return formatInfo_.pixelResolution; }
+    bool hasFeatureIndex() const { return (mode_ & 0x40u) != 0; }
     float getPixelResolutionZ() const {
         if ((mode_ & 0x10) && (mode_ & 0x20u) && formatInfo_.pixelResolutionZ > 0.0f) {
             return formatInfo_.pixelResolutionZ;
@@ -123,23 +126,34 @@ public:
     // Print index
     void printIndex() const;
     // Convert to plain TSV
-    void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2);
+    void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2,
+        const std::string& featureDictFile = "");
     // Fix Fragmented Tiles
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
     // Region query
-    void extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax);
-    void extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale = 10);
-    void extractRegionPrepared(const std::string& outPrefix, const PreparedRegionMask2D& region);
+    void extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax,
+        float qzmin = std::numeric_limits<float>::quiet_NaN(),
+        float qzmax = std::numeric_limits<float>::quiet_NaN());
+    void extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale = 10,
+        float qzmin = std::numeric_limits<float>::quiet_NaN(),
+        float qzmax = std::numeric_limits<float>::quiet_NaN());
+    void extractRegionPrepared(const std::string& outPrefix, const PreparedRegionMask2D& region,
+        float qzmin = std::numeric_limits<float>::quiet_NaN(),
+        float qzmax = std::numeric_limits<float>::quiet_NaN());
     int32_t query(float qxmin, float qxmax, float qymin, float qymax);
 
     /* Joining, annotating, and aggregation */
     void merge(const std::vector<std::string>& otherFiles,
         const std::string& outPrefix, std::vector<uint32_t> k2keep = {},
-        bool binaryOutput = false, bool keepAllMain = false);
-    void annotate(const std::string& ptPrefix, const std::string& outPrefix, int32_t icol_x, int32_t icol_y, int32_t icol_z = -1);
+        bool binaryOutput = false, bool keepAllMain = false,
+        const std::string& featureDictFile = "");
+    void annotate(const std::string& ptPrefix, const std::string& outPrefix,
+        int32_t icol_x, int32_t icol_y, int32_t icol_z = -1,
+        int32_t icol_f = -1, const std::string& featureDictFile = "");
     void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
-        int32_t icol_s = -1, int32_t icol_z = -1, uint32_t k_out = 0, float max_cell_diameter = 50);
+        int32_t icol_s = -1, int32_t icol_z = -1, int32_t icol_f = -1,
+        uint32_t k_out = 0, float max_cell_diameter = 50, const std::string& featureDictFile = "");
 
     /* Factor-distribution summaries */
     // For each pair of (k1,k2) compute \sum_i p1_i * p2_i
@@ -269,6 +283,7 @@ private:
     TopProbs finalizeRasterTopProbs(const RasterTopProbAccum& accum) const;
     void validateCoordinateEncoding() const;
     void closeTextStream();
+    void requireNoFeatureIndex(const char* funcName) const;
 
     // Determine if a block is strictly within a tile or a boundary block
     void classifyBlocks(int32_t tileSize);
@@ -305,18 +320,29 @@ private:
     // Read one binary record, w/ dimension (2<->3) & w/o coord scaling
     bool readBinaryRecord2DInt(std::istream& dataStream, PixTopProbs<int32_t>& out) const;
     bool readBinaryRecord3DInt(std::istream& dataStream, PixTopProbs3D<int32_t>& out) const;
+    bool readBinaryRecord2DInt(std::istream& dataStream, PixTopProbsFeature<int32_t>& out) const;
+    bool readBinaryRecord3DInt(std::istream& dataStream, PixTopProbsFeature3D<int32_t>& out) const;
     // Read one binary record, with dimension (2<->3) and
     //        (if rawCoord = false) int (pixel) ->float (world) conversion
     bool readBinaryRecord2D(std::istream& dataStream, PixTopProbs<float>& out,
         bool rawCoord = false) const;
     bool readBinaryRecord3D(std::istream& dataStream, PixTopProbs3D<float>& out,
         bool rawCoord = false) const;
+    bool readBinaryRecord2D(std::istream& dataStream, PixTopProbsFeature<float>& out,
+        bool rawCoord = false) const;
+    bool readBinaryRecord3D(std::istream& dataStream, PixTopProbsFeature3D<float>& out,
+        bool rawCoord = false) const;
     // Read one record and convert coordinates to integer pixel space.
     bool readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos, int32_t& recX, int32_t& recY, TopProbs& rec) const;
     bool readNextRecord3DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos, int32_t& recX, int32_t& recY, int32_t& recZ, TopProbs& rec) const;
+    bool readNextRecord2DFeatureAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos,
+        int32_t& recX, int32_t& recY, uint32_t& featureIdx, TopProbs& rec) const;
+    bool readNextRecord3DFeatureAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos,
+        int32_t& recX, int32_t& recY, int32_t& recZ, uint32_t& featureIdx, TopProbs& rec) const;
     // Parse only 2 coordinates with int->float conversion
     // (store world coordinates regardless of the input data type)
     void decodeBinaryXY(const char* recBuf, float& x, float& y) const;
+    void decodeBinaryXYZ(const char* recBuf, float& x, float& y, float& z) const;
 
     /* Dispatched implementations */
     // Impl for reorgTiles
@@ -337,6 +363,10 @@ private:
         bool binaryOutput,
         FILE* fp, int fdMain, int fdIndex,
         long& currentOffset);
+    void mergeSingleMolecule(const std::vector<std::string>& otherFiles,
+        const std::string& outPrefix, std::vector<uint32_t> k2keep,
+        bool binaryOutput, bool keepAllMain,
+        const std::string& featureDictFile);
     // Impl for probDot
     void probDotTiles2D(const std::set<TileKey>& commonTiles,
         const std::vector<TileOperator*>& opPtrs,
@@ -354,6 +384,8 @@ private:
         std::vector<std::map<std::pair<int32_t, int32_t>, double>>& internalDots,
         std::map<std::pair<size_t, size_t>, std::map<std::pair<int32_t, int32_t>, double>>& crossDots,
         size_t& count);
+    void probDotMultiSingleMolecule(const std::vector<std::string>& otherFiles,
+        const std::string& outPrefix, std::vector<uint32_t> k2keep, int32_t probDigits);
     // Impl for annotate
     void annotateTiles2D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y,
@@ -361,6 +393,24 @@ private:
     void annotateTiles3D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
         uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
+    void annotateSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
+        int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        int32_t icol_f, const std::string& featureDictFile);
+    void pix2cellSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
+        uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
+        int32_t icol_s, int32_t icol_z, int32_t icol_f,
+        uint32_t k_out, float max_cell_diameter, const std::string& featureDictFile);
+    void dumpTSVSingleMolecule(const std::string& outPrefix,
+        int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile);
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
+        computeConfusionMatrixSingleMolecule(double resolution) const;
+    int32_t loadTileToMapFeature(const TileKey& key,
+        std::map<PixelFeatureKey2, TopProbs>& pixelMap,
+        std::ifstream* dataStream = nullptr) const;
+    int32_t loadTileToMapFeature3D(const TileKey& key,
+        std::map<PixelFeatureKey3, TopProbs>& pixelMap,
+        std::ifstream* dataStream = nullptr) const;
+    std::vector<std::string> loadFeatureNames(const std::string& featureDictFile) const;
 
     /* Geometry & spatial related */
     struct TileGeom {

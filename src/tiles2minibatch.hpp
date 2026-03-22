@@ -37,14 +37,45 @@ struct Minibatch {
     int n  = 0;    // number of anchors
     int N  = 0;    // number of pixels
     int M  = 0;    // number of features
+    enum class StorageMode : uint8_t { GenericSparse, SingleMolecule };
+    StorageMode storageMode = StorageMode::GenericSparse;
     SparseMatrix<float, Eigen::RowMajor> mtx;  // (N x M); observed data matrix
     SparseMatrix<float, Eigen::RowMajor> wij; // (N x n)
-    RowMajorMatrixXf gamma; // (n x K); ~P(k|j)
-    RowMajorMatrixXf theta; // (n x K); only for em-nmf
-    // Does not need to be initialized:
     SparseMatrix<float, Eigen::RowMajor> psi; // (N x n)
+    // SingleMolecule mode specific fields
+    std::vector<uint32_t> featureIdx; // (N); one feature id per pixel
+    std::vector<float> featureWeight; // (N); count of the feature per pixel
+    std::vector<uint32_t> rowOffsets; // (N + 1); CSR offsets for anchor edges
+    std::vector<uint32_t> edgeAnchorIdx; // CSR anchor indices
+    std::vector<float> wijVal; // CSR edge values; raw weights in builders, logits in model-specific consumers
+    std::vector<float> psiVal; // CSR normalized edge weights
+    // Filled during inference
+    RowMajorMatrixXf gamma; // (n x K); ~P(k|j)
     RowMajorMatrixXf phi;   // (N x K); ~P(k|i)
+    RowMajorMatrixXf theta; // (n x K), em-nmf specific
     double ll = 0.0;
+
+    void clearDataSgl() {
+        featureIdx.clear(); featureWeight.clear();
+        rowOffsets.clear(); edgeAnchorIdx.clear();
+        wijVal.clear(); psiVal.clear();
+    }
+    void clearDataMtx() {
+        mtx.resize(0, 0);
+        wij.resize(0, 0);
+        psi.resize(0, 0);
+    }
+    bool checkIfReadySgl() const {
+        if (rowOffsets.size() != static_cast<size_t>(N + 1)) {
+            return false;
+        }
+        size_t expectedEdges = rowOffsets.back();
+        return featureIdx.size() == static_cast<size_t>(N) &&
+               featureWeight.size() == static_cast<size_t>(N) &&
+               edgeAnchorIdx.size() == expectedEdges &&
+               wijVal.size() == expectedEdges &&
+               psiVal.size() == expectedEdges;
+    }
 };
 
 enum class FieldType : uint8_t { INT32, FLOAT, STRING };
@@ -61,6 +92,7 @@ enum class MinibatchCoordDim : uint8_t { Dim2 = 2, Dim3 = 3 };
 struct MinibatchIoConfig {
     MinibatchInputMode input = MinibatchInputMode::Standard;
     MinibatchOutputMode output = MinibatchOutputMode::Standard;
+    bool singleMolecule = false;
     bool outputAnchor = false;
     bool useTicketSystem = false;
     bool nativeRegularTiles = false;
@@ -290,6 +322,7 @@ public:
         const std::string* opt = nullptr, double res = 1, int32_t debug = 0)
     : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref),
       lineParserPtr(parser), pixelResolution_(res), debug_(debug),
+      singleMolecule_(ioConfig.singleMolecule),
       useTicketSystem_(ioConfig.useTicketSystem),
       outputAnchor_(ioConfig.outputAnchor),
       inputMode_(ioConfig.input), outputMode_(ioConfig.output),
@@ -335,7 +368,7 @@ public:
     void set3Dparameters(bool isThin,
         double zMin = std::numeric_limits<double>::quiet_NaN(),
         double zMax = std::numeric_limits<double>::quiet_NaN(),
-        float zRes = -1.0f, int32_t n = 0, bool enforceZrange = false,
+        float zRes = -1.0f, bool enforceZrange = false,
         float standard3DBccGridDist = -1.0f,
         const std::vector<float>& thin3DZLevels = {});
     virtual int32_t getFactorCount() const = 0;
@@ -392,7 +425,9 @@ protected:
         float xmin, xmax, ymin, ymax;
         std::vector<std::string> outputLines;
         std::vector<PixTopProbs<int32_t>> outputObjs;
+        std::vector<PixTopProbsFeature<int32_t>> outputObjsFeature;
         std::vector<PixTopProbs3D<int32_t>> outputObjs3d;
+        std::vector<PixTopProbsFeature3D<int32_t>> outputObjsFeature3d;
         uint32_t npts;
         bool useObj = false; // true for binary output
         ResultBuf(int32_t t=0, float x1=0, float x2=0, float y1=0, float y2=0)
@@ -445,19 +480,19 @@ protected:
     bool outputBackgroundProbDense_ = false;
     bool outputBackgroundProbExpand_ = false;
     bool outputAnchor_ = false;
+    bool singleMolecule_ = false;
     MinibatchInputMode inputMode_ = MinibatchInputMode::Standard;
     MinibatchOutputMode outputMode_ = MinibatchOutputMode::Standard;
     MinibatchCoordDim coordDim_ = MinibatchCoordDim::Dim2;
-    int32_t nInitAnchorPerPix_ = 0;
     bool ignoreOutsideZrange_ = false;
     bool useThin3DAnchors_ = false;
     double zMin_ = std::numeric_limits<double>::quiet_NaN();
     double zMax_ = std::numeric_limits<double>::quiet_NaN();
     std::vector<float> thin3DZLevels_;
-    int32_t nZLevels_ = 0, thin3Dstep_ = 0;
+    int32_t nZLevels_ = 0;
+    uint64_t thin3DHashSeed_ = 0x8f3f73b5cf1c9d4bull;
     float standard3DBccSize_ = -1.0f;
     float standard3DBccGridDist_ = -1.0f;
-    mutable float thin3DAnchorRefDist_ = -1.0f;
     ParseTileFn parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard;
     ParseBoundaryFileFn parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile;
     ParseBoundaryMemoryFn parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandardWrapper;
@@ -680,24 +715,28 @@ protected:
         double supportRadius, double distNu);
     double buildMinibatchCore3D(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-        double supportRadius, double distNu);
-    double buildMinibatchCore3D(TileData<T>& tileData,
+        const BCCGrid* bccGrid, double supportRadius, double distNu);
+    double buildMinibatchCoreSingleMolecule(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
-        const BCCGrid& bccGrid, double supportRadius, double distNu);
-    double thin3DReferenceAnchorDistance(const HexGrid& hexGrid_, int32_t nMoves_) const;
+        double supportRadius, double distNu);
+    double buildMinibatchCoreSingleMolecule3D(TileData<T>& tileData,
+        std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
+        const BCCGrid* bccGrid, double supportRadius, double distNu);
+    int32_t thin3DAnchorZIndexForKey(const AnchorKey2D& key) const;
     void thin3DAnchorKeyToFineAxial(int32_t& u, int32_t& v, const AnchorKey2D& key, int32_t nMoves_) const;
     AnchorKey2D thin3DFineAxialToAnchorKey(int32_t u, int32_t v, int32_t nMoves_) const;
-    void thin3DSelectNearestZLevels(double z, int32_t nPerPixel, std::vector<int32_t>& zIndices) const;
-    AnchorKey2D thin3DNearestAnchorKeyForLevel(float x, float y, int32_t zIndex,
-        const HexGrid& hexGrid_, int32_t nMoves_) const;
-    // Given data, choose anchor points
-    void forEachAnchorCandidate2D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_,
-        const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const;
+    void forEachThin3DAnchorWithinRadius(float x, float y, float z,
+        const HexGrid& hexGrid_, int32_t nMoves_, float supportRadius,
+        const std::function<void(const AnchorKey2D&, float, float, float, float)>& emit) const;
+    // Choose a set of neighboring anchors for each point
+    void forEachAnchorCandidate2D(const TileData<T>& tileData,
+        const HexGrid& hexGrid_, int32_t nMoves_, const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const;
     void forEachAnchorCandidate3D(const TileData<T>& tileData,
         const std::function<void(uint32_t, float, const AnchorKey3D&)>& emit) const;
-    void forEachAnchorCandidate3D(const TileData<T>& tileData, const BCCGrid& bccGrid,
-        const std::function<void(uint32_t, float, const AnchorKey3D&)>& emit) const;
-    void forEachAnchorCandidateThin3D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_,
+    void forEachAnchorCandidate3D(const TileData<T>& tileData,
+        const BCCGrid& bccGrid, const std::function<void(uint32_t, float, const AnchorKey3D&)>& emit) const;
+    void forEachAnchorCandidateThin3D(const TileData<T>& tileData,
+        const HexGrid& hexGrid_, int32_t nMoves_, double supportRadius, double distNu,
         const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const;
     // Anchor key helper
     void anchorKeyToCoord2D(float& x, float& y, const AnchorKey2D& key, const HexGrid& hexGrid_, int32_t nMoves_) const;
@@ -708,7 +747,8 @@ protected:
     int32_t buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, const HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
     int32_t buildAnchors3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, double minCount = 0);
     int32_t buildAnchors3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, const BCCGrid& bccGrid, double minCount = 0);
-    int32_t buildAnchorsThin3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, const HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
+    int32_t buildAnchorsThin3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents,
+        const HexGrid& hexGrid_, int32_t nMoves_, double minCount, double supportRadius, double distNu);
 
     /* I/O */
     // Parsing helpers
@@ -738,7 +778,7 @@ protected:
     int32_t parseBoundaryMemoryExtended3DWrapper(TileData<T>& tileData,
         IBoundaryStorage* storage, uint32_t bufferKey);
     // Output helpers
-    float anchor_distance_weight(float dist, float radius, float nu = 1.943f);
+    float anchor_distance_weight(float dist, float radius, float nu = 1.943f) const;
     void setExtendedSchema(size_t offset);
     void setupOutput();
     void closeOutput();

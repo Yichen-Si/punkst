@@ -60,8 +60,6 @@ public:
     int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
     int32_t initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
     double makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
-    double referenceAnchorDistance() const;
-
     void processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) override;
     void postRun() override;
     void onWorkerStart(int threadId) override;

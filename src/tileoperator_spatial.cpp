@@ -50,6 +50,7 @@ inline void spatialAccumulateEdge(SpatialMetricsAccum& m, uint8_t a, uint8_t b) 
 } // namespace
 
 void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islandSmoothRounds, bool fillEmptyIslands) {
+    requireNoFeatureIndex(__func__);
     if (!regular_labeled_raster_ || coord_dim_ != 2) {
         error("%s only supports raster 2D data with regular tiles", __func__);
     }
@@ -288,6 +289,7 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
 }
 
 void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
+    requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;
@@ -431,6 +433,7 @@ void TileOperator::spatialMetricsBasic(const std::string& outPrefix) {
 void TileOperator::profileShellAndSurface(const std::string& outPrefix,
     const std::vector<int32_t>& radii, int32_t dMax,
     uint32_t minComponentSize, uint32_t minPixPerTilePerLabel) {
+    requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;

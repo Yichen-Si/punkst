@@ -1,3 +1,6 @@
+#include <cmath>
+#include <limits>
+
 #include "punkst.h"
 #include "tileoperator.hpp"
 
@@ -38,6 +41,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     double confusionRes = -1.0;
     std::vector<uint32_t> k2keep;
     int32_t icol_x = -1, icol_y = -1, icol_z = -1;
+    int32_t icol_f = -1;
     int32_t icol_c = -1, icol_s = -1;
     int32_t coordDigits = 2, probDigits = 4;
     int32_t kOut = 0;
@@ -53,7 +57,10 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     float rasterPixelRes = -1.0f;
     std::string templateGeoJSON;
     std::string templateOutPrefix;
+    std::string featureDictFile;
     float xmin = 0.0f, xmax = -1.0f, ymin = 0.0f, ymax = -1.0f;
+    double zmin = std::numeric_limits<double>::quiet_NaN();
+    double zmax = std::numeric_limits<double>::quiet_NaN();
     int32_t threads = 1;
     int32_t debug_ = 0;
 
@@ -83,7 +90,9 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("xmin", "Minimum x coordinate for --extract-region", xmin)
       .add_option("xmax", "Maximum x coordinate for --extract-region", xmax)
       .add_option("ymin", "Minimum y coordinate for --extract-region", ymin)
-      .add_option("ymax", "Maximum y coordinate for --extract-region", ymax);
+      .add_option("ymax", "Maximum y coordinate for --extract-region", ymax)
+      .add_option("zmin", "Minimum z coordinate for 3D region extraction ([zmin, zmax))", zmin)
+      .add_option("zmax", "Maximum z coordinate for 3D region extraction ([zmin, zmax))", zmax);
 
     // Merge, join, and aggregation operations.
     pl.add_option("merge-emb", "List of embedding files to merge", inMergeEmbFiles)
@@ -91,9 +100,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
+      .add_option("features", "Feature dictionary file; first column maps feature indices to names", featureDictFile)
       .add_option("icol-x", "X coordinate column index, 0-based", icol_x)
       .add_option("icol-y", "Y coordinate column index, 0-based", icol_y)
       .add_option("icol-z", "Z coordinate column index, 0-based", icol_z)
+      .add_option("icol-feature", "Feature-name column index, 0-based (required for single-molecule annotate/pix2cell)", icol_f)
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
@@ -153,6 +164,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     TileOperator tileOp(inData, inIndex);
     if (K > 0) {tileOp.setFactorCount(K);}
     tileOp.setThreads(threads);
+    const bool hasFeatureIndex = tileOp.hasFeatureIndex();
     const bool hasRasterPixelResOverride = (rasterPixelRes > 0.0f);
     auto applyRasterPixelResOverride = [&]() {
         if (hasRasterPixelResOverride) {
@@ -174,6 +186,18 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
           profileOneFactorMask || runSoftFactorMask || runHardFactorMask)) {
         error("--raster-pixel-res is currently supported only with raster-style tile-op commands");
     }
+    const bool hasExtractRegionZMin = !std::isnan(zmin);
+    const bool hasExtractRegionZMax = !std::isnan(zmax);
+    if (hasExtractRegionZMin != hasExtractRegionZMax) {
+        error("Both --zmin and --zmax must be provided together");
+    }
+    if ((hasExtractRegionZMin || hasExtractRegionZMax) &&
+        !(extractRegion || !extractRegionGeoJSON.empty())) {
+        error("--zmin/--zmax are only supported with --extract-region or --extract-region-geojson");
+    }
+    if ((extractRegion || !extractRegionGeoJSON.empty()) && hasExtractRegionZMin && !(zmax > zmin)) {
+        error("--zmax must be greater than --zmin");
+    }
 
     if (reorganize) {
         tileOp.reorgTiles(outPrefix, tileSize);
@@ -184,26 +208,68 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (!extractRegionGeoJSON.empty()) {
             error("--extract-region and --extract-region-geojson are mutually exclusive");
         }
-        tileOp.extractRegion(outPrefix, xmin, xmax - 1e-6, ymin, ymax - 1e-6);
+        tileOp.extractRegion(outPrefix, xmin, xmax - 1e-6f, ymin, ymax - 1e-6f,
+            static_cast<float>(zmin), static_cast<float>(zmax));
         return 0;
     }
 
     if (!extractRegionGeoJSON.empty()) {
-        tileOp.extractRegionGeoJSON(outPrefix, extractRegionGeoJSON, extractRegionScale);
+        tileOp.extractRegionGeoJSON(outPrefix, extractRegionGeoJSON, extractRegionScale,
+            static_cast<float>(zmin), static_cast<float>(zmax));
         return 0;
     }
 
     if (dumpTSV) {
-        tileOp.dumpTSV(outPrefix, probDigits, coordDigits);
+        if (hasFeatureIndex && featureDictFile.empty()) {
+            error("--features is required to dump single-molecule records to TSV");
+        }
+        tileOp.dumpTSV(outPrefix, probDigits, coordDigits, featureDictFile);
         return 0;
     }
 
+    if (confusionRes >= 0) {
+        auto confusion = tileOp.computeConfusionMatrix(confusionRes, outPrefix.c_str(), probDigits);
+        return 0;
+    }
+
+    if (probDot) {
+        if (!inMergeEmbFiles.empty()) {
+            tileOp.probDot_multi(inMergeEmbFiles, outPrefix, k2keep, probDigits);
+        } else {
+            tileOp.probDot(outPrefix, probDigits);
+        }
+        return 0;
+    }
+
+    if (cellAnno) {
+        if (hasFeatureIndex && (icol_f < 0 || featureDictFile.empty()))
+            error("valid --icol-feature and --features are required for --annotate-cell on single-molecule input");
+        tileOp.pix2cell(inMergePtsPrefix, outPrefix, icol_c, icol_x, icol_y,
+            icol_s, icol_z, icol_f, kOut, maxCellDiameter, featureDictFile);
+        return 0;
+    }
+
+    if (!inMergeEmbFiles.empty()) {
+        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut, mergeKeepAllMain, featureDictFile);
+        return 0;
+    }
+
+    if (!inMergePtsPrefix.empty()) {
+        if (hasFeatureIndex && (icol_f < 0 || featureDictFile.empty()))
+            error("valid --icol-feature and --features are required for --annotate-pts on single-molecule input");
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, featureDictFile);
+        return 0;
+    }
+
+    // Raster-style operations
+    if (hasFeatureIndex) {
+        error("Raster image based operations do not support single-molecule input");
+    }
     if (smoothTopLabelsRounds > 0) {
         applyRasterPixelResOverride();
         tileOp.smoothTopLabels2D(outPrefix, smoothTopLabelsRounds, fillEmptyIslands);
         return 0;
     }
-
     if (spatialMetrics) {
         applyRasterPixelResOverride();
         tileOp.spatialMetricsBasic(outPrefix);
@@ -235,35 +301,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     if (runHardFactorMask) {
         applyRasterPixelResOverride();
         tileOp.hardFactorMask(outPrefix, minComponentSize, skipBoundaries, templateGeoJSON, templateOutPrefix);
-        return 0;
-    }
-
-    if (confusionRes >= 0) {
-        auto confusion = tileOp.computeConfusionMatrix(confusionRes, outPrefix.c_str(), probDigits);
-        return 0;
-    }
-
-    if (probDot) {
-        if (!inMergeEmbFiles.empty()) {
-            tileOp.probDot_multi(inMergeEmbFiles, outPrefix, k2keep, probDigits);
-        } else {
-            tileOp.probDot(outPrefix, probDigits);
-        }
-        return 0;
-    }
-
-    if (cellAnno) {
-        tileOp.pix2cell(inMergePtsPrefix, outPrefix, icol_c, icol_x, icol_y, icol_s, icol_z, kOut, maxCellDiameter);
-        return 0;
-    }
-
-    if (!inMergeEmbFiles.empty()) {
-        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut, mergeKeepAllMain);
-        return 0;
-    }
-
-    if (!inMergePtsPrefix.empty()) {
-        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z);
         return 0;
     }
 

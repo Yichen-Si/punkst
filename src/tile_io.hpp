@@ -22,6 +22,7 @@ struct IndexHeader {
     // mode & 0x8: 0 for regular grid, 1 for generic rectangular blocks
     // mode & 0x10: 0 for 2D, 1 for 3D
     // mode & 0x20: 0 for isotropic/implicit z resolution, 1 for explicit pixelResolutionZ
+    // mode & 0x40: 0 for standard pixel records, 1 for records with an extra feature index
     uint32_t mode = 0;
     int32_t tileSize = 0;
     float pixelResolution = -1; // Must be > 0 if mode & 0x2 or mode & 0x4
@@ -239,6 +240,7 @@ struct TileData {
     std::vector<RecordT<T>> pts; // original data points
     std::vector<RecordExtendedT<T>> extPts; // with extended info fields
     std::vector<std::pair<int32_t, int32_t>> coords; // unique coordinates
+    std::vector<uint32_t> featureIdx; // feature id for each inference row (SingleMolecule)
     // 3D data storage
     std::unordered_map<uint32_t, std::vector<RecordT3D<T>>> buffers3d;
     std::unordered_map<uint32_t, std::vector<RecordExtendedT3D<T>>> extBuffers3d;
@@ -254,6 +256,7 @@ struct TileData {
         buffers.clear();buffers3d.clear();
         extBuffers.clear(); extBuffers3d.clear();
         coords.clear();coords3d.clear();
+        featureIdx.clear();
         idxinternal.clear();
         orgpts2pixel.clear();
     }
@@ -362,6 +365,42 @@ struct PixTopProbs {
     }
 };
 
+template<typename T>
+struct PixTopProbsFeature {
+    T x, y;
+    uint32_t featureIdx = 0;
+    std::vector<int32_t> ks;
+    std::vector<float> ps;
+    PixTopProbsFeature() = default;
+    PixTopProbsFeature(T _x, T _y, uint32_t _featureIdx) : x(_x), y(_y), featureIdx(_featureIdx) {}
+    PixTopProbsFeature(const std::pair<T,T>& c, uint32_t _featureIdx) : x(c.first), y(c.second), featureIdx(_featureIdx) {}
+
+    int32_t write(int fd) const {
+        if (!write_all(fd, reinterpret_cast<const char*>(&x), sizeof(x))) return -1;
+        if (!write_all(fd, reinterpret_cast<const char*>(&y), sizeof(y))) return -1;
+        if (!write_all(fd, reinterpret_cast<const char*>(&featureIdx), sizeof(featureIdx))) return -1;
+        if (!ks.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ks.data()), ks.size() * sizeof(int32_t))) return -1;
+        }
+        if (!ps.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ps.data()), ps.size() * sizeof(float))) return -1;
+        }
+        int32_t totalSize = 2 * sizeof(T) + sizeof(featureIdx) + ks.size() * sizeof(int32_t) + ps.size() * sizeof(float);
+        return totalSize;
+    }
+
+    bool read(std::istream& is, int32_t k) {
+        if (!is.read(reinterpret_cast<char*>(&x), sizeof(T))) return false;
+        if (!is.read(reinterpret_cast<char*>(&y), sizeof(T))) return false;
+        if (!is.read(reinterpret_cast<char*>(&featureIdx), sizeof(featureIdx))) return false;
+        ks.resize(k);
+        ps.resize(k);
+        if (!is.read(reinterpret_cast<char*>(ks.data()), k * sizeof(int32_t))) return false;
+        if (!is.read(reinterpret_cast<char*>(ps.data()), k * sizeof(float))) return false;
+        return true;
+    }
+};
+
 // Inference result for one pixel (3D)
 template<typename T>
 struct PixTopProbs3D {
@@ -390,6 +429,44 @@ struct PixTopProbs3D {
         if (!is.read(reinterpret_cast<char*>(&x), sizeof(T))) return false;
         if (!is.read(reinterpret_cast<char*>(&y), sizeof(T))) return false;
         if (!is.read(reinterpret_cast<char*>(&z), sizeof(T))) return false;
+        ks.resize(k);
+        ps.resize(k);
+        if (!is.read(reinterpret_cast<char*>(ks.data()), k * sizeof(int32_t))) return false;
+        if (!is.read(reinterpret_cast<char*>(ps.data()), k * sizeof(float))) return false;
+        return true;
+    }
+};
+
+template<typename T>
+struct PixTopProbsFeature3D {
+    T x, y, z;
+    uint32_t featureIdx = 0;
+    std::vector<int32_t> ks;
+    std::vector<float> ps;
+    PixTopProbsFeature3D() = default;
+    PixTopProbsFeature3D(T _x, T _y, T _z, uint32_t _featureIdx) : x(_x), y(_y), z(_z), featureIdx(_featureIdx) {}
+    PixTopProbsFeature3D(const Coord3<T>& c, uint32_t _featureIdx) : x(c.x), y(c.y), z(c.z), featureIdx(_featureIdx) {}
+
+    int32_t write(int fd) const {
+        if (!write_all(fd, reinterpret_cast<const char*>(&x), sizeof(x))) return -1;
+        if (!write_all(fd, reinterpret_cast<const char*>(&y), sizeof(y))) return -1;
+        if (!write_all(fd, reinterpret_cast<const char*>(&z), sizeof(z))) return -1;
+        if (!write_all(fd, reinterpret_cast<const char*>(&featureIdx), sizeof(featureIdx))) return -1;
+        if (!ks.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ks.data()), ks.size() * sizeof(int32_t))) return -1;
+        }
+        if (!ps.empty()) {
+            if (!write_all(fd, reinterpret_cast<const char*>(ps.data()), ps.size() * sizeof(float))) return -1;
+        }
+        int32_t totalSize = 3 * sizeof(T) + sizeof(featureIdx) + ks.size() * sizeof(int32_t) + ps.size() * sizeof(float);
+        return totalSize;
+    }
+
+    bool read(std::istream& is, int32_t k) {
+        if (!is.read(reinterpret_cast<char*>(&x), sizeof(T))) return false;
+        if (!is.read(reinterpret_cast<char*>(&y), sizeof(T))) return false;
+        if (!is.read(reinterpret_cast<char*>(&z), sizeof(T))) return false;
+        if (!is.read(reinterpret_cast<char*>(&featureIdx), sizeof(featureIdx))) return false;
         ks.resize(k);
         ps.resize(k);
         if (!is.read(reinterpret_cast<char*>(ks.data()), k * sizeof(int32_t))) return false;

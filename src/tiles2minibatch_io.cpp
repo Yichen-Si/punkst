@@ -14,6 +14,9 @@ void Tiles2MinibatchBase<T>::setupOutput() {
     assert(!(outputBackgroundProbDense_ && outputBackgroundProbExpand_));
     if (outputBinary_) {
         size_t coordBytes = (coordDim_ == MinibatchCoordDim::Dim3 ? 3u : 2u) * sizeof(int32_t);
+        if (singleMolecule_) {
+            coordBytes += sizeof(uint32_t);
+        }
         outputRecordSize_ = coordBytes + topk_ * sizeof(int32_t) + topk_ * sizeof(float);
     }
     if (nativeBinaryRegularTiles_) {
@@ -703,15 +706,26 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         if (!internal[j]) {
             continue;
         }
-        PixTopProbs<int32_t> rec(tileData.coords[j]);
-        rec.ks.resize(topk_);
-        rec.ps.resize(topk_);
-        for (int32_t k = 0; k < topk_; ++k) {
-            rec.ks[k] = topIds(j, k);
-            rec.ps[k] = topVals(j, k);
+        if (singleMolecule_) {
+            PixTopProbsFeature<int32_t> rec(tileData.coords[j], tileData.featureIdx[j]);
+            rec.ks.resize(topk_);
+            rec.ps.resize(topk_);
+            for (int32_t k = 0; k < topk_; ++k) {
+                rec.ks[k] = topIds(j, k);
+                rec.ps[k] = topVals(j, k);
+            }
+            result.outputObjsFeature.emplace_back(std::move(rec));
+        } else {
+            PixTopProbs<int32_t> rec(tileData.coords[j]);
+            rec.ks.resize(topk_);
+            rec.ps.resize(topk_);
+            for (int32_t k = 0; k < topk_; ++k) {
+                rec.ks[k] = topIds(j, k);
+                rec.ps[k] = topVals(j, k);
+            }
+            result.outputObjs.emplace_back(std::move(rec));
         }
-        result.outputObjs.emplace_back(std::move(rec));
     }
-    result.npts = result.outputObjs.size();
+    result.npts = singleMolecule_ ? result.outputObjsFeature.size() : result.outputObjs.size();
     return result;
 }

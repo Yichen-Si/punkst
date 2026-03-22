@@ -127,7 +127,7 @@ only in 3D mode. Default: 1.
 `--radius` - Support radius used in pixel-to-anchor weighting. In 2D and thin
 3D it also controls the anchor search neighborhood. Default: `anchor-dist *
 1.2` in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
-z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
+the nearest thin-3D z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
 stencil, but it does control the weight decay scale and contributes to the
 x-y padding.
 
@@ -136,7 +136,7 @@ x-y padding.
 rule is `w(d) = clamp(1 - (d / radius)^nu, 0.05, 0.95)` with
 `nu = log(0.5) / log(h)`.
 
-`--min-init-count` - Minimum total count within the hexagon around an anchor for it to be included. Filters out regions outside tissues with sparse noise. Default: 10.
+`--min-init-count` - Minimum accumulated anchor support required for an anchor to be retained during initialization. In thin 3D this support is radius-based and distance-weighted. Default: 10.
 
 `--zmin`, `--zmax` - z range for 3D mode. Thin 3D requires both values.
 Standard 3D accepts them, but only uses them when
@@ -149,9 +149,6 @@ generate between `zmin` and `zmax`.
 
 `--ignore-outside-zrange` - Drop observations outside `[zmin, zmax]` in 3D mode.
 
-`--n-init-anchor-per-pix` - Thin-3D-only initialization parameter controlling
-how many nearby z levels each point contributes to when anchors are initialized.
-
 `--threads` - Number of threads to use for parallel processing. Default: 1.
 
 `--seed` - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.
@@ -159,6 +156,16 @@ how many nearby z levels each point contributes to when anchors are initialized.
 ### Output Parameters
 
 `--output-binary` - Writes the main output as `<prefix>.bin` plus `<prefix>.index`. This cannot be combined with `--output-original`.
+
+`--single-molecule` - Switches from standard pixel-level output to a special single-molecule-style mode. Decoding still uses the user-specified `--pixel-res` / `--pixel-res-z`, but records are grouped by `(pixel-or-voxel, feature)` instead of by coordinate alone. Each output row therefore still represents exactly one feature identity, plus a count of how many observations of that feature were grouped into that local bin.
+
+Current restrictions for `--single-molecule`:
+
+- requires `--output-binary`
+- does not support `--output-original`
+- does not support `--output-bg-prob-expand`
+- does not support `--ext-col-ints`, `--ext-col-floats`, or `--ext-col-strs`
+- does not support weighted-feature input via `--feature-weights`
 
 `--output-original` - Writes the main output as text and includes the original feature names and counts together with the factor results.
 
@@ -173,6 +180,18 @@ how many nearby z levels each point contributes to when anchors are initialized.
 `--output-coord-digits` - Number of decimal digits to output for coordinates in text mode (used when input coordinates are float or `--output-original` is not set). Default: 2.
 
 `--output-prob-digits` - Number of decimal digits to output for probabilities. Default: 4.
+
+### Single-molecule Pixel Mode
+
+Use `--single-molecule` to make inference for each feature separately within each pixel/voxel. This mode may be suitable for image-based ST data with single molecule resolution and mostly informative genes.
+
+Compared with the standard pixel mode:
+
+- standard mode jointly considers all observations in the same pixel / voxel and make inference at pixel/voxel level
+- single-molecule mode makes inference for each feature separately within each pixel/voxel, so one pixel/voxel can be associated with multiple sets of factor probabilities
+- the binary output record therefore includes one extra `uint32_t featureIdx`
+
+This means only nearby repeated observations of the same feature can share one local inference result, while different features at the same coordinate can have different inference results.
 
 ## 3D Modes
 
@@ -226,13 +245,17 @@ finite set of z levels across `[zmin, zmax]`.
   `--thin-3d-n-z-levels` is ignored with a warning.
 - When `--thin-3d-n-z-levels` is used, the z levels are placed evenly between
   `zmin` and `zmax`.
-- `--radius` is still used for the pixel-to-anchor graph.
-- `--n-init-anchor-per-pix` controls how many nearby z levels each point
-  contributes to during anchor initialization.
+- The z coordinate of each anchor is assigned deterministically but
+  pseudorandomly from its x-y anchor key, so z levels are mixed across x-y
+  without the old periodic stripe pattern.
+- `--radius` controls both thin-3D anchor initialization and the final
+  pixel-to-anchor graph.
+- During initialization, each point contributes to every implicit thin-3D
+  anchor within the 3D support radius, using the same distance-decay rule that
+  is later used during iterative updates.
 - The x-y anchor coordinates are still generated from the shifted hex grids.
-- The z coordinate of each anchor is assigned by a modular coloring of the
-  underlying fine axial lattice, so anchors from different z levels are mixed
-  across x-y while staying roughly balanced across levels.
+- Thin-3D anchor retention is therefore radius-based rather than “nearest z
+  planes” based.
 
 Example:
 
@@ -243,7 +266,7 @@ punkst pixel-decode --model ${path}/thin3d.model.tsv \
 --icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
 --thin-3D --hex-grid-dist 18 --n-moves 3 \
 --thin-3d-z-levels 0 1.5 3 4.5 6 7.5 9 \
---zmin 0 --zmax 20 --n-init-anchor-per-pix 4 \
+--zmin 0 --zmax 20 --radius 7.5 \
 --pixel-res 0.5 --pixel-res-z 1 \
 --threads ${threads} --seed 1
 ```
@@ -290,6 +313,8 @@ Files are written with the prefix specified by `--out-pref` (or inferred from `-
 ### Main output
 
 `<prefix>.bin` - Main pixel-level output in binary format when `--output-binary` is set.
+
+When `--single-molecule` is enabled, each binary record stores coordinates, `featureIdx`, and the top-factor pairs.
 
 `<prefix>.tsv` - Main pixel-level output in text format when `--output-binary` is not set.
 

@@ -16,6 +16,7 @@ namespace {
 struct RegionTileResult {
     RegionTileState state = RegionTileState::Outside;
     uint32_t nOut = 0;
+    bool useCopyRange = false;
     uint64_t copySt = 0;
     uint64_t copyEd = 0;
     std::vector<char> binaryData;
@@ -120,6 +121,12 @@ void TileOperator::validateCoordinateEncoding() const {
     }
 }
 
+void TileOperator::requireNoFeatureIndex(const char* funcName) const {
+    if (hasFeatureIndex()) {
+        error("%s: single-molecule records with feature indices are not supported by this command", funcName);
+    }
+}
+
 void TileOperator::loadIndex(const std::string& indexFile) {
     std::ifstream in(indexFile, std::ios::binary);
     if (!in.is_open())
@@ -145,6 +152,9 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     if (mode_ & 0x1) {
         assert(formatInfo_.recordSize > 0);
         size_t kBytes = k_ * (sizeof(int32_t) + sizeof(float));
+        if (mode_ & 0x40u) {
+            kBytes += sizeof(uint32_t);
+        }
         size_t cBytes = (mode_ & 0x4) ? sizeof(int32_t) : sizeof(float);
         if (formatInfo_.recordSize != kBytes + coord_dim_ * cBytes) {
             error("%s: Record size %u inconsistent with k=%d and %dD dimensional coordinates", __func__, formatInfo_.recordSize, k_, coord_dim_);
@@ -210,7 +220,7 @@ void TileOperator::printIndex() const {
     }
 }
 
-void TileOperator::extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale) {
+void TileOperator::extractRegionGeoJSON(const std::string& outPrefix, const std::string& geojsonFile, int64_t scale, float qzmin, float qzmax) {
     if ((mode_ & 0x8) != 0) {
         error("%s: GeoJSON region query requires regular tile mode input (mode & 0x8 == 0)", __func__);
     }
@@ -228,15 +238,27 @@ void TileOperator::extractRegionGeoJSON(const std::string& outPrefix, const std:
         geojsonFile.c_str(), region.bbox_f.xmin, region.bbox_f.ymin, region.bbox_f.xmax, region.bbox_f.ymax,
         region.union_paths.size(), region.comp_bbox.size());
 
-    extractRegionPrepared(outPrefix, region);
+    extractRegionPrepared(outPrefix, region, qzmin, qzmax);
 }
 
-void TileOperator::extractRegionPrepared(const std::string& outPrefix, const PreparedRegionMask2D& region) {
+void TileOperator::extractRegionPrepared(const std::string& outPrefix, const PreparedRegionMask2D& region, float qzmin, float qzmax) {
     if ((mode_ & 0x8) != 0) {
         error("%s: Prepared polygon region query requires regular tile mode input (mode & 0x8 == 0)", __func__);
     }
     if (formatInfo_.tileSize <= 0) {
         error("%s: Invalid tileSize=%d; cannot write regular tiled output", __func__, formatInfo_.tileSize);
+    }
+    const bool hasZRange = !std::isnan(qzmin) || !std::isnan(qzmax);
+    if (hasZRange) {
+        if (std::isnan(qzmin) || std::isnan(qzmax)) {
+            error("%s: z-range filtering requires both qzmin and qzmax", __func__);
+        }
+        if (coord_dim_ != 3) {
+            error("%s: z-range filtering requires 3D input", __func__);
+        }
+        if (qzmin >= qzmax) {
+            error("%s: Invalid z interval [%.3f, %.3f)", __func__, qzmin, qzmax);
+        }
     }
     if (region.empty()) {
         warning("%s: Prepared region is empty", __func__);
@@ -357,7 +379,8 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
         const TileKey tile{blk.row, blk.col};
         const RegionTileState state = activeStates[activeIdx];
         result.state = state;
-        if (state == RegionTileState::Inside) {
+        if (state == RegionTileState::Inside && !hasZRange) {
+            result.useCopyRange = true;
             result.copySt = blk.idx.st;
             result.copyEd = blk.idx.ed;
             result.nOut = blk.idx.n;
@@ -383,8 +406,16 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
                 pos += recSize;
                 float x = 0.0f;
                 float y = 0.0f;
-                decodeBinaryXY(recBuf.data(), x, y);
-                if (!region.containsPoint(x, y, &tile)) {
+                float z = 0.0f;
+                if (hasZRange) {
+                    decodeBinaryXYZ(recBuf.data(), x, y, z);
+                } else {
+                    decodeBinaryXY(recBuf.data(), x, y);
+                }
+                if (hasZRange && (z < qzmin || z >= qzmax)) {
+                    continue;
+                }
+                if (state == RegionTileState::Partial && !region.containsPoint(x, y, &tile)) {
                     continue;
                 }
                 const size_t off = result.binaryData.size();
@@ -408,6 +439,22 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
             }
             pos += static_cast<uint64_t>(line.size()) + 1;
             if (line.empty() || line[0] == '#') {
+                continue;
+            }
+            if (hasZRange) {
+                PixTopProbs3D<float> rec;
+                if (!decodeTextRecord3D(line, rec, false)) {
+                    error("%s: Invalid text record", __func__);
+                }
+                if (rec.z < qzmin || rec.z >= qzmax) {
+                    continue;
+                }
+                if (state == RegionTileState::Partial && !region.containsPoint(rec.x, rec.y, &tile)) {
+                    continue;
+                }
+                result.textData += line;
+                result.textData.push_back('\n');
+                ++result.nOut;
                 continue;
             }
 
@@ -484,7 +531,7 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
             outEntry.st = currentOffset;
             outEntry.n = result.nOut;
 
-            if (result.state == RegionTileState::Inside) {
+            if (result.useCopyRange) {
                 if (!copy_stream_range(copyIn, out, result.copySt, result.copyEd)) {
                     error("%s: Error copying input bytes from %" PRIu64 " to %" PRIu64,
                         __func__, result.copySt, result.copyEd);
@@ -545,9 +592,22 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
     notice("%s: Wrote %zu indexed tile(s) to %s (index: %s)", __func__, nEntries, outData.c_str(), outIndex.c_str());
 }
 
-void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax) {
+void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, float qxmax, float qymin, float qymax,
+    float qzmin, float qzmax) {
     if (qxmin >= qxmax || qymin >= qymax) {
         error("%s: Invalid rectangle [%.3f, %.3f) x [%.3f, %.3f)", __func__, qxmin, qxmax, qymin, qymax);
+    }
+    const bool hasZRange = !std::isnan(qzmin) || !std::isnan(qzmax);
+    if (hasZRange) {
+        if (std::isnan(qzmin) || std::isnan(qzmax)) {
+            error("%s: z-range filtering requires both qzmin and qzmax", __func__);
+        }
+        if (coord_dim_ != 3) {
+            error("%s: z-range filtering requires 3D input", __func__);
+        }
+        if (qzmin >= qzmax) {
+            error("%s: Invalid z interval [%.3f, %.3f)", __func__, qzmin, qzmax);
+        }
     }
     PreparedRegionMask2D region;
     try {
@@ -556,7 +616,7 @@ void TileOperator::extractRegion(const std::string& outPrefix, float qxmin, floa
     } catch (const std::exception& ex) {
         error("%s: %s", __func__, ex.what());
     }
-    extractRegionPrepared(outPrefix, region);
+    extractRegionPrepared(outPrefix, region, qzmin, qzmax);
 }
 
 void TileOperator::openDataStream() {
@@ -996,7 +1056,12 @@ int32_t TileOperator::loadTileToMap3D(const TileKey& key,
     return static_cast<int32_t>(pixelMap.size());
 }
 
-void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int32_t coordDigits) {
+void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int32_t coordDigits,
+    const std::string& featureDictFile) {
+    if (hasFeatureIndex()) {
+        dumpTSVSingleMolecule(outPrefix, probDigits, coordDigits, featureDictFile);
+        return;
+    }
     if (!(mode_ & 0x1)) {
         error("dumpTSV only supports binary mode files");
     }
@@ -1449,23 +1514,9 @@ void TileOperator::parseHeaderLine() {
     const bool indexed_tsv = (formatInfo_.magic == PUNKST_INDEX_MAGIC) && ((mode_ & 0x1) == 0);
     icol_x_ = header["x"];
     icol_y_ = header["y"];
-
-    if (indexed_tsv) {
-        has_z_ = (coord_dim_ == 3);
-        if (has_z_) {
-            auto zit = header.find("z");
-            if (zit == header.end()) {
-                error("%s: 3D indexed TSV requires z column in header: %s", __func__, parsedHeaderLine.c_str());
-            }
-            icol_z_ = zit->second;
-        }
-    } else {
-        has_z_ = (header.find("z") != header.end());
-        coord_dim_ = has_z_ ? 3 : 2;
-        if (has_z_) {
-            icol_z_ = header["z"];
-        }
-    }
+    has_z_ = (header.find("z") != header.end());
+    coord_dim_ = has_z_ ? 3 : 2;
+    if (has_z_) {icol_z_ = header["z"];}
 
     icol_ks_.clear();
     icol_ps_.clear();

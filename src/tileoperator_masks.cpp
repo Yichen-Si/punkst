@@ -373,6 +373,7 @@ void TileOperator::profileSoftFactorMasks(const std::string& outPrefix,
     int32_t focalK, int32_t radius, double neighborhoodThresholdFrac,
     double minFactorFrac, float minPixelProb, const std::vector<int32_t>& morphologySteps,
     uint32_t minComponentArea, bool skipMaskOverlap) {
+    requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;
@@ -746,6 +747,7 @@ void TileOperator::softFactorMask(const std::string& outPrefix,
     double minTileFactorMass, uint32_t minComponentArea, uint32_t minHoleArea,
     double simplifyTolerance, bool skipBoundaries,
     const std::string& templateGeoJSON, const std::string& templateOutPrefix) {
+    requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;
@@ -1067,6 +1069,7 @@ void TileOperator::softFactorMask(const std::string& outPrefix,
 
 void TileOperator::softMaskComposition(const std::string& outPrefix,
     const std::string& maskGeoJSON, const std::vector<int32_t>& focalFactors) {
+    requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;
@@ -1351,6 +1354,7 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
 }
 
 void TileOperator::hardFactorMask(const std::string& outPrefix, uint32_t minComponentSize, bool skipBoundaries, const std::string& templateGeoJSON, const std::string& templateOutPrefix) {
+    requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
         return;

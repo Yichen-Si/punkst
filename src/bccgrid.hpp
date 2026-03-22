@@ -41,6 +41,7 @@ public:
         return std::make_tuple(q1, q2, q3);
     }
 
+    // 8 nearest + 6 next-nearest neighbors in the BCC lattice
     std::vector<std::array<int32_t, 3>> face_adjacent_offsets() const {
         std::vector<std::array<int32_t, 3>> offsets;
         const double maxFaceNeighborDist = size + 1e-8;

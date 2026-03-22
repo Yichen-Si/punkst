@@ -136,13 +136,21 @@ public:
     float do_e_step(Minibatch& batch,
         RowMajorMatrixXf* ss = nullptr,
         std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr,
-        int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
-        if (fit_background_) {
-            assert(phi0 != nullptr);
-            return do_e_step_bg(batch, *phi0, ss, n_iter, final_meanchange);
-        } else {
-            return do_e_step_standard(batch, ss, n_iter, final_meanchange);
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr)
+    {
+        if (fit_background_ && phi0 == nullptr) {
+            error("%s: background mode requires phi0 storage", __func__);
         }
+        if (batch.storageMode == Minibatch::StorageMode::SingleMolecule) {
+            if (fit_background_) {
+                return do_e_step_single_molecule_bg(batch, *phi0, ss, n_iter, final_meanchange);
+            }
+            return do_e_step_single_molecule(batch, ss, n_iter, final_meanchange);
+        }
+        if (fit_background_) {
+            return do_e_step_bg(batch, *phi0, ss, n_iter, final_meanchange);
+        }
+        return do_e_step_standard(batch, ss, n_iter, final_meanchange);
     }
 
     void approx_ll(Minibatch& batch) {
@@ -215,19 +223,8 @@ public:
         int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
         // (N x M) * (M x K) = (N x K)
         RowMajorMatrixXf Xb = batch.mtx * Elog_beta_;
-        // If gamma is not set, randomly initialize
-        if (batch.gamma.size() == 0) {
-            batch.gamma.resize(batch.n, K_);
-            std::gamma_distribution<float> gamma_dist(100.0, 1.0/100.0);
-            auto& rng = thread_rng();
-            for (int i = 0; i < batch.n; i++) {
-                for (int j = 0; j < K_; j++) {
-                    batch.gamma(i, j) = gamma_dist(rng);
-                }
-            }
-        }
-        RowMajorMatrixXf gamma_old = batch.gamma;
-        RowMajorMatrixXf phi_old;
+        // If gamma is not set, initialize with random values
+        init_gamma(batch);
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
             expitAndRowNormalize(batch.psi);
@@ -236,6 +233,8 @@ public:
             approx_ll(batch);
             printf("Initialize E-step, E_q[ll] %.4e\n", batch.ll);
         }
+        RowMajorMatrixXf gamma_old = batch.gamma;
+        RowMajorMatrixXf phi_old;
         RowMajorMatrixXf Elog_theta; // (n x K)
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
@@ -308,12 +307,127 @@ public:
         return 0;
     }
 
+    float do_e_step_single_molecule(Minibatch& batch,
+        RowMajorMatrixXf* ss = nullptr,
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
+        if (batch.storageMode != Minibatch::StorageMode::SingleMolecule) {
+            error("%s: expected SingleMolecule minibatch", __func__);
+        }
+        if (!batch.checkIfReadySgl()) {
+            error("%s: inconsistent SingleMolecule minibatch layout", __func__);
+        }
+
+        RowMajorMatrixXf Xb(batch.N, K_);
+        for (int32_t i = 0; i < batch.N; ++i) {
+            if (batch.featureIdx[i] >= static_cast<uint32_t>(M_)) {
+                error("%s: feature index %u out of range [0, %d)", __func__, batch.featureIdx[i], M_);
+            }
+            Xb.row(i) = Elog_beta_.row(batch.featureIdx[i]);
+        }
+        init_gamma(batch);
+
+        RowMajorMatrixXf gamma_old = batch.gamma;
+        RowMajorMatrixXf phi_old;
+        RowMajorMatrixXf Elog_theta; // (n x K)
+        double meanchange = tol_ + 1;
+        double meanchange_phi = tol_ + 1;
+        int it = 0;
+        while (it < max_iter_inner_ && meanchange_phi > tol_) {
+            it++;
+            Elog_theta = dirichlet_entropy_2d(batch.gamma);
+            batch.phi = Xb;
+            // Update phi: phi_i = Xb_i + sum_{j in N(i)} psi_ij * Elog_theta_j
+            for (int32_t i = 0; i < batch.N; ++i) {
+                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                    batch.phi.row(i) += batch.psiVal[e] * Elog_theta.row(batch.edgeAnchorIdx[e]);
+                }
+            }
+            rowSoftmaxInPlace(batch.phi);
+            // Update psi
+            VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
+            for (int32_t i = 0; i < batch.N; ++i) {
+                float rowsum = 0.0f;
+                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                    const uint32_t j = batch.edgeAnchorIdx[e];
+                    const float score = batch.wijVal[e] + batch.phi.row(i).dot(Elog_theta.row(j)) + extra(i);
+                    const float val = expit(score);
+                    batch.psiVal[e] = val;
+                    rowsum += val;
+                }
+                if (rowsum <= 0.0f) {
+                    const uint32_t degree = batch.rowOffsets[i + 1] - batch.rowOffsets[i];
+                    if (degree == 0) {
+                        continue;
+                    }
+                    const float uniform = 1.0f / static_cast<float>(degree);
+                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                        batch.psiVal[e] = uniform;
+                    }
+                } else {
+                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                        batch.psiVal[e] /= rowsum;
+                    }
+                }
+            }
+
+            batch.gamma = alpha_.replicate(batch.n, 1);
+            for (int32_t i = 0; i < batch.N; ++i) {
+                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                    batch.gamma.row(batch.edgeAnchorIdx[e]) += (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
+                }
+            }
+
+            meanchange = mean_max_row_change(batch.gamma, gamma_old);
+            gamma_old = batch.gamma;
+            if (it > 0)
+                meanchange_phi = mean_max_row_change(batch.phi, phi_old);
+            phi_old = batch.phi;
+            if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
+                printf("SingleMolecule E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);
+            }
+        }
+
+        if (n_iter) {
+            *n_iter = it;
+        }
+        if (final_meanchange) {
+            *final_meanchange = meanchange_phi;
+        }
+        if (ss != nullptr) {
+            ss->setZero(M_, K_);
+            for (int32_t i = 0; i < batch.N; ++i) {
+                ss->row(batch.featureIdx[i]) += batch.featureWeight[i] * batch.phi.row(i);
+            }
+        }
+        if (heuristic_final_hardcall_) {
+            for (int i = 0; i < gamma_old.rows(); i++) {
+                int maxIndex;
+                gamma_old.row(i).maxCoeff(&maxIndex);
+                for (int j = 0; j < gamma_old.cols(); j++) {
+                    if (j != maxIndex) {
+                        gamma_old(i, j) = 0.;
+                    }
+                }
+            }
+            Elog_theta = dirichlet_entropy_2d(gamma_old);
+            batch.phi = Xb;
+            for (int32_t i = 0; i < batch.N; ++i) {
+                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                    batch.phi.row(i) += batch.psiVal[e] * Elog_theta.row(batch.edgeAnchorIdx[e]);
+                }
+            }
+            rowSoftmaxInPlace(batch.phi);
+        }
+        return 0;
+    }
+
     float do_e_step_bg(Minibatch& batch,
         std::vector<std::unordered_map<uint32_t, float>>& phi0,
         RowMajorMatrixXf* ss = nullptr,
         int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
         SparseMatrix<float, Eigen::RowMajor> fgmtx = batch.mtx; // N x M
-        double pi0 = static_cast<double>(a0_) / (a0_ + b0_);
+        const float pi0 = static_cast<float> (a0_ / (a0_ + b0_));
+        phi0.clear();
         phi0.reserve(batch.mtx.rows());
         for (int i = 0; i < fgmtx.rows(); ++i) {
             std::unordered_map<uint32_t, float> phi0_i;
@@ -325,19 +439,9 @@ public:
         }
         // (N x M) * (M x K) = (N x K)
         RowMajorMatrixXf Xb = fgmtx * Elog_beta_;
-        // If gamma is not set, randomly initialize
-        if (batch.gamma.size() == 0) {
-            batch.gamma.resize(batch.n, K_);
-            std::gamma_distribution<float> gamma_dist(100.0, 1.0/100.0);
-            auto& rng = thread_rng();
-            for (int i = 0; i < batch.n; i++) {
-                for (int j = 0; j < K_; j++) {
-                    batch.gamma(i, j) = gamma_dist(rng);
-                }
-            }
-        }
-        RowMajorMatrixXf gamma_old = batch.gamma;
-        RowMajorMatrixXf phi_old;
+        // If gamma is not set, initialize with random values
+        init_gamma(batch);
+
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
             expitAndRowNormalize(batch.psi);
@@ -346,6 +450,8 @@ public:
             approx_ll(batch);
             printf("Initialize E-step, E_q[ll] %.4e\n", batch.ll);
         }
+        RowMajorMatrixXf gamma_old = batch.gamma;
+        RowMajorMatrixXf phi_old;
         RowMajorMatrixXf Elog_theta; // (n x K)
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
@@ -404,7 +510,7 @@ public:
 
         }
         // record total foreground/background counts
-        float c1 = 0.;
+        float c1 = 0.0f;
         VectorXf bg_local = VectorXf::Zero(M_);
         for (int i = 0; i < fgmtx.rows(); ++i) {
             for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.mtx, i), it2(fgmtx, i); it1 && it2; ++it1, ++it2) {
@@ -412,7 +518,7 @@ public:
                 bg_local(it1.col()) += it1.value() - it2.value();
             }
         }
-        float c0 = bg_local.sum();
+        const float c0 = bg_local.sum();
         {
             std::lock_guard<std::mutex> lock(mutex_bg_);
             a_ += c0;
@@ -430,6 +536,130 @@ public:
             *ss = fgmtx.transpose() * batch.phi; // M x N * N x K → M x K
         }
         return c0/(c0 + c1);
+    }
+
+    float do_e_step_single_molecule_bg(Minibatch& batch,
+        std::vector<std::unordered_map<uint32_t, float>>& phi0,
+        RowMajorMatrixXf* ss = nullptr,
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
+        if (batch.storageMode != Minibatch::StorageMode::SingleMolecule) {
+            error("%s: expected SingleMolecule minibatch", __func__);
+        }
+        if (!batch.checkIfReadySgl()) {
+            error("%s: inconsistent SingleMolecule minibatch layout", __func__);
+        }
+
+        const float pi0 = static_cast<float> (a0_ / (a0_ + b0_));
+        RowMajorMatrixXf Xb(batch.N, K_);
+        std::vector<float> fgWeight(static_cast<size_t>(batch.N), 0.0f);
+        phi0.clear();
+        phi0.reserve(static_cast<size_t>(batch.N));
+        for (size_t i = 0; i < (size_t) batch.N; ++i) {
+            if (batch.featureIdx[i] >= static_cast<uint32_t>(M_)) {
+                error("%s: feature index %u out of range [0, %d)", __func__, batch.featureIdx[i], M_);
+            }
+            phi0.push_back({{batch.featureIdx[i], 0.0f}});
+            Xb.row(i) = (1.0 - pi0) * Elog_beta_.row(batch.featureIdx[i]);
+        }
+        init_gamma(batch);
+
+        RowMajorMatrixXf gamma_old = batch.gamma;
+        RowMajorMatrixXf phi_old;
+        RowMajorMatrixXf Elog_theta;
+        double meanchange = tol_ + 1;
+        double meanchange_phi = tol_ + 1;
+        int it = 0;
+        while (it < max_iter_inner_ && meanchange > tol_) {
+            it++;
+            Elog_theta = dirichlet_entropy_2d(batch.gamma);
+            batch.phi = Xb;
+            for (int32_t i = 0; i < batch.N; ++i) {
+                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                    batch.phi.row(i) += batch.psiVal[e] * Elog_theta.row(batch.edgeAnchorIdx[e]);
+                }
+            }
+            rowSoftmaxInPlace(batch.phi);
+
+            VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
+            for (int32_t i = 0; i < batch.N; ++i) {
+                float rowsum = 0.0f;
+                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) { // for each connected anchors
+                    const uint32_t j = batch.edgeAnchorIdx[e];
+                    const float score = batch.wijVal[e] + batch.phi.row(i).dot(Elog_theta.row(j)) + extra(i);
+                    const float val = expit(score);
+                    batch.psiVal[e] = val;
+                    rowsum += val;
+                }
+                if (rowsum <= 0.0f) {
+                    const uint32_t degree = batch.rowOffsets[i + 1] - batch.rowOffsets[i];
+                    if (degree == 0) {
+                        continue;
+                    }
+                    const float uniform = 1.0f / static_cast<float>(degree);
+                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                        batch.psiVal[e] = uniform;
+                    }
+                } else {
+                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                        batch.psiVal[e] /= rowsum;
+                    }
+                }
+            }
+            // Update gamma
+            batch.gamma = alpha_.replicate(batch.n, 1);
+            for (int32_t i = 0; i < batch.N; ++i) {
+                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
+                    batch.gamma.row(batch.edgeAnchorIdx[e]) += (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
+                }
+            }
+            // Update background probabilities
+            for (size_t i = 0; i < (size_t) batch.N; ++i) {
+                const uint32_t m = batch.featureIdx[i];
+                float b = Elog_beta0_(m) - batch.phi.row(i).dot(Elog_beta_.row(m));
+                b = expit(Elogit_pi0_ + b);
+                phi0[i][m] = b;
+                fgWeight[i] = (1.0f - b) * batch.featureWeight[i];
+                Xb.row(i) = (1.0f - b) * Elog_beta_.row(m);
+            }
+
+            meanchange = mean_max_row_change(batch.gamma, gamma_old);
+            gamma_old = batch.gamma;
+            if (it > 0)
+                meanchange_phi = mean_max_row_change(batch.phi, phi_old);
+            phi_old = batch.phi;
+            if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
+                printf("SingleMolecule background E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);
+            }
+        }
+
+        float c1 = 0.0f;
+        VectorXf bg_local = VectorXf::Zero(M_);
+        for (size_t i = 0; i < (size_t) batch.N; ++i) {
+            const float fg = fgWeight[i];
+            c1 += fg;
+            bg_local(batch.featureIdx[i]) += batch.featureWeight[i] - fg;
+        }
+        const float c0 = bg_local.sum();
+        {
+            std::lock_guard<std::mutex> lock(mutex_bg_);
+            a_ += c0;
+            b_ += c1;
+            bg_marginal_ += bg_local;
+        }
+
+        if (n_iter) {
+            *n_iter = it;
+        }
+        if (final_meanchange) {
+            *final_meanchange = meanchange_phi;
+        }
+        if (ss != nullptr) {
+            ss->setZero(M_, K_);
+            for (size_t i = 0; i < (size_t) batch.N; ++i) {
+                ss->row(batch.featureIdx[i]) += fgWeight[i] * batch.phi.row(i);
+            }
+        }
+        return c0 / (c0 + c1);
     }
 
 private:
@@ -490,4 +720,18 @@ private:
     VectorXf bg_marginal_;
 
     bool heuristic_final_hardcall_ = false;
+
+    void init_gamma(Minibatch& batch) {
+        if (batch.gamma.size() == batch.n * K_) {
+            return;
+        }
+        batch.gamma.resize(batch.n, K_);
+        std::gamma_distribution<float> gamma_dist(100.0, 1.0/100.0);
+        auto& rng = thread_rng();
+        for (int i = 0; i < batch.n; i++) {
+            for (int j = 0; j < K_; j++) {
+                batch.gamma(i, j) = gamma_dist(rng);
+            }
+        }
+    }
 };

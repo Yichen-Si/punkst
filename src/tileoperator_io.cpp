@@ -149,6 +149,98 @@ bool TileOperator::readNextRecord3DAsPixel(std::istream& dataStream, uint64_t& p
     return false;
 }
 
+bool TileOperator::readNextRecord2DFeatureAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos,
+    int32_t& recX, int32_t& recY, uint32_t& featureIdx, TopProbs& rec) const {
+    if (coord_dim_ != 2) {
+        error("%s: Only 2D records are supported by this helper", __func__);
+    }
+    if (!hasFeatureIndex()) {
+        error("%s: Feature-bearing input required", __func__);
+    }
+    if ((mode_ & 0x1) == 0) {
+        error("%s: Feature-bearing text input is not supported", __func__);
+    }
+    while (pos < endPos) {
+        if (mode_ & 0x4) {
+            PixTopProbsFeature<int32_t> temp;
+            if (!readBinaryRecord2DInt(dataStream, temp)) {
+                if (dataStream.eof()) return false;
+                error("%s: Corrupted binary data", __func__);
+            }
+            pos += formatInfo_.recordSize;
+            recX = temp.x;
+            recY = temp.y;
+            featureIdx = temp.featureIdx;
+            rec.ks = std::move(temp.ks);
+            rec.ps = std::move(temp.ps);
+            return true;
+        }
+        PixTopProbsFeature<float> temp;
+        if (!readBinaryRecord2D(dataStream, temp, false)) {
+            if (dataStream.eof()) return false;
+            error("%s: Corrupted binary data", __func__);
+        }
+        pos += formatInfo_.recordSize;
+        if (formatInfo_.pixelResolution <= 0) {
+            error("%s: Float coordinates require positive pixelResolution", __func__);
+        }
+        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
+        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
+        featureIdx = temp.featureIdx;
+        rec.ks = std::move(temp.ks);
+        rec.ps = std::move(temp.ps);
+        return true;
+    }
+    return false;
+}
+
+bool TileOperator::readNextRecord3DFeatureAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos,
+    int32_t& recX, int32_t& recY, int32_t& recZ, uint32_t& featureIdx, TopProbs& rec) const {
+    if (coord_dim_ != 3) {
+        error("%s: Only 3D records are supported by this helper", __func__);
+    }
+    if (!hasFeatureIndex()) {
+        error("%s: Feature-bearing input required", __func__);
+    }
+    if ((mode_ & 0x1) == 0) {
+        error("%s: Feature-bearing text input is not supported", __func__);
+    }
+    while (pos < endPos) {
+        if (mode_ & 0x4) {
+            PixTopProbsFeature3D<int32_t> temp;
+            if (!readBinaryRecord3DInt(dataStream, temp)) {
+                if (dataStream.eof()) return false;
+                error("%s: Corrupted binary data", __func__);
+            }
+            pos += formatInfo_.recordSize;
+            recX = temp.x;
+            recY = temp.y;
+            recZ = temp.z;
+            featureIdx = temp.featureIdx;
+            rec.ks = std::move(temp.ks);
+            rec.ps = std::move(temp.ps);
+            return true;
+        }
+        PixTopProbsFeature3D<float> temp;
+        if (!readBinaryRecord3D(dataStream, temp, false)) {
+            if (dataStream.eof()) return false;
+            error("%s: Corrupted binary data", __func__);
+        }
+        pos += formatInfo_.recordSize;
+        if (formatInfo_.pixelResolution <= 0 || getPixelResolutionZ() <= 0) {
+            error("%s: Float coordinates require positive pixel resolutions", __func__);
+        }
+        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
+        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
+        recZ = static_cast<int32_t>(std::floor(temp.z / getPixelResolutionZ()));
+        featureIdx = temp.featureIdx;
+        rec.ks = std::move(temp.ks);
+        rec.ps = std::move(temp.ps);
+        return true;
+    }
+    return false;
+}
+
 
 bool TileOperator::parseLine(const std::string& line, PixTopProbs<float>& R) const {
     if (rawCoordinatesArePixels()) {
@@ -366,7 +458,29 @@ bool TileOperator::readBinaryRecord2DInt(std::istream& dataStream, PixTopProbs<i
         error("%s: Integer-coordinate helper requires mode & 0x4", __func__);
     }
     if (coord_dim_ == 3) {
+        if (mode_ & 0x40u) {
+            PixTopProbsFeature3D<int32_t> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
+            return true;
+        }
         PixTopProbs3D<int32_t> temp;
+        if (!temp.read(dataStream, k_)) {
+            return false;
+        }
+        out.x = temp.x;
+        out.y = temp.y;
+        out.ks = std::move(temp.ks);
+        out.ps = std::move(temp.ps);
+        return true;
+    }
+    if (mode_ & 0x40u) {
+        PixTopProbsFeature<int32_t> temp;
         if (!temp.read(dataStream, k_)) {
             return false;
         }
@@ -379,12 +493,49 @@ bool TileOperator::readBinaryRecord2DInt(std::istream& dataStream, PixTopProbs<i
     return out.read(dataStream, k_);
 }
 
+bool TileOperator::readBinaryRecord2DInt(std::istream& dataStream, PixTopProbsFeature<int32_t>& out) const {
+    if (!(mode_ & 0x4)) {
+        error("%s: Integer-coordinate helper requires mode & 0x4", __func__);
+    }
+    if (!hasFeatureIndex()) {
+        error("%s: Feature-bearing input required", __func__);
+    }
+    if (coord_dim_ != 2) {
+        error("%s: 2D feature record requested from %uD input", __func__, coord_dim_);
+    }
+    return out.read(dataStream, k_);
+}
+
 bool TileOperator::readBinaryRecord3DInt(std::istream& dataStream, PixTopProbs3D<int32_t>& out) const {
     if (!(mode_ & 0x4)) {
         error("%s: Integer-coordinate helper requires mode & 0x4", __func__);
     }
     if (coord_dim_ == 3) {
+        if (mode_ & 0x40u) {
+            PixTopProbsFeature3D<int32_t> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.z = temp.z;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
+            return true;
+        }
         return out.read(dataStream, k_);
+    }
+    if (mode_ & 0x40u) {
+        PixTopProbsFeature<int32_t> temp;
+        if (!temp.read(dataStream, k_)) {
+            return false;
+        }
+        out.x = temp.x;
+        out.y = temp.y;
+        out.z = 0;
+        out.ks = std::move(temp.ks);
+        out.ps = std::move(temp.ps);
+        return true;
     }
     PixTopProbs<int32_t> temp;
     if (!temp.read(dataStream, k_)) {
@@ -396,6 +547,19 @@ bool TileOperator::readBinaryRecord3DInt(std::istream& dataStream, PixTopProbs3D
     out.ks = std::move(temp.ks);
     out.ps = std::move(temp.ps);
     return true;
+}
+
+bool TileOperator::readBinaryRecord3DInt(std::istream& dataStream, PixTopProbsFeature3D<int32_t>& out) const {
+    if (!(mode_ & 0x4)) {
+        error("%s: Integer-coordinate helper requires mode & 0x4", __func__);
+    }
+    if (!hasFeatureIndex()) {
+        error("%s: Feature-bearing input required", __func__);
+    }
+    if (coord_dim_ != 3) {
+        error("%s: 3D feature record requested from %uD input", __func__, coord_dim_);
+    }
+    return out.read(dataStream, k_);
 }
 
 bool TileOperator::readBinaryRecord2D(std::istream& dataStream, PixTopProbs<float>& out, bool rawCoord) const {
@@ -415,18 +579,66 @@ bool TileOperator::readBinaryRecord2D(std::istream& dataStream, PixTopProbs<floa
         return true;
     }
     if (coord_dim_ == 3) { // float & 3D, drop z
-        PixTopProbs3D<float> temp;
-        if (!temp.read(dataStream, k_)) {
+        if (mode_ & 0x40u) {
+            PixTopProbsFeature3D<float> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
+        } else {
+            PixTopProbs3D<float> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
+        }
+    } else {
+        if (mode_ & 0x40u) {
+            PixTopProbsFeature<float> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
+        } else if (!out.read(dataStream, k_)) { // float & 2D, native
             return false;
         }
-        out.x = temp.x;
-        out.y = temp.y;
-        out.ks = std::move(temp.ks);
-        out.ps = std::move(temp.ps);
-    } else if (!out.read(dataStream, k_)) { // float & 2D, native
-        return false;
     }
     return true;
+}
+
+bool TileOperator::readBinaryRecord2D(std::istream& dataStream, PixTopProbsFeature<float>& out, bool rawCoord) const {
+    if (!hasFeatureIndex()) {
+        error("%s: Feature-bearing input required", __func__);
+    }
+    if (coord_dim_ != 2) {
+        error("%s: 2D feature record requested from %uD input", __func__, coord_dim_);
+    }
+    if (mode_ & 0x4) {
+        PixTopProbsFeature<int32_t> temp;
+        if (!readBinaryRecord2DInt(dataStream, temp)) {
+            return false;
+        }
+        out.x = static_cast<float>(temp.x);
+        out.y = static_cast<float>(temp.y);
+        out.featureIdx = temp.featureIdx;
+        out.ks = std::move(temp.ks);
+        out.ps = std::move(temp.ps);
+        if (!rawCoord && (mode_ & 0x2)) {
+            out.x *= formatInfo_.pixelResolution;
+            out.y *= formatInfo_.pixelResolution;
+        }
+        return true;
+    }
+    return out.read(dataStream, k_);
 }
 
 bool TileOperator::readBinaryRecord3D(std::istream& dataStream, PixTopProbs3D<float>& out, bool rawCoord) const {
@@ -448,21 +660,71 @@ bool TileOperator::readBinaryRecord3D(std::istream& dataStream, PixTopProbs3D<fl
         return true;
     }
     if (coord_dim_ == 3) {
-        if (!out.read(dataStream, k_)) {
+        if (mode_ & 0x40u) {
+            PixTopProbsFeature3D<float> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.z = temp.z;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
+        } else if (!out.read(dataStream, k_)) {
             return false;
         }
     } else {
-        PixTopProbs<float> temp;
-        if (!temp.read(dataStream, k_)) {
-            return false;
+        if (mode_ & 0x40u) {
+            PixTopProbsFeature<float> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.z = 0.0f;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
+        } else {
+            PixTopProbs<float> temp;
+            if (!temp.read(dataStream, k_)) {
+                return false;
+            }
+            out.x = temp.x;
+            out.y = temp.y;
+            out.z = 0.0f;
+            out.ks = std::move(temp.ks);
+            out.ps = std::move(temp.ps);
         }
-        out.x = temp.x;
-        out.y = temp.y;
-        out.z = 0.0f;
-        out.ks = std::move(temp.ks);
-        out.ps = std::move(temp.ps);
     }
     return true;
+}
+
+bool TileOperator::readBinaryRecord3D(std::istream& dataStream, PixTopProbsFeature3D<float>& out, bool rawCoord) const {
+    if (!hasFeatureIndex()) {
+        error("%s: Feature-bearing input required", __func__);
+    }
+    if (coord_dim_ != 3) {
+        error("%s: 3D feature record requested from %uD input", __func__, coord_dim_);
+    }
+    if (mode_ & 0x4) {
+        PixTopProbsFeature3D<int32_t> temp;
+        if (!readBinaryRecord3DInt(dataStream, temp)) {
+            return false;
+        }
+        out.x = static_cast<float>(temp.x);
+        out.y = static_cast<float>(temp.y);
+        out.z = static_cast<float>(temp.z);
+        out.featureIdx = temp.featureIdx;
+        out.ks = std::move(temp.ks);
+        out.ps = std::move(temp.ps);
+        if (!rawCoord && (mode_ & 0x2)) {
+            out.x *= formatInfo_.pixelResolution;
+            out.y *= formatInfo_.pixelResolution;
+            out.z *= getPixelResolutionZ();
+        }
+        return true;
+    }
+    return out.read(dataStream, k_);
 }
 
 void TileOperator::decodeBinaryXY(const char* recBuf, float& x, float& y) const {
@@ -481,4 +743,33 @@ void TileOperator::decodeBinaryXY(const char* recBuf, float& x, float& y) const 
     }
     std::memcpy(&x, recBuf, sizeof(x));
     std::memcpy(&y, recBuf + sizeof(x), sizeof(y));
+}
+
+void TileOperator::decodeBinaryXYZ(const char* recBuf, float& x, float& y, float& z) const {
+    if (mode_ & 0x4) {
+        int32_t xi = 0;
+        int32_t yi = 0;
+        int32_t zi = 0;
+        std::memcpy(&xi, recBuf, sizeof(xi));
+        std::memcpy(&yi, recBuf + sizeof(xi), sizeof(yi));
+        if (coord_dim_ == 3) {
+            std::memcpy(&zi, recBuf + sizeof(xi) + sizeof(yi), sizeof(zi));
+        }
+        x = static_cast<float>(xi);
+        y = static_cast<float>(yi);
+        z = static_cast<float>(zi);
+        if (mode_ & 0x2) {
+            x *= formatInfo_.pixelResolution;
+            y *= formatInfo_.pixelResolution;
+            z *= getPixelResolutionZ();
+        }
+        return;
+    }
+    std::memcpy(&x, recBuf, sizeof(x));
+    std::memcpy(&y, recBuf + sizeof(x), sizeof(y));
+    if (coord_dim_ == 3) {
+        std::memcpy(&z, recBuf + sizeof(x) + sizeof(y), sizeof(z));
+    } else {
+        z = 0.0f;
+    }
 }

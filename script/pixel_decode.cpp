@@ -67,7 +67,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool ignoreOutsideZrange = false;
     bool thin3D = false;
     bool standard3D = false;
-    int32_t nInitAnchorPerPix = 2;
     int32_t nMoves = -1, topK = 3;
     double minInitCount = 10;
     double minCountAnchor = 5;
@@ -76,6 +75,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool inMemory = false;
     bool outputBinary = false;
     bool outputOritinalData = false;
+    bool singleMolecule = false;
     bool featureIsIndex = false;
     bool coordsAreInt = false;
     bool outputAnchor = false;
@@ -129,7 +129,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("thin-3d-z-levels", "Explicit z coordinates for thin 3D anchor levels", thin3DZLevels)
       .add_option("thin-3d-n-z-levels", "Number of evenly spaced z levels for thin 3D anchors", thin3DNZLevels)
       .add_option("ignore-outside-zrange", "Ignore observations with z coordinates outside the specified [zmin, zmax] range", ignoreOutsideZrange)
-      .add_option("n-init-anchor-per-pix", "(Only for thin 3D) Number of anchors closest on z axis to assign each pixel to during initialization", nInitAnchorPerPix)
       .add_option("max-iter", "Maximum number of iterations (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
       .add_option("radius", "Support radius", decoderRadius)
@@ -153,6 +152,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("out-pref", "Output prefix", outPref)
       .add_option("output-binary", "Output pixel level results in binary format", outputBinary)
       .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
+      .add_option("single-molecule", "Enable \"single molecular level\" decoding (currently only support SLDA with binary output)", singleMolecule)
       .add_option("ext-col-ints", "Additional integer columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoInts)
       .add_option("ext-col-floats", "Additional float columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoFloats)
       .add_option("ext-col-strs", "Additional string columns to carry over to output file, in the form of \"idx1:name1:len1 idx2:name2:len2 ...\" where 'idx' are 0-based column indices and 'len' are maximum lengths of strings", annoStrs)
@@ -191,6 +191,18 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     }
     if (outputBinary && outputOritinalData) {
         error("Cannot set both --output-binary and --output-original");
+    }
+    if (singleMolecule) {
+        if (algo != "slda") {
+            error("--single-molecule is currently supported only with --algo slda");
+        }
+        if (outputOritinalData || outBgExpand) {
+            error("--single-molecule does not support --output-original or --output-bg-prob-expand");
+        }
+        if (!outputBinary) {
+            warning("--single-molecule currently only support the formated binary output");
+            outputBinary = true;
+        }
     }
     if (seed <= 0) {
         seed = std::random_device{}();
@@ -293,10 +305,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         if (decoderRadius <= 0) {
             if (thin3D) {
-                const int32_t nPerPixel = (nInitAnchorPerPix > 0)
-                    ? nInitAnchorPerPix
-                    : static_cast<int32_t>(thin3DZLevels.size() / 2);
-                const double zDist = thin3d_default_zreach(thin3DZLevels, nPerPixel, zMin, zMax);
+                const double zDist = thin3d_default_zreach(thin3DZLevels, 1, zMin, zMax);
                 decoderRadius = std::sqrt(anchorDist * anchorDist + zDist * zDist) * 1.2;
             } else {
                 decoderRadius = anchorDist * 1.2;
@@ -340,10 +349,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (!weightFile.empty()) {
         parser.readWeights(weightFile, defaultWeight, M_model);
     }
+    if (singleMolecule && (parser.isExtended || parser.weighted)) {
+        error("--single-molecule currently requires standard input records and does not support --ext-col-* for factor weights");
+    }
     notice("Initialized tile reader");
 
     MinibatchIoConfig ioConfig;
     ioConfig.input = parser.isExtended ? MinibatchInputMode::Extended : MinibatchInputMode::Standard;
+    ioConfig.singleMolecule = singleMolecule;
     if (outputBinary) {
         ioConfig.output = MinibatchOutputMode::Binary;
     } else if (outputOritinalData) {
@@ -382,7 +395,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         decoder.setOutputCoordDigits(floatCoordDigits);
         decoder.setOutputProbDigits(probDigits);
         if (use3D) {
-            decoder.set3Dparameters(thin3D, zMin, zMax, pixelResolutionZ, nInitAnchorPerPix, ignoreOutsideZrange, anchorDist, thin3DZLevels);
+            decoder.set3Dparameters(thin3D, zMin, zMax, pixelResolutionZ, ignoreOutsideZrange, anchorDist, thin3DZLevels);
         }
         decoder.setFeatureNames(featureNames);
         if (!anchorFile.empty()) {

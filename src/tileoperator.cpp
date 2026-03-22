@@ -90,13 +90,11 @@ int32_t checked_integer_ratio(float srcRes, float mainRes, const char* funcName,
     const double ratio = static_cast<double>(srcRes) / static_cast<double>(mainRes);
     const int64_t rounded = static_cast<int64_t>(std::llround(ratio));
     if (ratio < 1.0 - 1e-8) {
-        error("%s: Source %u has finer %s resolution (%.8g) than the main input (%.8g)",
-            funcName, srcIdx, axisName, srcRes, mainRes);
+        error("%s: Source %u has finer %s resolution (%.3g) than the main input (%.3g)", funcName, srcIdx, axisName, srcRes, mainRes);
     }
     const double tol = 1e-6 * std::max(1.0, std::abs(ratio));
     if (rounded < 1 || std::abs(ratio - static_cast<double>(rounded)) > tol) {
-        error("%s: Source %u has non-integer %s resolution ratio %.8g relative to the main input",
-            funcName, srcIdx, axisName, ratio);
+        error("%s: Source %u has non-integer %s resolution ratio %.4g relative to the main input", funcName, srcIdx, axisName, ratio);
     }
     return static_cast<int32_t>(rounded);
 }
@@ -140,6 +138,9 @@ std::vector<TileOperator::MergeSourcePlan> TileOperator::validateMergeSources(
             error("%s: Source %zu has higher dimension (%uD) than the main input (%uD)",
                 funcName, i, plan.srcDim, coord_dim_);
         }
+        if (!hasFeatureIndex() && op->hasFeatureIndex()) {
+            error("%s: source %zu carries feature indices but the main input does not", funcName, i);
+        }
         plan.ratioXY = checked_integer_ratio(plan.srcResXY, mainResXY, funcName,
             static_cast<uint32_t>(i), "x/y");
         if (coord_dim_ == 2) {
@@ -159,7 +160,12 @@ std::vector<TileOperator::MergeSourcePlan> TileOperator::validateMergeSources(
 }
 
 void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix,
-    std::vector<uint32_t> k2keep, bool binaryOutput, bool keepAllMain) {
+    std::vector<uint32_t> k2keep, bool binaryOutput, bool keepAllMain,
+    const std::string& featureDictFile) {
+    if (hasFeatureIndex()) {
+        mergeSingleMolecule(otherFiles, outPrefix, std::move(k2keep), binaryOutput, keepAllMain, featureDictFile);
+        return;
+    }
     std::string outIndex = outPrefix + ".index";
     int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
     if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
@@ -276,7 +282,13 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     notice("Merged %u files across %lu main tiles to %s", nSources, mainTiles.size(), outFile.c_str());
 }
 
-void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix, int32_t icol_x, int32_t icol_y, int32_t icol_z) {
+void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix,
+    int32_t icol_x, int32_t icol_y, int32_t icol_z, int32_t icol_f,
+    const std::string& featureDictFile) {
+    if (hasFeatureIndex()) {
+        annotateSingleMolecule(ptPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, featureDictFile);
+        return;
+    }
     if (icol_x < 0 || icol_y < 0) {
         error("%s: icol_x and icol_y must be >= 0", __func__);
     }
@@ -334,7 +346,15 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     notice("Annotation finished, data written to %s", outFile.c_str());
 }
 
-void TileOperator::pix2cell(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_c, uint32_t icol_x, uint32_t icol_y, int32_t icol_s, int32_t icol_z, uint32_t k_out, float max_cell_diameter) {
+void TileOperator::pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
+    uint32_t icol_c, uint32_t icol_x, uint32_t icol_y, int32_t icol_s,
+    int32_t icol_z, int32_t icol_f, uint32_t k_out, float max_cell_diameter,
+    const std::string& featureDictFile) {
+    if (hasFeatureIndex()) {
+        pix2cellSingleMolecule(ptPrefix, outPrefix, icol_c, icol_x, icol_y,
+            icol_s, icol_z, icol_f, k_out, max_cell_diameter, featureDictFile);
+        return;
+    }
     std::string ptData = ptPrefix + ".tsv";
     std::string ptIndex = ptPrefix + ".index";
     TileReader reader(ptData, ptIndex);
@@ -350,7 +370,7 @@ void TileOperator::pix2cell(const std::string& ptPrefix, const std::string& outP
     std::string outFile = outPrefix + ".tsv";
     FILE* fp = fopen(outFile.c_str(), "w");
     if (!fp) error("Cannot open output file %s", outFile.c_str());
-    std::string headerStr = hasComp ? "#CellID\tCellComp\tnPixel" : "#CellID\tnPixel";
+    std::string headerStr = hasComp ? "#CellID\tCellComp\tnQuery" : "#CellID\tnQuery";
     for (uint32_t i = 1; i <= k_out; ++i) {
         headerStr += "\tK" + std::to_string(i) + "\tP" + std::to_string(i);
     }
@@ -1094,6 +1114,15 @@ void TileOperator::probDot_multi(const std::vector<std::string>& otherFiles, con
         ops.push_back(std::make_unique<TileOperator>(df, idxFile));
         opPtrs.push_back(ops.back().get());
     }
+    const bool anyFeature = std::any_of(opPtrs.begin(), opPtrs.end(),
+        [](const TileOperator* op) { return op->hasFeatureIndex(); });
+    if (anyFeature) {
+        if (!hasFeatureIndex()) {
+            error("%s: single-molecule prob-dot requires all inputs to carry feature indices", __func__);
+        }
+        probDotMultiSingleMolecule(otherFiles, outPrefix, std::move(k2keep), probDigits);
+        return;
+    }
     uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
     if (k2keep.size() == 0) {
         for (auto* op : opPtrs) {
@@ -1376,6 +1405,18 @@ std::unordered_map<int32_t, TileOperator::Slice> TileOperator::aggOneTileRegion(
 
 Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
 TileOperator::computeConfusionMatrix(double resolution, const char* outPref, int32_t probDigits) const {
+    if (hasFeatureIndex()) {
+        auto confusion = computeConfusionMatrixSingleMolecule(resolution);
+        if (outPref) {
+            std::vector<std::string> factorNames(K_);
+            for (int32_t k = 0; k < K_; ++k) {factorNames[k] = std::to_string(k);}
+            std::string outFile(outPref);
+            outFile += ".confusion.tsv";
+            write_matrix_to_file(outFile, confusion, probDigits, true, factorNames, "K", &factorNames);
+            notice("Confusion matrix written to %s", outFile.c_str());
+        }
+        return confusion;
+    }
     if (coord_dim_ != 2) {error("%s: only 2D data are supported", __func__);}
     if (K_ <= 0) {error("%s: K is 0 or unknown", __func__);}
     const int32_t K = K_;

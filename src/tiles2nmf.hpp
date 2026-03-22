@@ -216,7 +216,6 @@ protected:
     double makeMinibatch(TileData<T>& tileData,
                           std::vector<AnchorPoint>& anchors,
                           Minibatch& minibatch);
-    double referenceAnchorDistance() const;
     void processTile(TileData<T>& tileData,
                      int threadId, int ticket, vec2f_t* anchorPtr) override;
     // void writePseudobulkToTsv();

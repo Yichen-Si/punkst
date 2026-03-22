@@ -143,6 +143,7 @@ set(SOURCE_FILES
     src/tileoperator_io.cpp
     src/tileoperator_base.cpp
     src/tileoperator_inner.cpp
+    src/tileoperator_sglmol.cpp
     src/tileoperator_masks.cpp
     src/tileoperator_spatial.cpp
     src/tileoperator.cpp
