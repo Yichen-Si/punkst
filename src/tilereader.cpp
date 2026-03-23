@@ -474,20 +474,16 @@ bool TileReaderBase::loadIndexBinary(const std::string &indexFilename) {
     recordSize_ = static_cast<size_t>(header.recordSize);
 
     IndexEntryF entry;
-    std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
     bool filter = !rects.empty();
-    if (filter) {
-        getTilesInBounds(rects, tileMap);
-    }
     while (indexFile.read(reinterpret_cast<char*>(&entry), sizeof(entry))) {
         TileKey key{entry.row, entry.col};
         TileInfo info(entry, true);
         if (filter) {
-            auto it = tileMap.find(key);
-            if (it == tileMap.end()) {
+            bool contained = false;
+            if (!tileIntersectsRects(entry.row, entry.col, rects, &contained)) {
                 continue;
             }
-            info.contained = it->second;
+            info.contained = contained;
         }
         tile_map_.emplace(key, info);
         if (entry.row < minrow) minrow = entry.row;
@@ -534,9 +530,7 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
     indexFile.clear();
     indexFile.seekg(0);
     std::string line;
-    std::unordered_map<TileKey,bool,TileKeyHash> tileMap;
     bool filter = !rects.empty();
-    if (filter) getTilesInBounds(rects, tileMap);
     while (std::getline(indexFile, line)) {
         if (line.empty()) {continue;}
         if (line[0] == '#') { // Parse metadata lines
@@ -557,9 +551,11 @@ bool TileReader::loadIndexText(const std::string &indexFilename) {
         TileInfo info(start, end, true);
         TileKey key{row, col};
         if (filter) {
-            auto it = tileMap.find(key);
-            if (it == tileMap.end()) {continue;}
-            info.contained = it->second;
+            bool contained = false;
+            if (!tileIntersectsRects(row, col, rects, &contained)) {
+                continue;
+            }
+            info.contained = contained;
         }
         tile_map_.emplace(key, info);
         if (row < minrow) minrow = row;

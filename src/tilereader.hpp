@@ -124,6 +124,52 @@ public:
     size_t getNumTiles() const {
         return nTiles;
     }
+    bool hasGlobalBox() const {
+        return globalBox_.proper();
+    }
+    const Rectangle<float>& getGlobalBox() const {
+        return globalBox_;
+    }
+    // if a tile (row, col) overlaps with or is fully contained in any of the rects
+    template<typename T>
+    bool tileIntersectsRects(int32_t row, int32_t col,
+                             const std::vector<Rectangle<T>>& _rects,
+                             bool* contained = nullptr) const {
+        if (_rects.empty()) {
+            if (contained != nullptr) {
+                *contained = true;
+            }
+            return true;
+        }
+
+        const Rectangle<T> tileRect = tile2bound<T>(row, col, tileSize_);
+        bool overlaps = false;
+        bool fullyContained = false;
+        for (const auto& r : _rects) {
+            if (!r.proper()) {
+                continue;
+            }
+            const int32_t code = tileRect.intersect(r);
+            if (code == 0) {
+                continue;
+            }
+            overlaps = true;
+            if (code == 2) {
+                fullyContained = true;
+                break;
+            }
+        }
+        if (contained != nullptr) {
+            *contained = fullyContained;
+        }
+        return overlaps;
+    }
+    template<typename T>
+    bool tileIntersectsRect(int32_t row, int32_t col,
+                            const Rectangle<T>& rect,
+                            bool* contained = nullptr) const {
+        return tileIntersectsRects(row, col, std::vector<Rectangle<T>>{rect}, contained);
+    }
     // given (x, y) compute the tile key and whether the tile is in the data
     template<typename T>
     bool pt2tile(T x, T y, TileKey &tile) const {
@@ -165,11 +211,10 @@ public:
                     if (tile_map_.find(key) == tile_map_.end()) {
                         continue;
                     }
-                    // the exact bounds of this tile in world‐space
-                    Rectangle<T> tileRect = tile2bound<T>(row, col, tileSize_);
-                    int32_t code = tileRect.intersect(r);
-                    if (code == 0) continue; // no overlap
-                    bool fullyInThisRect = (code == 2);
+                    bool fullyInThisRect = false;
+                    if (!tileIntersectsRect(row, col, r, &fullyInThisRect)) {
+                        continue;
+                    }
                     auto it = tileMap.find(key);
                     if (it == tileMap.end()) {
                         tileMap.emplace(key, fullyInThisRect);
