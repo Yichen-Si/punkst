@@ -3,4 +3,4 @@
 	url = https://gitlab.com/libeigen/eigen.git
 [submodule "ext/clipper2"]
 	path = ext/clipper2
-	url = git@github.com:AngusJohnson/Clipper2.git
+	url = https://github.com//AngusJohnson/Clipper2.git

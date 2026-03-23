@@ -147,10 +147,17 @@ set(SOURCE_FILES
     src/tileoperator_io.cpp
     src/tileoperator_base.cpp
     src/tileoperator_inner.cpp
+    src/tileoperator_mlt.cpp
     src/tileoperator_sglmol.cpp
     src/tileoperator_masks.cpp
     src/tileoperator_spatial.cpp
     src/tileoperator.cpp
+    src/mlt_pmtiles_utils.hpp
+    src/mlt_pmtiles_utils.cpp
+    src/mlt_encoder.hpp
+    src/mlt_encoder.cpp
+    src/pmtiles_writer.hpp
+    src/pmtiles_writer.cpp
     script/manipulate_tiles.cpp
     script/multi_cde_lowres.cpp
     script/multi_cde_lowres_nb.cpp

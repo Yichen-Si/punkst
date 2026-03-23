@@ -132,6 +132,12 @@ public:
         const std::string& geojsonFile = "", int64_t geojsonScale = 10,
         float qzmin = std::numeric_limits<float>::quiet_NaN(),
         float qzmax = std::numeric_limits<float>::quiet_NaN());
+    void writeMltPmtiles(const std::string& outFile,
+        const std::string& featureDictFile,
+        double coordScale = 1.0,
+        bool epsg3857Mode = true,
+        int32_t zoom = -1,
+        int32_t targetTileSize = -1);
     // Fix Fragmented Tiles
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
     // Region query

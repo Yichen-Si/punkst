@@ -18,6 +18,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string extractRegionGeoJSON;
     int64_t extractRegionScale = 10;
     bool dumpTSV = false;
+    bool writeMltPmtiles = false;
     bool probDot = false;
     bool cellAnno = false;
     bool spatialMetrics = false;
@@ -60,6 +61,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string templateGeoJSON;
     std::string templateOutPrefix;
     std::string featureDictFile;
+    double coordScale = 1.0;
+    int32_t targetTileSizeOut = -1;
+    bool pmtilesEpsg3857 = true;
+    bool pmtilesGenericScaledGrid = false;
+    int32_t pmtilesZoom = -1;
     float xmin = 0.0f, xmax = -1.0f, ymin = 0.0f, ymax = -1.0f;
     float zmin = std::numeric_limits<float>::quiet_NaN();
     float zmax = std::numeric_limits<float>::quiet_NaN();
@@ -85,6 +91,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     // Basic inspection, conversion, and region query.
     pl.add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
+      .add_option("write-mlt-pmtiles", "Write feature-bearing binary tiles as MLT-backed PMTiles", writeMltPmtiles)
+      .add_option("coord-scale", "Scale factor applied to x/y before MLT-PMTiles export", coordScale)
+      .add_option("target-tile-size", "Target tile size in scaled coordinate units for generic MLT-PMTiles export", targetTileSizeOut)
+      .add_option("pmtiles-epsg3857", "Interpret scaled coordinates as EPSG:3857 and tile them by Web Mercator zoom (default for --write-mlt-pmtiles)", pmtilesEpsg3857)
+      .add_option("pmtiles-generic-scaled-grid", "Use generic scaled-grid tiling instead of the default EPSG:3857 mode for --write-mlt-pmtiles", pmtilesGenericScaledGrid)
+      .add_option("pmtiles-zoom", "Web Mercator zoom level for EPSG:3857 MLT-PMTiles export", pmtilesZoom)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates (for --dump-tsv)", coordDigits)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities (for --dump-tsv)", probDigits)
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
@@ -237,6 +249,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     if (dumpTSV) {
         tileOp.dumpTSV(outPrefix, probDigits, coordDigits, featureDictFile,
             extractRegionGeoJSON, extractRegionScale, zmin, zmax);
+        return 0;
+    }
+    if (writeMltPmtiles) {
+        tileOp.writeMltPmtiles(outPrefix + ".pmtiles", featureDictFile,
+            coordScale, pmtilesEpsg3857, pmtilesZoom, targetTileSizeOut);
         return 0;
     }
 
