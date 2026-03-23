@@ -2,19 +2,14 @@
 
 ## Overview
 
-`pixel-decode` projects a trained factor model onto tiled pixel-level data and annotates each pixel (or collapsed pixel bin) with the top factors and their probabilities.
+`pixel-decode` projects a trained factor model onto the space and annotates each pixel/voxel/molecule with the top factors and their probabilities. In standard mode, the inference is done at pixel or voxel level. In the feature-specific modes, the inference is feature-specific even at the same location.
 
-It supports:
-
-- 2D decoding on overlapping shifted hex-anchor lattices
-- thin 3D decoding, which keeps the shifted hex-anchor construction and adds a finite set of z levels
-- standard 3D decoding, which uses a body-centered cubic (BCC) anchor lattice directly in the input 3D coordinate system
-
-In all cases, the input remains the x-y tiled output created by `pts2tiles`.
+In all cases, the input is the x-y tiled data created by `pts2tiles`.
 <!-- The default decoder is `slda`; `--algo nmf` enables the EM-NMF decoder. -->
 
+Basic usage:
 ```bash
-punkst pixel-decode --model ${path}/hex_12.model.tsv \
+punkst pixel-decode --model ${path}/model.tsv \
 --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
 --temp-dir ${tmpdir} --out-pref ${path}/pixel --output-binary \
 --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
@@ -65,9 +60,9 @@ The main inference result in this example is written to `${path}/pixel.bin` toge
 `--icol-z` - Column index for the z coordinate (0-based). Requires either
 `--thin-3D` or `--standard-3D`.
 
-`--thin-3D` - Activates the thin 3D path.
+`--thin-3D` - Activates the thin 3D path. (See the 3D modes section below)
 
-`--standard-3D` - Activates the standard 3D BCC path.
+`--standard-3D` - Activates the standard 3D path. (See the 3D modes section below)
 
 `--feature-is-index` - If set, the values in `--icol-feature` are interpreted as feature indices. Otherwise, they are expected to be feature names.
 
@@ -86,6 +81,10 @@ externally loaded anchors are not currently used.
 ### Algorithm Parameters
 
 <!-- `--algo` - Decoding algorithm: `slda` (default) or `nmf`. -->
+
+`--single-feature-pixel` - Enables feature-specific decoding on collapsed pixel/voxel bins. Decoding still uses the user-specified `--pixel-res` / `--pixel-res-z`, but factor probabilities are computed separately for each feature within the same pixel or voxel.
+
+`--single-molecule` - Enables raw single-molecule decoding without collapsing records to pixels or voxels. (This is not recommended for data that do not have single molecule resolution, such as Visium HD)
 
 `--max-iter` - Maximum number of outer iterations. Default: 100.
 
@@ -109,14 +108,6 @@ externally loaded anchors are not currently used.
 
 `--ridge` - Ridge stabilization parameter for the `nmf` inner solver. -->
 
-### Data Annotation Parameters
-
-`--ext-col-ints` - Additional integer columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: `--ext-col-ints 4:celltype 5:cluster`.
-
-`--ext-col-floats` - Additional float columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: `--ext-col-floats 6:quality`.
-
-`--ext-col-strs` - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings. Example: `--ext-col-strs 7:sample_id:20 8:batch:10`.
-
 ### Processing Parameters
 
 `--pixel-res` - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense. For Visium HD (where the pixel size is 2μm), use `--pixel-res 2`.
@@ -127,7 +118,7 @@ only in 3D mode. Default: 1.
 `--radius` - Support radius used in pixel-to-anchor weighting. In 2D and thin
 3D it also controls the anchor search neighborhood. Default: `anchor-dist *
 1.2` in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
-the nearest thin-3D z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
+the nearest thin-3D z-level spacing.
 stencil, but it does control the weight decay scale and contributes to the
 x-y padding.
 
@@ -157,16 +148,6 @@ generate between `zmin` and `zmax`.
 
 `--output-binary` - Writes the main output as `<prefix>.bin` plus `<prefix>.index`. This cannot be combined with `--output-original`.
 
-`--single-molecule` - Switches from standard pixel-level output to a special single-molecule-style mode. Decoding still uses the user-specified `--pixel-res` / `--pixel-res-z`, but records are grouped by `(pixel-or-voxel, feature)` instead of by coordinate alone. Each output row therefore still represents exactly one feature identity, plus a count of how many observations of that feature were grouped into that local bin.
-
-Current restrictions for `--single-molecule`:
-
-- requires `--output-binary`
-- does not support `--output-original`
-- does not support `--output-bg-prob-expand`
-- does not support `--ext-col-ints`, `--ext-col-floats`, or `--ext-col-strs`
-- does not support weighted-feature input via `--feature-weights`
-
 `--output-original` - Writes the main output as text and includes the original feature names and counts together with the factor results.
 
 `--output-anchors` - Writes anchor-level top-factor assignments to `<prefix>.anchors.tsv`.
@@ -181,30 +162,54 @@ Current restrictions for `--single-molecule`:
 
 `--output-prob-digits` - Number of decimal digits to output for probabilities. Default: 4.
 
-### Single-molecule Pixel Mode
+`--ext-col-ints` - Additional integer columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: `--ext-col-ints 4:celltype 5:cluster`.
 
-Use `--single-molecule` to make inference for each feature separately within each pixel/voxel. This mode may be suitable for image-based ST data with single molecule resolution and mostly informative genes.
+`--ext-col-floats` - Additional float columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: `--ext-col-floats 6:quality`.
+
+`--ext-col-strs` - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings. Example: `--ext-col-strs 7:sample_id:20 8:batch:10`.
+
+### Feature-Specific Modes
+
+The two feature-specific modes share the same inference path, where different features are considered separately even if they have the same location. Consider the feature-specific modes only if your factors are closer to "transcriptional modules" than "cell types".
+
+Caution: for Visium HD, where the resolution is 2μm, only `--single-feature-pixel` is valid.
 
 Compared with the standard pixel mode:
 
-- standard mode jointly considers all observations in the same pixel / voxel and make inference at pixel/voxel level
-- single-molecule mode makes inference for each feature separately within each pixel/voxel, so one pixel/voxel can be associated with multiple sets of factor probabilities
-- the binary output record therefore includes one extra `uint32_t featureIdx`
+- standard mode jointly considers all observations in the same pixel or voxel and makes one inference result per pixel/voxel
+- `--single-feature-pixel` still collapses the raw data by analysis resolution, but can assign different factor probabilities to features within the same pixel or voxel
+- `--single-molecule` does not collapse the data before inference; each accepted input record is treated on its own
 
-This means only nearby repeated observations of the same feature can share one local inference result, while different features at the same coordinate can have different inference results.
+
+Output differences:
+
+- `--single-feature-pixel` writes integer pixel or voxel coordinates plus one extra `uint32_t featureIdx`
+- `--single-molecule` writes raw float coordinates plus one extra `uint32_t featureIdx`
+
+Current restrictions for both `--single-feature-pixel` and `--single-molecule`:
+
+- requires `--output-binary`
+- does not support `--output-original`
+- does not support `--output-bg-prob-expand`
+- does not support `--ext-col-ints`, `--ext-col-floats`, or `--ext-col-strs`
+- does not support extended or weighted parser modes
 
 ## 3D Modes
 
-3D mode is explicit.
+3D mode needs to be configured explicitly
 
-- Use `--icol-z --thin-3D` for thin 3D.
-- Use `--icol-z --standard-3D` for standard 3D.
-- `--icol-z` without one of those flags is rejected.
+- Use `--icol-z --thin-3D` for thin 3D (e.g. 10um tissue slice from imaging-based platforms)
+- Use `--icol-z --standard-3D` for real, deep 3D
+- `--icol-z` without one of those flags is rejected
+- 3D mode does not support external fixed anchors
+- standard 3D requires positive `--anchor-dist` to define the BCC lattice
+- thin 3D and standard 3D both still use the optional `--half-life-dist` for distance-based anchor weighting
 
 ### Standard 3D
 
-Standard 3D uses a BCC anchor lattice directly in the input coordinate system.
-This means x, y, and z are expected to already use compatible units.
+Standard 3D uses a body-centered cubic (BCC) BCC anchor lattice in the input coordinate system. This is experimental and is only tested on one DeepSTARmap dataset.
+
+Caution: we assume x, y, and z are already use compatible units, see [pts2tiles](pts2tiles.md) for options to scale the input coordinates differently in preprocessing.
 
 - `--anchor-dist` is the preferred way to define the BCC anchor spacing.
 - Each pixel is connected to anchors from a fixed local BCC neighborhood:
@@ -236,8 +241,7 @@ punkst pixel-decode --model ${path}/bcc.model.tsv \
 
 ### Thin 3D
 
-Thin 3D keeps the overlapping shifted hex-anchor construction in x-y and adds a
-finite set of z levels across `[zmin, zmax]`.
+Thin 3D keeps anchor lattice in x-y and adds a small set of z levels across `[zmin, zmax]` to distribute these anchors. This is an experimental mode designed for thin tissue slices from imaging-based platforms where the range on the z axis is typically only 5-10μm.
 
 - `--zmin` and `--zmax` are required.
 - One of `--thin-3d-z-levels` or `--thin-3d-n-z-levels` must be provided.
@@ -271,18 +275,6 @@ punkst pixel-decode --model ${path}/thin3d.model.tsv \
 --threads ${threads} --seed 1
 ```
 
-### Current 3D Scope
-
-Current 3D support should be understood as a 2D tiled pipeline with 3D-aware
-anchor geometry.
-
-- tile ownership and boundary handling are still defined only in x-y
-- standard 3D does not support external fixed anchors
-- standard 3D requires positive `--anchor-dist`; `--radius` affects weighting
-  and padding but not the fixed BCC neighborhood
-- thin 3D and standard 3D both use `--half-life-dist` for distance-based
-  anchor weighting
-
 ## Process multiple samples
 
 If you want to project the same model onto multiple datasets/samples, you can use `--sample-list` to pass a tsv file containing all samples' information. (In this case, `--in-tsv` and `--in-index` are ignored.)
@@ -314,7 +306,9 @@ Files are written with the prefix specified by `--out-pref` (or inferred from `-
 
 `<prefix>.bin` - Main pixel-level output in binary format when `--output-binary` is set.
 
-When `--single-molecule` is enabled, each binary record stores coordinates, `featureIdx`, and the top-factor pairs.
+When `--single-feature-pixel` is enabled, each binary record stores integer pixel or voxel coordinates, `featureIdx`, and the top-factor pairs.
+
+When `--single-molecule` is enabled, each binary record stores raw float coordinates, `featureIdx`, and the top-factor pairs.
 
 `<prefix>.tsv` - Main pixel-level output in text format when `--output-binary` is not set.
 

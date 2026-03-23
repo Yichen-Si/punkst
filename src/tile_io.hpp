@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <unordered_map>
+#include <variant>
 #include <iostream>
 #include <limits>
 #include <functional>
@@ -25,7 +26,7 @@ struct IndexHeader {
     // mode & 0x40: 0 for standard pixel records, 1 for records with an extra feature index
     uint32_t mode = 0;
     int32_t tileSize = 0;
-    float pixelResolution = -1; // Must be > 0 if mode & 0x2 or mode & 0x4
+    float pixelResolution = -1; // Must be > 0 if mode & 0x2
     float pixelResolutionZ = -1; // Must be > 0 if mode & 0x20
     uint32_t topK = 0; // how many (factor, probability) pairs are kept per record (per inference set)
     uint32_t recordSize = 0; // <= 0 for tsv
@@ -232,31 +233,95 @@ struct Coord3 {
 };
 
 template<typename T>
+struct Standard2DTileInput {
+    std::vector<RecordT<T>> pts;
+};
+
+template<typename T>
+struct Extended2DTileInput {
+    std::vector<RecordExtendedT<T>> extPts;
+};
+
+struct SingleMolecule2DTileInput {
+    std::vector<std::pair<float, float>> coordsFloat;
+    std::vector<uint32_t> featureIdx;
+    std::vector<float> obsWeight;
+};
+
+template<typename T>
+struct Standard3DTileInput {
+    std::vector<RecordT3D<T>> pts3d;
+};
+
+template<typename T>
+struct Extended3DTileInput {
+    std::vector<RecordExtendedT3D<T>> extPts3d;
+};
+
+struct SingleMolecule3DTileInput {
+    std::vector<Coord3<float>> coords3dFloat;
+    std::vector<uint32_t> featureIdx;
+    std::vector<float> obsWeight;
+};
+
+template<typename T>
 struct TileData {
+    using InputVariant = std::variant<
+        std::monostate,
+        Standard2DTileInput<T>,
+        Extended2DTileInput<T>,
+        SingleMolecule2DTileInput,
+        Standard3DTileInput<T>,
+        Extended3DTileInput<T>,
+        SingleMolecule3DTileInput>;
+
     float xmin, xmax, ymin, ymax;
-    // 2D data storage
-    std::unordered_map<uint32_t, std::vector<RecordT<T>>> buffers; // local buffer to accumulate records to be written to temporary files
-    std::unordered_map<uint32_t, std::vector<RecordExtendedT<T>>> extBuffers;
-    std::vector<RecordT<T>> pts; // original data points
-    std::vector<RecordExtendedT<T>> extPts; // with extended info fields
-    std::vector<std::pair<int32_t, int32_t>> coords; // unique coordinates
-    std::vector<uint32_t> featureIdx; // feature id for each inference row (SingleMolecule)
-    // 3D data storage
-    std::unordered_map<uint32_t, std::vector<RecordT3D<T>>> buffers3d;
-    std::unordered_map<uint32_t, std::vector<RecordExtendedT3D<T>>> extBuffers3d;
-    std::vector<RecordT3D<T>> pts3d; // original data points (3D)
-    std::vector<RecordExtendedT3D<T>> extPts3d; // with extended info fields (3D)
-    std::vector<Coord3<int32_t>> coords3d; // unique coordinates (3D)
-    // Map between pixel coordinates and original points
+    InputVariant input;
+    std::vector<uint32_t> rowFeatureIdx;
+
+    // Populated by Tiles2MinibatchBase during minibatch construction
+    // For pixel mode only
+    std::vector<std::pair<int32_t, int32_t>> coords;
+    std::vector<Coord3<int32_t>> coords3d;
+    //     Map between pixel coordinates and original points
     std::vector<int32_t> idxinternal; // indices for internal points to output
     std::vector<int32_t> orgpts2pixel; // map from original points to indices of the pixels used in the model. -1 for not used
+
+    bool emptyInput() const {
+        return std::holds_alternative<std::monostate>(input);
+    }
+
+    Standard2DTileInput<T>& emplaceStandard2D() { return input.template emplace<Standard2DTileInput<T>>(); }
+    Extended2DTileInput<T>& emplaceExtended2D() { return input.template emplace<Extended2DTileInput<T>>(); }
+    SingleMolecule2DTileInput& emplaceSingleMolecule2D() { return input.template emplace<SingleMolecule2DTileInput>(); }
+    Standard3DTileInput<T>& emplaceStandard3D() { return input.template emplace<Standard3DTileInput<T>>(); }
+    Extended3DTileInput<T>& emplaceExtended3D() { return input.template emplace<Extended3DTileInput<T>>(); }
+    SingleMolecule3DTileInput& emplaceSingleMolecule3D() { return input.template emplace<SingleMolecule3DTileInput>(); }
+
+    bool isStandard2D() const { return std::holds_alternative<Standard2DTileInput<T>>(input); }
+    bool isExtended2D() const { return std::holds_alternative<Extended2DTileInput<T>>(input); }
+    bool isSingleMolecule2D() const { return std::holds_alternative<SingleMolecule2DTileInput>(input); }
+    bool isStandard3D() const { return std::holds_alternative<Standard3DTileInput<T>>(input); }
+    bool isExtended3D() const { return std::holds_alternative<Extended3DTileInput<T>>(input); }
+    bool isSingleMolecule3D() const { return std::holds_alternative<SingleMolecule3DTileInput>(input); }
+
+    Standard2DTileInput<T>& standard2D() { return std::get<Standard2DTileInput<T>>(input); }
+    const Standard2DTileInput<T>& standard2D() const { return std::get<Standard2DTileInput<T>>(input); }
+    Extended2DTileInput<T>& extended2D() { return std::get<Extended2DTileInput<T>>(input); }
+    const Extended2DTileInput<T>& extended2D() const { return std::get<Extended2DTileInput<T>>(input); }
+    SingleMolecule2DTileInput& singleMolecule2D() { return std::get<SingleMolecule2DTileInput>(input); }
+    const SingleMolecule2DTileInput& singleMolecule2D() const { return std::get<SingleMolecule2DTileInput>(input); }
+    Standard3DTileInput<T>& standard3D() { return std::get<Standard3DTileInput<T>>(input); }
+    const Standard3DTileInput<T>& standard3D() const { return std::get<Standard3DTileInput<T>>(input); }
+    Extended3DTileInput<T>& extended3D() { return std::get<Extended3DTileInput<T>>(input); }
+    const Extended3DTileInput<T>& extended3D() const { return std::get<Extended3DTileInput<T>>(input); }
+    SingleMolecule3DTileInput& singleMolecule3D() { return std::get<SingleMolecule3DTileInput>(input); }
+    const SingleMolecule3DTileInput& singleMolecule3D() const { return std::get<SingleMolecule3DTileInput>(input); }
+
     void clear() {
-        pts.clear();pts3d.clear();
-        extPts.clear();extPts3d.clear();
-        buffers.clear();buffers3d.clear();
-        extBuffers.clear(); extBuffers3d.clear();
+        input = std::monostate{};
         coords.clear();coords3d.clear();
-        featureIdx.clear();
+        rowFeatureIdx.clear();
         idxinternal.clear();
         orgpts2pixel.clear();
     }

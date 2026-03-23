@@ -19,7 +19,8 @@ public:
         double c = 20, double h = 0.7, double res = 1,
         int32_t N = 0, int32_t k = 3,
         int32_t verbose = 0, int32_t debug = 0,
-        double hexSize = 1.0, int32_t nMoves = 1);
+        double hexSize = 1.0, int32_t nMoves = 1,
+        bool useMemoryBuffer = false);
 
     void setLloydIter(int32_t nIter) { nLloydIter_ = nIter; }
     void set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand = false);

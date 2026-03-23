@@ -173,7 +173,8 @@ public:
                unsigned int seed = std::random_device{}(),
                double c = 20.0, double h = 0.7, double res = 1.0, int32_t topk = 3,
                int32_t verbose = 0, int32_t debug = 0,
-               double hexSize = 1.0, int32_t nMoves = 1);
+               double hexSize = 1.0, int32_t nMoves = 1,
+               bool useMemoryBuffer = false);
     void set_background_model(double pi0, VectorXf beta0, bool outputExpand = false) {
         empois_.set_background_model(pi0, beta0);
         Base::outputBackgroundProbDense_ = !outputExpand;

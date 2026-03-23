@@ -100,6 +100,7 @@ public:
     void setThreads(int32_t threads) {
         threads_ = std::max(0, threads);
     }
+    void setPixelResolutionOverride(float resXY, float resZ = -1.0f);
     void setRasterPixelResolution(float resXY);
     void setCoordinateColumns(int32_t icol_x, int32_t icol_y) {
         icol_x_ = icol_x;
@@ -127,7 +128,10 @@ public:
     void printIndex() const;
     // Convert to plain TSV
     void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2,
-        const std::string& featureDictFile = "");
+        const std::string& featureDictFile = "",
+        const std::string& geojsonFile = "", int64_t geojsonScale = 10,
+        float qzmin = std::numeric_limits<float>::quiet_NaN(),
+        float qzmax = std::numeric_limits<float>::quiet_NaN());
     // Fix Fragmented Tiles
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
     // Region query
@@ -269,7 +273,7 @@ private:
     bool canSeekTextInput() const { return isTextInput() && !isStreamingTextInput(); }
     bool storesIntegerCoordinates() const { return (mode_ & 0x4) != 0; }
     bool storesFloatCoordinates() const { return (mode_ & 0x4) == 0; }
-    bool rawCoordinatesArePixels() const { return (mode_ & 0x2) != 0; }
+    bool rawCoordinatesAreScaled() const { return (mode_ & 0x2) != 0; }
     bool usesRasterResolutionOverride() const { return hasRasterResolutionOverride_; }
     float getRasterPixelResolution() const {
         return hasRasterResolutionOverride_ ? rasterPixelResolution_ : getPixelResolution();
@@ -282,8 +286,15 @@ private:
     void accumulateRasterTopProbs(RasterTopProbAccum& accum, const TopProbs& rec) const;
     TopProbs finalizeRasterTopProbs(const RasterTopProbAccum& accum) const;
     void validateCoordinateEncoding() const;
+    void syncActiveBounds();
     void closeTextStream();
     void requireNoFeatureIndex(const char* funcName) const;
+    void applyUnsetSourceResolutionOverrides(
+        const std::vector<TileOperator*>& opPtrs,
+        const char* funcName) const;
+    void buildPreparedRegionPlan(const PreparedRegionMask2D& region,
+        std::vector<size_t>& activeOrder,
+        std::vector<uint8_t>& activeStates) const;
 
     // Determine if a block is strictly within a tile or a boundary block
     void classifyBlocks(int32_t tileSize);
@@ -349,7 +360,7 @@ private:
     void reorgTilesBinary(const std::string& outPrefix, int32_t tileSize = -1);
     // Impl for merge
     std::vector<MergeSourcePlan> validateMergeSources(
-        const std::vector<const TileOperator*>& opPtrs,
+        const std::vector<TileOperator*>& opPtrs,
         const std::vector<uint32_t>& k2keep) const;
     void mergeTiles2D(const std::vector<TileKey>& mainTiles,
         const std::vector<MergeSourcePlan>& mergePlans,
@@ -401,7 +412,10 @@ private:
         int32_t icol_s, int32_t icol_z, int32_t icol_f,
         uint32_t k_out, float max_cell_diameter, const std::string& featureDictFile);
     void dumpTSVSingleMolecule(const std::string& outPrefix,
-        int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile);
+        int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile,
+        PreparedRegionMask2D* regionPtr = nullptr,
+        float qzmin = std::numeric_limits<float>::quiet_NaN(),
+        float qzmax = std::numeric_limits<float>::quiet_NaN());
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
         computeConfusionMatrixSingleMolecule(double resolution) const;
     int32_t loadTileToMapFeature(const TileKey& key,

@@ -243,7 +243,7 @@ bool TileOperator::readNextRecord3DFeatureAsPixel(std::istream& dataStream, uint
 
 
 bool TileOperator::parseLine(const std::string& line, PixTopProbs<float>& R) const {
-    if (rawCoordinatesArePixels()) {
+    if (rawCoordinatesAreScaled()) {
         error("%s: Float-coordinate records require mode & 0x2 == 0; raw float records are expected in world coordinates", __func__);
     }
     std::vector<std::string> tokens;
@@ -289,7 +289,7 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs<int32_t>& R) c
 }
 
 bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<float>& R) const {
-    if (rawCoordinatesArePixels()) {
+    if (rawCoordinatesAreScaled()) {
         error("%s: Float-coordinate records require mode & 0x2 == 0; raw float records are expected in world coordinates", __func__);
     }
     std::vector<std::string> tokens;

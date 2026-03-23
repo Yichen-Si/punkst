@@ -10,8 +10,8 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
         unsigned int seed,
         double c, double h, double res, int32_t N, int32_t k,
         int32_t verbose, int32_t debug,
-        double hexSize, int32_t nMoves)
-    : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug),
+        double hexSize, int32_t nMoves, bool useMemoryBuffer)
+    : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug, useMemoryBuffer),
       supportRadius_(supportRadius), lda_(lda), lineParser_(lineParser), hexGrid_(hexSize), bccGrid_(hexSize), nMoves_(nMoves), anchorMinCount_(c)
 {
     topk_ = k;
@@ -80,12 +80,12 @@ void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0, b
     if (eta0.size() != M_) {
         error("%s: size of background prior (%d) does not match feature number (%d)", __func__, (int32_t)eta0.size(), M_);
     }
-    if (Base::singleMolecule_ && outputExpand) {
-        error("%s: SingleMolecule mode does not support expanded background output", __func__);
+    if (Base::usesFeatureSpecificMode() && outputExpand) {
+        error("%s: feature-row modes do not support expanded background output", __func__);
     }
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
-    if (Base::singleMolecule_) {
+    if (Base::usesFeatureSpecificMode()) {
         Base::outputBackgroundProbDense_ = false;
         Base::outputBackgroundProbExpand_ = false;
     } else {
@@ -118,12 +118,12 @@ void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, do
         }
     }
     fin.close();
-    if (Base::singleMolecule_ && outputExpand) {
-        error("%s: SingleMolecule mode does not support expanded background output", __func__);
+    if (Base::usesFeatureSpecificMode() && outputExpand) {
+        error("%s: feature-row modes do not support expanded background output", __func__);
     }
     slda_.set_background_prior(eta0, a0, b0);
     fitBackground_ = true;
-    if (Base::singleMolecule_) {
+    if (Base::usesFeatureSpecificMode()) {
         Base::outputBackgroundProbDense_ = false;
         Base::outputBackgroundProbExpand_ = false;
     } else {
@@ -249,8 +249,8 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<Anch
         std::vector<AnchorPoint> newAnchorCoords(nAnchors, AnchorPoint(0.f, 0.f, 0.f));
         std::vector<float> totalCounts(nAnchors, 0.0f);
         // E-Step: Assign each data point to its closest anchor
-        auto assign_pt = [&](const auto& pt) {
-            float query_pt[2] = {(float) pt.x, (float) pt.y};
+        auto assign_pt = [&](float x, float y, uint32_t idx, float ct) {
+            float query_pt[2] = {x, y};
             // Find the single nearest anchor (k=1 search is fast)
             size_t ret_index;
             float out_dist_sqr;
@@ -258,18 +258,26 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<Anch
             resultSet.init(&ret_index, &out_dist_sqr);
             kdtree.findNeighbors(resultSet, query_pt);
             // Aggregate data and coordinates to the assigned anchor
-            docAgg[ret_index][pt.idx] += pt.ct;
-            newAnchorCoords[ret_index].x += pt.x * pt.ct;
-            newAnchorCoords[ret_index].y += pt.y * pt.ct;
-            totalCounts[ret_index] += pt.ct;
+            docAgg[ret_index][idx] += ct;
+            newAnchorCoords[ret_index].x += x * ct;
+            newAnchorCoords[ret_index].y += y * ct;
+            totalCounts[ret_index] += ct;
         };
-    if (useExtended_) {
-        for (const auto& rec : tileData.extPts) {
-            assign_pt(rec.recBase);
-        }
+        if (useExtended_) {
+            for (const auto& rec : tileData.extended2D().extPts) {
+                assign_pt(static_cast<float>(rec.recBase.x), static_cast<float>(rec.recBase.y),
+                    rec.recBase.idx, static_cast<float>(rec.recBase.ct));
+            }
+        } else if (Base::isSingleMoleculeMode()) {
+            const auto& smInput = tileData.singleMolecule2D();
+            for (size_t i = 0; i < smInput.coordsFloat.size(); ++i) {
+                const auto& coord = smInput.coordsFloat[i];
+                assign_pt(coord.first, coord.second, smInput.featureIdx[i], smInput.obsWeight[i]);
+            }
         } else {
-            for (const auto& rec : tileData.pts) {
-                assign_pt(rec);
+            for (const auto& rec : tileData.standard2D().pts) {
+                assign_pt(static_cast<float>(rec.x), static_cast<float>(rec.y),
+                    rec.idx, static_cast<float>(rec.ct));
             }
         }
         // M-Step: Recalculate centroids for non-fixed anchors
@@ -328,8 +336,7 @@ void Tiles2SLDA<T>::onWorkerStart(int threadId) {
 
 template<typename T>
 void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
-    if (tileData.pts.empty() && tileData.extPts.empty() &&
-        tileData.pts3d.empty() && tileData.extPts3d.empty()) {
+    if (tileData.emptyInput()) {
         return;
     }
     std::vector<AnchorPoint> anchors;
@@ -339,9 +346,14 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     if (nAnchors == 0) {
         return;
     }
+    const size_t nObsInput = (Base::coordDim_ == MinibatchCoordDim::Dim3)
+        ? (Base::isSingleMoleculeMode() ? tileData.singleMolecule3D().coords3dFloat.size() : (Base::useExtended_ ? tileData.extended3D().extPts3d.size() : tileData.standard3D().pts3d.size()))
+        : (Base::isSingleMoleculeMode() ? tileData.singleMolecule2D().coordsFloat.size() : (Base::useExtended_ ? tileData.extended2D().extPts.size() : tileData.standard2D().pts.size()));
     double avgDegree = makeMinibatch(tileData, anchors, minibatch);
     const size_t nPixels = (Base::coordDim_ == MinibatchCoordDim::Dim3)
-        ? tileData.coords3d.size() : tileData.coords.size();
+        ? (Base::isSingleMoleculeMode() ? tileData.singleMolecule3D().coords3dFloat.size() : tileData.coords3d.size())
+        : (Base::isSingleMoleculeMode() ? tileData.singleMolecule2D().coordsFloat.size() : tileData.coords.size());
+    const size_t nObs = nObsInput;
     if (debug_) {
         std::cout << "Thread " << threadId << " made minibatch with " << nPixels
                   << " pixels and average degree " << avgDegree << ". ";
@@ -386,15 +398,15 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
         std::lock_guard<std::mutex> lock(pseudobulkMutex_);
         pseudobulk_ += smtx;
         confusion_ += local_cmtx;
-        if (debug_) {
-            std::cout << "Thread " << threadId << " updated pseudobulk.\n";
-            std::cout << "    Current sums: ";
-            auto colsums = pseudobulk_.colwise().sum();
-            for (int32_t i = 0; i < K_; ++i) {
-                std::cout << colsums(i) << " ";
-            }
-            std::cout << std::endl << std::flush;
-        }
+        // if (debug_) {
+        //     std::cout << "Thread " << threadId << " updated pseudobulk.\n";
+        //     std::cout << "    Current sums: ";
+        //     auto colsums = pseudobulk_.colwise().sum();
+        //     for (int32_t i = 0; i < K_; ++i) {
+        //         std::cout << colsums(i) << " ";
+        //     }
+        //     std::cout << std::endl << std::flush;
+        // }
     }
 
     MatrixXf topVals;
@@ -415,8 +427,8 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
 
     char buf[256];
     int l = snprintf(buf, sizeof(buf),
-        "Thread %d (ticket %d) fit minibatch with %d anchors, %zu pixels, average degree %.2f, and output %u internal pixels in %d iterations. Final mean max change in phi: %.1e",
-        threadId, ticket, nAnchors, nPixels, avgDegree, result.npts, n_iter, delta);
+        "Thread %d (ticket %d) fit minibatch with %d anchors, %zu pixels (%zu input records), average degree %.2f.\n    Output %zu internal pixels after %d iterations. Final mean max change in phi: %.1e",
+        threadId, ticket, nAnchors, nPixels, nObs, avgDegree, result.size(), n_iter, delta);
     if (fitBackground_) {
         l += snprintf(buf + l, sizeof(buf) - l, " (%.3f background)", f0);
     }

@@ -1,23 +1,29 @@
 #include "tileoperator.hpp"
+#include "tileoperator_common.hpp"
 #include "numerical_utils.hpp"
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <condition_variable>
-#include <deque>
 #include <set>
 #include <memory>
-#include <mutex>
-#include <thread>
 #include <unordered_map>
 #include <limits>
-#include <tbb/blocked_range.h>
-#include <tbb/global_control.h>
-#include <tbb/parallel_for.h>
 
 namespace {
+
+using tileoperator_detail::fmt::append_format;
+using tileoperator_detail::io::append_binary_span;
+using tileoperator_detail::io::append_binary_value;
+using tileoperator_detail::io::append_pix_top_probs3d_binary;
+using tileoperator_detail::io::append_pix_top_probs_binary;
+using tileoperator_detail::io::TileWriteResult;
+using tileoperator_detail::io::write_tile_result;
+using tileoperator_detail::merge::append_placeholder_pairs;
+using tileoperator_detail::merge::append_top_probs_prefix;
+using tileoperator_detail::merge::tile_key_from_source_xy;
+using tileoperator_detail::parallel::process_tile_results_parallel;
 
 using Clipper2Lib::Area;
 using Clipper2Lib::ClipType;
@@ -47,126 +53,6 @@ void add_nested_map(std::map<K1, std::map<K2, V>>& dst, const std::map<K1, std::
     }
 }
 
-template<typename T>
-class BoundedResultQueue {
-public:
-    explicit BoundedResultQueue(size_t capacity) : capacity_(std::max<size_t>(1, capacity)) {}
-
-    bool push(T value) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cvNotFull_.wait(lock, [&]() {
-            return aborted_ || queue_.size() < capacity_;
-        });
-        if (aborted_) {
-            return false;
-        }
-        queue_.push_back(std::move(value));
-        cvNotEmpty_.notify_one();
-        return true;
-    }
-
-    bool pop(T& value) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cvNotEmpty_.wait(lock, [&]() {
-            return aborted_ || closed_ || !queue_.empty();
-        });
-        if (aborted_) {
-            return false;
-        }
-        if (queue_.empty()) {
-            return false;
-        }
-        value = std::move(queue_.front());
-        queue_.pop_front();
-        cvNotFull_.notify_one();
-        return true;
-    }
-
-    void close() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        closed_ = true;
-        cvNotEmpty_.notify_all();
-        cvNotFull_.notify_all();
-    }
-
-    void abort() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        aborted_ = true;
-        cvNotEmpty_.notify_all();
-        cvNotFull_.notify_all();
-    }
-
-private:
-    size_t capacity_;
-    std::deque<T> queue_;
-    std::mutex mutex_;
-    std::condition_variable cvNotEmpty_;
-    std::condition_variable cvNotFull_;
-    bool closed_ = false;
-    bool aborted_ = false;
-};
-
-struct TileWriteResult {
-    TileKey tile;
-    uint32_t nMain = 0;
-    uint32_t n = 0;
-    std::string textData;
-    std::vector<char> binaryData;
-};
-
-template<typename... Args>
-void append_format(std::string& out, const char* fmt, Args... args) {
-    char stackBuf[256];
-    int n = std::snprintf(stackBuf, sizeof(stackBuf), fmt, args...);
-    if (n < 0) {
-        error("%s: snprintf failed", __func__);
-    }
-    if (static_cast<size_t>(n) < sizeof(stackBuf)) {
-        out.append(stackBuf, static_cast<size_t>(n));
-        return;
-    }
-    std::string heapBuf(static_cast<size_t>(n) + 1, '\0');
-    if (std::snprintf(heapBuf.data(), heapBuf.size(), fmt, args...) != n) {
-        error("%s: snprintf failed", __func__);
-    }
-    out.append(heapBuf.data(), static_cast<size_t>(n));
-}
-
-template<typename T>
-void append_binary_value(std::vector<char>& out, const T& value) {
-    const size_t oldSize = out.size();
-    out.resize(oldSize + sizeof(T));
-    std::memcpy(out.data() + oldSize, &value, sizeof(T));
-}
-
-template<typename T>
-void append_binary_span(std::vector<char>& out, const std::vector<T>& values) {
-    if (values.empty()) {
-        return;
-    }
-    const size_t byteCount = values.size() * sizeof(T);
-    const size_t oldSize = out.size();
-    out.resize(oldSize + byteCount);
-    std::memcpy(out.data() + oldSize, values.data(), byteCount);
-}
-
-void append_pix_top_probs_binary(std::vector<char>& out,
-    int32_t x, int32_t y, const TopProbs& probs) {
-    append_binary_value(out, x);
-    append_binary_value(out, y);
-    append_binary_span(out, probs.ks);
-    append_binary_span(out, probs.ps);
-}
-
-void append_pix_top_probs3d_binary(std::vector<char>& out,
-    int32_t x, int32_t y, int32_t z, const TopProbs& probs) {
-    append_binary_value(out, x);
-    append_binary_value(out, y);
-    append_binary_value(out, z);
-    append_binary_span(out, probs.ks);
-    append_binary_span(out, probs.ps);
-}
-
 int32_t floor_div_int32(int32_t value, int32_t divisor) {
     assert(divisor > 0);
     int32_t q = value / divisor;
@@ -175,50 +61,6 @@ int32_t floor_div_int32(int32_t value, int32_t divisor) {
         --q;
     }
     return q;
-}
-
-void append_top_probs_prefix(TopProbs& out, const TopProbs& src, uint32_t keepK) {
-    const size_t keep = std::min<size_t>(keepK, std::min(src.ks.size(), src.ps.size()));
-    out.ks.insert(out.ks.end(), src.ks.begin(), src.ks.begin() + keep);
-    out.ps.insert(out.ps.end(), src.ps.begin(), src.ps.begin() + keep);
-}
-
-void append_placeholder_pairs(TopProbs& out, uint32_t keepK) {
-    out.ks.insert(out.ks.end(), keepK, -1);
-    out.ps.insert(out.ps.end(), keepK, 0.0f);
-}
-
-TileKey tile_key_from_source_xy(int32_t x, int32_t y, float resXY, int32_t tileSize) {
-    const double worldX = static_cast<double>(x) * static_cast<double>(resXY);
-    const double worldY = static_cast<double>(y) * static_cast<double>(resXY);
-    return TileKey{
-        static_cast<int32_t>(std::floor(worldY / static_cast<double>(tileSize))),
-        static_cast<int32_t>(std::floor(worldX / static_cast<double>(tileSize)))
-    };
-}
-
-void write_tile_result(const TileWriteResult& result, bool binaryOutput,
-    FILE* fp, int fdMain, int fdIndex, long& currentOffset, int32_t tileSize) {
-    IndexEntryF newEntry(result.tile.row, result.tile.col);
-    newEntry.st = currentOffset;
-    newEntry.n = result.n;
-    tile2bound(result.tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, tileSize);
-    if (binaryOutput) {
-        if (!result.binaryData.empty() && !write_all(fdMain, result.binaryData.data(), result.binaryData.size())) {
-            error("%s: Write error", __func__);
-        }
-        currentOffset += static_cast<long>(result.binaryData.size());
-    } else {
-        if (!result.textData.empty() &&
-            std::fwrite(result.textData.data(), 1, result.textData.size(), fp) != result.textData.size()) {
-            error("%s: Write error", __func__);
-        }
-        currentOffset = std::ftell(fp);
-    }
-    newEntry.ed = currentOffset;
-    if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) {
-        error("%s: Index entry write error", __func__);
-    }
 }
 
 int64_t rounded_abs_area64(const Path64& path) {
@@ -789,76 +631,14 @@ void TileOperator::mergeTiles2D(const std::vector<TileKey>& mainTiles,
         return result;
     };
 
-    const bool useParallel = (threads_ > 1 && mainTiles.size() > 1);
-    if (!useParallel) {
-        std::vector<std::ifstream> streams(nSources);
-        for (const auto& tile : mainTiles) {
-            TileWriteResult result = buildTileResult(tile, streams);
-            if (result.n == 0) {
-                continue;
-            }
-            write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-            notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
-                funcName, tile.row, tile.col, result.n, result.nMain);
-        }
-        return;
-    }
-
-    const size_t chunkTileCount = std::max<size_t>(
-        (mainTiles.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
-    const size_t nChunks = (mainTiles.size() + chunkTileCount - 1) / chunkTileCount;
-    BoundedResultQueue<TileWriteResult> queue(std::max<size_t>(4, static_cast<size_t>(threads_) * 2));
-    std::exception_ptr writerError;
-    std::mutex writerErrorMutex;
-    std::thread writer([&]() {
-        try {
-            TileWriteResult result;
-            while (queue.pop(result)) {
-                write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-                notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
-                    funcName, result.tile.row, result.tile.col, result.n, result.nMain);
-            }
-        } catch (...) {
-            {
-                std::lock_guard<std::mutex> lock(writerErrorMutex);
-                writerError = std::current_exception();
-            }
-            queue.abort();
-        }
-    });
-
-    try {
-        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, nChunks),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t chunkIdx = range.begin(); chunkIdx < range.end(); ++chunkIdx) {
-                    std::vector<std::ifstream> streams(nSources);
-                    const size_t begin = chunkIdx * chunkTileCount;
-                    const size_t end = std::min(mainTiles.size(), begin + chunkTileCount);
-                    for (size_t ti = begin; ti < end; ++ti) {
-                        TileWriteResult result = buildTileResult(mainTiles[ti], streams);
-                        if (result.n > 0 && !queue.push(std::move(result))) {
-                            return;
-                        }
-                    }
-                }
-            });
-    } catch (...) {
-        queue.abort();
-        if (writer.joinable()) {
-            writer.join();
-        }
-        throw;
-    }
-
-    queue.close();
-    writer.join();
-    {
-        std::lock_guard<std::mutex> lock(writerErrorMutex);
-        if (writerError) {
-            std::rethrow_exception(writerError);
-        }
-    }
+    auto writeResult = [&](const TileWriteResult& result) {
+        write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
+        notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
+            funcName, result.tile.row, result.tile.col, result.n, result.nMain);
+    };
+    process_tile_results_parallel(mainTiles, threads_,
+        [&]() { return std::vector<std::ifstream>(nSources); },
+        buildTileResult, writeResult);
 }
 
 void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
@@ -974,76 +754,14 @@ void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
         return result;
     };
 
-    const bool useParallel = (threads_ > 1 && mainTiles.size() > 1);
-    if (!useParallel) {
-        std::vector<std::ifstream> streams(nSources);
-        for (const auto& tile : mainTiles) {
-            TileWriteResult result = buildTileResult(tile, streams);
-            if (result.n == 0) {
-                continue;
-            }
-            write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-            notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
-                funcName, tile.row, tile.col, result.n, result.nMain);
-        }
-        return;
-    }
-
-    const size_t chunkTileCount = std::max<size_t>(
-        (mainTiles.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
-    const size_t nChunks = (mainTiles.size() + chunkTileCount - 1) / chunkTileCount;
-    BoundedResultQueue<TileWriteResult> queue(std::max<size_t>(4, static_cast<size_t>(threads_) * 2));
-    std::exception_ptr writerError;
-    std::mutex writerErrorMutex;
-    std::thread writer([&]() {
-        try {
-            TileWriteResult result;
-            while (queue.pop(result)) {
-                write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
-                notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
-                    funcName, result.tile.row, result.tile.col, result.n, result.nMain);
-            }
-        } catch (...) {
-            {
-                std::lock_guard<std::mutex> lock(writerErrorMutex);
-                writerError = std::current_exception();
-            }
-            queue.abort();
-        }
-    });
-
-    try {
-        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, nChunks),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t chunkIdx = range.begin(); chunkIdx < range.end(); ++chunkIdx) {
-                    std::vector<std::ifstream> streams(nSources);
-                    const size_t begin = chunkIdx * chunkTileCount;
-                    const size_t end = std::min(mainTiles.size(), begin + chunkTileCount);
-                    for (size_t ti = begin; ti < end; ++ti) {
-                        TileWriteResult result = buildTileResult(mainTiles[ti], streams);
-                        if (result.n > 0 && !queue.push(std::move(result))) {
-                            return;
-                        }
-                    }
-                }
-            });
-    } catch (...) {
-        queue.abort();
-        if (writer.joinable()) {
-            writer.join();
-        }
-        throw;
-    }
-
-    queue.close();
-    writer.join();
-    {
-        std::lock_guard<std::mutex> lock(writerErrorMutex);
-        if (writerError) {
-            std::rethrow_exception(writerError);
-        }
-    }
+    auto writeResult = [&](const TileWriteResult& result) {
+        write_tile_result(result, binaryOutput, fp, fdMain, fdIndex, currentOffset, formatInfo_.tileSize);
+        notice("%s: Merged tile (%d, %d) with %u output pixels from %u main-input pixels",
+            funcName, result.tile.row, result.tile.col, result.n, result.nMain);
+    };
+    process_tile_results_parallel(mainTiles, threads_,
+        [&]() { return std::vector<std::ifstream>(nSources); },
+        buildTileResult, writeResult);
 }
 
 void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
@@ -1093,76 +811,14 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
         return result;
     };
 
-    const bool useParallel = (threads_ > 1 && tiles.size() > 1);
-    if (!useParallel) {
-        std::ifstream tileStream;
-        for (const auto& tile : tiles) {
-            TileWriteResult result = buildTileResult(tile, tileStream);
-            if (result.n == 0) {
-                continue;
-            }
-            write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
-            notice("%s: Annotated tile (%d, %d) with %u points",
-                funcName, tile.row, tile.col, result.n);
-        }
-        return;
-    }
-
-    const size_t chunkTileCount = std::max<size_t>(
-        (tiles.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
-    const size_t nChunks = (tiles.size() + chunkTileCount - 1) / chunkTileCount;
-    BoundedResultQueue<TileWriteResult> queue(std::max<size_t>(4, static_cast<size_t>(threads_) * 2));
-    std::exception_ptr writerError;
-    std::mutex writerErrorMutex;
-    std::thread writer([&]() {
-        try {
-            TileWriteResult result;
-            while (queue.pop(result)) {
-                write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
-                notice("%s: Annotated tile (%d, %d) with %u points",
-                    funcName, result.tile.row, result.tile.col, result.n);
-            }
-        } catch (...) {
-            {
-                std::lock_guard<std::mutex> lock(writerErrorMutex);
-                writerError = std::current_exception();
-            }
-            queue.abort();
-        }
-    });
-
-    try {
-        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, nChunks),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t chunkIdx = range.begin(); chunkIdx < range.end(); ++chunkIdx) {
-                    std::ifstream tileStream;
-                    const size_t begin = chunkIdx * chunkTileCount;
-                    const size_t end = std::min(tiles.size(), begin + chunkTileCount);
-                    for (size_t ti = begin; ti < end; ++ti) {
-                        TileWriteResult result = buildTileResult(tiles[ti], tileStream);
-                        if (result.n > 0 && !queue.push(std::move(result))) {
-                            return;
-                        }
-                    }
-                }
-            });
-    } catch (...) {
-        queue.abort();
-        if (writer.joinable()) {
-            writer.join();
-        }
-        throw;
-    }
-
-    queue.close();
-    writer.join();
-    {
-        std::lock_guard<std::mutex> lock(writerErrorMutex);
-        if (writerError) {
-            std::rethrow_exception(writerError);
-        }
-    }
+    auto writeResult = [&](const TileWriteResult& result) {
+        write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
+        notice("%s: Annotated tile (%d, %d) with %u points",
+            funcName, result.tile.row, result.tile.col, result.n);
+    };
+    process_tile_results_parallel(tiles, threads_,
+        [&]() { return std::ifstream(); },
+        buildTileResult, writeResult);
 }
 
 void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
@@ -1216,76 +872,14 @@ void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
         return result;
     };
 
-    const bool useParallel = (threads_ > 1 && tiles.size() > 1);
-    if (!useParallel) {
-        std::ifstream tileStream;
-        for (const auto& tile : tiles) {
-            TileWriteResult result = buildTileResult(tile, tileStream);
-            if (result.n == 0) {
-                continue;
-            }
-            write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
-            notice("%s: Annotated tile (%d, %d) with %u points",
-                funcName, tile.row, tile.col, result.n);
-        }
-        return;
-    }
-
-    const size_t chunkTileCount = std::max<size_t>(
-        (tiles.size() + static_cast<size_t>(threads_) - 1) / static_cast<size_t>(threads_), 1);
-    const size_t nChunks = (tiles.size() + chunkTileCount - 1) / chunkTileCount;
-    BoundedResultQueue<TileWriteResult> queue(std::max<size_t>(4, static_cast<size_t>(threads_) * 2));
-    std::exception_ptr writerError;
-    std::mutex writerErrorMutex;
-    std::thread writer([&]() {
-        try {
-            TileWriteResult result;
-            while (queue.pop(result)) {
-                write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
-                notice("%s: Annotated tile (%d, %d) with %u points",
-                    funcName, result.tile.row, result.tile.col, result.n);
-            }
-        } catch (...) {
-            {
-                std::lock_guard<std::mutex> lock(writerErrorMutex);
-                writerError = std::current_exception();
-            }
-            queue.abort();
-        }
-    });
-
-    try {
-        tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, nChunks),
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t chunkIdx = range.begin(); chunkIdx < range.end(); ++chunkIdx) {
-                    std::ifstream tileStream;
-                    const size_t begin = chunkIdx * chunkTileCount;
-                    const size_t end = std::min(tiles.size(), begin + chunkTileCount);
-                    for (size_t ti = begin; ti < end; ++ti) {
-                        TileWriteResult result = buildTileResult(tiles[ti], tileStream);
-                        if (result.n > 0 && !queue.push(std::move(result))) {
-                            return;
-                        }
-                    }
-                }
-            });
-    } catch (...) {
-        queue.abort();
-        if (writer.joinable()) {
-            writer.join();
-        }
-        throw;
-    }
-
-    queue.close();
-    writer.join();
-    {
-        std::lock_guard<std::mutex> lock(writerErrorMutex);
-        if (writerError) {
-            std::rethrow_exception(writerError);
-        }
-    }
+    auto writeResult = [&](const TileWriteResult& result) {
+        write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
+        notice("%s: Annotated tile (%d, %d) with %u points",
+            funcName, result.tile.row, result.tile.col, result.n);
+    };
+    process_tile_results_parallel(tiles, threads_,
+        [&]() { return std::ifstream(); },
+        buildTileResult, writeResult);
 }
 
 void TileOperator::probDotTiles2D(const std::set<TileKey>& commonTiles,
@@ -2135,4 +1729,34 @@ nlohmann::json TileOperator::maskPathsToMultiPolygonGeoJSON(const Clipper2Lib::P
         append_geojson_polygons(*child, scale, multipolygon);
     }
     return json{{"type", "MultiPolygon"}, {"coordinates", std::move(multipolygon)}};
+}
+
+int32_t TileOperator::floorDivInt32(int32_t value, int32_t divisor) {
+    if (divisor <= 0) {
+        error("%s: divisor must be positive", __func__);
+    }
+    int32_t q = value / divisor;
+    const int32_t r = value % divisor;
+    if (r < 0) {
+        --q;
+    }
+    return q;
+}
+
+int32_t TileOperator::ceilDivInt32(int32_t value, int32_t divisor) {
+    return -floorDivInt32(-value, divisor);
+}
+
+int32_t TileOperator::mapPixelToRasterFloor(int32_t value) const {
+    if (!hasRasterResolutionOverride_) {
+        return value;
+    }
+    return floorDivInt32(value, rasterRatioXY_);
+}
+
+int32_t TileOperator::mapPixelToRasterCeil(int32_t value) const {
+    if (!hasRasterResolutionOverride_) {
+        return value;
+    }
+    return ceilDivInt32(value, rasterRatioXY_);
 }

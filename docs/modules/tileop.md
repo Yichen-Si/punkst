@@ -46,9 +46,14 @@ When using `--in`, without `--binary`, the tool assumes the data file is `<in>.t
 
 Use `--out` to specify the output prefix. In some operations use `--binary-out` to specify that the output is to be written in binary format.
 
-### Single-molecule Pixel Inputs
+### Feature-specific Inputs
 
-If the input was created by `punkst pixel-decode --single-molecule`, each binary record carries an additional feature index in addition to coordinates and factor probabilities.
+`tile-op` recognizes feature-bearing inference outputs (`mode & 0x40`). These are currently produced by:
+
+- `punkst pixel-decode --single-feature-pixel`
+- `punkst pixel-decode --single-molecule`
+
+In both cases, each binary record carries an additional feature index in addition to coordinates and factor probabilities, so `tile-op` uses feature-aware loaders / matching logic where supported.
 
 Current `tile-op` support for these inputs is:
 
@@ -70,7 +75,7 @@ Current `tile-op` support for these inputs is:
 
 Additional flags used with supported single-molecule workflows:
 
-- `--features`: dictionary file whose first column maps feature indices to feature names
+- `--features`: dictionary file whose first column maps feature indices to feature names. `--features -` reads this dictionary from stdin.
 - `--icol-feature`: 0-based feature-name column in the query TSV for `--annotate-pts` and `--annotate-cell`
 
 ### Parallel Execution
@@ -96,8 +101,12 @@ Current commands with meaningful parallel tile-local execution include:
 Notes:
 
 - Some commands are only partially parallelized: tile-local work is parallel, but later reduction, polygon assembly, or final writeback is still serial.
-- `--merge-emb` and `--annotate-pts` use a dedicated writer thread in parallel mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.
+- `--merge-emb` and `--annotate-pts` now use the same shared tile-result pipeline in both default pixel mode and feature-specific mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.
 - `--prob-dot` without `--merge-emb` has a serial fallback for bounded query mode and non-seekable text input such as stdin or gzipped streaming text.
+
+Feature-specific note:
+
+- `--merge-emb` and `--annotate-pts` are parallelized for feature-specific inputs as well
 
 ### Raster Resolution Override
 
@@ -121,6 +130,27 @@ Rules:
 - the requested value is in the original coordinate units, the same units stored in the input header
 - it must be strictly larger than and an integer times of the input `pixelResolution`
 - all raster-like sizes and distances for the command remain in pixel units, but now refer to the overridden raster grid
+
+This override is for raster-style coordinate-only commands only. It is not to be confused with `--pixel-res-override` and `--pixel-res-z-override` used by feature-specific (single molecule level) merge / annotate paths.
+
+### Pixel Resolution Override For Raw Float Coordinates
+
+Feature-specific inputs written with raw float coordinates do not always carry a usable integer-pixel resolution in the header. For commands that currently rely on a integer lattice for fast operations, `tile-op` needs to override the coordinate-to-pixel resolution:
+
+```bash
+--pixel-res-override <xy_res> [--pixel-res-z-override <z_res>]
+```
+
+where `xy_res` and `z_res` can be set to a safe small value like `0.001`, equivalent to rounding coordinates to the nearest nanometer if the original coordinates are in micron.
+
+Current behavior:
+
+- only allowed when the input stores original float coordinates
+- `--pixel-res-z-override` requires `--pixel-res-override`; if only `--pixel-res-override` is provided for 3D input the same value is used for Z
+- this override is used by feature-aware operations such as `--merge-emb`, `--annotate-pts`, `--annotate-cell`, and `--prob-dot`
+- when the main input uses this override in feature-aware merge / prob-dot workflows, the same effective resolution is propagated to auxiliary raw-float sources whose own resolution is unset
+
+Unscaled integer-coordinate inputs do not use this override. They are treated as already being on an integer lattice.
 
 ### Print Index
 
@@ -147,6 +177,23 @@ punkst tile-op --dump-tsv --in path/prefix --binary \
   --features path/features.tsv \
   --out path/prefix.dump
 ```
+
+`--dump-tsv` also supports GeoJSON filtering, and it can composes with the rectangle query set by `--xmin/--xmax/--ymin/--ymax`:
+
+```bash
+punkst tile-op --dump-tsv --in path/prefix --binary \
+  --extract-region-geojson path/region.geojson \
+  --xmin 1000 --xmax 2000 --ymin 500 --ymax 1500 \
+  --out path/prefix.dump
+```
+
+In this mode:
+
+- the rectangle query is applied first through the existing indexed `query(...)` path
+- the GeoJSON filter is then evaluated only on tiles overlapping that rectangle
+- the output TSV index header and per-tile entries reflect the records actually written
+
+For 3D TSV dumping with GeoJSON, `--zmin/--zmax` are supported only together with `--extract-region-geojson`.
 
 ### Fix fragmented Tiles
 
@@ -196,6 +243,7 @@ punkst tile-op --extract-region-geojson path/region.geojson \
 Optional:
 
 - `--extract-region-scale` controls the integer snapping scale used internally for polygon processing. Default is `10`, which corresponds to `0.1` units.
+- `--zmin` and `--zmax` can be provided for 3D input to keep only records in `[zmin, zmax)`
 
 **Requirements**
 
@@ -233,6 +281,8 @@ For single-molecule inputs, the main input must also be single-molecule. Matchin
 
 If the merged output is TSV rather than binary, you may also pass `--features` so the feature-bearing column is written as feature names instead of numeric feature indices.
 
+For raw-float feature-specific inputs, use `--pixel-res-override` (and `--pixel-res-z-override` for 3D when needed) if the inputs need an explicit lattice resolution for matching.
+
 ### Annotate Points with Inference Results
 
 You can annotate a transcript file with the inference results. The query file is required to be generated by `punkst pts2tiles` with the same tile structure as the result file (since you normally run `pixel-decode` with the output from `pts2tiles` as the input), but you can apply `pts2tiles` to any tsv file that contains X, Y coordinates as two of its columns.
@@ -257,6 +307,8 @@ For single-molecule inputs, also provide:
 Matching is then done by `(x, y, feature)` in 2D or `(x, y, z, feature)` in 3D.
 
 `--threads` - (Optional) Number of worker threads for tile-local annotation.
+
+For raw-float feature-specific inputs, use `--pixel-res-override` if the inference file needs an explicit coordinate-to-pixel mapping resolution.
 
 ### Compute Joint Probability Distributions
 

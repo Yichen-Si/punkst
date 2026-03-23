@@ -1,4 +1,5 @@
 #include "tileoperator.hpp"
+#include "tileoperator_common.hpp"
 #include "region_query.hpp"
 #include "numerical_utils.hpp"
 #include "img_utils.hpp"
@@ -22,62 +23,11 @@
 
 namespace {
 
-using FactorSums = std::pair<std::unordered_map<int32_t, double>, int32_t>;
-
-template<typename K, typename V>
-void add_numeric_map(std::map<K, V>& dst, const std::map<K, V>& src) {
-    for (const auto& kv : src) {
-        dst[kv.first] += kv.second;
-    }
-}
-
-template<typename K1, typename K2, typename V>
-void add_nested_map(std::map<K1, std::map<K2, V>>& dst, const std::map<K1, std::map<K2, V>>& src) {
-    for (const auto& kv : src) {
-        add_numeric_map(dst[kv.first], kv.second);
-    }
-}
-
-struct CellAgg {
-    FactorSums sums;
-    std::map<std::string, FactorSums> compSums;
-    bool boundary = false;
-};
-
-void write_top_factors(FILE* fp, const FactorSums& sums, uint32_t k_out) {
-    std::vector<std::pair<int32_t, double>> items;
-    items.reserve(sums.first.size());
-    for (const auto& kv : sums.first) {
-        if (kv.second != 0.0) {
-            items.emplace_back(kv.first, kv.second / sums.second);
-        }
-    }
-    uint32_t keep = std::min<uint32_t>(k_out, static_cast<uint32_t>(items.size()));
-    if (keep > 0) {
-        std::partial_sort(items.begin(), items.begin() + keep, items.end(),
-            [](const auto& a, const auto& b) {
-                if (a.second == b.second) return a.first < b.first;
-                return a.second > b.second;
-            });
-    }
-    fprintf(fp, "\t%d", sums.second);
-    for (uint32_t i = 0; i < keep; ++i) {
-        fprintf(fp, "\t%d\t%.4e", items[i].first, items[i].second);
-    }
-    for (uint32_t i = keep; i < k_out; ++i) {
-        fprintf(fp, "\t-1\t0");
-    }
-}
-
-void write_cell_row(FILE* fp, const std::string& cellId, const std::string& comp, const FactorSums& sums, uint32_t k_out, bool writeComp) {
-    if (writeComp) {
-        fprintf(fp, "%s\t%s", cellId.c_str(), comp.c_str());
-    } else {
-        fprintf(fp, "%s", cellId.c_str());
-    }
-    write_top_factors(fp, sums, k_out);
-    fprintf(fp, "\n");
-}
+using tileoperator_detail::cellagg::add_nested_map;
+using tileoperator_detail::cellagg::add_numeric_map;
+using tileoperator_detail::cellagg::CellAgg;
+using tileoperator_detail::cellagg::FactorSums;
+using tileoperator_detail::cellagg::write_cell_row;
 
 int32_t checked_integer_ratio(float srcRes, float mainRes, const char* funcName,
     uint32_t srcIdx, const char* axisName) {
@@ -101,13 +51,41 @@ int32_t checked_integer_ratio(float srcRes, float mainRes, const char* funcName,
 
 } // namespace
 
+void TileOperator::applyUnsetSourceResolutionOverrides(
+    const std::vector<TileOperator*>& opPtrs,
+    const char* funcName) const {
+    if (!hasFeatureIndex()) {
+        return;
+    }
+    const float mainResXY = getPixelResolution();
+    if (!(mainResXY > 0.0f)) {
+        return;
+    }
+    const float mainResZ = (coord_dim_ == 3) ? getPixelResolutionZ() : -1.0f;
+    for (size_t i = 1; i < opPtrs.size(); ++i) {
+        TileOperator* op = opPtrs[i];
+        if (!op) {
+            error("%s: source %zu is null", funcName, i);
+        }
+        if (op->getPixelResolution() > 0.0f) {
+            continue;
+        }
+        if (op->storesIntegerCoordinates() || op->rawCoordinatesAreScaled()) {
+            continue;
+        }
+        const float srcResZ = (op->coord_dim_ == 3) ? mainResZ : -1.0f;
+        op->setPixelResolutionOverride(mainResXY, srcResZ);
+    }
+}
+
 std::vector<TileOperator::MergeSourcePlan> TileOperator::validateMergeSources(
-    const std::vector<const TileOperator*>& opPtrs,
+    const std::vector<TileOperator*>& opPtrs,
     const std::vector<uint32_t>& k2keep) const {
     const char* funcName = __func__;
     if (formatInfo_.tileSize <= 0) {
         error("%s: Main input must have a positive tile size", funcName);
     }
+    applyUnsetSourceResolutionOverrides(opPtrs, funcName);
     const float mainResXY = getPixelResolution();
     const float mainResZ = (coord_dim_ == 3) ? getPixelResolutionZ() : -1.0f;
     if (!(mainResXY > 0.0f)) {
@@ -119,7 +97,7 @@ std::vector<TileOperator::MergeSourcePlan> TileOperator::validateMergeSources(
 
     std::vector<MergeSourcePlan> plans(opPtrs.size());
     for (size_t i = 0; i < opPtrs.size(); ++i) {
-        const TileOperator* op = opPtrs[i];
+        TileOperator* op = opPtrs[i];
         MergeSourcePlan& plan = plans[i];
         plan.op = op;
         plan.keepK = k2keep[i];
@@ -173,7 +151,7 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
 
     // 1. Setup operators
     std::vector<std::unique_ptr<TileOperator>> ops;
-    std::vector<const TileOperator*> opPtrs;
+    std::vector<TileOperator*> opPtrs;
     opPtrs.push_back(this); // current object
     for (const auto& f : otherFiles) {
         std::string idxFile = f.substr(0, f.find_last_of('.')) + ".index";
@@ -986,7 +964,7 @@ void TileOperator::probDot(const std::string& outPrefix, int32_t probDigits) {
                 }
                 const int32_t done = processed.fetch_add(1) + 1;
                 if (done % 10 == 0) {
-                    notice("%s: Processed %d blocks...", __func__, done);
+                    notice("probDot: Processed %d blocks...", done);
                 }
             }
         };

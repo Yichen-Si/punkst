@@ -28,9 +28,12 @@ double nth_nearest_zlevel_distance(const std::vector<float>& zLevels, double z, 
     return dists[static_cast<size_t>(nPick - 1)];
 }
 
-double thin3d_default_zreach(const std::vector<float>& zLevels, int32_t nPick, double zMin, double zMax) {
+double thin3d_default_zreach(const std::vector<float>& zLevels, double zMin, double zMax, int32_t nPick = -1) {
     if (zLevels.size() <= 1) {
         return 0.0;
+    }
+    if (nPick <= 0) {
+        nPick = static_cast<int32_t>(zLevels.size() * 0.7);
     }
     nPick = std::min<int32_t>(std::max<int32_t>(nPick, 1), static_cast<int32_t>(zLevels.size()));
     std::vector<double> probes;
@@ -75,6 +78,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool inMemory = false;
     bool outputBinary = false;
     bool outputOritinalData = false;
+    bool singleFeaturePixel = false;
     bool singleMolecule = false;
     bool featureIsIndex = false;
     bool coordsAreInt = false;
@@ -152,13 +156,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("out-pref", "Output prefix", outPref)
       .add_option("output-binary", "Output pixel level results in binary format", outputBinary)
       .add_option("output-original", "Output original data points (pixels with feature values) together with the pixel level factor results", outputOritinalData)
-      .add_option("single-molecule", "Enable \"single molecular level\" decoding (currently only support SLDA with binary output)", singleMolecule)
+      .add_option("single-feature-pixel", "Enable one-feature-per-collapsed-pixel decoding (SLDA binary output only)", singleFeaturePixel)
+      .add_option("single-molecule", "Enable raw single-molecule decoding without collapsing records to pixels (SLDA binary output only)", singleMolecule)
       .add_option("ext-col-ints", "Additional integer columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoInts)
       .add_option("ext-col-floats", "Additional float columns to carry over to output file, in the form of \"idx1:name1 idx2:name2 ...\" where 'idx' are 0-based column indices", annoFloats)
       .add_option("ext-col-strs", "Additional string columns to carry over to output file, in the form of \"idx1:name1:len1 idx2:name2:len2 ...\" where 'idx' are 0-based column indices and 'len' are maximum lengths of strings", annoStrs)
       .add_option("output-anchors", "Output anchor level info", outputAnchor)
       .add_option("use-ticket-system", "Use ticket system to ensure predictable output order", useTicketSystem)
-      .add_option("temp-dir", "Directory to store temporary files", tmpDirPath)
+      .add_option("temp-dir", "Directory to store temporary files", tmpDirPath, true)
       .add_option("in-memory", "Keep boundary buffers in memory instead of writing to temporary files", inMemory)
       .add_option("top-k", "Top K factors to output", topK)
       .add_option("min-init-count", "Minimum", minInitCount)
@@ -183,24 +188,30 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (algo != "slda" && algo != "nmf") {
         error("Invalid --algo (%s). Must be either \"slda\" or \"nmf\"", algo.c_str());
     }
-    if (!inMemory && tmpDirPath.empty()) {
-        error("If --in-memory is not set, --temp-dir is required");
-    }
     if (thin3D && standard3D) {
         error("Use either --thin-3D or --standard-3D, not both");
     }
     if (outputBinary && outputOritinalData) {
         error("Cannot set both --output-binary and --output-original");
     }
-    if (singleMolecule) {
+    if (singleFeaturePixel && singleMolecule) {
+        error("Use either --single-feature-pixel or --single-molecule, not both");
+    }
+    FeatureSpecificMode featureSpecificMode = FeatureSpecificMode::Off;
+    if (singleFeaturePixel) {
+        featureSpecificMode = FeatureSpecificMode::SingleFeaturePixel;
+    } else if (singleMolecule) {
+        featureSpecificMode = FeatureSpecificMode::SingleMolecule;
+    }
+    if (featureSpecificMode != FeatureSpecificMode::Off) {
         if (algo != "slda") {
-            error("--single-molecule is currently supported only with --algo slda");
+            error("feature-specific decoding modes are currently supported only with --algo slda");
         }
         if (outputOritinalData || outBgExpand) {
-            error("--single-molecule does not support --output-original or --output-bg-prob-expand");
+            error("feature-specific decoding modes do not support --output-original or --output-bg-prob-expand");
         }
         if (!outputBinary) {
-            warning("--single-molecule currently only support the formated binary output");
+            warning("feature-specific decoding modes currently support formatted binary output only");
             outputBinary = true;
         }
     }
@@ -305,7 +316,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         if (decoderRadius <= 0) {
             if (thin3D) {
-                const double zDist = thin3d_default_zreach(thin3DZLevels, 1, zMin, zMax);
+                const double zDist = thin3d_default_zreach(thin3DZLevels, zMin, zMax, -1);
                 decoderRadius = std::sqrt(anchorDist * anchorDist + zDist * zDist) * 1.2;
             } else {
                 decoderRadius = anchorDist * 1.2;
@@ -349,14 +360,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (!weightFile.empty()) {
         parser.readWeights(weightFile, defaultWeight, M_model);
     }
-    if (singleMolecule && (parser.isExtended || parser.weighted)) {
-        error("--single-molecule currently requires standard input records and does not support --ext-col-* for factor weights");
+    if (featureSpecificMode != FeatureSpecificMode::Off && (parser.isExtended || parser.weighted)) {
+        error("feature-specific decoding modes currently require standard input records and do not support --ext-col-* or feature weights");
     }
     notice("Initialized tile reader");
 
     MinibatchIoConfig ioConfig;
     ioConfig.input = parser.isExtended ? MinibatchInputMode::Extended : MinibatchInputMode::Standard;
-    ioConfig.singleMolecule = singleMolecule;
+    ioConfig.featureSpecificMode = featureSpecificMode;
     if (outputBinary) {
         ioConfig.output = MinibatchOutputMode::Binary;
     } else if (outputOritinalData) {
@@ -438,7 +449,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                     nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath,
                     emPois, tileReader, parser, ioConfig,
                     seed, minInitCount, halfLifeDist, pixelResolution,
-                    topK, verbose, debug_, geometryUnitSize, nMoves);
+                    topK, verbose, debug_, geometryUnitSize, nMoves, inMemory);
                 if (fit_background) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
                 }
@@ -449,7 +460,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                     nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath,
                     emPois, tileReader, parser, ioConfig,
                     seed, minInitCount, halfLifeDist, pixelResolution,
-                    topK, verbose, debug_, geometryUnitSize, nMoves);
+                    topK, verbose, debug_, geometryUnitSize, nMoves, inMemory);
                 if (fit_background) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
                 }
@@ -476,14 +487,14 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("Error in input tiles: %s", ds.inTsv.c_str());
         }
         if (coordsAreInt) {
-            Tiles2SLDA<int32_t> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves);
+            Tiles2SLDA<int32_t> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves, inMemory);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
             configure_decoder(tiles2slda, ds.anchorFile, !use3D);
             tiles2slda.run();
         } else {
-            Tiles2SLDA<float> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves);
+            Tiles2SLDA<float> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves, inMemory);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }

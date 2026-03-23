@@ -320,9 +320,10 @@ void populate_tile_data(const std::vector<RawPoint>& points, TileData<float>& ti
     tileData.xmax = static_cast<float>(params.xmax);
     tileData.ymin = static_cast<float>(params.ymin);
     tileData.ymax = static_cast<float>(params.ymax);
-    tileData.pts3d.reserve(points.size());
+    auto& input = tileData.emplaceStandard3D();
+    input.pts3d.reserve(points.size());
     for (const auto& pt : points) {
-        tileData.pts3d.push_back(RecordT3D<float>{
+        input.pts3d.push_back(RecordT3D<float>{
             static_cast<float>(pt.x),
             static_cast<float>(pt.y),
             static_cast<float>(pt.z),

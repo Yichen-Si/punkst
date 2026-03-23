@@ -213,8 +213,8 @@ Tiles2NMF<T>::Tiles2NMF(int nThreads, double supportRadius, double paddingRadius
         PixelEM& empois, TileReader& tileReader, lineParserUnival& lineParser, const MinibatchIoConfig& ioConfig,
         unsigned int seed, double c, double h, double res, int32_t topk,
         int32_t verbose, int32_t debug,
-        double hexSize, int32_t nMoves)
-    : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug), supportRadius_(supportRadius),
+        double hexSize, int32_t nMoves, bool useMemoryBuffer)
+    : Tiles2MinibatchBase<T>(nThreads, paddingRadius, tileReader, outPref, &lineParser, ioConfig, &tmpDir, res, debug, useMemoryBuffer), supportRadius_(supportRadius),
         empois_(empois), lineParser_(lineParser),
         hexGrid_(hexSize), bccGrid_(hexSize), nMoves_(nMoves),
         seed_(seed), anchorMinCount_(c), verbose_(verbose)
@@ -332,8 +332,7 @@ int32_t Tiles2NMF<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint
 template<typename T>
 void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
     (void)anchorPtr;
-    if (tileData.pts.empty() && tileData.extPts.empty() &&
-        tileData.pts3d.empty() && tileData.extPts3d.empty()) {
+    if (tileData.emptyInput()) {
         return;
     }
     std::vector<AnchorPoint> anchors;
@@ -372,8 +371,8 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
         anchorQueue.push(std::move(anchorResult));
     }
 
-    notice("Thread %d (ticket %d) fit minibatch with %d anchors, %zu pixels, average degree %.2f, and output %lu internal pixels in %d iterations. Final mean max change in theta: %.1e (final averaged inner iterations %.1f)",
-        threadId, ticket, nAnchors, nPixels, avgDegree, result.npts, stats.niter, stats.last_change, stats.last_avg_internal_niters);
+    notice("Thread %d (ticket %d) fit minibatch with %d anchors, %zu pixels, average degree %.2f, and output %zu internal pixels in %d iterations. Final mean max change in theta: %.1e (final averaged inner iterations %.1f)",
+        threadId, ticket, nAnchors, nPixels, avgDegree, result.size(), stats.niter, stats.last_change, stats.last_avg_internal_niters);
 
 }
 

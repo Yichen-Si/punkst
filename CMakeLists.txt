@@ -37,7 +37,10 @@ endif()
 
 set(APP_EXE punkst)
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin")
+set(PUNKST_RUNTIME_OUTPUT_DIRECTORY
+  "${CMAKE_CURRENT_SOURCE_DIR}/bin"
+  CACHE PATH "Directory for punkst executable output"
+)
 
 # Eigen
 set(EIGEN3_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ext/eigen")
@@ -140,6 +143,7 @@ set(SOURCE_FILES
     src/region_query.cpp
     script/de_chisq.cpp
     src/tileoperator.hpp
+    src/tileoperator_common.hpp
     src/tileoperator_io.cpp
     src/tileoperator_base.cpp
     src/tileoperator_inner.cpp
@@ -156,6 +160,9 @@ set(SOURCE_FILES
   )
 
 add_executable(${APP_EXE} ${SOURCE_FILES})
+set_target_properties(${APP_EXE} PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${PUNKST_RUNTIME_OUTPUT_DIRECTORY}"
+)
 
 target_include_directories(${APP_EXE} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/script

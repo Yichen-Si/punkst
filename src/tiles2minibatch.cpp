@@ -10,6 +10,132 @@
 #include <map>
 #include <algorithm>
 
+namespace {
+
+template<typename CoordT>
+void append_record_bytes(std::vector<char>& bytes, const PixTopProbs<CoordT>& obj, size_t recordSize) {
+    const size_t off = bytes.size();
+    bytes.resize(off + recordSize);
+    char* dst = bytes.data() + off;
+    std::memcpy(dst, &obj.x, sizeof(obj.x));
+    std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+    if (!obj.ks.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y),
+            obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+    }
+    if (!obj.ps.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + obj.ks.size() * sizeof(int32_t),
+            obj.ps.data(), obj.ps.size() * sizeof(float));
+    }
+}
+
+template<typename CoordT>
+void append_record_bytes(std::vector<char>& bytes, const PixTopProbs3D<CoordT>& obj, size_t recordSize) {
+    const size_t off = bytes.size();
+    bytes.resize(off + recordSize);
+    char* dst = bytes.data() + off;
+    std::memcpy(dst, &obj.x, sizeof(obj.x));
+    std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+    std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
+    if (!obj.ks.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z),
+            obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+    }
+    if (!obj.ps.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + obj.ks.size() * sizeof(int32_t),
+            obj.ps.data(), obj.ps.size() * sizeof(float));
+    }
+}
+
+template<typename CoordT>
+void append_record_bytes(std::vector<char>& bytes, const PixTopProbsFeature<CoordT>& obj, size_t recordSize) {
+    const size_t off = bytes.size();
+    bytes.resize(off + recordSize);
+    char* dst = bytes.data() + off;
+    std::memcpy(dst, &obj.x, sizeof(obj.x));
+    std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+    std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.featureIdx, sizeof(obj.featureIdx));
+    if (!obj.ks.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.featureIdx),
+            obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+    }
+    if (!obj.ps.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.featureIdx) + obj.ks.size() * sizeof(int32_t),
+            obj.ps.data(), obj.ps.size() * sizeof(float));
+    }
+}
+
+template<typename CoordT>
+void append_record_bytes(std::vector<char>& bytes, const PixTopProbsFeature3D<CoordT>& obj, size_t recordSize) {
+    const size_t off = bytes.size();
+    bytes.resize(off + recordSize);
+    char* dst = bytes.data() + off;
+    std::memcpy(dst, &obj.x, sizeof(obj.x));
+    std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
+    std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
+    std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z), &obj.featureIdx, sizeof(obj.featureIdx));
+    if (!obj.ks.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + sizeof(obj.featureIdx),
+            obj.ks.data(), obj.ks.size() * sizeof(int32_t));
+    }
+    if (!obj.ps.empty()) {
+        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + sizeof(obj.featureIdx) + obj.ks.size() * sizeof(int32_t),
+            obj.ps.data(), obj.ps.size() * sizeof(float));
+    }
+}
+
+inline TileKey boundary_tile_key(const PixTopProbs<int32_t>& obj, int tileSize, float pixelResolution) {
+    const float x = static_cast<float>(obj.x) * pixelResolution;
+    const float y = static_cast<float>(obj.y) * pixelResolution;
+    return TileKey{
+        static_cast<int32_t>(std::floor(y / tileSize)),
+        static_cast<int32_t>(std::floor(x / tileSize))
+    };
+}
+
+inline TileKey boundary_tile_key(const PixTopProbs3D<int32_t>& obj, int tileSize, float pixelResolution) {
+    const float x = static_cast<float>(obj.x) * pixelResolution;
+    const float y = static_cast<float>(obj.y) * pixelResolution;
+    return TileKey{
+        static_cast<int32_t>(std::floor(y / tileSize)),
+        static_cast<int32_t>(std::floor(x / tileSize))
+    };
+}
+
+inline TileKey boundary_tile_key(const PixTopProbsFeature<int32_t>& obj, int tileSize, float pixelResolution) {
+    const float x = static_cast<float>(obj.x) * pixelResolution;
+    const float y = static_cast<float>(obj.y) * pixelResolution;
+    return TileKey{
+        static_cast<int32_t>(std::floor(y / tileSize)),
+        static_cast<int32_t>(std::floor(x / tileSize))
+    };
+}
+
+inline TileKey boundary_tile_key(const PixTopProbsFeature3D<int32_t>& obj, int tileSize, float pixelResolution) {
+    const float x = static_cast<float>(obj.x) * pixelResolution;
+    const float y = static_cast<float>(obj.y) * pixelResolution;
+    return TileKey{
+        static_cast<int32_t>(std::floor(y / tileSize)),
+        static_cast<int32_t>(std::floor(x / tileSize))
+    };
+}
+
+inline TileKey boundary_tile_key(const PixTopProbsFeature<float>& obj, int tileSize, float /*pixelResolution*/) {
+    return TileKey{
+        static_cast<int32_t>(std::floor(obj.y / tileSize)),
+        static_cast<int32_t>(std::floor(obj.x / tileSize))
+    };
+}
+
+inline TileKey boundary_tile_key(const PixTopProbsFeature3D<float>& obj, int tileSize, float /*pixelResolution*/) {
+    return TileKey{
+        static_cast<int32_t>(std::floor(obj.y / tileSize)),
+        static_cast<int32_t>(std::floor(obj.x / tileSize))
+    };
+}
+
+} // namespace
+
 template<typename T>
 float Tiles2MinibatchBase<T>::anchor_distance_weight(float dist, float radius, float nu) const {
     if (radius <= 0 || nu < 0) {
@@ -108,8 +234,8 @@ void Tiles2MinibatchBase<T>::configureInputMode() {
     if (!lineParserPtr) {
         error("%s: lineParser is required", __func__);
     }
-    if (singleMolecule_ && inputMode_ != MinibatchInputMode::Standard) {
-        error("%s: single-molecule mode currently does not support --ext-col-* output carry-through", __func__);
+    if (usesFeatureSpecificMode() && inputMode_ != MinibatchInputMode::Standard) {
+        error("%s: feature-row modes currently do not support --ext-col-* output carry-through", __func__);
     }
     if (coordDim_ == MinibatchCoordDim::Dim3 && !lineParserPtr->hasZCoord()) {
         error("%s: 3D mode requires a z column", __func__);
@@ -135,25 +261,37 @@ void Tiles2MinibatchBase<T>::configureInputMode() {
         }
         useExtended_ = false;
         if (coordDim_ == MinibatchCoordDim::Dim3) {
-            parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard3D;
-            parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile3D;
-            parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandard3DWrapper;
+            if (isSingleMoleculeMode()) {
+                parseTileFn_ = &Tiles2MinibatchBase::parseOneTileSingleMolecule3D;
+                parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFileSingleMolecule3D;
+                parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemorySingleMolecule3DWrapper;
+            } else {
+                parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard3D;
+                parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile3D;
+                parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandard3DWrapper;
+            }
         } else {
-            parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard;
-            parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile;
-            parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandardWrapper;
+            if (isSingleMoleculeMode()) {
+                parseTileFn_ = &Tiles2MinibatchBase::parseOneTileSingleMolecule;
+                parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFileSingleMolecule;
+                parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemorySingleMoleculeWrapper;
+            } else {
+                parseTileFn_ = &Tiles2MinibatchBase::parseOneTileStandard;
+                parseBoundaryFileFn_ = &Tiles2MinibatchBase::parseBoundaryFile;
+                parseBoundaryMemoryFn_ = &Tiles2MinibatchBase::parseBoundaryMemoryStandardWrapper;
+            }
         }
     }
 }
 
 template<typename T>
 void Tiles2MinibatchBase<T>::configureOutputMode() {
-    if (singleMolecule_) {
+    if (usesFeatureSpecificMode()) {
         if (outputMode_ != MinibatchOutputMode::Binary) {
-            error("%s: single-molecule mode currently supports binary output only", __func__);
+            error("%s: feature-row modes currently support binary output only", __func__);
         }
         if (outputBackgroundProbDense_ || outputBackgroundProbExpand_) {
-            error("%s: single-molecule mode does not support background-expanded output", __func__);
+            error("%s: feature-row modes do not support background-expanded output", __func__);
         }
     }
     if (outputMode_ == MinibatchOutputMode::Binary) {
@@ -292,22 +430,29 @@ int32_t Tiles2MinibatchBase<T>::loadAnchors(const std::string& anchorFile) {
 template<typename T>
 void Tiles2MinibatchBase<T>::forEachAnchorCandidate2D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_, const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const
 {
-    auto assign_pt = [&](const auto& pt) {
+    auto assign_pt = [&](float x, float y, uint32_t idx, float ct) {
         for (int32_t ir = 0; ir < nMoves_; ++ir) {
             for (int32_t ic = 0; ic < nMoves_; ++ic) {
                 int32_t hx, hy;
-                hexGrid_.cart_to_axial(hx, hy, pt.x, pt.y, ic * 1.0 / nMoves_, ir * 1.0 / nMoves_);
-                emit(pt.idx, static_cast<float>(pt.ct), AnchorKey2D{hx, hy, ic, ir});
+                hexGrid_.cart_to_axial(hx, hy, x, y, ic * 1.0 / nMoves_, ir * 1.0 / nMoves_);
+                emit(idx, ct, AnchorKey2D{hx, hy, ic, ir});
             }
         }
     };
     if (useExtended_) {
-        for (const auto& pt : tileData.extPts) {
-            assign_pt(pt.recBase);
+        for (const auto& pt : tileData.extended2D().extPts) {
+            assign_pt(static_cast<float>(pt.recBase.x), static_cast<float>(pt.recBase.y),
+                pt.recBase.idx, static_cast<float>(pt.recBase.ct));
+        }
+    } else if (isSingleMoleculeMode()) {
+        const auto& smInput = tileData.singleMolecule2D();
+        for (size_t i = 0; i < smInput.coordsFloat.size(); ++i) {
+            const auto& coord = smInput.coordsFloat[i];
+            assign_pt(coord.first, coord.second, smInput.featureIdx[i], smInput.obsWeight[i]);
         }
     } else {
-        for (const auto& pt : tileData.pts) {
-            assign_pt(pt);
+        for (const auto& pt : tileData.standard2D().pts) {
+            assign_pt(static_cast<float>(pt.x), static_cast<float>(pt.y), pt.idx, static_cast<float>(pt.ct));
         }
     }
 }
@@ -369,7 +514,7 @@ int32_t Tiles2MinibatchBase<T>::parseOneTile(TileData<T>& tileData, TileKey tile
 }
 
 template<typename T>
-double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule(TileData<T>& tileData,
+double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleFeaturePixel(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     double supportRadius, double distNu) {
     struct SingleMoleculeKey2D {
@@ -412,8 +557,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule(TileData<T>& til
     std::vector<SingleMoleculePixel2D> groupedPixels;
     uint32_t idxOriginal = 0;
     uint32_t nPixels = 0;
-    tileData.orgpts2pixel.assign(tileData.pts.size(), -1);
-    for (const auto& pt : tileData.pts) {
+    const auto& stdInput = tileData.standard2D();
+    tileData.orgpts2pixel.assign(stdInput.pts.size(), -1);
+    for (const auto& pt : stdInput.pts) {
         const int32_t x = static_cast<int32_t>(std::floor(pt.x / res));
         const int32_t y = static_cast<int32_t>(std::floor(pt.y / res));
         const SingleMoleculeKey2D key{x, y, pt.idx};
@@ -437,9 +583,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule(TileData<T>& til
     }
 
     tileData.coords.clear();
-    tileData.featureIdx.clear();
+    tileData.rowFeatureIdx.clear();
     tileData.coords.reserve(nPixels);
-    tileData.featureIdx.reserve(nPixels);
+    tileData.rowFeatureIdx.reserve(nPixels);
     minibatch.featureIdx.reserve(nPixels);
     minibatch.featureWeight.reserve(nPixels);
     minibatch.rowOffsets.reserve(nPixels + 1);
@@ -469,7 +615,7 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule(TileData<T>& til
         }
 
         tileData.coords.emplace_back(pix.x, pix.y);
-        tileData.featureIdx.push_back(pix.feature);
+        tileData.rowFeatureIdx.push_back(pix.feature);
         minibatch.featureIdx.push_back(pix.feature);
         minibatch.featureWeight.push_back(pix.weight);
         for (auto v : pix.originalIdx) {
@@ -482,7 +628,78 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule(TileData<T>& til
     const double avgDegree = (npt > 0)
         ? static_cast<double>(minibatch.edgeAnchorIdx.size()) / static_cast<double>(npt)
         : 0.0;
-    debug("%s: created %zu single-molecule edges between %u pixels and %zu anchors, average degree %.2f",
+    debug("%s: created %zu single-feature-pixel edges between %u rows and %zu anchors, average degree %.2f",
+        __func__, minibatch.edgeAnchorIdx.size(), npt, anchors.size(), avgDegree);
+
+    minibatch.N = static_cast<int32_t>(npt);
+    minibatch.M = M_;
+    return avgDegree;
+}
+
+template<typename T>
+double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule(TileData<T>& tileData,
+    std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
+    double supportRadius, double distNu) {
+    PointCloud<float> pc;
+    pc.pts = std::move(anchors);
+    kd_tree_f2_t kdtree(2, pc, {10});
+    std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
+
+    const float l2radius = static_cast<float>(supportRadius * supportRadius);
+
+    minibatch.storageMode = Minibatch::StorageMode::SingleMolecule;
+    minibatch.clearDataSgl();
+    minibatch.clearDataMtx();
+
+    tileData.coords.clear();
+    const auto& smInput = tileData.singleMolecule2D();
+    auto& smInputMut = tileData.singleMolecule2D();
+    const size_t nObs = smInput.coordsFloat.size();
+    minibatch.rowOffsets.reserve(nObs + 1);
+    minibatch.rowOffsets.push_back(0);
+    minibatch.edgeAnchorIdx.reserve(nObs * 4);
+
+    size_t npt = 0;
+    tileData.orgpts2pixel.assign(nObs, -1);
+    for (size_t i = 0; i < nObs; ++i) {
+        const auto coord = smInput.coordsFloat[i];
+        const float xy[2] = {coord.first, coord.second};
+        const size_t n = kdtree.radiusSearch(xy, l2radius, indices_dists);
+        if (n == 0) {
+            continue;
+        }
+
+        float weightSum = 0.0f;
+        const size_t edgeStart = minibatch.edgeAnchorIdx.size();
+        for (size_t i = 0; i < n; ++i) {
+            const float dist = std::sqrt(indices_dists[i].second);
+            const float rawWeight = anchor_distance_weight(dist, supportRadius, distNu);
+            minibatch.edgeAnchorIdx.push_back(indices_dists[i].first);
+            minibatch.wijVal.push_back(rawWeight);
+            minibatch.psiVal.push_back(rawWeight);
+            weightSum += rawWeight;
+        }
+        for (size_t e = edgeStart; e < minibatch.psiVal.size(); ++e) {
+            minibatch.psiVal[e] /= weightSum;
+        }
+
+        smInputMut.coordsFloat[npt] = coord;
+        smInputMut.featureIdx[npt] = smInput.featureIdx[i];
+        smInputMut.obsWeight[npt] = smInput.obsWeight[i];
+        tileData.orgpts2pixel[i] = static_cast<int32_t>(npt);
+        ++npt;
+        minibatch.rowOffsets.push_back(static_cast<uint32_t>(minibatch.edgeAnchorIdx.size()));
+    }
+    smInputMut.coordsFloat.resize(npt);
+    smInputMut.featureIdx.resize(npt);
+    smInputMut.obsWeight.resize(npt);
+    minibatch.featureIdx = smInputMut.featureIdx;
+    minibatch.featureWeight = std::move(smInputMut.obsWeight);
+    anchors = std::move(pc.pts);
+    const double avgDegree = (npt > 0)
+        ? static_cast<double>(minibatch.edgeAnchorIdx.size()) / static_cast<double>(npt)
+        : 0.0;
+    debug("%s: created %zu single-molecule edges between %zu rows and %zu anchors, average degree %.2f",
         __func__, minibatch.edgeAnchorIdx.size(), npt, anchors.size(), avgDegree);
 
     minibatch.N = static_cast<int32_t>(npt);
@@ -494,7 +711,10 @@ template<typename T>
 double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     double supportRadius, double distNu) {
-    debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts.size() + tileData.extPts.size());
+    const size_t nObs = isSingleMoleculeMode()
+        ? tileData.singleMolecule2D().coordsFloat.size()
+        : (useExtended_ ? tileData.extended2D().extPts.size() : tileData.standard2D().pts.size());
+    debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), nObs);
     if (minibatch.n <= 0) {
         return 0.0;
     }
@@ -504,7 +724,10 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
         error("%s: 3D inference requires an explicit buildMinibatchCore3D() call", __func__);
     }
 
-    if (singleMolecule_) {
+    if (isSingleFeaturePixelMode()) {
+        return buildMinibatchCoreSingleFeaturePixel(tileData, anchors, minibatch, supportRadius, distNu);
+    }
+    if (isSingleMoleculeMode()) {
         return buildMinibatchCoreSingleMolecule(tileData, anchors, minibatch, supportRadius, distNu);
     }
     minibatch.storageMode = Minibatch::StorageMode::GenericSparse;
@@ -520,15 +743,17 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
 
     std::vector<Eigen::Triplet<float>> tripletsMtx;
     std::vector<Eigen::Triplet<float>> tripletsWij;
-    tripletsMtx.reserve(tileData.pts.size() + tileData.extPts.size());
-    tripletsWij.reserve(tileData.pts.size() + tileData.extPts.size());
+    const size_t standardObs = useExtended_ ? tileData.extended2D().extPts.size() : tileData.standard2D().pts.size();
+    tripletsMtx.reserve(standardObs);
+    tripletsWij.reserve(standardObs);
 
     std::unordered_map<uint64_t, std::pair<std::unordered_map<uint32_t, float>, std::vector<uint32_t>>> pixAgg;
     uint32_t idxOriginal = 0;
 
     if (useExtended_) {
-        tileData.orgpts2pixel.assign(tileData.extPts.size(), -1);
-        for (const auto& pt : tileData.extPts) {
+        const auto& extInput = tileData.extended2D();
+        tileData.orgpts2pixel.assign(extInput.extPts.size(), -1);
+        for (const auto& pt : extInput.extPts) {
             int32_t x = static_cast<int32_t>(std::floor(pt.recBase.x / res));
             int32_t y = static_cast<int32_t>(std::floor(pt.recBase.y / res));
             uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(y);
@@ -536,8 +761,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore(TileData<T>& tileData,
             pixAgg[key].second.push_back(idxOriginal++);
         }
     } else {
-        tileData.orgpts2pixel.assign(tileData.pts.size(), -1);
-        for (const auto& pt : tileData.pts) {
+        const auto& stdInput2 = tileData.standard2D();
+        tileData.orgpts2pixel.assign(stdInput2.pts.size(), -1);
+        for (const auto& pt : stdInput2.pts) {
             int32_t x = static_cast<int32_t>(std::floor(pt.x / res));
             int32_t y = static_cast<int32_t>(std::floor(pt.y / res));
             uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(y);
@@ -620,60 +846,33 @@ void Tiles2MinibatchBase<T>::writerWorker() {
                (!useTicketSystem_ ||
                 outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
             const auto& readyToWrite = outOfOrderBuffer.top();
-            if (readyToWrite.npts == 0) {
+            if (readyToWrite.empty()) {
                 outOfOrderBuffer.pop();
                 nextTicketToWrite++;
                 continue;
             }
             size_t st = outputSize;
             size_t ed = st;
-            if (readyToWrite.useObj) {
-                if (coordDim_ == MinibatchCoordDim::Dim3) {
-                    if (singleMolecule_) {
-                        for (const auto& obj : readyToWrite.outputObjsFeature3d) {
-                            int32_t s0 = obj.write(fdMain);
-                            if (s0 < 0) {
-                                error("Error writing to main output file");
-                            }
-                            ed += s0;
+            std::visit([&](const auto& data) {
+                using PayloadT = std::decay_t<decltype(data)>;
+                if constexpr (std::is_same_v<PayloadT, typename ResultBuf::TextLines>) {
+                    for (const auto& line : data) {
+                        if (!write_all(fdMain, line.data(), line.size())) {
+                            error("Error writing to main output file");
                         }
-                    } else {
-                        for (const auto& obj : readyToWrite.outputObjs3d) {
-                            int32_t s0 = obj.write(fdMain);
-                            if (s0 < 0) {
-                                error("Error writing to main output file");
-                            }
-                            ed += s0;
-                        }
+                        ed += line.size();
                     }
                 } else {
-                    if (singleMolecule_) {
-                        for (const auto& obj : readyToWrite.outputObjsFeature) {
-                            int32_t s0 = obj.write(fdMain);
-                            if (s0 < 0) {
-                                error("Error writing to main output file");
-                            }
-                            ed += s0;
+                    for (const auto& obj : data) {
+                        int32_t s0 = obj.write(fdMain);
+                        if (s0 < 0) {
+                            error("Error writing to main output file");
                         }
-                    } else {
-                        for (const auto& obj : readyToWrite.outputObjs) {
-                            int32_t s0 = obj.write(fdMain);
-                            if (s0 < 0) {
-                                error("Error writing to main output file");
-                            }
-                            ed += s0;
-                        }
+                        ed += s0;
                     }
                 }
-            } else {
-                for (const auto& line : readyToWrite.outputLines) {
-                    if (!write_all(fdMain, line.data(), line.size())) {
-                        error("Error writing to main output file");
-                    }
-                    ed += line.size();
-                }
-            }
-            IndexEntryF e(st, ed, readyToWrite.npts,
+            }, readyToWrite.payload);
+            IndexEntryF e(st, ed, readyToWrite.size(),
                 (int32_t) std::floor(readyToWrite.xmin),
                 (int32_t) std::ceil(readyToWrite.xmax),
                 (int32_t) std::floor(readyToWrite.ymin),
@@ -707,24 +906,29 @@ IndexHeader Tiles2MinibatchBase<T>::buildIndexHeader(bool fragmented) const {
     }
     idxHeader.tileSize = tileSize;
     idxHeader.topK = topk_;
-    idxHeader.pixelResolution = pixelResolution_;
-    idxHeader.pixelResolutionZ = pixelResolution_;
+    idxHeader.pixelResolution = usesFloatFeatureCoords() ? -1.0f : pixelResolution_;
+    idxHeader.pixelResolutionZ = -1.0f;
     const auto& box = tileReader.getGlobalBox();
     idxHeader.xmin = box.xmin;
     idxHeader.xmax = box.xmax;
     idxHeader.ymin = box.ymin;
     idxHeader.ymax = box.ymax;
     if (outputBinary_) {
-        idxHeader.mode |= 0x7;
+        idxHeader.mode |= 0x1;
+        if (!usesFloatFeatureCoords()) {
+            idxHeader.mode |= 0x6;
+        }
         idxHeader.recordSize = outputRecordSize_;
     }
-    if (singleMolecule_) {
+    if (usesFeatureSpecificMode()) {
         idxHeader.mode |= 0x40u;
     }
     if (coordDim_ == MinibatchCoordDim::Dim3) {
         idxHeader.mode |= 0x10;
-        idxHeader.mode |= 0x20u;
-        idxHeader.pixelResolutionZ = pixelResolutionZ_;
+        if (!usesFloatFeatureCoords()) {
+            idxHeader.mode |= 0x20u;
+            idxHeader.pixelResolutionZ = pixelResolutionZ_;
+        }
     }
     return idxHeader;
 }
@@ -784,102 +988,27 @@ void Tiles2MinibatchBase<T>::closeNativeBinaryShards() {
 
 template<typename T>
 std::vector<char> Tiles2MinibatchBase<T>::serializeBinaryResult(const ResultBuf& result) const {
-    if (!result.useObj) {
+    if (result.isText()) {
         error("%s: native binary serialization expects object records", __func__);
     }
     std::vector<char> bytes;
-    bytes.reserve(static_cast<size_t>(result.npts) * outputRecordSize_);
-    auto appendObjectBytes2D = [&](const PixTopProbs<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
-    auto appendObjectBytes3D = [&](const PixTopProbs3D<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
-    auto appendObjectBytes2DFeature = [&](const PixTopProbsFeature<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.featureIdx, sizeof(obj.featureIdx));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.featureIdx),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.featureIdx) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
-    auto appendObjectBytes3DFeature = [&](const PixTopProbsFeature3D<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z), &obj.featureIdx, sizeof(obj.featureIdx));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + sizeof(obj.featureIdx),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + sizeof(obj.featureIdx) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
-    if (coordDim_ == MinibatchCoordDim::Dim3) {
-        if (singleMolecule_) {
-            for (const auto& obj : result.outputObjsFeature3d) {
-                appendObjectBytes3DFeature(obj);
-            }
+    bytes.reserve(result.size() * outputRecordSize_);
+    std::visit([&](const auto& data) {
+        using PayloadT = std::decay_t<decltype(data)>;
+        if constexpr (std::is_same_v<PayloadT, typename ResultBuf::TextLines>) {
+            error("%s: native binary serialization expects object records", __func__);
         } else {
-            for (const auto& obj : result.outputObjs3d) {
-                appendObjectBytes3D(obj);
+            for (const auto& obj : data) {
+                append_record_bytes(bytes, obj, outputRecordSize_);
             }
         }
-    } else {
-        if (singleMolecule_) {
-            for (const auto& obj : result.outputObjsFeature) {
-                appendObjectBytes2DFeature(obj);
-            }
-        } else {
-            for (const auto& obj : result.outputObjs) {
-                appendObjectBytes2D(obj);
-            }
-        }
-    }
+    }, result.payload);
     return bytes;
 }
 
 template<typename T>
 void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, int threadId) {
-    if (result.npts == 0) {
+    if (result.empty()) {
         return;
     }
     const size_t workerId = static_cast<size_t>(threadId);
@@ -891,70 +1020,6 @@ void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, i
         error("%s: missing output context for worker %d", __func__, threadId);
     }
     WorkerShardFiles& shard = workerShards_[workerId];
-    auto appendObjectBytes2D = [&](std::vector<char>& bytes, const PixTopProbs<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
-    auto appendObjectBytes3D = [&](std::vector<char>& bytes, const PixTopProbs3D<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
-    auto appendObjectBytes2DFeature = [&](std::vector<char>& bytes, const PixTopProbsFeature<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.featureIdx, sizeof(obj.featureIdx));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.featureIdx),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.featureIdx) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
-    auto appendObjectBytes3DFeature = [&](std::vector<char>& bytes, const PixTopProbsFeature3D<int32_t>& obj) {
-        const size_t off = bytes.size();
-        bytes.resize(off + outputRecordSize_);
-        char* dst = bytes.data() + off;
-        std::memcpy(dst, &obj.x, sizeof(obj.x));
-        std::memcpy(dst + sizeof(obj.x), &obj.y, sizeof(obj.y));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y), &obj.z, sizeof(obj.z));
-        std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z), &obj.featureIdx, sizeof(obj.featureIdx));
-        if (!obj.ks.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + sizeof(obj.featureIdx),
-                obj.ks.data(), obj.ks.size() * sizeof(int32_t));
-        }
-        if (!obj.ps.empty()) {
-            std::memcpy(dst + sizeof(obj.x) + sizeof(obj.y) + sizeof(obj.z) + sizeof(obj.featureIdx) + obj.ks.size() * sizeof(int32_t),
-                obj.ps.data(), obj.ps.size() * sizeof(float));
-        }
-    };
     if (ctx.kind == OutputSourceKind::MainTile) {
         std::vector<char> bytes = serializeBinaryResult(result);
         if (bytes.empty()) {
@@ -962,7 +1027,7 @@ void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, i
         }
         ShardFragmentIndex idx;
         idx.kind = static_cast<uint8_t>(ctx.kind);
-        idx.npts = result.npts;
+        idx.npts = result.size();
         idx.boundaryKey = 0;
         idx.row = ctx.tile.row;
         idx.col = ctx.tile.col;
@@ -975,59 +1040,19 @@ void Tiles2MinibatchBase<T>::appendNativeBinaryResult(const ResultBuf& result, i
         shard.mainDataSize += idx.dataBytes;
     } else if (ctx.kind == OutputSourceKind::Boundary) {
         std::map<TileKey, std::pair<std::vector<char>, uint32_t>> buckets;
-        if (coordDim_ == MinibatchCoordDim::Dim3) {
-            if (singleMolecule_) {
-                for (const auto& obj : result.outputObjsFeature3d) {
-                    const float x = static_cast<float>(obj.x) * pixelResolution_;
-                    const float y = static_cast<float>(obj.y) * pixelResolution_;
-                    TileKey tile{
-                        static_cast<int32_t>(std::floor(y / tileSize)),
-                        static_cast<int32_t>(std::floor(x / tileSize))
-                    };
-                    auto& bucket = buckets[tile];
-                    appendObjectBytes3DFeature(bucket.first, obj);
-                    bucket.second++;
-                }
+        std::visit([&](const auto& data) {
+            using PayloadT = std::decay_t<decltype(data)>;
+            if constexpr (std::is_same_v<PayloadT, typename ResultBuf::TextLines>) {
+                error("%s: boundary native binary output expects object records", __func__);
             } else {
-                for (const auto& obj : result.outputObjs3d) {
-                    const float x = static_cast<float>(obj.x) * pixelResolution_;
-                    const float y = static_cast<float>(obj.y) * pixelResolution_;
-                    TileKey tile{
-                        static_cast<int32_t>(std::floor(y / tileSize)),
-                        static_cast<int32_t>(std::floor(x / tileSize))
-                    };
+                for (const auto& obj : data) {
+                    TileKey tile = boundary_tile_key(obj, tileSize, pixelResolution_);
                     auto& bucket = buckets[tile];
-                    appendObjectBytes3D(bucket.first, obj);
+                    append_record_bytes(bucket.first, obj, outputRecordSize_);
                     bucket.second++;
                 }
             }
-        } else {
-            if (singleMolecule_) {
-                for (const auto& obj : result.outputObjsFeature) {
-                    const float x = static_cast<float>(obj.x) * pixelResolution_;
-                    const float y = static_cast<float>(obj.y) * pixelResolution_;
-                    TileKey tile{
-                        static_cast<int32_t>(std::floor(y / tileSize)),
-                        static_cast<int32_t>(std::floor(x / tileSize))
-                    };
-                    auto& bucket = buckets[tile];
-                    appendObjectBytes2DFeature(bucket.first, obj);
-                    bucket.second++;
-                }
-            } else {
-                for (const auto& obj : result.outputObjs) {
-                    const float x = static_cast<float>(obj.x) * pixelResolution_;
-                    const float y = static_cast<float>(obj.y) * pixelResolution_;
-                    TileKey tile{
-                        static_cast<int32_t>(std::floor(y / tileSize)),
-                        static_cast<int32_t>(std::floor(x / tileSize))
-                    };
-                    auto& bucket = buckets[tile];
-                    appendObjectBytes2D(bucket.first, obj);
-                    bucket.second++;
-                }
-            }
-        }
+        }, result.payload);
         for (const auto& kv : buckets) {
             const auto& tile = kv.first;
             const auto& bytes = kv.second.first;
@@ -1216,23 +1241,23 @@ void Tiles2MinibatchBase<T>::anchorWriterWorker() {
                (!useTicketSystem_ ||
                 outOfOrderBuffer.top().ticket == nextTicketToWrite)) {
             const auto& readyToWrite = outOfOrderBuffer.top();
-            if (readyToWrite.npts == 0) {
+            if (readyToWrite.empty()) {
                 outOfOrderBuffer.pop();
                 nextTicketToWrite++;
                 continue;
             }
             size_t totalLen = 0;
-            if (readyToWrite.useObj) { // currently always false
-                if (coordDim_ == MinibatchCoordDim::Dim3) {
-                    for (const auto& obj : readyToWrite.outputObjs3d) {
-                        int32_t s0 = obj.write(fdAnchor);
-                        if (s0 < 0) {
+            std::visit([&](const auto& data) {
+                using PayloadT = std::decay_t<decltype(data)>;
+                if constexpr (std::is_same_v<PayloadT, typename ResultBuf::TextLines>) {
+                    for (const auto& line : data) {
+                        if (!write_all(fdAnchor, line.data(), line.size())) {
                             error("Error writing to anchor output file");
                         }
-                        totalLen += s0;
+                        totalLen += line.size();
                     }
                 } else {
-                    for (const auto& obj : readyToWrite.outputObjs) {
+                    for (const auto& obj : data) {
                         int32_t s0 = obj.write(fdAnchor);
                         if (s0 < 0) {
                             error("Error writing to anchor output file");
@@ -1240,14 +1265,7 @@ void Tiles2MinibatchBase<T>::anchorWriterWorker() {
                         totalLen += s0;
                     }
                 }
-            } else {
-                for (const auto& line : readyToWrite.outputLines) {
-                    if (!write_all(fdAnchor, line.data(), line.size())) {
-                        error("Error writing to anchor output file");
-                    }
-                    totalLen += line.size();
-                }
-            }
+            }, readyToWrite.payload);
             anchorOutputSize += totalLen;
             outOfOrderBuffer.pop();
             nextTicketToWrite++;

@@ -13,8 +13,9 @@ void Tiles2MinibatchBase<T>::setupOutput() {
     #endif
     assert(!(outputBackgroundProbDense_ && outputBackgroundProbExpand_));
     if (outputBinary_) {
-        size_t coordBytes = (coordDim_ == MinibatchCoordDim::Dim3 ? 3u : 2u) * sizeof(int32_t);
-        if (singleMolecule_) {
+        const size_t coordSize = usesFloatFeatureCoords() ? sizeof(float) : sizeof(int32_t);
+        size_t coordBytes = (coordDim_ == MinibatchCoordDim::Dim3 ? 3u : 2u) * coordSize;
+        if (usesFeatureSpecificMode()) {
             coordBytes += sizeof(uint32_t);
         }
         outputRecordSize_ = coordBytes + topk_ * sizeof(int32_t) + topk_ * sizeof(float);
@@ -141,6 +142,8 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileStandard(TileData<T>& tileData, Tile
     }
     tileData.clear();
     tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
+    auto& input = tileData.emplaceStandard2D();
+    std::unordered_map<uint32_t, std::vector<RecordT<T>>> buffers;
     if (M_ == 0) {
         M_ = lineParserPtr->featureDict.size();
     }
@@ -156,22 +159,68 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileStandard(TileData<T>& tileData, Tile
         if (idx == -1 || idx >= M_) {
             continue;
         }
-        tileData.pts.push_back(rec);
+        input.pts.push_back(rec);
         std::vector<uint32_t> bufferidx;
         if (pt2buffer(bufferidx, rec.x, rec.y, tile) == 1) {
             tileData.idxinternal.push_back(npt);
         }
         for (const auto& key : bufferidx) {
-            tileData.buffers[key].push_back(rec);
+            buffers[key].push_back(rec);
         }
         npt++;
     }
     // write buffered records to temporary files
-    for (const auto& entry : tileData.buffers) {
+    for (const auto& entry : buffers) {
         auto buffer = getBoundaryBuffer(entry.first);
         buffer->addRecords(entry.second);
     }
-    tileData.buffers.clear();
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseOneTileSingleMolecule(TileData<T>& tileData, TileKey tile) {
+    std::unique_ptr<BoundedReadline> iter;
+    try {
+        iter = tileReader.get_tile_iterator(tile.row, tile.col);
+    } catch (const std::exception &e) {
+        warning("%s", e.what());
+        return -1;
+    }
+    tileData.clear();
+    tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
+    auto& input = tileData.emplaceSingleMolecule2D();
+    std::unordered_map<uint32_t, std::vector<RecordT<T>>> buffers;
+    if (M_ == 0) {
+        M_ = lineParserPtr->featureDict.size();
+    }
+
+    std::string line;
+    int32_t npt = 0;
+    while (iter->next(line)) {
+        RecordT<T> rec;
+        int32_t idx = lineParserPtr->parse<T>(rec, line);
+        if (idx < -1) {
+            error("Error parsing line: %s", line.c_str());
+        }
+        if (idx == -1 || idx >= M_) {
+            continue;
+        }
+        input.coordsFloat.emplace_back(static_cast<float>(rec.x), static_cast<float>(rec.y));
+        input.featureIdx.push_back(rec.idx);
+        input.obsWeight.push_back(static_cast<float>(rec.ct));
+        std::vector<uint32_t> bufferidx;
+        if (pt2buffer(bufferidx, rec.x, rec.y, tile) == 1) {
+            tileData.idxinternal.push_back(npt);
+        }
+        for (const auto& key : bufferidx) {
+            buffers[key].push_back(rec);
+        }
+        npt++;
+    }
+    for (const auto& entry : buffers) {
+        auto buffer = getBoundaryBuffer(entry.first);
+        buffer->addRecords(entry.second);
+    }
     return tileData.idxinternal.size();
 }
 
@@ -186,6 +235,8 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileExtended(TileData<T>& tileData, Tile
     }
     tileData.clear();
     tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
+    auto& input = tileData.emplaceExtended2D();
+    std::unordered_map<uint32_t, std::vector<RecordExtendedT<T>>> extBuffers;
     if (M_ == 0) {
         M_ = lineParserPtr->featureDict.size();
     }
@@ -201,21 +252,20 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileExtended(TileData<T>& tileData, Tile
         if (idx == -1 || idx >= M_) {
             continue;
         }
-        tileData.extPts.push_back(recExt);
+        input.extPts.push_back(recExt);
         std::vector<uint32_t> bufferidx;
         if (pt2buffer(bufferidx, recExt.recBase.x, recExt.recBase.y, tile) == 1) {
             tileData.idxinternal.push_back(npt);
         }
         for (const auto& key : bufferidx) {
-            tileData.extBuffers[key].push_back(recExt);
+            extBuffers[key].push_back(recExt);
         }
         npt++;
     }
-    for (const auto& entry : tileData.extBuffers) {
+    for (const auto& entry : extBuffers) {
         auto buffer = getBoundaryBuffer(entry.first);
         buffer->addRecordsExtended(entry.second, schema_, recordSize_);
     }
-    tileData.extBuffers.clear();
     return tileData.idxinternal.size();
 }
 
@@ -235,11 +285,44 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryFile(TileData<T>& tileData, std::sh
     int npt = 0;
     tileData.clear();
     bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceStandard2D();
     while (true) {
         RecordT<T> rec;
         ifs.read(reinterpret_cast<char*>(&rec), sizeof(RecordT<T>));
         if (ifs.gcount() != sizeof(RecordT<T>)) break;
-        tileData.pts.push_back(rec);
+        input.pts.push_back(rec);
+        if (isInternalToBuffer(rec.x, rec.y, bufferPtr->key)) {
+            tileData.idxinternal.push_back(npt);
+        }
+        npt++;
+    }
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseBoundaryFileSingleMolecule(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
+    std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
+    std::ifstream ifs;
+    if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
+        ifs.open(*tmpFile, std::ios::binary);
+        if (!ifs) {
+            warning("%s: Failed to open temporary file %s", __func__, tmpFile->c_str());
+            return -1;
+        }
+    } else {
+        error("%s cannot be called when buffer is in memory", __func__);
+    }
+    int npt = 0;
+    tileData.clear();
+    bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceSingleMolecule2D();
+    while (true) {
+        RecordT<T> rec;
+        ifs.read(reinterpret_cast<char*>(&rec), sizeof(RecordT<T>));
+        if (ifs.gcount() != sizeof(RecordT<T>)) break;
+        input.coordsFloat.emplace_back(static_cast<float>(rec.x), static_cast<float>(rec.y));
+        input.featureIdx.push_back(rec.idx);
+        input.obsWeight.push_back(static_cast<float>(rec.ct));
         if (isInternalToBuffer(rec.x, rec.y, bufferPtr->key)) {
             tileData.idxinternal.push_back(npt);
         }
@@ -264,6 +347,7 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryFileExtended(TileData<T>& tileData,
     int npt = 0;
     tileData.clear();
     bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceExtended2D();
     while (true) {
         std::vector<uint8_t> buf(recordSize_);
         ifs.read(reinterpret_cast<char*>(buf.data()), recordSize_);
@@ -295,7 +379,7 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryFileExtended(TileData<T>& tileData,
                 } break;
             }
         }
-        tileData.extPts.push_back(std::move(r));
+        input.extPts.push_back(std::move(r));
         if (isInternalToBuffer(r.recBase.x, r.recBase.y, bufferPtr->key)) {
             tileData.idxinternal.push_back(npt);
         }
@@ -308,11 +392,12 @@ template<typename T>
 int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandard(TileData<T>& tileData, InMemoryStorageStandard<T>* memStore, uint32_t bufferKey) {
     tileData.clear();
     bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceStandard2D();
     // Directly copy the data from the in-memory vector.
-    tileData.pts = std::move(memStore->data);
+    input.pts = std::move(memStore->data);
     // Mark internal points (for output)
     int npt = 0;
-    for(const auto& rec : tileData.pts) {
+    for(const auto& rec : input.pts) {
         if (isInternalToBuffer(rec.x, rec.y, bufferKey)) {
             tileData.idxinternal.push_back(npt);
         }
@@ -322,12 +407,35 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandard(TileData<T>& tileDat
 }
 
 template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseBoundaryMemorySingleMolecule(TileData<T>& tileData, InMemoryStorageStandard<T>* memStore, uint32_t bufferKey) {
+    tileData.clear();
+    bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceSingleMolecule2D();
+    int npt = 0;
+    input.coordsFloat.reserve(memStore->data.size());
+    input.featureIdx.reserve(memStore->data.size());
+    input.obsWeight.reserve(memStore->data.size());
+    for (const auto& rec : memStore->data) {
+        input.coordsFloat.emplace_back(static_cast<float>(rec.x), static_cast<float>(rec.y));
+        input.featureIdx.push_back(rec.idx);
+        input.obsWeight.push_back(static_cast<float>(rec.ct));
+        if (isInternalToBuffer(rec.x, rec.y, bufferKey)) {
+            tileData.idxinternal.push_back(npt);
+        }
+        npt++;
+    }
+    memStore->data.clear();
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
 int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryExtended(TileData<T>& tileData, InMemoryStorageExtended<T>* memStore, uint32_t bufferKey) {
     tileData.clear();
     bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    tileData.extPts = std::move(memStore->dataExtended);
+    auto& input = tileData.emplaceExtended2D();
+    input.extPts = std::move(memStore->dataExtended);
     int npt = 0;
-    for(const auto& rec : tileData.extPts) {
+    for(const auto& rec : input.extPts) {
         if (isInternalToBuffer(rec.recBase.x, rec.recBase.y, bufferKey)) {
             tileData.idxinternal.push_back(npt);
         }
@@ -348,6 +456,20 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandardWrapper(TileData<T>& 
         error("%s: expected standard in-memory storage", __func__);
     }
     return parseBoundaryMemoryStandard(tileData, memStore, bufferKey);
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseBoundaryMemorySingleMoleculeWrapper(TileData<T>& tileData, IBoundaryStorage* storage, uint32_t bufferKey) {
+    if (!storage) {
+        tileData.clear();
+        bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+        return 0;
+    }
+    auto* memStore = dynamic_cast<InMemoryStorageStandard<T>*>(storage);
+    if (!memStore) {
+        error("%s: expected standard in-memory storage", __func__);
+    }
+    return parseBoundaryMemorySingleMolecule(tileData, memStore, bufferKey);
 }
 
 template<typename T>
@@ -372,6 +494,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatAnchorR
             __func__, topVals.rows(), topIds.rows(), anchors.size());
     }
     ResultBuf result(ticket, xmin, xmax, ymin, ymax);
+    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
     char buf[512];
     for (size_t i = 0; i < nrows; ++i) {
         if (anchors[i].x < xmin + r || anchors[i].x >= xmax - r ||
@@ -426,9 +549,8 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatAnchorR
             len += n;
         }
         buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
+        lines.emplace_back(buf, len);
     }
-    result.npts = result.outputLines.size();
     return result;
 }
 
@@ -439,8 +561,11 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
         assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
     int32_t nrows = topVals.rows();
     char buf[65536];
+    const auto* extInput = useExtended_ ? &tileData.extended2D() : nullptr;
+    const auto* stdInput = useExtended_ ? nullptr : &tileData.standard2D();
     for (size_t i = 0; i < tileData.idxinternal.size(); ++i) {
         int32_t idxorg = tileData.idxinternal[i]; // index in the original data
         int32_t idx = tileData.orgpts2pixel[idxorg]; // index in the pixel minibatch
@@ -449,9 +574,9 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
         }
         const RecordT<T>* recPtr;
         if (useExtended_) {
-            recPtr = &tileData.extPts[idxorg].recBase;
+            recPtr = &extInput->extPts[idxorg].recBase;
         } else {
-            recPtr = &tileData.pts[idxorg];
+            recPtr = &stdInput->pts[idxorg];
         }
         const RecordT<T>& rec = *recPtr;
         int len = 0;
@@ -512,7 +637,7 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
         }
         // write the extra fields
         if (useExtended_) {
-            const RecordExtendedT<T>& recExt = tileData.extPts[idxorg];
+            const RecordExtendedT<T>& recExt = extInput->extPts[idxorg];
             for (auto v : recExt.intvals) {
                 len += std::snprintf(buf + len, sizeof(buf) - len, "\t%d", v);
                 if (len >= int(sizeof(buf))) {
@@ -533,9 +658,8 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
             }
         }
         buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
+        lines.emplace_back(buf, len);
     }
-    result.npts = result.outputLines.size();
     return result;
 }
 
@@ -553,6 +677,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
     size_t N = tileData.coords.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
@@ -617,9 +742,8 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
             }
         }
         buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
+        lines.emplace_back(buf, len);
     }
-    result.npts = result.outputLines.size();
     return result;
 }
 
@@ -633,6 +757,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         assert(phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
     size_t N = tileData.coords.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
@@ -681,11 +806,10 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
                 len += n;
             }
             buf[len++] = '\n';
-            result.outputLines.emplace_back(buf, len);
+            lines.emplace_back(buf, len);
         }
 
     }
-    result.npts = result.outputLines.size();
     return result;
 }
 
@@ -693,8 +817,15 @@ template<typename T>
 typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelResultBinary(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0) {
     (void)phi0;
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    result.useObj = true;
-    size_t N = tileData.coords.size();
+    const auto* smInput = isSingleMoleculeMode() ? &tileData.singleMolecule2D() : nullptr;
+    if (isSingleMoleculeMode()) {
+        result.emplacePayload<typename ResultBuf::OutputObjs2DFeatureFloat>();
+    } else if (isSingleFeaturePixelMode()) {
+        result.emplacePayload<typename ResultBuf::OutputObjs2DFeature>();
+    } else {
+        result.emplacePayload<typename ResultBuf::OutputObjs2D>();
+    }
+    size_t N = isSingleMoleculeMode() ? smInput->coordsFloat.size() : tileData.coords.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
         if (tileData.orgpts2pixel[j] < 0) {
@@ -706,15 +837,25 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         if (!internal[j]) {
             continue;
         }
-        if (singleMolecule_) {
-            PixTopProbsFeature<int32_t> rec(tileData.coords[j], tileData.featureIdx[j]);
+        if (isSingleMoleculeMode()) {
+            const auto& coord = smInput->coordsFloat[j];
+            PixTopProbsFeature<float> rec(coord.first, coord.second, smInput->featureIdx[j]);
             rec.ks.resize(topk_);
             rec.ps.resize(topk_);
             for (int32_t k = 0; k < topk_; ++k) {
                 rec.ks[k] = topIds(j, k);
                 rec.ps[k] = topVals(j, k);
             }
-            result.outputObjsFeature.emplace_back(std::move(rec));
+            result.getPayload<typename ResultBuf::OutputObjs2DFeatureFloat>().emplace_back(std::move(rec));
+        } else if (isSingleFeaturePixelMode()) {
+            PixTopProbsFeature<int32_t> rec(tileData.coords[j], tileData.rowFeatureIdx[j]);
+            rec.ks.resize(topk_);
+            rec.ps.resize(topk_);
+            for (int32_t k = 0; k < topk_; ++k) {
+                rec.ks[k] = topIds(j, k);
+                rec.ps[k] = topVals(j, k);
+            }
+            result.getPayload<typename ResultBuf::OutputObjs2DFeature>().emplace_back(std::move(rec));
         } else {
             PixTopProbs<int32_t> rec(tileData.coords[j]);
             rec.ks.resize(topk_);
@@ -723,9 +864,8 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
                 rec.ks[k] = topIds(j, k);
                 rec.ps[k] = topVals(j, k);
             }
-            result.outputObjs.emplace_back(std::move(rec));
+            result.getPayload<typename ResultBuf::OutputObjs2D>().emplace_back(std::move(rec));
         }
     }
-    result.npts = singleMolecule_ ? result.outputObjsFeature.size() : result.outputObjs.size();
     return result;
 }

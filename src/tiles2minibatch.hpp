@@ -88,11 +88,12 @@ struct FieldDef {
 enum class MinibatchInputMode : uint8_t { Standard, Extended };
 enum class MinibatchOutputMode : uint8_t { Standard, Original, Binary };
 enum class MinibatchCoordDim : uint8_t { Dim2 = 2, Dim3 = 3 };
+enum class FeatureSpecificMode : uint8_t { Off, SingleFeaturePixel, SingleMolecule };
 
 struct MinibatchIoConfig {
     MinibatchInputMode input = MinibatchInputMode::Standard;
     MinibatchOutputMode output = MinibatchOutputMode::Standard;
-    bool singleMolecule = false;
+    FeatureSpecificMode featureSpecificMode = FeatureSpecificMode::Off;
     bool outputAnchor = false;
     bool useTicketSystem = false;
     bool nativeRegularTiles = false;
@@ -319,21 +320,22 @@ public:
     Tiles2MinibatchBase(int nThreads, double r,
         TileReader& tileReader, const std::string& _outPref,
         lineParserUnival* parser, const MinibatchIoConfig& ioConfig,
-        const std::string* opt = nullptr, double res = 1, int32_t debug = 0)
+        const std::string* opt = nullptr, double res = 1, int32_t debug = 0,
+        bool useMemoryBuffer = false)
     : nThreads(nThreads), r(r), tileReader(tileReader), outPref(_outPref),
       lineParserPtr(parser), pixelResolution_(res), debug_(debug),
-      singleMolecule_(ioConfig.singleMolecule),
+      featureSpecificMode_(ioConfig.featureSpecificMode),
       useTicketSystem_(ioConfig.useTicketSystem),
       outputAnchor_(ioConfig.outputAnchor),
       inputMode_(ioConfig.input), outputMode_(ioConfig.output),
       nativeRegularTiles_(ioConfig.nativeRegularTiles),
       coordDim_(MinibatchCoordDim::Dim2) {
         tileSize = tileReader.getTileSize();
+        useMemoryBuffer_ = useMemoryBuffer;
         if (opt && !(*opt).empty()) {
-            useMemoryBuffer_ = false;
             tmpDir.init(*opt);
             notice("Created temporary directory: %s", tmpDir.path.string().c_str());
-        } else {
+        } else if (!useMemoryBuffer_) {
             useMemoryBuffer_ = true;
         }
         resultQueue.set_capacity(static_cast<size_t>(std::max(1, nThreads)));
@@ -421,19 +423,50 @@ protected:
 
     // buffer output results (for one tile)
     struct ResultBuf {
+        using TextLines = std::vector<std::string>;
+        using OutputObjs2D = std::vector<PixTopProbs<int32_t>>;
+        using OutputObjs2DFeature = std::vector<PixTopProbsFeature<int32_t>>;
+        using OutputObjs2DFeatureFloat = std::vector<PixTopProbsFeature<float>>;
+        using OutputObjs3D = std::vector<PixTopProbs3D<int32_t>>;
+        using OutputObjs3DFeature = std::vector<PixTopProbsFeature3D<int32_t>>;
+        using OutputObjs3DFeatureFloat = std::vector<PixTopProbsFeature3D<float>>;
+        using Payload = std::variant<
+            TextLines,
+            OutputObjs2D,
+            OutputObjs2DFeature,
+            OutputObjs2DFeatureFloat,
+            OutputObjs3D,
+            OutputObjs3DFeature,
+            OutputObjs3DFeatureFloat>;
+
         int32_t ticket;
         float xmin, xmax, ymin, ymax;
-        std::vector<std::string> outputLines;
-        std::vector<PixTopProbs<int32_t>> outputObjs;
-        std::vector<PixTopProbsFeature<int32_t>> outputObjsFeature;
-        std::vector<PixTopProbs3D<int32_t>> outputObjs3d;
-        std::vector<PixTopProbsFeature3D<int32_t>> outputObjsFeature3d;
-        uint32_t npts;
-        bool useObj = false; // true for binary output
+        Payload payload;
         ResultBuf(int32_t t=0, float x1=0, float x2=0, float y1=0, float y2=0)
-        : ticket(t), xmin(x1), xmax(x2), ymin(y1), ymax(y2), npts(0) {}
+        : ticket(t), xmin(x1), xmax(x2), ymin(y1), ymax(y2), payload(TextLines{}) {}
         bool operator>(const ResultBuf& other) const {
             return ticket > other.ticket;
+        }
+        template<typename PayloadT, typename... Args>
+        PayloadT& emplacePayload(Args&&... args) {
+            return payload.template emplace<PayloadT>(std::forward<Args>(args)...);
+        }
+        template<typename PayloadT>
+        PayloadT& getPayload() {
+            return std::get<PayloadT>(payload);
+        }
+        template<typename PayloadT>
+        const PayloadT& getPayload() const {
+            return std::get<PayloadT>(payload);
+        }
+        size_t size() const {
+            return std::visit([](const auto& data) { return data.size(); }, payload);
+        }
+        bool empty() const {
+            return size() == 0;
+        }
+        bool isText() const {
+            return std::holds_alternative<TextLines>(payload);
         }
     };
 
@@ -480,7 +513,7 @@ protected:
     bool outputBackgroundProbDense_ = false;
     bool outputBackgroundProbExpand_ = false;
     bool outputAnchor_ = false;
-    bool singleMolecule_ = false;
+    FeatureSpecificMode featureSpecificMode_ = FeatureSpecificMode::Off;
     MinibatchInputMode inputMode_ = MinibatchInputMode::Standard;
     MinibatchOutputMode outputMode_ = MinibatchOutputMode::Standard;
     MinibatchCoordDim coordDim_ = MinibatchCoordDim::Dim2;
@@ -519,6 +552,11 @@ protected:
     void writerWorker();
     void anchorWriterWorker();
     void submitPixelResult(ResultBuf&& result, int threadId);
+
+    bool usesFeatureSpecificMode() const { return featureSpecificMode_ != FeatureSpecificMode::Off; }
+    bool isSingleFeaturePixelMode() const { return featureSpecificMode_ == FeatureSpecificMode::SingleFeaturePixel; }
+    bool isSingleMoleculeMode() const { return featureSpecificMode_ == FeatureSpecificMode::SingleMolecule; }
+    bool usesFloatFeatureCoords() const { return featureSpecificMode_ == FeatureSpecificMode::SingleMolecule; }
 
     /* Key logic */
     void configureInputMode();
@@ -716,6 +754,12 @@ protected:
     double buildMinibatchCore3D(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
         const BCCGrid* bccGrid, double supportRadius, double distNu);
+    double buildMinibatchCoreSingleFeaturePixel(TileData<T>& tileData,
+        std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
+        double supportRadius, double distNu);
+    double buildMinibatchCoreSingleFeaturePixel3D(TileData<T>& tileData,
+        std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
+        const BCCGrid* bccGrid, double supportRadius, double distNu);
     double buildMinibatchCoreSingleMolecule(TileData<T>& tileData,
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
         double supportRadius, double distNu);
@@ -754,26 +798,38 @@ protected:
     // Parsing helpers
     int32_t parseOneTile(TileData<T>& tileData, TileKey tile);
     int32_t parseOneTileStandard(TileData<T>& tileData, TileKey tile);
+    int32_t parseOneTileSingleMolecule(TileData<T>& tileData, TileKey tile);
     int32_t parseOneTileExtended(TileData<T>& tileData, TileKey tile);
     int32_t parseOneTileStandard3D(TileData<T>& tileData, TileKey tile);
+    int32_t parseOneTileSingleMolecule3D(TileData<T>& tileData, TileKey tile);
     int32_t parseOneTileExtended3D(TileData<T>& tileData, TileKey tile);
     int32_t parseBoundaryFile(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    int32_t parseBoundaryFileSingleMolecule(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryFileExtended(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryFile3D(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
+    int32_t parseBoundaryFileSingleMolecule3D(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryFileExtended3D(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr);
     int32_t parseBoundaryMemoryStandard(TileData<T>& tileData,
+        InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
+    int32_t parseBoundaryMemorySingleMolecule(TileData<T>& tileData,
         InMemoryStorageStandard<T>* memStore, uint32_t bufferKey);
     int32_t parseBoundaryMemoryExtended(TileData<T>& tileData,
         InMemoryStorageExtended<T>* memStore, uint32_t bufferKey);
     int32_t parseBoundaryMemoryStandard3D(TileData<T>& tileData,
         InMemoryStorageStandard3D<T>* memStore, uint32_t bufferKey);
+    int32_t parseBoundaryMemorySingleMolecule3D(TileData<T>& tileData,
+        InMemoryStorageStandard3D<T>* memStore, uint32_t bufferKey);
     int32_t parseBoundaryMemoryExtended3D(TileData<T>& tileData,
         InMemoryStorageExtended3D<T>* memStore, uint32_t bufferKey);
     int32_t parseBoundaryMemoryStandardWrapper(TileData<T>& tileData,
         IBoundaryStorage* storage, uint32_t bufferKey);
+    int32_t parseBoundaryMemorySingleMoleculeWrapper(TileData<T>& tileData,
+        IBoundaryStorage* storage, uint32_t bufferKey);
     int32_t parseBoundaryMemoryExtendedWrapper(TileData<T>& tileData,
         IBoundaryStorage* storage, uint32_t bufferKey);
     int32_t parseBoundaryMemoryStandard3DWrapper(TileData<T>& tileData,
+        IBoundaryStorage* storage, uint32_t bufferKey);
+    int32_t parseBoundaryMemorySingleMolecule3DWrapper(TileData<T>& tileData,
         IBoundaryStorage* storage, uint32_t bufferKey);
     int32_t parseBoundaryMemoryExtended3DWrapper(TileData<T>& tileData,
         IBoundaryStorage* storage, uint32_t bufferKey);

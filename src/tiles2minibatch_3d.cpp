@@ -109,25 +109,33 @@ void Tiles2MinibatchBase<T>::forEachAnchorCandidate3D(const TileData<T>& tileDat
 template<typename T>
 void Tiles2MinibatchBase<T>::forEachAnchorCandidate3D(const TileData<T>& tileData, const BCCGrid& bccGrid, const std::function<void(uint32_t, float, const AnchorKey3D&)>& emit) const {
     auto neighborOffsets = bccGrid.face_adjacent_offsets();
-    auto assign_pt = [&](const auto& pt) {
-        if (ignoreOutsideZrange_ && (pt.z < zMin_ || pt.z > zMax_)) {
+    auto assign_pt = [&](float x, float y, float z, uint32_t idx, float ct) {
+        if (ignoreOutsideZrange_ && (z < zMin_ || z > zMax_)) {
             return;
         }
         int32_t q1, q2, q3;
-        bccGrid.cart_to_lattice(q1, q2, q3, pt.x, pt.y, pt.z);
-        emit(pt.idx, static_cast<float>(pt.ct), AnchorKey3D{q1, q2, q3, 0, 0, 0});
+        bccGrid.cart_to_lattice(q1, q2, q3, x, y, z);
+        emit(idx, ct, AnchorKey3D{q1, q2, q3, 0, 0, 0});
         for (const auto& delta : neighborOffsets) {
-            emit(pt.idx, static_cast<float>(pt.ct),
+            emit(idx, ct,
                 AnchorKey3D{q1 + delta[0], q2 + delta[1], q3 + delta[2], 0, 0, 0});
         }
     };
     if (useExtended_) {
-        for (const auto& pt : tileData.extPts3d) {
-            assign_pt(pt.recBase);
+        for (const auto& pt : tileData.extended3D().extPts3d) {
+            assign_pt(static_cast<float>(pt.recBase.x), static_cast<float>(pt.recBase.y),
+                static_cast<float>(pt.recBase.z), pt.recBase.idx, static_cast<float>(pt.recBase.ct));
+        }
+    } else if (isSingleMoleculeMode()) {
+        const auto& smInput = tileData.singleMolecule3D();
+        for (size_t i = 0; i < smInput.coords3dFloat.size(); ++i) {
+            const auto& coord = smInput.coords3dFloat[i];
+            assign_pt(coord.x, coord.y, coord.z, smInput.featureIdx[i], smInput.obsWeight[i]);
         }
     } else {
-        for (const auto& pt : tileData.pts3d) {
-            assign_pt(pt);
+        for (const auto& pt : tileData.standard3D().pts3d) {
+            assign_pt(static_cast<float>(pt.x), static_cast<float>(pt.y),
+                static_cast<float>(pt.z), pt.idx, static_cast<float>(pt.ct));
         }
     }
 }
@@ -243,26 +251,34 @@ void Tiles2MinibatchBase<T>::forEachThin3DAnchorWithinRadius(float x, float y, f
 template<typename T>
 void Tiles2MinibatchBase<T>::forEachAnchorCandidateThin3D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_,
     double supportRadius, double distNu, const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const {
-    auto assign_pt = [&](const auto& pt) {
-        if (ignoreOutsideZrange_ && (pt.z < zMin_ || pt.z > zMax_)) {
+    auto assign_pt = [&](float x, float y, float z, uint32_t idx, float ct) {
+        if (ignoreOutsideZrange_ && (z < zMin_ || z > zMax_)) {
             return;
         }
         const std::function<void(const AnchorKey2D&, float, float, float, float)> emitCandidate =
             [&](const AnchorKey2D& key, float, float, float, float dist) {
-                const float weightedCt = static_cast<float>(pt.ct) *
+                const float weightedCt = ct *
                     anchor_distance_weight(dist, static_cast<float>(supportRadius), static_cast<float>(distNu));
-                emit(pt.idx, weightedCt, key);
+                emit(idx, weightedCt, key);
             };
-        forEachThin3DAnchorWithinRadius(static_cast<float>(pt.x), static_cast<float>(pt.y), static_cast<float>(pt.z),
+        forEachThin3DAnchorWithinRadius(x, y, z,
             hexGrid_, nMoves_, static_cast<float>(supportRadius), emitCandidate);
     };
     if (useExtended_) {
-        for (const auto& pt : tileData.extPts3d) {
-            assign_pt(pt.recBase);
+        for (const auto& pt : tileData.extended3D().extPts3d) {
+            assign_pt(static_cast<float>(pt.recBase.x), static_cast<float>(pt.recBase.y),
+                static_cast<float>(pt.recBase.z), pt.recBase.idx, static_cast<float>(pt.recBase.ct));
+        }
+    } else if (isSingleMoleculeMode()) {
+        const auto& smInput = tileData.singleMolecule3D();
+        for (size_t i = 0; i < smInput.coords3dFloat.size(); ++i) {
+            const auto& coord = smInput.coords3dFloat[i];
+            assign_pt(coord.x, coord.y, coord.z, smInput.featureIdx[i], smInput.obsWeight[i]);
         }
     } else {
-        for (const auto& pt : tileData.pts3d) {
-            assign_pt(pt);
+        for (const auto& pt : tileData.standard3D().pts3d) {
+            assign_pt(static_cast<float>(pt.x), static_cast<float>(pt.y),
+                static_cast<float>(pt.z), pt.idx, static_cast<float>(pt.ct));
         }
     }
 }
@@ -361,7 +377,7 @@ int32_t Tiles2MinibatchBase<T>::buildAnchorsThin3D(TileData<T>& tileData, std::v
 }
 
 template<typename T>
-double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule3D(TileData<T>& tileData,
+double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleFeaturePixel3D(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     const BCCGrid* bccGrid, double supportRadius, double distNu) {
     struct SingleMoleculeKey3D {
@@ -402,8 +418,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule3D(TileData<T>& t
     std::vector<SingleMoleculePixel3D> groupedPixels;
     uint32_t idxOriginal = 0;
     uint32_t nPixels = 0;
-    tileData.orgpts2pixel.assign(tileData.pts3d.size(), -1);
-    for (const auto& pt : tileData.pts3d) {
+    const auto& stdInput = tileData.standard3D();
+    tileData.orgpts2pixel.assign(stdInput.pts3d.size(), -1);
+    for (const auto& pt : stdInput.pts3d) {
         if (ignoreOutsideZrange_ && (pt.z < zMin_ || pt.z > zMax_)) {
             continue;
         }
@@ -432,9 +449,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule3D(TileData<T>& t
     }
 
     tileData.coords3d.clear();
-    tileData.featureIdx.clear();
+    tileData.rowFeatureIdx.clear();
     tileData.coords3d.reserve(nPixels);
-    tileData.featureIdx.reserve(nPixels);
+    tileData.rowFeatureIdx.reserve(nPixels);
     minibatch.featureIdx.reserve(nPixels);
     minibatch.featureWeight.reserve(nPixels);
     minibatch.rowOffsets.reserve(nPixels + 1);
@@ -518,7 +535,7 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule3D(TileData<T>& t
         }
 
         tileData.coords3d.emplace_back(pix.x, pix.y, pix.z);
-        tileData.featureIdx.push_back(pix.feature);
+        tileData.rowFeatureIdx.push_back(pix.feature);
         minibatch.featureIdx.push_back(pix.feature);
         minibatch.featureWeight.push_back(pix.weight);
         for (auto v : pix.originalIdx) {
@@ -532,7 +549,129 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule3D(TileData<T>& t
     const double avgDegree = (npt > 0)
         ? static_cast<double>(minibatch.edgeAnchorIdx.size()) / static_cast<double>(npt)
         : 0.0;
-    debug("%s: created %zu single-molecule edges between %u rows and %zu anchors, average degree %.2f",
+    debug("%s: created %zu single-feature-pixel edges between %u rows and %zu anchors, average degree %.2f",
+        __func__, minibatch.edgeAnchorIdx.size(), npt, anchors.size(), avgDegree);
+
+    minibatch.N = static_cast<int32_t>(npt);
+    minibatch.M = M_;
+    return avgDegree;
+}
+
+template<typename T>
+double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleMolecule3D(TileData<T>& tileData,
+    std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
+    const BCCGrid* bccGrid, double supportRadius, double distNu) {
+    minibatch.storageMode = Minibatch::StorageMode::SingleMolecule;
+    minibatch.clearDataSgl();
+    minibatch.clearDataMtx();
+
+    tileData.coords3d.clear();
+    const auto& smInput = tileData.singleMolecule3D();
+    auto& smInputMut = tileData.singleMolecule3D();
+    const size_t nObs = smInput.coords3dFloat.size();
+    minibatch.rowOffsets.reserve(nObs + 1);
+    minibatch.rowOffsets.push_back(0);
+
+    std::vector<AnchorPoint> originalAnchors = anchors;
+    std::map<AnchorKey3D, uint32_t> anchorKeyToIndex;
+    std::vector<std::array<int32_t, 3>> bccNeighborOffsets;
+    PointCloud<float> pc;
+    std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
+    if (useThin3DAnchors_) {
+        pc.pts = anchors;
+    } else {
+        const BCCGrid& grid = *bccGrid;
+        bccNeighborOffsets = grid.face_adjacent_offsets();
+        for (uint32_t i = 0; i < static_cast<uint32_t>(anchors.size()); ++i) {
+            int32_t q1, q2, q3;
+            grid.cart_to_lattice(q1, q2, q3, anchors[i].x, anchors[i].y, anchors[i].z);
+            anchorKeyToIndex[AnchorKey3D{q1, q2, q3, 0, 0, 0}] = i;
+        }
+    }
+    std::unique_ptr<kd_tree_f3_t> kdtree;
+    const float l2radius = static_cast<float>(supportRadius * supportRadius);
+    if (useThin3DAnchors_) {
+        kdtree = std::make_unique<kd_tree_f3_t>(3, pc, nanoflann::KDTreeSingleIndexAdaptorParams(10));
+    }
+
+    size_t npt = 0;
+    tileData.orgpts2pixel.assign(nObs, -1);
+    for (size_t i = 0; i < nObs; ++i) {
+        const auto coord = smInput.coords3dFloat[i];
+        const uint32_t feature = smInput.featureIdx[i];
+        const float obsWeight = smInput.obsWeight[i];
+
+        std::vector<std::pair<uint32_t, float>> candidates;
+        const float x = coord.x;
+        const float y = coord.y;
+        const float z = coord.z;
+        if (useThin3DAnchors_) {
+            const float xyz[3] = {x, y, z};
+            const size_t n = kdtree->radiusSearch(xyz, l2radius, indices_dists);
+            if (n == 0) {
+                continue;
+            }
+            for (size_t i = 0; i < n; ++i) {
+                const float dist = std::sqrt(indices_dists[i].second);
+                candidates.emplace_back(indices_dists[i].first,
+                    anchor_distance_weight(dist, supportRadius, distNu));
+            }
+        } else {
+            const BCCGrid& grid = *bccGrid;
+            int32_t q1, q2, q3;
+            grid.cart_to_lattice(q1, q2, q3, x, y, z);
+            auto emitCandidate = [&](int32_t cq1, int32_t cq2, int32_t cq3) {
+                auto it = anchorKeyToIndex.find(AnchorKey3D{cq1, cq2, cq3, 0, 0, 0});
+                if (it == anchorKeyToIndex.end()) {
+                    return;
+                }
+                const AnchorPoint& anchor = originalAnchors[it->second];
+                const float dx = x - anchor.x;
+                const float dy = y - anchor.y;
+                const float dz = z - anchor.z;
+                const double dist = static_cast<double>(std::sqrt(dx * dx + dy * dy + dz * dz));
+                candidates.emplace_back(it->second,
+                    anchor_distance_weight(dist, supportRadius, distNu));
+            };
+            emitCandidate(q1, q2, q3);
+            for (const auto& delta : bccNeighborOffsets) {
+                emitCandidate(q1 + delta[0], q2 + delta[1], q3 + delta[2]);
+            }
+            if (candidates.empty()) {
+                continue;
+            }
+        }
+
+        float weightSum = 0.0f;
+        const size_t edgeStart = minibatch.edgeAnchorIdx.size();
+        for (const auto& candidate : candidates) {
+            minibatch.edgeAnchorIdx.push_back(candidate.first);
+            minibatch.wijVal.push_back(candidate.second);
+            minibatch.psiVal.push_back(candidate.second);
+            weightSum += candidate.second;
+        }
+        for (size_t e = edgeStart; e < minibatch.psiVal.size(); ++e) {
+            minibatch.psiVal[e] /= weightSum;
+        }
+
+        smInputMut.coords3dFloat[npt] = coord;
+        smInputMut.featureIdx[npt] = feature;
+        smInputMut.obsWeight[npt] = obsWeight;
+        tileData.orgpts2pixel[i] = static_cast<int32_t>(npt);
+        ++npt;
+        minibatch.rowOffsets.push_back(static_cast<uint32_t>(minibatch.edgeAnchorIdx.size()));
+    }
+    smInputMut.coords3dFloat.resize(npt);
+    smInputMut.featureIdx.resize(npt);
+    smInputMut.obsWeight.resize(npt);
+    minibatch.featureIdx = smInputMut.featureIdx;
+    minibatch.featureWeight = std::move(smInputMut.obsWeight);
+
+    anchors = std::move(originalAnchors);
+    const double avgDegree = (npt > 0)
+        ? static_cast<double>(minibatch.edgeAnchorIdx.size()) / static_cast<double>(npt)
+        : 0.0;
+    debug("%s: created %zu single-molecule edges between %zu rows and %zu anchors, average degree %.2f",
         __func__, minibatch.edgeAnchorIdx.size(), npt, anchors.size(), avgDegree);
 
     minibatch.N = static_cast<int32_t>(npt);
@@ -544,7 +683,10 @@ template<typename T>
 double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
     const BCCGrid* bccGrid, double supportRadius, double distNu) {
-    debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), tileData.pts3d.size() + tileData.extPts3d.size());
+    const size_t nObs = isSingleMoleculeMode()
+        ? tileData.singleMolecule3D().coords3dFloat.size()
+        : (useExtended_ ? tileData.extended3D().extPts3d.size() : tileData.standard3D().pts3d.size());
+    debug("%s: building minibatch with %zu anchors and %zu documents", __func__, anchors.size(), nObs);
     if (minibatch.n <= 0) {
         return 0.0;
     }
@@ -556,7 +698,10 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     const float res = pixelResolution_;
     const float resZ = pixelResolutionZ_;
 
-    if (singleMolecule_) {
+    if (isSingleFeaturePixelMode()) {
+        return buildMinibatchCoreSingleFeaturePixel3D(tileData, anchors, minibatch, bccGrid, supportRadius, distNu);
+    }
+    if (isSingleMoleculeMode()) {
         return buildMinibatchCoreSingleMolecule3D(tileData, anchors, minibatch, bccGrid, supportRadius, distNu);
     }
 
@@ -565,8 +710,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
 
     std::vector<Eigen::Triplet<float>> tripletsMtx;
     std::vector<Eigen::Triplet<float>> tripletsWij;
-    tripletsMtx.reserve(tileData.pts3d.size() + tileData.extPts3d.size());
-    tripletsWij.reserve(tileData.pts3d.size() + tileData.extPts3d.size());
+    const size_t standardObs = useExtended_ ? tileData.extended3D().extPts3d.size() : tileData.standard3D().pts3d.size();
+    tripletsMtx.reserve(standardObs);
+    tripletsWij.reserve(standardObs);
 
     std::unordered_map<std::tuple<int32_t, int32_t, int32_t>,
         std::pair<std::unordered_map<uint32_t, float>, std::vector<uint32_t>>,
@@ -574,8 +720,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
     uint32_t idxOriginal = 0;
 
     if (useExtended_) {
-        tileData.orgpts2pixel.assign(tileData.extPts3d.size(), -1);
-        for (const auto& pt : tileData.extPts3d) {
+        const auto& extInput = tileData.extended3D();
+        tileData.orgpts2pixel.assign(extInput.extPts3d.size(), -1);
+        for (const auto& pt : extInput.extPts3d) {
             if (ignoreOutsideZrange_ && (pt.recBase.z < zMin_ || pt.recBase.z > zMax_)) {
                 continue;
             }
@@ -587,8 +734,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCore3D(TileData<T>& tileData,
             pixAgg[key].second.push_back(idxOriginal++);
         }
     } else {
-        tileData.orgpts2pixel.assign(tileData.pts3d.size(), -1);
-        for (const auto& pt : tileData.pts3d) {
+        const auto& stdInput2 = tileData.standard3D();
+        tileData.orgpts2pixel.assign(stdInput2.pts3d.size(), -1);
+        for (const auto& pt : stdInput2.pts3d) {
             if (ignoreOutsideZrange_ && (pt.z < zMin_ || pt.z > zMax_)) {
                 continue;
             }
@@ -730,6 +878,8 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileStandard3D(TileData<T>& tileData, Ti
     }
     tileData.clear();
     tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
+    auto& input = tileData.emplaceStandard3D();
+    std::unordered_map<uint32_t, std::vector<RecordT3D<T>>> buffers3d;
     if (M_ == 0) {
         M_ = lineParserPtr->featureDict.size();
     }
@@ -748,21 +898,70 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileStandard3D(TileData<T>& tileData, Ti
         if (ignoreOutsideZrange_ && (rec.z < zMin_ || rec.z > zMax_)) {
             continue;
         }
-        tileData.pts3d.push_back(rec);
+        input.pts3d.push_back(rec);
         std::vector<uint32_t> bufferidx;
         if (pt2buffer(bufferidx, rec.x, rec.y, tile) == 1) {
             tileData.idxinternal.push_back(npt);
         }
         for (const auto& key : bufferidx) {
-            tileData.buffers3d[key].push_back(rec);
+            buffers3d[key].push_back(rec);
         }
         npt++;
     }
-    for (const auto& entry : tileData.buffers3d) {
+    for (const auto& entry : buffers3d) {
         auto buffer = getBoundaryBuffer(entry.first);
         buffer->addRecords3D(entry.second);
     }
-    tileData.buffers3d.clear();
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseOneTileSingleMolecule3D(TileData<T>& tileData, TileKey tile) {
+    std::unique_ptr<BoundedReadline> iter;
+    try {
+        iter = tileReader.get_tile_iterator(tile.row, tile.col);
+    } catch (const std::exception &e) {
+        warning("%s", e.what());
+        return -1;
+    }
+    tileData.clear();
+    tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
+    auto& input = tileData.emplaceSingleMolecule3D();
+    std::unordered_map<uint32_t, std::vector<RecordT3D<T>>> buffers3d;
+    if (M_ == 0) {
+        M_ = lineParserPtr->featureDict.size();
+    }
+
+    std::string line;
+    int32_t npt = 0;
+    while (iter->next(line)) {
+        RecordT3D<T> rec;
+        int32_t idx = lineParserPtr->parse<T>(rec, line);
+        if (idx < -1) {
+            error("Error parsing line: %s", line.c_str());
+        }
+        if (idx == -1 || idx >= M_) {
+            continue;
+        }
+        if (ignoreOutsideZrange_ && (rec.z < zMin_ || rec.z > zMax_)) {
+            continue;
+        }
+        input.coords3dFloat.emplace_back(static_cast<float>(rec.x), static_cast<float>(rec.y), static_cast<float>(rec.z));
+        input.featureIdx.push_back(rec.idx);
+        input.obsWeight.push_back(static_cast<float>(rec.ct));
+        std::vector<uint32_t> bufferidx;
+        if (pt2buffer(bufferidx, rec.x, rec.y, tile) == 1) {
+            tileData.idxinternal.push_back(npt);
+        }
+        for (const auto& key : bufferidx) {
+            buffers3d[key].push_back(rec);
+        }
+        npt++;
+    }
+    for (const auto& entry : buffers3d) {
+        auto buffer = getBoundaryBuffer(entry.first);
+        buffer->addRecords3D(entry.second);
+    }
     return tileData.idxinternal.size();
 }
 
@@ -777,6 +976,8 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileExtended3D(TileData<T>& tileData, Ti
     }
     tileData.clear();
     tile2bound(tile, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax, tileSize);
+    auto& input = tileData.emplaceExtended3D();
+    std::unordered_map<uint32_t, std::vector<RecordExtendedT3D<T>>> extBuffers3d;
     if (M_ == 0) {
         M_ = lineParserPtr->featureDict.size();
     }
@@ -795,21 +996,20 @@ int32_t Tiles2MinibatchBase<T>::parseOneTileExtended3D(TileData<T>& tileData, Ti
         if (ignoreOutsideZrange_ && (recExt.recBase.z < zMin_ || recExt.recBase.z > zMax_)) {
             continue;
         }
-        tileData.extPts3d.push_back(recExt);
+        input.extPts3d.push_back(recExt);
         std::vector<uint32_t> bufferidx;
         if (pt2buffer(bufferidx, recExt.recBase.x, recExt.recBase.y, tile) == 1) {
             tileData.idxinternal.push_back(npt);
         }
         for (const auto& key : bufferidx) {
-            tileData.extBuffers3d[key].push_back(recExt);
+            extBuffers3d[key].push_back(recExt);
         }
         npt++;
     }
-    for (const auto& entry : tileData.extBuffers3d) {
+    for (const auto& entry : extBuffers3d) {
         auto buffer = getBoundaryBuffer(entry.first);
         buffer->addRecordsExtended3D(entry.second, schema_, recordSize_);
     }
-    tileData.extBuffers3d.clear();
     return tileData.idxinternal.size();
 }
 
@@ -829,11 +1029,44 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryFile3D(TileData<T>& tileData, std::
     int npt = 0;
     tileData.clear();
     bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceStandard3D();
     while (true) {
         RecordT3D<T> rec;
         ifs.read(reinterpret_cast<char*>(&rec), sizeof(RecordT3D<T>));
         if (ifs.gcount() != sizeof(RecordT3D<T>)) break;
-        tileData.pts3d.push_back(rec);
+        input.pts3d.push_back(rec);
+        if (isInternalToBuffer(rec.x, rec.y, bufferPtr->key)) {
+            tileData.idxinternal.push_back(npt);
+        }
+        npt++;
+    }
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseBoundaryFileSingleMolecule3D(TileData<T>& tileData, std::shared_ptr<BoundaryBuffer> bufferPtr) {
+    std::lock_guard<std::mutex> lock(*(bufferPtr->mutex));
+    std::ifstream ifs;
+    if (auto* tmpFile = std::get_if<std::string>(&(bufferPtr->storage))) {
+        ifs.open(*tmpFile, std::ios::binary);
+        if (!ifs) {
+            warning("%s: Failed to open temporary file %s", __func__, tmpFile->c_str());
+            return -1;
+        }
+    } else {
+        error("%s cannot be called when buffer is in memory", __func__);
+    }
+    int npt = 0;
+    tileData.clear();
+    bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceSingleMolecule3D();
+    while (true) {
+        RecordT3D<T> rec;
+        ifs.read(reinterpret_cast<char*>(&rec), sizeof(RecordT3D<T>));
+        if (ifs.gcount() != sizeof(RecordT3D<T>)) break;
+        input.coords3dFloat.emplace_back(static_cast<float>(rec.x), static_cast<float>(rec.y), static_cast<float>(rec.z));
+        input.featureIdx.push_back(rec.idx);
+        input.obsWeight.push_back(static_cast<float>(rec.ct));
         if (isInternalToBuffer(rec.x, rec.y, bufferPtr->key)) {
             tileData.idxinternal.push_back(npt);
         }
@@ -858,6 +1091,7 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryFileExtended3D(TileData<T>& tileDat
     int npt = 0;
     tileData.clear();
     bufferId2bound(bufferPtr->key, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceExtended3D();
     while (true) {
         std::vector<uint8_t> buf(recordSize_);
         ifs.read(reinterpret_cast<char*>(buf.data()), recordSize_);
@@ -887,7 +1121,7 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryFileExtended3D(TileData<T>& tileDat
             }
         }
         const bool isInternal = isInternalToBuffer(r.recBase.x, r.recBase.y, bufferPtr->key);
-        tileData.extPts3d.push_back(std::move(r));
+        input.extPts3d.push_back(std::move(r));
         if (isInternal) {
             tileData.idxinternal.push_back(npt);
         }
@@ -900,9 +1134,10 @@ template<typename T>
 int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandard3D(TileData<T>& tileData, InMemoryStorageStandard3D<T>* memStore, uint32_t bufferKey) {
     tileData.clear();
     bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceStandard3D();
     int npt = 0;
-    tileData.pts3d = std::move(memStore->data);
-    for (const auto& rec : tileData.pts3d) {
+    input.pts3d = std::move(memStore->data);
+    for (const auto& rec : input.pts3d) {
         const bool isInternal = isInternalToBuffer(rec.x, rec.y, bufferKey);
         if (isInternal) {
             tileData.idxinternal.push_back(npt);
@@ -913,12 +1148,35 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandard3D(TileData<T>& tileD
 }
 
 template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseBoundaryMemorySingleMolecule3D(TileData<T>& tileData, InMemoryStorageStandard3D<T>* memStore, uint32_t bufferKey) {
+    tileData.clear();
+    bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceSingleMolecule3D();
+    int npt = 0;
+    input.coords3dFloat.reserve(memStore->data.size());
+    input.featureIdx.reserve(memStore->data.size());
+    input.obsWeight.reserve(memStore->data.size());
+    for (const auto& rec : memStore->data) {
+        input.coords3dFloat.emplace_back(static_cast<float>(rec.x), static_cast<float>(rec.y), static_cast<float>(rec.z));
+        input.featureIdx.push_back(rec.idx);
+        input.obsWeight.push_back(static_cast<float>(rec.ct));
+        if (isInternalToBuffer(rec.x, rec.y, bufferKey)) {
+            tileData.idxinternal.push_back(npt);
+        }
+        npt++;
+    }
+    memStore->data.clear();
+    return tileData.idxinternal.size();
+}
+
+template<typename T>
 int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryExtended3D(TileData<T>& tileData, InMemoryStorageExtended3D<T>* memStore, uint32_t bufferKey) {
     tileData.clear();
     bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& input = tileData.emplaceExtended3D();
     int npt = 0;
-    tileData.extPts3d = std::move(memStore->dataExtended);
-    for (const auto& rec : tileData.extPts3d) {
+    input.extPts3d = std::move(memStore->dataExtended);
+    for (const auto& rec : input.extPts3d) {
         const bool isInternal = isInternalToBuffer(rec.recBase.x, rec.recBase.y, bufferKey);
         if (isInternal) {
             tileData.idxinternal.push_back(npt);
@@ -935,6 +1193,20 @@ int32_t Tiles2MinibatchBase<T>::parseBoundaryMemoryStandard3DWrapper(TileData<T>
         error("%s: wrong in-memory storage type for 3D standard", __func__);
     }
     return parseBoundaryMemoryStandard3D(tileData, memStore, bufferKey);
+}
+
+template<typename T>
+int32_t Tiles2MinibatchBase<T>::parseBoundaryMemorySingleMolecule3DWrapper(TileData<T>& tileData, IBoundaryStorage* storage, uint32_t bufferKey) {
+    if (!storage) {
+        tileData.clear();
+        bufferId2bound(bufferKey, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+        return 0;
+    }
+    auto* memStore = dynamic_cast<InMemoryStorageStandard3D<T>*>(storage);
+    if (!memStore) {
+        error("%s: wrong in-memory storage type for 3D standard", __func__);
+    }
+    return parseBoundaryMemorySingleMolecule3D(tileData, memStore, bufferKey);
 }
 
 template<typename T>
@@ -955,6 +1227,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
     size_t N = tileData.coords3d.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
@@ -1017,9 +1290,8 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
             }
         }
         buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
+        lines.emplace_back(buf, len);
     }
-    result.npts = result.outputLines.size();
     return result;
 }
 
@@ -1030,8 +1302,11 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
         assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
     int32_t nrows = topVals.rows();
     char buf[65536];
+    const auto* extInput = useExtended_ ? &tileData.extended3D() : nullptr;
+    const auto* stdInput = useExtended_ ? nullptr : &tileData.standard3D();
     for (size_t i = 0; i < tileData.idxinternal.size(); ++i) {
         int32_t idxorg = tileData.idxinternal[i];
         int32_t idx = tileData.orgpts2pixel[idxorg];
@@ -1040,9 +1315,9 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
         }
         const RecordT3D<T>* recPtr;
         if (useExtended_) {
-            recPtr = &tileData.extPts3d[idxorg].recBase;
+            recPtr = &extInput->extPts3d[idxorg].recBase;
         } else {
-            recPtr = &tileData.pts3d[idxorg];
+            recPtr = &stdInput->pts3d[idxorg];
         }
         const RecordT3D<T>& rec = *recPtr;
         int len = 0;
@@ -1100,7 +1375,7 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
             len += n;
         }
         if (useExtended_) {
-            const RecordExtendedT3D<T>& recExt = tileData.extPts3d[idxorg];
+            const RecordExtendedT3D<T>& recExt = extInput->extPts3d[idxorg];
             for (auto v : recExt.intvals) {
                 len += std::snprintf(buf + len, sizeof(buf) - len, "\t%d", v);
                 if (len >= int(sizeof(buf))) {
@@ -1121,9 +1396,8 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
             }
         }
         buf[len++] = '\n';
-        result.outputLines.emplace_back(buf, len);
+        lines.emplace_back(buf, len);
     }
-    result.npts = result.outputLines.size();
     return result;
 }
 
@@ -1137,6 +1411,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         assert(phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
+    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
     size_t N = tileData.coords3d.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
@@ -1183,10 +1458,9 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
                 len += n;
             }
             buf[len++] = '\n';
-            result.outputLines.emplace_back(buf, len);
+            lines.emplace_back(buf, len);
         }
     }
-    result.npts = result.outputLines.size();
     return result;
 }
 
@@ -1194,8 +1468,15 @@ template<typename T>
 typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelResultBinary3D(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0) {
     (void)phi0;
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    result.useObj = true;
-    size_t N = tileData.coords3d.size();
+    const auto* smInput = isSingleMoleculeMode() ? &tileData.singleMolecule3D() : nullptr;
+    if (isSingleMoleculeMode()) {
+        result.emplacePayload<typename ResultBuf::OutputObjs3DFeatureFloat>();
+    } else if (isSingleFeaturePixelMode()) {
+        result.emplacePayload<typename ResultBuf::OutputObjs3DFeature>();
+    } else {
+        result.emplacePayload<typename ResultBuf::OutputObjs3D>();
+    }
+    size_t N = isSingleMoleculeMode() ? smInput->coords3dFloat.size() : tileData.coords3d.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
         if (tileData.orgpts2pixel[j] < 0) {
@@ -1207,15 +1488,25 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         if (!internal[j]) {
             continue;
         }
-        if (singleMolecule_) {
-            PixTopProbsFeature3D<int32_t> rec(tileData.coords3d[j], tileData.featureIdx[j]);
+        if (isSingleMoleculeMode()) {
+            const auto& coord = smInput->coords3dFloat[j];
+            PixTopProbsFeature3D<float> rec(coord.x, coord.y, coord.z, smInput->featureIdx[j]);
             rec.ks.resize(topk_);
             rec.ps.resize(topk_);
             for (int32_t k = 0; k < topk_; ++k) {
                 rec.ks[k] = topIds(j, k);
                 rec.ps[k] = topVals(j, k);
             }
-            result.outputObjsFeature3d.emplace_back(std::move(rec));
+            result.getPayload<typename ResultBuf::OutputObjs3DFeatureFloat>().emplace_back(std::move(rec));
+        } else if (isSingleFeaturePixelMode()) {
+            PixTopProbsFeature3D<int32_t> rec(tileData.coords3d[j], tileData.rowFeatureIdx[j]);
+            rec.ks.resize(topk_);
+            rec.ps.resize(topk_);
+            for (int32_t k = 0; k < topk_; ++k) {
+                rec.ks[k] = topIds(j, k);
+                rec.ps[k] = topVals(j, k);
+            }
+            result.getPayload<typename ResultBuf::OutputObjs3DFeature>().emplace_back(std::move(rec));
         } else {
             PixTopProbs3D<int32_t> rec(tileData.coords3d[j]);
             rec.ks.resize(topk_);
@@ -1224,9 +1515,8 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
                 rec.ks[k] = topIds(j, k);
                 rec.ps[k] = topVals(j, k);
             }
-            result.outputObjs3d.emplace_back(std::move(rec));
+            result.getPayload<typename ResultBuf::OutputObjs3D>().emplace_back(std::move(rec));
         }
     }
-    result.npts = singleMolecule_ ? result.outputObjsFeature3d.size() : result.outputObjs3d.size();
     return result;
 }

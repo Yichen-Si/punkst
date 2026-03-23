@@ -110,14 +110,75 @@ int32_t nextBoundedTextRecordImpl(bool& done, int32_t& idxBlock, uint64_t& pos,
 
 void TileOperator::validateCoordinateEncoding() const {
     if (storesIntegerCoordinates()) {
-        if (!rawCoordinatesArePixels()) {
-            error("%s: Integer coordinate storage requires mode & 0x2 so raw records are pixel coordinates", __func__);
-        }
         if (formatInfo_.pixelResolution <= 0.0f) {
             error("%s: Integer coordinate storage requires positive pixelResolution", __func__);
         }
-    } else if (rawCoordinatesArePixels()) {
+    } else if (rawCoordinatesAreScaled()) {
         error("%s: Float coordinate storage requires mode & 0x2 == 0 so raw records are world coordinates", __func__);
+    }
+}
+
+void TileOperator::syncActiveBounds() {
+    if (!bounded_) {
+        formatInfo_.xmin = globalBox_.xmin;
+        formatInfo_.xmax = globalBox_.xmax;
+        formatInfo_.ymin = globalBox_.ymin;
+        formatInfo_.ymax = globalBox_.ymax;
+        return;
+    }
+    if (!globalBox_.proper() || !queryBox_.proper()) {
+        formatInfo_.xmin = 0.0f;
+        formatInfo_.xmax = -1.0f;
+        formatInfo_.ymin = 0.0f;
+        formatInfo_.ymax = -1.0f;
+        return;
+    }
+    formatInfo_.xmin = std::max(globalBox_.xmin, queryBox_.xmin);
+    formatInfo_.xmax = std::min(globalBox_.xmax, queryBox_.xmax);
+    formatInfo_.ymin = std::max(globalBox_.ymin, queryBox_.ymin);
+    formatInfo_.ymax = std::min(globalBox_.ymax, queryBox_.ymax);
+    if (!(formatInfo_.xmin < formatInfo_.xmax && formatInfo_.ymin < formatInfo_.ymax)) {
+        formatInfo_.xmin = 0.0f;
+        formatInfo_.xmax = -1.0f;
+        formatInfo_.ymin = 0.0f;
+        formatInfo_.ymax = -1.0f;
+    }
+}
+
+void TileOperator::buildPreparedRegionPlan(const PreparedRegionMask2D& region,
+    std::vector<size_t>& activeOrder, std::vector<uint8_t>& activeStates) const {
+    activeOrder.clear();
+    activeStates.clear();
+
+    std::vector<size_t> order;
+    order.reserve(blocks_.size());
+    for (size_t i = 0; i < blocks_.size(); ++i) {
+        const auto& blk = blocks_[i];
+        if (region.bbox_f.intersect(Rectangle<float>(
+                static_cast<float>(blk.idx.xmin), static_cast<float>(blk.idx.ymin),
+                static_cast<float>(blk.idx.xmax), static_cast<float>(blk.idx.ymax))) == 0) {
+            continue;
+        }
+        order.push_back(i);
+    }
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        const TileInfo& lhs = blocks_[a];
+        const TileInfo& rhs = blocks_[b];
+        if (lhs.row != rhs.row) return lhs.row < rhs.row;
+        return lhs.col < rhs.col;
+    });
+
+    activeOrder.reserve(order.size());
+    activeStates.reserve(order.size());
+    for (size_t idx : order) {
+        const TileInfo& blk = blocks_[idx];
+        const TileKey tile{blk.row, blk.col};
+        const RegionTileState state = region.classifyTile(tile);
+        if (state == RegionTileState::Outside) {
+            continue;
+        }
+        activeOrder.push_back(idx);
+        activeStates.push_back(static_cast<uint8_t>(state));
     }
 }
 
@@ -146,6 +207,14 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     mode_ &= 0xFFFF;
     coord_dim_ = (mode_ & 0x10) ? 3 : 2;
     if ((mode_ & 0x8) == 0) {assert(formatInfo_.tileSize > 0);}
+    if (storesIntegerCoordinates() && !rawCoordinatesAreScaled()) {
+        if (formatInfo_.pixelResolution <= 0.0f) {
+            formatInfo_.pixelResolution = 1.0f;
+        }
+        if (coord_dim_ == 3 && formatInfo_.pixelResolutionZ <= 0.0f) {
+            formatInfo_.pixelResolutionZ = 1.0f;
+        }
+    }
     validateCoordinateEncoding();
     if ((mode_ & 0x20u) && coord_dim_ == 3) {assert(formatInfo_.pixelResolutionZ > 0.0f);}
     k_ = formatInfo_.parseKvec(kvec_);
@@ -173,6 +242,8 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     if (blocks_all_.empty())
         error("No index entries loaded from %s", indexFile.c_str());
     blocks_ = blocks_all_;
+    bounded_ = false;
+    syncActiveBounds();
     if ((mode_ & 0x8) == 0) { // regular grid
         for (size_t i = 0; i < blocks_all_.size(); ++i) {
             blocks_all_[i].row = blocks_all_[i].idx.row;
@@ -192,9 +263,9 @@ void TileOperator::printIndex() const {
         // Print header info
         printf("##Flag: 0x%x\n", formatInfo_.mode);
         printf("##Tile size: %d\n", formatInfo_.tileSize);
-        printf("##Pixel resolution: %.2f\n", formatInfo_.pixelResolution);
+        printf("##Pixel resolution: %.4f\n", formatInfo_.pixelResolution);
         if ((mode_ & 0x10) && (mode_ & 0x20u)) {
-            printf("##Z pixel resolution: %.2f\n", formatInfo_.pixelResolutionZ);
+            printf("##Z pixel resolution: %.4f\n", formatInfo_.pixelResolutionZ);
         }
         printf("##Coordinate type: %s\n", (mode_ & 0x4) ? "int32" : "float");
         if (k_ > 0) {
@@ -265,47 +336,14 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
         return;
     }
 
-    std::vector<size_t> order;
-    order.reserve(blocks_.size());
-    for (size_t i = 0; i < blocks_.size(); ++i) {
-        const auto& blk = blocks_[i];
-        if (region.bbox_f.intersect(Rectangle<float>(
-                static_cast<float>(blk.idx.xmin), static_cast<float>(blk.idx.ymin),
-                static_cast<float>(blk.idx.xmax), static_cast<float>(blk.idx.ymax))) == 0) {
-            continue;
-        }
-        order.push_back(i);
-    }
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        const TileInfo& lhs = blocks_[a];
-        const TileInfo& rhs = blocks_[b];
-        if (lhs.row != rhs.row) return lhs.row < rhs.row;
-        return lhs.col < rhs.col;
-    });
-    if (order.empty()) {
+    std::vector<size_t> activeOrder;
+    std::vector<uint8_t> activeStates;
+    buildPreparedRegionPlan(region, activeOrder, activeStates);
+    if (activeOrder.empty()) {
         warning("%s: No indexed tiles intersect the region bounding box", __func__);
         return;
     }
-    notice("%s: %lu tiles intersect the region bounding box", __func__, order.size());
-
-    std::vector<size_t> activeOrder;
-    std::vector<RegionTileState> activeStates;
-    activeOrder.reserve(order.size());
-    activeStates.reserve(order.size());
-    for (size_t idx : order) {
-        const TileInfo& blk = blocks_[idx];
-        const TileKey tile{blk.row, blk.col};
-        const RegionTileState state = region.classifyTile(tile);
-        if (state == RegionTileState::Outside) {
-            continue;
-        }
-        activeOrder.push_back(idx);
-        activeStates.push_back(state);
-    }
-    if (activeOrder.empty()) {
-        warning("%s: No indexed tiles intersect the queried region", __func__);
-        return;
-    }
+    notice("%s: %lu tiles intersect the queried region", __func__, activeOrder.size());
 
     const bool binaryInput = (mode_ & 0x1) != 0;
     const std::string outData = outPrefix + (binaryInput ? ".bin" : ".tsv");
@@ -377,7 +415,7 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
         const size_t blkIdx = activeOrder[activeIdx];
         const TileInfo& blk = blocks_[blkIdx];
         const TileKey tile{blk.row, blk.col};
-        const RegionTileState state = activeStates[activeIdx];
+        const RegionTileState state = static_cast<RegionTileState>(activeStates[activeIdx]);
         result.state = state;
         if (state == RegionTileState::Inside && !hasZRange) {
             result.useCopyRange = true;
@@ -750,9 +788,11 @@ bool TileOperator::readNextTextLine(std::string& line) {
 }
 
 int32_t TileOperator::query(float qxmin,float qxmax,float qymin,float qymax) {
+    if (qxmin >= qxmax || qymin >= qymax) {
+        return -1;
+    }
     if ((mode_ & 0x1) == 0 && !canSeekTextInput()) {
-        error("%s: --filter/query requires a seekable text file. Input '%s' is a stream (stdin/gzip).",
-            __func__, dataFile_.c_str());
+        error("%s: region query requires a seekable file. Input '%s' is stdin/gzip", __func__, dataFile_.c_str());
     }
     queryBox_ = Rectangle<float>(qxmin, qymin, qxmax, qymax);
     bounded_ = true;
@@ -762,6 +802,7 @@ int32_t TileOperator::query(float qxmin,float qxmax,float qymin,float qymax) {
         if (rel==0) {continue;}
         blocks_.push_back({ b.idx, rel==3});
     }
+    syncActiveBounds();
     if (blocks_.empty()) {
         return 0;
     }
@@ -801,36 +842,6 @@ void TileOperator::sampleTilesToDebug(int32_t ntiles) {
             tile_lookup_[{b.row, b.col}] = i;
         }
     }
-}
-
-int32_t TileOperator::floorDivInt32(int32_t value, int32_t divisor) {
-    if (divisor <= 0) {
-        error("%s: divisor must be positive", __func__);
-    }
-    int32_t q = value / divisor;
-    const int32_t r = value % divisor;
-    if (r < 0) {
-        --q;
-    }
-    return q;
-}
-
-int32_t TileOperator::ceilDivInt32(int32_t value, int32_t divisor) {
-    return -floorDivInt32(-value, divisor);
-}
-
-int32_t TileOperator::mapPixelToRasterFloor(int32_t value) const {
-    if (!hasRasterResolutionOverride_) {
-        return value;
-    }
-    return floorDivInt32(value, rasterRatioXY_);
-}
-
-int32_t TileOperator::mapPixelToRasterCeil(int32_t value) const {
-    if (!hasRasterResolutionOverride_) {
-        return value;
-    }
-    return ceilDivInt32(value, rasterRatioXY_);
 }
 
 void TileOperator::accumulateRasterTopProbs(RasterTopProbAccum& accum, const TopProbs& rec) const {
@@ -885,6 +896,32 @@ TopProbs TileOperator::finalizeRasterTopProbs(const RasterTopProbAccum& accum) c
     return out;
 }
 
+void TileOperator::setPixelResolutionOverride(float resXY, float resZ) {
+    if (!(resXY > 0.0f)) {
+        error("%s: pixel resolution override must be positive", __func__);
+    }
+    if (storesIntegerCoordinates() || rawCoordinatesAreScaled()) {
+        error("%s: override is allowed only for inputs with original float coordinates (mode & 0x2 == 0 and mode & 0x4 == 0)", __func__);
+    }
+    if (coord_dim_ != 3 && resZ > 0.0f) {
+        error("%s: z pixel resolution override is only supported for 3D input", __func__);
+    }
+
+    formatInfo_.pixelResolution = resXY;
+    mode_ &= ~0x20u;
+    mode_ |= 0x02u;
+    if (coord_dim_ == 3) {
+        formatInfo_.pixelResolutionZ = (resZ > 0.0f) ? resZ : resXY;
+        if (resZ > 0.0f && resZ != resXY)
+            mode_ |= 0x20u;
+    } else {
+        formatInfo_.pixelResolutionZ = -1.0f;
+    }
+    formatInfo_.mode = ((static_cast<uint32_t>(K_) & 0xFFFFu) << 16) | (mode_ & 0xFFFFu);
+    regular_labeled_raster_ = ((mode_ & 0x8) == 0) && (k_ > 0) &&
+        ((mode_ & 0x4) != 0 || formatInfo_.pixelResolution > 0.0f);
+}
+
 void TileOperator::setRasterPixelResolution(float resXY) {
     if (!(resXY > 0.0f)) {
         error("%s: raster pixel resolution must be positive", __func__);
@@ -905,7 +942,7 @@ void TileOperator::setRasterPixelResolution(float resXY) {
             __func__, ratio);
     }
     int32_t tileSpanPixels = formatInfo_.tileSize;
-    if (rawCoordinatesArePixels()) {
+    if (rawCoordinatesAreScaled()) {
         tileSpanPixels = coord2pix(tileSpanPixels);
     }
     if (tileSpanPixels <= 0 || (tileSpanPixels % static_cast<int32_t>(rounded)) != 0) {
@@ -1056,12 +1093,11 @@ int32_t TileOperator::loadTileToMap3D(const TileKey& key,
     return static_cast<int32_t>(pixelMap.size());
 }
 
-void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int32_t coordDigits,
-    const std::string& featureDictFile) {
-    if (hasFeatureIndex()) {
-        dumpTSVSingleMolecule(outPrefix, probDigits, coordDigits, featureDictFile);
-        return;
-    }
+void TileOperator::dumpTSV(const std::string& outPrefix,
+    int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile,
+    const std::string& geojsonFile, int64_t geojsonScale,
+    float qzmin, float qzmax) {
+
     if (!(mode_ & 0x1)) {
         error("dumpTSV only supports binary mode files");
     }
@@ -1069,6 +1105,56 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
         warning("%s: No data to write", __func__);
         return;
     }
+    const bool useRegion = !geojsonFile.empty();
+    const bool hasZRange = !std::isnan(qzmin) || !std::isnan(qzmax);
+    if (hasZRange) {
+        if (std::isnan(qzmin) || std::isnan(qzmax)) {
+            error("%s: z-range filtering requires both qzmin and qzmax", __func__);
+        }
+        if (coord_dim_ != 3) {
+            error("%s: z-range filtering requires 3D input", __func__);
+        }
+        if (qzmin >= qzmax) {
+            error("%s: Invalid z interval [%.3f, %.3f)", __func__, qzmin, qzmax);
+        }
+    }
+    PreparedRegionMask2D region;
+    PreparedRegionMask2D* regionPtr = nullptr;
+    if (useRegion) {
+        if ((mode_ & 0x8) != 0) {
+            error("%s: GeoJSON region filtering requires regular tile mode input (mode & 0x8 == 0)", __func__);
+        }
+        try {
+            region = loadPreparedRegionGeoJSON(geojsonFile, formatInfo_.tileSize, geojsonScale);
+        } catch (const std::exception& ex) {
+            error("%s: %s", __func__, ex.what());
+        }
+        notice("Prepared region loaded from %s: bounding box [%.2f, %.2f, %.2f, %.2f], %lu union paths, %lu component bboxes",
+            geojsonFile.c_str(), region.bbox_f.xmin, region.bbox_f.ymin, region.bbox_f.xmax, region.bbox_f.ymax,
+            region.union_paths.size(), region.comp_bbox.size());
+        if (region.empty()) {
+            warning("%s: Prepared region is empty", __func__);
+            return;
+        }
+        regionPtr = &region;
+    }
+
+    if (hasFeatureIndex()) {
+        dumpTSVSingleMolecule(outPrefix, probDigits, coordDigits, featureDictFile, regionPtr, qzmin, qzmax);
+        return;
+    }
+
+    std::vector<size_t> activeOrder;
+    std::vector<uint8_t> activeStates;
+    if (useRegion) {
+        buildPreparedRegionPlan(region, activeOrder, activeStates);
+        if (activeOrder.empty()) {
+            warning("%s: No indexed tiles intersect the queried region", __func__);
+            return;
+        }
+        notice("%s: %lu tiles intersect the queried region", __func__, activeOrder.size());
+    }
+
     resetReader();
 
     // Set up output files/stream
@@ -1118,22 +1204,25 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
 
     // Track current offset in the output TSV file
     long currentOffset = ftell(fp);
+    Rectangle<float> writtenBox;
+    bool wroteAny = false;
 
-    for (const auto& blk : blocks_) {
+    auto processBlock = [&](const TileInfo& blk, RegionTileState regionState) {
+        dataStream_.clear();
         dataStream_.seekg(blk.idx.st);
         size_t len = blk.idx.ed - blk.idx.st;
         size_t recSize = formatInfo_.recordSize;
         if (recSize == 0) error("Record size is 0 in binary mode");
-        bool checkBound = bounded_ && !blk.contained;
+        const bool checkBound = !useRegion && bounded_ && !blk.contained;
+        const TileKey tile{blk.row, blk.col};
         size_t nRecs = len / recSize;
 
-        // We will accumulate index entry info for this block
         IndexEntryF newEntry = blk.idx;
         newEntry.st = currentOffset;
-        // n, xmin, xmax, ymin, ymax are copied from the binary index entry
-        // This assumes the binary index is correct and aligned with the data we read.
+        newEntry.n = 0;
+        Rectangle<float> tileBox;
 
-        for(size_t i=0; i<nRecs; ++i) {
+        for (size_t i = 0; i < nRecs; ++i) {
             float x, y, z = 0.0f;
             std::vector<int32_t> ks;
             std::vector<float> ps;
@@ -1158,6 +1247,14 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
             if (checkBound && !queryBox_.contains(x, y)) {
                 continue;
             }
+            if (useRegion) {
+                if (hasZRange && (z < qzmin || z >= qzmax)) {
+                    continue;
+                }
+                if (regionState == RegionTileState::Partial && !region.containsPoint(x, y, &tile)) {
+                    continue;
+                }
+            }
 
             if (coord_dim_ == 3) {
                 if (fprintf(fp, "%.*f\t%.*f\t%.*f", coordDigits, x, coordDigits, y, coordDigits, z) < 0)
@@ -1170,22 +1267,58 @@ void TileOperator::dumpTSV(const std::string& outPrefix, int32_t probDigits, int
                     error("%s: Write error", __func__);
             }
             if (fprintf(fp, "\n") < 0) error("%s: Write error", __func__);
+            tileBox.extendToInclude(x, y);
+            ++newEntry.n;
         }
 
         currentOffset = ftell(fp);
         newEntry.ed = currentOffset;
 
+        if (newEntry.n == 0) {
+            return;
+        }
+        newEntry.xmin = static_cast<int32_t>(std::floor(tileBox.xmin));
+        newEntry.xmax = static_cast<int32_t>(std::ceil(tileBox.xmax));
+        newEntry.ymin = static_cast<int32_t>(std::floor(tileBox.ymin));
+        newEntry.ymax = static_cast<int32_t>(std::ceil(tileBox.ymax));
+        writtenBox.extendToInclude(tileBox);
+        wroteAny = true;
+
         if (writeIndex) {
-             if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) {
-                 error("Error writing index entry");
-             }
+            if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) {
+                error("Error writing index entry");
+            }
+        }
+    };
+
+    if (useRegion) {
+        for (size_t i = 0; i < activeOrder.size(); ++i) {
+            processBlock(blocks_[activeOrder[i]], static_cast<RegionTileState>(activeStates[i]));
+        }
+    } else {
+        for (const auto& blk : blocks_) {
+            processBlock(blk, RegionTileState::Inside);
         }
     }
 
     if (fp != stdout) fclose(fp);
-    if (fdIndex >= 0) close(fdIndex);
-
     if (writeIndex) {
+        if (wroteAny) {
+            IndexHeader idxHeader = formatInfo_;
+            idxHeader.mode &= ~0x7;
+            idxHeader.recordSize = 0;
+            idxHeader.xmin = writtenBox.xmin;
+            idxHeader.xmax = writtenBox.xmax;
+            idxHeader.ymin = writtenBox.ymin;
+            idxHeader.ymax = writtenBox.ymax;
+            if (lseek(fdIndex, 0, SEEK_SET) < 0) {
+                error("%s: Error seeking output index file", __func__);
+            }
+            if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+                error("%s: Error finalizing index header", __func__);
+            }
+        }
+        close(fdIndex);
         notice("Dumped TSV to %s and index to %s.index", tsvFile.c_str(), outPrefix.c_str());
     }
 }
@@ -1452,6 +1585,8 @@ void TileOperator::loadIndexLegacy(const std::string& indexFile) {
     if (blocks_all_.empty())
         error("No index entries loaded from %s", indexFile.c_str());
     blocks_ = blocks_all_;
+    bounded_ = false;
+    syncActiveBounds();
     notice("Loaded index with %lu blocks", blocks_all_.size());
 }
 

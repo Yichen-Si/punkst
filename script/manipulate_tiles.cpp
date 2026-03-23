@@ -54,13 +54,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     float maskMinPixelProb = 0.01;
     double minTileFactorMass = 10.;
     double maskSimplify = 0.0;
+    float pixelResOverride = -1.0f;
+    float pixelResZOverride = -1.0f;
     float rasterPixelRes = -1.0f;
     std::string templateGeoJSON;
     std::string templateOutPrefix;
     std::string featureDictFile;
     float xmin = 0.0f, xmax = -1.0f, ymin = 0.0f, ymax = -1.0f;
-    double zmin = std::numeric_limits<double>::quiet_NaN();
-    double zmax = std::numeric_limits<double>::quiet_NaN();
+    float zmin = std::numeric_limits<float>::quiet_NaN();
+    float zmax = std::numeric_limits<float>::quiet_NaN();
     int32_t threads = 1;
     int32_t debug_ = 0;
 
@@ -74,6 +76,8 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("binary-out", "Output in binary format (merge only)", binaryOut)
       .add_option("K", "Total number of factors in the data", K)
       .add_option("tile-size", "Tile size in the original data", tileSize)
+      .add_option("pixel-res-override", "Override the pixel resolution used to map raw float coordinates to integer pixels", pixelResOverride)
+      .add_option("pixel-res-z-override", "Override the z pixel resolution used to map raw float 3D coordinates to integer pixels", pixelResZOverride)
       .add_option("raster-pixel-res", "Optional coarser raster resolution in original units for raster-style tile-op commands", rasterPixelRes)
       .add_option("threads", "Number of threads to use", threads)
       .add_option("debug", "Debug", debug_);
@@ -100,7 +104,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
-      .add_option("features", "Feature dictionary file; first column maps feature indices to names", featureDictFile)
+      .add_option("features", "Feature dictionary file; first column maps feature indices to names. Use '-' to read from stdin", featureDictFile)
       .add_option("icol-x", "X coordinate column index, 0-based", icol_x)
       .add_option("icol-y", "Y coordinate column index, 0-based", icol_y)
       .add_option("icol-z", "Z coordinate column index, 0-based", icol_z)
@@ -162,6 +166,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     TileOperator tileOp(inData, inIndex);
+    if (pixelResZOverride > 0.0f && !(pixelResOverride > 0.0f)) {
+        error("--pixel-res-z-override requires --pixel-res-override");
+    }
+    if (pixelResOverride > 0.0f) {
+        tileOp.setPixelResolutionOverride(pixelResOverride, pixelResZOverride);
+    }
     if (K > 0) {tileOp.setFactorCount(K);}
     tileOp.setThreads(threads);
     const bool hasFeatureIndex = tileOp.hasFeatureIndex();
@@ -171,6 +181,10 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
             tileOp.setRasterPixelResolution(rasterPixelRes);
         }
     };
+    int32_t nTiles = tileOp.query(xmin, xmax - 1e-6f, ymin, ymax - 1e-6f);
+    if (nTiles >= 0) {
+        notice("Operating on %d tiles within the specified range", nTiles);
+    }
 
     if(printIndex) {
         tileOp.printIndex();
@@ -192,11 +206,14 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         error("Both --zmin and --zmax must be provided together");
     }
     if ((hasExtractRegionZMin || hasExtractRegionZMax) &&
-        !(extractRegion || !extractRegionGeoJSON.empty())) {
-        error("--zmin/--zmax are only supported with --extract-region or --extract-region-geojson");
+        !(extractRegion || !extractRegionGeoJSON.empty() || dumpTSV)) {
+        error("--zmin/--zmax are only supported with --extract-region, --extract-region-geojson, or --dump-tsv with --extract-region-geojson");
     }
-    if ((extractRegion || !extractRegionGeoJSON.empty()) && hasExtractRegionZMin && !(zmax > zmin)) {
+    if ((extractRegion || !extractRegionGeoJSON.empty() || dumpTSV) && hasExtractRegionZMin && !(zmax > zmin)) {
         error("--zmax must be greater than --zmin");
+    }
+    if (dumpTSV && (hasExtractRegionZMin || hasExtractRegionZMax) && extractRegionGeoJSON.empty()) {
+        error("--zmin/--zmax require --extract-region-geojson when used with --dump-tsv");
     }
 
     if (reorganize) {
@@ -208,22 +225,18 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (!extractRegionGeoJSON.empty()) {
             error("--extract-region and --extract-region-geojson are mutually exclusive");
         }
-        tileOp.extractRegion(outPrefix, xmin, xmax - 1e-6f, ymin, ymax - 1e-6f,
-            static_cast<float>(zmin), static_cast<float>(zmax));
+        tileOp.extractRegion(outPrefix, xmin, xmax - 1e-6f, ymin, ymax - 1e-6f, zmin, zmax);
         return 0;
     }
 
-    if (!extractRegionGeoJSON.empty()) {
-        tileOp.extractRegionGeoJSON(outPrefix, extractRegionGeoJSON, extractRegionScale,
-            static_cast<float>(zmin), static_cast<float>(zmax));
+    if (!extractRegionGeoJSON.empty() && !dumpTSV) {
+        tileOp.extractRegionGeoJSON(outPrefix, extractRegionGeoJSON, extractRegionScale, zmin, zmax);
         return 0;
     }
 
     if (dumpTSV) {
-        if (hasFeatureIndex && featureDictFile.empty()) {
-            error("--features is required to dump single-molecule records to TSV");
-        }
-        tileOp.dumpTSV(outPrefix, probDigits, coordDigits, featureDictFile);
+        tileOp.dumpTSV(outPrefix, probDigits, coordDigits, featureDictFile,
+            extractRegionGeoJSON, extractRegionScale, zmin, zmax);
         return 0;
     }
 
