@@ -869,17 +869,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#data-annotation-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Data Annotation Parameters
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#processing-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -902,10 +891,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#single-molecule-pixel-mode" class="md-nav__link">
+  <a href="#feature-specific-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Single-molecule Pixel Mode
+        Feature-Specific Modes
       
     </span>
   </a>
@@ -945,17 +934,6 @@
     <span class="md-ellipsis">
       
         Thin 3D
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#current-3d-scope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Current 3D Scope
       
     </span>
   </a>
@@ -1334,17 +1312,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#data-annotation-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Data Annotation Parameters
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#processing-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1367,10 +1334,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#single-molecule-pixel-mode" class="md-nav__link">
+  <a href="#feature-specific-modes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Single-molecule Pixel Mode
+        Feature-Specific Modes
       
     </span>
   </a>
@@ -1410,17 +1377,6 @@
     <span class="md-ellipsis">
       
         Thin 3D
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#current-3d-scope" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Current 3D Scope
       
     </span>
   </a>
@@ -1504,23 +1460,18 @@
 
 <h1 id="pixel-decode">pixel-decode<a class="headerlink" href="#pixel-decode" title="Permanent link">&para;</a></h1>
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p><code>pixel-decode</code> projects a trained factor model onto tiled pixel-level data and annotates each pixel (or collapsed pixel bin) with the top factors and their probabilities.</p>
-<p>It supports:</p>
-<ul>
-<li>2D decoding on overlapping shifted hex-anchor lattices</li>
-<li>thin 3D decoding, which keeps the shifted hex-anchor construction and adds a finite set of z levels</li>
-<li>standard 3D decoding, which uses a body-centered cubic (BCC) anchor lattice directly in the input 3D coordinate system</li>
-</ul>
-<p>In all cases, the input remains the x-y tiled output created by <code>pts2tiles</code>.</p>
+<p><code>pixel-decode</code> projects a trained factor model onto the space and annotates each pixel/voxel/molecule with the top factors and their probabilities. In standard mode, the inference is done at pixel or voxel level. In the feature-specific modes, the inference is feature-specific even at the same location.</p>
+<p>In all cases, the input is the x-y tiled data created by <code>pts2tiles</code>.</p>
 <!-- The default decoder is `slda`; `--algo nmf` enables the EM-NMF decoder. -->
 
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.model.tsv<span class="w"> </span><span class="se">\</span>
+<p>Basic usage:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/model.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
-</span></code></pre></div>
+</span></code></pre></div></p>
 <p>The main inference result in this example is written to <code>${path}/pixel.bin</code> together with <code>${path}/pixel.index</code>. The output are organized in regular square tiles for efficient downstream analysis (see <a href="../tileop/">tile-op</a>).</p>
 <h2 id="required-parameters">Required Parameters<a class="headerlink" href="#required-parameters" title="Permanent link">&para;</a></h2>
 <p><code>--in-tsv</code> - Specifies the tiled data created by <code>pts2tiles</code>.</p>
@@ -1544,8 +1495,8 @@
 <p><code>--coords-are-int</code> - If set, indicates that the coordinates are integers; otherwise, they are treated as floating point values.</p>
 <p><code>--icol-z</code> - Column index for the z coordinate (0-based). Requires either
 <code>--thin-3D</code> or <code>--standard-3D</code>.</p>
-<p><code>--thin-3D</code> - Activates the thin 3D path.</p>
-<p><code>--standard-3D</code> - Activates the standard 3D BCC path.</p>
+<p><code>--thin-3D</code> - Activates the thin 3D path. (See the 3D modes section below)</p>
+<p><code>--standard-3D</code> - Activates the standard 3D path. (See the 3D modes section below)</p>
 <p><code>--feature-is-index</code> - If set, the values in <code>--icol-feature</code> are interpreted as feature indices. Otherwise, they are expected to be feature names.</p>
 <p><code>--feature-weights</code> - Specifies a file to weight each feature. The first column should contain the feature names, and the second column should contain the weights.</p>
 <p><code>--default-weight</code> - Specifies the default weight for features not present in the weights file (only if <code>--feature-weights</code> is specified). Default: 0.</p>
@@ -1557,6 +1508,8 @@ externally loaded anchors are not currently used.</p>
 <h3 id="algorithm-parameters">Algorithm Parameters<a class="headerlink" href="#algorithm-parameters" title="Permanent link">&para;</a></h3>
 <!-- `--algo` - Decoding algorithm: `slda` (default) or `nmf`. -->
 
+<p><code>--single-feature-pixel</code> - Enables feature-specific decoding on collapsed pixel/voxel bins. Decoding still uses the user-specified <code>--pixel-res</code> / <code>--pixel-res-z</code>, but factor probabilities are computed separately for each feature within the same pixel or voxel.</p>
+<p><code>--single-molecule</code> - Enables raw single-molecule decoding without collapsing records to pixels or voxels. (This is not recommended for data that do not have single molecule resolution, such as Visium HD)</p>
 <p><code>--max-iter</code> - Maximum number of outer iterations. Default: 100.</p>
 <p><code>--mean-change-tol</code> - Convergence tolerance for the outer iterations. Default: <code>1e-3</code>.</p>
 <p><code>--background-model</code> - Background profile file. If provided, background probabilities are modeled explicitly.</p>
@@ -1575,10 +1528,6 @@ externally loaded anchors are not currently used.</p>
 
 `--ridge` - Ridge stabilization parameter for the `nmf` inner solver. -->
 
-<h3 id="data-annotation-parameters">Data Annotation Parameters<a class="headerlink" href="#data-annotation-parameters" title="Permanent link">&para;</a></h3>
-<p><code>--ext-col-ints</code> - Additional integer columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: <code>--ext-col-ints 4:celltype 5:cluster</code>.</p>
-<p><code>--ext-col-floats</code> - Additional float columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: <code>--ext-col-floats 6:quality</code>.</p>
-<p><code>--ext-col-strs</code> - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings. Example: <code>--ext-col-strs 7:sample_id:20 8:batch:10</code>.</p>
 <h3 id="processing-parameters">Processing Parameters<a class="headerlink" href="#processing-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--pixel-res</code> - Resolution for the analysis, in the same unit as the input coordinates. Default: 1 (each pixel treated independently). Setting the resolution equivalent to 0.5-1μm is recommended, but it could be smaller if your data is very dense. For Visium HD (where the pixel size is 2μm), use <code>--pixel-res 2</code>.</p>
 <p><code>--pixel-res-z</code> - Resolution for aggregating pixels in the z dimension. Used
@@ -1586,7 +1535,7 @@ only in 3D mode. Default: 1.</p>
 <p><code>--radius</code> - Support radius used in pixel-to-anchor weighting. In 2D and thin
 3D it also controls the anchor search neighborhood. Default: <code>anchor-dist *
 1.2</code> in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
-the nearest thin-3D z-level spacing. In standard 3D, it does not change the fixed BCC neighbor
+the nearest thin-3D z-level spacing.
 stencil, but it does control the weight decay scale and contributes to the
 x-y padding.</p>
 <p><code>--half-life-dist</code> - Ratio <code>h</code> in <code>(0, 1)</code> such that an anchor at distance
@@ -1605,15 +1554,6 @@ generate between <code>zmin</code> and <code>zmax</code>.</p>
 <p><code>--seed</code> - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.</p>
 <h3 id="output-parameters">Output Parameters<a class="headerlink" href="#output-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--output-binary</code> - Writes the main output as <code>&lt;prefix&gt;.bin</code> plus <code>&lt;prefix&gt;.index</code>. This cannot be combined with <code>--output-original</code>.</p>
-<p><code>--single-molecule</code> - Switches from standard pixel-level output to a special single-molecule-style mode. Decoding still uses the user-specified <code>--pixel-res</code> / <code>--pixel-res-z</code>, but records are grouped by <code>(pixel-or-voxel, feature)</code> instead of by coordinate alone. Each output row therefore still represents exactly one feature identity, plus a count of how many observations of that feature were grouped into that local bin.</p>
-<p>Current restrictions for <code>--single-molecule</code>:</p>
-<ul>
-<li>requires <code>--output-binary</code></li>
-<li>does not support <code>--output-original</code></li>
-<li>does not support <code>--output-bg-prob-expand</code></li>
-<li>does not support <code>--ext-col-ints</code>, <code>--ext-col-floats</code>, or <code>--ext-col-strs</code></li>
-<li>does not support weighted-feature input via <code>--feature-weights</code></li>
-</ul>
 <p><code>--output-original</code> - Writes the main output as text and includes the original feature names and counts together with the factor results.</p>
 <p><code>--output-anchors</code> - Writes anchor-level top-factor assignments to <code>&lt;prefix&gt;.anchors.tsv</code>.</p>
 <p><code>--output-bg-prob-expand</code> - In text mode, writes one line per feature per pixel to include background probabilities. Ignored if <code>--output-original</code> is set.</p>
@@ -1621,25 +1561,44 @@ generate between <code>zmin</code> and <code>zmax</code>.</p>
 <p><code>--top-k</code> - Number of top factors to include in the output. Default: 3.</p>
 <p><code>--output-coord-digits</code> - Number of decimal digits to output for coordinates in text mode (used when input coordinates are float or <code>--output-original</code> is not set). Default: 2.</p>
 <p><code>--output-prob-digits</code> - Number of decimal digits to output for probabilities. Default: 4.</p>
-<h3 id="single-molecule-pixel-mode">Single-molecule Pixel Mode<a class="headerlink" href="#single-molecule-pixel-mode" title="Permanent link">&para;</a></h3>
-<p>Use <code>--single-molecule</code> to make inference for each feature separately within each pixel/voxel. This mode may be suitable for image-based ST data with single molecule resolution and mostly informative genes.</p>
+<p><code>--ext-col-ints</code> - Additional integer columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: <code>--ext-col-ints 4:celltype 5:cluster</code>.</p>
+<p><code>--ext-col-floats</code> - Additional float columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: <code>--ext-col-floats 6:quality</code>.</p>
+<p><code>--ext-col-strs</code> - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings. Example: <code>--ext-col-strs 7:sample_id:20 8:batch:10</code>.</p>
+<h3 id="feature-specific-modes">Feature-Specific Modes<a class="headerlink" href="#feature-specific-modes" title="Permanent link">&para;</a></h3>
+<p>The two feature-specific modes share the same inference path, where different features are considered separately even if they have the same location. Consider the feature-specific modes only if your factors are closer to "transcriptional modules" than "cell types".</p>
+<p>Caution: for Visium HD, where the resolution is 2μm, only <code>--single-feature-pixel</code> is valid.</p>
 <p>Compared with the standard pixel mode:</p>
 <ul>
-<li>standard mode jointly considers all observations in the same pixel / voxel and make inference at pixel/voxel level</li>
-<li>single-molecule mode makes inference for each feature separately within each pixel/voxel, so one pixel/voxel can be associated with multiple sets of factor probabilities</li>
-<li>the binary output record therefore includes one extra <code>uint32_t featureIdx</code></li>
+<li>standard mode jointly considers all observations in the same pixel or voxel and makes one inference result per pixel/voxel</li>
+<li><code>--single-feature-pixel</code> still collapses the raw data by analysis resolution, but can assign different factor probabilities to features within the same pixel or voxel</li>
+<li><code>--single-molecule</code> does not collapse the data before inference; each accepted input record is treated on its own</li>
 </ul>
-<p>This means only nearby repeated observations of the same feature can share one local inference result, while different features at the same coordinate can have different inference results.</p>
-<h2 id="3d-modes">3D Modes<a class="headerlink" href="#3d-modes" title="Permanent link">&para;</a></h2>
-<p>3D mode is explicit.</p>
+<p>Output differences:</p>
 <ul>
-<li>Use <code>--icol-z --thin-3D</code> for thin 3D.</li>
-<li>Use <code>--icol-z --standard-3D</code> for standard 3D.</li>
-<li><code>--icol-z</code> without one of those flags is rejected.</li>
+<li><code>--single-feature-pixel</code> writes integer pixel or voxel coordinates plus one extra <code>uint32_t featureIdx</code></li>
+<li><code>--single-molecule</code> writes raw float coordinates plus one extra <code>uint32_t featureIdx</code></li>
+</ul>
+<p>Current restrictions for both <code>--single-feature-pixel</code> and <code>--single-molecule</code>:</p>
+<ul>
+<li>requires <code>--output-binary</code></li>
+<li>does not support <code>--output-original</code></li>
+<li>does not support <code>--output-bg-prob-expand</code></li>
+<li>does not support <code>--ext-col-ints</code>, <code>--ext-col-floats</code>, or <code>--ext-col-strs</code></li>
+<li>does not support extended or weighted parser modes</li>
+</ul>
+<h2 id="3d-modes">3D Modes<a class="headerlink" href="#3d-modes" title="Permanent link">&para;</a></h2>
+<p>3D mode needs to be configured explicitly</p>
+<ul>
+<li>Use <code>--icol-z --thin-3D</code> for thin 3D (e.g. 10um tissue slice from imaging-based platforms)</li>
+<li>Use <code>--icol-z --standard-3D</code> for real, deep 3D</li>
+<li><code>--icol-z</code> without one of those flags is rejected</li>
+<li>3D mode does not support external fixed anchors</li>
+<li>standard 3D requires positive <code>--anchor-dist</code> to define the BCC lattice</li>
+<li>thin 3D and standard 3D both still use the optional <code>--half-life-dist</code> for distance-based anchor weighting</li>
 </ul>
 <h3 id="standard-3d">Standard 3D<a class="headerlink" href="#standard-3d" title="Permanent link">&para;</a></h3>
-<p>Standard 3D uses a BCC anchor lattice directly in the input coordinate system.
-This means x, y, and z are expected to already use compatible units.</p>
+<p>Standard 3D uses a body-centered cubic (BCC) BCC anchor lattice in the input coordinate system. This is experimental and is only tested on one DeepSTARmap dataset.</p>
+<p>Caution: we assume x, y, and z are already use compatible units, see <a href="../pts2tiles/">pts2tiles</a> for options to scale the input coordinates differently in preprocessing.</p>
 <ul>
 <li><code>--anchor-dist</code> is the preferred way to define the BCC anchor spacing.</li>
 <li>Each pixel is connected to anchors from a fixed local BCC neighborhood:
@@ -1665,8 +1624,7 @@ This means x, y, and z are expected to already use compatible units.</p>
 </span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <h3 id="thin-3d">Thin 3D<a class="headerlink" href="#thin-3d" title="Permanent link">&para;</a></h3>
-<p>Thin 3D keeps the overlapping shifted hex-anchor construction in x-y and adds a
-finite set of z levels across <code>[zmin, zmax]</code>.</p>
+<p>Thin 3D keeps anchor lattice in x-y and adds a small set of z levels across <code>[zmin, zmax]</code> to distribute these anchors. This is an experimental mode designed for thin tissue slices from imaging-based platforms where the range on the z axis is typically only 5-10μm.</p>
 <ul>
 <li><code>--zmin</code> and <code>--zmax</code> are required.</li>
 <li>One of <code>--thin-3d-z-levels</code> or <code>--thin-3d-n-z-levels</code> must be provided.</li>
@@ -1697,17 +1655,6 @@ finite set of z levels across <code>[zmin, zmax]</code>.</p>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
-<h3 id="current-3d-scope">Current 3D Scope<a class="headerlink" href="#current-3d-scope" title="Permanent link">&para;</a></h3>
-<p>Current 3D support should be understood as a 2D tiled pipeline with 3D-aware
-anchor geometry.</p>
-<ul>
-<li>tile ownership and boundary handling are still defined only in x-y</li>
-<li>standard 3D does not support external fixed anchors</li>
-<li>standard 3D requires positive <code>--anchor-dist</code>; <code>--radius</code> affects weighting
-  and padding but not the fixed BCC neighborhood</li>
-<li>thin 3D and standard 3D both use <code>--half-life-dist</code> for distance-based
-  anchor weighting</li>
-</ul>
 <h2 id="process-multiple-samples">Process multiple samples<a class="headerlink" href="#process-multiple-samples" title="Permanent link">&para;</a></h2>
 <p>If you want to project the same model onto multiple datasets/samples, you can use <code>--sample-list</code> to pass a tsv file containing all samples' information. (In this case, <code>--in-tsv</code> and <code>--in-index</code> are ignored.)
 Note: all other parameters are shared across samples, so the input files should have the same structure.</p>
@@ -1726,7 +1673,8 @@ sample_id, path to the transcript file created by <code>pts2tiles</code>, path t
 <p>Files are written with the prefix specified by <code>--out-pref</code> (or inferred from <code>--out</code>).</p>
 <h3 id="main-output">Main output<a class="headerlink" href="#main-output" title="Permanent link">&para;</a></h3>
 <p><code>&lt;prefix&gt;.bin</code> - Main pixel-level output in binary format when <code>--output-binary</code> is set.</p>
-<p>When <code>--single-molecule</code> is enabled, each binary record stores coordinates, <code>featureIdx</code>, and the top-factor pairs.</p>
+<p>When <code>--single-feature-pixel</code> is enabled, each binary record stores integer pixel or voxel coordinates, <code>featureIdx</code>, and the top-factor pairs.</p>
+<p>When <code>--single-molecule</code> is enabled, each binary record stores raw float coordinates, <code>featureIdx</code>, and the top-factor pairs.</p>
 <p><code>&lt;prefix&gt;.tsv</code> - Main pixel-level output in text format when <code>--output-binary</code> is not set.</p>
 <p><code>&lt;prefix&gt;.index</code> - Binary index for the main output. This is written for both text and binary modes. In 2D binary mode, the index describes regular square tiles directly.</p>
 <p><code>&lt;prefix&gt;.anchors.tsv</code> - Anchor-level top-factor assignments when <code>--output-anchors</code> is set.</p>
