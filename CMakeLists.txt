@@ -263,7 +263,7 @@ target_link_libraries(${APP_EXE} PRIVATE
     ZLIB::ZLIB
     BZip2::BZip2
     ${LibLZMA_LIBRARIES}
-    stdc++fs
+    $<$<CXX_COMPILER_ID:GNU>:stdc++fs>
 )
 
 
