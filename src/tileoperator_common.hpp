@@ -9,6 +9,7 @@
 #include <exception>
 #include <mutex>
 #include <thread>
+#include <vector>
 #include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
 #include <tbb/parallel_for.h>
@@ -28,11 +29,11 @@ inline void append_format(std::string& out, const char* fmtStr, Args... args) {
         out.append(stackBuf, static_cast<size_t>(n));
         return;
     }
-    std::string heapBuf(static_cast<size_t>(n) + 1, '\0');
-    if (std::snprintf(heapBuf.data(), heapBuf.size(), fmtStr, args...) != n) {
+    std::string temp(static_cast<size_t>(n), '\0');
+    if (std::snprintf(temp.data(), temp.size() + 1, fmtStr, args...) != n) {
         error("%s: snprintf failed", __func__);
     }
-    out.append(heapBuf.data(), static_cast<size_t>(n));
+    out.append(temp);
 }
 
 } // namespace fmt

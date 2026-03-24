@@ -491,7 +491,7 @@ Eigen::Matrix<typename Eigen::NumTraits<typename Derived::Scalar>::Real,
 {
     using Scalar     = typename Derived::Scalar;
     using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
-    using Index      = typename Eigen::Index;
+    using Index      = Eigen::Index;
     // Reject complex types at compile time
     static_assert(!Eigen::NumTraits<Scalar>::IsComplex,
                   "columnMedians: complex types are not supported.");

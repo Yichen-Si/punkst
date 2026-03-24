@@ -494,7 +494,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatAnchorR
             __func__, topVals.rows(), topIds.rows(), anchors.size());
     }
     ResultBuf result(ticket, xmin, xmax, ymin, ymax);
-    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
+    auto& lines = result.template getPayload<typename ResultBuf::TextLines>();
     char buf[512];
     for (size_t i = 0; i < nrows; ++i) {
         if (anchors[i].x < xmin + r || anchors[i].x >= xmax - r ||
@@ -561,7 +561,7 @@ std::vector<std::unordered_map<uint32_t, float>>* phi0) {
         assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
+    auto& lines = result.template getPayload<typename ResultBuf::TextLines>();
     int32_t nrows = topVals.rows();
     char buf[65536];
     const auto* extInput = useExtended_ ? &tileData.extended2D() : nullptr;
@@ -677,7 +677,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         assert(phi0 != nullptr && phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
+    auto& lines = result.template getPayload<typename ResultBuf::TextLines>();
     size_t N = tileData.coords.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
@@ -757,7 +757,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
         assert(phi0->size() == size_t(topVals.rows()));
     }
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-    auto& lines = result.getPayload<typename ResultBuf::TextLines>();
+    auto& lines = result.template getPayload<typename ResultBuf::TextLines>();
     size_t N = tileData.coords.size();
     std::vector<bool> internal(N, 0);
     for (auto j : tileData.idxinternal) {
@@ -819,11 +819,11 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
     ResultBuf result(ticket, tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
     const auto* smInput = isSingleMoleculeMode() ? &tileData.singleMolecule2D() : nullptr;
     if (isSingleMoleculeMode()) {
-        result.emplacePayload<typename ResultBuf::OutputObjs2DFeatureFloat>();
+        result.template emplacePayload<typename ResultBuf::OutputObjs2DFeatureFloat>();
     } else if (isSingleFeaturePixelMode()) {
-        result.emplacePayload<typename ResultBuf::OutputObjs2DFeature>();
+        result.template emplacePayload<typename ResultBuf::OutputObjs2DFeature>();
     } else {
-        result.emplacePayload<typename ResultBuf::OutputObjs2D>();
+        result.template emplacePayload<typename ResultBuf::OutputObjs2D>();
     }
     size_t N = isSingleMoleculeMode() ? smInput->coordsFloat.size() : tileData.coords.size();
     std::vector<bool> internal(N, 0);
@@ -846,7 +846,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
                 rec.ks[k] = topIds(j, k);
                 rec.ps[k] = topVals(j, k);
             }
-            result.getPayload<typename ResultBuf::OutputObjs2DFeatureFloat>().emplace_back(std::move(rec));
+            result.template getPayload<typename ResultBuf::OutputObjs2DFeatureFloat>().emplace_back(std::move(rec));
         } else if (isSingleFeaturePixelMode()) {
             PixTopProbsFeature<int32_t> rec(tileData.coords[j], tileData.rowFeatureIdx[j]);
             rec.ks.resize(topk_);
@@ -855,7 +855,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
                 rec.ks[k] = topIds(j, k);
                 rec.ps[k] = topVals(j, k);
             }
-            result.getPayload<typename ResultBuf::OutputObjs2DFeature>().emplace_back(std::move(rec));
+            result.template getPayload<typename ResultBuf::OutputObjs2DFeature>().emplace_back(std::move(rec));
         } else {
             PixTopProbs<int32_t> rec(tileData.coords[j]);
             rec.ks.resize(topk_);
@@ -864,7 +864,7 @@ typename Tiles2MinibatchBase<T>::ResultBuf Tiles2MinibatchBase<T>::formatPixelRe
                 rec.ks[k] = topIds(j, k);
                 rec.ps[k] = topVals(j, k);
             }
-            result.getPayload<typename ResultBuf::OutputObjs2D>().emplace_back(std::move(rec));
+            result.template getPayload<typename ResultBuf::OutputObjs2D>().emplace_back(std::move(rec));
         }
     }
     return result;
