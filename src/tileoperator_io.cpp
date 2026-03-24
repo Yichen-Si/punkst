@@ -259,9 +259,15 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs<float>& R) con
     R.ks.resize(k_);
     R.ps.resize(k_);
     for (int i = 0; i < k_; ++i) {
+        R.ks[i] = -1;
+        R.ps[i] = 0.0f;
         if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
             !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
+            R.ks[i] = -1;
+            R.ps[i] = 0.0f;
+            if (!suppressKpParseWarnings_) {
+                warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
+            }
         }
     }
     return true;
@@ -313,9 +319,15 @@ bool TileOperator::parseLine(const std::string& line, PixTopProbs3D<float>& R) c
     R.ks.resize(k_);
     R.ps.resize(k_);
     for (int i = 0; i < k_; ++i) {
+        R.ks[i] = -1;
+        R.ps[i] = 0.0f;
         if (!str2int32(tokens[icol_ks_[i]], R.ks[i]) ||
             !str2float(tokens[icol_ps_[i]], R.ps[i])) {
-            warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
+            R.ks[i] = -1;
+            R.ps[i] = 0.0f;
+            if (!suppressKpParseWarnings_) {
+                warning("%s: Error parsing K,P from line: %s", __func__, line.c_str());
+            }
         }
     }
     return true;

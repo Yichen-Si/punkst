@@ -70,9 +70,11 @@ public:
 
     /* Small get/set helpers */
     int32_t getK() const { return k_; }
+    std::vector<uint32_t> getKvec() const { return kvec_; }
     int32_t getTileSize() const { return formatInfo_.tileSize; }
     float getPixelResolution() const { return formatInfo_.pixelResolution; }
     bool hasFeatureIndex() const { return (mode_ & 0x40u) != 0; }
+    const std::vector<std::string>& getFeatureNames() const { return featureNames_; }
     float getPixelResolutionZ() const {
         if ((mode_ & 0x10) && (mode_ & 0x20u) && formatInfo_.pixelResolutionZ > 0.0f) {
             return formatInfo_.pixelResolutionZ;
@@ -99,6 +101,16 @@ public:
     }
     void setThreads(int32_t threads) {
         threads_ = std::max(0, threads);
+    }
+    void setNullPlaceholders(const std::string& nullK, const std::string& nullP) {
+        if (nullK.empty() || nullP.empty()) {
+            error("%s: null placeholders must be non-empty", __func__);
+        }
+        nullK_ = nullK;
+        nullP_ = nullP;
+    }
+    void setSuppressKpParseWarnings(bool suppress) {
+        suppressKpParseWarnings_ = suppress;
     }
     void setPixelResolutionOverride(float resXY, float resZ = -1.0f);
     void setRasterPixelResolution(float resXY);
@@ -155,11 +167,21 @@ public:
     /* Joining, annotating, and aggregation */
     void merge(const std::vector<std::string>& otherFiles,
         const std::string& outPrefix, std::vector<uint32_t> k2keep = {},
-        bool binaryOutput = false, bool keepAllMain = false,
-        const std::string& featureDictFile = "");
+        bool binaryOutput = false, bool keepAllMain = false, bool keepAll = false,
+        const std::string& featureDictFile = "",
+        const std::vector<std::string>& mergePrefixes = {});
     void annotate(const std::string& ptPrefix, const std::string& outPrefix,
         int32_t icol_x, int32_t icol_y, int32_t icol_z = -1,
-        int32_t icol_f = -1, const std::string& featureDictFile = "");
+        int32_t icol_f = -1, const std::string& featureDictFile = "",
+        bool annoKeepAll = false);
+    void annotateMerged(const std::vector<std::string>& otherFiles,
+        const std::string& ptPrefix, const std::string& outPrefix,
+        std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
+        int32_t icol_z = -1, int32_t icol_f = -1,
+        bool keepAllMain = false, bool keepAll = false,
+        const std::vector<std::string>& mergePrefixes = {},
+        const std::string& featureDictFile = "",
+        bool annoKeepAll = false);
     void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
         int32_t icol_s = -1, int32_t icol_z = -1, int32_t icol_f = -1,
@@ -256,6 +278,7 @@ private:
     std::vector<uint32_t> icol_ks_, icol_ps_;
     int32_t k_ = 0, K_ = 0;
     std::vector<uint32_t> kvec_;
+    std::vector<std::string> featureNames_;
     uint32_t mode_ = 0;
     IndexHeader formatInfo_;
     std::vector<TileInfo> blocks_all_, blocks_;
@@ -271,6 +294,9 @@ private:
     bool hasRasterResolutionOverride_ = false;
     float rasterPixelResolution_ = -1.0f;
     int32_t rasterRatioXY_ = 1;
+    std::string nullK_ = "-1";
+    std::string nullP_ = "0";
+    bool suppressKpParseWarnings_ = false;
 
     bool isTextInput() const { return ((mode_ & 0x1) == 0); }
     bool isTextStdinInput() const { return dataFile_ == "-" || dataFile_ == "/dev/stdin"; }
@@ -298,6 +324,7 @@ private:
     void applyUnsetSourceResolutionOverrides(
         const std::vector<TileOperator*>& opPtrs,
         const char* funcName) const;
+    void writeIndexHeaderWithFeatureDict(int fdIndex, const IndexHeader& idxHeader) const;
     void buildPreparedRegionPlan(const PreparedRegionMask2D& region,
         std::vector<size_t>& activeOrder,
         std::vector<uint8_t>& activeStates) const;
@@ -370,20 +397,21 @@ private:
         const std::vector<uint32_t>& k2keep) const;
     void mergeTiles2D(const std::vector<TileKey>& mainTiles,
         const std::vector<MergeSourcePlan>& mergePlans,
-        bool keepAllMain,
+        bool keepAllMain, bool keepAll,
         bool binaryOutput,
         FILE* fp, int fdMain, int fdIndex,
         long& currentOffset);
     void mergeTiles3D(const std::vector<TileKey>& mainTiles,
         const std::vector<MergeSourcePlan>& mergePlans,
-        bool keepAllMain,
+        bool keepAllMain, bool keepAll,
         bool binaryOutput,
         FILE* fp, int fdMain, int fdIndex,
         long& currentOffset);
     void mergeSingleMolecule(const std::vector<std::string>& otherFiles,
         const std::string& outPrefix, std::vector<uint32_t> k2keep,
-        bool binaryOutput, bool keepAllMain,
-        const std::string& featureDictFile);
+        bool binaryOutput, bool keepAllMain, bool keepAll,
+        const std::string& featureDictFile,
+        const std::vector<std::string>& mergePrefixes);
     // Impl for probDot
     void probDotTiles2D(const std::set<TileKey>& commonTiles,
         const std::vector<TileOperator*>& opPtrs,
@@ -406,13 +434,22 @@ private:
     // Impl for annotate
     void annotateTiles2D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y,
-        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
+        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+        bool annoKeepAll);
     void annotateTiles3D(const std::vector<TileKey>& tiles,
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
-        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset);
+        uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+        bool annoKeepAll);
     void annotateSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
         int32_t icol_x, int32_t icol_y, int32_t icol_z,
-        int32_t icol_f, const std::string& featureDictFile);
+        int32_t icol_f, const std::string& featureDictFile, bool annoKeepAll);
+    void annotateMergedSingleMolecule(const std::vector<std::string>& otherFiles,
+        const std::string& ptPrefix, const std::string& outPrefix,
+        std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
+        int32_t icol_z, int32_t icol_f, bool keepAllMain, bool keepAll,
+        const std::vector<std::string>& mergePrefixes,
+        const std::string& featureDictFile, bool annoKeepAll);
+    void appendTopProbsText(std::string& out, const TopProbs& probs) const;
     void pix2cellSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
         int32_t icol_s, int32_t icol_z, int32_t icol_f,

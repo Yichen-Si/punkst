@@ -24,6 +24,7 @@ using tileoperator_detail::io::TileWriteResult;
 using tileoperator_detail::io::write_tile_result;
 using tileoperator_detail::merge::append_placeholder_pairs;
 using tileoperator_detail::merge::append_top_probs_prefix;
+using tileoperator_detail::merge::build_merge_column_names;
 using tileoperator_detail::merge::tile_key_from_source_xy;
 using tileoperator_detail::parallel::process_tile_results_parallel;
 
@@ -39,11 +40,127 @@ std::unordered_map<std::string, uint32_t> buildFeatureIndexMap(const std::vector
     return out;
 }
 
-uint32_t require_feature_idx(const std::unordered_map<std::string, uint32_t>& featureIndex,
+struct FeatureRemapPlan {
+    std::vector<std::string> canonicalNames;
+    std::unordered_map<std::string, uint32_t> canonicalIndex;
+    std::vector<std::vector<int32_t>> localToCanonical;
+    std::vector<std::vector<int32_t>> canonicalToLocal;
+};
+
+bool isIdentityFeatureRemap(const std::vector<int32_t>& localToCanonical) {
+    for (size_t i = 0; i < localToCanonical.size(); ++i) {
+        if (localToCanonical[i] != static_cast<int32_t>(i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void remapFeatureMapToCanonical(std::map<TileOperator::PixelFeatureKey2, TopProbs>& pixelMap,
+    const std::vector<int32_t>& localToCanonical, const char* funcName) {
+    if (pixelMap.empty() || localToCanonical.empty() || isIdentityFeatureRemap(localToCanonical)) {
+        return;
+    }
+    std::map<TileOperator::PixelFeatureKey2, TopProbs> remapped;
+    for (auto& kv : pixelMap) {
+        const uint32_t localFeatureIdx = std::get<2>(kv.first);
+        if (localFeatureIdx >= localToCanonical.size()) {
+            error("%s: local feature index %u exceeds remap size %zu",
+                funcName, localFeatureIdx, localToCanonical.size());
+        }
+        const int32_t canonicalFeatureIdx = localToCanonical[localFeatureIdx];
+        if (canonicalFeatureIdx < 0) {
+            error("%s: missing canonical mapping for local feature index %u",
+                funcName, localFeatureIdx);
+        }
+        remapped.emplace(
+            std::make_tuple(std::get<0>(kv.first), std::get<1>(kv.first),
+                static_cast<uint32_t>(canonicalFeatureIdx)),
+            std::move(kv.second));
+    }
+    pixelMap.swap(remapped);
+}
+
+void remapFeatureMapToCanonical(std::map<TileOperator::PixelFeatureKey3, TopProbs>& pixelMap,
+    const std::vector<int32_t>& localToCanonical, const char* funcName) {
+    if (pixelMap.empty() || localToCanonical.empty() || isIdentityFeatureRemap(localToCanonical)) {
+        return;
+    }
+    std::map<TileOperator::PixelFeatureKey3, TopProbs> remapped;
+    for (auto& kv : pixelMap) {
+        const uint32_t localFeatureIdx = std::get<3>(kv.first);
+        if (localFeatureIdx >= localToCanonical.size()) {
+            error("%s: local feature index %u exceeds remap size %zu",
+                funcName, localFeatureIdx, localToCanonical.size());
+        }
+        const int32_t canonicalFeatureIdx = localToCanonical[localFeatureIdx];
+        if (canonicalFeatureIdx < 0) {
+            error("%s: missing canonical mapping for local feature index %u",
+                funcName, localFeatureIdx);
+        }
+        remapped.emplace(
+            std::make_tuple(std::get<0>(kv.first), std::get<1>(kv.first),
+                std::get<2>(kv.first), static_cast<uint32_t>(canonicalFeatureIdx)),
+            std::move(kv.second));
+    }
+    pixelMap.swap(remapped);
+}
+
+FeatureRemapPlan buildFeatureRemapPlan(const std::vector<TileOperator*>& opPtrs, const char* funcName) {
+    if (opPtrs.empty()) {
+        error("%s: no operators provided for feature remapping", funcName);
+    }
+    FeatureRemapPlan plan;
+    plan.localToCanonical.resize(opPtrs.size());
+    plan.canonicalToLocal.resize(opPtrs.size());
+    plan.canonicalNames = opPtrs[0]->getFeatureNames();
+    if (plan.canonicalNames.empty()) {
+        error("%s: main input is feature-bearing but has no embedded feature dictionary", funcName);
+    }
+    plan.canonicalIndex = buildFeatureIndexMap(plan.canonicalNames);
+    for (size_t srcIdx = 1; srcIdx < opPtrs.size(); ++srcIdx) {
+        const TileOperator* op = opPtrs[srcIdx];
+        if (!op->hasFeatureIndex()) {
+            continue;
+        }
+        if (op->getFeatureNames().empty()) {
+            error("%s: source %zu is feature-bearing but has no embedded feature dictionary",
+                funcName, srcIdx);
+        }
+        for (const auto& featureName : op->getFeatureNames()) {
+            if (plan.canonicalIndex.emplace(featureName,
+                    static_cast<uint32_t>(plan.canonicalNames.size())).second) {
+                plan.canonicalNames.push_back(featureName);
+            }
+        }
+    }
+    for (size_t srcIdx = 0; srcIdx < opPtrs.size(); ++srcIdx) {
+        const TileOperator* op = opPtrs[srcIdx];
+        if (!op->hasFeatureIndex()) {
+            continue;
+        }
+        const auto& sourceNames = op->getFeatureNames();
+        plan.localToCanonical[srcIdx].assign(sourceNames.size(), -1);
+        plan.canonicalToLocal[srcIdx].assign(plan.canonicalNames.size(), -1);
+        for (size_t localIdx = 0; localIdx < sourceNames.size(); ++localIdx) {
+            const auto it = plan.canonicalIndex.find(sourceNames[localIdx]);
+            if (it == plan.canonicalIndex.end()) {
+                error("%s: feature '%s' is missing from canonical dictionary",
+                    funcName, sourceNames[localIdx].c_str());
+            }
+            const int32_t canonicalIdx = static_cast<int32_t>(it->second);
+            plan.localToCanonical[srcIdx][localIdx] = canonicalIdx;
+            plan.canonicalToLocal[srcIdx][canonicalIdx] = static_cast<int32_t>(localIdx);
+        }
+    }
+    return plan;
+}
+
+int32_t require_feature_idx(const std::unordered_map<std::string, uint32_t>& featureIndex,
     const std::string& featureName, const char* funcName) {
     auto it = featureIndex.find(featureName);
     if (it == featureIndex.end()) {
-        error("%s: unknown feature name '%s'", funcName, featureName.c_str());
+        return -1;
     }
     return it->second;
 }
@@ -92,41 +209,14 @@ void accumulate_probdot_maps(const std::map<Key, TopProbs>& mergedMap,
 } // namespace
 
 std::vector<std::string> TileOperator::loadFeatureNames(const std::string& featureDictFile) const {
-    if (featureDictFile.empty()) {
-        warning("%s: feature dictionary file is required", __func__);
+    (void) featureDictFile;
+    if (!hasFeatureIndex()) {
+        error("%s: feature names requested from a non-feature-bearing input", __func__);
     }
-    const bool fromStdin = (featureDictFile == "-");
-    std::ifstream in;
-    std::istream* input = nullptr;
-    if (fromStdin) {
-        input = &std::cin;
-    } else {
-        in.open(featureDictFile);
-        if (!in.is_open()) {
-            error("%s: cannot open feature dictionary %s", __func__, featureDictFile.c_str());
-        }
-        input = &in;
+    if (featureNames_.empty()) {
+        error("%s: feature-bearing input requires embedded feature names in the index", __func__);
     }
-    std::vector<std::string> featureNames;
-    std::string line;
-    while (std::getline(*input, line)) {
-        if (line.empty() || line[0] == '#') {
-            continue;
-        }
-        size_t tabPos = line.find('\t');
-        std::string name = (tabPos == std::string::npos) ? line : line.substr(0, tabPos);
-        if (!name.empty() && name.back() == '\r') {
-            name.pop_back();
-        }
-        if (name.empty()) {
-            error("%s: empty feature name in dictionary %s", __func__, fromStdin ? "<stdin>" : featureDictFile.c_str());
-        }
-        featureNames.push_back(std::move(name));
-    }
-    if (featureNames.empty()) {
-        error("%s: no feature names found in %s", __func__, fromStdin ? "<stdin>" : featureDictFile.c_str());
-    }
-    return featureNames;
+    return featureNames_;
 }
 
 int32_t TileOperator::loadTileToMapFeature(const TileKey& key,
@@ -227,14 +317,7 @@ void TileOperator::dumpTSVSingleMolecule(const std::string& outPrefix,
         }
         notice("%s: %lu tiles intersect the queried region", __func__, activeOrder.size());
     }
-    std::vector<std::string> featureNames;
-    bool useFeatureNames = false;
-    if (featureDictFile.empty()) {
-        warning("%s: feature dictionary is not provided, feature indices will be used in tsv output", __func__);
-    } else {
-        featureNames = loadFeatureNames(featureDictFile);
-        useFeatureNames = true;
-    }
+    const std::vector<std::string> featureNames = loadFeatureNames(featureDictFile);
     resetReader();
 
     FILE* fp = stdout;
@@ -323,7 +406,7 @@ void TileOperator::dumpTSVSingleMolecule(const std::string& outPrefix,
                 ks = std::move(temp.ks);
                 ps = std::move(temp.ps);
             }
-            if (useFeatureNames && featureIdx >= featureNames.size()) {
+            if (featureIdx >= featureNames.size()) {
                 error("%s: feature index %u out of range for dictionary of size %zu", __func__, featureIdx, featureNames.size());
             }
             if (checkBound && !queryBox_.contains(x, y)) {
@@ -337,7 +420,7 @@ void TileOperator::dumpTSVSingleMolecule(const std::string& outPrefix,
                     continue;
                 }
             }
-            std::string featureName = useFeatureNames ? featureNames[featureIdx] : std::to_string(featureIdx);
+            const std::string& featureName = featureNames[featureIdx];
             if (coord_dim_ == 3) {
                 if (std::fprintf(fp, "%.*f\t%.*f\t%.*f\t%s",
                     coordDigits, x, coordDigits, y, coordDigits, z,
@@ -412,7 +495,7 @@ void TileOperator::dumpTSVSingleMolecule(const std::string& outPrefix,
 
 void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
     int32_t icol_x, int32_t icol_y, int32_t icol_z,
-    int32_t icol_f, const std::string& featureDictFile) {
+    int32_t icol_f, const std::string& featureDictFile, bool annoKeepAll) {
     if (icol_x < 0 || icol_y < 0 || icol_f < 0) {
         error("%s: icol_x, icol_y, and icol_f must be >= 0", __func__);
     }
@@ -469,7 +552,9 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
         if (use3d) {
             std::map<PixelFeatureKey3, TopProbs> pixelMap;
             if (loadTileToMapFeature3D(tile, pixelMap, &tileStream) <= 0) {
-                return result;
+                if (!annoKeepAll) {
+                    return result;
+                }
             }
             auto it = reader.get_tile_iterator(tile.row, tile.col);
             if (!it) {
@@ -487,17 +572,26 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
                 if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y) || !str2float(tokens[icol_z], z)) {
                     error("%s: Invalid coordinates in line: %s", funcName, s.c_str());
                 }
-                const uint32_t featureIdx = require_feature_idx(featureIndex, tokens[icol_f], funcName);
+                const auto fit = featureIndex.find(tokens[icol_f]);
+                if (fit == featureIndex.end() && !annoKeepAll) {
+                    continue;
+                }
+                const bool featureKnown = (fit != featureIndex.end());
+                const uint32_t featureIdx = featureKnown ? fit->second : 0u;
                 const int32_t ix = static_cast<int32_t>(std::floor(x / resXY));
                 const int32_t iy = static_cast<int32_t>(std::floor(y / resXY));
                 const int32_t iz = static_cast<int32_t>(std::floor(z / resZ));
-                auto pit = pixelMap.find(std::make_tuple(ix, iy, iz, featureIdx));
-                if (pit == pixelMap.end()) {
+                auto pit = featureKnown ? pixelMap.find(std::make_tuple(ix, iy, iz, featureIdx)) : pixelMap.end();
+                if (pit == pixelMap.end() && !annoKeepAll) {
                     continue;
                 }
                 result.textData += s;
-                for (size_t k = 0; k < pit->second.ks.size(); ++k) {
-                    append_format(result.textData, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
+                if (pit == pixelMap.end()) {
+                    TopProbs missing;
+                    append_placeholder_pairs(missing, static_cast<uint32_t>(k_));
+                    appendTopProbsText(result.textData, missing);
+                } else {
+                    appendTopProbsText(result.textData, pit->second);
                 }
                 result.textData.push_back('\n');
                 ++result.n;
@@ -507,7 +601,9 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
 
         std::map<PixelFeatureKey2, TopProbs> pixelMap;
         if (loadTileToMapFeature(tile, pixelMap, &tileStream) <= 0) {
-            return result;
+            if (!annoKeepAll) {
+                return result;
+            }
         }
         auto it = reader.get_tile_iterator(tile.row, tile.col);
         if (!it) {
@@ -525,16 +621,25 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
             if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
                 error("%s: Invalid coordinates in line: %s", funcName, s.c_str());
             }
-            const uint32_t featureIdx = require_feature_idx(featureIndex, tokens[icol_f], funcName);
+            const auto fit = featureIndex.find(tokens[icol_f]);
+            if (fit == featureIndex.end() && !annoKeepAll) {
+                continue;
+            }
+            const bool featureKnown = (fit != featureIndex.end());
+            const uint32_t featureIdx = featureKnown ? fit->second : 0u;
             const int32_t ix = static_cast<int32_t>(std::floor(x / resXY));
             const int32_t iy = static_cast<int32_t>(std::floor(y / resXY));
-            auto pit = pixelMap.find(std::make_tuple(ix, iy, featureIdx));
-            if (pit == pixelMap.end()) {
+            auto pit = featureKnown ? pixelMap.find(std::make_tuple(ix, iy, featureIdx)) : pixelMap.end();
+            if (pit == pixelMap.end() && !annoKeepAll) {
                 continue;
             }
             result.textData += s;
-            for (size_t k = 0; k < pit->second.ks.size(); ++k) {
-                append_format(result.textData, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
+            if (pit == pixelMap.end()) {
+                TopProbs missing;
+                append_placeholder_pairs(missing, static_cast<uint32_t>(k_));
+                appendTopProbsText(result.textData, missing);
+            } else {
+                appendTopProbsText(result.textData, pit->second);
             }
             result.textData.push_back('\n');
             ++result.n;
@@ -549,6 +654,354 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
     };
     process_tile_results_parallel(tiles, threads_,
         [&]() { return std::ifstream(); },
+        buildTileResult, writeTileResult);
+
+    std::fclose(fp);
+    close(fdIndex);
+}
+
+void TileOperator::annotateMergedSingleMolecule(const std::vector<std::string>& otherFiles,
+    const std::string& ptPrefix, const std::string& outPrefix,
+    std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
+    int32_t icol_z, int32_t icol_f, bool keepAllMain, bool keepAll,
+    const std::vector<std::string>& mergePrefixes,
+    const std::string& featureDictFile, bool annoKeepAll) {
+    if (icol_x < 0 || icol_y < 0 || icol_f < 0) {
+        error("%s: icol_x, icol_y, and icol_f must be >= 0", __func__);
+    }
+    if (icol_x == icol_y || icol_f == icol_x || icol_f == icol_y) {
+        error("%s: coordinate and feature columns must be distinct", __func__);
+    }
+    if (coord_dim_ == 3 && (icol_z < 0 || icol_z == icol_x || icol_z == icol_y || icol_z == icol_f)) {
+        error("%s: Valid icol_z distinct from icol_x/icol_y/icol_f is required for 3D input", __func__);
+    }
+    std::vector<std::unique_ptr<TileOperator>> ops;
+    std::vector<TileOperator*> opPtrs;
+    opPtrs.push_back(this);
+    for (const auto& f : otherFiles) {
+        const std::string idxFile = f.substr(0, f.find_last_of('.')) + ".index";
+        struct stat buffer;
+        if (stat(idxFile.c_str(), &buffer) != 0) {
+            error("%s: Index file %s not found", __func__, idxFile.c_str());
+        }
+        ops.push_back(std::make_unique<TileOperator>(f, idxFile));
+        opPtrs.push_back(ops.back().get());
+    }
+    const uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
+    if (!mergePrefixes.empty() && mergePrefixes.size() != nSources) {
+        error("%s: expected %u merge prefixes, got %zu", __func__, nSources, mergePrefixes.size());
+    }
+    if (!k2keep.empty()) { assert(k2keep.size() == nSources); }
+    if (k2keep.empty()) {
+        for (const auto* op : opPtrs) {
+            k2keep.push_back(op->getK());
+        }
+    } else {
+        for (uint32_t i = 0; i < nSources; ++i) {
+            if (k2keep[i] > opPtrs[i]->getK()) {
+                warning("%s: Invalid value k (%d) specified for the %d-th source", __func__, k2keep[i], i);
+                k2keep[i] = opPtrs[i]->getK();
+            }
+        }
+    }
+    if (nSources > 7) {
+        const int32_t k = *std::min_element(k2keep.begin(), k2keep.end());
+        k2keep.assign(nSources, static_cast<uint32_t>(k));
+        warning("%s: More than 7 files to merge, keep %d values each", __func__, k);
+    }
+    bool seenNonFeature = false;
+    for (size_t i = 0; i < opPtrs.size(); ++i) {
+        if (!opPtrs[i]->hasFeatureIndex()) {
+            seenNonFeature = true;
+        } else if (seenNonFeature) {
+            error("%s: feature-bearing sources must come before feature-less auxiliary sources", __func__);
+        }
+    }
+    const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
+    const FeatureRemapPlan featureRemap = buildFeatureRemapPlan(opPtrs, __func__);
+    const auto featureIndex = buildFeatureIndexMap(featureRemap.canonicalNames);
+    const bool use3d = (coord_dim_ == 3);
+    const size_t totalK = std::accumulate(k2keep.begin(), k2keep.end(), size_t(0));
+
+    const std::string ptData = ptPrefix + ".tsv";
+    const std::string ptIndex = ptPrefix + ".index";
+    TileReader reader(ptData, ptIndex);
+    assert(reader.getTileSize() == formatInfo_.tileSize);
+    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
+    const float resZ = use3d ? getPixelResolutionZ() : 1.0f;
+
+    const std::string outFile = outPrefix + ".tsv";
+    const std::string outIndex = outPrefix + ".index";
+    FILE* fp = std::fopen(outFile.c_str(), "w");
+    if (!fp) error("Cannot open output file %s", outFile.c_str());
+    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+
+    uint32_t ntok = static_cast<uint32_t>(std::max({icol_x, icol_y, icol_f}));
+    if (use3d) { ntok = std::max(ntok, static_cast<uint32_t>(icol_z)); }
+    ntok += 1;
+    if (!reader.headerLine.empty()) {
+        std::string headerStr = reader.headerLine;
+        for (const auto& colName : build_merge_column_names(k2keep, mergePrefixes)) {
+            headerStr += "\t" + colName;
+        }
+        std::fprintf(fp, "%s\n", headerStr.c_str());
+    }
+    long currentOffset = std::ftell(fp);
+
+    IndexHeader idxHeader = formatInfo_;
+    idxHeader.mode &= ~0x47u;
+    idxHeader.recordSize = 0;
+    if (!idxHeader.packKvec(k2keep)) {
+        warning("%s: Too many input fields", __func__);
+    }
+    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+        error("%s: Index header write error", __func__);
+    }
+
+    std::vector<TileKey> tiles;
+    reader.getTileList(tiles);
+    const char* funcName = __func__;
+    notice("%s: Start annotating merged query with %lu tiles", funcName, tiles.size());
+    auto buildTileResult = [&](const TileKey& tile, std::vector<std::ifstream>& streams) {
+        TileWriteResult result;
+        result.tile = tile;
+        if (use3d) {
+            std::vector<std::map<TileKey, std::map<PixelFeatureKey2, TopProbs>>> auxFeature2D(nSources);
+            std::vector<std::map<TileKey, std::map<PixelFeatureKey3, TopProbs>>> auxFeature3D(nSources);
+            std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxPlain2D(nSources);
+            std::vector<std::map<TileKey, std::map<PixelKey3, TopProbs>>> auxPlain3D(nSources);
+            std::vector<std::set<TileKey>> missing(nSources);
+            auto findRecord = [&](size_t srcIdx, int32_t mainX, int32_t mainY, int32_t mainZ,
+                                  bool featureKnown, uint32_t featureIdx) -> const TopProbs* {
+                const MergeSourcePlan& plan = mergePlans[srcIdx];
+                const int32_t auxX = floorDivInt32(mainX, plan.ratioXY);
+                const int32_t auxY = floorDivInt32(mainY, plan.ratioXY);
+                const TileKey auxTile = tile_key_from_source_xy(auxX, auxY, plan.srcResXY, plan.tileSize);
+                if (missing[srcIdx].count(auxTile) > 0) {
+                    return nullptr;
+                }
+                if (plan.op->hasFeatureIndex()) {
+                    if (!featureKnown) {
+                        return nullptr;
+                    }
+                    if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
+                        auto tileIt = auxFeature2D[srcIdx].find(auxTile);
+                        if (tileIt == auxFeature2D[srcIdx].end()) {
+                            std::map<PixelFeatureKey2, TopProbs> auxMap;
+                            if (plan.op->loadTileToMapFeature(auxTile, auxMap, &streams[srcIdx]) == 0) {
+                                missing[srcIdx].insert(auxTile);
+                                return nullptr;
+                            }
+                            remapFeatureMapToCanonical(auxMap, featureRemap.localToCanonical[srcIdx], funcName);
+                            tileIt = auxFeature2D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                        }
+                        auto recIt = tileIt->second.find(std::make_tuple(auxX, auxY, featureIdx));
+                        return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+                    }
+                    const int32_t auxZ = floorDivInt32(mainZ, plan.ratioZ);
+                    auto tileIt = auxFeature3D[srcIdx].find(auxTile);
+                    if (tileIt == auxFeature3D[srcIdx].end()) {
+                        std::map<PixelFeatureKey3, TopProbs> auxMap;
+                        if (plan.op->loadTileToMapFeature3D(auxTile, auxMap, &streams[srcIdx]) == 0) {
+                            missing[srcIdx].insert(auxTile);
+                            return nullptr;
+                        }
+                        remapFeatureMapToCanonical(auxMap, featureRemap.localToCanonical[srcIdx], funcName);
+                        tileIt = auxFeature3D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                    }
+                    auto recIt = tileIt->second.find(std::make_tuple(auxX, auxY, auxZ, featureIdx));
+                    return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+                }
+                if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
+                    auto tileIt = auxPlain2D[srcIdx].find(auxTile);
+                    if (tileIt == auxPlain2D[srcIdx].end()) {
+                        std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
+                        if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[srcIdx]) == 0) {
+                            missing[srcIdx].insert(auxTile);
+                            return nullptr;
+                        }
+                        tileIt = auxPlain2D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                    }
+                    auto recIt = tileIt->second.find({auxX, auxY});
+                    return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+                }
+                const int32_t auxZ = floorDivInt32(mainZ, plan.ratioZ);
+                auto tileIt = auxPlain3D[srcIdx].find(auxTile);
+                if (tileIt == auxPlain3D[srcIdx].end()) {
+                    std::map<PixelKey3, TopProbs> auxMap;
+                    if (plan.op->loadTileToMap3D(auxTile, auxMap, &streams[srcIdx]) == 0) {
+                        missing[srcIdx].insert(auxTile);
+                        return nullptr;
+                    }
+                    tileIt = auxPlain3D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                }
+                auto recIt = tileIt->second.find(std::make_tuple(auxX, auxY, auxZ));
+                return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+            };
+
+            auto it = reader.get_tile_iterator(tile.row, tile.col);
+            if (!it) {
+                return result;
+            }
+            std::string s;
+            while (it->next(s)) {
+                if (s.empty() || s[0] == '#') continue;
+                std::vector<std::string> tokens;
+                split(tokens, "\t", s, ntok + 1, true, true, true);
+                if (tokens.size() < ntok) {
+                    error("%s: Invalid line: %s", funcName, s.c_str());
+                }
+                float x = 0.0f, y = 0.0f, z = 0.0f;
+                if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y) || !str2float(tokens[icol_z], z)) {
+                    error("%s: Invalid coordinates in line: %s", funcName, s.c_str());
+                }
+                const auto fit = featureIndex.find(tokens[icol_f]);
+                if (fit == featureIndex.end() && !annoKeepAll) {
+                    continue;
+                }
+                const bool featureKnown = (fit != featureIndex.end());
+                const uint32_t featureIdx = featureKnown ? fit->second : 0u;
+                const int32_t ix = static_cast<int32_t>(std::floor(x / resXY));
+                const int32_t iy = static_cast<int32_t>(std::floor(y / resXY));
+                const int32_t iz = static_cast<int32_t>(std::floor(z / resZ));
+                TopProbs merged;
+                merged.ks.reserve(totalK);
+                merged.ps.reserve(totalK);
+                bool anyFound = false;
+                bool allFound = true;
+                bool mainFound = false;
+                for (size_t srcIdx = 0; srcIdx < nSources; ++srcIdx) {
+                    const TopProbs* rec = findRecord(srcIdx, ix, iy, iz, featureKnown, featureIdx);
+                    if (rec == nullptr) {
+                        allFound = false;
+                        append_placeholder_pairs(merged, mergePlans[srcIdx].keepK);
+                    } else {
+                        anyFound = true;
+                        if (srcIdx == 0) {
+                            mainFound = true;
+                            ++result.nMain;
+                        }
+                        append_top_probs_prefix(merged, *rec, mergePlans[srcIdx].keepK);
+                    }
+                }
+                const bool emit = annoKeepAll || (keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound)));
+                if (!emit) {
+                    continue;
+                }
+                result.textData += s;
+                appendTopProbsText(result.textData, merged);
+                result.textData.push_back('\n');
+                ++result.n;
+            }
+            return result;
+        }
+
+        std::vector<std::map<TileKey, std::map<PixelFeatureKey2, TopProbs>>> auxFeature2D(nSources);
+        std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxPlain2D(nSources);
+        std::vector<std::set<TileKey>> missing(nSources);
+        auto findRecord2D = [&](size_t srcIdx, int32_t mainX, int32_t mainY,
+                                bool featureKnown, uint32_t featureIdx) -> const TopProbs* {
+            const MergeSourcePlan& plan = mergePlans[srcIdx];
+            const int32_t auxX = floorDivInt32(mainX, plan.ratioXY);
+            const int32_t auxY = floorDivInt32(mainY, plan.ratioXY);
+            const TileKey auxTile = tile_key_from_source_xy(auxX, auxY, plan.srcResXY, plan.tileSize);
+            if (missing[srcIdx].count(auxTile) > 0) {
+                return nullptr;
+            }
+            if (plan.op->hasFeatureIndex()) {
+                if (!featureKnown) {
+                    return nullptr;
+                }
+                auto tileIt = auxFeature2D[srcIdx].find(auxTile);
+                if (tileIt == auxFeature2D[srcIdx].end()) {
+                    std::map<PixelFeatureKey2, TopProbs> auxMap;
+                    if (plan.op->loadTileToMapFeature(auxTile, auxMap, &streams[srcIdx]) == 0) {
+                        missing[srcIdx].insert(auxTile);
+                        return nullptr;
+                    }
+                    remapFeatureMapToCanonical(auxMap, featureRemap.localToCanonical[srcIdx], funcName);
+                    tileIt = auxFeature2D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                }
+                auto recIt = tileIt->second.find(std::make_tuple(auxX, auxY, featureIdx));
+                return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+            }
+            auto tileIt = auxPlain2D[srcIdx].find(auxTile);
+            if (tileIt == auxPlain2D[srcIdx].end()) {
+                std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
+                if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[srcIdx]) == 0) {
+                    missing[srcIdx].insert(auxTile);
+                    return nullptr;
+                }
+                tileIt = auxPlain2D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+            }
+            auto recIt = tileIt->second.find({auxX, auxY});
+            return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+        };
+
+        auto it = reader.get_tile_iterator(tile.row, tile.col);
+        if (!it) {
+            return result;
+        }
+        std::string s;
+        while (it->next(s)) {
+            if (s.empty() || s[0] == '#') continue;
+            std::vector<std::string> tokens;
+            split(tokens, "\t", s, ntok + 1, true, true, true);
+            if (tokens.size() < ntok) {
+                error("%s: Invalid line: %s", funcName, s.c_str());
+            }
+            float x = 0.0f, y = 0.0f;
+            if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
+                error("%s: Invalid coordinates in line: %s", funcName, s.c_str());
+            }
+            const auto fit = featureIndex.find(tokens[icol_f]);
+            if (fit == featureIndex.end() && !annoKeepAll) {
+                continue;
+            }
+            const bool featureKnown = (fit != featureIndex.end());
+            const uint32_t featureIdx = featureKnown ? fit->second : 0u;
+            const int32_t ix = static_cast<int32_t>(std::floor(x / resXY));
+            const int32_t iy = static_cast<int32_t>(std::floor(y / resXY));
+            TopProbs merged;
+            merged.ks.reserve(totalK);
+            merged.ps.reserve(totalK);
+            bool anyFound = false;
+            bool allFound = true;
+            bool mainFound = false;
+            for (size_t srcIdx = 0; srcIdx < nSources; ++srcIdx) {
+                const TopProbs* rec = findRecord2D(srcIdx, ix, iy, featureKnown, featureIdx);
+                if (rec == nullptr) {
+                    allFound = false;
+                    append_placeholder_pairs(merged, mergePlans[srcIdx].keepK);
+                } else {
+                    anyFound = true;
+                    if (srcIdx == 0) {
+                        mainFound = true;
+                        ++result.nMain;
+                    }
+                    append_top_probs_prefix(merged, *rec, mergePlans[srcIdx].keepK);
+                }
+            }
+            const bool emit = annoKeepAll || (keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound)));
+            if (!emit) {
+                continue;
+            }
+            result.textData += s;
+            appendTopProbsText(result.textData, merged);
+            result.textData.push_back('\n');
+            ++result.n;
+        }
+        return result;
+    };
+
+    auto writeTileResult = [&](const TileWriteResult& result) {
+        write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
+        notice("%s: Annotated merged tile (%d, %d) with %u points",
+            funcName, result.tile.row, result.tile.col, result.n);
+    };
+    process_tile_results_parallel(tiles, threads_,
+        [&]() { return std::vector<std::ifstream>(nSources); },
         buildTileResult, writeTileResult);
 
     std::fclose(fp);
@@ -645,8 +1098,8 @@ void TileOperator::pix2cellSingleMolecule(const std::string& ptPrefix, const std
             if (use3d && !str2float(tokens[icol_z], z)) {
                 error("%s: Invalid z coordinate in line: %s", __func__, s.c_str());
             }
-            const uint32_t featureIdx = require_feature_idx(featureIndex, tokens[icol_f], __func__);
-
+            const int32_t featureIdx = require_feature_idx(featureIndex, tokens[icol_f], __func__);
+            if (featureIdx < 0) { continue; }
             const int32_t ix = static_cast<int32_t>(std::floor(x / resXY));
             const int32_t iy = static_cast<int32_t>(std::floor(y / resXY));
             const TopProbs* probs = nullptr;
@@ -794,6 +1247,7 @@ void TileOperator::probDotMultiSingleMolecule(const std::vector<std::string>& ot
             error("%s: Mixed 2D/3D inputs are not supported", __func__);
         }
     }
+    const FeatureRemapPlan featureRemap = buildFeatureRemapPlan(opPtrs, __func__);
     if (k2keep.empty()) {
         for (auto* op : opPtrs) {
             k2keep.push_back(op->getK());
@@ -845,6 +1299,7 @@ void TileOperator::probDotMultiSingleMolecule(const std::vector<std::string>& ot
                     mergedMap.clear();
                     break;
                 }
+                remapFeatureMapToCanonical(currentMap, featureRemap.localToCanonical[i], __func__);
                 if (first) {
                     if (opPtrs[i]->getK() > static_cast<int32_t>(k2keep[i])) {
                         for (auto& kv : currentMap) {
@@ -881,6 +1336,7 @@ void TileOperator::probDotMultiSingleMolecule(const std::vector<std::string>& ot
                     mergedMap.clear();
                     break;
                 }
+                remapFeatureMapToCanonical(currentMap, featureRemap.localToCanonical[i], __func__);
                 if (first) {
                     if (opPtrs[i]->getK() > static_cast<int32_t>(k2keep[i])) {
                         for (auto& kv : currentMap) {
@@ -970,13 +1426,10 @@ void TileOperator::probDotMultiSingleMolecule(const std::vector<std::string>& ot
 
 void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFiles,
     const std::string& outPrefix, std::vector<uint32_t> k2keep,
-    bool binaryOutput, bool keepAllMain,
-    const std::string& featureDictFile) {
-    std::vector<std::string> featureNames;
-    const bool writeFeatureNames = !binaryOutput && !featureDictFile.empty();
-    if (writeFeatureNames) {
-        featureNames = loadFeatureNames(featureDictFile);
-    }
+    bool binaryOutput, bool keepAllMain, bool keepAll,
+    const std::string& featureDictFile,
+    const std::vector<std::string>& mergePrefixes) {
+    (void) featureDictFile;
     std::vector<std::unique_ptr<TileOperator>> ops;
     std::vector<TileOperator*> opPtrs;
     opPtrs.push_back(this);
@@ -1017,6 +1470,18 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
         }
     }
     const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
+    const FeatureRemapPlan featureRemap = buildFeatureRemapPlan(opPtrs, __func__);
+    const std::vector<std::string>& featureNames = featureRemap.canonicalNames;
+    if (keepAll) {
+        for (size_t i = 1; i < mergePlans.size(); ++i) {
+            if (mergePlans[i].relation == MergeSourceRelation::Broadcast2DTo3D) {
+                error("%s: --merge-keep-all does not support 2D auxiliary sources when the main input is 3D", __func__);
+            }
+            if (!mergePlans[i].op->hasFeatureIndex()) {
+                error("%s: --merge-keep-all on single-molecule input requires all merged sources to carry feature indices", __func__);
+            }
+        }
+    }
     const bool use3d = (coord_dim_ == 3);
     const int32_t totalK = std::accumulate(k2keep.begin(), k2keep.end(), 0);
 
@@ -1063,20 +1528,20 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
         if (use3d) {
             headerStr += "\tz";
         }
-        headerStr += writeFeatureNames ? "\tfeature" : "\tfeature_idx";
-        uint32_t idx = 1;
-        for (uint32_t i = 0; i < nSources; ++i) {
-            for (uint32_t j = 0; j < k2keep[i]; ++j) {
-                headerStr += "\tK" + std::to_string(idx) + "\tP" + std::to_string(idx);
-                ++idx;
-            }
+        headerStr += "\tfeature";
+        for (const auto& colName : build_merge_column_names(k2keep, mergePrefixes)) {
+            headerStr += "\t" + colName;
         }
         headerStr += "\n";
         std::fprintf(fp, "%s", headerStr.c_str());
         currentOffset = std::ftell(fp);
     }
+    configureFeatureDictionaryHeader(idxHeader, featureNames, __func__);
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
         error("%s: index header write error", __func__);
+    }
+    if (!writeFeatureDictionaryPayload(fdIndex, idxHeader, featureNames)) {
+        error("%s: feature dictionary write error", __func__);
     }
 
     const char* funcName = __func__;
@@ -1089,41 +1554,70 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
             if (loadTileToMapFeature3D(tile, mainMap, &streams[0]) <= 0) {
                 return result;
             }
+            remapFeatureMapToCanonical(mainMap, featureRemap.localToCanonical[0], funcName);
             result.nMain = static_cast<uint32_t>(mainMap.size());
             std::vector<std::map<TileKey, std::map<PixelFeatureKey2, TopProbs>>> auxFeature2D(nSources);
             std::vector<std::map<TileKey, std::map<PixelFeatureKey3, TopProbs>>> auxFeature3D(nSources);
             std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxPlain2D(nSources);
             std::vector<std::map<TileKey, std::map<PixelKey3, TopProbs>>> auxPlain3D(nSources);
             std::vector<std::set<TileKey>> missing(nSources);
+            std::vector<std::map<PixelFeatureKey3, TopProbs>> sourceTileMaps(nSources);
+            sourceTileMaps[0] = mainMap;
+            if (keepAll) {
+                for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                    mergePlans[srcIdx].op->loadTileToMapFeature3D(tile, sourceTileMaps[srcIdx], &streams[srcIdx]);
+                    remapFeatureMapToCanonical(sourceTileMaps[srcIdx], featureRemap.localToCanonical[srcIdx], funcName);
+                }
+            }
+            std::set<PixelFeatureKey3> outputKeys;
             for (const auto& kv : mainMap) {
-                const int32_t mainX = std::get<0>(kv.first);
-                const int32_t mainY = std::get<1>(kv.first);
-                const int32_t mainZ = std::get<2>(kv.first);
-                const uint32_t featureIdx = std::get<3>(kv.first);
+                outputKeys.insert(kv.first);
+            }
+            if (keepAll) {
+                for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                    const MergeSourcePlan& plan = mergePlans[srcIdx];
+                    for (const auto& kv : sourceTileMaps[srcIdx]) {
+                        outputKeys.insert(std::make_tuple(
+                            std::get<0>(kv.first) * plan.ratioXY,
+                            std::get<1>(kv.first) * plan.ratioXY,
+                            std::get<2>(kv.first) * plan.ratioZ,
+                            std::get<3>(kv.first)));
+                    }
+                }
+            }
+            for (const auto& key : outputKeys) {
+                const int32_t mainX = std::get<0>(key);
+                const int32_t mainY = std::get<1>(key);
+                const int32_t mainZ = std::get<2>(key);
+                const uint32_t featureIdx = std::get<3>(key);
                 TopProbs merged;
                 merged.ks.reserve(totalK);
                 merged.ps.reserve(totalK);
-                append_top_probs_prefix(merged, kv.second, mergePlans[0].keepK);
-                bool keep = true;
-                for (size_t i = 1; i < nSources; ++i) {
+                bool anyFound = false;
+                bool allFound = true;
+                bool mainFound = false;
+                for (size_t i = 0; i < nSources; ++i) {
+                    const uint32_t keepK = mergePlans[i].keepK;
+                    const TopProbs* aux = nullptr;
+                    if (i == 0) {
+                        auto it0 = mainMap.find(key);
+                        if (it0 != mainMap.end()) {
+                            aux = &it0->second;
+                        }
+                    } else {
                     const MergeSourcePlan& plan = mergePlans[i];
                     const int32_t auxX = floorDivInt32(mainX, plan.ratioXY);
                     const int32_t auxY = floorDivInt32(mainY, plan.ratioXY);
                     const TileKey auxTile = tile_key_from_source_xy(auxX, auxY, plan.srcResXY, plan.tileSize);
                     if (missing[i].count(auxTile) > 0) {
-                        if (!keepAllMain) { keep = false; break; }
-                        append_placeholder_pairs(merged, plan.keepK);
-                        continue;
-                    }
-                    const TopProbs* aux = nullptr;
-                    if (plan.op->hasFeatureIndex()) {
-                        if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
+                        } else if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
                             auto tileIt = auxFeature2D[i].find(auxTile);
                             if (tileIt == auxFeature2D[i].end()) {
                                 std::map<PixelFeatureKey2, TopProbs> auxMap;
                                 if (plan.op->loadTileToMapFeature(auxTile, auxMap, &streams[i]) == 0) {
                                     missing[i].insert(auxTile);
                                 } else {
+                                    remapFeatureMapToCanonical(auxMap, featureRemap.localToCanonical[i], funcName);
                                     tileIt = auxFeature2D[i].emplace(auxTile, std::move(auxMap)).first;
                                 }
                             }
@@ -1139,6 +1633,7 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
                                 if (plan.op->loadTileToMapFeature3D(auxTile, auxMap, &streams[i]) == 0) {
                                     missing[i].insert(auxTile);
                                 } else {
+                                    remapFeatureMapToCanonical(auxMap, featureRemap.localToCanonical[i], funcName);
                                     tileIt = auxFeature3D[i].emplace(auxTile, std::move(auxMap)).first;
                                 }
                             }
@@ -1147,64 +1642,29 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
                                 if (recIt != tileIt->second.end()) aux = &recIt->second;
                             }
                         }
-                    } else {
-                        if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
-                            auto tileIt = auxPlain2D[i].find(auxTile);
-                            if (tileIt == auxPlain2D[i].end()) {
-                                std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
-                                if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[i]) == 0) {
-                                    missing[i].insert(auxTile);
-                                } else {
-                                    tileIt = auxPlain2D[i].emplace(auxTile, std::move(auxMap)).first;
-                                }
-                            }
-                            if (tileIt != auxPlain2D[i].end()) {
-                                auto recIt = tileIt->second.find({auxX, auxY});
-                                if (recIt != tileIt->second.end()) aux = &recIt->second;
-                            }
-                        } else {
-                            const int32_t auxZ = floorDivInt32(mainZ, plan.ratioZ);
-                            auto tileIt = auxPlain3D[i].find(auxTile);
-                            if (tileIt == auxPlain3D[i].end()) {
-                                std::map<PixelKey3, TopProbs> auxMap;
-                                if (plan.op->loadTileToMap3D(auxTile, auxMap, &streams[i]) == 0) {
-                                    missing[i].insert(auxTile);
-                                } else {
-                                    tileIt = auxPlain3D[i].emplace(auxTile, std::move(auxMap)).first;
-                                }
-                            }
-                            if (tileIt != auxPlain3D[i].end()) {
-                                auto recIt = tileIt->second.find(std::make_tuple(auxX, auxY, auxZ));
-                                if (recIt != tileIt->second.end()) aux = &recIt->second;
-                            }
-                        }
                     }
                     if (aux == nullptr) {
-                        if (!keepAllMain) {
-                            keep = false;
-                            break;
-                        }
-                        append_placeholder_pairs(merged, plan.keepK);
+                        allFound = false;
+                        append_placeholder_pairs(merged, keepK);
                     } else {
-                        append_top_probs_prefix(merged, *aux, plan.keepK);
+                        anyFound = true;
+                        if (i == 0) {
+                            mainFound = true;
+                        }
+                        append_top_probs_prefix(merged, *aux, keepK);
                     }
                 }
-                if (!keep) continue;
+                const bool emit = keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound));
+                if (!emit) continue;
                 ++result.n;
                 if (binaryOutput) {
                     append_pix_top_probs_feature3d_binary(result.binaryData, mainX, mainY, mainZ, featureIdx, merged);
                 } else {
-                    if (writeFeatureNames) {
-                        if (featureIdx >= featureNames.size()) {
-                            error("%s: feature index %u out of range for dictionary of size %zu", funcName, featureIdx, featureNames.size());
-                        }
-                        append_format(result.textData, "%d\t%d\t%d\t%s", mainX, mainY, mainZ, featureNames[featureIdx].c_str());
-                    } else {
-                        append_format(result.textData, "%d\t%d\t%d\t%u", mainX, mainY, mainZ, featureIdx);
+                    if (featureIdx >= featureNames.size()) {
+                        error("%s: feature index %u out of range for dictionary of size %zu", funcName, featureIdx, featureNames.size());
                     }
-                    for (size_t j = 0; j < merged.ks.size(); ++j) {
-                        append_format(result.textData, "\t%d\t%.4e", merged.ks[j], merged.ps[j]);
-                    }
+                    append_format(result.textData, "%d\t%d\t%d\t%s", mainX, mainY, mainZ, featureNames[featureIdx].c_str());
+                    appendTopProbsText(result.textData, merged);
                     result.textData.push_back('\n');
                 }
             }
@@ -1215,37 +1675,66 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
         if (loadTileToMapFeature(tile, mainMap, &streams[0]) <= 0) {
             return result;
         }
+        remapFeatureMapToCanonical(mainMap, featureRemap.localToCanonical[0], funcName);
         result.nMain = static_cast<uint32_t>(mainMap.size());
+        std::vector<std::map<PixelFeatureKey2, TopProbs>> sourceTileMaps(nSources);
+        sourceTileMaps[0] = mainMap;
+        if (keepAll) {
+            for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                mergePlans[srcIdx].op->loadTileToMapFeature(tile, sourceTileMaps[srcIdx], &streams[srcIdx]);
+                remapFeatureMapToCanonical(sourceTileMaps[srcIdx], featureRemap.localToCanonical[srcIdx], funcName);
+            }
+        }
         std::vector<std::map<TileKey, std::map<PixelFeatureKey2, TopProbs>>> auxFeature2D(nSources);
         std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxPlain2D(nSources);
         std::vector<std::set<TileKey>> missing(nSources);
+        std::set<PixelFeatureKey2> outputKeys;
         for (const auto& kv : mainMap) {
-            const int32_t mainX = std::get<0>(kv.first);
-            const int32_t mainY = std::get<1>(kv.first);
-            const uint32_t featureIdx = std::get<2>(kv.first);
+            outputKeys.insert(kv.first);
+        }
+        if (keepAll) {
+            for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                const MergeSourcePlan& plan = mergePlans[srcIdx];
+                for (const auto& kv : sourceTileMaps[srcIdx]) {
+                    outputKeys.insert(std::make_tuple(
+                        std::get<0>(kv.first) * plan.ratioXY,
+                        std::get<1>(kv.first) * plan.ratioXY,
+                        std::get<2>(kv.first)));
+                }
+            }
+        }
+        for (const auto& key : outputKeys) {
+            const int32_t mainX = std::get<0>(key);
+            const int32_t mainY = std::get<1>(key);
+            const uint32_t featureIdx = std::get<2>(key);
             TopProbs merged;
             merged.ks.reserve(totalK);
             merged.ps.reserve(totalK);
-            append_top_probs_prefix(merged, kv.second, mergePlans[0].keepK);
-            bool keep = true;
-            for (size_t i = 1; i < nSources; ++i) {
+            bool anyFound = false;
+            bool allFound = true;
+            bool mainFound = false;
+            for (size_t i = 0; i < nSources; ++i) {
+                const uint32_t keepK = mergePlans[i].keepK;
+                const TopProbs* aux = nullptr;
+                if (i == 0) {
+                    auto it0 = mainMap.find(key);
+                    if (it0 != mainMap.end()) {
+                        aux = &it0->second;
+                    }
+                } else {
                 const MergeSourcePlan& plan = mergePlans[i];
                 const int32_t auxX = floorDivInt32(mainX, plan.ratioXY);
                 const int32_t auxY = floorDivInt32(mainY, plan.ratioXY);
                 const TileKey auxTile = tile_key_from_source_xy(auxX, auxY, plan.srcResXY, plan.tileSize);
                 if (missing[i].count(auxTile) > 0) {
-                    if (!keepAllMain) { keep = false; break; }
-                    append_placeholder_pairs(merged, plan.keepK);
-                    continue;
-                }
-                const TopProbs* aux = nullptr;
-                if (plan.op->hasFeatureIndex()) {
+                } else {
                     auto tileIt = auxFeature2D[i].find(auxTile);
                     if (tileIt == auxFeature2D[i].end()) {
                         std::map<PixelFeatureKey2, TopProbs> auxMap;
                         if (plan.op->loadTileToMapFeature(auxTile, auxMap, &streams[i]) == 0) {
                             missing[i].insert(auxTile);
                         } else {
+                            remapFeatureMapToCanonical(auxMap, featureRemap.localToCanonical[i], funcName);
                             tileIt = auxFeature2D[i].emplace(auxTile, std::move(auxMap)).first;
                         }
                     }
@@ -1253,47 +1742,30 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
                         auto recIt = tileIt->second.find(std::make_tuple(auxX, auxY, featureIdx));
                         if (recIt != tileIt->second.end()) aux = &recIt->second;
                     }
-                } else {
-                    auto tileIt = auxPlain2D[i].find(auxTile);
-                    if (tileIt == auxPlain2D[i].end()) {
-                        std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
-                        if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[i]) == 0) {
-                            missing[i].insert(auxTile);
-                        } else {
-                            tileIt = auxPlain2D[i].emplace(auxTile, std::move(auxMap)).first;
-                        }
-                    }
-                    if (tileIt != auxPlain2D[i].end()) {
-                        auto recIt = tileIt->second.find({auxX, auxY});
-                        if (recIt != tileIt->second.end()) aux = &recIt->second;
-                    }
+                }
                 }
                 if (aux == nullptr) {
-                    if (!keepAllMain) {
-                        keep = false;
-                        break;
-                    }
-                    append_placeholder_pairs(merged, plan.keepK);
+                    allFound = false;
+                    append_placeholder_pairs(merged, keepK);
                 } else {
-                    append_top_probs_prefix(merged, *aux, plan.keepK);
+                    anyFound = true;
+                    if (i == 0) {
+                        mainFound = true;
+                    }
+                    append_top_probs_prefix(merged, *aux, keepK);
                 }
             }
-            if (!keep) continue;
+            const bool emit = keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound));
+            if (!emit) continue;
             ++result.n;
             if (binaryOutput) {
                 append_pix_top_probs_feature_binary(result.binaryData, mainX, mainY, featureIdx, merged);
             } else {
-                if (writeFeatureNames) {
-                    if (featureIdx >= featureNames.size()) {
-                        error("%s: feature index %u out of range for dictionary of size %zu", funcName, featureIdx, featureNames.size());
-                    }
-                    append_format(result.textData, "%d\t%d\t%s", mainX, mainY, featureNames[featureIdx].c_str());
-                } else {
-                    append_format(result.textData, "%d\t%d\t%u", mainX, mainY, featureIdx);
+                if (featureIdx >= featureNames.size()) {
+                    error("%s: feature index %u out of range for dictionary of size %zu", funcName, featureIdx, featureNames.size());
                 }
-                for (size_t j = 0; j < merged.ks.size(); ++j) {
-                    append_format(result.textData, "\t%d\t%.4e", merged.ks[j], merged.ps[j]);
-                }
+                append_format(result.textData, "%d\t%d\t%s", mainX, mainY, featureNames[featureIdx].c_str());
+                appendTopProbsText(result.textData, merged);
                 result.textData.push_back('\n');
             }
         }

@@ -465,6 +465,7 @@ void TileReaderBase::assignLoadedIndex(const LoadedTileIndexData& loaded) {
     tileSize_ = loaded.header.tileSize;
     globalBox_ = loaded.globalBox;
     recordSize_ = static_cast<size_t>(loaded.header.recordSize);
+    featureNames_ = loaded.featureNames;
 
     const bool filter = !rects.empty();
     for (const auto& entry : loaded.entries) {

@@ -29,6 +29,12 @@ using tileoperator_detail::cellagg::add_numeric_map;
 using tileoperator_detail::cellagg::CellAgg;
 using tileoperator_detail::cellagg::FactorSums;
 using tileoperator_detail::cellagg::write_cell_row;
+using tileoperator_detail::fmt::append_format;
+using tileoperator_detail::io::TileWriteResult;
+using tileoperator_detail::io::write_tile_result;
+using tileoperator_detail::merge::build_merge_column_names;
+
+constexpr float kDefaultRawFloatPixelResolution = 0.001f;
 
 int32_t checked_integer_ratio(float srcRes, float mainRes, const char* funcName,
     uint32_t srcIdx, const char* axisName) {
@@ -87,6 +93,13 @@ void TileOperator::applyUnsetSourceResolutionOverrides(
     const char* funcName) const {
     if (!hasFeatureIndex()) {
         return;
+    }
+    if (!(getPixelResolution() > 0.0f) && !storesIntegerCoordinates() && !rawCoordinatesAreScaled()) {
+        warning("%s: Main input has raw float coordinates without pixel resolution; defaulting to %.4g",
+            funcName, kDefaultRawFloatPixelResolution);
+        TileOperator* mainOp = const_cast<TileOperator*>(this);
+        const float mainResZ = (coord_dim_ == 3) ? kDefaultRawFloatPixelResolution : -1.0f;
+        mainOp->setPixelResolutionOverride(kDefaultRawFloatPixelResolution, mainResZ);
     }
     const float mainResXY = getPixelResolution();
     if (!(mainResXY > 0.0f)) {
@@ -168,11 +181,23 @@ std::vector<TileOperator::MergeSourcePlan> TileOperator::validateMergeSources(
     return plans;
 }
 
+void TileOperator::appendTopProbsText(std::string& out, const TopProbs& probs) const {
+    const size_t keep = std::min(probs.ks.size(), probs.ps.size());
+    for (size_t i = 0; i < keep; ++i) {
+        if (probs.ks[i] < 0) {
+            append_format(out, "\t%s\t%s", nullK_.c_str(), nullP_.c_str());
+        } else {
+            append_format(out, "\t%d\t%.4e", probs.ks[i], probs.ps[i]);
+        }
+    }
+}
+
 void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::string& outPrefix,
-    std::vector<uint32_t> k2keep, bool binaryOutput, bool keepAllMain,
-    const std::string& featureDictFile) {
+    std::vector<uint32_t> k2keep, bool binaryOutput, bool keepAllMain, bool keepAll,
+    const std::string& featureDictFile, const std::vector<std::string>& mergePrefixes) {
     if (hasFeatureIndex()) {
-        mergeSingleMolecule(otherFiles, outPrefix, std::move(k2keep), binaryOutput, keepAllMain, featureDictFile);
+        mergeSingleMolecule(otherFiles, outPrefix, std::move(k2keep), binaryOutput, keepAllMain, keepAll,
+            featureDictFile, mergePrefixes);
         return;
     }
     std::string outIndex = outPrefix + ".index";
@@ -214,6 +239,13 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     int32_t totalK = std::accumulate(k2keep.begin(), k2keep.end(), 0);
     bool use3d = (coord_dim_ == 3);
     const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
+    if (keepAll && use3d) {
+        for (size_t i = 1; i < mergePlans.size(); ++i) {
+            if (mergePlans[i].relation == MergeSourceRelation::Broadcast2DTo3D) {
+                error("%s: --merge-keep-all does not support 2D auxiliary sources when the main input is 3D", __func__);
+            }
+        }
+    }
 
     // 2. Identify main tiles
     std::vector<TileKey> mainTiles;
@@ -260,12 +292,8 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
         if (use3d) {
             headerStr += "\tz";
         }
-        uint32_t idx = 1;
-        for (uint32_t i = 0; i < nSources; ++i) {
-            for (int j = 0; j < k2keep[i]; ++j) {
-                headerStr += "\tK" + std::to_string(idx) + "\tP" + std::to_string(idx);
-                idx++;
-            }
+        for (const auto& colName : build_merge_column_names(k2keep, mergePrefixes)) {
+            headerStr += "\t" + colName;
         }
         headerStr += "\n";
         fprintf(fp, "%s", headerStr.c_str());
@@ -277,9 +305,9 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     // 4. Process tiles
     notice("%s: Start merging %u files across %lu main tiles", __func__, nSources, mainTiles.size());
     if (use3d) {
-        mergeTiles3D(mainTiles, mergePlans, keepAllMain, binaryOutput, fp, fdMain, fdIndex, currentOffset);
+        mergeTiles3D(mainTiles, mergePlans, keepAllMain, keepAll, binaryOutput, fp, fdMain, fdIndex, currentOffset);
     } else {
-        mergeTiles2D(mainTiles, mergePlans, keepAllMain, binaryOutput, fp, fdMain, fdIndex, currentOffset);
+        mergeTiles2D(mainTiles, mergePlans, keepAllMain, keepAll, binaryOutput, fp, fdMain, fdIndex, currentOffset);
     }
 
     if (binaryOutput) {
@@ -291,11 +319,317 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     notice("Merged %u files across %lu main tiles to %s", nSources, mainTiles.size(), outFile.c_str());
 }
 
+void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
+    const std::string& ptPrefix, const std::string& outPrefix,
+    std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
+    int32_t icol_z, int32_t icol_f, bool keepAllMain, bool keepAll,
+    const std::vector<std::string>& mergePrefixes,
+    const std::string& featureDictFile, bool annoKeepAll) {
+    if (hasFeatureIndex()) {
+        annotateMergedSingleMolecule(otherFiles, ptPrefix, outPrefix, std::move(k2keep),
+            icol_x, icol_y, icol_z, icol_f, keepAllMain, keepAll, mergePrefixes, featureDictFile, annoKeepAll);
+        return;
+    }
+    if (icol_x < 0 || icol_y < 0) {
+        error("%s: icol_x and icol_y must be >= 0", __func__);
+    }
+    if (icol_x == icol_y) {
+        error("%s: icol_x and icol_y must be different", __func__);
+    }
+    if (coord_dim_ == 3 && (icol_z < 0 || icol_z == icol_x || icol_z == icol_y)) {
+        error("%s: Valid icol_z distinct from icol_x/icol_y is required for 3D input", __func__);
+    }
+
+    std::vector<std::unique_ptr<TileOperator>> ops;
+    std::vector<TileOperator*> opPtrs;
+    opPtrs.push_back(this);
+    for (const auto& f : otherFiles) {
+        const std::string idxFile = f.substr(0, f.find_last_of('.')) + ".index";
+        struct stat buffer;
+        if (stat(idxFile.c_str(), &buffer) != 0) {
+            error("%s: Index file %s not found", __func__, idxFile.c_str());
+        }
+        ops.push_back(std::make_unique<TileOperator>(f, idxFile));
+        opPtrs.push_back(ops.back().get());
+    }
+    const uint32_t nSources = static_cast<uint32_t>(opPtrs.size());
+    if (!mergePrefixes.empty() && mergePrefixes.size() != nSources) {
+        error("%s: expected %u merge prefixes, got %zu", __func__, nSources, mergePrefixes.size());
+    }
+    if (!k2keep.empty()) {
+        assert(k2keep.size() == nSources);
+    }
+    if (k2keep.empty()) {
+        for (const auto* op : opPtrs) {
+            k2keep.push_back(op->getK());
+        }
+    } else {
+        for (uint32_t i = 0; i < nSources; ++i) {
+            if (k2keep[i] > opPtrs[i]->getK()) {
+                warning("%s: Invalid value k (%d) specified for the %d-th source", __func__, k2keep[i], i);
+                k2keep[i] = opPtrs[i]->getK();
+            }
+        }
+    }
+    if (nSources > 7) {
+        const int32_t k = *std::min_element(k2keep.begin(), k2keep.end());
+        k2keep.assign(nSources, static_cast<uint32_t>(k));
+        warning("%s: More than 7 files to merge, keep %d values each", __func__, k);
+    }
+    const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
+    const size_t totalK = std::accumulate(k2keep.begin(), k2keep.end(), size_t(0));
+
+    const std::string ptData = ptPrefix + ".tsv";
+    const std::string ptIndex = ptPrefix + ".index";
+    TileReader reader(ptData, ptIndex);
+    assert(reader.getTileSize() == formatInfo_.tileSize);
+    const bool use3d = (coord_dim_ == 3);
+    const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
+
+    const std::string outFile = outPrefix + ".tsv";
+    const std::string outIndex = outPrefix + ".index";
+    FILE* fp = std::fopen(outFile.c_str(), "w");
+    if (!fp) error("Cannot open output file %s", outFile.c_str());
+    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+
+    uint32_t ntok = static_cast<uint32_t>(std::max(icol_x, icol_y));
+    if (use3d) {
+        ntok = std::max(ntok, static_cast<uint32_t>(icol_z));
+    }
+    ntok += 1;
+    if (!reader.headerLine.empty()) {
+        std::string headerStr = reader.headerLine;
+        for (const auto& colName : build_merge_column_names(k2keep, mergePrefixes)) {
+            headerStr += "\t" + colName;
+        }
+        std::fprintf(fp, "%s\n", headerStr.c_str());
+    }
+    long currentOffset = std::ftell(fp);
+
+    IndexHeader idxHeader = formatInfo_;
+    idxHeader.mode &= ~0x7u;
+    idxHeader.recordSize = 0;
+    if (!idxHeader.packKvec(k2keep)) {
+        warning("%s: Too many input fields", __func__);
+    }
+    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+        error("%s: Index header write error", __func__);
+    }
+
+    std::vector<TileKey> tiles;
+    reader.getTileList(tiles);
+    const char* funcName = __func__;
+    notice("%s: Start annotating merged query with %lu tiles", funcName, tiles.size());
+    if (use3d) {
+        auto buildTileResult = [&](const TileKey& tile, std::vector<std::ifstream>& streams) {
+            TileWriteResult result;
+            result.tile = tile;
+            std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxTileCaches2D(nSources);
+            std::vector<std::set<TileKey>> missingAuxTiles2D(nSources);
+            std::vector<std::map<TileKey, std::map<PixelKey3, TopProbs>>> auxTileCaches3D(nSources);
+            std::vector<std::set<TileKey>> missingAuxTiles3D(nSources);
+            auto findAuxRecord = [&](size_t srcIdx, int32_t mainX, int32_t mainY, int32_t mainZ) -> const TopProbs* {
+                const MergeSourcePlan& plan = mergePlans[srcIdx];
+                const int32_t auxX = floorDivInt32(mainX, plan.ratioXY);
+                const int32_t auxY = floorDivInt32(mainY, plan.ratioXY);
+                const TileKey auxTile = tileoperator_detail::merge::tile_key_from_source_xy(
+                    auxX, auxY, plan.srcResXY, plan.tileSize);
+                if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
+                    if (missingAuxTiles2D[srcIdx].count(auxTile) > 0) {
+                        return nullptr;
+                    }
+                    auto tileIt = auxTileCaches2D[srcIdx].find(auxTile);
+                    if (tileIt == auxTileCaches2D[srcIdx].end()) {
+                        std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
+                        if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[srcIdx]) == 0) {
+                            missingAuxTiles2D[srcIdx].insert(auxTile);
+                            return nullptr;
+                        }
+                        tileIt = auxTileCaches2D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                    }
+                    auto recIt = tileIt->second.find({auxX, auxY});
+                    return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+                }
+                const int32_t auxZ = floorDivInt32(mainZ, plan.ratioZ);
+                if (missingAuxTiles3D[srcIdx].count(auxTile) > 0) {
+                    return nullptr;
+                }
+                auto tileIt = auxTileCaches3D[srcIdx].find(auxTile);
+                if (tileIt == auxTileCaches3D[srcIdx].end()) {
+                    std::map<PixelKey3, TopProbs> auxMap;
+                    if (plan.op->loadTileToMap3D(auxTile, auxMap, &streams[srcIdx]) == 0) {
+                        missingAuxTiles3D[srcIdx].insert(auxTile);
+                        return nullptr;
+                    }
+                    tileIt = auxTileCaches3D[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                }
+                auto recIt = tileIt->second.find({auxX, auxY, auxZ});
+                return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+            };
+
+            auto it = reader.get_tile_iterator(tile.row, tile.col);
+            if (!it) {
+                return result;
+            }
+            std::string s;
+            while (it->next(s)) {
+                if (s.empty() || s[0] == '#') continue;
+                std::vector<std::string> tokens;
+                split(tokens, "\t", s, ntok + 1, true, true, true);
+                if (tokens.size() < ntok) {
+                    error("%s: Invalid line: %s", funcName, s.c_str());
+                }
+                float x, y, z;
+                if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
+                    error("%s: Invalid coordinates in line: %s", funcName, s.c_str());
+                }
+                if (!str2float(tokens[icol_z], z)) {
+                    error("%s: Invalid z coordinate in line: %s", funcName, s.c_str());
+                }
+                const int32_t ix = static_cast<int32_t>(std::floor(x / res));
+                const int32_t iy = static_cast<int32_t>(std::floor(y / res));
+                const int32_t iz = static_cast<int32_t>(std::floor(z / res));
+                TopProbs merged;
+                merged.ks.reserve(totalK);
+                merged.ps.reserve(totalK);
+                bool anyFound = false;
+                bool allFound = true;
+                bool mainFound = false;
+                for (size_t srcIdx = 0; srcIdx < nSources; ++srcIdx) {
+                    const TopProbs* rec = findAuxRecord(srcIdx, ix, iy, iz);
+                    if (rec != nullptr) {
+                        anyFound = true;
+                        if (srcIdx == 0) {
+                            mainFound = true;
+                            ++result.nMain;
+                        }
+                        tileoperator_detail::merge::append_top_probs_prefix(merged, *rec, mergePlans[srcIdx].keepK);
+                    } else {
+                        allFound = false;
+                        tileoperator_detail::merge::append_placeholder_pairs(merged, mergePlans[srcIdx].keepK);
+                    }
+                }
+                const bool emit = annoKeepAll || (keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound)));
+                if (!emit) {
+                    continue;
+                }
+                result.textData += s;
+                appendTopProbsText(result.textData, merged);
+                result.textData.push_back('\n');
+                ++result.n;
+            }
+            return result;
+        };
+
+        auto writeResult = [&](const TileWriteResult& result) {
+            tileoperator_detail::io::write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
+            notice("%s: Annotated merged tile (%d, %d) with %u points",
+                funcName, result.tile.row, result.tile.col, result.n);
+        };
+        tileoperator_detail::parallel::process_tile_results_parallel(tiles, threads_,
+            [&]() { return std::vector<std::ifstream>(nSources); },
+            buildTileResult, writeResult);
+    } else {
+        auto buildTileResult = [&](const TileKey& tile, std::vector<std::ifstream>& streams) {
+            TileWriteResult result;
+            result.tile = tile;
+            std::vector<std::map<TileKey, std::map<std::pair<int32_t, int32_t>, TopProbs>>> auxTileCaches(nSources);
+            std::vector<std::set<TileKey>> missingAuxTiles(nSources);
+            auto findAuxRecord = [&](size_t srcIdx, int32_t mainX, int32_t mainY) -> const TopProbs* {
+                const MergeSourcePlan& plan = mergePlans[srcIdx];
+                const std::pair<int32_t, int32_t> auxKey{
+                    floorDivInt32(mainX, plan.ratioXY),
+                    floorDivInt32(mainY, plan.ratioXY)
+                };
+                const TileKey auxTile = tileoperator_detail::merge::tile_key_from_source_xy(
+                    auxKey.first, auxKey.second, plan.srcResXY, plan.tileSize);
+                if (missingAuxTiles[srcIdx].count(auxTile) > 0) {
+                    return nullptr;
+                }
+                auto tileIt = auxTileCaches[srcIdx].find(auxTile);
+                if (tileIt == auxTileCaches[srcIdx].end()) {
+                    std::map<std::pair<int32_t, int32_t>, TopProbs> auxMap;
+                    if (plan.op->loadTileToMap(auxTile, auxMap, nullptr, &streams[srcIdx]) == 0) {
+                        missingAuxTiles[srcIdx].insert(auxTile);
+                        return nullptr;
+                    }
+                    tileIt = auxTileCaches[srcIdx].emplace(auxTile, std::move(auxMap)).first;
+                }
+                auto recIt = tileIt->second.find(auxKey);
+                return (recIt == tileIt->second.end()) ? nullptr : &recIt->second;
+            };
+
+            auto it = reader.get_tile_iterator(tile.row, tile.col);
+            if (!it) {
+                return result;
+            }
+            std::string s;
+            while (it->next(s)) {
+                if (s.empty() || s[0] == '#') continue;
+                std::vector<std::string> tokens;
+                split(tokens, "\t", s, ntok + 1, true, true, true);
+                if (tokens.size() < ntok) {
+                    error("%s: Invalid line: %s", funcName, s.c_str());
+                }
+                float x, y;
+                if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
+                    error("%s: Invalid coordinates in line: %s", funcName, s.c_str());
+                }
+                const int32_t ix = static_cast<int32_t>(std::floor(x / res));
+                const int32_t iy = static_cast<int32_t>(std::floor(y / res));
+                TopProbs merged;
+                merged.ks.reserve(totalK);
+                merged.ps.reserve(totalK);
+                bool anyFound = false;
+                bool allFound = true;
+                bool mainFound = false;
+                for (size_t srcIdx = 0; srcIdx < nSources; ++srcIdx) {
+                    const TopProbs* rec = findAuxRecord(srcIdx, ix, iy);
+                    if (rec != nullptr) {
+                        anyFound = true;
+                        if (srcIdx == 0) {
+                            mainFound = true;
+                            ++result.nMain;
+                        }
+                        tileoperator_detail::merge::append_top_probs_prefix(merged, *rec, mergePlans[srcIdx].keepK);
+                    } else {
+                        allFound = false;
+                        tileoperator_detail::merge::append_placeholder_pairs(merged, mergePlans[srcIdx].keepK);
+                    }
+                }
+                const bool emit = annoKeepAll || (keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound)));
+                if (!emit) {
+                    continue;
+                }
+                result.textData += s;
+                appendTopProbsText(result.textData, merged);
+                result.textData.push_back('\n');
+                ++result.n;
+            }
+            return result;
+        };
+
+        auto writeResult = [&](const TileWriteResult& result) {
+            tileoperator_detail::io::write_tile_result(result, false, fp, -1, fdIndex, currentOffset, formatInfo_.tileSize);
+            notice("%s: Annotated merged tile (%d, %d) with %u points",
+                funcName, result.tile.row, result.tile.col, result.n);
+        };
+        tileoperator_detail::parallel::process_tile_results_parallel(tiles, threads_,
+            [&]() { return std::vector<std::ifstream>(nSources); },
+            buildTileResult, writeResult);
+    }
+
+    std::fclose(fp);
+    close(fdIndex);
+    notice("Merged annotation finished, data written to %s", outFile.c_str());
+}
+
 void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix,
     int32_t icol_x, int32_t icol_y, int32_t icol_z, int32_t icol_f,
-    const std::string& featureDictFile) {
+    const std::string& featureDictFile, bool annoKeepAll) {
     if (hasFeatureIndex()) {
-        annotateSingleMolecule(ptPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, featureDictFile);
+        annotateSingleMolecule(ptPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, featureDictFile, annoKeepAll);
         return;
     }
     if (icol_x < 0 || icol_y < 0) {
@@ -343,11 +677,11 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     if (use3d) {
         annotateTiles3D(tiles, reader,
             static_cast<uint32_t>(icol_x), static_cast<uint32_t>(icol_y), static_cast<uint32_t>(icol_z),
-            ntok, fp, fdIndex, currentOffset);
+            ntok, fp, fdIndex, currentOffset, annoKeepAll);
     } else {
         annotateTiles2D(tiles, reader,
             static_cast<uint32_t>(icol_x), static_cast<uint32_t>(icol_y),
-            ntok, fp, fdIndex, currentOffset);
+            ntok, fp, fdIndex, currentOffset, annoKeepAll);
     }
 
     fclose(fp);

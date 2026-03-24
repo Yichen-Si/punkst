@@ -541,7 +541,7 @@ TileOperator::BorderDSUState TileOperator::mergeBorderComponentsWithDSU(
 }
 
 void TileOperator::mergeTiles2D(const std::vector<TileKey>& mainTiles,
-    const std::vector<MergeSourcePlan>& mergePlans, bool keepAllMain, bool binaryOutput,
+    const std::vector<MergeSourcePlan>& mergePlans, bool keepAllMain, bool keepAll, bool binaryOutput,
     FILE* fp, int fdMain, int fdIndex, long& currentOffset) {
     const char* funcName = __func__;
     const size_t nSources = mergePlans.size();
@@ -591,40 +591,72 @@ void TileOperator::mergeTiles2D(const std::vector<TileKey>& mainTiles,
             return &recIt->second;
         };
 
+        std::vector<std::map<std::pair<int32_t, int32_t>, TopProbs>> sourceTileMaps(nSources);
+        sourceTileMaps[0] = mainMap;
+        if (keepAll) {
+            for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                mergePlans[srcIdx].op->loadTileToMap(tile, sourceTileMaps[srcIdx], nullptr, &streams[srcIdx]);
+            }
+        }
+
         const size_t bytesPerRecord = 2 * sizeof(int32_t) +
             totalK * (sizeof(int32_t) + sizeof(float));
-        if (binaryOutput) {
-            result.binaryData.reserve(mainMap.size() * bytesPerRecord);
-        }
+        std::set<std::pair<int32_t, int32_t>> outputKeys;
         for (const auto& kv : mainMap) {
+            outputKeys.insert(kv.first);
+        }
+        if (keepAll) {
+            for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                const MergeSourcePlan& plan = mergePlans[srcIdx];
+                for (const auto& kv : sourceTileMaps[srcIdx]) {
+                    outputKeys.insert({
+                        kv.first.first * plan.ratioXY,
+                        kv.first.second * plan.ratioXY
+                    });
+                }
+            }
+        }
+        if (binaryOutput) {
+            result.binaryData.reserve(outputKeys.size() * bytesPerRecord);
+        }
+        for (const auto& key : outputKeys) {
             TopProbs merged;
             merged.ks.reserve(totalK);
             merged.ps.reserve(totalK);
-            append_top_probs_prefix(merged, kv.second, mergePlans[0].keepK);
-            bool keep = true;
-            for (size_t i = 1; i < nSources; ++i) {
-                const TopProbs* aux = findAuxRecord(i, kv.first.first, kv.first.second);
-                if (aux == nullptr) {
-                    if (!keepAllMain) {
-                        keep = false;
-                        break;
+            bool anyFound = false;
+            bool allFound = true;
+            bool mainFound = false;
+            for (size_t i = 0; i < nSources; ++i) {
+                const TopProbs* aux = nullptr;
+                if (i == 0) {
+                    auto it = mainMap.find(key);
+                    if (it != mainMap.end()) {
+                        aux = &it->second;
                     }
+                } else {
+                    aux = findAuxRecord(i, key.first, key.second);
+                }
+                if (aux == nullptr) {
+                    allFound = false;
                     append_placeholder_pairs(merged, mergePlans[i].keepK);
                 } else {
+                    anyFound = true;
+                    if (i == 0) {
+                        mainFound = true;
+                    }
                     append_top_probs_prefix(merged, *aux, mergePlans[i].keepK);
                 }
             }
-            if (!keep) {
+            const bool emit = keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound));
+            if (!emit) {
                 continue;
             }
             ++result.n;
             if (binaryOutput) {
-                append_pix_top_probs_binary(result.binaryData, kv.first.first, kv.first.second, merged);
+                append_pix_top_probs_binary(result.binaryData, key.first, key.second, merged);
             } else {
-                append_format(result.textData, "%d\t%d", kv.first.first, kv.first.second);
-                for (size_t i = 0; i < merged.ks.size(); ++i) {
-                    append_format(result.textData, "\t%d\t%.4e", merged.ks[i], merged.ps[i]);
-                }
+                append_format(result.textData, "%d\t%d", key.first, key.second);
+                appendTopProbsText(result.textData, merged);
                 result.textData.push_back('\n');
             }
         }
@@ -642,7 +674,7 @@ void TileOperator::mergeTiles2D(const std::vector<TileKey>& mainTiles,
 }
 
 void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
-    const std::vector<MergeSourcePlan>& mergePlans, bool keepAllMain, bool binaryOutput,
+    const std::vector<MergeSourcePlan>& mergePlans, bool keepAllMain, bool keepAll, bool binaryOutput,
     FILE* fp, int fdMain, int fdIndex, long& currentOffset) {
     const char* funcName = __func__;
     const size_t nSources = mergePlans.size();
@@ -711,43 +743,74 @@ void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
             return &recIt->second;
         };
 
+        std::vector<std::map<PixelKey3, TopProbs>> sourceTileMaps(nSources);
+        sourceTileMaps[0] = mainMap;
+        if (keepAll) {
+            for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                mergePlans[srcIdx].op->loadTileToMap3D(tile, sourceTileMaps[srcIdx], &streams[srcIdx]);
+            }
+        }
+
         const size_t bytesPerRecord = 3 * sizeof(int32_t) +
             totalK * (sizeof(int32_t) + sizeof(float));
-        if (binaryOutput) {
-            result.binaryData.reserve(mainMap.size() * bytesPerRecord);
-        }
+        std::set<PixelKey3> outputKeys;
         for (const auto& kv : mainMap) {
+            outputKeys.insert(kv.first);
+        }
+        if (keepAll) {
+            for (size_t srcIdx = 1; srcIdx < nSources; ++srcIdx) {
+                const MergeSourcePlan& plan = mergePlans[srcIdx];
+                for (const auto& kv : sourceTileMaps[srcIdx]) {
+                    outputKeys.insert(std::make_tuple(
+                        std::get<0>(kv.first) * plan.ratioXY,
+                        std::get<1>(kv.first) * plan.ratioXY,
+                        std::get<2>(kv.first) * plan.ratioZ));
+                }
+            }
+        }
+        if (binaryOutput) {
+            result.binaryData.reserve(outputKeys.size() * bytesPerRecord);
+        }
+        for (const auto& key : outputKeys) {
             TopProbs merged;
             merged.ks.reserve(totalK);
             merged.ps.reserve(totalK);
-            append_top_probs_prefix(merged, kv.second, mergePlans[0].keepK);
-            bool keep = true;
-            for (size_t i = 1; i < nSources; ++i) {
-                const TopProbs* aux = findAuxRecord(i,
-                    std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first));
-                if (aux == nullptr) {
-                    if (!keepAllMain) {
-                        keep = false;
-                        break;
+            bool anyFound = false;
+            bool allFound = true;
+            bool mainFound = false;
+            for (size_t i = 0; i < nSources; ++i) {
+                const TopProbs* aux = nullptr;
+                if (i == 0) {
+                    auto it = mainMap.find(key);
+                    if (it != mainMap.end()) {
+                        aux = &it->second;
                     }
+                } else {
+                    aux = findAuxRecord(i, std::get<0>(key), std::get<1>(key), std::get<2>(key));
+                }
+                if (aux == nullptr) {
+                    allFound = false;
                     append_placeholder_pairs(merged, mergePlans[i].keepK);
                 } else {
+                    anyFound = true;
+                    if (i == 0) {
+                        mainFound = true;
+                    }
                     append_top_probs_prefix(merged, *aux, mergePlans[i].keepK);
                 }
             }
-            if (!keep) {
+            const bool emit = keepAll ? anyFound : (keepAllMain ? mainFound : (mainFound && allFound));
+            if (!emit) {
                 continue;
             }
             ++result.n;
             if (binaryOutput) {
                 append_pix_top_probs3d_binary(result.binaryData,
-                    std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first), merged);
+                    std::get<0>(key), std::get<1>(key), std::get<2>(key), merged);
             } else {
                 append_format(result.textData, "%d\t%d\t%d",
-                    std::get<0>(kv.first), std::get<1>(kv.first), std::get<2>(kv.first));
-                for (size_t i = 0; i < merged.ks.size(); ++i) {
-                    append_format(result.textData, "\t%d\t%.4e", merged.ks[i], merged.ps[i]);
-                }
+                    std::get<0>(key), std::get<1>(key), std::get<2>(key));
+                appendTopProbsText(result.textData, merged);
                 result.textData.push_back('\n');
             }
         }
@@ -766,7 +829,8 @@ void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
 
 void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
     TileReader& reader, uint32_t icol_x, uint32_t icol_y,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset) {
+    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+    bool annoKeepAll) {
     const char* funcName = __func__;
     notice("%s: Start annotating query with %lu tiles", funcName, tiles.size());
     float res = formatInfo_.pixelResolution;
@@ -777,7 +841,9 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
         std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
         if (loadTileToMap(tile, pixelMap, nullptr, &tileStream) <= 0) {
             debug("%s: Query tile (%d, %d) is not in the annotation dataset", funcName, tile.row, tile.col);
-            return result;
+            if (!annoKeepAll) {
+                return result;
+            }
         }
         auto it = reader.get_tile_iterator(tile.row, tile.col);
         if (!it) {
@@ -798,12 +864,16 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
             int32_t ix = static_cast<int32_t>(std::floor(x / res));
             int32_t iy = static_cast<int32_t>(std::floor(y / res));
             auto pit = pixelMap.find({ix, iy});
-            if (pit == pixelMap.end()) {
+            if (pit == pixelMap.end() && !annoKeepAll) {
                 continue;
             }
             result.textData += s;
-            for (size_t k = 0; k < pit->second.ks.size(); ++k) {
-                append_format(result.textData, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
+            if (pit == pixelMap.end()) {
+                TopProbs missing;
+                append_placeholder_pairs(missing, static_cast<uint32_t>(k_));
+                appendTopProbsText(result.textData, missing);
+            } else {
+                appendTopProbsText(result.textData, pit->second);
             }
             result.textData.push_back('\n');
             result.n++;
@@ -823,7 +893,8 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
 
 void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
     TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
-    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset) {
+    uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
+    bool annoKeepAll) {
     const char* funcName = __func__;
     notice("%s: Start annotating query with %lu tiles", funcName, tiles.size());
     float res = formatInfo_.pixelResolution;
@@ -834,7 +905,9 @@ void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
         std::map<PixelKey3, TopProbs> pixelMap3d;
         if (loadTileToMap3D(tile, pixelMap3d, &tileStream) <= 0) {
             debug("%s: Query tile (%d, %d) is not in the annotation dataset", funcName, tile.row, tile.col);
-            return result;
+            if (!annoKeepAll) {
+                return result;
+            }
         }
         auto it = reader.get_tile_iterator(tile.row, tile.col);
         if (!it) {
@@ -859,12 +932,16 @@ void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
             int32_t iy = static_cast<int32_t>(std::floor(y / res));
             int32_t iz = static_cast<int32_t>(std::floor(z / res));
             auto pit = pixelMap3d.find(std::make_tuple(ix, iy, iz));
-            if (pit == pixelMap3d.end()) {
+            if (pit == pixelMap3d.end() && !annoKeepAll) {
                 continue;
             }
             result.textData += s;
-            for (size_t k = 0; k < pit->second.ks.size(); ++k) {
-                append_format(result.textData, "\t%d\t%.4e", pit->second.ks[k], pit->second.ps[k]);
+            if (pit == pixelMap3d.end()) {
+                TopProbs missing;
+                append_placeholder_pairs(missing, static_cast<uint32_t>(k_));
+                appendTopProbsText(result.textData, missing);
+            } else {
+                appendTopProbsText(result.textData, pit->second);
             }
             result.textData.push_back('\n');
             result.n++;

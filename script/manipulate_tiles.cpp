@@ -7,8 +7,11 @@
 int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string inPrefix, inData, inIndex, outPrefix;
     std::vector<std::string> inMergeEmbFiles;
+    std::vector<std::string> mergeEmbPrefixes;
     std::string inMergePtsPrefix;
     bool mergeKeepAllMain = false;
+    bool mergeKeepAll = false;
+    bool annoKeepAll = false;
     int32_t tileSize = -1;
     bool binaryOut = false;
     bool isBinary = false;
@@ -60,7 +63,8 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     float rasterPixelRes = -1.0f;
     std::string templateGeoJSON;
     std::string templateOutPrefix;
-    std::string featureDictFile;
+    std::string nullK = "-1";
+    std::string nullP = "0";
     double coordScale = 1.0;
     int32_t targetTileSizeOut = -1;
     bool pmtilesEpsg3857 = true;
@@ -112,11 +116,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     // Merge, join, and aggregation operations.
     pl.add_option("merge-emb", "List of embedding files to merge", inMergeEmbFiles)
+      .add_option("emb-prefix", "Optional per-source prefixes for merged K/P TSV columns", mergeEmbPrefixes)
       .add_option("merge-keep-all-main", "Keep all main-input records in --merge-emb and fill missing source slots with (-1, 0)", mergeKeepAllMain)
+      .add_option("merge-keep-all", "Keep any pixel observed in at least one source when merging", mergeKeepAll)
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
+      .add_option("null-k", "Placeholder printed for missing K values in TSV merge outputs", nullK)
+      .add_option("null-p", "Placeholder printed for missing P values in TSV merge outputs", nullP)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
+      .add_option("anno-keep-all", "Keep all query records in annotate outputs and use placeholders for missing annotations", annoKeepAll)
       .add_option("annotate-cell", "Annotate factor composition per cell and subcellular component", cellAnno)
-      .add_option("features", "Feature dictionary file; first column maps feature indices to names. Use '-' to read from stdin", featureDictFile)
       .add_option("icol-x", "X coordinate column index, 0-based", icol_x)
       .add_option("icol-y", "Y coordinate column index, 0-based", icol_y)
       .add_option("icol-z", "Z coordinate column index, 0-based", icol_z)
@@ -178,6 +186,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     TileOperator tileOp(inData, inIndex);
+    tileOp.setNullPlaceholders(nullK, nullP);
     if (pixelResZOverride > 0.0f && !(pixelResOverride > 0.0f)) {
         error("--pixel-res-z-override requires --pixel-res-override");
     }
@@ -227,6 +236,16 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     if (dumpTSV && (hasExtractRegionZMin || hasExtractRegionZMax) && extractRegionGeoJSON.empty()) {
         error("--zmin/--zmax require --extract-region-geojson when used with --dump-tsv");
     }
+    if (!mergeEmbPrefixes.empty() && inMergeEmbFiles.empty()) {
+        error("--emb-prefix requires --merge-emb");
+    }
+    if (!mergeEmbPrefixes.empty() &&
+        mergeEmbPrefixes.size() != static_cast<size_t>(inMergeEmbFiles.size() + 1)) {
+        error("--emb-prefix must provide one prefix for the main input and one for each --merge-emb source");
+    }
+    if (!mergeEmbPrefixes.empty() && binaryOut) {
+        error("--emb-prefix is only meaningful for TSV output and cannot be used with --binary-out");
+    }
 
     if (reorganize) {
         tileOp.reorgTiles(outPrefix, tileSize);
@@ -247,12 +266,12 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (dumpTSV) {
-        tileOp.dumpTSV(outPrefix, probDigits, coordDigits, featureDictFile,
+        tileOp.dumpTSV(outPrefix, probDigits, coordDigits, "",
             extractRegionGeoJSON, extractRegionScale, zmin, zmax);
         return 0;
     }
     if (writeMltPmtiles) {
-        tileOp.writeMltPmtiles(outPrefix + ".pmtiles", featureDictFile,
+        tileOp.writeMltPmtiles(outPrefix + ".pmtiles", "",
             coordScale, pmtilesEpsg3857, pmtilesZoom, targetTileSizeOut);
         return 0;
     }
@@ -272,22 +291,35 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (cellAnno) {
-        if (hasFeatureIndex && (icol_f < 0 || featureDictFile.empty()))
-            error("valid --icol-feature and --features are required for --annotate-cell on single-molecule input");
+        if (hasFeatureIndex && icol_f < 0)
+            error("valid --icol-feature is required for --annotate-cell on single-molecule input");
         tileOp.pix2cell(inMergePtsPrefix, outPrefix, icol_c, icol_x, icol_y,
-            icol_s, icol_z, icol_f, kOut, maxCellDiameter, featureDictFile);
+            icol_s, icol_z, icol_f, kOut, maxCellDiameter, "");
+        return 0;
+    }
+
+    if (!inMergeEmbFiles.empty() && !inMergePtsPrefix.empty()) {
+        if (binaryOut) {
+            error("--binary-out is not supported when using --merge-emb together with --annotate-pts");
+        }
+        if (hasFeatureIndex && icol_f < 0)
+            error("valid --icol-feature is required for --annotate-pts on single-molecule input");
+        tileOp.annotateMerged(inMergeEmbFiles, inMergePtsPrefix, outPrefix, k2keep,
+            icol_x, icol_y, icol_z, icol_f, mergeKeepAllMain, mergeKeepAll, mergeEmbPrefixes,
+            "", annoKeepAll);
         return 0;
     }
 
     if (!inMergeEmbFiles.empty()) {
-        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut, mergeKeepAllMain, featureDictFile);
+        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut, mergeKeepAllMain, mergeKeepAll,
+            "", mergeEmbPrefixes);
         return 0;
     }
 
     if (!inMergePtsPrefix.empty()) {
-        if (hasFeatureIndex && (icol_f < 0 || featureDictFile.empty()))
-            error("valid --icol-feature and --features are required for --annotate-pts on single-molecule input");
-        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, featureDictFile);
+        if (hasFeatureIndex && icol_f < 0)
+            error("valid --icol-feature is required for --annotate-pts on single-molecule input");
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, "", annoKeepAll);
         return 0;
     }
 

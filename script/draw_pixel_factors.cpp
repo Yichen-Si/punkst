@@ -18,12 +18,14 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     int32_t debug_ = 0;
     int32_t islandSmooth = 0;
     bool fillEmptyIslands = false;
+    int32_t resultSet = -1;
+    bool suppressKpWarnings = false;
 
     ParamList pl;
     // Input options
     pl.add_option("in-data", "Input data file (.tsv/.tsv.gz, or '-' for stdin). Lines beginning with # are ignored", dataFile)
       .add_option("index", "Index file", indexFile)
-      .add_option("in", "Input prefix (equal to --in-tsv <in>.tsv/.bin --index <in>.index)", inPrefix)
+      .add_option("in", "Input prefix (equal to --in-data <in>.tsv/.bin --index <in>.index)", inPrefix)
       .add_option("binary", "Data file is in binary format", isBinary)
       .add_option("in-tsv", "Input TSV file (.tsv/.tsv.gz, or '-' for stdin). Lines beginning with # are ignored", dataFile) // backward compatible
       .add_option("header-json", "Header JSON file", headerFile) // to deprecate
@@ -43,6 +45,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
       .add_option("top-only", "Use only the top channel per pixel", topOnly)
       .add_option("island-smooth", "Remove isolated noisy pixels (only for --top-only)", islandSmooth)
       .add_option("fill-empty-islands", "Fill empty pixels surrounded by consistent neighbors (only for --island-smooth)", fillEmptyIslands)
+      .add_option("result-set", "If there are multiple sets of results in the input (a merged file), specify which set to use (0-based)", resultSet)
+      .add_option("suppress-kp-warnings", "Silence TSV K/P parse warnings and treat invalid entries as placeholders", suppressKpWarnings)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug_);
 
@@ -66,7 +70,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         dataFile = inPrefix + (isBinary ? ".bin" : ".tsv");
         indexFile = inPrefix + ".index";
     } else if (dataFile.empty()) {
-        error("One of --in --in-tsv or --in-data must be specified");
+        error("One of --in or --in-tsv & --in-data pair must be specified");
     }
     const bool streamingTsv = !isBinary &&
         (dataFile == "-" || dataFile == "/dev/stdin" || ends_with(dataFile, ".gz"));
@@ -78,8 +82,23 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
     // set up reader
     TileOperator reader(dataFile, indexFile, headerFile);
+    reader.setSuppressKpParseWarnings(suppressKpWarnings);
     int32_t k = reader.getK();
+    std::vector<uint32_t> kvec = reader.getKvec();
+    int32_t resultOffset = 0;
     if (k<=0) error("No factor columns found in header");
+    if (kvec.size() > 1 && resultSet < 0) {
+        error("Multiple sets of results found in header; please specify which one to use with --result-set");
+    }
+    if (resultSet >= 0) {
+        if (resultSet >= kvec.size()) {
+            error("Invalid --result-set: %d (only %zu sets available)", resultSet, kvec.size());
+        }
+        for (int32_t s = 0; s < resultSet; ++s) {
+            resultOffset += static_cast<int32_t>(kvec[s]);
+        }
+        k = kvec[resultSet];
+    }
     if (!rangeFile.empty()) {
        readCoordRange(rangeFile, xmin, xmax, ymin, ymax);
     }
@@ -106,12 +125,10 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     std::vector<std::vector<int>> cmtx;
     std::unordered_map<int,std::vector<int32_t>> selectedMap;
     if (selected) { // parse selected channels
-        if (colorListStr.empty()) {
+        if (colorListStr.empty())
             colorListStr = std::vector<std::string>{"FFEE00", "DD65E6", "00FFFF", "FF7000"};
-        }
-        if (channelListStr.size()>colorListStr.size()) {
-            error("--channel-list and --color-list must have same length");
-        }
+        if (channelListStr.size()>colorListStr.size())
+            error("-color-list must have at least the same number of elements as --channel-list does");
         for (size_t i=0;i<channelListStr.size();++i) {
             std::vector<int32_t> c;
             if (!set_rgb(colorListStr[i].c_str(), c))
@@ -181,7 +198,11 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             if ((unsigned)xpix >= (unsigned)width || (unsigned)ypix >= (unsigned)height) continue;
             if (tot(ypix, xpix) >= 255) { ++nskip; continue; }
             // map record -> integer label
-            int ch = rec.ks[0];
+            if (resultOffset >= static_cast<int32_t>(rec.ks.size()) ||
+                resultOffset >= static_cast<int32_t>(rec.ps.size())) {
+                error("Invalid record: fewer fields than expected at the %d-th line", nline);
+            }
+            int ch = rec.ks[resultOffset];
             int lbl = -1;
             if (selected) {
                 if (ch < 0) continue;
@@ -320,7 +341,11 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
         float R=0,G=0,B=0;
         if (topOnly || k==1) {
-            int ch = rec.ks[0];
+            if (resultOffset >= static_cast<int32_t>(rec.ks.size()) ||
+                resultOffset >= static_cast<int32_t>(rec.ps.size())) {
+                error("Invalid record: fewer fields than expected at the %d-th line", nline);
+            }
+            int ch = rec.ks[resultOffset];
             if (selected) {
                 if (ch < 0) {
                     continue;
@@ -350,9 +375,14 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
 
         bool valid=false;
         double psum=0;
-        for (int i=0;i<k;++i) {
-            int ch = rec.ks[i];
-            double p = rec.ps[i];
+        for (int i = 0; i < k; ++i) {
+            const int32_t idx = resultOffset + i;
+            if (idx >= static_cast<int32_t>(rec.ks.size()) ||
+                idx >= static_cast<int32_t>(rec.ps.size())) {
+                error("Invalid record: fewer fields than expected at the %d-th line", nline);
+            }
+            int ch = rec.ks[idx];
+            double p = rec.ps[idx];
             if (p < minProb) continue;
             if (ch < 0) continue;
             if (selected) {

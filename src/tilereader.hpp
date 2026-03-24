@@ -99,6 +99,7 @@ protected:
     size_t nTiles = 0;
     size_t recordSize_ = 0;
     Rectangle<float> globalBox_;
+    std::vector<std::string> featureNames_;
     std::vector<Rectangle<double>> rects;
     std::vector<TileInfo> blocks_;
     bool load_ok_ = false;
@@ -134,6 +135,9 @@ public:
     }
     const Rectangle<float>& getGlobalBox() const {
         return globalBox_;
+    }
+    const std::vector<std::string>& getFeatureNames() const {
+        return featureNames_;
     }
     // if a tile (row, col) overlaps with or is fully contained in any of the rects
     template<typename T>

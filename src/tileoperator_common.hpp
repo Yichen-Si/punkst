@@ -130,6 +130,44 @@ inline void write_tile_result(const TileWriteResult& result, bool binaryOutput,
 
 namespace merge {
 
+inline std::vector<std::string> build_merge_column_names(
+    const std::vector<uint32_t>& k2keep,
+    const std::vector<std::string>& mergePrefixes) {
+    std::vector<std::string> out;
+    size_t totalPairs = 0;
+    for (uint32_t keep : k2keep) {
+        totalPairs += static_cast<size_t>(keep);
+    }
+    out.reserve(totalPairs * 2);
+    if (!mergePrefixes.empty() && mergePrefixes.size() != k2keep.size()) {
+        error("%s: expected %zu merge prefixes, got %zu",
+            __func__, k2keep.size(), mergePrefixes.size());
+    }
+    if (mergePrefixes.empty()) {
+        uint32_t idx = 1;
+        for (uint32_t keep : k2keep) {
+            for (uint32_t j = 0; j < keep; ++j) {
+                out.push_back("K" + std::to_string(idx));
+                out.push_back("P" + std::to_string(idx));
+                ++idx;
+            }
+        }
+        return out;
+    }
+    for (size_t srcIdx = 0; srcIdx < k2keep.size(); ++srcIdx) {
+        const std::string& prefix = mergePrefixes[srcIdx];
+        if (prefix.empty()) {
+            error("%s: merge prefixes must be non-empty", __func__);
+        }
+        for (uint32_t j = 0; j < k2keep[srcIdx]; ++j) {
+            const uint32_t slot = j + 1;
+            out.push_back(prefix + "_K" + std::to_string(slot));
+            out.push_back(prefix + "_P" + std::to_string(slot));
+        }
+    }
+    return out;
+}
+
 inline void append_top_probs_prefix(TopProbs& out, const TopProbs& src, uint32_t keepK) {
     const size_t keep = std::min<size_t>(keepK, std::min(src.ks.size(), src.ps.size()));
     out.ks.insert(out.ks.end(), src.ks.begin(), src.ks.begin() + keep);
