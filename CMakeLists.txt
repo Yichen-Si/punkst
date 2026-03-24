@@ -84,6 +84,8 @@ set(SOURCE_FILES
     src/hexgrid.h
     src/bccgrid.hpp
     src/threads.hpp
+    src/tile_io.hpp
+    src/tile_io.cpp
     src/tilereader.hpp
     src/tilereader.cpp
     src/tilereader_binary.hpp

@@ -96,15 +96,17 @@ class TileReaderBase {
 protected:
     std::string inputFile_;
     int tileSize_;
-    size_t nTiles;
-    size_t recordSize_;
+    size_t nTiles = 0;
+    size_t recordSize_ = 0;
     Rectangle<float> globalBox_;
     std::vector<Rectangle<double>> rects;
+    std::vector<TileInfo> blocks_;
+    bool load_ok_ = false;
     // Map from TileKey to TileInfo.
     std::unordered_map<TileKey, TileInfo, TileKeyHash> tile_map_;
     // Helper function to load the index file.
     virtual void loadIndex(const std::string &indexFilename) = 0;
-    bool loadIndexBinary(const std::string &indexFilename);
+    void assignLoadedIndex(const LoadedTileIndexData& loaded);
 
 public:
     int32_t minrow = INT32_MAX; // inclusive
@@ -123,6 +125,9 @@ public:
     }
     size_t getNumTiles() const {
         return nTiles;
+    }
+    size_t getNumBlocks() const {
+        return blocks_.size();
     }
     bool hasGlobalBox() const {
         return globalBox_.proper();
@@ -170,6 +175,40 @@ public:
                             bool* contained = nullptr) const {
         return tileIntersectsRects(row, col, std::vector<Rectangle<T>>{rect}, contained);
     }
+    template<typename T>
+    bool blockIntersectsRects(const IndexEntryF& entry,
+                              const std::vector<Rectangle<T>>& _rects,
+                              bool* contained = nullptr) const {
+        if (_rects.empty()) {
+            if (contained != nullptr) {
+                *contained = true;
+            }
+            return true;
+        }
+        const Rectangle<T> blockRect(
+            static_cast<T>(entry.xmin), static_cast<T>(entry.ymin),
+            static_cast<T>(entry.xmax), static_cast<T>(entry.ymax));
+        bool overlaps = false;
+        bool fullyContained = false;
+        for (const auto& r : _rects) {
+            if (!r.proper()) {
+                continue;
+            }
+            const int32_t code = blockRect.intersect(r);
+            if (code == 0) {
+                continue;
+            }
+            overlaps = true;
+            if (code == 2) {
+                fullyContained = true;
+                break;
+            }
+        }
+        if (contained != nullptr) {
+            *contained = fullyContained;
+        }
+        return overlaps;
+    }
     // given (x, y) compute the tile key and whether the tile is in the data
     template<typename T>
     bool pt2tile(T x, T y, TileKey &tile) const {
@@ -187,11 +226,14 @@ public:
     }
 
     void getTileList(std::vector<TileKey> &tileList) const {
-        tileList.reserve(nTiles);
+        tileList.reserve(tile_map_.size());
         tileList.clear();
         for (const auto &pair : tile_map_) {
             tileList.push_back(pair.first);
         }
+    }
+    void getBlockList(std::vector<TileInfo>& blockList) const {
+        blockList = blocks_;
     }
 
     template<typename T>
@@ -233,7 +275,10 @@ public:
                      std::vector<TileKey>&            tileList,
                      std::vector<bool>&               isContained) const {
         if (!isValid()) {
-            throw std::runtime_error("TileReaderBase is not initialized or has empty index");
+            throw std::runtime_error("TileReaderBase is not initialized");
+        }
+        if (tile_map_.empty() || tileSize_ <= 0) {
+            throw std::runtime_error("TileReaderBase does not have regular-grid tile keys");
         }
 
         // Map each TileKey -> whether we've seen it _fully contained_
@@ -251,7 +296,7 @@ public:
     }
 
     bool isValid() const {
-        return !tile_map_.empty() && tileSize_ > 0;
+        return load_ok_;
     }
 
     // Given a focal tile returns a vector of TileKey for adjacent tiles.
@@ -305,13 +350,13 @@ public:
     // that reads the corresponding chunk (lines) from the TSV file.
     // Throws a runtime error if the tile is not found in the index.
     std::unique_ptr<BoundedReadline> get_tile_iterator(int tileRow, int tileCol) const;
+    std::unique_ptr<BoundedReadline> get_block_iterator(const TileInfo& block) const;
     const Rectangle<float>& getGlobalBox() const { return globalBox_; }
 
     CoordType getCoordType() const { return coordType; }
 private:
     CoordType coordType;
     void loadIndex(const std::string &indexFilename) override;
-    bool loadIndexText(const std::string &indexFilename);
 };
 
 // Helper for multisample pipelien

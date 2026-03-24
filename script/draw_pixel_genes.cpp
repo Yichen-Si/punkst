@@ -17,7 +17,7 @@ struct TileResult {
 };
 
 void draw_worker(
-    ThreadSafeQueue<TileKey>& tileQueue,
+    ThreadSafeQueue<TileInfo>& tileQueue,
     std::vector<TileResult>& results,
     std::mutex& results_mutex,
     const TileReader& tileReader,
@@ -26,16 +26,17 @@ void draw_worker(
     double xmin, double ymin, double scale,
     int image_width, int image_height
 ) {
-    TileKey tile_key;
-    while (tileQueue.pop(tile_key)) {
-        int tile_size = tileReader.getTileSize();
-        double tile_xmin = tile_key.col * tile_size;
-        double tile_ymin = tile_key.row * tile_size;
+    TileInfo block;
+    while (tileQueue.pop(block)) {
+        const double block_xmin = block.idx.xmin;
+        const double block_ymin = block.idx.ymin;
+        const double block_xmax = block.idx.xmax;
+        const double block_ymax = block.idx.ymax;
 
-        int left = static_cast<int>(std::floor((tile_xmin - xmin) / scale));
-        int top = static_cast<int>(std::floor((tile_ymin - ymin) / scale));
-        int right = static_cast<int>(std::ceil(((tile_xmin + tile_size) - xmin) / scale));
-        int bottom = static_cast<int>(std::ceil(((tile_ymin + tile_size) - ymin) / scale));
+        int left = static_cast<int>(std::floor((block_xmin - xmin) / scale));
+        int top = static_cast<int>(std::floor((block_ymin - ymin) / scale));
+        int right = static_cast<int>(std::ceil((block_xmax - xmin) / scale));
+        int bottom = static_cast<int>(std::ceil((block_ymax - ymin) / scale));
 
         int tile_w = right - left;
         int tile_h = bottom - top;
@@ -48,7 +49,7 @@ void draw_worker(
         result.color_accumulator = cv::Mat3f::zeros(tile_h, tile_w);
         result.weight_accumulator = cv::Mat1f::zeros(tile_h, tile_w);
 
-        auto iter = tileReader.get_tile_iterator(tile_key.row, tile_key.col);
+        auto iter = tileReader.get_block_iterator(block);
         if (!iter) continue;
 
         std::string line;
@@ -145,13 +146,13 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
     }
     const bool manualRangeSpecified = xmin < xmax && ymin < ymax;
 
-    TileReader tileReader(dataFile, indexFile);
-    if (!tileReader.isValid()) {
+    TileReader metaReader(dataFile, indexFile);
+    if (!metaReader.isValid()) {
         error("Failed to initialize TileReader. Check input TSV and index files.");
     }
     if (!manualRangeSpecified) {
-        if (tileReader.hasGlobalBox()) {
-            const auto& globalBox = tileReader.getGlobalBox();
+        if (metaReader.hasGlobalBox()) {
+            const auto& globalBox = metaReader.getGlobalBox();
             xmin = globalBox.xmin;
             xmax = globalBox.xmax;
             ymin = globalBox.ymin;
@@ -164,6 +165,15 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
 
     std::vector<Rectangle<double>> query_rects;
     query_rects.emplace_back(xmin, ymin, xmax, ymax);
+
+    TileReader tileReader(dataFile, indexFile, &query_rects);
+    if (!tileReader.isValid()) {
+        error("Failed to initialize the data loader, check input TSV and index files.");
+    }
+    if (tileReader.getNumBlocks() == 0) {
+        notice("No data overlap the requested rectangle: xmin=%.2f xmax=%.2f ymin=%.2f ymax=%.2f",
+              xmin, xmax, ymin, ymax);
+    }
 
     std::unordered_map<uint32_t, std::vector<int32_t>> feature_color_map;
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile, &query_rects);
@@ -233,14 +243,13 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
         error("Image dimensions are non-positive. Check range and scale. W=%d, H=%d", width, height);
     notice("Output image size: %d x %d", width, height);
 
-    std::vector<TileKey> tiles;
-    std::vector<bool> tile_contained;
-    tileReader.getTileList(query_rects, tiles, tile_contained);
-    notice("Processing %zu tiles overlapping the query rectangle with %d threads...", tiles.size(), n_threads);
+    std::vector<TileInfo> blocks;
+    tileReader.getBlockList(blocks);
+    notice("Processing %zu indexed blocks overlapping the query rectangle with %d threads...", blocks.size(), n_threads);
 
-    ThreadSafeQueue<TileKey> tileQueue;
-    for (const auto& tile_key : tiles) {
-        tileQueue.push(tile_key);
+    ThreadSafeQueue<TileInfo> tileQueue;
+    for (const auto& block : blocks) {
+        tileQueue.push(block);
     }
     tileQueue.set_done();
 

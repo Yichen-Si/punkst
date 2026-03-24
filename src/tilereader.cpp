@@ -453,48 +453,43 @@ template int32_t lineParserUnival::parse<int32_t>( RecordExtendedT3D<int32_t>& r
 /*
     TileReaderBase
 */
-bool TileReaderBase::loadIndexBinary(const std::string &indexFilename) {
-    std::ifstream indexFile(indexFilename, std::ios::binary);
-    if (!indexFile.is_open()) {
-        error("%s: Unable to open index file %s", __func__, indexFilename.c_str());
-    }
+void TileReaderBase::assignLoadedIndex(const LoadedTileIndexData& loaded) {
+    tile_map_.clear();
+    blocks_.clear();
+    load_ok_ = false;
+    minrow = INT32_MAX;
+    mincol = INT32_MAX;
+    maxrow = INT32_MIN;
+    maxcol = INT32_MIN;
 
-    uint64_t magic = 0;
-    if (!indexFile.read(reinterpret_cast<char*>(&magic), sizeof(magic)) ||
-        magic != PUNKST_INDEX_MAGIC) {
-        return false;
-    }
+    tileSize_ = loaded.header.tileSize;
+    globalBox_ = loaded.globalBox;
+    recordSize_ = static_cast<size_t>(loaded.header.recordSize);
 
-    IndexHeader header;
-    indexFile.seekg(0);
-    indexFile.read(reinterpret_cast<char*>(&header), sizeof(header));
-    tileSize_ = header.tileSize;
-    if (tileSize_ <= 0) error("%s: invalid tileSize", __func__);
-    globalBox_ = Rectangle<float>(header.xmin, header.ymin, header.xmax, header.ymax);
-    recordSize_ = static_cast<size_t>(header.recordSize);
-
-    IndexEntryF entry;
-    bool filter = !rects.empty();
-    while (indexFile.read(reinterpret_cast<char*>(&entry), sizeof(entry))) {
-        TileKey key{entry.row, entry.col};
+    const bool filter = !rects.empty();
+    for (const auto& entry : loaded.entries) {
         TileInfo info(entry, true);
         if (filter) {
             bool contained = false;
-            if (!tileIntersectsRects(entry.row, entry.col, rects, &contained)) {
+            if (!blockIntersectsRects(entry, rects, &contained)) {
                 continue;
             }
             info.contained = contained;
         }
-        tile_map_.emplace(key, info);
-        if (entry.row < minrow) minrow = entry.row;
-        if (entry.col < mincol) mincol = entry.col;
-        if (entry.row > maxrow) maxrow = entry.row;
-        if (entry.col > maxcol) maxcol = entry.col;
+        blocks_.push_back(info);
+        if (entry.row != std::numeric_limits<int32_t>::lowest() &&
+            entry.col != std::numeric_limits<int32_t>::lowest()) {
+            TileKey key{entry.row, entry.col};
+            tile_map_.emplace(key, info);
+            if (entry.row < minrow) minrow = entry.row;
+            if (entry.col < mincol) mincol = entry.col;
+            if (entry.row > maxrow) maxrow = entry.row;
+            if (entry.col > maxcol) maxcol = entry.col;
+        }
     }
-    nTiles = tile_map_.size();
-    indexFile.close();
-    notice("Read index with %zu tiles", nTiles);
-    return true;
+    nTiles = blocks_.size();
+    load_ok_ = true;
+    notice("Read index with %zu blocks", nTiles);
 }
 
 /*
@@ -511,67 +506,12 @@ std::unique_ptr<BoundedReadline> TileReader::get_tile_iterator(int tileRow, int 
     return std::make_unique<BoundedReadline>(inputFile_, info.idx.st, info.idx.ed);
 }
 
-void TileReader::loadIndex(const std::string &indexFilename) {
-    std::ifstream indexFile(indexFilename, std::ios::binary);
-    if (!indexFile.is_open()) {
-        throw std::runtime_error("Unable to open index file: " + indexFilename);
-    }
-    if (loadIndexBinary(indexFilename)) {return;}
-    // Fallback to text format
-    loadIndexText(indexFilename);
+std::unique_ptr<BoundedReadline> TileReader::get_block_iterator(const TileInfo& block) const {
+    return std::make_unique<BoundedReadline>(inputFile_, block.idx.st, block.idx.ed);
 }
 
-bool TileReader::loadIndexText(const std::string &indexFilename) {
-    std::ifstream indexFile(indexFilename, std::ios::binary);
-    if (!indexFile.is_open()) {
-        error("%s: Unable to open index file %s", __func__, indexFilename.c_str());
-    }
-
-    indexFile.clear();
-    indexFile.seekg(0);
-    std::string line;
-    bool filter = !rects.empty();
-    while (std::getline(indexFile, line)) {
-        if (line.empty()) {continue;}
-        if (line[0] == '#') { // Parse metadata lines
-            std::istringstream metaStream(line);
-            std::string hashtag, key;
-            metaStream >> hashtag >> key;
-            if (key == "tilesize") {
-                if (!(metaStream >> tileSize_)) error("%s: Invalid tileSize", __func__);
-            }
-            continue;
-        }
-        std::istringstream iss(line);
-        int row, col;
-        uint64_t start, end;
-        if (!(iss >> row >> col >> start >> end)) {
-            error("%s: Malformed index line: %s", __func__, line.c_str());
-        }
-        TileInfo info(start, end, true);
-        TileKey key{row, col};
-        if (filter) {
-            bool contained = false;
-            if (!tileIntersectsRects(row, col, rects, &contained)) {
-                continue;
-            }
-            info.contained = contained;
-        }
-        tile_map_.emplace(key, info);
-        if (row < minrow) minrow = row;
-        if (col < mincol) mincol = col;
-        if (row > maxrow) maxrow = row;
-        if (col > maxcol) maxcol = col;
-        globalBox_.extendToInclude(Rectangle<int32_t>(
-            col * tileSize_, row * tileSize_,
-            (col + 1) * tileSize_, (row + 1) * tileSize_));
-    }
-    if (tileSize_ <= 0) {error("%s: Cannot identify tileSize", __func__);}
-
-    nTiles = tile_map_.size();
-    indexFile.close();
-    notice("%s: Read %zu tiles from index file, tilesize=%d", __func__, nTiles, tileSize_);
-    return true;
+void TileReader::loadIndex(const std::string &indexFilename) {
+    assignLoadedIndex(loadTileIndexData(indexFilename));
 }
 
 /*

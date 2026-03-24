@@ -3,6 +3,7 @@
 #include "region_query.hpp"
 #include "numerical_utils.hpp"
 #include "img_utils.hpp"
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
@@ -48,6 +49,36 @@ int32_t checked_integer_ratio(float srcRes, float mainRes, const char* funcName,
     }
     return static_cast<int32_t>(rounded);
 }
+
+struct ReorgTextShard {
+    std::string path;
+    int fd = -1;
+    IndexEntryF entry;
+
+    ReorgTextShard() = default;
+    ReorgTextShard(const ReorgTextShard&) = delete;
+    ReorgTextShard& operator=(const ReorgTextShard&) = delete;
+    ReorgTextShard(ReorgTextShard&& other) noexcept
+        : path(std::move(other.path)), fd(other.fd), entry(other.entry) {
+        other.fd = -1;
+    }
+    ReorgTextShard& operator=(ReorgTextShard&& other) noexcept {
+        if (this == &other) return *this;
+        if (fd >= 0) {
+            close(fd);
+        }
+        path = std::move(other.path);
+        fd = other.fd;
+        entry = other.entry;
+        other.fd = -1;
+        return *this;
+    }
+    ~ReorgTextShard() {
+        if (fd >= 0) {
+            close(fd);
+        }
+    }
+};
 
 } // namespace
 
@@ -552,72 +583,157 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
 
     if (mode_ & 0x1) {reorgTilesBinary(outPrefix, tileSize); return;}
 
-    std::map<TileKey, std::vector<size_t>> tileMainBlocks;
-    std::map<TileKey, std::vector<std::string>> boundaryLines;
-    std::map<TileKey, IndexEntryF> boundaryInfo;
     notice("%s: Start reorganizing %lu blocks with original tile size %d", __func__, blocks_.size(), tileSize);
 
     int boundaryBlocksCount = 0;
     int mainBlocksCount = 0;
-    for (size_t i = 0; i < blocks_.size(); ++i) {
-        const auto& b = blocks_[i];
+    for (const auto& b : blocks_) {
         if (b.contained) {
-            TileKey key{b.row, b.col};
-            tileMainBlocks[key].push_back(i);
             mainBlocksCount++;
-            continue;
-        }
-
-        boundaryBlocksCount++;
-        dataStream_.seekg(b.idx.st);
-        size_t len = b.idx.ed - b.idx.st;
-        if (len == 0) continue;
-        std::vector<char> data(len);
-        dataStream_.read(data.data(), len);
-        const char* ptr = data.data();
-        const char* end = ptr + len;
-        const char* lineStart = ptr;
-        std::vector<std::string> tokens;
-
-        while (lineStart < end) {
-            const char* lineEnd = static_cast<const char*>(memchr(lineStart, '\n', end - lineStart));
-            if (!lineEnd) lineEnd = end;
-
-            size_t lineLen = lineEnd - lineStart;
-            if (lineLen > 0 && lineStart[lineLen - 1] == '\r') lineLen--;
-            if (lineLen == 0 || lineStart[0] == '#') {
-                lineStart = lineEnd + 1;
-                continue;
-            }
-            std::string_view lineView(lineStart, lineLen);
-            split(tokens, "\t", lineView);
-            if (tokens.size() < icol_max_ + 1) {
-                error("Insufficient tokens (%lu) in line (block %lu): %.*s.", tokens.size(), i, (int)lineLen, lineStart);
-            }
-
-            float x, y;
-            if (!str2float(tokens[icol_x_], x) || !str2float(tokens[icol_y_], y)) {
-                error("Invalid coordinate values in line: %.*s", (int)lineLen, lineStart);
-            }
-            if (mode_ & 0x2) {
-                x *= formatInfo_.pixelResolution;
-                y *= formatInfo_.pixelResolution;
-            }
-
-            int32_t c = static_cast<int32_t>(std::floor(x / tileSize));
-            int32_t r = static_cast<int32_t>(std::floor(y / tileSize));
-            TileKey key{r, c};
-            boundaryLines[key].emplace_back(lineStart, lineLen);
-            if (boundaryInfo.find(key) == boundaryInfo.end()) {
-                IndexEntryF idx(r, c);
-                tile2bound(key, idx.xmin, idx.xmax, idx.ymin, idx.ymax, tileSize);
-                boundaryInfo.emplace(key, std::move(idx));
-            }
-            lineStart = lineEnd + 1;
+        } else {
+            boundaryBlocksCount++;
         }
     }
-
     notice("Found %d main blocks and %d boundary blocks", mainBlocksCount, boundaryBlocksCount);
+
+    std::filesystem::path outPath(outPrefix);
+    std::filesystem::path tempParent = outPath.has_parent_path() ? outPath.parent_path() : std::filesystem::path(".");
+    ScopedTempDir tempDirScope(tempParent);
+
+    std::map<TileKey, ReorgTextShard> tileShards;
+    auto getShard = [&](const TileKey& key) -> ReorgTextShard& {
+        auto it = tileShards.find(key);
+        if (it != tileShards.end()) {
+            return it->second;
+        }
+        ReorgTextShard shard;
+        shard.path = (tempDirScope.path /
+            (std::to_string(key.row) + "_" + std::to_string(key.col) + ".tsvfrag")).string();
+        shard.fd = open(shard.path.c_str(), O_CREAT | O_WRONLY | O_APPEND | O_CLOEXEC, 0644);
+        if (shard.fd < 0) {
+            error("%s: Cannot open shard file %s", __func__, shard.path.c_str());
+        }
+        shard.entry = IndexEntryF(key.row, key.col);
+        tile2bound(key, shard.entry.xmin, shard.entry.xmax, shard.entry.ymin, shard.entry.ymax, tileSize);
+        auto [insertedIt, inserted] = tileShards.emplace(key, std::move(shard));
+        (void)inserted;
+        return insertedIt->second;
+    };
+
+    auto appendLineToShard = [&](const TileKey& key, const char* data, size_t len) {
+        ReorgTextShard& shard = getShard(key);
+        if (!write_all(shard.fd, data, len)) {
+            error("%s: Failed writing shard %s", __func__, shard.path.c_str());
+        }
+        if (!write_all(shard.fd, "\n", 1)) {
+            error("%s: Failed writing newline to shard %s", __func__, shard.path.c_str());
+        }
+        shard.entry.n++;
+    };
+
+    auto copyRangeToShard = [&](const TileKey& key, uint64_t st, uint64_t ed) {
+        if (ed <= st) {
+            return;
+        }
+        ReorgTextShard& shard = getShard(key);
+        const uint64_t len = ed - st;
+        const size_t bufSz = 1024 * 1024;
+        std::vector<char> buffer(bufSz);
+        dataStream_.clear();
+        dataStream_.seekg(static_cast<std::streamoff>(st));
+        if (!dataStream_) {
+            error("%s: seek failed to %" PRIu64, __func__, st);
+        }
+        uint64_t copied = 0;
+        while (copied < len) {
+            const size_t toRead = static_cast<size_t>(std::min<uint64_t>(bufSz, len - copied));
+            dataStream_.read(buffer.data(), static_cast<std::streamsize>(toRead));
+            if (static_cast<size_t>(dataStream_.gcount()) != toRead) {
+                error("%s: read failed while copying block range [%" PRIu64 ", %" PRIu64 ")",
+                    __func__, st, ed);
+            }
+            if (!write_all(shard.fd, buffer.data(), toRead)) {
+                error("%s: Failed writing shard %s", __func__, shard.path.c_str());
+            }
+            copied += static_cast<uint64_t>(toRead);
+        }
+    };
+
+    std::vector<size_t> blockOrder(blocks_.size());
+    std::iota(blockOrder.begin(), blockOrder.end(), size_t{0});
+    std::sort(blockOrder.begin(), blockOrder.end(), [&](size_t lhs, size_t rhs) {
+        const IndexEntryF& a = blocks_[lhs].idx;
+        const IndexEntryF& b = blocks_[rhs].idx;
+        if (a.st != b.st) return a.st < b.st;
+        if (a.ed != b.ed) return a.ed < b.ed;
+        if (blocks_[lhs].row != blocks_[rhs].row) return blocks_[lhs].row < blocks_[rhs].row;
+        return blocks_[lhs].col < blocks_[rhs].col;
+    });
+
+    int32_t nBlocksProcessed = 0;
+    for (size_t orderIdx = 0; orderIdx < blockOrder.size(); ++orderIdx) {
+        const size_t i = blockOrder[orderIdx];
+        const auto& b = blocks_[i];
+        if (b.contained) {
+            const TileKey key{b.row, b.col};
+            copyRangeToShard(key, b.idx.st, b.idx.ed);
+            getShard(key).entry.n += b.idx.n;
+        } else {
+            dataStream_.clear();
+            dataStream_.seekg(static_cast<std::streamoff>(b.idx.st));
+            if (!dataStream_) {
+                error("%s: seek failed to boundary block start %" PRIu64, __func__, b.idx.st);
+            }
+            const size_t len = static_cast<size_t>(b.idx.ed - b.idx.st);
+            if (len > 0) {
+                std::vector<char> data(len);
+                dataStream_.read(data.data(), static_cast<std::streamsize>(len));
+                if (static_cast<size_t>(dataStream_.gcount()) != len) {
+                    error("%s: Read error block %lu", __func__, i);
+                }
+                const char* ptr = data.data();
+                const char* end = ptr + len;
+                const char* lineStart = ptr;
+                std::vector<std::string> tokens;
+
+                while (lineStart < end) {
+                    const char* lineEnd = static_cast<const char*>(memchr(lineStart, '\n', end - lineStart));
+                    if (!lineEnd) lineEnd = end;
+
+                    size_t lineLen = static_cast<size_t>(lineEnd - lineStart);
+                    if (lineLen > 0 && lineStart[lineLen - 1] == '\r') lineLen--;
+                    if (lineLen == 0 || lineStart[0] == '#') {
+                        lineStart = (lineEnd < end) ? lineEnd + 1 : end;
+                        continue;
+                    }
+                    std::string_view lineView(lineStart, lineLen);
+                    split(tokens, "\t", lineView);
+                    if (tokens.size() < icol_max_ + 1) {
+                        error("Insufficient tokens (%lu) in line (block %lu): %.*s.",
+                            tokens.size(), i, (int)lineLen, lineStart);
+                    }
+
+                    float x, y;
+                    if (!str2float(tokens[icol_x_], x) || !str2float(tokens[icol_y_], y)) {
+                        error("Invalid coordinate values in line: %.*s", (int)lineLen, lineStart);
+                    }
+                    if (mode_ & 0x2) {
+                        x *= formatInfo_.pixelResolution;
+                        y *= formatInfo_.pixelResolution;
+                    }
+
+                    const int32_t c = static_cast<int32_t>(std::floor(x / tileSize));
+                    const int32_t r = static_cast<int32_t>(std::floor(y / tileSize));
+                    appendLineToShard(TileKey{r, c}, lineStart, lineLen);
+                    lineStart = (lineEnd < end) ? lineEnd + 1 : end;
+                }
+            }
+        }
+        nBlocksProcessed++;
+        if (nBlocksProcessed % 100 == 0) {
+            notice("%s: Processed %d/%lu source blocks", __func__, nBlocksProcessed, blockOrder.size());
+        }
+    }
 
     std::string outFile = outPrefix + ".tsv";
     std::string outIndex = outPrefix + ".index";
@@ -653,83 +769,48 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
     }
 
     size_t currentOffset = headerLine_.size();
-    int32_t nFinished = 0;
-    // 1. Process tiles with main blocks
-    for (const auto& kv : tileMainBlocks) {
-        TileKey tile = kv.first;
-        const auto& indices = kv.second;
-
-        IndexEntryF newEntry(tile.row, tile.col);
-        newEntry.st = currentOffset;
-        newEntry.n = 0;
-        tile2bound(tile, newEntry.xmin, newEntry.xmax, newEntry.ymin, newEntry.ymax, tileSize);
-
-        // Write main blocks
-        for (size_t i : indices) {
-            const auto& mb = blocks_[i];
-            size_t len = mb.idx.ed - mb.idx.st;
-            if (len > 0) {
-                dataStream_.seekg(mb.idx.st);
-                size_t copied = 0;
-                const size_t bufSz = 1024 * 1024;
-                std::vector<char> buffer(bufSz);
-                while (copied < len) {
-                    size_t toRead = std::min(bufSz, len - copied);
-                    dataStream_.read(buffer.data(), toRead);
-                    if (!write_all(fdMain, buffer.data(), toRead)) error("Write error");
-                    copied += toRead;
-                }
-                newEntry.n += mb.idx.n;
-            }
-        }
-
-        // Append boundary lines if any
-        if (boundaryLines.count(tile)) {
-            const auto& lines = boundaryLines[tile];
-            for (size_t i = 0; i < lines.size(); ++i) {
-                const std::string& l = lines[i];
-                if (!write_all(fdMain, l.data(), l.size())) error("Write error");
-                if (!write_all(fdMain, "\n", 1)) error("Write error");
-
-                newEntry.n++;
-            }
-            boundaryLines.erase(tile);
-        }
-
-        newEntry.ed = lseek(fdMain, 0, SEEK_CUR);
-        currentOffset = newEntry.ed;
-        if (newEntry.n > 0) {
-            if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index write error");
-            nFinished++;
-            if (nFinished % 100 == 0) {
-                notice("%s: Processed %d/%lu tiles with main blocks", __func__, nFinished, tileMainBlocks.size());
-            }
+    for (auto& kv : tileShards) {
+        if (kv.second.fd >= 0) {
+            close(kv.second.fd);
+            kv.second.fd = -1;
         }
     }
-    notice("%s: Written %d tiles with main blocks; %lu boundary-only tiles remain", __func__, nFinished, boundaryLines.size());
 
-    // 2. Process remaining boundary-only tiles
-    for (const auto& kv : boundaryLines) {
-        TileKey tile = kv.first;
-        const auto& lines = kv.second;
-        IndexEntryF& newEntry = boundaryInfo[tile];
-        newEntry.st = currentOffset;
-        for (size_t i = 0; i < lines.size(); ++i) {
-            const std::string& l = lines[i];
-            if (!write_all(fdMain, l.data(), l.size())) error("Write error");
-            if (!write_all(fdMain, "\n", 1)) error("Write error");
-            newEntry.n++;
+    int32_t nTilesWritten = 0;
+    for (auto& kv : tileShards) {
+        ReorgTextShard& shard = kv.second;
+        if (shard.entry.n == 0) {
+            continue;
         }
-        newEntry.ed = lseek(fdMain, 0, SEEK_CUR);
-        currentOffset = newEntry.ed;
-        if (newEntry.n > 0) {
-            if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) error("Index write error");
+        shard.entry.st = currentOffset;
+        std::ifstream shardIn(shard.path, std::ios::binary);
+        if (!shardIn.is_open()) {
+            error("%s: Cannot open shard file %s for merge", __func__, shard.path.c_str());
         }
+        const size_t bufSz = 1024 * 1024;
+        std::vector<char> buffer(bufSz);
+        while (shardIn) {
+            shardIn.read(buffer.data(), static_cast<std::streamsize>(bufSz));
+            const std::streamsize got = shardIn.gcount();
+            if (got <= 0) {
+                break;
+            }
+            if (!write_all(fdMain, buffer.data(), static_cast<size_t>(got))) {
+                error("%s: Write error while merging shard %s", __func__, shard.path.c_str());
+            }
+            currentOffset += static_cast<size_t>(got);
+        }
+        shard.entry.ed = currentOffset;
+        if (!write_all(fdIndex, &shard.entry, sizeof(shard.entry))) {
+            error("%s: Index write error", __func__);
+        }
+        nTilesWritten++;
     }
 
     close(fdMain);
     close(fdIndex);
-    notice("Reorganization completed. Output written to %s\n Index written to %s", outFile.c_str(), outIndex.c_str());
+    notice("Reorganization completed into %d tiles. Output written to %s\n Index written to %s",
+        nTilesWritten, outFile.c_str(), outIndex.c_str());
 }
 
 void TileOperator::reorgTilesBinary(const std::string& outPrefix, int32_t tileSize) {

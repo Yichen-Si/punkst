@@ -546,3 +546,13 @@ struct IndexEntryF_legacy {
     uint32_t n;
     float xmin, xmax, ymin, ymax;
 };
+
+struct LoadedTileIndexData {
+    IndexHeader header;
+    Rectangle<float> globalBox;
+    std::vector<IndexEntryF> entries;
+    bool isLegacyBinary = false;
+    bool isTextIndex = false;
+};
+
+LoadedTileIndexData loadTileIndexData(const std::string& indexFile);
