@@ -1094,6 +1094,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Annotate Points with Inference Results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#merge-and-annotate-in-one-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merge and annotate in one step
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1557,6 +1574,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Annotate Points with Inference Results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#merge-and-annotate-in-one-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merge and annotate in one step
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1726,7 +1760,7 @@
 <p><strong><code>tile-op</code> provides utilities to view and manipulate the tiled data files</strong> created by <code>punkst pixel-decode</code> or <code>punkst pts2tiles</code>.</p>
 <p>This module is under active development and any suggestions or requests will be most welcome.</p>
 <p>Caution:</p>
-<p>Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when <code>pixel-decode</code> is run with a moderate <code>--pixel-res</code>, like <code>0.5</code> or <code>1</code> for submicron resolution data, or <code>2</code> for Visium HD data. If the input was generated at a much finer grid, you can now request a coarser raster grid for these operations with <code>--raster-pixel-res</code>.</p>
+<p>Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when <code>pixel-decode</code> is run with a moderate <code>--pixel-res</code>, like <code>0.5</code> or <code>1</code> for submicron resolution data, or <code>2</code> for Visium HD data. If the input was generated at a much finer grid, you can request a coarser raster grid for these operations with <code>--raster-pixel-res</code>.</p>
 <h2 id="available-operations">Available Operations<a class="headerlink" href="#available-operations" title="Permanent link">&para;</a></h2>
 <ul>
 <li>
@@ -1800,8 +1834,13 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </ul>
 <p>Additional flags used with supported single-molecule workflows:</p>
 <ul>
-<li><code>--features</code>: dictionary file whose first column maps feature indices to feature names. <code>--features -</code> reads this dictionary from stdin.</li>
 <li><code>--icol-feature</code>: 0-based feature-name column in the query TSV for <code>--annotate-pts</code> and <code>--annotate-cell</code></li>
+</ul>
+<p>Feature-bearing binary indexes now embed their feature dictionary directly in the <code>.index</code> file:</p>
+<ul>
+<li><code>tile-op</code> no longer takes <code>--features</code></li>
+<li><code>--dump-tsv</code>, <code>--merge-emb</code>, <code>--annotate-pts</code>, <code>--annotate-cell</code>, and feature-aware <code>--prob-dot</code> decode names from the embedded dictionary</li>
+<li>when multiple feature-bearing sources are merged together, <code>tile-op</code> first compares dictionaries and then either uses the original indices directly or remaps them through a canonical union of feature names</li>
 </ul>
 <h3 id="parallel-execution">Parallel Execution<a class="headerlink" href="#parallel-execution" title="Permanent link">&para;</a></h3>
 <p>Most <code>tile-op</code> subcommands accept <code>--threads N</code>. The current CLI default is <code>--threads 1</code>, which keeps all operations single-threaded unless you explicitly request more threads.</p>
@@ -1861,6 +1900,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li>only allowed when the input stores original float coordinates</li>
 <li><code>--pixel-res-z-override</code> requires <code>--pixel-res-override</code>; if only <code>--pixel-res-override</code> is provided for 3D input the same value is used for Z</li>
 <li>this override is used by feature-aware operations such as <code>--merge-emb</code>, <code>--annotate-pts</code>, <code>--annotate-cell</code>, and <code>--prob-dot</code></li>
+<li>if a feature-aware merge-related workflow needs a raw-float main input that has no usable stored pixel resolution and <code>--pixel-res-override</code> is omitted, <code>tile-op</code> now warns and falls back to <code>0.001</code></li>
 <li>when the main input uses this override in feature-aware merge / prob-dot workflows, the same effective resolution is propagated to auxiliary raw-float sources whose own resolution is unset</li>
 </ul>
 <p>Unscaled integer-coordinate inputs do not use this override. They are treated as already being on an integer lattice.</p>
@@ -1873,10 +1913,8 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--dump-tsv<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span>--binary<span class="w"> </span>--out<span class="w"> </span>path/prefix.dump
 </span></code></pre></div>
 <p>The output include <code>path/prefix.dump.tsv</code> and <code>path/prefix.dump.index</code>.</p>
-<p>For single-molecule binary input, <code>--features</code> is required and the dumped TSV includes one extra <code>feature</code> column with feature names:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--dump-tsv<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--features<span class="w"> </span>path/features.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.dump
+<p>For single-molecule binary input, the dumped TSV includes one extra <code>feature</code> column decoded from the embedded dictionary in <code>path/prefix.index</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--dump-tsv<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span>--binary<span class="w"> </span>--out<span class="w"> </span>path/prefix.dump
 </span></code></pre></div>
 <p><code>--dump-tsv</code> also supports GeoJSON filtering, and it can composes with the rectangle query set by <code>--xmin/--xmax/--ymin/--ymax</code>:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--dump-tsv<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
@@ -1936,16 +1974,26 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p><code>--k2keep</code> - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all top in the input files are kept.</p>
 <p><code>--binary-out</code> - (Optional) Save the merged output in binary format instead of TSV.</p>
 <p><code>--merge-keep-all-main</code> - (Optional) Keep all records from the main input and fill any unmatched auxiliary source slots with <code>(-1, 0)</code>. By default, merge keeps only records that match in every source.</p>
+<p><code>--merge-keep-all</code> - (Optional) Outer-style merge. Emit a merged record if any source matches, instead of requiring the main input or all sources. Missing source slots are filled with placeholders.</p>
+<p><code>--emb-prefix</code> - (Optional, TSV output only) Rename merged <code>(K, P)</code> columns per source. For example, <code>--k2keep 2 2 --emb-prefix rna atac</code> writes <code>rna_K1 rna_P1 rna_K2 rna_P2 atac_K1 atac_P1 atac_K2 atac_P2</code>.</p>
+<p><code>--null-k</code>, <code>--null-p</code> - (Optional, TSV output only) Override the placeholder text used for missing merged <code>(K, P)</code> pairs. Defaults are <code>-1</code> and <code>0</code>.</p>
 <p><code>--threads</code> - (Optional) Number of worker threads for tile-local merge processing.</p>
 <p>In the above example, we keep top 3 factors from file <code>result1.bin</code> (or <code>.tsv</code>), top 1 from <code>result2.tsv</code>, and top 2 from <code>result3.bin</code>. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.</p>
-<p>For single-molecule inputs, the main input must also be single-molecule. Matching then works as follows:</p>
+<p>To merge single-molecule data, the main input must be single-molecule. Matching then works as follows:</p>
 <ul>
 <li>if all inputs are single-molecule, records are matched by coordinate and feature index</li>
 <li>if the main input is single-molecule and some later auxiliary inputs are standard pixel outputs, those later inputs are treated as lower-resolution feature-agnostic records and can fan out to multiple feature-bearing main records at the same coordinate</li>
 <li>the merged output keeps the feature index</li>
 </ul>
-<p>If the merged output is TSV rather than binary, you may also pass <code>--features</code> so the feature-bearing column is written as feature names instead of numeric feature indices.</p>
+<p>For single-molecule TSV merge output, the <code>feature</code> column is always written using the canonical merged feature dictionary embedded in the output index.</p>
 <p>For raw-float feature-specific inputs, use <code>--pixel-res-override</code> (and <code>--pixel-res-z-override</code> for 3D when needed) if the inputs need an explicit lattice resolution for matching.</p>
+<p>If the feature-bearing main input stores original float coordinates and has no usable pixel resolution in its header, omitting <code>--pixel-res-override</code> now triggers a warning and a default fallback to <code>0.001</code>. That effective resolution is then reused for auxiliary raw-float sources whose own resolution is unset.</p>
+<p>Current restrictions:</p>
+<ul>
+<li><code>--emb-prefix</code> is only for TSV output, not <code>--binary-out</code></li>
+<li>standalone <code>--merge-keep-all</code> with a 3D main input does not support 2D auxiliary sources</li>
+<li>standalone single-molecule <code>--merge-keep-all</code> requires all merged sources to carry feature indices</li>
+</ul>
 <h3 id="annotate-points-with-inference-results">Annotate Points with Inference Results<a class="headerlink" href="#annotate-points-with-inference-results" title="Permanent link">&para;</a></h3>
 <p>You can annotate a transcript file with the inference results. The query file is required to be generated by <code>punkst pts2tiles</code> with the same tile structure as the result file (since you normally run <code>pixel-decode</code> with the output from <code>pts2tiles</code> as the input), but you can apply <code>pts2tiles</code> to any tsv file that contains X, Y coordinates as two of its columns.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
@@ -1957,19 +2005,40 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p><code>--icol-y</code> - 0-based column index for Y coordinate in the points file.</p>
 <p>For single-molecule inputs, also provide:</p>
 <ul>
-<li><code>--features</code> - feature dictionary used to map feature names to the feature indices stored in the tiled inference file</li>
 <li><code>--icol-feature</code> - 0-based column index of the feature-name column in the query TSV</li>
 </ul>
 <p>Matching is then done by <code>(x, y, feature)</code> in 2D or <code>(x, y, z, feature)</code> in 3D.</p>
+<p><code>--anno-keep-all</code> - (Optional) Keep all query records even when no annotation is found. Missing <code>(K, P)</code> pairs are written using the same placeholder rendering controlled by <code>--null-k</code> / <code>--null-p</code>.</p>
 <p><code>--threads</code> - (Optional) Number of worker threads for tile-local annotation.</p>
 <p>For raw-float feature-specific inputs, use <code>--pixel-res-override</code> if the inference file needs an explicit coordinate-to-pixel mapping resolution.</p>
+<p>For combined <code>--merge-emb + --annotate-pts</code> in feature-bearing mode, the same fallback applies: if the main raw-float input has no usable stored pixel resolution and <code>--pixel-res-override</code> is omitted, <code>tile-op</code> warns and defaults to <code>0.001</code>.</p>
+<p>For single-molecule annotate, unknown query feature names behave like unmatched records: they are skipped by default, and <code>--anno-keep-all</code> keeps the row and writes placeholder <code>(K, P)</code> pairs.</p>
+<h4 id="merge-and-annotate-in-one-step">Merge and annotate in one step<a class="headerlink" href="#merge-and-annotate-in-one-step" title="Permanent link">&para;</a></h4>
+<p>You can also merge multiple inference sources and annotate the query TSV in one pass:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span><span class="si">${</span><span class="nv">opref1</span><span class="si">}</span><span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span>--pixel-res-override<span class="w"> </span><span class="m">0</span>.001<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span>--annotate-pts<span class="w"> </span><span class="si">${</span><span class="nv">ptpref</span><span class="si">}</span><span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--merge-emb<span class="w"> </span><span class="si">${</span><span class="nv">opref2</span><span class="si">}</span>.bin<span class="w"> </span><span class="si">${</span><span class="nv">opref3</span><span class="si">}</span>.bin<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span>--k2keep<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">3</span><span class="w"> </span>--emb-prefix<span class="w"> </span>pref1<span class="w"> </span>pref2<span class="w"> </span>pref3<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span>--merge-keep-all<span class="w"> </span>--anno-keep-all<span class="w"> </span>--null-k<span class="w"> </span>NA<span class="w"> </span>--null-p<span class="w"> </span>NA<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">opref</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
+</span></code></pre></div>
+<p>(In the above example we assume at least one of the merged sources is from the single-molecule version of <a href="../pixel-decode.md"><code>pixel-decode</code></a> so <code>--icol-feature</code> and <code>--pixel-res-override</code> are needed.)</p>
+<p>This combined mode:</p>
+<ul>
+<li>output is TSV-only</li>
+<li>applies the same merge rules as standalone <code>--merge-emb</code></li>
+<li>appends the merged <code>(K, P)</code> columns to each emitted query row</li>
+<li>supports <code>--merge-keep-all-main</code>, <code>--merge-keep-all</code>, <code>--emb-prefix</code>, <code>--null-k</code>, <code>--null-p</code>, and <code>--anno-keep-all</code></li>
+<li>if one of the merged sources is feature-specific, <code>--icol-feature</code> is required and feature names are resolved from the embedded dictionaries</li>
+</ul>
 <h3 id="compute-joint-probability-distributions">Compute Joint Probability Distributions<a class="headerlink" href="#compute-joint-probability-distributions" title="Permanent link">&para;</a></h3>
 <p>You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from different models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file). To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.</p>
 <p>Note: the pixel level factor probabilities are not to be interpreted as full Bayesian posterior probabilities as they are from approximated computation with mean-field variational inference.</p>
 <p>Likely use cases: comparing factor sets; comparing factors with cell types.</p>
 <h4 id="single-input">Single Input<a class="headerlink" href="#single-input" title="Permanent link">&para;</a></h4>
 <p>For a single inference result file:</p>
-<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 Output:</p>
 <ul>
@@ -1984,9 +2053,9 @@ Output:</p>
 <p>If the file contains multiple sets of results (e.g. a merged file), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., <code>path/out_prefix.0v1.cross.tsv</code>).</p>
 <h4 id="merging-and-computing-on-the-fly">Merging and Computing on the Fly<a class="headerlink" href="#merging-and-computing-on-the-fly" title="Permanent link">&para;</a></h4>
 <p>You can also compute these statistics while merging multiple inference result files on the fly, without writing the merged file to disk.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <p>This supports <code>--k2keep</code> to reduce the number of top-K factors used in each source before computing the products.</p>
 <p><code>--threads</code> - (Optional) Number of worker threads for shared-tile accumulation across input sources.</p>
@@ -2005,7 +2074,7 @@ Output:</p>
 </ul>
 <h3 id="compute-confusion-matrix">Compute Confusion Matrix<a class="headerlink" href="#compute-confusion-matrix" title="Permanent link">&para;</a></h3>
 <p>This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--confusion<span class="w"> </span><span class="m">10</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--confusion<span class="w"> </span><span class="m">10</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <p><code>--confusion</code> - The resolution (side length of square bins in microns) for computing the confusion matrix.</p>
 <p><code>--threads</code> - (Optional) Number of worker threads for indexed tile-level confusion accumulation.</p>
@@ -2017,10 +2086,10 @@ Output:</p>
 <h3 id="aggregate-results-by-cell">Aggregate Results by Cell<a class="headerlink" href="#aggregate-results-by-cell" title="Permanent link">&para;</a></h3>
 <p>This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tailed) transcript file that contains cell/compartment annotations per transcript/pixel.
 If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run <code>punkst pts2tiles</code> on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file should contain the necessary information.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--annotate-cell<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts_with_cells<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-c<span class="w"> </span><span class="m">5</span><span class="w"> </span>--icol-s<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>--out<span class="w"> </span>path/cellular_results
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--annotate-cell<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts_with_cells<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-c<span class="w"> </span><span class="m">5</span><span class="w"> </span>--icol-s<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span>--out<span class="w"> </span>path/cellular_results
 </span></code></pre></div>
 <p>This command will summarize the factors for each cell ID found in <code>path/transcripts_with_cells.tsv</code>.</p>
 <p><code>--annotate-cell</code> - Flag to enable aggregation by cell.</p>
@@ -2029,7 +2098,6 @@ If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already 
 <p><code>--icol-z</code> - (Optional) 0-based column index for Z coordinate.</p>
 <p>For single-molecule inputs, also provide:</p>
 <ul>
-<li><code>--features</code> - feature dictionary used to map feature names to feature indices</li>
 <li><code>--icol-feature</code> - 0-based feature-name column in the annotated query TSV</li>
 </ul>
 <p>Matching is then done by coordinate plus feature before factor probabilities are aggregated per cell.</p>
@@ -2044,7 +2112,7 @@ If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already 
 <p>This is a heuristic denoising operation on the top-predicted factor labels for each pixel. It replace pixels where the predicted factor differs from most of its neighbors with the majority vote among its neighbors.
 It is meant for the case where you projected categorical cell types at high resolution data where you do not expect to see much mixing of cell types at single pixel level.
 The output is a new tiled data file where for each pixel, only the smoothed top factor is kept. (The output can be used as input for <code>tile-op</code>, so you can dump it to a tsv file or do other operations)</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--smooth-top-labels<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/smoothed_result
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--smooth-top-labels<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/smoothed_result
 </span></code></pre></div>
 <p><code>--smooth-top-labels</code> - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.</p>
 <p>Optional:</p>
@@ -2052,7 +2120,7 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <p><code>--raster-pixel-res</code> - (Optional) run smoothing on a coarser raster grid. The output header records the requested pixel resolution.</p>
 <h3 id="compute-basic-spatial-metrics">Compute Basic Spatial Metrics<a class="headerlink" href="#compute-basic-spatial-metrics" title="Permanent link">&para;</a></h3>
 <p>This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with <code>tile-op --smooth-top-labels r --fill-empty-islands</code> (see above).</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--spatial-metrics<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/prefix
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--spatial-metrics<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/prefix
 </span></code></pre></div>
 <p>The output includes two files:</p>
 <ul>
@@ -2061,7 +2129,7 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <li>total number of pixels (<code>area</code>)</li>
 <li>total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel <code>K</code> (<code>perim</code>)</li>
 </ul>
-<p>The single-channel table now includes one extra row with <code>#k = K</code>, representing empty/background area.</p>
+<p>The single-channel table includes one extra row with <code>#k = K</code>, representing empty/background area.</p>
 <ul>
 <li><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are</li>
 <li>channel indices for the pair (<code>#k</code>, <code>l</code>)</li>
@@ -2077,10 +2145,10 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <p>Shell composition: consider each focal factor as defining a binary mask, we first find the contour of each patch (connected component) of the foreground of the mask, a shell is defined as the set of pixels within a certain distance from the contour. For each of the specified shell radii, we report the composition of other factors within the shell.</p>
 <p>Surface distance: for each pair of factors, we compute a histogram of the distance from pixels of one factor to the nearest pixel of the other factor, and vice versa. This is a directional measure of spatial proximity between factors. It is approximated for efficiency and robustness by first extracting boundaries of the factor masks, then computing the distance from each boundary pixel to the nearest pixel on the other factor's boundary. The output is a histogram of these distances for each pair of factors with bin size <code>1</code> and up to the specified maximum distance.</p>
 <p><strong>CAUTION</strong>: all length and area parameters are in pixel units because this operation views the data as a rasterized image. By default those pixels are the input pixels. If you pass <code>--raster-pixel-res</code>, the same parameters are interpreted on that coarser raster grid instead.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--shell-surface<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span>--shell-radii<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="m">20</span><span class="w"> </span>--surface-dmax<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--spatial-min-pix-per-tile-label<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--shell-surface<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--shell-radii<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="m">20</span><span class="w"> </span>--surface-dmax<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--spatial-min-pix-per-tile-label<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
 </span></code></pre></div>
 <p><code>--shell-surface</code> - run shell occupancy and surface distance profiling.</p>
 <p><code>--shell-radii</code> - one or more shell radii (in pixels, NOT microns) for occupancy reporting.</p>
@@ -2109,10 +2177,10 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <h3 id="profile-the-area-covered-by-one-focal-factor">Profile the area covered by one focal factor<a class="headerlink" href="#profile-the-area-covered-by-one-focal-factor" title="Permanent link">&para;</a></h3>
 <p>Build a raster mask for one focal factor using local neighborhood probability mass, optionally remove isolated small spots/patches, then report the factor composition inside the mask. Optionally, it then creates a soft mask for each of the factors with a high total probability mass inside the focal mask and calculate pairwise overlaps among the focal and selected factor masks.
 (It currently does not output the boundaries. See <code>--soft-factor-mask</code> below for that)</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--profile-one-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--focal-k<span class="w"> </span><span class="m">7</span><span class="w"> </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--mask-min-frac<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--profile-one-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">  </span>--focal-k<span class="w"> </span><span class="m">7</span><span class="w"> </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">  </span>--mask-min-frac<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>
@@ -2148,11 +2216,11 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <h3 id="soft-factor-mask">Soft factor mask<a class="headerlink" href="#soft-factor-mask" title="Permanent link">&para;</a></h3>
 <p>Build a soft binary mask for every factor, optionally remove small connected components, and write global summaries. By default this also polygonizes the kept mask and exports one GeoJSON <code>MultiPolygon</code> feature per factor; use <code>--skip-boundaries</code> to disable geometry export.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--soft-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">  </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="w">  </span>--mask-min-pixel-prob<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span>--mask-min-tile-mass<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="w">  </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span>--mask-min-hole-area<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="w">  </span>--mask-simplify<span class="w"> </span><span class="m">2</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--soft-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">  </span>--mask-min-pixel-prob<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span>--mask-min-tile-mass<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">  </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span>--mask-min-hole-area<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="w">  </span>--mask-simplify<span class="w"> </span><span class="m">2</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>
@@ -2201,10 +2269,10 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <h3 id="soft-mask-composition">Soft mask composition<a class="headerlink" href="#soft-mask-composition" title="Permanent link">&para;</a></h3>
 <p>Read the joined GeoJSON produced by <code>--soft-factor-mask</code>, treat each feature as one focal-factor mask, and compute the factor composition inside each mask as well as globally over the full processed input. Masks may overlap, so one pixel can contribute to multiple focal-mask histograms.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--soft-mask-composition<span class="w"> </span>path/out_prefix.geojson<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span>--soft-mask-composition-focal<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">7</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="w">  </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--soft-mask-composition<span class="w"> </span>path/out_prefix.geojson<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span>--soft-mask-composition-focal<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">7</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">  </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>
@@ -2222,8 +2290,8 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <p>For the global histogram block, <code>k_focal</code> is written as <code>K</code>, the total number of factors in the input.</p>
 <h3 id="hard-factor-mask">Hard factor mask<a class="headerlink" href="#hard-factor-mask" title="Permanent link">&para;</a></h3>
 <p>Build per-label hard masks from the top predicted factor at each raster pixel, merge connected components across tile boundaries, and write global summaries. By default this also writes one GeoJSON <code>MultiPolygon</code> feature per factor; use <code>--skip-boundaries</code> to disable boundary extraction and write only the summaries.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--hard-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--hard-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>
