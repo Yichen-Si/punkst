@@ -30,6 +30,8 @@ struct IndexHeader {
     float pixelResolutionZ = -1; // Must be > 0 if mode & 0x20
     uint32_t topK = 0; // how many (factor, probability) pairs are kept per record (per inference set)
     uint32_t recordSize = 0; // <= 0 for tsv
+    uint32_t featureCount = 0; // > 0 iff mode & 0x40
+    uint32_t featureNameSize = 0; // fixed byte width including trailing NUL padding
     float xmin = -1.0f, xmax = -1.0f, ymin = -1.0f, ymax = -1.0f;
 
     int32_t parseKvec(std::vector<uint32_t>& kvec) {
@@ -90,7 +92,9 @@ struct IndexEntryF {
     IndexEntryF(int32_t r, int32_t c) : row(r), col(c) {}
     IndexEntryF(uint64_t s, uint64_t e, uint32_t nn,
                 int32_t x0=-1, int32_t x1=-1, int32_t y0=-1, int32_t y1=-1)
-        : st(s), ed(e), n(nn), xmin(x0), xmax(x1), ymin(y0), ymax(y1) {}
+        : st(s), ed(e), n(nn), xmin(x0), xmax(x1), ymin(y0), ymax(y1),
+          row(std::numeric_limits<int32_t>::lowest()),
+          col(std::numeric_limits<int32_t>::lowest()) {}
     void resetBounds() {
         xmin = std::numeric_limits<int32_t>::max();
         xmax = std::numeric_limits<int32_t>::lowest();
@@ -551,8 +555,14 @@ struct LoadedTileIndexData {
     IndexHeader header;
     Rectangle<float> globalBox;
     std::vector<IndexEntryF> entries;
+    std::vector<std::string> featureNames;
     bool isLegacyBinary = false;
     bool isTextIndex = false;
 };
 
 LoadedTileIndexData loadTileIndexData(const std::string& indexFile);
+uint32_t computeFeatureNameSizeFixed(const std::vector<std::string>& featureNames);
+void configureFeatureDictionaryHeader(IndexHeader& header,
+    const std::vector<std::string>& featureNames, const char* funcName);
+bool writeFeatureDictionaryPayload(int fd, const IndexHeader& header,
+    const std::vector<std::string>& featureNames);

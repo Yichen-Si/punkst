@@ -134,6 +134,37 @@ inline TileKey boundary_tile_key(const PixTopProbsFeature3D<float>& obj, int til
     };
 }
 
+template<typename PayloadT>
+void write_bucketed_binary_payload(int fdMain, int fdIndex, size_t& outputSize,
+    const PayloadT& data, size_t recordSize, int tileSize, float pixelResolution) {
+    std::map<TileKey, std::pair<std::vector<char>, uint32_t>> buckets;
+    for (const auto& obj : data) {
+        TileKey tile = boundary_tile_key(obj, tileSize, pixelResolution);
+        auto& bucket = buckets[tile];
+        append_record_bytes(bucket.first, obj, recordSize);
+        bucket.second++;
+    }
+    for (const auto& kv : buckets) {
+        const auto& tile = kv.first;
+        const auto& bytes = kv.second.first;
+        if (bytes.empty()) {
+            continue;
+        }
+        IndexEntryF entry(tile.row, tile.col);
+        entry.st = outputSize;
+        entry.n = kv.second.second;
+        tile2bound(tile, entry.xmin, entry.xmax, entry.ymin, entry.ymax, tileSize);
+        if (!write_all(fdMain, bytes.data(), bytes.size())) {
+            error("%s: Error writing bucketed binary records to main output file", __func__);
+        }
+        outputSize += bytes.size();
+        entry.ed = outputSize;
+        if (!write_all(fdIndex, &entry, sizeof(entry))) {
+            error("%s: Error writing bucketed index entry", __func__);
+        }
+    }
+}
+
 } // namespace
 
 template<typename T>
@@ -863,22 +894,20 @@ void Tiles2MinibatchBase<T>::writerWorker() {
                         ed += line.size();
                     }
                 } else {
-                    for (const auto& obj : data) {
-                        int32_t s0 = obj.write(fdMain);
-                        if (s0 < 0) {
-                            error("Error writing to main output file");
-                        }
-                        ed += s0;
-                    }
+                    write_bucketed_binary_payload(fdMain, fdIndex, outputSize,
+                        data, outputRecordSize_, tileSize, pixelResolution_);
+                    ed = outputSize;
                 }
             }, readyToWrite.payload);
-            IndexEntryF e(st, ed, readyToWrite.size(),
-                (int32_t) std::floor(readyToWrite.xmin),
-                (int32_t) std::ceil(readyToWrite.xmax),
-                (int32_t) std::floor(readyToWrite.ymin),
-                (int32_t) std::ceil(readyToWrite.ymax));
-            if (!write_all(fdIndex, &e, sizeof(e))) {
-                error("Error writing to index output file");
+            if (readyToWrite.isText()) {
+                IndexEntryF e(st, ed, readyToWrite.size(),
+                    static_cast<int32_t>(std::floor(readyToWrite.xmin)),
+                    static_cast<int32_t>(std::ceil(readyToWrite.xmax)),
+                    static_cast<int32_t>(std::floor(readyToWrite.ymin)),
+                    static_cast<int32_t>(std::ceil(readyToWrite.ymax)));
+                if (!write_all(fdIndex, &e, sizeof(e))) {
+                    error("Error writing to index output file");
+                }
             }
             outputSize = ed;
             outOfOrderBuffer.pop();
@@ -930,6 +959,7 @@ IndexHeader Tiles2MinibatchBase<T>::buildIndexHeader(bool fragmented) const {
             idxHeader.pixelResolutionZ = pixelResolutionZ_;
         }
     }
+    configureFeatureDictionaryHeader(idxHeader, featureNames, __func__);
     return idxHeader;
 }
 
@@ -1132,6 +1162,11 @@ void Tiles2MinibatchBase<T>::mergeNativeBinaryShards() {
         ::close(fdOut);
         ::close(fdIdx);
         error("%s: failed writing final index header", __func__);
+    }
+    if (!writeFeatureDictionaryPayload(fdIdx, idxHeader, featureNames)) {
+        ::close(fdOut);
+        ::close(fdIdx);
+        error("%s: failed writing embedded feature dictionary", __func__);
     }
 
     std::vector<std::ifstream> mainInputs;

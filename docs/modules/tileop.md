@@ -6,7 +6,7 @@ This module is under active development and any suggestions or requests will be 
 
 Caution:
 
-Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` for Visium HD data. If the input was generated at a much finer grid, you can now request a coarser raster grid for these operations with `--raster-pixel-res`.
+Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` for Visium HD data. If the input was generated at a much finer grid, you can request a coarser raster grid for these operations with `--raster-pixel-res`.
 
 ## Available Operations
 
@@ -75,8 +75,13 @@ Current `tile-op` support for these inputs is:
 
 Additional flags used with supported single-molecule workflows:
 
-- `--features`: dictionary file whose first column maps feature indices to feature names. `--features -` reads this dictionary from stdin.
 - `--icol-feature`: 0-based feature-name column in the query TSV for `--annotate-pts` and `--annotate-cell`
+
+Feature-bearing binary indexes now embed their feature dictionary directly in the `.index` file:
+
+- `tile-op` no longer takes `--features`
+- `--dump-tsv`, `--merge-emb`, `--annotate-pts`, `--annotate-cell`, and feature-aware `--prob-dot` decode names from the embedded dictionary
+- when multiple feature-bearing sources are merged together, `tile-op` first compares dictionaries and then either uses the original indices directly or remaps them through a canonical union of feature names
 
 ### Parallel Execution
 
@@ -148,6 +153,7 @@ Current behavior:
 - only allowed when the input stores original float coordinates
 - `--pixel-res-z-override` requires `--pixel-res-override`; if only `--pixel-res-override` is provided for 3D input the same value is used for Z
 - this override is used by feature-aware operations such as `--merge-emb`, `--annotate-pts`, `--annotate-cell`, and `--prob-dot`
+- if a feature-aware merge-related workflow needs a raw-float main input that has no usable stored pixel resolution and `--pixel-res-override` is omitted, `tile-op` now warns and falls back to `0.001`
 - when the main input uses this override in feature-aware merge / prob-dot workflows, the same effective resolution is propagated to auxiliary raw-float sources whose own resolution is unset
 
 Unscaled integer-coordinate inputs do not use this override. They are treated as already being on an integer lattice.
@@ -170,12 +176,10 @@ punkst tile-op --dump-tsv --in path/prefix --binary --out path/prefix.dump
 
 The output include `path/prefix.dump.tsv` and `path/prefix.dump.index`.
 
-For single-molecule binary input, `--features` is required and the dumped TSV includes one extra `feature` column with feature names:
+For single-molecule binary input, the dumped TSV includes one extra `feature` column decoded from the embedded dictionary in `path/prefix.index`:
 
 ```bash
-punkst tile-op --dump-tsv --in path/prefix --binary \
-  --features path/features.tsv \
-  --out path/prefix.dump
+punkst tile-op --dump-tsv --in path/prefix --binary --out path/prefix.dump
 ```
 
 `--dump-tsv` also supports GeoJSON filtering, and it can composes with the rectangle query set by `--xmin/--xmax/--ymin/--ymax`:
@@ -269,19 +273,33 @@ punkst tile-op --in path/result1 [--binary] \
 
 `--merge-keep-all-main` - (Optional) Keep all records from the main input and fill any unmatched auxiliary source slots with `(-1, 0)`. By default, merge keeps only records that match in every source.
 
+`--merge-keep-all` - (Optional) Outer-style merge. Emit a merged record if any source matches, instead of requiring the main input or all sources. Missing source slots are filled with placeholders.
+
+`--emb-prefix` - (Optional, TSV output only) Rename merged `(K, P)` columns per source. For example, `--k2keep 2 2 --emb-prefix rna atac` writes `rna_K1 rna_P1 rna_K2 rna_P2 atac_K1 atac_P1 atac_K2 atac_P2`.
+
+`--null-k`, `--null-p` - (Optional, TSV output only) Override the placeholder text used for missing merged `(K, P)` pairs. Defaults are `-1` and `0`.
+
 `--threads` - (Optional) Number of worker threads for tile-local merge processing.
 
 In the above example, we keep top 3 factors from file `result1.bin` (or `.tsv`), top 1 from `result2.tsv`, and top 2 from `result3.bin`. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.
 
-For single-molecule inputs, the main input must also be single-molecule. Matching then works as follows:
+To merge single-molecule data, the main input must be single-molecule. Matching then works as follows:
 
 - if all inputs are single-molecule, records are matched by coordinate and feature index
 - if the main input is single-molecule and some later auxiliary inputs are standard pixel outputs, those later inputs are treated as lower-resolution feature-agnostic records and can fan out to multiple feature-bearing main records at the same coordinate
 - the merged output keeps the feature index
 
-If the merged output is TSV rather than binary, you may also pass `--features` so the feature-bearing column is written as feature names instead of numeric feature indices.
+For single-molecule TSV merge output, the `feature` column is always written using the canonical merged feature dictionary embedded in the output index.
 
 For raw-float feature-specific inputs, use `--pixel-res-override` (and `--pixel-res-z-override` for 3D when needed) if the inputs need an explicit lattice resolution for matching.
+
+If the feature-bearing main input stores original float coordinates and has no usable pixel resolution in its header, omitting `--pixel-res-override` now triggers a warning and a default fallback to `0.001`. That effective resolution is then reused for auxiliary raw-float sources whose own resolution is unset.
+
+Current restrictions:
+
+- `--emb-prefix` is only for TSV output, not `--binary-out`
+- standalone `--merge-keep-all` with a 3D main input does not support 2D auxiliary sources
+- standalone single-molecule `--merge-keep-all` requires all merged sources to carry feature indices
 
 ### Annotate Points with Inference Results
 
@@ -301,14 +319,43 @@ punkst tile-op --in path/prefix [--binary] \
 
 For single-molecule inputs, also provide:
 
-- `--features` - feature dictionary used to map feature names to the feature indices stored in the tiled inference file
 - `--icol-feature` - 0-based column index of the feature-name column in the query TSV
 
 Matching is then done by `(x, y, feature)` in 2D or `(x, y, z, feature)` in 3D.
 
+`--anno-keep-all` - (Optional) Keep all query records even when no annotation is found. Missing `(K, P)` pairs are written using the same placeholder rendering controlled by `--null-k` / `--null-p`.
+
 `--threads` - (Optional) Number of worker threads for tile-local annotation.
 
 For raw-float feature-specific inputs, use `--pixel-res-override` if the inference file needs an explicit coordinate-to-pixel mapping resolution.
+
+For combined `--merge-emb + --annotate-pts` in feature-bearing mode, the same fallback applies: if the main raw-float input has no usable stored pixel resolution and `--pixel-res-override` is omitted, `tile-op` warns and defaults to `0.001`.
+
+For single-molecule annotate, unknown query feature names behave like unmatched records: they are skipped by default, and `--anno-keep-all` keeps the row and writes placeholder `(K, P)` pairs.
+
+#### Merge and annotate in one step
+
+You can also merge multiple inference sources and annotate the query TSV in one pass:
+
+```bash
+punkst tile-op --in ${opref1} --binary \
+  --pixel-res-override 0.001 \
+  --annotate-pts ${ptpref} --icol-x 0 --icol-y 1 --icol-feature 2 \
+  --merge-emb ${opref2}.bin ${opref3}.bin \
+  --k2keep 2 1 3 --emb-prefix pref1 pref2 pref3 \
+  --merge-keep-all --anno-keep-all --null-k NA --null-p NA \
+  --out ${opref} --threads ${threads}
+```
+
+(In the above example we assume at least one of the merged sources is from the single-molecule version of [`pixel-decode`](../pixel-decode.md) so `--icol-feature` and `--pixel-res-override` are needed.)
+
+This combined mode:
+
+- output is TSV-only
+- applies the same merge rules as standalone `--merge-emb`
+- appends the merged `(K, P)` columns to each emitted query row
+- supports `--merge-keep-all-main`, `--merge-keep-all`, `--emb-prefix`, `--null-k`, `--null-p`, and `--anno-keep-all`
+- if one of the merged sources is feature-specific, `--icol-feature` is required and feature names are resolved from the embedded dictionaries
 
 ### Compute Joint Probability Distributions
 
@@ -401,7 +448,6 @@ This command will summarize the factors for each cell ID found in `path/transcri
 
 For single-molecule inputs, also provide:
 
-- `--features` - feature dictionary used to map feature names to feature indices
 - `--icol-feature` - 0-based feature-name column in the annotated query TSV
 
 Matching is then done by coordinate plus feature before factor probabilities are aggregated per cell.
@@ -453,7 +499,7 @@ The output includes two files:
   - total number of pixels (`area`)
   - total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel `K` (`perim`)
 
-The single-channel table now includes one extra row with `#k = K`, representing empty/background area.
+The single-channel table includes one extra row with `#k = K`, representing empty/background area.
 
 - `path/prefix.stats.pairwise.tsv` for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be $A_k, P_k, A_l, P_l$, the columns are
   - channel indices for the pair (`#k`, `l`)

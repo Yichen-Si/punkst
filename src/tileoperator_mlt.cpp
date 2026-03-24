@@ -663,14 +663,12 @@ std::vector<mlt_pmtiles::EncodedTilePayload> run_epsg3857_parallel_pipeline(
 void TileOperator::writeMltPmtiles(const std::string& outFile,
     const std::string& featureDictFile, double coordScale,
     bool epsg3857Mode, int32_t zoom, int32_t targetTileSize) {
+    (void) featureDictFile;
     if (isTextInput()) {
         error("%s: MLT-PMTiles export currently supports binary input only", __func__);
     }
     if (!hasFeatureIndex()) {
         error("%s: MLT-PMTiles export requires feature-bearing input (mode & 0x40)", __func__);
-    }
-    if (featureDictFile.empty()) {
-        error("%s: --features is required for MLT-PMTiles export", __func__);
     }
     if (!(coordScale > 0.0)) {
         error("%s: coordScale must be positive", __func__);
@@ -694,7 +692,7 @@ void TileOperator::writeMltPmtiles(const std::string& outFile,
         }
     }
 
-    const std::vector<std::string> featureNames = loadFeatureNames(featureDictFile);
+    const std::vector<std::string> featureNames = loadFeatureNames("");
     mlt_pmtiles::GlobalStringDictionary featureDictionary;
     featureDictionary.values = featureNames;
 

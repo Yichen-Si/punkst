@@ -46,6 +46,9 @@ void Tiles2MinibatchBase<T>::setupOutput() {
         if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
             error("Error writing header to index output file: %s", indexFile.c_str());
         }
+        if (!writeFeatureDictionaryPayload(fdIndex, idxHeader, featureNames)) {
+            error("Error writing feature dictionary to index output file: %s", indexFile.c_str());
+        }
     }
 
     if (!outputAnchor_) return;

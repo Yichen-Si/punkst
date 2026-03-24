@@ -191,6 +191,7 @@ void TileOperator::requireNoFeatureIndex(const char* funcName) const {
 void TileOperator::loadIndex(const std::string& indexFile) {
     const LoadedTileIndexData loaded = loadTileIndexData(indexFile);
     formatInfo_ = loaded.header;
+    featureNames_ = loaded.featureNames;
     mode_ = formatInfo_.mode;
     K_ = mode_ >> 16;
     mode_ &= 0xFFFF;
@@ -207,6 +208,10 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     }
     if (formatInfo_.magic == PUNKST_INDEX_MAGIC) {
         validateCoordinateEncoding();
+    }
+    if ((mode_ & 0x40u) != 0u && featureNames_.empty()) {
+        error("%s: feature-bearing input requires embedded feature names in %s",
+            __func__, indexFile.c_str());
     }
     if ((mode_ & 0x20u) && coord_dim_ == 3) {assert(formatInfo_.pixelResolutionZ > 0.0f);}
     k_ = formatInfo_.parseKvec(kvec_);
@@ -248,6 +253,15 @@ void TileOperator::loadIndex(const std::string& indexFile) {
     notice("Read index with %lu tiles", blocks_all_.size());
 }
 
+void TileOperator::writeIndexHeaderWithFeatureDict(int fdIndex, const IndexHeader& idxHeader) const {
+    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+        error("%s: Index header write error", __func__);
+    }
+    if (!writeFeatureDictionaryPayload(fdIndex, idxHeader, featureNames_)) {
+        error("%s: Feature dictionary payload write error", __func__);
+    }
+}
+
 void TileOperator::printIndex() const {
     if (formatInfo_.magic == PUNKST_INDEX_MAGIC) {
         // Print header info
@@ -271,6 +285,9 @@ void TileOperator::printIndex() const {
         if (formatInfo_.xmin < formatInfo_.xmax && formatInfo_.ymin < formatInfo_.ymax) {
             printf("##Bound: xmin %.2f, xmax %.2f, ymin %.2f, ymax %.2f\n",
                 formatInfo_.xmin, formatInfo_.xmax, formatInfo_.ymin, formatInfo_.ymax);
+        }
+        if (mode_ & 0x40u) {
+            printf("##Feature count: %u\n", formatInfo_.featureCount);
         }
     }
     printf("#start\tend\trow\tcol\tnpts\txmin\txmax\tymin\tymax\n");
@@ -1622,15 +1639,57 @@ void TileOperator::parseHeaderLine() {
     line = parsedHeaderLine.substr(1); // skip initial '#'
     std::vector<std::string> tokens;
     split(tokens, "\t", line);
+
+    auto normalize_coord_name = [](std::string key) {
+        std::transform(key.begin(), key.end(), key.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return key;
+    };
+    struct ParsedKPCol {
+        bool ok = false;
+        bool isK = false;
+        uint32_t idx = 0;
+        std::string prefix;
+    };
+    auto parse_kp_col = [](const std::string& key) -> ParsedKPCol {
+        ParsedKPCol out;
+        if (key.size() < 2) {
+            return out;
+        }
+        size_t pos = key.size();
+        while (pos > 0 && std::isdigit(static_cast<unsigned char>(key[pos - 1]))) {
+            --pos;
+        }
+        if (pos == key.size() || pos == 0) {
+            return out;
+        }
+        const char kp = static_cast<char>(std::toupper(static_cast<unsigned char>(key[pos - 1])));
+        if (kp != 'K' && kp != 'P') {
+            return out;
+        }
+        if (pos > 1) {
+            const std::string prefix = key.substr(0, pos - 1);
+            if (!prefix.empty() && prefix.back() != '_') {
+                return out;
+            }
+            out.prefix = prefix;
+        }
+        uint32_t parsedIdx = 0;
+        if (!str2uint32(key.substr(pos), parsedIdx) || parsedIdx == 0) {
+            return out;
+        }
+        out.ok = true;
+        out.isK = (kp == 'K');
+        out.idx = parsedIdx;
+        return out;
+    };
+
     std::unordered_map<std::string, uint32_t> header;
     for (uint32_t i = 0; i < tokens.size(); ++i) {
-        std::string key = tokens[i];
-        if (key == "X" || key == "Y" || key == "Z") {
-            std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-        } else if (key.size() > 1 && (key[0] == 'k' || key[0] == 'p')) {
-            key[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(key[0])));
+        const std::string coordKey = normalize_coord_name(tokens[i]);
+        if (coordKey == "x" || coordKey == "y" || coordKey == "z") {
+            header[coordKey] = i;
         }
-        header[key] = i;
     }
     if (header.find("x") == header.end() || header.find("y") == header.end()) {
         error("%s: tsv input must has x and y columns for coordinates\n%s", __func__, parsedHeaderLine.c_str());
@@ -1645,19 +1704,54 @@ void TileOperator::parseHeaderLine() {
 
     icol_ks_.clear();
     icol_ps_.clear();
-    for (int32_t k = 1; ; ++k) {
-        const std::string kcol = "K" + std::to_string(k);
-        const std::string pcol = "P" + std::to_string(k);
-        bool has_k = (header.find(kcol) != header.end());
-        bool has_p = (header.find(pcol) != header.end());
-        if (!has_k && !has_p) {
-            break;
+    struct KPColsByPrefix {
+        std::unordered_map<uint32_t, uint32_t> kcols;
+        std::unordered_map<uint32_t, uint32_t> pcols;
+    };
+    std::vector<std::string> prefixOrder;
+    std::unordered_map<std::string, KPColsByPrefix> kpCols;
+    for (uint32_t col = 0; col < tokens.size(); ++col) {
+        const ParsedKPCol parsed = parse_kp_col(tokens[col]);
+        if (!parsed.ok) {
+            continue;
         }
-        if (!has_k || !has_p) {
-            error("%s: Header must include both %s and %s", __func__, kcol.c_str(), pcol.c_str());
+        auto [it, inserted] = kpCols.emplace(parsed.prefix, KPColsByPrefix{});
+        if (inserted) {
+            prefixOrder.push_back(parsed.prefix);
         }
-        icol_ks_.push_back(header[kcol]);
-        icol_ps_.push_back(header[pcol]);
+        auto& target = parsed.isK ? it->second.kcols : it->second.pcols;
+        if (!target.emplace(parsed.idx, col).second) {
+            error("%s: Duplicate %c%u column for prefix '%s'",
+                __func__, parsed.isK ? 'K' : 'P', parsed.idx, parsed.prefix.c_str());
+        }
+    }
+    for (const auto& prefix : prefixOrder) {
+        const auto it = kpCols.find(prefix);
+        if (it == kpCols.end()) {
+            continue;
+        }
+        const auto& kcols = it->second.kcols;
+        const auto& pcols = it->second.pcols;
+        for (uint32_t idx = 1; ; ++idx) {
+            const auto kit = kcols.find(idx);
+            const auto pit = pcols.find(idx);
+            const bool has_k = (kit != kcols.end());
+            const bool has_p = (pit != pcols.end());
+            if (!has_k && !has_p) {
+                break;
+            }
+            if (!has_k || !has_p) {
+                const std::string kcol = prefix.empty()
+                    ? ("K" + std::to_string(idx))
+                    : (prefix + "_K" + std::to_string(idx));
+                const std::string pcol = prefix.empty()
+                    ? ("P" + std::to_string(idx))
+                    : (prefix + "_P" + std::to_string(idx));
+                error("%s: Header must include both %s and %s", __func__, kcol.c_str(), pcol.c_str());
+            }
+            icol_ks_.push_back(kit->second);
+            icol_ps_.push_back(pit->second);
+        }
     }
 
     if (indexed_tsv) {

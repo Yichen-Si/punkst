@@ -100,7 +100,7 @@ void draw_worker(
 }
 
 int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
-    std::string dataFile, indexFile, featureColorFile, dictFile, rangeFile, outFile;
+    std::string inPrefix, dataFile, indexFile, featureColorFile, dictFile, rangeFile, outFile;
     std::vector<std::string> featureListStr, colorListStr;
     double scale = 1.0;
     double xmin = 0, xmax = -1, ymin = 0, ymax = -1;
@@ -109,8 +109,10 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
     int n_threads = 1;
 
     ParamList pl;
-    pl.add_option("in-tsv", "Input TSV file from pts2tiles.", dataFile, true)
-      .add_option("in-index", "Index file for the TSV.", indexFile, true)
+    pl.add_option("in-tsv", "Input TSV file from pts2tiles.", dataFile)
+      .add_option("in-data", "Input TSV file from pts2tiles.", dataFile)
+      .add_option("in-index", "Index file for the TSV.", indexFile)
+      .add_option("in", "Input prefix (equal to --in-data <in>.tsv --in-index <in>.index)", inPrefix)
       .add_option("icol-x", "0-based column for x-coordinate.", icol_x, true)
       .add_option("icol-y", "0-based column for y-coordinate.", icol_y, true)
       .add_option("icol-feature", "0-based column for feature ID/name.", icol_feature, true)
@@ -140,6 +142,12 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
 
     if (!checkOutputWritable(outFile))
         error("Output file is not writable: %s", outFile.c_str());
+    if (!inPrefix.empty()) {
+        dataFile = inPrefix + ".tsv";
+        indexFile = inPrefix + ".index";
+    } else if (dataFile.empty()) {
+        error("One of --in or --in-tsv & --in-data pair must be specified");
+    }
 
     if (!rangeFile.empty()) {
         readCoordRange(rangeFile, xmin, xmax, ymin, ymax);
@@ -219,8 +227,10 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
         }
         notice("Loaded %zu colors from %s", feature_color_map.size(), featureColorFile.c_str());
     } else if (!featureListStr.empty()) {
-        if (featureListStr.size() != colorListStr.size())
-            error("--feature-list and --color-list must have the same number of elements.");
+        if (colorListStr.empty())
+            colorListStr = std::vector<std::string>{"FFEE00", "DD65E6", "00FFFF", "FF7000"};
+        if (featureListStr.size()>colorListStr.size())
+            error("--color-list must have at least the same number of elements as --feature-list does");
         for (size_t i = 0; i < featureListStr.size(); ++i) {
             auto it = parser.featureDict.find(featureListStr[i]);
             if (it != parser.featureDict.end()) {
