@@ -177,6 +177,7 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
     int minTotalCountPerSample = 1;
     int minCtPerUnit = 1;
     uint32_t nThreads = 1;
+    bool randomize = false;
 
     // 1. Define and parse command-line options
     ParamList pl;
@@ -186,7 +187,8 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
         .add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample)
         .add_option("min-count-per-unit", "Minimum total count per unit to be included in merged output", minCtPerUnit) // backward
         .add_option("min-count", "Minimum total count per unit to be included in merged output", minCtPerUnit)
-        .add_option("threads", "Number of threads for sorting", nThreads);
+        .add_option("threads", "Number of threads for sorting", nThreads)
+        .add_option("randomize", "Randomize output order by sorting on the random key column", randomize);
 
     try {
         pl.readArgs(argc, argv);
@@ -347,10 +349,21 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
         t.join();
     }
 
-    notice("Concatenating and sorting %zu temporary files...", temp_files.size());
     std::string mergedFile = outPref + ".txt";
-    if (pipe_cat_sort(temp_files, mergedFile, nThreads) != 0) {
-        return 1;
+    if (randomize) {
+        notice("Concatenating and sorting %zu temporary files...", temp_files.size());
+        if (pipe_cat_sort(temp_files, mergedFile, nThreads) != 0) {
+            return 1;
+        }
+    } else {
+        notice("Concatenating %zu temporary files (no randomization)...", temp_files.size());
+        std::ofstream out(mergedFile);
+        if (!out) { error("Cannot open output file: %s", mergedFile.c_str()); return 1; }
+        for (const auto& tf : temp_files) {
+            std::ifstream in(tf);
+            if (in) out << in.rdbuf();
+        }
+        out.close();
     }
     notice("Merged %d units across %zu samples.", nUnits.load(), S);
 

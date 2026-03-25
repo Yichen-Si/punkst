@@ -66,27 +66,33 @@ void writeTopicVectorWithTopK(std::ostream& os,
                               const std::vector<std::string>& unitCols,
                               const TopicModelWrapper::TransformOutputOptions& outOpts) {
     os << std::fixed << std::setprecision(4);
-    os << doc_topic(row, 0);
-    int32_t imax = 0;
-    double maxP = doc_topic(row, 0);
     const int32_t K = static_cast<int32_t>(doc_topic.cols());
-    for (int32_t k = 1; k < K; ++k) {
-        const double p = doc_topic(row, k);
-        os << "\t" << p;
-        if (p > maxP) {
-            maxP = p;
-            imax = k;
-        }
-    }
     if (outOpts.appendTopK) {
+        // Compute argmax before writing
+        int32_t imax = 0;
+        double maxP = doc_topic(row, 0);
+        for (int32_t k = 1; k < K; ++k) {
+            const double p = doc_topic(row, k);
+            if (p > maxP) {
+                maxP = p;
+                imax = k;
+            }
+        }
         const std::string topLabel =
             (imax >= 0 && imax < static_cast<int32_t>(unitCols.size())) ? unitCols[imax] : std::to_string(imax);
-        os << "\t" << topLabel << "\t";
-        std::ios::fmtflags oldFlags = os.flags();
-        std::streamsize oldPrec = os.precision();
-        os << std::defaultfloat << std::setprecision(5) << maxP;
-        os.flags(oldFlags);
-        os.precision(oldPrec);
+        os << topLabel << "\t";
+        {
+            std::ios::fmtflags oldFlags = os.flags();
+            std::streamsize oldPrec = os.precision();
+            os << std::defaultfloat << std::setprecision(5) << maxP;
+            os.flags(oldFlags);
+            os.precision(oldPrec);
+        }
+        os << "\t";
+    }
+    os << doc_topic(row, 0);
+    for (int32_t k = 1; k < K; ++k) {
+        os << "\t" << doc_topic(row, k);
     }
 }
 
@@ -255,19 +261,20 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
     getUnitHeaderCols(unitCols);
     outFileStream << "#";
     bool wroteAny = writeColumnsWithOptionalDrop(outFileStream, infoCols, transformOutputOptions_.randomKeyIndex);
-    for (const auto& c : unitCols) {
-        if (wroteAny) {
-            outFileStream << "\t";
-        }
-        outFileStream << c;
-        wroteAny = true;
-    }
     if (transformOutputOptions_.appendTopK) {
         if (wroteAny) {
             outFileStream << "\t";
         }
         outFileStream << transformOutputOptions_.topKColname
                       << "\t" << transformOutputOptions_.topPColname;
+        wroteAny = true;
+    }
+    for (const auto& c : unitCols) {
+        if (wroteAny) {
+            outFileStream << "\t";
+        }
+        outFileStream << c;
+        wroteAny = true;
     }
     outFileStream << "\n";
 
@@ -330,12 +337,12 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
     std::vector<std::string> unitCols;
     getUnitHeaderCols(unitCols);
     outFileStream << "#barcode";
-    for (const auto& c : unitCols) {
-        outFileStream << "\t" << c;
-    }
     if (transformOutputOptions_.appendTopK) {
         outFileStream << "\t" << transformOutputOptions_.topKColname
                       << "\t" << transformOutputOptions_.topPColname;
+    }
+    for (const auto& c : unitCols) {
+        outFileStream << "\t" << c;
     }
     outFileStream << "\n";
 

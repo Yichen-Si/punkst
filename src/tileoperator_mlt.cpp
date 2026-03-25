@@ -668,13 +668,14 @@ void TileOperator::writeMltPmtiles(const std::string& outFile,
         error("%s: MLT-PMTiles export currently supports binary input only", __func__);
     }
     if (!hasFeatureIndex()) {
-        error("%s: MLT-PMTiles export requires feature-bearing input (mode & 0x40)", __func__);
+        error("%s: MLT-PMTiles export requires feature-bearing binary input with stored feature indices; "
+              "for pixel-decode outputs use --single-molecule together with --output-binary", __func__);
     }
     if (!(coordScale > 0.0)) {
         error("%s: coordScale must be positive", __func__);
     }
     if (k_ <= 0) {
-        error("%s: input does not carry top-k payloads", __func__);
+        error("%s: input does not carry top-k payloads; export requires binary decode output with factor assignments", __func__);
     }
     if (epsg3857Mode) {
         if (zoom < 0 || zoom > 31) {

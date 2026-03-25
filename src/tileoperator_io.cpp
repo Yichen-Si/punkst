@@ -8,7 +8,11 @@ bool TileOperator::readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& p
     if (coord_dim_ != 2) {
         error("%s: Only 2D records are supported by this helper", __func__);
     }
+    if ((mode_ & 0x4) && formatInfo_.pixelResolution <= 0) {
+        error("%s: Float coordinates require positive pixelResolution", __func__);
+    }    
     std::string line;
+    const float resXY = formatInfo_.pixelResolution;
     while (pos < endPos) {
         if (mode_ & 0x4) { // int32 mode
             PixTopProbs<int32_t> temp;
@@ -62,12 +66,9 @@ bool TileOperator::readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& p
                 error("%s: Invalid text record", __func__);
             }
         }
-
-        if (formatInfo_.pixelResolution <= 0) {
-            error("%s: Float coordinates require positive pixelResolution", __func__);
-        }
-        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
-        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
+ 
+        recX = static_cast<int32_t>(std::floor(temp.x / resXY));
+        recY = static_cast<int32_t>(std::floor(temp.y / resXY));
         rec.ks = std::move(temp.ks);
         rec.ps = std::move(temp.ps);
         return true;
@@ -80,7 +81,12 @@ bool TileOperator::readNextRecord3DAsPixel(std::istream& dataStream, uint64_t& p
     if (coord_dim_ != 3) {
         error("%s: Only 3D records are supported by this helper", __func__);
     }
+    if ((mode_ & 0x4) && formatInfo_.pixelResolution <= 0) {
+        error("%s: Float coordinates require positive pixelResolution", __func__);
+    }
     std::string line;
+    float resXY = formatInfo_.pixelResolution;
+    float resZ = getPixelResolutionZ();
     while (pos < endPos) {
         if (mode_ & 0x4) { // int32 mode
             PixTopProbs3D<int32_t> temp;
@@ -135,13 +141,10 @@ bool TileOperator::readNextRecord3DAsPixel(std::istream& dataStream, uint64_t& p
                 error("%s: Invalid text record", __func__);
             }
         }
-
-        if (formatInfo_.pixelResolution <= 0 || getPixelResolutionZ() <= 0) {
-            error("%s: Float coordinates require positive pixel resolutions", __func__);
-        }
-        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
-        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
-        recZ = static_cast<int32_t>(std::floor(temp.z / getPixelResolutionZ()));
+ 
+        recX = static_cast<int32_t>(std::floor(temp.x / resXY));
+        recY = static_cast<int32_t>(std::floor(temp.y / resXY));
+        recZ = static_cast<int32_t>(std::floor(temp.z / resZ));
         rec.ks = std::move(temp.ks);
         rec.ps = std::move(temp.ps);
         return true;
@@ -160,6 +163,10 @@ bool TileOperator::readNextRecord2DFeatureAsPixel(std::istream& dataStream, uint
     if ((mode_ & 0x1) == 0) {
         error("%s: Feature-bearing text input is not supported", __func__);
     }
+    if ((mode_ & 0x4) && formatInfo_.pixelResolution <= 0) {
+        error("%s: Float coordinates require positive pixelResolution", __func__);
+    }
+    const float resXY = formatInfo_.pixelResolution;
     while (pos < endPos) {
         if (mode_ & 0x4) {
             PixTopProbsFeature<int32_t> temp;
@@ -181,11 +188,8 @@ bool TileOperator::readNextRecord2DFeatureAsPixel(std::istream& dataStream, uint
             error("%s: Corrupted binary data", __func__);
         }
         pos += formatInfo_.recordSize;
-        if (formatInfo_.pixelResolution <= 0) {
-            error("%s: Float coordinates require positive pixelResolution", __func__);
-        }
-        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
-        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
+        recX = static_cast<int32_t>(std::floor(temp.x / resXY));
+        recY = static_cast<int32_t>(std::floor(temp.y / resXY));
         featureIdx = temp.featureIdx;
         rec.ks = std::move(temp.ks);
         rec.ps = std::move(temp.ps);
@@ -205,6 +209,11 @@ bool TileOperator::readNextRecord3DFeatureAsPixel(std::istream& dataStream, uint
     if ((mode_ & 0x1) == 0) {
         error("%s: Feature-bearing text input is not supported", __func__);
     }
+    if ((mode_ & 0x4) && formatInfo_.pixelResolution <= 0) {
+        error("%s: Float coordinates require positive pixelResolution", __func__);
+    }    
+    float resXY = formatInfo_.pixelResolution;
+    float resZ = getPixelResolutionZ(); 
     while (pos < endPos) {
         if (mode_ & 0x4) {
             PixTopProbsFeature3D<int32_t> temp;
@@ -226,13 +235,10 @@ bool TileOperator::readNextRecord3DFeatureAsPixel(std::istream& dataStream, uint
             if (dataStream.eof()) return false;
             error("%s: Corrupted binary data", __func__);
         }
-        pos += formatInfo_.recordSize;
-        if (formatInfo_.pixelResolution <= 0 || getPixelResolutionZ() <= 0) {
-            error("%s: Float coordinates require positive pixel resolutions", __func__);
-        }
-        recX = static_cast<int32_t>(std::floor(temp.x / formatInfo_.pixelResolution));
-        recY = static_cast<int32_t>(std::floor(temp.y / formatInfo_.pixelResolution));
-        recZ = static_cast<int32_t>(std::floor(temp.z / getPixelResolutionZ()));
+        pos += formatInfo_.recordSize; 
+        recX = static_cast<int32_t>(std::floor(temp.x / resXY));
+        recY = static_cast<int32_t>(std::floor(temp.y / resXY));
+        recZ = static_cast<int32_t>(std::floor(temp.z / resZ));
         featureIdx = temp.featureIdx;
         rec.ks = std::move(temp.ks);
         rec.ps = std::move(temp.ps);

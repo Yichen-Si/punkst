@@ -518,8 +518,8 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
     TileReader reader(ptData, ptIndex);
     assert(reader.getTileSize() == formatInfo_.tileSize);
     const bool use3d = (coord_dim_ == 3);
-    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
-    const float resZ = use3d ? getPixelResolutionZ() : 1.0f;
+    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 0.001f;
+    const float resZ = use3d ? getPixelResolutionZ() : 0.001f;
     const bool writeStdout = (outPrefix == "-");
     const std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
     const std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
@@ -744,8 +744,8 @@ void TileOperator::annotateMergedSingleMolecule(const std::vector<std::string>& 
     const std::string ptIndex = ptPrefix + ".index";
     TileReader reader(ptData, ptIndex);
     assert(reader.getTileSize() == formatInfo_.tileSize);
-    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
-    const float resZ = use3d ? getPixelResolutionZ() : 1.0f;
+    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 0.001f;
+    const float resZ = use3d ? getPixelResolutionZ() : 0.001f;
     const bool writeStdout = (outPrefix == "-");
     const std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
     const std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
@@ -1063,8 +1063,8 @@ void TileOperator::pix2cellSingleMolecule(const std::string& ptPrefix, const std
     headerStr += "\n";
     std::fprintf(fp, "%s", headerStr.c_str());
 
-    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
-    const float resZ = use3d ? getPixelResolutionZ() : 1.0f;
+    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 0.001f;
+    const float resZ = use3d ? getPixelResolutionZ() : 0.001f;
     const int32_t tileSize = formatInfo_.tileSize;
     const bool enableEarlyFlush = (max_cell_diameter > 0);
 
@@ -1493,6 +1493,10 @@ void TileOperator::mergeSingleMolecule(const std::vector<std::string>& otherFile
             seenNonFeature = true;
         } else if (seenNonFeature) {
             error("%s: feature-bearing sources must come before feature-less auxiliary sources", __func__);
+        }
+        if (opPtrs[i]->getPixelResolution() < 0) {
+            warning("%s: %d-th source does not have pixel resolution, assuming it is single-molecule data", __func__, i);
+            opPtrs[i]->setPixelResolutionOverride(0.001f);
         }
     }
     const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
