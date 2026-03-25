@@ -236,12 +236,22 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     if (dumpTSV && (hasExtractRegionZMin || hasExtractRegionZMax) && extractRegionGeoJSON.empty()) {
         error("--zmin/--zmax require --extract-region-geojson when used with --dump-tsv");
     }
-    if (!mergeEmbPrefixes.empty() && inMergeEmbFiles.empty()) {
-        error("--emb-prefix requires --merge-emb");
-    }
-    if (!mergeEmbPrefixes.empty() &&
-        mergeEmbPrefixes.size() != static_cast<size_t>(inMergeEmbFiles.size() + 1)) {
-        error("--emb-prefix must provide one prefix for the main input and one for each --merge-emb source");
+    if (!mergeEmbPrefixes.empty()) {
+        size_t expectedPrefixes = 0;
+        if (!inMergeEmbFiles.empty()) {
+            expectedPrefixes = static_cast<size_t>(inMergeEmbFiles.size() + 1);
+        } else if (dumpTSV || (!inMergePtsPrefix.empty() && !cellAnno)) {
+            const std::vector<uint32_t> sourceKvec = tileOp.getKvec();
+            expectedPrefixes = sourceKvec.empty() ? size_t(1) : sourceKvec.size();
+        } else {
+            error("--emb-prefix requires --merge-emb, --annotate-pts, or --dump-tsv");
+        }
+        if (mergeEmbPrefixes.size() != expectedPrefixes) {
+            if (!inMergeEmbFiles.empty()) {
+                error("--emb-prefix must provide one prefix for the main input and one for each --merge-emb source");
+            }
+            error("--emb-prefix must provide one prefix per result set in the input/source");
+        }
     }
     if (!mergeEmbPrefixes.empty() && binaryOut) {
         error("--emb-prefix is only meaningful for TSV output and cannot be used with --binary-out");
@@ -267,7 +277,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     if (dumpTSV) {
         tileOp.dumpTSV(outPrefix, probDigits, coordDigits, "",
-            extractRegionGeoJSON, extractRegionScale, zmin, zmax);
+            extractRegionGeoJSON, extractRegionScale, zmin, zmax, mergeEmbPrefixes);
         return 0;
     }
     if (writeMltPmtiles) {
@@ -319,7 +329,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     if (!inMergePtsPrefix.empty()) {
         if (hasFeatureIndex && icol_f < 0)
             error("valid --icol-feature is required for --annotate-pts on single-molecule input");
-        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, "", annoKeepAll);
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, "", annoKeepAll, mergeEmbPrefixes);
         return 0;
     }
 

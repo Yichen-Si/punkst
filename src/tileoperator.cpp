@@ -385,13 +385,16 @@ void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
     assert(reader.getTileSize() == formatInfo_.tileSize);
     const bool use3d = (coord_dim_ == 3);
     const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
-
-    const std::string outFile = outPrefix + ".tsv";
-    const std::string outIndex = outPrefix + ".index";
-    FILE* fp = std::fopen(outFile.c_str(), "w");
+    const bool writeStdout = (outPrefix == "-");
+    const std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
+    const std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
+    FILE* fp = writeStdout ? stdout : std::fopen(outFile.c_str(), "w");
     if (!fp) error("Cannot open output file %s", outFile.c_str());
-    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    int fdIndex = -1;
+    if (!writeStdout) {
+        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    }
 
     uint32_t ntok = static_cast<uint32_t>(std::max(icol_x, icol_y));
     if (use3d) {
@@ -405,7 +408,9 @@ void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
         }
         std::fprintf(fp, "%s\n", headerStr.c_str());
     }
-    long currentOffset = std::ftell(fp);
+    long currentOffset = writeStdout
+        ? static_cast<long>(reader.headerLine.empty() ? 0 : (reader.headerLine.size() + 1))
+        : std::ftell(fp);
 
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~0x7u;
@@ -413,7 +418,7 @@ void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
     if (!idxHeader.packKvec(k2keep)) {
         warning("%s: Too many input fields", __func__);
     }
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+    if (fdIndex >= 0 && !write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
         error("%s: Index header write error", __func__);
     }
 
@@ -620,16 +625,21 @@ void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
             buildTileResult, writeResult);
     }
 
-    std::fclose(fp);
-    close(fdIndex);
+    if (fp != stdout) {
+        std::fclose(fp);
+    }
+    if (fdIndex >= 0) {
+        close(fdIndex);
+    }
     notice("Merged annotation finished, data written to %s", outFile.c_str());
 }
 
 void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix,
     int32_t icol_x, int32_t icol_y, int32_t icol_z, int32_t icol_f,
-    const std::string& featureDictFile, bool annoKeepAll) {
+    const std::string& featureDictFile, bool annoKeepAll,
+    const std::vector<std::string>& mergePrefixes) {
     if (hasFeatureIndex()) {
-        annotateSingleMolecule(ptPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, featureDictFile, annoKeepAll);
+        annotateSingleMolecule(ptPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, featureDictFile, annoKeepAll, mergePrefixes);
         return;
     }
     if (icol_x < 0 || icol_y < 0) {
@@ -646,12 +656,16 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     TileReader reader(ptData, ptIndex);
     assert(reader.getTileSize() == formatInfo_.tileSize);
     bool use3d = (coord_dim_ == 3);
-    std::string outFile = outPrefix + ".tsv";
-    std::string outIndex = outPrefix + ".index";
-    FILE* fp = fopen(outFile.c_str(), "w");
+    const bool writeStdout = (outPrefix == "-");
+    std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
+    std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
+    FILE* fp = writeStdout ? stdout : fopen(outFile.c_str(), "w");
     if (!fp) error("Cannot open output file %s", outFile.c_str());
-    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    int fdIndex = -1;
+    if (!writeStdout) {
+        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    }
     float res = formatInfo_.pixelResolution;
     if (res <= 0) res = 1.0f;
     uint32_t ntok = static_cast<uint32_t>(std::max(icol_x, icol_y));
@@ -660,17 +674,22 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     // Header?
     if (!reader.headerLine.empty()) {
         std::string headerStr = reader.headerLine;
-        for (uint32_t i = 1; i <= k_; ++i) {
-            headerStr += "\tK" + std::to_string(i) + "\tP" + std::to_string(i);
+        const std::vector<uint32_t> headerKvec = kvec_.empty()
+            ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
+            : kvec_;
+        for (const auto& colName : build_merge_column_names(headerKvec, mergePrefixes)) {
+            headerStr += "\t" + colName;
         }
         fprintf(fp, "%s\n", headerStr.c_str());
     }
-    long currentOffset = ftell(fp);
+    long currentOffset = writeStdout
+        ? static_cast<long>(reader.headerLine.empty() ? 0 : (reader.headerLine.size() + 1))
+        : ftell(fp);
     // Write index header
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~(0x7);
     idxHeader.recordSize = 0;
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index header write error");
+    if (fdIndex >= 0 && !write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index header write error");
 
     std::vector<TileKey> tiles;
     reader.getTileList(tiles);
@@ -684,8 +703,12 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
             ntok, fp, fdIndex, currentOffset, annoKeepAll);
     }
 
-    fclose(fp);
-    close(fdIndex);
+    if (fp != stdout) {
+        fclose(fp);
+    }
+    if (fdIndex >= 0) {
+        close(fdIndex);
+    }
     notice("Annotation finished, data written to %s", outFile.c_str());
 }
 

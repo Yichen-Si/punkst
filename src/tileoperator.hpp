@@ -143,7 +143,8 @@ public:
         const std::string& featureDictFile = "",
         const std::string& geojsonFile = "", int64_t geojsonScale = 10,
         float qzmin = std::numeric_limits<float>::quiet_NaN(),
-        float qzmax = std::numeric_limits<float>::quiet_NaN());
+        float qzmax = std::numeric_limits<float>::quiet_NaN(),
+        const std::vector<std::string>& mergePrefixes = {});
     void writeMltPmtiles(const std::string& outFile,
         const std::string& featureDictFile,
         double coordScale = 1.0,
@@ -173,7 +174,8 @@ public:
     void annotate(const std::string& ptPrefix, const std::string& outPrefix,
         int32_t icol_x, int32_t icol_y, int32_t icol_z = -1,
         int32_t icol_f = -1, const std::string& featureDictFile = "",
-        bool annoKeepAll = false);
+        bool annoKeepAll = false,
+        const std::vector<std::string>& mergePrefixes = {});
     void annotateMerged(const std::vector<std::string>& otherFiles,
         const std::string& ptPrefix, const std::string& outPrefix,
         std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
@@ -442,7 +444,8 @@ private:
         bool annoKeepAll);
     void annotateSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
         int32_t icol_x, int32_t icol_y, int32_t icol_z,
-        int32_t icol_f, const std::string& featureDictFile, bool annoKeepAll);
+        int32_t icol_f, const std::string& featureDictFile, bool annoKeepAll,
+        const std::vector<std::string>& mergePrefixes);
     void annotateMergedSingleMolecule(const std::vector<std::string>& otherFiles,
         const std::string& ptPrefix, const std::string& outPrefix,
         std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
@@ -458,7 +461,8 @@ private:
         int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile,
         PreparedRegionMask2D* regionPtr = nullptr,
         float qzmin = std::numeric_limits<float>::quiet_NaN(),
-        float qzmax = std::numeric_limits<float>::quiet_NaN());
+        float qzmax = std::numeric_limits<float>::quiet_NaN(),
+        const std::vector<std::string>& mergePrefixes = {});
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
         computeConfusionMatrixSingleMolecule(double resolution) const;
     int32_t loadTileToMapFeature(const TileKey& key,

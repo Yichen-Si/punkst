@@ -302,7 +302,8 @@ int32_t TileOperator::loadTileToMapFeature3D(const TileKey& key,
 
 void TileOperator::dumpTSVSingleMolecule(const std::string& outPrefix,
     int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile,
-    PreparedRegionMask2D* regionPtr, float qzmin, float qzmax) {
+    PreparedRegionMask2D* regionPtr, float qzmin, float qzmax,
+    const std::vector<std::string>& mergePrefixes) {
     const bool useRegion = regionPtr != nullptr;
     const bool hasZRange = !std::isnan(qzmin) || !std::isnan(qzmax);
     PreparedRegionMask2D region;
@@ -340,8 +341,11 @@ void TileOperator::dumpTSVSingleMolecule(const std::string& outPrefix,
         headerStr += "\tz";
     }
     headerStr += "\tfeature";
-    for (int i = 0; i < k_; ++i) {
-        headerStr += "\tK" + std::to_string(i + 1) + "\tP" + std::to_string(i + 1);
+    const std::vector<uint32_t> headerKvec = kvec_.empty()
+        ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
+        : kvec_;
+    for (const auto& colName : build_merge_column_names(headerKvec, mergePrefixes)) {
+        headerStr += "\t" + colName;
     }
     headerStr += "\n";
     if (std::fprintf(fp, "%s", headerStr.c_str()) < 0) {
@@ -495,7 +499,8 @@ void TileOperator::dumpTSVSingleMolecule(const std::string& outPrefix,
 
 void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
     int32_t icol_x, int32_t icol_y, int32_t icol_z,
-    int32_t icol_f, const std::string& featureDictFile, bool annoKeepAll) {
+    int32_t icol_f, const std::string& featureDictFile, bool annoKeepAll,
+    const std::vector<std::string>& mergePrefixes) {
     if (icol_x < 0 || icol_y < 0 || icol_f < 0) {
         error("%s: icol_x, icol_y, and icol_f must be >= 0", __func__);
     }
@@ -515,30 +520,38 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
     const bool use3d = (coord_dim_ == 3);
     const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
     const float resZ = use3d ? getPixelResolutionZ() : 1.0f;
-
-    const std::string outFile = outPrefix + ".tsv";
-    const std::string outIndex = outPrefix + ".index";
-    FILE* fp = std::fopen(outFile.c_str(), "w");
+    const bool writeStdout = (outPrefix == "-");
+    const std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
+    const std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
+    FILE* fp = writeStdout ? stdout : std::fopen(outFile.c_str(), "w");
     if (!fp) error("Cannot open output file %s", outFile.c_str());
-    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    int fdIndex = -1;
+    if (!writeStdout) {
+        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    }
 
     uint32_t ntok = static_cast<uint32_t>(std::max({icol_x, icol_y, icol_f}));
     if (use3d) {ntok = std::max(ntok, static_cast<uint32_t>(icol_z));}
     ntok += 1;
     if (!reader.headerLine.empty()) {
         std::string headerStr = reader.headerLine;
-        for (uint32_t i = 1; i <= static_cast<uint32_t>(k_); ++i) {
-            headerStr += "\tK" + std::to_string(i) + "\tP" + std::to_string(i);
+        const std::vector<uint32_t> headerKvec = kvec_.empty()
+            ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
+            : kvec_;
+        for (const auto& colName : build_merge_column_names(headerKvec, mergePrefixes)) {
+            headerStr += "\t" + colName;
         }
         std::fprintf(fp, "%s\n", headerStr.c_str());
     }
-    long currentOffset = std::ftell(fp);
+    long currentOffset = writeStdout
+        ? static_cast<long>(reader.headerLine.empty() ? 0 : (reader.headerLine.size() + 1))
+        : std::ftell(fp);
 
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~0x47u;
     idxHeader.recordSize = 0;
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+    if (fdIndex >= 0 && !write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
         error("%s: Index header write error", __func__);
     }
 
@@ -656,8 +669,12 @@ void TileOperator::annotateSingleMolecule(const std::string& ptPrefix, const std
         [&]() { return std::ifstream(); },
         buildTileResult, writeTileResult);
 
-    std::fclose(fp);
-    close(fdIndex);
+    if (fp != stdout) {
+        std::fclose(fp);
+    }
+    if (fdIndex >= 0) {
+        close(fdIndex);
+    }
 }
 
 void TileOperator::annotateMergedSingleMolecule(const std::vector<std::string>& otherFiles,
@@ -729,13 +746,16 @@ void TileOperator::annotateMergedSingleMolecule(const std::vector<std::string>& 
     assert(reader.getTileSize() == formatInfo_.tileSize);
     const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
     const float resZ = use3d ? getPixelResolutionZ() : 1.0f;
-
-    const std::string outFile = outPrefix + ".tsv";
-    const std::string outIndex = outPrefix + ".index";
-    FILE* fp = std::fopen(outFile.c_str(), "w");
+    const bool writeStdout = (outPrefix == "-");
+    const std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
+    const std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
+    FILE* fp = writeStdout ? stdout : std::fopen(outFile.c_str(), "w");
     if (!fp) error("Cannot open output file %s", outFile.c_str());
-    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    int fdIndex = -1;
+    if (!writeStdout) {
+        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    }
 
     uint32_t ntok = static_cast<uint32_t>(std::max({icol_x, icol_y, icol_f}));
     if (use3d) { ntok = std::max(ntok, static_cast<uint32_t>(icol_z)); }
@@ -747,7 +767,9 @@ void TileOperator::annotateMergedSingleMolecule(const std::vector<std::string>& 
         }
         std::fprintf(fp, "%s\n", headerStr.c_str());
     }
-    long currentOffset = std::ftell(fp);
+    long currentOffset = writeStdout
+        ? static_cast<long>(reader.headerLine.empty() ? 0 : (reader.headerLine.size() + 1))
+        : std::ftell(fp);
 
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~0x47u;
@@ -755,7 +777,7 @@ void TileOperator::annotateMergedSingleMolecule(const std::vector<std::string>& 
     if (!idxHeader.packKvec(k2keep)) {
         warning("%s: Too many input fields", __func__);
     }
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+    if (fdIndex >= 0 && !write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
         error("%s: Index header write error", __func__);
     }
 
@@ -1004,8 +1026,12 @@ void TileOperator::annotateMergedSingleMolecule(const std::vector<std::string>& 
         [&]() { return std::vector<std::ifstream>(nSources); },
         buildTileResult, writeTileResult);
 
-    std::fclose(fp);
-    close(fdIndex);
+    if (fp != stdout) {
+        std::fclose(fp);
+    }
+    if (fdIndex >= 0) {
+        close(fdIndex);
+    }
 }
 
 void TileOperator::pix2cellSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,

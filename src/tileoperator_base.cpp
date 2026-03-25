@@ -1,4 +1,5 @@
 #include "tileoperator.hpp"
+#include "tileoperator_common.hpp"
 #include "region_query.hpp"
 #include <cinttypes>
 #include <cmath>
@@ -1103,7 +1104,7 @@ int32_t TileOperator::loadTileToMap3D(const TileKey& key,
 void TileOperator::dumpTSV(const std::string& outPrefix,
     int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile,
     const std::string& geojsonFile, int64_t geojsonScale,
-    float qzmin, float qzmax) {
+    float qzmin, float qzmax, const std::vector<std::string>& mergePrefixes) {
 
     if (!(mode_ & 0x1)) {
         error("dumpTSV only supports binary mode files");
@@ -1147,7 +1148,7 @@ void TileOperator::dumpTSV(const std::string& outPrefix,
     }
 
     if (hasFeatureIndex()) {
-        dumpTSVSingleMolecule(outPrefix, probDigits, coordDigits, featureDictFile, regionPtr, qzmin, qzmax);
+        dumpTSVSingleMolecule(outPrefix, probDigits, coordDigits, featureDictFile, regionPtr, qzmin, qzmax, mergePrefixes);
         return;
     }
 
@@ -1185,8 +1186,11 @@ void TileOperator::dumpTSV(const std::string& outPrefix,
     if (coord_dim_ == 3) {
         headerStr += "\tz";
     }
-    for (int i = 0; i < k_; ++i) {
-        headerStr += "\tK" + std::to_string(i + 1) + "\tP" + std::to_string(i + 1);
+    const std::vector<uint32_t> headerKvec = kvec_.empty()
+        ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
+        : kvec_;
+    for (const auto& colName : tileoperator_detail::merge::build_merge_column_names(headerKvec, mergePrefixes)) {
+        headerStr += "\t" + colName;
     }
     headerStr += "\n";
     if (fprintf(fp, "%s", headerStr.c_str()) < 0) {

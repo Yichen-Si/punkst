@@ -176,11 +176,21 @@ punkst tile-op --dump-tsv --in path/prefix --binary --out path/prefix.dump
 
 The output include `path/prefix.dump.tsv` and `path/prefix.dump.index`.
 
+You can also stream TSV output to stdout with:
+
+```bash
+punkst tile-op --dump-tsv --in path/prefix --binary --out -
+```
+
+In stdout mode, no `.index` sidecar is written.
+
 For single-molecule binary input, the dumped TSV includes one extra `feature` column decoded from the embedded dictionary in `path/prefix.index`:
 
 ```bash
 punkst tile-op --dump-tsv --in path/prefix --binary --out path/prefix.dump
 ```
+
+`--emb-prefix` is also supported for standalone `--dump-tsv`. The number of prefixes must match the number of result sets encoded in the input header. For example, if the input contains two result sets, `--emb-prefix pref1 pref2` renames the dumped columns to `pref1_K1, pref1_P1, ..., pref2_K1, pref2_P1, ...`.
 
 `--dump-tsv` also supports GeoJSON filtering, and it can composes with the rectangle query set by `--xmin/--xmax/--ymin/--ymax`:
 
@@ -325,7 +335,11 @@ Matching is then done by `(x, y, feature)` in 2D or `(x, y, z, feature)` in 3D.
 
 `--anno-keep-all` - (Optional) Keep all query records even when no annotation is found. Missing `(K, P)` pairs are written using the same placeholder rendering controlled by `--null-k` / `--null-p`.
 
+`--emb-prefix` - (Optional) Rename the appended `(K, P)` columns. The number of prefixes must match the number of result sets encoded in the annotation source header. If the source is a legacy format without that header metadata, only one prefix is allowed.
+
 `--threads` - (Optional) Number of worker threads for tile-local annotation.
+
+`--out -` - (Optional) Write the annotated TSV to stdout instead of `path/out.tsv`. In stdout mode, no `.index` sidecar is written.
 
 For raw-float feature-specific inputs, use `--pixel-res-override` if the inference file needs an explicit coordinate-to-pixel mapping resolution.
 

@@ -118,10 +118,14 @@ inline void write_tile_result(const TileWriteResult& result, bool binaryOutput,
             std::fwrite(result.textData.data(), 1, result.textData.size(), fp) != result.textData.size()) {
             error("%s: Write error", __func__);
         }
-        currentOffset = std::ftell(fp);
+        if (fdIndex >= 0) {
+            currentOffset = std::ftell(fp);
+        } else {
+            currentOffset += static_cast<long>(result.textData.size());
+        }
     }
     newEntry.ed = currentOffset;
-    if (!write_all(fdIndex, &newEntry, sizeof(newEntry))) {
+    if (fdIndex >= 0 && !write_all(fdIndex, &newEntry, sizeof(newEntry))) {
         error("%s: Index entry write error", __func__);
     }
 }
