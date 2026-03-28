@@ -490,7 +490,6 @@ void TileReaderBase::assignLoadedIndex(const LoadedTileIndexData& loaded) {
     }
     nTiles = blocks_.size();
     load_ok_ = true;
-    notice("Read index with %zu blocks", nTiles);
 }
 
 /*

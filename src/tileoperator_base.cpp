@@ -1102,7 +1102,7 @@ int32_t TileOperator::loadTileToMap3D(const TileKey& key,
 }
 
 void TileOperator::dumpTSV(const std::string& outPrefix,
-    int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile,
+    int32_t probDigits, int32_t coordDigits,
     const std::string& geojsonFile, int64_t geojsonScale,
     float qzmin, float qzmax, const std::vector<std::string>& mergePrefixes) {
 
@@ -1148,7 +1148,7 @@ void TileOperator::dumpTSV(const std::string& outPrefix,
     }
 
     if (hasFeatureIndex()) {
-        dumpTSVSingleMolecule(outPrefix, probDigits, coordDigits, featureDictFile, regionPtr, qzmin, qzmax, mergePrefixes);
+        dumpTSVSingleMolecule(outPrefix, probDigits, coordDigits, regionPtr, qzmin, qzmax, mergePrefixes);
         return;
     }
 
@@ -1784,4 +1784,24 @@ void TileOperator::parseHeaderLine() {
     if (indexed_tsv) {
         validateCoordinateEncoding();
     }
+}
+
+std::vector<std::string> TileOperator::getHeaderColumns() const {
+    if (headerLine_.empty()) {
+        error("%s: header line is not available", __func__);
+    }
+    std::string line = headerLine_;
+    if (!line.empty() && line.back() == '\n') {
+        line.pop_back();
+    }
+    if (line.empty()) {
+        error("%s: malformed header line", __func__);
+    }
+    size_t pos = line.find_first_not_of('#');
+    if (pos != std::string::npos) {
+        line = line.substr(pos);
+    }
+    std::vector<std::string> tokens;
+    split(tokens, "\t", line);
+    return tokens;
 }

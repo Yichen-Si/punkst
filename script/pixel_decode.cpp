@@ -73,8 +73,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     int32_t nMoves = -1, topK = 3;
     double minInitCount = 10;
     double minCountAnchor = 5;
-    double pixelResolution = 1, defaultWeight = 0.;
-    double pixelResolutionZ = 1.0;
+    double pixelResolution = -1., defaultWeight = 0.;
+    double pixelResolutionZ = -1.;
     bool inMemory = false;
     bool outputBinary = false;
     bool outputOritinalData = false;
@@ -197,6 +197,15 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (singleFeaturePixel && singleMolecule) {
         error("Use either --single-feature-pixel or --single-molecule, not both");
     }
+    if (singleMolecule) {
+        if (pixelResolution > 0 || pixelResolutionZ > 0)
+            error("--pixel-res and --pixel-res-z should not be set in single molecule mode");
+        if (pixelResolution <= 0) {
+            pixelResolution = 1.;
+            warning("--pixel-res is not set. Using default resolution of 1.0");
+        }
+    }
+
     FeatureSpecificMode featureSpecificMode = FeatureSpecificMode::Off;
     if (singleFeaturePixel) {
         featureSpecificMode = FeatureSpecificMode::SingleFeaturePixel;

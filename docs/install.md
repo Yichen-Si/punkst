@@ -12,6 +12,7 @@ Prerequisites
 - CMake: 3.15 to 3.23
 - C++20 compiler* (GCC/Clang/MSVC with C++20 support)
 - TBB, OpenCV
+- libcurl (optional; only needed when `ENABLE_REMOTE_IO=ON`)
 
 *We assume your compiler properly supports C++20. Consider updating your compiler if you encounter issues.
 
@@ -44,6 +45,16 @@ cmake .. \
   -DCMAKE_PREFIX_PATH="$HOME/.local"
 ```
 (On mac, if CMake fails to locate OpenCV (installed with brew), pass: `-DOpenCV_DIR=$(brew --prefix opencv)/lib/cmake/opencv4` or wherever OpenCV is installed.)
+
+Remote random-access readers for `http(s)` and `s3://` inputs are enabled by the CMake option `ENABLE_REMOTE_IO`, which defaults to `ON`.
+
+- `ENABLE_REMOTE_IO=ON`: requires libcurl and enables remote URL input support
+- `ENABLE_REMOTE_IO=OFF`: builds without libcurl; local-file input still works, but remote URL input is disabled
+
+Example:
+```bash
+cmake .. -DENABLE_REMOTE_IO=OFF
+```
 
 The `punkst` binary will be placed in `bin/` under the project root.
 
@@ -88,6 +99,7 @@ make -j$(nproc) && make install
 | **zlib**     | `sudo apt-get install zlib1g-dev`   | `sudo yum install zlib-devel` | `brew install zlib`      |
 | **BZip2**    | `sudo apt-get install libbz2-dev`   | `sudo yum install bzip2-devel` | `brew install bzip2`    |
 | **LibLZMA**  | `sudo apt-get install liblzma-dev`  | `sudo yum install xz-devel` | `brew install xz`          |
+| **libcurl**  | `sudo apt-get install libcurl4-openssl-dev` | `sudo yum install libcurl-devel` | `brew install curl` |
 
 ### Build Options for Performance and Portability
 
@@ -98,3 +110,4 @@ The default options prioritizes runtime performance (`Release`, `ENABLE_LTO=ON`,
 | **Default / Local Performance** | `cmake ..` | Defaults to `Release` and enables `-march=native` when supported |
 | **Maximum Portability**| `cmake -DENABLE_PORTABLE_BUILD=ON ..` | Disables architecture-specific tuning flags for broader CPU compatibility |
 | **Modern CPU Fleet** | `cmake -DENABLE_NATIVE_ARCH=OFF -DENABLE_X86_64_V3=ON ..` | Targets x86-64-v3 (Haswell/2013+), useful when deploying to a known modern x86_64 baseline |
+| **No Remote I/O** | `cmake -DENABLE_REMOTE_IO=OFF ..` | Builds without libcurl and disables `http(s)` / `s3://` input support |

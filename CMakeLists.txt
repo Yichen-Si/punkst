@@ -139,10 +139,12 @@ set(SOURCE_FILES
     src/glm.hpp
     src/glm.cpp
     script/feature_selection.cpp
+    script/gene_bins.cpp
     src/tiles2nmf.hpp
     src/tiles2nmf.cpp
     src/region_query.hpp
     src/region_query.cpp
+    src/gene_bin_utils.hpp
     script/de_chisq.cpp
     src/tileoperator.hpp
     src/tileoperator_common.hpp
@@ -154,12 +156,12 @@ set(SOURCE_FILES
     src/tileoperator_masks.cpp
     src/tileoperator_spatial.cpp
     src/tileoperator.cpp
-    src/mlt_pmtiles_utils.hpp
-    src/mlt_pmtiles_utils.cpp
-    src/mlt_encoder.hpp
-    src/mlt_encoder.cpp
-    src/pmtiles_writer.hpp
-    src/pmtiles_writer.cpp
+    src/flex_io.hpp
+    src/flex_io.cpp
+    src/mlt_utils.hpp
+    src/mlt_utils.cpp
+    src/pmtiles_utils.hpp
+    src/pmtiles_utils.cpp
     script/manipulate_tiles.cpp
     script/multi_cde_lowres.cpp
     script/multi_cde_lowres_nb.cpp
@@ -187,9 +189,19 @@ find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
 find_package(LibLZMA)
+option(ENABLE_REMOTE_IO "Enable libcurl-backed http(s)/s3 random-access readers" ON)
+if (ENABLE_REMOTE_IO)
+  find_package(CURL REQUIRED)
+  message(STATUS "ENABLE_REMOTE_IO=ON: libcurl-backed remote readers enabled.")
+else()
+  message(STATUS "ENABLE_REMOTE_IO=OFF: building without libcurl-backed remote readers.")
+endif()
 
 target_compile_options(${APP_EXE} PRIVATE
   $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O3>
+)
+target_compile_definitions(${APP_EXE} PRIVATE
+  PUNKST_ENABLE_REMOTE_IO=$<BOOL:${ENABLE_REMOTE_IO}>
 )
 
 # Faster Debug builds
@@ -265,6 +277,10 @@ target_link_libraries(${APP_EXE} PRIVATE
     ${LibLZMA_LIBRARIES}
     $<$<CXX_COMPILER_ID:GNU>:stdc++fs>
 )
+
+if (ENABLE_REMOTE_IO)
+  target_link_libraries(${APP_EXE} PRIVATE CURL::libcurl)
+endif()
 
 
 install(TARGETS ${APP_EXE} RUNTIME DESTINATION bin)

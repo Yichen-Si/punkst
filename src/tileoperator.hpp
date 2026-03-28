@@ -7,6 +7,7 @@
 #include <utility>
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include "clipper2/clipper.h"
 #include "utils.h"
 #include "utils_sys.hpp"
@@ -14,10 +15,12 @@
 #include "tile_io.hpp"
 #include "tilereader.hpp"
 #include "hexgrid.h"
+#include "gene_bin_utils.hpp"
 
 struct PreparedRegionMask2D;
 struct PreparedRegionRasterMask2D;
 enum class RegionPixelState : uint8_t;
+namespace tileoperator_detail { namespace feature { struct FeatureRemapPlan; } }
 
 struct SparseObsDict {
     double totalCount = 0;
@@ -49,6 +52,35 @@ public:
     using PixelFeatureKey2 = std::tuple<int32_t, int32_t, uint32_t>;
     using PixelFeatureKey3 = std::tuple<int32_t, int32_t, int32_t, uint32_t>;
 
+    struct MltPmtilesOptions {
+        bool enabled = false;
+        int32_t icol_count = -1;
+        std::string gene_bin_info_file;
+        std::string feature_count_file;
+        std::vector<std::string> ext_col_ints;
+        std::vector<std::string> ext_col_floats;
+        std::vector<std::string> ext_col_strs;
+        double coordScale = -1.0;
+        double encode_prob_min = 1e-4;
+        double encode_prob_eps = 1e-6;
+        int32_t n_gene_bins = 0;
+        int32_t zoom = -1;
+    };
+
+    struct ExportPmtilesOptions {
+        int32_t tileSize = -1;
+        int32_t probDigits = 4;
+        int32_t coordDigits = 2;
+        std::string geojsonFile;
+        int64_t geojsonScale = 10;
+        float xmin = 0.0f;
+        float xmax = -1.0f;
+        float ymin = 0.0f;
+        float ymax = -1.0f;
+        float zmin = std::numeric_limits<float>::quiet_NaN();
+        float zmax = std::numeric_limits<float>::quiet_NaN();
+    };
+
     TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "", int32_t threads = 1) : dataFile_(dataFile), indexFile_(indexFile), threads_(std::max(0, threads)) {
         if (!indexFile.empty()) {
             loadIndex(indexFile);
@@ -75,6 +107,7 @@ public:
     float getPixelResolution() const { return formatInfo_.pixelResolution; }
     bool hasFeatureIndex() const { return (mode_ & 0x40u) != 0; }
     const std::vector<std::string>& getFeatureNames() const { return featureNames_; }
+    std::vector<std::string> getHeaderColumns() const;
     float getPixelResolutionZ() const {
         if ((mode_ & 0x10) && (mode_ & 0x20u) && formatInfo_.pixelResolutionZ > 0.0f) {
             return formatInfo_.pixelResolutionZ;
@@ -139,18 +172,19 @@ public:
     // Print index
     void printIndex() const;
     // Convert to plain TSV
-    void dumpTSV(const std::string& outPrefix = "",  int32_t probDigits = 4, int32_t coordDigits = 2,
-        const std::string& featureDictFile = "",
+    void dumpTSV(const std::string& outPrefix = "",
+        int32_t probDigits = 4, int32_t coordDigits = 2,
         const std::string& geojsonFile = "", int64_t geojsonScale = 10,
         float qzmin = std::numeric_limits<float>::quiet_NaN(),
         float qzmax = std::numeric_limits<float>::quiet_NaN(),
         const std::vector<std::string>& mergePrefixes = {});
-    void writeMltPmtiles(const std::string& outFile,
-        const std::string& featureDictFile,
-        double coordScale = 1.0,
-        bool epsg3857Mode = true,
-        int32_t zoom = -1,
-        int32_t targetTileSize = -1);
+    static void exportPMTiles(const std::string& pmtilesFile,
+        const std::string& outPrefix,
+        const ExportPmtilesOptions& options);
+    void writeMltPmtiles(const std::string& outPrefix,
+        const MltPmtilesOptions& mltOptions,
+        std::vector<uint32_t> k2keep = {},
+        const std::vector<std::string>& mergePrefixes = {});
     // Fix Fragmented Tiles
     void reorgTiles(const std::string& outPrefix, int32_t tileSize = -1);
     // Region query
@@ -168,26 +202,24 @@ public:
     /* Joining, annotating, and aggregation */
     void merge(const std::vector<std::string>& otherFiles,
         const std::string& outPrefix, std::vector<uint32_t> k2keep = {},
-        bool binaryOutput = false, bool keepAllMain = false, bool keepAll = false,
-        const std::string& featureDictFile = "",
-        const std::vector<std::string>& mergePrefixes = {});
+        bool binaryOutput = false, bool keepAllMain = false, bool keepAll = false, const std::vector<std::string>& mergePrefixes = {});
     void annotate(const std::string& ptPrefix, const std::string& outPrefix,
-        int32_t icol_x, int32_t icol_y, int32_t icol_z = -1,
-        int32_t icol_f = -1, const std::string& featureDictFile = "",
-        bool annoKeepAll = false,
-        const std::vector<std::string>& mergePrefixes = {});
+        int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        int32_t icol_f, bool annoKeepAll,
+        const std::vector<std::string>& mergePrefixes,
+        const MltPmtilesOptions& mltOptions);
     void annotateMerged(const std::vector<std::string>& otherFiles,
         const std::string& ptPrefix, const std::string& outPrefix,
         std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
-        int32_t icol_z = -1, int32_t icol_f = -1,
-        bool keepAllMain = false, bool keepAll = false,
-        const std::vector<std::string>& mergePrefixes = {},
-        const std::string& featureDictFile = "",
-        bool annoKeepAll = false);
+        int32_t icol_z, int32_t icol_f,
+        bool keepAllMain, bool keepAll,
+        const std::vector<std::string>& mergePrefixes,
+        bool annoKeepAll,
+        const MltPmtilesOptions& mltOptions);
     void pix2cell(const std::string& ptPrefix, const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
         int32_t icol_s = -1, int32_t icol_z = -1, int32_t icol_f = -1,
-        uint32_t k_out = 0, float max_cell_diameter = 50, const std::string& featureDictFile = "");
+        uint32_t k_out = 0, float max_cell_diameter = 50);
 
     /* Factor-distribution summaries */
     // For each pair of (k1,k2) compute \sum_i p1_i * p2_i
@@ -267,6 +299,8 @@ private:
         MergeSourceRelation relation = MergeSourceRelation::Same2D;
     };
 
+    struct MergedAnnotate2DCounts;
+
     std::string dataFile_, indexFile_;
     std::ifstream dataStream_;
     GzHandle gzDataStream_ = nullptr;
@@ -314,6 +348,7 @@ private:
     }
     static int32_t floorDivInt32(int32_t value, int32_t divisor);
     static int32_t ceilDivInt32(int32_t value, int32_t divisor);
+
     int32_t mapPixelToRasterFloor(int32_t value) const;
     int32_t mapPixelToRasterCeil(int32_t value) const;
     using RasterTopProbAccum = std::vector<std::unordered_map<int32_t, double>>;
@@ -412,7 +447,6 @@ private:
     void mergeSingleMolecule(const std::vector<std::string>& otherFiles,
         const std::string& outPrefix, std::vector<uint32_t> k2keep,
         bool binaryOutput, bool keepAllMain, bool keepAll,
-        const std::string& featureDictFile,
         const std::vector<std::string>& mergePrefixes);
     // Impl for probDot
     void probDotTiles2D(const std::set<TileKey>& commonTiles,
@@ -442,23 +476,49 @@ private:
         TileReader& reader, uint32_t icol_x, uint32_t icol_y, uint32_t icol_z,
         uint32_t ntok, FILE* fp, int fdIndex, long& currentOffset,
         bool annoKeepAll);
-    void annotateSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
+    void annotateSingleMolecule(const std::string& ptPrefix,
+        const std::string& outPrefix,
         int32_t icol_x, int32_t icol_y, int32_t icol_z,
-        int32_t icol_f, const std::string& featureDictFile, bool annoKeepAll,
-        const std::vector<std::string>& mergePrefixes);
+        int32_t icol_f, bool annoKeepAll,
+        const std::vector<std::string>& mergePrefixes,
+        const MltPmtilesOptions& mltOptions);
     void annotateMergedSingleMolecule(const std::vector<std::string>& otherFiles,
         const std::string& ptPrefix, const std::string& outPrefix,
         std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
         int32_t icol_z, int32_t icol_f, bool keepAllMain, bool keepAll,
         const std::vector<std::string>& mergePrefixes,
-        const std::string& featureDictFile, bool annoKeepAll);
+        bool annoKeepAll,
+        const MltPmtilesOptions& mltOptions);
+    void annotateSingleMoleculeToMltPmtiles(const std::string& ptPrefix, const std::string& outPrefix,
+        int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        int32_t icol_f, bool annoKeepAll,
+        const std::vector<std::string>& mergePrefixes,
+        const MltPmtilesOptions& mltOptions);
+    void annotateMergedSingleMoleculeToMltPmtiles(const std::vector<std::string>& otherFiles,
+        const std::string& ptPrefix, const std::string& outPrefix,
+        std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
+        int32_t icol_z, int32_t icol_f, bool keepAllMain, bool keepAll,
+        const std::vector<std::string>& mergePrefixes, bool annoKeepAll,
+        const MltPmtilesOptions& mltOptions);
+    void annotatePlainToMltPmtiles(const std::string& ptPrefix, const std::string& outPrefix,
+        int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        int32_t icol_f, bool annoKeepAll,
+        const std::vector<std::string>& mergePrefixes,
+        const MltPmtilesOptions& mltOptions);
+    void annotateMergedPlainToMltPmtiles(const std::vector<std::string>& otherFiles,
+        const std::string& ptPrefix, const std::string& outPrefix,
+        std::vector<uint32_t> k2keep, int32_t icol_x, int32_t icol_y,
+        int32_t icol_z, int32_t icol_f, bool keepAllMain, bool keepAll,
+        const std::vector<std::string>& mergePrefixes, bool annoKeepAll,
+        const MltPmtilesOptions& mltOptions);
     void appendTopProbsText(std::string& out, const TopProbs& probs) const;
-    void pix2cellSingleMolecule(const std::string& ptPrefix, const std::string& outPrefix,
+    void pix2cellSingleMolecule(const std::string& ptPrefix,
+        const std::string& outPrefix,
         uint32_t icol_c, uint32_t icol_x, uint32_t icol_y,
         int32_t icol_s, int32_t icol_z, int32_t icol_f,
-        uint32_t k_out, float max_cell_diameter, const std::string& featureDictFile);
+        uint32_t k_out, float max_cell_diameter);
     void dumpTSVSingleMolecule(const std::string& outPrefix,
-        int32_t probDigits, int32_t coordDigits, const std::string& featureDictFile,
+        int32_t probDigits, int32_t coordDigits,
         PreparedRegionMask2D* regionPtr = nullptr,
         float qzmin = std::numeric_limits<float>::quiet_NaN(),
         float qzmax = std::numeric_limits<float>::quiet_NaN(),
@@ -471,7 +531,7 @@ private:
     int32_t loadTileToMapFeature3D(const TileKey& key,
         std::map<PixelFeatureKey3, TopProbs>& pixelMap,
         std::ifstream* dataStream = nullptr) const;
-    std::vector<std::string> loadFeatureNames(const std::string& featureDictFile) const;
+    std::vector<std::string> loadFeatureNames() const;
 
     /* Geometry & spatial related */
     struct TileGeom {
@@ -717,4 +777,69 @@ private:
         const std::vector<uint8_t>* boundaryMask = nullptr,
         bool keepPixelCid = true) const;
 
+
+
+    /* Shared per-tile annotate/merge logic */
+    template<typename OnEmitFn>
+    uint32_t annotateTile2DPlainShared(TileReader& reader, const TileKey& tile,
+        std::ifstream& tileStream,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, float resXY,
+        bool annoKeepAll, uint32_t placeholderK,
+        OnEmitFn&& onEmit, const char* funcName) const;
+    template<typename OnEmitFn>
+    uint32_t annotateTile3DPlainShared(TileReader& reader, const TileKey& tile,
+        std::ifstream& tileStream,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        float resXY, float resZ,
+        bool annoKeepAll, uint32_t placeholderK,
+        OnEmitFn&& onEmit, const char* funcName) const;
+    template<typename OnEmitFn>
+    MergedAnnotate2DCounts annotateMergedTile2DPlainShared(TileReader& reader,
+        const TileKey& tile, std::vector<std::ifstream>& streams,
+        const std::vector<MergeSourcePlan>& mergePlans,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, float resXY,
+        bool keepAllMain, bool keepAll, bool annoKeepAll,
+        size_t totalK, OnEmitFn&& onEmit, const char* funcName) const;
+    template<typename OnEmitFn>
+    MergedAnnotate2DCounts annotateMergedTile3DPlainShared(TileReader& reader,
+        const TileKey& tile, std::vector<std::ifstream>& streams,
+        const std::vector<MergeSourcePlan>& mergePlans,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        float resXY, float resZ,
+        bool keepAllMain, bool keepAll, bool annoKeepAll,
+        size_t totalK, OnEmitFn&& onEmit, const char* funcName) const;
+    template<typename OnEmitFn>
+    uint32_t annotateSingleTile2DShared(TileReader& reader,
+        const TileKey& tile, std::ifstream& tileStream,
+        const std::unordered_map<std::string, uint32_t>& featureIndex,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, int32_t icol_f,
+        float resXY, bool annoKeepAll, uint32_t placeholderK,
+        OnEmitFn&& onEmit, const char* funcName) const;
+    template<typename OnEmitFn>
+    uint32_t annotateSingleTile3DShared(TileReader& reader,
+        const TileKey& tile, std::ifstream& tileStream,
+        const std::unordered_map<std::string, uint32_t>& featureIndex,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        int32_t icol_f, float resXY, float resZ,
+        bool annoKeepAll, uint32_t placeholderK,
+        OnEmitFn&& onEmit, const char* funcName) const;
+    template<typename OnEmitFn>
+    MergedAnnotate2DCounts annotateMergedTile2DShared(TileReader& reader,
+        const TileKey& tile, std::vector<std::ifstream>& streams,
+        const std::vector<MergeSourcePlan>& mergePlans,
+        const tileoperator_detail::feature::FeatureRemapPlan& featureRemap,
+        const std::unordered_map<std::string, uint32_t>& featureIndex,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, int32_t icol_f,
+        float resXY, bool keepAllMain, bool keepAll, bool annoKeepAll,
+        size_t totalK, OnEmitFn&& onEmit, const char* funcName) const;
+    template<typename OnEmitFn>
+    MergedAnnotate2DCounts annotateMergedTile3DShared(TileReader& reader,
+        const TileKey& tile, std::vector<std::ifstream>& streams,
+        const std::vector<MergeSourcePlan>& mergePlans,
+        const tileoperator_detail::feature::FeatureRemapPlan& featureRemap,
+        const std::unordered_map<std::string, uint32_t>& featureIndex,
+        uint32_t ntok, int32_t icol_x, int32_t icol_y, int32_t icol_z,
+        int32_t icol_f, float resXY, float resZ,
+        bool keepAllMain, bool keepAll, bool annoKeepAll,
+        size_t totalK, OnEmitFn&& onEmit, const char* funcName) const;
 };

@@ -105,6 +105,21 @@ std::string join(const std::vector<std::string>& tokens, const std::string& deli
     return result.str();
 }
 
+std::string basename(const std::string& path, bool stripExtension) {
+    std::string base = path;
+    const size_t slash = base.find_last_of("/\\");
+    if (slash != std::string::npos) {
+        base = base.substr(slash + 1);
+    }
+    if (stripExtension) {
+        const size_t dot = base.find_last_of('.');
+        if (dot != std::string::npos) {
+            base = base.substr(0, dot);
+        }
+    }
+    return base;
+}
+
 // String to number conversion shortcuts
 bool str2int32(const std::string& str, int32_t& value) {
     return str2num<int32_t>(str, value);
@@ -373,4 +388,3 @@ bool set_rgb(const char *s_color, std::array<int32_t, 3>& rgb) {
         return true;
     }
 }
-

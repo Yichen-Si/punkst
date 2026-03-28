@@ -53,16 +53,6 @@ void add_nested_map(std::map<K1, std::map<K2, V>>& dst, const std::map<K1, std::
     }
 }
 
-int32_t floor_div_int32(int32_t value, int32_t divisor) {
-    assert(divisor > 0);
-    int32_t q = value / divisor;
-    const int32_t r = value % divisor;
-    if (r != 0 && ((r > 0) != (divisor > 0))) {
-        --q;
-    }
-    return q;
-}
-
 int64_t rounded_abs_area64(const Path64& path) {
     return static_cast<int64_t>(std::llround(std::abs(Area(path))));
 }
@@ -838,46 +828,17 @@ void TileOperator::annotateTiles2D(const std::vector<TileKey>& tiles,
     auto buildTileResult = [&](const TileKey& tile, std::ifstream& tileStream) {
         TileWriteResult result;
         result.tile = tile;
-        std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
-        if (loadTileToMap(tile, pixelMap, nullptr, &tileStream) <= 0) {
-            debug("%s: Query tile (%d, %d) is not in the annotation dataset", funcName, tile.row, tile.col);
-            if (!annoKeepAll) {
-                return result;
-            }
-        }
-        auto it = reader.get_tile_iterator(tile.row, tile.col);
-        if (!it) {
-            return result;
-        }
-        std::string s;
-        while (it->next(s)) {
-            if (s.empty() || s[0] == '#') continue;
-            std::vector<std::string> tokens;
-            split(tokens, "\t", s, ntok + 1, true, true, true);
-            if (tokens.size() < ntok) {
-                error("%s: Invalid line: %s", __func__, s.c_str());
-            }
-            float x, y;
-            if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
-                error("%s: Invalid coordinates in line: %s", __func__, s.c_str());
-            }
-            int32_t ix = static_cast<int32_t>(std::floor(x / res));
-            int32_t iy = static_cast<int32_t>(std::floor(y / res));
-            auto pit = pixelMap.find({ix, iy});
-            if (pit == pixelMap.end() && !annoKeepAll) {
-                continue;
-            }
-            result.textData += s;
-            if (pit == pixelMap.end()) {
-                TopProbs missing;
-                append_placeholder_pairs(missing, static_cast<uint32_t>(k_));
-                appendTopProbsText(result.textData, missing);
-            } else {
-                appendTopProbsText(result.textData, pit->second);
-            }
-            result.textData.push_back('\n');
-            result.n++;
-        }
+        result.n = annotateTile2DPlainShared(reader, tile, tileStream,
+            ntok, static_cast<int32_t>(icol_x), static_cast<int32_t>(icol_y), res,
+            annoKeepAll, static_cast<uint32_t>(k_),
+            [&](const std::string& line, const std::vector<std::string>&,
+                float, float, int32_t, int32_t, const TopProbs& probs) {
+                result.textData += line;
+                appendTopProbsText(result.textData, probs);
+                result.textData.push_back('\n');
+                return true;
+            },
+            funcName);
         return result;
     };
 
@@ -902,50 +863,19 @@ void TileOperator::annotateTiles3D(const std::vector<TileKey>& tiles,
     auto buildTileResult = [&](const TileKey& tile, std::ifstream& tileStream) {
         TileWriteResult result;
         result.tile = tile;
-        std::map<PixelKey3, TopProbs> pixelMap3d;
-        if (loadTileToMap3D(tile, pixelMap3d, &tileStream) <= 0) {
-            debug("%s: Query tile (%d, %d) is not in the annotation dataset", funcName, tile.row, tile.col);
-            if (!annoKeepAll) {
-                return result;
-            }
-        }
-        auto it = reader.get_tile_iterator(tile.row, tile.col);
-        if (!it) {
-            return result;
-        }
-        std::string s;
-        while (it->next(s)) {
-            if (s.empty() || s[0] == '#') continue;
-            std::vector<std::string> tokens;
-            split(tokens, "\t", s, ntok + 1, true, true, true);
-            if (tokens.size() < ntok) {
-                error("%s: Invalid line: %s", __func__, s.c_str());
-            }
-            float x, y, z;
-            if (!str2float(tokens[icol_x], x) || !str2float(tokens[icol_y], y)) {
-                error("%s: Invalid coordinates in line: %s", __func__, s.c_str());
-            }
-            if (!str2float(tokens[icol_z], z)) {
-                error("%s: Invalid z coordinate in line: %s", __func__, s.c_str());
-            }
-            int32_t ix = static_cast<int32_t>(std::floor(x / res));
-            int32_t iy = static_cast<int32_t>(std::floor(y / res));
-            int32_t iz = static_cast<int32_t>(std::floor(z / res));
-            auto pit = pixelMap3d.find(std::make_tuple(ix, iy, iz));
-            if (pit == pixelMap3d.end() && !annoKeepAll) {
-                continue;
-            }
-            result.textData += s;
-            if (pit == pixelMap3d.end()) {
-                TopProbs missing;
-                append_placeholder_pairs(missing, static_cast<uint32_t>(k_));
-                appendTopProbsText(result.textData, missing);
-            } else {
-                appendTopProbsText(result.textData, pit->second);
-            }
-            result.textData.push_back('\n');
-            result.n++;
-        }
+        result.n = annotateTile3DPlainShared(reader, tile, tileStream,
+            ntok, static_cast<int32_t>(icol_x), static_cast<int32_t>(icol_y),
+            static_cast<int32_t>(icol_z), res, res,
+            annoKeepAll, static_cast<uint32_t>(k_),
+            [&](const std::string& line, const std::vector<std::string>&,
+                float, float, float, int32_t, int32_t, int32_t,
+                const TopProbs& probs) {
+                result.textData += line;
+                appendTopProbsText(result.textData, probs);
+                result.textData.push_back('\n');
+                return true;
+            },
+            funcName);
         return result;
     };
 

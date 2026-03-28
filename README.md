@@ -17,10 +17,11 @@ If you have difficulty installing, let us known (by opening an issue). You can a
 
 - Git
 - CMake: 3.15 to 3.23
-- C++17 compiler* (GCC ≥8, Clang ≥5, MSVC 2017+)
+- C++20 compiler* (GCC >= 8, Clang >= 6, Apple Clang >= 10, MSVC >= 19.22)
 - TBB, OpenCV
+- libcurl (optional; enabled by default for `http(s)` / `s3://` input support)
 
-*We do assume your compiler properly supports C++17. Consider updating the compiler if you encounter issues.
+*We do assume your [compiler](https://en.cppreference.com/w/cpp/compiler_support/20.html) properly supports C++20. Consider updating the compiler if you encounter issues.
 
 ```bash
 # 1) Clone the repository
@@ -49,6 +50,17 @@ cmake .. \
   -DOpenCV_DIR=$HOME/.local/lib/cmake/opencv4 \
   -DTBB_DIR=$HOME/user/opt/tbb/lib/cmake/tbb \
   -DCMAKE_PREFIX_PATH="$HOME/.local"
+```
+
+Remote random-access readers for `http(s)` and `s3://` inputs are controlled by the CMake option `ENABLE_REMOTE_IO`.
+
+- Default: `-DENABLE_REMOTE_IO=ON`
+- Requires libcurl at configure/build time
+- Set `-DENABLE_REMOTE_IO=OFF` to build without libcurl; local-file input still works, but remote URL input is disabled
+
+Example:
+```bash
+cmake .. -DENABLE_REMOTE_IO=OFF
 ```
 
 The `punkst` binary will be placed in `bin/` under the project root.

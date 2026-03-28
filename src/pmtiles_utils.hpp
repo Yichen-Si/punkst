@@ -1,8 +1,11 @@
 #pragma once
 
+#include "flex_io.hpp"
 #include "json.hpp"
+#include "PMTiles/pmtiles.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -32,6 +35,18 @@ struct ArchiveOptions {
     int32_t centerLatE7 = 0;
     nlohmann::json metadata;
 };
+
+struct LoadedPmtilesArchive {
+    std::unique_ptr<flexio::FlexReader> reader;
+    pmtiles::headerv3 header{};
+    nlohmann::json metadata;
+    std::vector<pmtiles::entry_zxy> entries;
+};
+
+LoadedPmtilesArchive load_pmtiles_archive(const std::string& inFile);
+std::string read_pmtiles_tile_payload(flexio::FlexReader& reader,
+    const pmtiles::headerv3& header,
+    const pmtiles::entry_zxy& entry);
 
 void write_pmtiles_archive(const std::string& outFile,
     std::vector<EncodedTilePayload> tiles,

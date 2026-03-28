@@ -38,6 +38,7 @@ std::string trim(const std::string& str);
 std::string to_lower(const std::string& str);
 std::string to_upper(const std::string& str);
 std::string join(const std::vector<std::string>& tokens, const std::string& delim);
+std::string basename(const std::string& path, bool stripExtension = false);
 static bool ends_with(const std::string &s, const std::string &suffix) {
     return s.size() >= suffix.size()
         && 0 == s.compare(s.size()-suffix.size(), suffix.size(), suffix);
@@ -148,6 +149,18 @@ std::string fp_to_string(FP x, int digits)
 #endif
     std::snprintf(buf, sizeof buf, "%.*f", digits, static_cast<double>(x));
     return buf;
+}
+
+inline int32_t floor_div_int32(int32_t value, int32_t divisor) {
+    if (divisor <= 0) {
+        error("%s: divisor must be positive", __func__);
+    }
+    int32_t q = value / divisor;
+    int32_t r = value % divisor;
+    if (r != 0 && ((r < 0) != (divisor < 0))) {
+        --q;
+    }
+    return q;
 }
 
 // String to scalar

@@ -21,7 +21,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string extractRegionGeoJSON;
     int64_t extractRegionScale = 10;
     bool dumpTSV = false;
-    bool writeMltPmtiles = false;
+    bool exportPMTiles = false;
     bool probDot = false;
     bool cellAnno = false;
     bool spatialMetrics = false;
@@ -65,14 +65,10 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string templateOutPrefix;
     std::string nullK = "-1";
     std::string nullP = "0";
-    double coordScale = 1.0;
-    int32_t targetTileSizeOut = -1;
-    bool pmtilesEpsg3857 = true;
-    bool pmtilesGenericScaledGrid = false;
-    int32_t pmtilesZoom = -1;
     float xmin = 0.0f, xmax = -1.0f, ymin = 0.0f, ymax = -1.0f;
     float zmin = std::numeric_limits<float>::quiet_NaN();
     float zmax = std::numeric_limits<float>::quiet_NaN();
+    TileOperator::MltPmtilesOptions mltOptions;
     int32_t threads = 1;
     int32_t debug_ = 0;
 
@@ -95,12 +91,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     // Basic inspection, conversion, and region query.
     pl.add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
-      .add_option("write-mlt-pmtiles", "Write feature-bearing binary tiles as MLT-backed PMTiles", writeMltPmtiles)
-      .add_option("coord-scale", "Scale factor applied to x/y before MLT-PMTiles export", coordScale)
-      .add_option("target-tile-size", "Target tile size in scaled coordinate units for generic MLT-PMTiles export", targetTileSizeOut)
-      .add_option("pmtiles-epsg3857", "Interpret scaled coordinates as EPSG:3857 and tile them by Web Mercator zoom (default for --write-mlt-pmtiles)", pmtilesEpsg3857)
-      .add_option("pmtiles-generic-scaled-grid", "Use generic scaled-grid tiling instead of the default EPSG:3857 mode for --write-mlt-pmtiles", pmtilesGenericScaledGrid)
-      .add_option("pmtiles-zoom", "Web Mercator zoom level for EPSG:3857 MLT-PMTiles export", pmtilesZoom)
+      .add_option("export-pmtiles", "Export an input PMTiles archive to TSV plus TileOperator index", exportPMTiles)
+      .add_option("write-mlt-pmtiles", "Write MLT-backed PMTiles", mltOptions.enabled)
+      .add_option("gene-bin-info", "JSON file with gene/count/bin rows; when provided with --write-mlt-pmtiles, gene-bin PMTiles packaging is activated", mltOptions.gene_bin_info_file)
+      .add_option("feature-count-file", "Optional TSV with feature name in column 1 and total count in column 2; together with positive --n-gene-bins this activates gene-bin PMTiles packaging", mltOptions.feature_count_file)
+      .add_option("n-gene-bins", "Positive number of gene bins to derive from --feature-count-file; zero disables TSV-derived gene-bin packaging", mltOptions.n_gene_bins)
+      .add_option("coord-scale", "Scale factor applied to x/y before MLT-PMTiles export", mltOptions.coordScale)
+      .add_option("encode-prob-min", "For MLT PMTiles export, encode P2+ values below this threshold as null together with their K values; negative disables pruning", mltOptions.encode_prob_min)
+      .add_option("encode-prob-eps", "For MLT PMTiles export, mark P1 nullable and omit it when P1 > 1-eps; non-positive disables this rule", mltOptions.encode_prob_eps)
+      .add_option("pmtiles-zoom", "Web Mercator zoom level for EPSG:3857 MLT-PMTiles export", mltOptions.zoom)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates (for --dump-tsv)", coordDigits)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities (for --dump-tsv)", probDigits)
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
@@ -128,7 +127,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-x", "X coordinate column index, 0-based", icol_x)
       .add_option("icol-y", "Y coordinate column index, 0-based", icol_y)
       .add_option("icol-z", "Z coordinate column index, 0-based", icol_z)
-      .add_option("icol-feature", "Feature-name column index, 0-based (required for single-molecule annotate/pix2cell)", icol_f)
+      .add_option("icol-feature", "Feature-name column index, 0-based (required for single-molecule annotate/pix2cell and annotate PMTiles packaging)", icol_f)
+      .add_option("icol-count", "Count/value column index, 0-based (required for annotate PMTiles packaging)", mltOptions.icol_count)
+      .add_option("ext-col-ints", "Additional integer query columns for PMTiles packaging, in the form of \"idx[:name[:nullval]]\"", mltOptions.ext_col_ints)
+      .add_option("ext-col-floats", "Additional float query columns for PMTiles packaging, in the form of \"idx[:name[:nullval]]\"", mltOptions.ext_col_floats)
+      .add_option("ext-col-strs", "Additional string query columns for PMTiles packaging, in the form of \"idx[:name[:nullval]]\"", mltOptions.ext_col_strs)
       .add_option("icol-c", "Cell ID column index, 0-based (for pix2cell)", icol_c)
       .add_option("icol-s", "Cell component column index, 0-based (for pix2cell)", icol_s)
       .add_option("k-out", "Number of top factors to output (for pix2cell)", kOut)
@@ -179,10 +182,34 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (!inPrefix.empty()) {
-        inData = inPrefix + (isBinary ? ".bin" : ".tsv");
-        inIndex = inPrefix + ".index";
-    } else if (inData.empty() || inIndex.empty()) {
+        if (exportPMTiles) {
+            inData = inPrefix;
+        } else {
+            inData = inPrefix + (isBinary ? ".bin" : ".tsv");
+            inIndex = inPrefix + ".index";
+        }
+    } else if (inData.empty() || (!exportPMTiles && inIndex.empty())) {
+        if (exportPMTiles) {
+            error("Either --in or --in-data must be specified for --export-pmtiles");
+        }
         error("Either --in or both --in-data and --in-index must be specified");
+    }
+
+    if (exportPMTiles) {
+        TileOperator::ExportPmtilesOptions exportOptions;
+        exportOptions.tileSize = tileSize;
+        exportOptions.probDigits = probDigits;
+        exportOptions.coordDigits = coordDigits;
+        exportOptions.geojsonFile = extractRegionGeoJSON;
+        exportOptions.geojsonScale = extractRegionScale;
+        exportOptions.xmin = xmin;
+        exportOptions.xmax = xmax;
+        exportOptions.ymin = ymin;
+        exportOptions.ymax = ymax;
+        exportOptions.zmin = zmin;
+        exportOptions.zmax = zmax;
+        TileOperator::exportPMTiles(inData, outPrefix, exportOptions);
+        return 0;
     }
 
     TileOperator tileOp(inData, inIndex);
@@ -221,6 +248,21 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
           profileOneFactorMask || runSoftFactorMask || runHardFactorMask)) {
         error("--raster-pixel-res is currently supported only with raster-style tile-op commands");
     }
+    mltOptions.enabled = mltOptions.zoom > 0;
+    if (mltOptions.enabled) {
+        if (mltOptions.encode_prob_min > 1.0) {
+            error("--encode-prob-min must be <= 1");
+        }
+        if (mltOptions.encode_prob_eps > 1.0) {
+            error("--encode-prob-eps must be <= 1");
+        }
+        if (inMergePtsPrefix.empty() && !inMergeEmbFiles.empty()) {
+            error("--write-mlt-pmtiles with --merge-emb currently requires --annotate-pts");
+        }
+        if (mltOptions.zoom > 31) {
+            error("--pmtiles-zoom must be between 0 and 31");
+        }
+    }
     const bool hasExtractRegionZMin = !std::isnan(zmin);
     const bool hasExtractRegionZMax = !std::isnan(zmax);
     if (hasExtractRegionZMin != hasExtractRegionZMax) {
@@ -235,26 +277,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
     if (dumpTSV && (hasExtractRegionZMin || hasExtractRegionZMax) && extractRegionGeoJSON.empty()) {
         error("--zmin/--zmax require --extract-region-geojson when used with --dump-tsv");
-    }
-    if (!mergeEmbPrefixes.empty()) {
-        size_t expectedPrefixes = 0;
-        if (!inMergeEmbFiles.empty()) {
-            expectedPrefixes = static_cast<size_t>(inMergeEmbFiles.size() + 1);
-        } else if (dumpTSV || (!inMergePtsPrefix.empty() && !cellAnno)) {
-            const std::vector<uint32_t> sourceKvec = tileOp.getKvec();
-            expectedPrefixes = sourceKvec.empty() ? size_t(1) : sourceKvec.size();
-        } else {
-            error("--emb-prefix requires --merge-emb, --annotate-pts, or --dump-tsv");
-        }
-        if (mergeEmbPrefixes.size() != expectedPrefixes) {
-            if (!inMergeEmbFiles.empty()) {
-                error("--emb-prefix must provide one prefix for the main input and one for each --merge-emb source");
-            }
-            error("--emb-prefix must provide one prefix per result set in the input/source");
-        }
-    }
-    if (!mergeEmbPrefixes.empty() && binaryOut) {
-        error("--emb-prefix is only meaningful for TSV output and cannot be used with --binary-out");
     }
 
     if (reorganize) {
@@ -276,13 +298,13 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     }
 
     if (dumpTSV) {
-        tileOp.dumpTSV(outPrefix, probDigits, coordDigits, "",
+        tileOp.dumpTSV(outPrefix, probDigits, coordDigits,
             extractRegionGeoJSON, extractRegionScale, zmin, zmax, mergeEmbPrefixes);
         return 0;
     }
-    if (writeMltPmtiles) {
-        tileOp.writeMltPmtiles(outPrefix + ".pmtiles", "",
-            coordScale, pmtilesEpsg3857, pmtilesZoom, targetTileSizeOut);
+    if (mltOptions.enabled &&
+        inMergePtsPrefix.empty() && inMergeEmbFiles.empty()) {
+        tileOp.writeMltPmtiles(outPrefix, mltOptions, k2keep, mergeEmbPrefixes);
         return 0;
     }
 
@@ -304,7 +326,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         if (hasFeatureIndex && icol_f < 0)
             error("valid --icol-feature is required for --annotate-cell on single-molecule input");
         tileOp.pix2cell(inMergePtsPrefix, outPrefix, icol_c, icol_x, icol_y,
-            icol_s, icol_z, icol_f, kOut, maxCellDiameter, "");
+            icol_s, icol_z, icol_f, kOut, maxCellDiameter);
         return 0;
     }
 
@@ -314,22 +336,23 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         }
         if (hasFeatureIndex && icol_f < 0)
             error("valid --icol-feature is required for --annotate-pts on single-molecule input");
-        tileOp.annotateMerged(inMergeEmbFiles, inMergePtsPrefix, outPrefix, k2keep,
-            icol_x, icol_y, icol_z, icol_f, mergeKeepAllMain, mergeKeepAll, mergeEmbPrefixes,
-            "", annoKeepAll);
+        tileOp.annotateMerged(inMergeEmbFiles, inMergePtsPrefix,
+            outPrefix, k2keep, icol_x, icol_y, icol_z, icol_f,
+            mergeKeepAllMain, mergeKeepAll, mergeEmbPrefixes,
+            annoKeepAll, mltOptions);
         return 0;
     }
 
     if (!inMergeEmbFiles.empty()) {
-        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut, mergeKeepAllMain, mergeKeepAll,
-            "", mergeEmbPrefixes);
+        tileOp.merge(inMergeEmbFiles, outPrefix, k2keep, binaryOut, mergeKeepAllMain, mergeKeepAll, mergeEmbPrefixes);
         return 0;
     }
 
     if (!inMergePtsPrefix.empty()) {
         if (hasFeatureIndex && icol_f < 0)
             error("valid --icol-feature is required for --annotate-pts on single-molecule input");
-        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z, icol_f, "", annoKeepAll, mergeEmbPrefixes);
+        tileOp.annotate(inMergePtsPrefix, outPrefix, icol_x, icol_y, icol_z,
+            icol_f, annoKeepAll, mergeEmbPrefixes, mltOptions);
         return 0;
     }
 

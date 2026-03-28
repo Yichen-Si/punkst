@@ -12,7 +12,9 @@ Some operations related to smoothing, spatial profiling, and factor masks treat 
 
 - Basic inspection, conversion, and region query
     - [Print Index](#print-index)
-    - [Convert TSV](#convert-to-tsv)
+    - [Export as TSV](#convert-to-tsv)
+    - [Export as MLT PMTiles](#write-mlt-pmtiles)
+    - [Export PMTiles as TSV](#export-pmtiles)
     - [Fix Fragmented Tiles](#fix-fragmented-tiles)
     - [Region Query](#region-query)
 
@@ -64,6 +66,7 @@ Current `tile-op` support for these inputs is:
   - `--annotate-cell`
   - `--prob-dot`
   - `--confusion`
+  - direct `--write-mlt-pmtiles`
 - raster image processing style operations are not supported:
   - `--smooth-top-labels`
   - `--spatial-metrics`
@@ -81,6 +84,7 @@ Feature-bearing binary indexes now embed their feature dictionary directly in th
 
 - `tile-op` no longer takes `--features`
 - `--dump-tsv`, `--merge-emb`, `--annotate-pts`, `--annotate-cell`, and feature-aware `--prob-dot` decode names from the embedded dictionary
+- direct `--write-mlt-pmtiles` also uses the embedded dictionary
 - when multiple feature-bearing sources are merged together, `tile-op` first compares dictionaries and then either uses the original indices directly or remaps them through a canonical union of feature names
 
 ### Parallel Execution
@@ -105,6 +109,7 @@ Current commands with meaningful parallel tile-local execution include:
 
 Notes:
 
+- PMTiles packaging paths also honor `--threads`, including direct `--write-mlt-pmtiles` export and `--annotate-pts` / `--merge-emb + --annotate-pts` packaging
 - Some commands are only partially parallelized: tile-local work is parallel, but later reduction, polygon assembly, or final writeback is still serial.
 - `--merge-emb` and `--annotate-pts` now use the same shared tile-result pipeline in both default pixel mode and feature-specific mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.
 - `--prob-dot` without `--merge-emb` has a serial fallback for bounded query mode and non-seekable text input such as stdin or gzipped streaming text.
@@ -208,6 +213,119 @@ In this mode:
 - the output TSV index header and per-tile entries reflect the records actually written
 
 For 3D TSV dumping with GeoJSON, `--zmin/--zmax` are supported only together with `--extract-region-geojson`.
+
+### Write MLT PMTiles
+
+`tile-op` can write point-only MLT-backed PMTiles in EPSG:3857 coordinates.
+
+A valid `--pmtiles-zoom` is required for all PMTiles packaging modes. In practice, use `--write-mlt-pmtiles` together with `--pmtiles-zoom`.
+
+#### Direct export from feature-bearing binary input
+
+This path is for binary feature-bearing decode output such as:
+
+- `punkst pixel-decode --single-feature-pixel`
+- `punkst pixel-decode --single-molecule`
+
+```bash
+punkst tile-op --in path/pixel.smol --binary --write-mlt-pmtiles \
+  --pmtiles-zoom 18 --encode-prob-min 0.01 --emb-prefix smol \
+  --n-gene-bins 5 --feature-count-file path/transcripts.tiled.features.tsv \
+  --out path/pixel.smol.z18 --threads 4
+```
+
+Main points:
+
+- this direct writer is used only when neither `--annotate-pts` nor `--merge-emb` is present
+- direct PMTiles export requires feature-bearing binary input with top-K decode payloads; plain TSV input is not supported
+- geometry is always 2D point geometry; for 3D input, `z` is written as a normal property column
+- feature names come from the embedded dictionary in the input `.index`
+- `--emb-prefix` can rename exported `K/P` column groups
+- `--coord-scale` optionally scales `x/y` before EPSG:3857 packaging; if omitted, stored coordinates are used directly
+- `--encode-prob-min` prunes later `K/P` pairs by writing them as null once `P2+` falls below the threshold; negative disables pruning
+- `--encode-prob-eps` makes `P1` nullable and omits it when `P1 > 1 - eps`; non-positive disables this rule
+
+Outputs:
+
+- without gene-bin packaging: `path/out.pmtiles`
+- with gene-bin packaging: `path/out_all.pmtiles`, `path/out_bin<id>.pmtiles`, `path/out.bin_counts.json`, and `path/out.pmtiles_index.tsv`
+
+Gene-bin packaging is activated by either:
+
+- `--gene-bin-info path/bins.json`
+- `--feature-count-file path/features.tsv --n-gene-bins N`
+
+If both are provided, `--gene-bin-info` takes precedence. The JSON can be generated ahead of time with `punkst gene-bins`.
+
+#### Annotate and package to PMTiles
+
+`--annotate-pts` can package the annotated rows directly as PMTiles for both standard pixel decode input and feature-bearing single-molecule input:
+
+```bash
+punkst tile-op --in path/pixel.ann2d --binary \
+  --annotate-pts path/transcripts --icol-x 0 --icol-y 1 \
+  --icol-feature 2 --icol-count 3 \
+  --write-mlt-pmtiles --pmtiles-zoom 18 --encode-prob-min 0.01 \
+  --out path/pixel.ann2d.z18 --threads 4
+```
+
+This mode writes `feature` from the query TSV `--icol-feature` column and `ct` from `--icol-count`, then appends the annotated `K/P` columns. The main archive is always `path/out_all.pmtiles`; gene-bin side outputs are written only when gene-bin packaging is active.
+
+You can also carry selected extra query TSV columns into the packaged PMTiles schema:
+
+- `--ext-col-ints`
+- `--ext-col-floats`
+- `--ext-col-strs`
+
+Each extra-column spec has the form `idx[:name[:nullval]]`:
+
+- `idx` is the 0-based query TSV column index
+- if `name` is omitted, the query TSV header supplies the property name
+- if `nullval` is provided, that exact token is encoded as null and the property becomes nullable
+
+#### Merge, annotate, and package in one pass
+
+`--merge-emb` can be combined with `--annotate-pts` and PMTiles packaging:
+
+```bash
+punkst tile-op --in path/pixel.smol --binary \
+  --merge-emb path/pixel.bin --emb-prefix smol pix \
+  --annotate-pts path/transcripts --icol-x 0 --icol-y 1 \
+  --icol-feature 2 --icol-count 3 --icol-z 4 \
+  --merge-keep-all --anno-keep-all \
+  --write-mlt-pmtiles --pmtiles-zoom 18 --encode-prob-min 0.01 \
+  --out path/pixel.merge.z18 --threads 4
+```
+
+This follows the same merge and annotation rules described below, but writes PMTiles instead of TSV. The output is `path/out_all.pmtiles` plus optional gene-bin side outputs.
+
+### Export PMTiles
+
+`tile-op --export-pmtiles` reads an MLT-backed PMTiles archive produced by `punkst` and exports it back to a plain TSV plus `.index` that `tile-op` can read again.
+
+```bash
+punkst tile-op --export-pmtiles \
+  --in path/pixel.bin1.pmtiles \
+  --tile-size 500 \
+  --out path/pixel.bin1.export
+```
+
+Requirements and behavior:
+
+- `--in` or `--in-data` must point to the PMTiles archive
+- `--tile-size` is required and defines the tile size recorded in the exported `.index`
+- output is `path/out.tsv` and `path/out.index`
+- the export reads rows from the archive max zoom
+- column order is `x`, `y`, optional `z`, then the decoded PMTiles schema columns
+- missing `K` and `P` values are rendered as `-1` and `0`; other nullable fields are rendered as `NA`
+
+Region filters are also supported in this mode:
+
+- `--xmin`, `--xmax`, `--ymin`, `--ymax`
+- `--extract-region-geojson`
+- `--zmin`, `--zmax`
+
+This makes it possible to round-trip PMTiles output through `tile-op` and to export only a spatial subset of a PMTiles archive.
 
 ### Fix fragmented Tiles
 
@@ -333,6 +451,22 @@ For single-molecule inputs, also provide:
 
 Matching is then done by `(x, y, feature)` in 2D or `(x, y, z, feature)` in 3D.
 
+For PMTiles packaging from `--annotate-pts`, also provide:
+
+- `--icol-feature` - the packaged `feature` property comes from this query column
+- `--icol-count` - the packaged `ct` property comes from this query column
+- `--pmtiles-zoom` - output Web Mercator zoom level in `[0, 31]`
+
+This applies both to single-molecule annotation and to the standard coordinate-only annotation path.
+
+Optional PMTiles-only query properties:
+
+- `--ext-col-ints`
+- `--ext-col-floats`
+- `--ext-col-strs`
+
+Each uses `idx[:name[:nullval]]` and appends the selected query column as an integer, float, or string property in the packaged PMTiles output.
+
 `--anno-keep-all` - (Optional) Keep all query records even when no annotation is found. Missing `(K, P)` pairs are written using the same placeholder rendering controlled by `--null-k` / `--null-p`.
 
 `--emb-prefix` - (Optional) Rename the appended `(K, P)` columns. The number of prefixes must match the number of result sets encoded in the annotation source header. If the source is a legacy format without that header metadata, only one prefix is allowed.
@@ -340,6 +474,11 @@ Matching is then done by `(x, y, feature)` in 2D or `(x, y, z, feature)` in 3D.
 `--threads` - (Optional) Number of worker threads for tile-local annotation.
 
 `--out -` - (Optional) Write the annotated TSV to stdout instead of `path/out.tsv`. In stdout mode, no `.index` sidecar is written.
+
+When `--write-mlt-pmtiles` is active, the output is PMTiles instead of TSV:
+
+- always `path/out_all.pmtiles`
+- optionally `path/out_bin<id>.pmtiles`, `path/out.bin_counts.json`, and `path/out.pmtiles_index.tsv` when gene-bin packaging is enabled
 
 For raw-float feature-specific inputs, use `--pixel-res-override` if the inference file needs an explicit coordinate-to-pixel mapping resolution.
 
@@ -365,11 +504,13 @@ punkst tile-op --in ${opref1} --binary \
 
 This combined mode:
 
-- output is TSV-only
+- without PMTiles packaging, output is TSV-only
 - applies the same merge rules as standalone `--merge-emb`
 - appends the merged `(K, P)` columns to each emitted query row
 - supports `--merge-keep-all-main`, `--merge-keep-all`, `--emb-prefix`, `--null-k`, `--null-p`, and `--anno-keep-all`
 - if one of the merged sources is feature-specific, `--icol-feature` is required and feature names are resolved from the embedded dictionaries
+
+The same combined workflow also supports PMTiles packaging when `--write-mlt-pmtiles` and `--pmtiles-zoom` are provided. In that case the output is `path/out_all.pmtiles` plus optional gene-bin side outputs, and `--ext-col-*` can be used to carry selected query TSV columns into the packaged archive.
 
 ### Compute Joint Probability Distributions
 
