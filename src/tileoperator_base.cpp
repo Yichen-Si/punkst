@@ -1618,7 +1618,15 @@ void TileOperator::parseHeaderLine() {
         if (!line.empty() && line.back() == '\r') {
             line.pop_back();
         }
-        if (line.empty() || line.substr(0, 2) == "##") {
+        if (line.empty()) {
+            continue;
+        }
+        if (line.substr(0, 2) == "##") {
+            size_t pos = 0;
+            while (pos < line.size() && line[pos] == '#') {
+                ++pos;
+            }
+            parsedHeaderLine = "#" + line.substr(pos);
             continue;
         }
         if (line[0] == '#') {

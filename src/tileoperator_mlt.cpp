@@ -42,7 +42,7 @@ struct ExtColumnValue {
     bool present = true;
     int32_t intValue = 0;
     float floatValue = 0.0f;
-    std::string stringValue;
+    std::string stringValue = "";
 };
 
 struct AnnotatePackagingConfig {
@@ -408,6 +408,19 @@ void reorder_vector(std::vector<T>& values, const std::vector<size_t>& order) {
     values.swap(reordered);
 }
 
+template<typename T>
+void reorder_optional_vector(std::vector<T>& values, const std::vector<size_t>& order,
+    const char* fieldName) {
+    if (values.empty()) {
+        return;
+    }
+    if (values.size() != order.size()) {
+        error("%s: optional column '%s' has %zu values for %zu rows",
+            __func__, fieldName, values.size(), order.size());
+    }
+    reorder_vector(values, order);
+}
+
 AccumTileData sort_tile_rows(const AccumTileData& in) {
     AccumTileData out = in;
     std::vector<size_t> order(out.size());
@@ -436,10 +449,10 @@ AccumTileData sort_tile_rows(const AccumTileData& in) {
         reorder_vector(out.pPresent[i], order);
     }
     for (auto& col : out.extraColumns) {
-        reorder_vector(col.present, order);
-        reorder_vector(col.intValues, order);
-        reorder_vector(col.floatValues, order);
-        reorder_vector(col.stringValues, order);
+        reorder_optional_vector(col.present, order, "present");
+        reorder_optional_vector(col.intValues, order, "intValues");
+        reorder_optional_vector(col.floatValues, order, "floatValues");
+        reorder_optional_vector(col.stringValues, order, "stringValues");
     }
     return out;
 }
@@ -1022,7 +1035,7 @@ std::vector<ExtColumnPlan> build_ext_column_plans(const TileOperator& queryOp,
 
 bool parse_ext_column_values(const std::vector<std::string>& tokens,
     const std::vector<ExtColumnPlan>& extColumns,
-    std::vector<ExtColumnValue>& out) {
+    std::vector<ExtColumnValue>& out, bool allowMissing = true) {
     out.clear();
     out.reserve(extColumns.size());
     for (const auto& ext : extColumns) {
@@ -1038,12 +1051,12 @@ bool parse_ext_column_values(const std::vector<std::string>& tokens,
         }
         switch (ext.type) {
         case mlt_pmtiles::ScalarType::INT_32:
-            if (!str2num<int32_t>(token, value.intValue)) {
+            if (!str2num<int32_t>(token, value.intValue) && !allowMissing) {
                 return false;
             }
             break;
         case mlt_pmtiles::ScalarType::FLOAT:
-            if (!str2num<float>(token, value.floatValue)) {
+            if (!str2num<float>(token, value.floatValue) && !allowMissing) {
                 return false;
             }
             break;
@@ -1349,6 +1362,47 @@ std::vector<char> serialize_accum_tile_data(const AccumTileData& tile) {
         append_array(out, tile.kValues[i]);
         append_array(out, tile.pValues[i]);
     }
+    const uint32_t extraCount = static_cast<uint32_t>(tile.extraColumns.size());
+    append_scalar(out, extraCount);
+    for (const auto& col : tile.extraColumns) {
+        const uint32_t typeValue = static_cast<uint32_t>(col.type);
+        append_scalar(out, typeValue);
+        out.push_back(col.nullable ? 1 : 0);
+        if (col.nullable) {
+            if (col.present.size() != rowCount) {
+                error("%s: nullable extra column present bitmap length mismatch", __func__);
+            }
+            for (bool present : col.present) {
+                out.push_back(present ? 1 : 0);
+            }
+        }
+        switch (col.type) {
+        case mlt_pmtiles::ScalarType::INT_32:
+            if (col.intValues.size() != rowCount) {
+                error("%s: int extra column length mismatch", __func__);
+            }
+            append_array(out, col.intValues);
+            break;
+        case mlt_pmtiles::ScalarType::FLOAT:
+            if (col.floatValues.size() != rowCount) {
+                error("%s: float extra column length mismatch", __func__);
+            }
+            append_array(out, col.floatValues);
+            break;
+        case mlt_pmtiles::ScalarType::STRING:
+            if (col.stringValues.size() != rowCount) {
+                error("%s: string extra column length mismatch", __func__);
+            }
+            for (const auto& value : col.stringValues) {
+                const uint32_t len = static_cast<uint32_t>(value.size());
+                append_scalar(out, len);
+                out.insert(out.end(), value.begin(), value.end());
+            }
+            break;
+        default:
+            error("%s: unsupported spilled extra column type", __func__);
+        }
+    }
     return out;
 }
 
@@ -1365,7 +1419,8 @@ const char* read_array_into(const char* ptr, const char* end, std::vector<T>& ou
     return ptr + bytes;
 }
 
-AccumTileData deserialize_accum_tile_data(const std::vector<char>& bytes, size_t kCount, bool hasZ) {
+AccumTileData deserialize_accum_tile_data(const std::vector<char>& bytes, size_t kCount, bool hasZ,
+    const std::vector<ExtColumnPlan>& extColumnPlans = {}) {
     const char* ptr = bytes.data();
     const char* end = ptr + bytes.size();
     if (static_cast<size_t>(end - ptr) < sizeof(uint32_t)) {
@@ -1375,7 +1430,7 @@ AccumTileData deserialize_accum_tile_data(const std::vector<char>& bytes, size_t
     std::memcpy(&rowCount, ptr, sizeof(rowCount));
     ptr += sizeof(rowCount);
 
-    AccumTileData out(kCount, hasZ);
+    AccumTileData out(kCount, hasZ, extColumnPlans);
     ptr = read_array_into(ptr, end, out.localX, rowCount, __func__);
     ptr = read_array_into(ptr, end, out.localY, rowCount, __func__);
     ptr = read_array_into(ptr, end, out.featureCodes, rowCount, __func__);
@@ -1402,6 +1457,65 @@ AccumTileData deserialize_accum_tile_data(const std::vector<char>& bytes, size_t
         ptr += rowCount;
         ptr = read_array_into(ptr, end, out.kValues[i], rowCount, __func__);
         ptr = read_array_into(ptr, end, out.pValues[i], rowCount, __func__);
+    }
+    if (static_cast<size_t>(end - ptr) < sizeof(uint32_t)) {
+        error("%s: truncated extra-column count in spill fragment", __func__);
+    }
+    uint32_t extraCount = 0;
+    std::memcpy(&extraCount, ptr, sizeof(extraCount));
+    ptr += sizeof(extraCount);
+    if (extraCount != out.extraColumns.size()) {
+        error("%s: extra-column count mismatch in spill fragment (%u != %zu)",
+            __func__, extraCount, out.extraColumns.size());
+    }
+    for (size_t i = 0; i < out.extraColumns.size(); ++i) {
+        auto& col = out.extraColumns[i];
+        if (static_cast<size_t>(end - ptr) < sizeof(uint32_t) + 1) {
+            error("%s: truncated extra-column header in spill fragment", __func__);
+        }
+        uint32_t typeValue = 0;
+        std::memcpy(&typeValue, ptr, sizeof(typeValue));
+        ptr += sizeof(typeValue);
+        const bool nullable = (*ptr++ != 0);
+        if (typeValue != static_cast<uint32_t>(col.type) || nullable != col.nullable) {
+            error("%s: extra-column schema mismatch in spill fragment", __func__);
+        }
+        if (col.nullable) {
+            if (static_cast<size_t>(end - ptr) < rowCount) {
+                error("%s: truncated extra-column present bitmap in spill fragment", __func__);
+            }
+            col.present.reserve(rowCount);
+            for (uint32_t j = 0; j < rowCount; ++j) {
+                col.present.push_back(ptr[j] != 0);
+            }
+            ptr += rowCount;
+        }
+        switch (col.type) {
+        case mlt_pmtiles::ScalarType::INT_32:
+            ptr = read_array_into(ptr, end, col.intValues, rowCount, __func__);
+            break;
+        case mlt_pmtiles::ScalarType::FLOAT:
+            ptr = read_array_into(ptr, end, col.floatValues, rowCount, __func__);
+            break;
+        case mlt_pmtiles::ScalarType::STRING:
+            col.stringValues.reserve(rowCount);
+            for (uint32_t j = 0; j < rowCount; ++j) {
+                if (static_cast<size_t>(end - ptr) < sizeof(uint32_t)) {
+                    error("%s: truncated extra-column string length in spill fragment", __func__);
+                }
+                uint32_t len = 0;
+                std::memcpy(&len, ptr, sizeof(len));
+                ptr += sizeof(len);
+                if (static_cast<size_t>(end - ptr) < len) {
+                    error("%s: truncated extra-column string payload in spill fragment", __func__);
+                }
+                col.stringValues.emplace_back(ptr, ptr + len);
+                ptr += len;
+            }
+            break;
+        default:
+            error("%s: unsupported spilled extra column type", __func__);
+        }
     }
     if (ptr != end) {
         error("%s: unexpected trailing bytes in spill fragment", __func__);
@@ -2146,6 +2260,7 @@ AnnotatePmtilesPipelineResult run_annotate_epsg3857_parallel_pipeline(
     size_t kCount, bool hasZ,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const mlt_pmtiles::GlobalStringDictionary& featureDictionary,
+    const std::vector<ExtColumnPlan>& extColumnPlans,
     double coordScale, uint8_t zoom,
     MakeWorkerStateFn&& makeWorkerState,
     ProcessQueryTileFn&& processQueryTile) {
@@ -2278,7 +2393,7 @@ AnnotatePmtilesPipelineResult run_annotate_epsg3857_parallel_pipeline(
                 }
                 const BinTileKey tileKey = mergeTasks[taskIdx].first;
                 const auto& fragments = mergeTasks[taskIdx].second;
-                AccumTileData merged(kCount, hasZ);
+                AccumTileData merged(kCount, hasZ, extColumnPlans);
                 for (const auto& fragment : fragments) {
                     std::ifstream& in = spillStreams[fragment.shardId];
                     in.clear();
@@ -2291,7 +2406,7 @@ AnnotatePmtilesPipelineResult run_annotate_epsg3857_parallel_pipeline(
                         }
                     }
                     const AccumTileData part = deserialize_accum_tile_data(
-                        buf, kCount, hasZ);
+                        buf, kCount, hasZ, extColumnPlans);
                     merged.appendFrom(part);
                 }
                 auto encoded = encode_accum_tile_payload(tileKey.tile, zoom, schema, merged, featureDictionary);
@@ -2855,6 +2970,7 @@ void TileOperator::annotatePlainToMltPmtiles(
     AnnotatePmtilesPipelineResult pipeline = run_annotate_epsg3857_parallel_pipeline(
         tiles, reader.getTileSize(), threads_, totalK, use3d,
         queryPlan.schema, packaging.featureDictionary,
+        queryPlan.extColumns,
         mltOptions.coordScale, outputZoom,
         [&]() { return std::ifstream(); },
         processQueryTile);
@@ -3049,6 +3165,7 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
     AnnotatePmtilesPipelineResult pipeline = run_annotate_epsg3857_parallel_pipeline(
         tiles, reader.getTileSize(), threads_, ktotal, use3d,
         queryPlan.schema, packaging.featureDictionary,
+        queryPlan.extColumns,
         mltOptions.coordScale, outputZoom,
         [&]() { return MergedAnnotateWorkerState{std::vector<std::ifstream>(nSources)}; },
         processQueryTile);
@@ -3215,6 +3332,7 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
     AnnotatePmtilesPipelineResult pipeline = run_annotate_epsg3857_parallel_pipeline(
         tiles, reader.getTileSize(), threads_, static_cast<size_t>(k_), use3d,
         queryPlan.schema, packaging.featureDictionary,
+        queryPlan.extColumns,
         mltOptions.coordScale, outputZoom,
         [&]() { return std::ifstream(); },
         processQueryTile);
@@ -3414,6 +3532,7 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
     AnnotatePmtilesPipelineResult pipeline = run_annotate_epsg3857_parallel_pipeline(
         tiles, reader.getTileSize(), threads_, ktotal, use3d,
         queryPlan.schema, packaging.featureDictionary,
+        queryPlan.extColumns,
         mltOptions.coordScale, outputZoom,
         [&]() { return MergedAnnotateWorkerState{std::vector<std::ifstream>(nSources)}; },
         processQueryTile);
