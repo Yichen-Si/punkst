@@ -1198,6 +1198,7 @@
 <li>CMake: 3.15 to 3.23</li>
 <li>C++20 compiler* (GCC/Clang/MSVC with C++20 support)</li>
 <li>TBB, OpenCV</li>
+<li>libcurl (optional; only needed when <code>ENABLE_REMOTE_IO=ON</code>)</li>
 </ul>
 <p>*We assume your compiler properly supports C++20. Consider updating your compiler if you encounter issues.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1) Clone the repository</span>
@@ -1222,13 +1223,21 @@
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>-DCMAKE_PREFIX_PATH<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/.local&quot;</span>
 </span></code></pre></div>
 (On mac, if CMake fails to locate OpenCV (installed with brew), pass: <code>-DOpenCV_DIR=$(brew --prefix opencv)/lib/cmake/opencv4</code> or wherever OpenCV is installed.)</p>
+<p>Remote random-access readers for <code>http(s)</code> and <code>s3://</code> inputs are enabled by the CMake option <code>ENABLE_REMOTE_IO</code>, which defaults to <code>ON</code>.</p>
+<ul>
+<li><code>ENABLE_REMOTE_IO=ON</code>: requires libcurl and enables remote URL input support</li>
+<li><code>ENABLE_REMOTE_IO=OFF</code>: builds without libcurl; local-file input still works, but remote URL input is disabled</li>
+</ul>
+<p>Example:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cmake<span class="w"> </span>..<span class="w"> </span>-DENABLE_REMOTE_IO<span class="o">=</span>OFF
+</span></code></pre></div></p>
 <p>The <code>punkst</code> binary will be placed in <code>bin/</code> under the project root.</p>
 <p>Verifying the Build</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst/bin/punkst<span class="w"> </span>--help
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst/bin/punkst<span class="w"> </span>--help
 </span></code></pre></div>
 <p>You should see a message starting with
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Available Commands
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>The following commands are available:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Available Commands
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>The following commands are available:
 </span></code></pre></div></p>
 <h3 id="required-libraries">Required Libraries<a class="headerlink" href="#required-libraries" title="Permanent link">&para;</a></h3>
 <ul>
@@ -1280,6 +1289,12 @@ make -j$(nproc) && make install
 <td><code>sudo yum install xz-devel</code></td>
 <td><code>brew install xz</code></td>
 </tr>
+<tr>
+<td><strong>libcurl</strong></td>
+<td><code>sudo apt-get install libcurl4-openssl-dev</code></td>
+<td><code>sudo yum install libcurl-devel</code></td>
+<td><code>brew install curl</code></td>
+</tr>
 </tbody>
 </table>
 <h3 id="build-options-for-performance-and-portability">Build Options for Performance and Portability<a class="headerlink" href="#build-options-for-performance-and-portability" title="Permanent link">&para;</a></h3>
@@ -1307,6 +1322,11 @@ make -j$(nproc) && make install
 <td style="text-align: left;"><strong>Modern CPU Fleet</strong></td>
 <td style="text-align: left;"><code>cmake -DENABLE_NATIVE_ARCH=OFF -DENABLE_X86_64_V3=ON ..</code></td>
 <td style="text-align: left;">Targets x86-64-v3 (Haswell/2013+), useful when deploying to a known modern x86_64 baseline</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>No Remote I/O</strong></td>
+<td style="text-align: left;"><code>cmake -DENABLE_REMOTE_IO=OFF ..</code></td>
+<td style="text-align: left;">Builds without libcurl and disables <code>http(s)</code> / <code>s3://</code> input support</td>
 </tr>
 </tbody>
 </table>
