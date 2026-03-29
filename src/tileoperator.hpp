@@ -81,6 +81,14 @@ public:
         float zmax = std::numeric_limits<float>::quiet_NaN();
     };
 
+    struct BuildPmtilesPyramidOptions {
+        int32_t minZoom = 0;
+        int32_t maxTileBytes = 500000;
+        int32_t maxTileFeatures = 50000;
+        double scaleFactorCompression = 10.0;
+        int32_t threads = 1;
+    };
+
     TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "", int32_t threads = 1) : dataFile_(dataFile), indexFile_(indexFile), threads_(std::max(0, threads)) {
         if (!indexFile.empty()) {
             loadIndex(indexFile);
@@ -181,6 +189,9 @@ public:
     static void exportPMTiles(const std::string& pmtilesFile,
         const std::string& outPrefix,
         const ExportPmtilesOptions& options);
+    static void buildPmtilesPyramid(const std::string& inPmtiles,
+        const std::string& outPmtiles,
+        const BuildPmtilesPyramidOptions& options);
     void writeMltPmtiles(const std::string& outPrefix,
         const MltPmtilesOptions& mltOptions,
         std::vector<uint32_t> k2keep = {},

@@ -4,6 +4,8 @@
 
 This module is under active development and any suggestions or requests will be most welcome.
 
+Acknowledgement: the new MLT PMTiles support heavily borrows from `pmpoint`, the [MLT cpp implementation](https://github.com/maplibre/maplibre-tile-spec/tree/86ad02b21c98e0b302272839cb7eaaa936e5d392/cpp), and `tippecanoe`.
+
 Caution:
 
 Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` for Visium HD data. If the input was generated at a much finer grid, you can request a coarser raster grid for these operations with `--raster-pixel-res`.
@@ -12,11 +14,14 @@ Some operations related to smoothing, spatial profiling, and factor masks treat 
 
 - Basic inspection, conversion, and region query
     - [Print Index](#print-index)
-    - [Export as TSV](#convert-to-tsv)
-    - [Export as MLT PMTiles](#write-mlt-pmtiles)
-    - [Export PMTiles as TSV](#export-pmtiles)
     - [Fix Fragmented Tiles](#fix-fragmented-tiles)
     - [Region Query](#region-query)
+    - [Export as TSV](#convert-to-tsv)
+    - [Export as MLT PMTiles](#write-mlt-pmtiles)
+
+- PMTiles utilities
+    - [Export PMTiles as TSV](#export-pmtiles-as-tsv)
+    - [Build MLT PMTiles pyramids](#build-mlt-pmtiles-pyramids)
 
 - Joining, annotating, and aggregation
     - [Merge Multiple Inference Results](#merge-multiple-inference-results)
@@ -171,6 +176,62 @@ To inspect the index of a tiled file (it prints one tile per line after the head
 punkst tile-op --print-index --in path/prefix [--binary]
 ```
 
+### Fix fragmented Tiles
+
+The output of `punkst pixel-decode` is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.
+
+If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (`path/prefix.index`), currently we don't support generic reorganization)
+
+Note that this is **not** required for visualization `draw-pixel-factors`.
+
+```bash
+punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix
+```
+
+### Region Query
+
+You can extract a spatial subset of a tiled file and write it out as another indexed tiled file.
+
+Output:
+
+- `path/prefix.region.tsv` or `path/prefix.region.bin`
+- `path/prefix.region.index`
+
+The output remains in regular tiled format even when the query region may partially overlap some tiles, and contains all and only tiles with at least one retained record.
+
+#### Rectangle query
+
+To extract all records inside one axis-aligned rectangle:
+
+```bash
+punkst tile-op --extract-region --in path/prefix [--binary] \
+  --xmin 1000 --xmax 2000 --ymin 500 --ymax 1500 \
+  --out path/prefix.region
+```
+
+This keeps all records whose `(x, y)` coordinates fall inside the half-open rectangle `[xmin, xmax) x [ymin, ymax)`.
+
+#### GeoJSON region query
+
+To extract all records inside the union of multiple polygons:
+
+```bash
+punkst tile-op --extract-region-geojson path/region.geojson \
+  --in path/prefix [--binary] \
+  --out path/prefix.region
+```
+
+Optional:
+
+- `--extract-region-scale` controls the integer snapping scale used internally for polygon processing. Default is `10`, which corresponds to `0.1` units.
+- `--zmin` and `--zmax` can be provided for 3D input to keep only records in `[zmin, zmax)`
+
+**Requirements**
+
+Tiled input data: GeoJSON region query currently only supports tiled inputs in **regular square tile mode** (see [Fix Fragmented Tiles](#fix-fragmented-tiles) below). The input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation.
+
+GeoJSON / JSON file: see [GeoJSON Region Input](../input/geojson-region.md) for requirements and polygon validity handling.
+
 ### Convert to TSV
 
 To dump a binary tiled file to a plain TSV file:
@@ -299,7 +360,7 @@ punkst tile-op --in path/pixel.smol --binary \
 
 This follows the same merge and annotation rules described below, but writes PMTiles instead of TSV. The output is `path/out_all.pmtiles` plus optional gene-bin side outputs.
 
-### Export PMTiles to TSV
+### Export PMTiles as TSV
 
 `tile-op --export-pmtiles` reads an MLT-backed PMTiles archive (that only contains point data, produced by `punkst` or `pmpoint`) and exports it back to a plain TSV plus `.index` that `tile-op` can read again.
 
@@ -325,61 +386,45 @@ Region filters are also supported in this mode:
 - `--extract-region-geojson`
 - `--zmin`, `--zmax`
 
-### Fix fragmented Tiles
+### Build MLT PMTiles pyramids
 
-The output of `punkst pixel-decode` is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.
+`tile-op --build-pyramid` builds a multi-zoom MLT PMTiles archive from an existing MLT PMTiles input.
 
-If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (`path/prefix.index`), currently we don't support generic reorganization)
+This is the intended follow-up step after writing a max-zoom archive with `--write-mlt-pmtiles` (or the merge-and-export options), but the input may already contain multiple zoom levels.
 
-Note that this is **not** required for visualization `draw-pixel-factors`.
-
-```bash
-punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix
-```
-
-### Region Query
-
-You can extract a spatial subset of a tiled file and write it out as another indexed tiled file.
-
-Output:
-
-- `path/prefix.region.tsv` or `path/prefix.region.bin`
-- `path/prefix.region.index`
-
-The output remains in regular tiled format even when the query region may partially overlap some tiles, and contains all and only tiles with at least one retained record.
-
-#### Rectangle query
-
-To extract all records inside one axis-aligned rectangle:
+Current support is limited to **point-only MLT** PMTiles with **gzip**-compressed tile payloads.
 
 ```bash
-punkst tile-op --extract-region --in path/prefix [--binary] \
-  --xmin 1000 --xmax 2000 --ymin 500 --ymax 1500 \
-  --out path/prefix.region
+punkst tile-op --build-pyramid \
+  --in path/pixel.z18.pmtiles \
+  --min-zoom 10 \
+  --max-tile-bytes 500000 \
+  --max-tile-features 50000 \
+  --scale-factor-compression 10 \
+  --threads 4 \
+  --out path/pixel.pyramid.pmtiles
 ```
 
-This keeps all records whose `(x, y)` coordinates fall inside the half-open rectangle `[xmin, xmax) x [ymin, ymax)`.
+Requirements:
 
-#### GeoJSON region query
+- `--in` (or `--in-data`, used equivalently) must point to the input PMTiles archive
+- `--out` must be a concrete PMTiles file path
+- `--export-pmtiles` and `--build-pyramid` are mutually exclusive
 
-To extract all records inside the union of multiple polygons:
+Main options:
 
-```bash
-punkst tile-op --extract-region-geojson path/region.geojson \
-  --in path/prefix [--binary] \
-  --out path/prefix.region
-```
+- `--min-zoom` sets the coarsest zoom that should exist in the output archive
+- `--max-tile-bytes` is the target upper bound on compressed tile payload size (default: 500KB)
+- `--max-tile-features` is the target upper bound on features per tile (default: 50K)
+- `--scale-factor-compression` controls the pre-encode byte estimate used to choose a retention ratio; larger values assume stronger compression and therefore retain more features before the actual compressed-size backoff step (default: 10)
+- `--threads` controls parallel parent-tile construction and encoding
 
-Optional:
+Input handling:
 
-- `--extract-region-scale` controls the integer snapping scale used internally for polygon processing. Default is `10`, which corresponds to `0.1` units.
-- `--zmin` and `--zmax` can be provided for 3D input to keep only records in `[zmin, zmax)`
-
-**Requirements**
-
-Tiled input data: GeoJSON region query currently only supports tiled inputs in **regular square tile mode** (see [Fix Fragmented Tiles](#fix-fragmented-tiles) below). The input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation.
-
-GeoJSON / JSON file: see [GeoJSON Region Input](../input/geojson-region.md) for requirements and polygon validity handling.
+- if the input already contains zoom levels down to or below `--min-zoom`, the command exits directly
+- if the input already contains some lower zoom levels but not enough, those existing levels are preserved byte-for-byte and only the missing coarser levels are built
+- if the input is a max-zoom-only archive, the full pyramid from that zoom down to `--min-zoom` is built
+- if present, the input PMTiles metadata field `coordinate_mode` is copied to the output
 
 ### Merge Multiple Inference Results
 
@@ -510,6 +555,49 @@ This combined mode:
 
 The same combined workflow also supports PMTiles packaging when `--write-mlt-pmtiles` and `--pmtiles-zoom` are provided. In that case the output is `path/out_all.pmtiles` plus optional gene-bin side outputs, and `--ext-col-*` can be used to carry selected query TSV columns into the packaged archive.
 
+### Aggregate Results by Cell
+
+This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tailed) transcript file that contains cell/compartment annotations per transcript/pixel.
+If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run `punkst pts2tiles` on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file should contain the necessary information.
+
+```bash
+punkst tile-op --annotate-cell --in path/result [--binary] \
+  --annotate-pts path/transcripts_with_cells \
+  --icol-x 0 --icol-y 1 --icol-c 5 --icol-s 6 \
+  --out path/cellular_results
+```
+
+This command will summarize the factors for each cell ID found in `path/transcripts_with_cells.tsv`.
+
+`--annotate-cell` - Flag to enable aggregation by cell.
+
+`--annotate-pts` - Prefix of the points file (e.g. transcripts) containing cell annotations.
+
+`--icol-x`, `--icol-y` - 0-based column indices for X and Y coordinates.
+
+`--icol-z` - (Optional) 0-based column index for Z coordinate.
+
+For single-molecule inputs, also provide:
+
+- `--icol-feature` - 0-based feature-name column in the annotated query TSV
+
+Matching is then done by coordinate plus feature before factor probabilities are aggregated per cell.
+
+`--icol-c` - 0-based column index for the cell ID.
+
+`--icol-s` - (Optional) 0-based column index for subcellular component annotations. If provided, results will be aggregated per-cell and per-component.
+
+`--k-out` - (Optional) Number of top factors to include in the output for each cell/component. If not provided, the same number of in the input file is used.
+
+`--max-cell-diameter` - (Optional) The maximum expected diameter of a cell in microns. Used for avoiding boundary effects as we process by tiles. Default is 50.
+
+Output:
+
+A TSV file `path/cellular_results.tsv` containing aggregated factor probabilities for each cell (and component, if specified).
+
+A TSV file `path/cellular_results.pseudobulk.tsv` containing the sum of factor probabilities across each subcellular component. Useful for comparing global factor abundance between components.
+
+
 ### Compute Joint Probability Distributions
 
 You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from different models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file). To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.
@@ -576,48 +664,6 @@ For single-molecule input, the feature index is ignored for the confusion defini
 Output:
 
 - `path/out_prefix.confusion.tsv`: A matrix of co-occurrence counts between factors.
-
-### Aggregate Results by Cell
-
-This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tailed) transcript file that contains cell/compartment annotations per transcript/pixel.
-If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run `punkst pts2tiles` on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file should contain the necessary information.
-
-```bash
-punkst tile-op --annotate-cell --in path/result [--binary] \
-  --annotate-pts path/transcripts_with_cells \
-  --icol-x 0 --icol-y 1 --icol-c 5 --icol-s 6 \
-  --out path/cellular_results
-```
-
-This command will summarize the factors for each cell ID found in `path/transcripts_with_cells.tsv`.
-
-`--annotate-cell` - Flag to enable aggregation by cell.
-
-`--annotate-pts` - Prefix of the points file (e.g. transcripts) containing cell annotations.
-
-`--icol-x`, `--icol-y` - 0-based column indices for X and Y coordinates.
-
-`--icol-z` - (Optional) 0-based column index for Z coordinate.
-
-For single-molecule inputs, also provide:
-
-- `--icol-feature` - 0-based feature-name column in the annotated query TSV
-
-Matching is then done by coordinate plus feature before factor probabilities are aggregated per cell.
-
-`--icol-c` - 0-based column index for the cell ID.
-
-`--icol-s` - (Optional) 0-based column index for subcellular component annotations. If provided, results will be aggregated per-cell and per-component.
-
-`--k-out` - (Optional) Number of top factors to include in the output for each cell/component. If not provided, the same number of in the input file is used.
-
-`--max-cell-diameter` - (Optional) The maximum expected diameter of a cell in microns. Used for avoiding boundary effects as we process by tiles. Default is 50.
-
-Output:
-
-A TSV file `path/cellular_results.tsv` containing aggregated factor probabilities for each cell (and component, if specified).
-
-A TSV file `path/cellular_results.pseudobulk.tsv` containing the sum of factor probabilities across each subcellular component. Useful for comparing global factor abundance between components.
 
 ### Denoise Top Labels
 

@@ -38,10 +38,6 @@ inline std::string encode_varint_bytes(uint64_t value) {
     return out;
 }
 
-inline uint32_t encode_zigzag32(int32_t value) {
-    return (static_cast<uint32_t>(value) << 1u) ^ static_cast<uint32_t>(value >> 31);
-}
-
 inline int32_t decode_zigzag32(uint64_t value) {
     return static_cast<int32_t>((value >> 1u) ^ (~(value & 1u) + 1u));
 }
@@ -156,18 +152,60 @@ ColumnSchema decode_column_type(uint32_t typeCode) {
     return ColumnSchema{};
 }
 
-std::vector<bool> resolve_present_bitmap(const PropertyColumn& column, bool nullable, size_t rowCount) {
-    std::vector<bool> present;
+uint32_t row_at(const std::vector<uint32_t>* order, size_t i) {
+    return order == nullptr ? static_cast<uint32_t>(i) : (*order)[i];
+}
+
+std::vector<bool> resolve_present_bitmap_subset(const PropertyColumn& column, bool nullable,
+    const std::vector<uint32_t>* order, size_t rowCount) {
     if (!nullable) {
+        return {};
+    }
+    std::vector<bool> present;
+    present.reserve(rowCount);
+    if (column.present.empty()) {
+        present.assign(rowCount, true);
         return present;
     }
-    present.reserve(rowCount);
-    if (!column.present.empty()) {
-        present = column.present;
-    } else {
-        present.assign(rowCount, true);
+    for (size_t i = 0; i < rowCount; ++i) {
+        present.push_back(column.present[row_at(order, i)]);
     }
     return present;
+}
+
+bool column_value_present(const PropertyColumn& column, size_t row) {
+    if (column.present.empty()) {
+        return true;
+    }
+    return column.present[row];
+}
+
+void append_row_value(const ColumnSchema& schema,
+    const PropertyColumn& src, size_t row,
+    PropertyColumn& dst) {
+    if (schema.nullable || !dst.present.empty()) {
+        dst.present.push_back(column_value_present(src, row));
+    }
+    switch (schema.type) {
+    case ScalarType::BOOLEAN:
+        dst.boolValues.push_back(src.boolValues[row]);
+        break;
+    case ScalarType::INT_32:
+        dst.intValues.push_back(src.intValues[row]);
+        break;
+    case ScalarType::FLOAT:
+        dst.floatValues.push_back(src.floatValues[row]);
+        break;
+    case ScalarType::STRING:
+        if (!src.stringCodes.empty()) {
+            error("%s: unexpected dictionary-coded string column in decoded tile", __func__);
+        }
+        dst.stringValues.push_back(src.stringValues[row]);
+        break;
+    default:
+        error("%s: unsupported scalar column type %d", __func__,
+            static_cast<int>(schema.type));
+    }
 }
 
 void append_stream(std::string& layer, uint8_t streamTag, uint8_t encodingTag,
@@ -185,14 +223,15 @@ void append_present_stream(std::string& layer, const std::vector<bool>& present,
 }
 
 void encode_boolean_column(std::string& layer, const PropertyColumn& column,
-    const std::vector<bool>& present, bool nullable, size_t rowCount) {
+    const std::vector<bool>& present, bool nullable, size_t rowCount,
+    const std::vector<uint32_t>* order) {
     std::vector<bool> boolValues;
     boolValues.reserve(nullable ? rowCount : column.boolValues.size());
     for (size_t row = 0; row < rowCount; ++row) {
         if (nullable && !present[row]) {
             continue;
         }
-        boolValues.push_back(column.boolValues[row]);
+        boolValues.push_back(column.boolValues[row_at(order, row)]);
     }
     if (nullable) {
         append_present_stream(layer, present, rowCount);
@@ -202,7 +241,8 @@ void encode_boolean_column(std::string& layer, const PropertyColumn& column,
 }
 
 void encode_int32_column(std::string& layer, const PropertyColumn& column,
-    const std::vector<bool>& present, bool nullable, size_t rowCount) {
+    const std::vector<bool>& present, bool nullable, size_t rowCount,
+    const std::vector<uint32_t>* order) {
     std::string intData;
     size_t nonNullCount = 0;
     for (size_t row = 0; row < rowCount; ++row) {
@@ -210,7 +250,7 @@ void encode_int32_column(std::string& layer, const PropertyColumn& column,
             continue;
         }
         ++nonNullCount;
-        append_varint(intData, encode_zigzag32(column.intValues[row]));
+        append_varint(intData, encode_zigzag32(column.intValues[row_at(order, row)]));
     }
     if (nullable) {
         append_present_stream(layer, present, rowCount);
@@ -219,7 +259,8 @@ void encode_int32_column(std::string& layer, const PropertyColumn& column,
 }
 
 void encode_float_column(std::string& layer, const PropertyColumn& column,
-    const std::vector<bool>& present, bool nullable, size_t rowCount) {
+    const std::vector<bool>& present, bool nullable, size_t rowCount,
+    const std::vector<uint32_t>* order) {
     std::string floatData;
     size_t nonNullCount = 0;
     for (size_t row = 0; row < rowCount; ++row) {
@@ -229,7 +270,8 @@ void encode_float_column(std::string& layer, const PropertyColumn& column,
         ++nonNullCount;
         uint32_t bits = 0;
         static_assert(sizeof(float) == sizeof(uint32_t));
-        std::memcpy(&bits, &column.floatValues[row], sizeof(bits));
+        const uint32_t srcRow = row_at(order, row);
+        std::memcpy(&bits, &column.floatValues[srcRow], sizeof(bits));
         floatData.push_back(static_cast<char>(bits & 0xFFu));
         floatData.push_back(static_cast<char>((bits >> 8u) & 0xFFu));
         floatData.push_back(static_cast<char>((bits >> 16u) & 0xFFu));
@@ -243,6 +285,7 @@ void encode_float_column(std::string& layer, const PropertyColumn& column,
 
 void encode_string_column(std::string& layer, const PropertyColumn& column,
     const std::vector<bool>& present, bool nullable, size_t rowCount,
+    const std::vector<uint32_t>* order,
     const GlobalStringDictionary* stringDictionary) {
     const bool useDictionary = !column.stringCodes.empty();
     if (useDictionary && stringDictionary == nullptr) {
@@ -256,9 +299,10 @@ void encode_string_column(std::string& layer, const PropertyColumn& column,
             continue;
         }
         ++nonNullCount;
+        const uint32_t srcRow = row_at(order, row);
         const std::string& value = useDictionary
-            ? stringDictionary->lookup(column.stringCodes[row])
-            : column.stringValues[row];
+            ? stringDictionary->lookup(column.stringCodes[srcRow])
+            : column.stringValues[srcRow];
         append_varint(lengths, value.size());
         bytes.append(value);
     }
@@ -634,18 +678,31 @@ const std::string& GlobalStringDictionary::lookup(uint32_t code) const {
     return values[code];
 }
 
-std::string encode_point_tile(const FeatureTableSchema& schema,
+std::string encode_point_tile_impl(const FeatureTableSchema& schema,
     const PointTileData& tile,
+    size_t rowCount,
+    const std::vector<uint32_t>* order,
     const GlobalStringDictionary* stringDictionary) {
-    const size_t rowCount = tile.size();
-    if (tile.localY.size() != rowCount) {
+    const size_t totalRowCount = tile.size();
+    if (tile.localY.size() != totalRowCount) {
         error("%s: geometry column length mismatch", __func__);
     }
     if (schema.columns.size() != tile.columns.size()) {
         error("%s: schema/column count mismatch", __func__);
     }
     for (size_t i = 0; i < tile.columns.size(); ++i) {
-        validate_column_lengths(tile.columns[i], rowCount, __func__);
+        validate_column_lengths(tile.columns[i], totalRowCount, __func__);
+    }
+    if (order != nullptr && rowCount > order->size()) {
+        error("%s: subset rowCount %zu exceeds order size %zu", __func__,
+            rowCount, order->size());
+    }
+    for (size_t i = 0; i < rowCount; ++i) {
+        const uint32_t row = row_at(order, i);
+        if (row >= totalRowCount) {
+            error("%s: subset row index %u is out of range for row count %zu", __func__,
+                row, totalRowCount);
+        }
     }
 
     std::string layer;
@@ -672,8 +729,9 @@ std::string encode_point_tile(const FeatureTableSchema& schema,
 
     std::string vertexData;
     for (size_t i = 0; i < rowCount; ++i) {
-        append_varint(vertexData, encode_zigzag32(tile.localX[i]));
-        append_varint(vertexData, encode_zigzag32(tile.localY[i]));
+        const uint32_t row = row_at(order, i);
+        append_varint(vertexData, encode_zigzag32(tile.localX[row]));
+        append_varint(vertexData, encode_zigzag32(tile.localY[row]));
     }
     layer.push_back(0x13);
     layer.push_back(0x02);
@@ -685,20 +743,22 @@ std::string encode_point_tile(const FeatureTableSchema& schema,
         const auto& columnSchema = schema.columns[colIdx];
         const auto& column = tile.columns[colIdx];
         const bool nullable = columnSchema.nullable;
-        const std::vector<bool> present = resolve_present_bitmap(column, nullable, rowCount);
+        const std::vector<bool> present =
+            resolve_present_bitmap_subset(column, nullable, order, rowCount);
 
         switch (columnSchema.type) {
         case ScalarType::BOOLEAN:
-            encode_boolean_column(layer, column, present, nullable, rowCount);
+            encode_boolean_column(layer, column, present, nullable, rowCount, order);
             break;
         case ScalarType::INT_32:
-            encode_int32_column(layer, column, present, nullable, rowCount);
+            encode_int32_column(layer, column, present, nullable, rowCount, order);
             break;
         case ScalarType::FLOAT:
-            encode_float_column(layer, column, present, nullable, rowCount);
+            encode_float_column(layer, column, present, nullable, rowCount, order);
             break;
         case ScalarType::STRING:
-            encode_string_column(layer, column, present, nullable, rowCount, stringDictionary);
+            encode_string_column(layer, column, present, nullable, rowCount, order,
+                stringDictionary);
             break;
         default:
             error("%s: unsupported scalar column type %d",
@@ -711,6 +771,62 @@ std::string encode_point_tile(const FeatureTableSchema& schema,
     out.push_back(1);
     out.append(layer);
     return out;
+}
+
+std::string encode_point_tile(const FeatureTableSchema& schema,
+    const PointTileData& tile,
+    const GlobalStringDictionary* stringDictionary) {
+    return encode_point_tile_impl(schema, tile, tile.size(), nullptr, stringDictionary);
+}
+
+std::string encode_point_tile_prefix(const FeatureTableSchema& schema,
+    const PointTileData& tile,
+    size_t rowCount,
+    const GlobalStringDictionary* stringDictionary) {
+    return encode_point_tile_impl(schema, tile, rowCount, nullptr, stringDictionary);
+}
+
+std::string encode_point_tile_subset(const FeatureTableSchema& schema,
+    const PointTileData& tile,
+    const std::vector<uint32_t>& order,
+    size_t rowCount,
+    const GlobalStringDictionary* stringDictionary) {
+    return encode_point_tile_impl(schema, tile, rowCount, &order, stringDictionary);
+}
+
+int32_t remap_child_local_to_parent_local(int32_t childLocal, uint32_t childIndex,
+    uint32_t extent) {
+    const double shifted = static_cast<double>(childLocal) +
+        static_cast<double>(childIndex) * static_cast<double>(extent);
+    const long rounded = std::lround(0.5 * shifted);
+    const long lo = 0;
+    const long hi = static_cast<long>(extent);
+    return static_cast<int32_t>(std::clamp<long>(rounded, lo, hi));
+}
+
+void append_child_row_to_parent_tile(const DecodedPointTile& child,
+    size_t row,
+    uint32_t childX,
+    uint32_t childY,
+    uint32_t parentX,
+    uint32_t parentY,
+    PointTileData& parentOut) {
+    const uint32_t extent = child.schema.extent;
+    const uint32_t dx = childX - 2u * parentX;
+    const uint32_t dy = childY - 2u * parentY;
+    if (dx > 1u || dy > 1u) {
+        error("%s: child tile (%u,%u) does not belong to parent (%u,%u)",
+            __func__, childX, childY, parentX, parentY);
+    }
+
+    parentOut.localX.push_back(
+        remap_child_local_to_parent_local(child.tile.localX[row], dx, extent));
+    parentOut.localY.push_back(
+        remap_child_local_to_parent_local(child.tile.localY[row], dy, extent));
+    for (size_t colIdx = 0; colIdx < child.schema.columns.size(); ++colIdx) {
+        append_row_value(child.schema.columns[colIdx], child.tile.columns[colIdx], row,
+            parentOut.columns[colIdx]);
+    }
 }
 
 std::string rewrite_point_tile_layer_name(const std::string& rawTile,

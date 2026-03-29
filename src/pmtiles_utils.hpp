@@ -20,6 +20,19 @@ struct EncodedTilePayload {
     std::string compressedData;
 };
 
+struct StoredTilePayloadRef {
+    uint64_t tileId = 0;
+    uint8_t z = 0;
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t featureCount = 0;
+    uint64_t dataOffset = 0;
+    uint32_t dataLength = 0;
+    uint64_t priorityOffset = 0;
+    uint32_t priorityCount = 0;
+    bool prioritiesSorted = false;
+};
+
 struct ArchiveOptions {
     uint8_t tileType = 0x06;
     uint8_t minZoom = 0;
@@ -50,6 +63,11 @@ std::string read_pmtiles_tile_payload(flexio::FlexReader& reader,
 
 void write_pmtiles_archive(const std::string& outFile,
     std::vector<EncodedTilePayload> tiles,
+    const ArchiveOptions& options);
+
+void write_pmtiles_archive_from_blob_file(const std::string& outFile,
+    const std::string& blobFile,
+    std::vector<StoredTilePayloadRef> tiles,
     const ArchiveOptions& options);
 
 } // namespace mlt_pmtiles
