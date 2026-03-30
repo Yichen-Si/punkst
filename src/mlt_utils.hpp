@@ -19,6 +19,8 @@ struct ColumnSchema {
 struct FeatureTableSchema {
     std::string layerName;
     uint32_t extent = 4096;
+    bool hasIdColumn = false;
+    bool idIsUint64 = false;
     std::vector<ColumnSchema> columns;
 };
 
@@ -44,6 +46,7 @@ struct PropertyColumn {
 };
 
 struct PointTileData {
+    std::vector<uint64_t> featureIds;
     std::vector<int32_t> localX;
     std::vector<int32_t> localY;
     std::vector<PropertyColumn> columns;
@@ -61,6 +64,7 @@ struct PolygonTileData {
     // with no holes and no multipolygon
     // ringOffsets has size featureCount + 1 and stores half-open vertex ranges
     // figure i uses vertices in localX[ringOffsets[i] : ringOffsets[i+1]]
+    std::vector<uint64_t> featureIds;
     std::vector<uint32_t> ringOffsets;
     std::vector<int32_t> localX;
     std::vector<int32_t> localY;

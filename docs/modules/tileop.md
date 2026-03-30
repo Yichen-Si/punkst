@@ -4,8 +4,6 @@
 
 This module is under active development and any suggestions or requests will be most welcome.
 
-Acknowledgement: the new MLT PMTiles support heavily borrows from `pmpoint`, the [MLT cpp implementation](https://github.com/maplibre/maplibre-tile-spec/tree/86ad02b21c98e0b302272839cb7eaaa936e5d392/cpp), and `tippecanoe`.
-
 For PMTiles archive export and pyramid building see [pmtiles](pmtiles.md).
 
 Caution:

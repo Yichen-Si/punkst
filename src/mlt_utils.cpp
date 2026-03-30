@@ -117,6 +117,12 @@ inline void validate_column_lengths(const PropertyColumn& column, size_t rowCoun
     }
 }
 
+inline void validate_feature_ids(const std::vector<uint64_t>& featureIds, size_t rowCount, const char* funcName) {
+    if (!featureIds.empty() && featureIds.size() != rowCount) {
+        error("%s: feature ID column length mismatch", funcName);
+    }
+}
+
 SpecColumn make_spec_column(const ColumnSchema& columnSchema) {
     return SpecColumn{
         .name = columnSchema.name,
@@ -124,6 +130,17 @@ SpecColumn make_spec_column(const ColumnSchema& columnSchema) {
         .columnScope = SpecColumnScope::FEATURE,
         .type = SpecScalarColumn{.type = columnSchema.type},
     };
+}
+
+uint32_t encode_id_column_type(bool isUint64) {
+    // The current official decoder interprets ID type codes as:
+    //   0 -> non-null u32
+    //   1 -> nullable u32
+    //   2 -> non-null u64
+    //   3 -> nullable u64
+    // We only emit non-null IDs here, so use 0/2 directly rather than
+    // relying on encodeColumnType() for LogicalScalarType::ID.
+    return isUint64 ? 2u : 0u;
 }
 
 uint32_t encode_column_type(const ColumnSchema& columnSchema) {
@@ -273,6 +290,15 @@ void append_present_stream(std::string& layer, const std::vector<bool>& present,
     append_stream(layer, 0x00, 0x02, rowCount, rle);
 }
 
+void append_id_stream(std::string& layer, const std::vector<uint64_t>& featureIds,
+    size_t rowCount, const std::vector<uint32_t>* order) {
+    std::string idData;
+    for (size_t row = 0; row < rowCount; ++row) {
+        append_varint(idData, featureIds[row_at(order, row)]);
+    }
+    append_stream(layer, 0x10, 0x02, rowCount, idData);
+}
+
 void append_length_stream(std::string& layer, uint8_t logicalType,
     uint64_t numValues, const std::string& data) {
     append_stream(layer, static_cast<uint8_t>(0x30u | logicalType), 0x02, numValues, data);
@@ -350,8 +376,11 @@ void encode_string_column(std::string& layer, const PropertyColumn& column,
     std::string lengths;
     std::string bytes;
     size_t nonNullCount = 0;
+    const std::vector<bool> effectivePresent = nullable
+        ? present
+        : std::vector<bool>(rowCount, true);
     for (size_t row = 0; row < rowCount; ++row) {
-        if (nullable && !present[row]) {
+        if (!effectivePresent[row]) {
             continue;
         }
         ++nonNullCount;
@@ -362,10 +391,8 @@ void encode_string_column(std::string& layer, const PropertyColumn& column,
         append_varint(lengths, value.size());
         bytes.append(value);
     }
-    append_varint(layer, nullable ? 3 : 2);
-    if (nullable) {
-        append_present_stream(layer, present, rowCount);
-    }
+    append_varint(layer, 3);
+    append_present_stream(layer, effectivePresent, rowCount);
     append_stream(layer, 0x30, 0x02, nonNullCount, lengths);
     append_stream(layer, 0x10, 0x00, 0, bytes);
 }
@@ -456,6 +483,35 @@ void decode_int32_column(PropertyColumn& column, const uint8_t*& ptr, const uint
     }
     if (column.intValues.size() != rowCount) {
         error("%s: INT row count mismatch", __func__);
+    }
+}
+
+void decode_id_column(std::vector<uint64_t>& featureIds, const uint8_t*& ptr, const uint8_t* end, size_t rowCount) {
+    if (ptr + 2 > end) {
+        error("%s: truncated ID stream header", __func__);
+    }
+    const uint8_t h0 = *ptr++;
+    ptr++;
+    const uint64_t numValues = read_varint(ptr, end, __func__);
+    const uint64_t byteLen = read_varint(ptr, end, __func__);
+    const uint8_t* streamData = ptr;
+    ptr = checked_advance(ptr, end, byteLen, __func__);
+    const uint8_t physicalType = (h0 >> 4u) & 0x0Fu;
+    if (physicalType != 1u) {
+        error("%s: unsupported ID physical stream %u", __func__, physicalType);
+    }
+    if (numValues != rowCount) {
+        error("%s: ID row count mismatch", __func__);
+    }
+    featureIds.clear();
+    featureIds.reserve(rowCount);
+    const uint8_t* valuePtr = streamData;
+    const uint8_t* valueEnd = streamData + byteLen;
+    for (size_t row = 0; row < rowCount; ++row) {
+        featureIds.push_back(read_varint(valuePtr, valueEnd, __func__));
+    }
+    if (valuePtr != valueEnd) {
+        error("%s: ID stream length mismatch", __func__);
     }
 }
 
@@ -774,9 +830,13 @@ std::string encode_point_tile_impl(const FeatureTableSchema& schema,
     const std::vector<uint32_t>* order,
     const GlobalStringDictionary* stringDictionary) {
     const size_t totalRowCount = tile.size();
+    if (schema.hasIdColumn && tile.featureIds.empty()) {
+        error("%s: schema requires feature IDs but tile has none", __func__);
+    }
     if (tile.localY.size() != totalRowCount) {
         error("%s: geometry column length mismatch", __func__);
     }
+    validate_feature_ids(tile.featureIds, totalRowCount, __func__);
     if (schema.columns.size() != tile.columns.size()) {
         error("%s: schema/column count mismatch", __func__);
     }
@@ -799,8 +859,11 @@ std::string encode_point_tile_impl(const FeatureTableSchema& schema,
     append_varint(layer, schema.layerName.size());
     layer.append(schema.layerName);
     append_varint(layer, schema.extent);
-    append_varint(layer, 1 + schema.columns.size());
+    append_varint(layer, 1 + schema.columns.size() + (schema.hasIdColumn ? 1u : 0u));
     append_varint(layer, kGeometryColumnTypeCode); // geometry column
+    if (schema.hasIdColumn) {
+        append_varint(layer, encode_id_column_type(schema.idIsUint64));
+    }
     for (size_t i = 0; i < schema.columns.size(); ++i) {
         const auto& columnSchema = schema.columns[i];
         append_varint(layer, encode_column_type(columnSchema));
@@ -834,6 +897,10 @@ std::string encode_point_tile_impl(const FeatureTableSchema& schema,
     append_varint(layer, rowCount * 2);
     append_varint(layer, vertexData.size());
     layer.append(vertexData);
+
+    if (schema.hasIdColumn) {
+        append_id_stream(layer, tile.featureIds, rowCount, order);
+    }
 
     for (size_t colIdx = 0; colIdx < schema.columns.size(); ++colIdx) {
         const auto& columnSchema = schema.columns[colIdx];
@@ -875,7 +942,11 @@ std::string encode_polygon_tile_impl(const FeatureTableSchema& schema,
     const std::vector<uint32_t>* order,
     const GlobalStringDictionary* stringDictionary) {
     const size_t totalRowCount = tile.size();
+    if (schema.hasIdColumn && tile.featureIds.empty()) {
+        error("%s: schema requires feature IDs but tile has none", __func__);
+    }
     validate_polygon_tile_geometry(tile, totalRowCount, __func__);
+    validate_feature_ids(tile.featureIds, totalRowCount, __func__);
     if (schema.columns.size() != tile.columns.size()) {
         error("%s: schema/column count mismatch", __func__);
     }
@@ -911,8 +982,11 @@ std::string encode_polygon_tile_impl(const FeatureTableSchema& schema,
     append_varint(layer, schema.layerName.size());
     layer.append(schema.layerName);
     append_varint(layer, schema.extent);
-    append_varint(layer, 1 + schema.columns.size());
+    append_varint(layer, 1 + schema.columns.size() + (schema.hasIdColumn ? 1u : 0u));
     append_varint(layer, kGeometryColumnTypeCode); // geometry column
+    if (schema.hasIdColumn) {
+        append_varint(layer, encode_id_column_type(schema.idIsUint64));
+    }
     for (size_t i = 0; i < schema.columns.size(); ++i) {
         const auto& columnSchema = schema.columns[i];
         append_varint(layer, encode_column_type(columnSchema));
@@ -954,6 +1028,10 @@ std::string encode_polygon_tile_impl(const FeatureTableSchema& schema,
     append_varint(layer, totalVertices * 2u);
     append_varint(layer, vertexData.size());
     layer.append(vertexData);
+
+    if (schema.hasIdColumn) {
+        append_id_stream(layer, tile.featureIds, rowCount, order);
+    }
 
     for (size_t colIdx = 0; colIdx < schema.columns.size(); ++colIdx) {
         const auto& columnSchema = schema.columns[colIdx];
@@ -1060,6 +1138,9 @@ void append_child_row_to_parent_tile(const DecodedPointTile& child,
         remap_child_local_to_parent_local(child.tile.localX[row], dx, extent));
     parentOut.localY.push_back(
         remap_child_local_to_parent_local(child.tile.localY[row], dy, extent));
+    if (!child.tile.featureIds.empty()) {
+        parentOut.featureIds.push_back(child.tile.featureIds[row]);
+    }
     for (size_t colIdx = 0; colIdx < child.schema.columns.size(); ++colIdx) {
         append_row_value(child.schema.columns[colIdx], child.tile.columns[colIdx], row,
             parentOut.columns[colIdx]);
@@ -1159,7 +1240,20 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
     out.schema.columns.reserve(static_cast<size_t>(numColumns - 1));
     out.tile.columns.reserve(static_cast<size_t>(numColumns - 1));
     for (uint64_t col = 1; col < numColumns; ++col) {
-        ColumnSchema schema = decode_column_type(static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__)));
+        const uint32_t typeCode = static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__));
+        const auto decodedColumn = SpecTypeMap::decodeColumnType(typeCode);
+        if (!decodedColumn.has_value()) {
+            error("%s: unsupported MLT type code %u", __func__, typeCode);
+        }
+        if (decodedColumn->isID()) {
+            if (out.schema.hasIdColumn) {
+                error("%s: duplicate ID column", __func__);
+            }
+            out.schema.hasIdColumn = true;
+            out.schema.idIsUint64 = decodedColumn->getScalarType().hasLongID;
+            continue;
+        }
+        ColumnSchema schema = decode_column_type(typeCode);
         const uint64_t colNameLen = read_varint(ptr, layerEnd, __func__);
         if (colNameLen > static_cast<uint64_t>(layerEnd - ptr)) {
             error("%s: truncated column name", __func__);
@@ -1196,6 +1290,10 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
     }
     if (out.tile.localX.size() != rowCount || out.tile.localY.size() != rowCount) {
         error("%s: geometry row count mismatch", __func__);
+    }
+
+    if (out.schema.hasIdColumn) {
+        decode_id_column(out.tile.featureIds, ptr, layerEnd, rowCount);
     }
 
     for (size_t colIdx = 0; colIdx < out.schema.columns.size(); ++colIdx) {
@@ -1267,7 +1365,20 @@ DecodedPolygonTile decode_polygon_tile(const std::string& rawTile) {
     out.schema.columns.reserve(static_cast<size_t>(numColumns - 1));
     out.tile.columns.reserve(static_cast<size_t>(numColumns - 1));
     for (uint64_t col = 1; col < numColumns; ++col) {
-        ColumnSchema schema = decode_column_type(static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__)));
+        const uint32_t typeCode = static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__));
+        const auto decodedColumn = SpecTypeMap::decodeColumnType(typeCode);
+        if (!decodedColumn.has_value()) {
+            error("%s: unsupported MLT type code %u", __func__, typeCode);
+        }
+        if (decodedColumn->isID()) {
+            if (out.schema.hasIdColumn) {
+                error("%s: duplicate ID column", __func__);
+            }
+            out.schema.hasIdColumn = true;
+            out.schema.idIsUint64 = decodedColumn->getScalarType().hasLongID;
+            continue;
+        }
+        ColumnSchema schema = decode_column_type(typeCode);
         const uint64_t colNameLen = read_varint(ptr, layerEnd, __func__);
         if (colNameLen > static_cast<uint64_t>(layerEnd - ptr)) {
             error("%s: truncated column name", __func__);
@@ -1378,6 +1489,10 @@ DecodedPolygonTile decode_polygon_tile(const std::string& rawTile) {
         offset += static_cast<size_t>(ringVertexCounts[row]);
     }
     out.tile.ringOffsets[rowCount] = static_cast<uint32_t>(offset);
+
+    if (out.schema.hasIdColumn) {
+        decode_id_column(out.tile.featureIds, ptr, layerEnd, rowCount);
+    }
 
     for (size_t colIdx = 0; colIdx < out.schema.columns.size(); ++colIdx) {
         auto& column = out.tile.columns[colIdx];

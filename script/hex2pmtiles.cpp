@@ -7,9 +7,12 @@
 #include "utils.h"
 
 #include <cinttypes>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -32,8 +35,14 @@ std::string build_hex_polygon_id(int32_t hexQ, int32_t hexR) {
     return std::to_string(hexQ) + "_" + std::to_string(hexR);
 }
 
+uint64_t pack_hex_polygon_id(int32_t hexQ, int32_t hexR) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(hexQ)) << 32u) |
+        static_cast<uint64_t>(static_cast<uint32_t>(hexR));
+}
+
 struct SimplePolygonWorldRecord {
     std::string polygonId;
+    uint32_t assignedId = 0;
     std::vector<std::pair<double, double>> outerRing;
 };
 
@@ -58,16 +67,20 @@ char infer_delimiter_or_die(const std::string& line) {
 
 std::unordered_map<std::string, SimplePolygonWorldRecord> read_simple_polygon_geometry_map(
     const std::string& path,
-    const SimplePolygonGeomReadOptions& options) {
+    const SimplePolygonGeomReadOptions& options,
+    bool idIsU32) {
     if (options.icolId < 0 || options.icolX < 0 || options.icolY < 0) {
         error("%s: --icol-id-geom, --icol-x-geom, and --icol-y-geom must be non-negative", __func__);
     }
     TextLineReader reader(path);
     std::unordered_map<std::string, std::vector<std::tuple<int64_t, double, double>>> staged;
+    std::unordered_map<std::string, uint32_t> assignedIdsByPolygonId;
+    uint32_t nextAssignedId = 0;
     std::string line;
     uint64_t lineNo = 0;
     bool firstDataRowHandled = false;
     bool sawData = false;
+    std::unordered_set<uint32_t> seenAssignedIds;
     while (reader.getline(line)) {
         ++lineNo;
         if (line.empty() || line.front() == '#') {
@@ -103,6 +116,20 @@ std::unordered_map<std::string, SimplePolygonWorldRecord> read_simple_polygon_ge
         if (polygonId.empty()) {
             error("%s: empty polygon ID in geometry row %" PRIu64, __func__, lineNo);
         }
+        if (assignedIdsByPolygonId.count(polygonId) == 0) {
+            uint32_t assignedId = 0;
+            if (idIsU32) {
+                if (!str2uint32(polygonId, assignedId)) {
+                    error("%s: failed parsing polygon ID %s as u32", __func__, polygonId.c_str());
+                }
+                if (!seenAssignedIds.insert(assignedId).second) {
+                    error("%s: duplicate parsed u32 polygon ID %u", __func__, assignedId);
+                }
+            } else {
+                assignedId = nextAssignedId++;
+            }
+            assignedIdsByPolygonId.emplace(polygonId, assignedId);
+        }
         auto& rows = staged[polygonId];
         int64_t order = 0;
         if (options.icolOrder >= 0) {
@@ -128,6 +155,11 @@ std::unordered_map<std::string, SimplePolygonWorldRecord> read_simple_polygon_ge
             });
         SimplePolygonWorldRecord rec;
         rec.polygonId = kv.first;
+        auto idIt = assignedIdsByPolygonId.find(kv.first);
+        if (idIt == assignedIdsByPolygonId.end()) {
+            error("%s: internal polygon ID assignment missing for %s", __func__, kv.first.c_str());
+        }
+        rec.assignedId = idIt->second;
         rec.outerRing.reserve(rows.size());
         for (size_t i = 0; i < rows.size(); ++i) {
             if (i > 0 && std::get<0>(rows[i]) == std::get<0>(rows[i - 1])) {
@@ -145,14 +177,40 @@ std::unordered_map<std::string, SimplePolygonWorldRecord> read_simple_polygon_ge
     return out;
 }
 
+bool is_valid_mlt_column_name(const std::string& name) {
+    if (name.empty()) {
+        return false;
+    }
+    const unsigned char first = static_cast<unsigned char>(name.front());
+    if (!(std::isalpha(first) || first == '_')) {
+        return false;
+    }
+    for (unsigned char ch : name) {
+        if (!(std::isalnum(ch) || ch == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string choose_original_id_column_name(const std::string& requested) {
+    return is_valid_mlt_column_name(requested) ? requested : std::string("ID_org");
+}
+
 mlt_pmtiles::FeatureTableSchema build_polygon_schema(const std::string& layerName,
     uint32_t extent,
     const std::vector<std::pair<int32_t, int32_t>>& factorCols,
-    bool includeHexCoords) {
+    bool includeHexCoords,
+    bool idIsUint64,
+    const std::string& originalIdColumnName = std::string()) {
     mlt_pmtiles::FeatureTableSchema schema;
     schema.layerName = layerName;
     schema.extent = extent;
-    schema.columns.push_back({"ID", mlt_pmtiles::ScalarType::STRING, false});
+    schema.hasIdColumn = true;
+    schema.idIsUint64 = idIsUint64;
+    if (!originalIdColumnName.empty()) {
+        schema.columns.push_back({originalIdColumnName, mlt_pmtiles::ScalarType::STRING, true});
+    }
     if (includeHexCoords) {
         schema.columns.push_back({"hex_q", mlt_pmtiles::ScalarType::INT_32, false});
         schema.columns.push_back({"hex_r", mlt_pmtiles::ScalarType::INT_32, false});
@@ -185,6 +243,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     double coordScale = 1.0;
     double probThreshold = 1e-4;
     double tileBufferPixels = 5.0;
+    bool noDuplication = false;
+    bool idIsU32 = false;
+    bool keepOrgId = false;
     int64_t clipScale = 1024;
     int32_t zoom = -1;
     int32_t extent = 4096;
@@ -200,6 +261,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
       .add_option("coord-scale", "Scale factor applied to input coordinates before EPSG:3857 tiling", coordScale)
       .add_option("prob-thres", "Minimum factor probability retained as a nullable property", probThreshold)
       .add_option("tile-buffer-px", "Tile buffer in screen pixels for buffered clipping", tileBufferPixels)
+      .add_option("no-duplication", "Store each polygon intact in exactly one tile per zoom level", noDuplication)
       .add_option("clip-scale", "Integer scale used internally for polygon clipping", clipScale)
       .add_option("extent", "Vector tile extent", extent)
       .add_option("threads", "Number of encode threads", threads)
@@ -208,6 +270,8 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
       .add_option("topk-col", "Input column name for top factor", topKColName)
       .add_option("topp-col", "Input column name for top factor probability", topPColName)
       .add_option("id-col", "Polygon ID column name in the factor-probability file (generic polygon mode)", idColName)
+      .add_option("id-is-u32", "Parse polygon IDs directly as u32 instead of assigning IDs by geometry-file order", idIsU32)
+      .add_option("keep-org-id", "Keep the original generic polygon ID as a string property column when generated u32 IDs are used", keepOrgId)
       .add_option("icol-id-geom", "0-based polygon ID column index in the geometry file", icolIdGeom)
       .add_option("icol-x-geom", "0-based x coordinate column index in the geometry file", icolXGeom)
       .add_option("icol-y-geom", "0-based y coordinate column index in the geometry file", icolYGeom)
@@ -241,6 +305,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     if (genericPolygonMode) {
         if (idColName.empty()) {
             error("%s: --id-col is required when --in-geom is provided", __func__);
+        }
+        if (idIsU32 && keepOrgId) {
+            error("%s: --keep-org-id cannot be used together with --id-is-u32", __func__);
         }
     } else {
         if (hexGridDist <= 0.0) {
@@ -282,8 +349,11 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     }
     UnitFactorResultReader reader(inTsv, readOptions);
     const UnitFactorResultHeader& layout = reader.header();
+    const std::string originalIdColumnName =
+        (genericPolygonMode && keepOrgId && !idIsU32) ? choose_original_id_column_name(idColName) : std::string();
     const mlt_pmtiles::FeatureTableSchema schema =
-        build_polygon_schema(layerName, static_cast<uint32_t>(extent), layout.factorCols, !genericPolygonMode);
+        build_polygon_schema(layerName, static_cast<uint32_t>(extent), layout.factorCols,
+            !genericPolygonMode, !genericPolygonMode, originalIdColumnName);
     simple_polygon_pmtiles::SingleZoomPolygonWriterOptions writerOptions;
     writerOptions.zoom = static_cast<uint8_t>(zoom);
     writerOptions.extent = static_cast<uint32_t>(extent);
@@ -291,6 +361,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     writerOptions.tileBufferPixels = tileBufferPixels;
     writerOptions.clipScale = clipScale;
     writerOptions.threads = threads;
+    writerOptions.boundaryMode = noDuplication ?
+        simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication :
+        simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate;
 
     std::map<TileKey, mlt_pmtiles::PolygonTileData> tileMap;
     simple_polygon_pmtiles::PolygonWriteSummary summary;
@@ -304,7 +377,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
         geomOptions.icolX = icolXGeom;
         geomOptions.icolY = icolYGeom;
         geomOptions.icolOrder = icolOrderGeom;
-        geometryMap = read_simple_polygon_geometry_map(inGeom, geomOptions);
+        geometryMap = read_simple_polygon_geometry_map(inGeom, geomOptions, idIsU32);
     } else {
         inputGrid = HexGrid(hexGridDist / kSqrt3, true);
         scaledGrid = HexGrid((hexGridDist * coordScale) / kSqrt3, true);
@@ -316,6 +389,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     while (reader.next(row)) {
         simple_polygon_pmtiles::PolygonFeatureProperties props;
         std::vector<std::pair<double, double>> ring;
+        uint64_t featureId = 0;
         if (genericPolygonMode) {
             const std::string& polygonId = row.unitId;
             auto it = geometryMap.find(polygonId);
@@ -328,7 +402,10 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
                 pt.first *= coordScale;
                 pt.second *= coordScale;
             }
-            props.stringValues = {polygonId};
+            featureId = static_cast<uint64_t>(it->second.assignedId);
+            if (keepOrgId && !idIsU32) {
+                props.stringValues = {polygonId};
+            }
             props.intValues = {row.topK};
         } else {
             int32_t hexQ = 0;
@@ -344,7 +421,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
             double centerY = 0.0;
             scaledGrid.axial_to_cart(centerX, centerY, hexQ, hexR);
             ring = build_pointy_hex_ring(centerX, centerY, scaledGridDist);
-            props.stringValues = {build_hex_polygon_id(hexQ, hexR)};
+            featureId = pack_hex_polygon_id(hexQ, hexR);
             props.intValues = {hexQ, hexR, row.topK};
         }
         props.floatValues.reserve(1u + layout.factorCols.size());
@@ -356,7 +433,19 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
                 props.floatValues.push_back(std::nullopt);
             }
         }
-        simple_polygon_pmtiles::append_simple_polygon_feature(tileMap, schema, ring, props, writerOptions, summary);
+        if (genericPolygonMode) {
+            simple_polygon_pmtiles::append_simple_polygon_feature(
+                tileMap, schema, ring, featureId, props, writerOptions, summary);
+        } else {
+            const int32_t hexQ = props.intValues[0].value_or(0);
+            const int32_t hexR = props.intValues[1].value_or(0);
+            double centerX = 0.0;
+            double centerY = 0.0;
+            scaledGrid.axial_to_cart(centerX, centerY, hexQ, hexR);
+            simple_polygon_pmtiles::append_simple_polygon_feature(
+                tileMap, schema, ring, featureId, props, writerOptions, summary,
+                std::make_optional(std::make_pair(centerX, centerY)));
+        }
         ++nRows;
     }
 
@@ -390,8 +479,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
         };
     }
     nlohmann::json extraMetadata = simple_polygon_pmtiles::build_simple_polygon_metadata(
-        sourceFamily, {"ID"}, writerOptions, sourceMetadata);
-    extraMetadata["tile_buffer_rule"] = "tippecanoe_default_like";
+        sourceFamily, {}, writerOptions, sourceMetadata);
+    extraMetadata["tile_buffer_rule"] = noDuplication ?
+        "single_tile_no_duplication" : "tippecanoe_default_like";
     extraMetadata["tile_buffer_screen_px"] = tileBufferPixels;
 
     mlt_pmtiles::SingleLayerVectorPmtilesOptions archiveOptions;
@@ -413,6 +503,30 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     if (genericPolygonMode) {
         notice("%s: wrote %" PRIu64 " source polygons into %s (%zu destination tiles)",
             __func__, nRows, outFile.c_str(), tileMap.size());
+        if (!idIsU32) {
+            const std::string idMapPath = std::filesystem::path(outFile).replace_extension("").string() + ".idmap.tsv";
+            std::ofstream ofs(idMapPath);
+            if (!ofs.good()) {
+                error("%s: failed opening polygon ID map output %s", __func__, idMapPath.c_str());
+            }
+            ofs << "input_id\tassigned_u32\n";
+            std::vector<std::pair<std::string, uint32_t>> mappings;
+            mappings.reserve(geometryMap.size());
+            for (const auto& kv : geometryMap) {
+                mappings.emplace_back(kv.first, kv.second.assignedId);
+            }
+            std::sort(mappings.begin(), mappings.end(),
+                [](const auto& lhs, const auto& rhs) {
+                    return lhs.second < rhs.second;
+                });
+            for (const auto& kv : mappings) {
+                ofs << kv.first << '\t' << kv.second << '\n';
+            }
+            if (!ofs.good()) {
+                error("%s: failed writing polygon ID map to %s", __func__, idMapPath.c_str());
+            }
+            notice("%s: wrote polygon ID mapping to %s", __func__, idMapPath.c_str());
+        }
     } else {
         notice("%s: wrote %" PRIu64 " source hexagons into %s (%zu destination tiles, %" PRIu64 " snapped centers)",
             __func__, nRows, outFile.c_str(), tileMap.size(), nSnapped);

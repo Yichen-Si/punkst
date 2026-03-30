@@ -15,6 +15,11 @@
 
 namespace simple_polygon_pmtiles {
 
+enum class PolygonBoundaryMode {
+    BufferClipDuplicate,
+    SingleTileNoDuplication,
+};
+
 struct PolygonFeatureProperties {
     std::vector<std::optional<int32_t>> intValues;
     std::vector<std::optional<float>> floatValues;
@@ -28,6 +33,7 @@ struct SingleZoomPolygonWriterOptions {
     double tileBufferPixels = 5.0;
     int64_t clipScale = 1024;
     int32_t threads = 1;
+    PolygonBoundaryMode boundaryMode = PolygonBoundaryMode::BufferClipDuplicate;
 };
 
 struct PolygonWriteSummary {
@@ -41,6 +47,7 @@ struct PolygonWriteSummary {
 size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const std::vector<std::pair<double, double>>& outerRing,
+    uint64_t featureId,
     const PolygonFeatureProperties& properties,
     uint32_t tileX,
     uint32_t tileY,
@@ -49,6 +56,7 @@ size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTi
 size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const std::vector<std::pair<int64_t, int64_t>>& globalRing,
+    uint64_t featureId,
     const PolygonFeatureProperties& properties,
     uint32_t tileX,
     uint32_t tileY,
@@ -58,9 +66,11 @@ size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData
 void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const std::vector<std::pair<double, double>>& outerRing,
+    uint64_t featureId,
     const PolygonFeatureProperties& properties,
     const SingleZoomPolygonWriterOptions& options,
-    PolygonWriteSummary& summary);
+    PolygonWriteSummary& summary,
+    const std::optional<std::pair<double, double>>& assignmentCenter = std::nullopt);
 
 std::vector<mlt_pmtiles::EncodedTilePayload> encode_polygon_tile_map(
     std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,

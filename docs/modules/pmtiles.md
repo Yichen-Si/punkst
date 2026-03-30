@@ -65,6 +65,7 @@ Options:
 - `--x-col`, `--y-col`, `--topk-col`, and `--topp-col` set column names in the input factor table for the hex center coordinates (default: `x` and `y`), the top factor ID (default: `topK`), and the top factor probability (default: `topP`)
 - `--prob-thres` keeps only factor probabilities above the threshold as nullable properties (default: `1e-4`)
 - `--coord-scale` scales the input coordinates before Web Mercator tiling (default: `1`, no scaling)
+- `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries
 
 ### Generic simple-polygon mode
 
@@ -86,8 +87,12 @@ Options:
 
 - `--in-geom` points to the polygon geometry file
 - `--id-col` is required in generic polygon mode and names the polygon ID column in the factor-probability table
+- `--id-is-u32` tells `punkst` to parse that input ID directly as a `u32` MLT feature ID
+- if `--id-is-u32` is not used we assign each polygon an internal `u32` feature ID in first-encounter order from the geometry file and write a sidecar `*.idmap.tsv` with the mapping from the input string ID to the assigned integer ID
+- `--keep-org-id` optionally keeps the original input string ID as a regular string property column in the PMTiles output
 - `--icol-id-geom`, `--icol-x-geom`, and `--icol-y-geom` set the 0-based geometry-file columns for polygon ID, `x`, and `y`
 - `--icol-order-geom` is optional; if omitted, the geometry rows are assumed to already be in vertex order
+- `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries
 
 Geometry file format:
 
@@ -109,8 +114,16 @@ cell_id,vertex_x,vertex_y
 Output:
 
 - writes one PMTiles archive at the requested zoom level
-- stores polygon ID, `topK`, `topP`, and retained factor probabilities as feature properties
+- stores the polygon ID in the dedicated MLT feature ID column
+- stores `topK`, `topP`, and retained factor probabilities as feature properties
+- if `--keep-org-id` is used, also stores the original string ID as a regular string property column
 - output from this step can be passed to `punkst build-pyramid --polygon`
+
+Boundary behavior:
+
+- by default, polygons that cross tile boundaries are clipped and may appear in more than one tile
+- with `--no-duplication`, each polygon is assigned to a single tile and stored there intact
+- `--no-duplication` is mainly useful when polygons are much smaller than the tile size
 
 ## Build MLT PMTiles pyramids
 
@@ -146,7 +159,6 @@ Current support is limited to:
 ```bash
 punkst build-pyramid --polygon \
   --in path/hex.z18.pmtiles \
-  --polygon-id-col ID \
   --min-zoom 10 \
   --polygon-priority area \
   --max-tile-bytes 5000000 \
@@ -156,14 +168,18 @@ punkst build-pyramid --polygon \
   --out path/hex.pyramid.pmtiles
 ```
 
-- `--polygon-id-col` sets the polygon ID column name in the input PMTiles schema
 - `--polygon-priority` chooses how polygons are retained when down-sampling is needed: `random`, `area` (default, in decreasing order)
 
 Behavior:
 
+- by default, if the input PMTiles has an MLT feature ID column, that is used as the polygon ID
+- `--polygon-id-col` is optional and acts as a hard override when you want to use a regular property column instead of the MLT feature ID column
+- if neither an MLT feature ID column nor `--polygon-id-col` is available, the command reports an error
 - for PMTiles written by `punkst hex2pmtiles`, which contains only hexagons, a shortcut is taken by using the stored hexagonal grid coordinates to build the geometry instead of recovering it from the encoded geometry
 - for generic polygon inputs, uses the finest input zoom level to recover one canonical polygon per ID before building parent levels
 - if `--polygon-source` is provided, that file is used as the geometry source override
+- by default, parent tiles use clipped polygons that may appear in more than one tile
+- with `--no-duplication`, each polygon is kept intact and written to only one tile per zoom level
 
 Limitations for the generic polygon mode:
 
@@ -212,9 +228,10 @@ Main options:
 - `--max-tile-features` sets a target upper bound on the number of features per tile (default: 50K)
 - `--scale-factor-compression` controls how aggressively features are kept before the final tile-size check (default: 10)
 - `--threads` controls parallel processing
-- `--polygon-id-col` sets the polygon ID column name in the PMTiles
+- `--polygon-id-col` is an optional hard override for polygon ID lookup in `--polygon` mode
 - `--polygon-priority` sets polygon retention mode for `--polygon`
 - `--polygon-source` and `--icol-*` options are used only for `--polygon` in generic polygon mode
+- `--no-duplication` switches polygon output from clipped/duplicated tiles to single-tile intact storage
 
 Input PMTiles handling:
 

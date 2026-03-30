@@ -75,13 +75,29 @@ double compute_path64_area_abs(const Path64& path) {
     return std::abs(Area(path));
 }
 
+int64_t median_int64(std::vector<int64_t> values) {
+    if (values.empty()) {
+        return 0;
+    }
+    const size_t mid = values.size() / 2u;
+    std::nth_element(values.begin(), values.begin() + mid, values.end());
+    if ((values.size() & 1u) == 1u) {
+        return values[mid];
+    }
+    const int64_t upper = values[mid];
+    std::nth_element(values.begin(), values.begin() + (mid - 1u), values.begin() + mid);
+    return static_cast<int64_t>((static_cast<long double>(values[mid - 1u]) +
+        static_cast<long double>(upper)) * 0.5L);
+}
+
 } // namespace
 
 SimplePolygonTableIndex::SimplePolygonTableIndex(const std::string& path,
     const SimplePolygonTableReadOptions& options,
     uint8_t sourceZoom,
     uint32_t extent,
-    double coordScale) {
+    double coordScale,
+    bool useAssignedU32Ids) {
     TextLineReader reader(path);
     std::string line;
     if (options.icolId < 0 || options.icolX < 0 || options.icolY < 0) {
@@ -98,6 +114,7 @@ SimplePolygonTableIndex::SimplePolygonTableIndex(const std::string& path,
     };
 
     std::unordered_map<std::string, std::vector<VertexRow>> staged;
+    uint32_t nextAssignedId = 0;
     uint64_t lineNo = 0;
     bool sawData = false;
     bool firstDataRowHandled = false;
@@ -137,7 +154,15 @@ SimplePolygonTableIndex::SimplePolygonTableIndex(const std::string& path,
         if (polygonId.empty()) {
             error("%s: empty polygon ID in polygon table row %" PRIu64, __func__, lineNo);
         }
-        auto& rows = staged[polygonId];
+        std::string stagedKey = polygonId;
+        if (useAssignedU32Ids) {
+            auto [idIt, inserted] = assignedIdsBySourceId_.emplace(polygonId, nextAssignedId);
+            if (inserted) {
+                ++nextAssignedId;
+            }
+            stagedKey = std::to_string(idIt->second);
+        }
+        auto& rows = staged[stagedKey];
         if (options.icolOrder >= 0) {
             if (!str2int64(fields[options.icolOrder], row.order)) {
                 error("%s: failed parsing polygon vertex order at row %" PRIu64,
@@ -342,6 +367,7 @@ struct PolygonSourceDescriptor {
     PolygonPriorityMode priorityMode = PolygonPriorityMode::Random;
     uint8_t sourceZoom = 0;
     uint32_t sourceExtent = 0;
+    bool useFeatureId = false;
     std::vector<ResolvedCanonicalField> canonicalFields;
     size_t hexQColumn = std::numeric_limits<size_t>::max();
     size_t hexRColumn = std::numeric_limits<size_t>::max();
@@ -362,6 +388,8 @@ bool schemas_equal(const mlt_pmtiles::FeatureTableSchema& lhs,
     const mlt_pmtiles::FeatureTableSchema& rhs) {
     if (lhs.layerName != rhs.layerName ||
         lhs.extent != rhs.extent ||
+        lhs.hasIdColumn != rhs.hasIdColumn ||
+        lhs.idIsUint64 != rhs.idIsUint64 ||
         lhs.columns.size() != rhs.columns.size()) {
         return false;
     }
@@ -507,6 +535,17 @@ size_t estimate_stream_bytes(uint64_t numValues, size_t payloadBytes) {
     return 2u + varint_size(numValues) + varint_size(payloadBytes) + payloadBytes;
 }
 
+size_t estimate_id_column_bytes(const std::vector<uint64_t>& featureIds,
+    const std::vector<uint32_t>* order,
+    size_t rowCount) {
+    size_t payloadBytes = 0;
+    for (size_t i = 0; i < rowCount; ++i) {
+        const uint32_t row = order == nullptr ? static_cast<uint32_t>(i) : (*order)[i];
+        payloadBytes += varint_size(featureIds[row]);
+    }
+    return estimate_stream_bytes(rowCount, payloadBytes);
+}
+
 size_t estimate_property_columns_bytes(const mlt_pmtiles::FeatureTableSchema& schema,
     const std::vector<mlt_pmtiles::PropertyColumn>& columns,
     const std::vector<uint32_t>* order,
@@ -585,8 +624,11 @@ size_t estimate_point_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& sch
     size_t layerBytes = 0;
     layerBytes += varint_size(schema.layerName.size()) + schema.layerName.size();
     layerBytes += varint_size(schema.extent);
-    layerBytes += varint_size(1u + schema.columns.size());
+    layerBytes += varint_size(1u + schema.columns.size() + (schema.hasIdColumn ? 1u : 0u));
     layerBytes += varint_size(4u);
+    if (schema.hasIdColumn) {
+        layerBytes += 1u;
+    }
     for (const auto& columnSchema : schema.columns) {
         switch (columnSchema.type) {
         case mlt_pmtiles::ScalarType::BOOLEAN:
@@ -617,6 +659,9 @@ size_t estimate_point_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& sch
         prevY = y;
     }
     layerBytes += estimate_stream_bytes(rowCount * 2u, vertexPayload);
+    if (schema.hasIdColumn) {
+        layerBytes += estimate_id_column_bytes(tile.featureIds, order, rowCount);
+    }
     layerBytes += estimate_property_columns_bytes(schema, tile.columns, order, rowCount);
     return varint_size(1u + layerBytes) + 1u + layerBytes;
 }
@@ -645,8 +690,11 @@ size_t estimate_polygon_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& s
     size_t layerBytes = 0;
     layerBytes += varint_size(schema.layerName.size()) + schema.layerName.size();
     layerBytes += varint_size(schema.extent);
-    layerBytes += varint_size(1u + schema.columns.size());
+    layerBytes += varint_size(1u + schema.columns.size() + (schema.hasIdColumn ? 1u : 0u));
     layerBytes += varint_size(4u);
+    if (schema.hasIdColumn) {
+        layerBytes += 1u;
+    }
     for (const auto& columnSchema : schema.columns) {
         switch (columnSchema.type) {
         case mlt_pmtiles::ScalarType::BOOLEAN:
@@ -690,6 +738,9 @@ size_t estimate_polygon_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& s
     layerBytes += estimate_stream_bytes(rowCount, partPayload);
     layerBytes += estimate_stream_bytes(rowCount, ringPayload);
     layerBytes += estimate_stream_bytes(totalVertices * 2u, vertexPayload);
+    if (schema.hasIdColumn) {
+        layerBytes += estimate_id_column_bytes(tile.featureIds, order, rowCount);
+    }
     layerBytes += estimate_property_columns_bytes(schema, tile.columns, order, rowCount);
     return varint_size(1u + layerBytes) + 1u + layerBytes;
 }
@@ -1038,6 +1089,18 @@ PolygonGeometryBackendKind parse_polygon_geometry_backend_kind(const std::string
     return PolygonGeometryBackendKind::Hexgrid;
 }
 
+simple_polygon_pmtiles::PolygonBoundaryMode parse_polygon_boundary_mode(
+    const std::string& name) {
+    if (name.empty() || name == "buffer_clip_duplicate") {
+        return simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate;
+    }
+    if (name == "single_tile_no_duplication") {
+        return simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication;
+    }
+    error("%s: unsupported polygon boundary mode %s", __func__, name.c_str());
+    return simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate;
+}
+
 size_t find_schema_column_by_name(const mlt_pmtiles::FeatureTableSchema& schema,
     const std::string& name) {
     for (size_t i = 0; i < schema.columns.size(); ++i) {
@@ -1052,6 +1115,17 @@ std::string canonical_key_for_polygon_row(const mlt_pmtiles::FeatureTableSchema&
     const mlt_pmtiles::PolygonTileData& tile,
     size_t row,
     const PolygonSourceDescriptor& descriptor) {
+    if (descriptor.useFeatureId) {
+        if (row >= tile.featureIds.size()) {
+            error("%s: polygon feature ID missing for row %zu", __func__, row);
+        }
+        const uint64_t featureId = tile.featureIds[row];
+        std::string key;
+        key.reserve(1u + sizeof(featureId));
+        key.push_back('\x02');
+        key.append(reinterpret_cast<const char*>(&featureId), sizeof(featureId));
+        return key;
+    }
     std::string key;
     key.reserve(descriptor.canonicalFields.size() * 16u);
     for (const auto& field : descriptor.canonicalFields) {
@@ -1130,6 +1204,24 @@ std::string require_polygon_row_string(const mlt_pmtiles::FeatureTableSchema& sc
     return column.stringValues[row];
 }
 
+uint64_t require_polygon_row_feature_id(const mlt_pmtiles::PolygonTileData& tile,
+    size_t row) {
+    if (row >= tile.featureIds.size()) {
+        error("%s: polygon feature ID missing for row %zu", __func__, row);
+    }
+    return tile.featureIds[row];
+}
+
+std::string polygon_source_lookup_id(const mlt_pmtiles::FeatureTableSchema& schema,
+    const mlt_pmtiles::PolygonTileData& tile,
+    size_t row,
+    const PolygonSourceDescriptor& descriptor) {
+    if (descriptor.useFeatureId) {
+        return std::to_string(require_polygon_row_feature_id(tile, row));
+    }
+    return require_polygon_row_string(schema, tile, row, descriptor.polygonIdColumn);
+}
+
 std::vector<std::pair<double, double>> extract_polygon_row_world_ring(
     const mlt_pmtiles::FeatureTableSchema& schema,
     const mlt_pmtiles::PolygonTileData& tile,
@@ -1206,6 +1298,54 @@ std::vector<std::pair<double, double>> build_pointy_hex_ring(double centerX,
     return out;
 }
 
+std::pair<uint32_t, uint32_t> assign_tile_from_world_center(double centerX, double centerY,
+    uint8_t zoom) {
+    int64_t tileX = 0;
+    int64_t tileY = 0;
+    double localX = 0.0;
+    double localY = 0.0;
+    mlt_pmtiles::epsg3857_to_tilecoord(centerX, centerY, zoom, tileX, tileY, localX, localY);
+    const int64_t maxTileIndex = static_cast<int64_t>((uint64_t{1} << zoom) - 1u);
+    tileX = std::clamp(tileX, int64_t{0}, maxTileIndex);
+    tileY = std::clamp(tileY, int64_t{0}, maxTileIndex);
+    return {
+        static_cast<uint32_t>(tileX),
+        static_cast<uint32_t>(tileY),
+    };
+}
+
+std::pair<uint32_t, uint32_t> assign_tile_from_global_ring(
+    const std::vector<std::pair<int64_t, int64_t>>& globalRing,
+    uint8_t sourceZoom,
+    uint32_t sourceExtent,
+    uint8_t targetZoom) {
+    if (globalRing.empty()) {
+        return {0u, 0u};
+    }
+    if (sourceZoom < targetZoom) {
+        error("%s: source zoom must be >= target zoom for global polygon assignment", __func__);
+    }
+    std::vector<int64_t> xs;
+    std::vector<int64_t> ys;
+    xs.reserve(globalRing.size());
+    ys.reserve(globalRing.size());
+    for (const auto& pt : globalRing) {
+        xs.push_back(pt.first);
+        ys.push_back(pt.second);
+    }
+    const int64_t centerX = median_int64(std::move(xs));
+    const int64_t centerY = median_int64(std::move(ys));
+    const uint64_t scale = uint64_t{1} << static_cast<uint32_t>(sourceZoom - targetZoom);
+    const int64_t tileSpan = static_cast<int64_t>(sourceExtent) * static_cast<int64_t>(scale);
+    const int64_t maxTileIndex = static_cast<int64_t>((uint64_t{1} << targetZoom) - 1u);
+    const int64_t tileX = std::clamp(centerX / tileSpan, int64_t{0}, maxTileIndex);
+    const int64_t tileY = std::clamp(centerY / tileSpan, int64_t{0}, maxTileIndex);
+    return {
+        static_cast<uint32_t>(tileX),
+        static_cast<uint32_t>(tileY),
+    };
+}
+
 std::vector<std::pair<double, double>> reconstruct_polygon_ring(
     const PolygonSourceDescriptor& descriptor,
     const mlt_pmtiles::FeatureTableSchema& schema,
@@ -1229,8 +1369,8 @@ std::vector<std::pair<double, double>> reconstruct_polygon_ring(
         if (!descriptor.polygonTable) {
             error("%s: polygon_table backend requires a loaded polygon table", __func__);
         }
-        const std::string polygonId = require_polygon_row_string(
-            schema, tile, row, descriptor.polygonIdColumn);
+        const std::string polygonId = polygon_source_lookup_id(
+            schema, tile, row, descriptor);
         const SimplePolygonRecord* record = descriptor.polygonTable->find(polygonId);
         if (record == nullptr) {
             error("%s: polygon ID %s was not found in the source geometry table",
@@ -1278,9 +1418,16 @@ PolygonSourceDescriptor resolve_polygon_source_descriptor(
     out.backend = parse_polygon_geometry_backend_kind(out.backendName);
     out.priorityMode = options.polygonPriorityMode;
     out.writerOptions.extent = schema.extent;
-    out.writerOptions.tileBufferPixels = hint.value("buffer_screen_px", 5.0);
+    out.writerOptions.tileBufferPixels = !std::isnan(options.tileBufferPixels) ?
+        options.tileBufferPixels : hint.value("buffer_screen_px", 5.0);
     out.writerOptions.clipScale = 1024;
     out.writerOptions.coordScale = metadata.value("coord_scale", 1.0);
+    out.writerOptions.boundaryMode = parse_polygon_boundary_mode(
+        hint.value("boundary_mode", source.value("boundary_mode", std::string())));
+    if (options.polygonNoDuplication) {
+        out.writerOptions.boundaryMode =
+            simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication;
+    }
     std::vector<std::string> canonicalFieldNames;
     if (hint.contains("canonical_id_fields") && hint["canonical_id_fields"].is_array()) {
         for (const auto& item : hint["canonical_id_fields"]) {
@@ -1290,11 +1437,22 @@ PolygonSourceDescriptor resolve_polygon_source_descriptor(
             canonicalFieldNames.push_back(item.get<std::string>());
         }
     }
-    if (canonicalFieldNames.empty() && out.backend == PolygonGeometryBackendKind::PolygonTable) {
+    if (!options.polygonIdColumn.empty()) {
+        canonicalFieldNames.clear();
         canonicalFieldNames.push_back(options.polygonIdColumn);
+        out.useFeatureId = false;
+    } else if (schema.hasIdColumn) {
+        canonicalFieldNames.clear();
+        out.useFeatureId = true;
     }
-    if (canonicalFieldNames.empty()) {
-        error("%s: polygon_pyramid_hint.canonical_id_fields is required", __func__);
+    if (canonicalFieldNames.empty() && !out.useFeatureId &&
+        out.backend == PolygonGeometryBackendKind::PolygonTable) {
+        error("%s: polygon_table backend requires an MLT feature ID column by default; "
+            "use --polygon-id-col to override with a property column", __func__);
+    }
+    if (canonicalFieldNames.empty() && !out.useFeatureId) {
+        error("%s: polygon pyramid inputs require either an MLT feature ID column or --polygon-id-col",
+            __func__);
     }
     for (const auto& name : canonicalFieldNames) {
         bool found = false;
@@ -1330,12 +1488,15 @@ PolygonSourceDescriptor resolve_polygon_source_descriptor(
             error("%s: hexgrid polygon pyramids require schema columns hex_q and hex_r", __func__);
         }
     } else if (out.backend == PolygonGeometryBackendKind::PolygonTable) {
-        if (out.canonicalFields.size() != 1u ||
-            out.canonicalFields.front().type != mlt_pmtiles::ScalarType::STRING) {
+        if (!out.useFeatureId &&
+            (out.canonicalFields.size() != 1u ||
+             out.canonicalFields.front().type != mlt_pmtiles::ScalarType::STRING)) {
             error("%s: polygon_table backend requires exactly one STRING canonical ID field",
                 __func__);
         }
-        out.polygonIdColumn = out.canonicalFields.front().columnIndex;
+        if (!out.useFeatureId) {
+            out.polygonIdColumn = out.canonicalFields.front().columnIndex;
+        }
     } else {
         error("%s: polygon pyramid builder currently supports only known polygon geometry backends", __func__);
     }
@@ -1353,8 +1514,8 @@ std::vector<uint64_t> build_polygon_seed_priorities(
         if (descriptor.priorityMode == PolygonPriorityMode::Area) {
             double area = 0.0;
             if (descriptor.backend == PolygonGeometryBackendKind::PolygonTable) {
-                const std::string polygonId = require_polygon_row_string(
-                    decoded.schema, decoded.tile, row, descriptor.polygonIdColumn);
+                const std::string polygonId = polygon_source_lookup_id(
+                    decoded.schema, decoded.tile, row, descriptor);
                 const SimplePolygonRecord* record = descriptor.polygonTable ?
                     descriptor.polygonTable->find(polygonId) : nullptr;
                 if (record != nullptr) {
@@ -1488,10 +1649,12 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
             auto writerOptions = descriptor.writerOptions;
             writerOptions.zoom = input.z;
             size_t appended = 0;
+            const uint64_t featureId = childSeq.decoded.tile.featureIds.empty() ? 0u :
+                childSeq.decoded.tile.featureIds[row];
             bool skippedForSourceIssue = false;
             if (descriptor.backend == PolygonGeometryBackendKind::PolygonTable) {
-                const std::string polygonId = require_polygon_row_string(
-                    childSeq.decoded.schema, childSeq.decoded.tile, row, descriptor.polygonIdColumn);
+                const std::string polygonId = polygon_source_lookup_id(
+                    childSeq.decoded.schema, childSeq.decoded.tile, row, descriptor);
                 const SimplePolygonIssueReason issue = descriptor.polygonTable ?
                     descriptor.polygonTable->issue_reason(polygonId) :
                     SimplePolygonIssueReason::None;
@@ -1505,15 +1668,43 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
                     skippedForSourceIssue = true;
                 }
                 if (!skippedForSourceIssue) {
+                    if (writerOptions.boundaryMode ==
+                        simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication) {
+                        const auto [assignedTileX, assignedTileY] = assign_tile_from_global_ring(
+                            record->globalRing, descriptor.sourceZoom, descriptor.sourceExtent, input.z);
+                        if (assignedTileX != input.x || assignedTileY != input.y) {
+                            skippedForSourceIssue = true;
+                        }
+                    }
+                }
+                if (!skippedForSourceIssue) {
                     appended = simple_polygon_pmtiles::append_simple_polygon_global_feature_to_tile(
-                        candidate.data, schema, record->globalRing, props, input.x, input.y,
+                        candidate.data, schema, record->globalRing, featureId, props, input.x, input.y,
                         descriptor.sourceZoom, writerOptions);
                 }
             } else {
+                if (writerOptions.boundaryMode ==
+                    simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication) {
+                    const int32_t hexQ = require_polygon_row_int(
+                        childSeq.decoded.schema, childSeq.decoded.tile, row, descriptor.hexQColumn);
+                    const int32_t hexR = require_polygon_row_int(
+                        childSeq.decoded.schema, childSeq.decoded.tile, row, descriptor.hexRColumn);
+                    HexGrid scaledGrid(descriptor.hexGridDistScaled / kSqrt3, true);
+                    double centerX = 0.0;
+                    double centerY = 0.0;
+                    scaledGrid.axial_to_cart(centerX, centerY, hexQ, hexR);
+                    const auto [assignedTileX, assignedTileY] =
+                        assign_tile_from_world_center(centerX, centerY, input.z);
+                    if (assignedTileX != input.x || assignedTileY != input.y) {
+                        skippedForSourceIssue = true;
+                    }
+                }
                 auto ring = reconstruct_polygon_ring(descriptor, childSeq.decoded.schema,
                     childSeq.decoded.tile, row);
+                if (!skippedForSourceIssue) {
                 appended = simple_polygon_pmtiles::append_simple_polygon_feature_to_tile(
-                    candidate.data, schema, ring, props, input.x, input.y, writerOptions);
+                    candidate.data, schema, ring, featureId, props, input.x, input.y, writerOptions);
+                }
             }
             if (!skippedForSourceIssue && appended == 0) {
                 ++candidate.droppedDegenerate;
@@ -1954,7 +2145,8 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
                                 : options.polygonSourceCoordScale;
                         sourceDescriptor.polygonTable = std::make_shared<SimplePolygonTableIndex>(
                             options.polygonSourcePath, readOptions, sourceDescriptor.sourceZoom,
-                            sourceDescriptor.sourceExtent, polygonSourceCoordScale);
+                            sourceDescriptor.sourceExtent, polygonSourceCoordScale,
+                            sourceDescriptor.useFeatureId);
                     } else {
                         sourceDescriptor.polygonTable = std::make_shared<SimplePolygonTableIndex>();
                     }
@@ -1968,8 +2160,8 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
                 options.polygonSourcePath.empty() &&
                 entry.z == maxZoom) {
                 for (size_t row = 0; row < decoded.tile.size(); ++row) {
-                    const std::string polygonId = require_polygon_row_string(
-                        decoded.schema, decoded.tile, row, sourceDescriptor.polygonIdColumn);
+                    const std::string polygonId = polygon_source_lookup_id(
+                        decoded.schema, decoded.tile, row, sourceDescriptor);
                     sourceDescriptor.polygonTable->add_fragment(polygonId,
                         extract_polygon_row_global_ring(decoded, row, entry.z, entry.x, entry.y));
                 }

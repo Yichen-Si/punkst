@@ -41,7 +41,8 @@ public:
         const SimplePolygonTableReadOptions& options,
         uint8_t sourceZoom,
         uint32_t extent,
-        double coordScale = 1.0);
+        double coordScale = 1.0,
+        bool useAssignedU32Ids = false);
 
     void add_fragment(const std::string& polygonId,
         const std::vector<std::pair<int64_t, int64_t>>& globalRing);
@@ -57,6 +58,7 @@ private:
     std::unordered_map<std::string, SimplePolygonRecord> polygons_;
     std::unordered_map<std::string, SimplePolygonIssueReason> issues_;
     std::unordered_map<std::string, std::vector<std::vector<std::pair<int64_t, int64_t>>>> pendingFragments_;
+    std::unordered_map<std::string, uint32_t> assignedIdsBySourceId_;
 };
 
 struct BuildOptions {
@@ -66,13 +68,15 @@ struct BuildOptions {
     double scaleFactorCompression = 10.0;
     int32_t threads = 1;
     PolygonPriorityMode polygonPriorityMode = PolygonPriorityMode::Random;
-    std::string polygonIdColumn = "ID";
+    std::string polygonIdColumn;
     std::string polygonSourcePath;
     int32_t polygonSourceIcolId = 0;
     int32_t polygonSourceIcolX = 1;
     int32_t polygonSourceIcolY = 2;
     int32_t polygonSourceIcolOrder = -1;
     double polygonSourceCoordScale = std::numeric_limits<double>::quiet_NaN();
+    double tileBufferPixels = std::numeric_limits<double>::quiet_NaN();
+    bool polygonNoDuplication = false;
 };
 
 void build_point_pmtiles_pyramid(const std::string& inPmtiles,
