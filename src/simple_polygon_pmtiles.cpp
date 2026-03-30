@@ -116,21 +116,43 @@ double signed_area_local(const std::vector<int32_t>& xs,
     return twiceArea * 0.5;
 }
 
-size_t count_distinct_local_vertices(const std::vector<std::pair<int32_t, int32_t>>& ring) {
-    size_t distinct = 0;
-    for (size_t i = 0; i < ring.size(); ++i) {
-        bool seen = false;
-        for (size_t j = 0; j < i; ++j) {
-            if (ring[j] == ring[i]) {
-                seen = true;
-                break;
-            }
-        }
-        if (!seen) {
-            ++distinct;
-        }
+Path64 build_scaled_world_path(const std::vector<std::pair<double, double>>& outerRing,
+    int64_t clipScale,
+    double* minX = nullptr,
+    double* minY = nullptr,
+    double* maxX = nullptr,
+    double* maxY = nullptr) {
+    Path64 source;
+    source.reserve(outerRing.size());
+    double pathMinX = std::numeric_limits<double>::infinity();
+    double pathMinY = std::numeric_limits<double>::infinity();
+    double pathMaxX = -std::numeric_limits<double>::infinity();
+    double pathMaxY = -std::numeric_limits<double>::infinity();
+    for (const auto& pt : outerRing) {
+        pathMinX = std::min(pathMinX, pt.first);
+        pathMinY = std::min(pathMinY, pt.second);
+        pathMaxX = std::max(pathMaxX, pt.first);
+        pathMaxY = std::max(pathMaxY, pt.second);
+        source.push_back(Point64(to_scaled_world(pt.first, clipScale),
+            to_scaled_world(pt.second, clipScale)));
     }
-    return distinct;
+    if (minX != nullptr) {
+        *minX = pathMinX;
+    }
+    if (minY != nullptr) {
+        *minY = pathMinY;
+    }
+    if (maxX != nullptr) {
+        *maxX = pathMaxX;
+    }
+    if (maxY != nullptr) {
+        *maxY = pathMaxY;
+    }
+    return source;
+}
+
+bool is_non_degenerate_path(const Path64& path) {
+    return path.size() >= 3 && std::llround(std::abs(Area(path))) != 0;
 }
 
 std::vector<std::pair<int32_t, int32_t>> convert_clipped_ring_to_local(
@@ -180,7 +202,7 @@ void append_local_polygon_fragment(mlt_pmtiles::PolygonTileData& tile,
     const std::vector<std::pair<int32_t, int32_t>>& localRing,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const PolygonFeatureProperties& properties) {
-    if (localRing.size() < 3 || count_distinct_local_vertices(localRing) < 3) {
+    if (localRing.size() < 3) {
         return;
     }
     ensure_tile_columns(tile, schema);
@@ -195,7 +217,13 @@ void append_local_polygon_fragment(mlt_pmtiles::PolygonTileData& tile,
         tile.localY.resize(beg);
         return;
     }
-    if (signed_area_local(tile.localX, tile.localY, beg, end) < 0.0) {
+    const double area = signed_area_local(tile.localX, tile.localY, beg, end);
+    if (area == 0.0) {
+        tile.localX.resize(beg);
+        tile.localY.resize(beg);
+        return;
+    }
+    if (area < 0.0) {
         std::reverse(tile.localX.begin() + beg, tile.localX.begin() + end);
         std::reverse(tile.localY.begin() + beg, tile.localY.begin() + end);
     }
@@ -219,98 +247,18 @@ mlt_pmtiles::EncodedTilePayload encode_polygon_tile_payload(const TileKey& tileK
     return payload;
 }
 
-} // namespace
-
-void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
+size_t append_scaled_polygon_source_to_tile(mlt_pmtiles::PolygonTileData& outTile,
     const mlt_pmtiles::FeatureTableSchema& schema,
-    const std::vector<std::pair<double, double>>& outerRing,
-    const PolygonFeatureProperties& properties,
-    const SingleZoomPolygonWriterOptions& options,
-    PolygonWriteSummary& summary) {
-    if (outerRing.size() < 3) {
-        return;
-    }
-    if (options.extent == 0) {
-        error("%s: extent must be positive", __func__);
-    }
-    if (options.clipScale <= 0) {
-        error("%s: clipScale must be positive", __func__);
-    }
-
-    update_geo_bounds(outerRing, summary);
-    ++summary.featureCount;
-
-    Path64 source;
-    source.reserve(outerRing.size());
-    double minX = std::numeric_limits<double>::infinity();
-    double minY = std::numeric_limits<double>::infinity();
-    double maxX = -std::numeric_limits<double>::infinity();
-    double maxY = -std::numeric_limits<double>::infinity();
-    for (const auto& pt : outerRing) {
-        minX = std::min(minX, pt.first);
-        minY = std::min(minY, pt.second);
-        maxX = std::max(maxX, pt.first);
-        maxY = std::max(maxY, pt.second);
-        source.push_back(Point64(to_scaled_world(pt.first, options.clipScale),
-            to_scaled_world(pt.second, options.clipScale)));
-    }
-    if (source.size() < 3 || std::llround(std::abs(Area(source))) == 0) {
-        return;
-    }
-
-    const double bufferWorld = tile_buffer_world_units(options);
-    const double minXBuffered = minX - bufferWorld;
-    const double minYBuffered = minY - bufferWorld;
-    const double maxXBuffered = maxX + bufferWorld;
-    const double maxYBuffered = maxY + bufferWorld;
-
-    int64_t tileX0 = 0, tileY0 = 0, tileX1 = 0, tileY1 = 0;
-    double localXDummy = 0.0, localYDummy = 0.0;
-    mlt_pmtiles::epsg3857_to_tilecoord(minXBuffered, maxYBuffered, options.zoom, tileX0, tileY0, localXDummy, localYDummy);
-    mlt_pmtiles::epsg3857_to_tilecoord(maxXBuffered, minYBuffered, options.zoom, tileX1, tileY1, localXDummy, localYDummy);
-    const int64_t maxTileIndex = static_cast<int64_t>((uint64_t{1} << options.zoom) - 1u);
-    tileX0 = std::clamp(tileX0, int64_t{0}, maxTileIndex);
-    tileX1 = std::clamp(tileX1, int64_t{0}, maxTileIndex);
-    tileY0 = std::clamp(tileY0, int64_t{0}, maxTileIndex);
-    tileY1 = std::clamp(tileY1, int64_t{0}, maxTileIndex);
-
-    for (int64_t tileY = tileY0; tileY <= tileY1; ++tileY) {
-        for (int64_t tileX = tileX0; tileX <= tileX1; ++tileX) {
-            TileKey key{static_cast<int32_t>(tileY), static_cast<int32_t>(tileX)};
-            append_simple_polygon_feature_to_tile(tileMap[key], schema, outerRing, properties,
-                static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY), options);
-        }
-    }
-}
-
-size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const std::vector<std::pair<double, double>>& outerRing,
+    const Path64& source,
     const PolygonFeatureProperties& properties,
     uint32_t tileX,
     uint32_t tileY,
+    double bufferWorld,
     const SingleZoomPolygonWriterOptions& options) {
-    if (outerRing.size() < 3) {
-        return 0;
-    }
-    if (options.extent == 0) {
-        error("%s: extent must be positive", __func__);
-    }
-    if (options.clipScale <= 0) {
-        error("%s: clipScale must be positive", __func__);
-    }
-
-    Path64 source;
-    source.reserve(outerRing.size());
-    for (const auto& pt : outerRing) {
-        source.push_back(Point64(to_scaled_world(pt.first, options.clipScale),
-            to_scaled_world(pt.second, options.clipScale)));
-    }
-    if (source.size() < 3 || std::llround(std::abs(Area(source))) == 0) {
+    if (!is_non_degenerate_path(source)) {
         return 0;
     }
 
-    const double bufferWorld = tile_buffer_world_units(options);
     double worldMinX = 0.0;
     double worldMaxY = 0.0;
     double worldMaxX = 0.0;
@@ -333,6 +281,85 @@ size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTi
         append_local_polygon_fragment(outTile, localRing, schema, properties);
     }
     return outTile.size() - before;
+}
+
+} // namespace
+
+void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
+    const mlt_pmtiles::FeatureTableSchema& schema,
+    const std::vector<std::pair<double, double>>& outerRing,
+    const PolygonFeatureProperties& properties,
+    const SingleZoomPolygonWriterOptions& options,
+    PolygonWriteSummary& summary) {
+    if (outerRing.size() < 3) {
+        return;
+    }
+    if (options.extent == 0) {
+        error("%s: extent must be positive", __func__);
+    }
+    if (options.clipScale <= 0) {
+        error("%s: clipScale must be positive", __func__);
+    }
+
+    update_geo_bounds(outerRing, summary);
+    ++summary.featureCount;
+
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    const Path64 source = build_scaled_world_path(outerRing, options.clipScale,
+        &minX, &minY, &maxX, &maxY);
+    if (!is_non_degenerate_path(source)) {
+        return;
+    }
+
+    const double bufferWorld = tile_buffer_world_units(options);
+    const double minXBuffered = minX - bufferWorld;
+    const double minYBuffered = minY - bufferWorld;
+    const double maxXBuffered = maxX + bufferWorld;
+    const double maxYBuffered = maxY + bufferWorld;
+
+    int64_t tileX0 = 0, tileY0 = 0, tileX1 = 0, tileY1 = 0;
+    double localXDummy = 0.0, localYDummy = 0.0;
+    mlt_pmtiles::epsg3857_to_tilecoord(minXBuffered, maxYBuffered, options.zoom, tileX0, tileY0, localXDummy, localYDummy);
+    mlt_pmtiles::epsg3857_to_tilecoord(maxXBuffered, minYBuffered, options.zoom, tileX1, tileY1, localXDummy, localYDummy);
+    const int64_t maxTileIndex = static_cast<int64_t>((uint64_t{1} << options.zoom) - 1u);
+    tileX0 = std::clamp(tileX0, int64_t{0}, maxTileIndex);
+    tileX1 = std::clamp(tileX1, int64_t{0}, maxTileIndex);
+    tileY0 = std::clamp(tileY0, int64_t{0}, maxTileIndex);
+    tileY1 = std::clamp(tileY1, int64_t{0}, maxTileIndex);
+
+    for (int64_t tileY = tileY0; tileY <= tileY1; ++tileY) {
+        for (int64_t tileX = tileX0; tileX <= tileX1; ++tileX) {
+            TileKey key{static_cast<int32_t>(tileY), static_cast<int32_t>(tileX)};
+            append_scaled_polygon_source_to_tile(tileMap[key], schema, source, properties,
+                static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY), bufferWorld, options);
+        }
+    }
+}
+
+size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
+    const mlt_pmtiles::FeatureTableSchema& schema,
+    const std::vector<std::pair<double, double>>& outerRing,
+    const PolygonFeatureProperties& properties,
+    uint32_t tileX,
+    uint32_t tileY,
+    const SingleZoomPolygonWriterOptions& options) {
+    if (outerRing.size() < 3) {
+        return 0;
+    }
+    if (options.extent == 0) {
+        error("%s: extent must be positive", __func__);
+    }
+    if (options.clipScale <= 0) {
+        error("%s: clipScale must be positive", __func__);
+    }
+
+    const double bufferWorld = tile_buffer_world_units(options);
+    const Path64 source = build_scaled_world_path(outerRing, options.clipScale);
+    return append_scaled_polygon_source_to_tile(outTile, schema, source, properties,
+        tileX, tileY, bufferWorld, options);
 }
 
 size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
@@ -358,7 +385,7 @@ size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData
     for (const auto& pt : globalRing) {
         source.push_back(Point64(pt.first, pt.second));
     }
-    if (source.size() < 3 || std::llround(std::abs(Area(source))) == 0) {
+    if (!is_non_degenerate_path(source)) {
         return 0;
     }
 

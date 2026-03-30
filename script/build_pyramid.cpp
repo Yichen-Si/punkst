@@ -1,3 +1,5 @@
+#include <cmath>
+
 #include "pmtiles_pyramid.hpp"
 #include "punkst.h"
 
@@ -28,6 +30,7 @@ int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
       .add_option("icol-x", "0-based polygon source X column index", options.polygonSourceIcolX)
       .add_option("icol-y", "0-based polygon source Y column index", options.polygonSourceIcolY)
       .add_option("icol-order", "Optional 0-based polygon source vertex-order column index", options.polygonSourceIcolOrder)
+      .add_option("polygon-source-coord-scale", "Override scale applied to --polygon-source coordinates before EPSG:3857 tiling (default: archive coord_scale metadata)", options.polygonSourceCoordScale)
       .add_option("threads", "Number of threads to use", threads);
 
     try {
@@ -53,6 +56,10 @@ int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
     }
 
     options.threads = threads;
+    if (!std::isnan(options.polygonSourceCoordScale) &&
+        !(options.polygonSourceCoordScale > 0.0)) {
+        error("%s: --polygon-source-coord-scale must be positive", __func__);
+    }
     if (polygonPriorityMode == "random") {
         options.polygonPriorityMode = pmtiles_pyramid::PolygonPriorityMode::Random;
     } else if (polygonPriorityMode == "area") {

@@ -8,7 +8,7 @@
 
 We only support PMTiles with the [MLT format](https://maplibre.org/maplibre-tile-spec/).
 
-For point/pixel-only PMTiles writing paths, see [tile-op](tileop.md) for `punkst tile-op --write-mlt-pmtiles`
+For writing point/pixel-only PMTiles see [tile-op](tileop.md)
 
 ## Export PMTiles as TSV
 
@@ -175,12 +175,15 @@ Optional polygon source file:
 
 `--polygon-source` optionally specifies a polygon-vertex table to override geometry recovery from the finest input zoom. Plain or gzipped TSV/CSV files are supported.
 
+By default, coordinates read from `--polygon-source` are multiplied by the input archive's `coord_scale` metadata before EPSG:3857 tiling so they match the packaged PMTiles coordinate space. Use `--polygon-source-coord-scale` to override that default when the source table is already pre-scaled or uses a different scale.
+
 Required fields (specified by 0-based column index):
 - polygon ID `--icol-id` (default: `0`)
 - `x` coordinate `--icol-x` (default: `1`)
 - `y` coordinate `--icol-y` (default: `2`)
 
 Optional field: vertex order `--icol-order`. If provided, it is used to assemble each polygon ring, otherwise, rows in the input file are assumed to already be in polygon-vertex order.
+- `--polygon-source-coord-scale` optionally overrides the scale applied to `--polygon-source` coordinates before EPSG:3857 tiling
 
 (Empty lines and lines starting with `#` are ignored; if the first non-comment line does not have numeric `x` and `y` values at `--icol-x` and `--icol-y`, it is treated as a header line and skipped; after that first line, malformed numeric values are treated as errors)
 

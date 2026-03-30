@@ -80,11 +80,15 @@ double compute_path64_area_abs(const Path64& path) {
 SimplePolygonTableIndex::SimplePolygonTableIndex(const std::string& path,
     const SimplePolygonTableReadOptions& options,
     uint8_t sourceZoom,
-    uint32_t extent) {
+    uint32_t extent,
+    double coordScale) {
     TextLineReader reader(path);
     std::string line;
     if (options.icolId < 0 || options.icolX < 0 || options.icolY < 0) {
         error("%s: --icol-id, --icol-x, and --icol-y must be non-negative", __func__);
+    }
+    if (!(coordScale > 0.0)) {
+        error("%s: polygon source coordScale must be positive", __func__);
     }
 
     struct VertexRow {
@@ -162,11 +166,13 @@ SimplePolygonTableIndex::SimplePolygonTableIndex(const std::string& path,
                 error("%s: duplicate vertex order %" PRId64 " for polygon %s",
                     __func__, vertices[i].order, kv.first.c_str());
             }
+            const double scaledX = vertices[i].x * coordScale;
+            const double scaledY = vertices[i].y * coordScale;
             int64_t tileX = 0;
             int64_t tileY = 0;
             double localX = 0.0;
             double localY = 0.0;
-            mlt_pmtiles::epsg3857_to_tilecoord(vertices[i].x, vertices[i].y, sourceZoom,
+            mlt_pmtiles::epsg3857_to_tilecoord(scaledX, scaledY, sourceZoom,
                 tileX, tileY, localX, localY);
             const int64_t globalX = tileX * static_cast<int64_t>(extent) +
                 static_cast<int64_t>(std::llround(localX * static_cast<double>(extent) / 256.0));
@@ -1942,9 +1948,13 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
                         readOptions.icolX = options.polygonSourceIcolX;
                         readOptions.icolY = options.polygonSourceIcolY;
                         readOptions.icolOrder = options.polygonSourceIcolOrder;
+                        const double polygonSourceCoordScale =
+                            std::isnan(options.polygonSourceCoordScale)
+                                ? sourceDescriptor.writerOptions.coordScale
+                                : options.polygonSourceCoordScale;
                         sourceDescriptor.polygonTable = std::make_shared<SimplePolygonTableIndex>(
                             options.polygonSourcePath, readOptions, sourceDescriptor.sourceZoom,
-                            sourceDescriptor.sourceExtent);
+                            sourceDescriptor.sourceExtent, polygonSourceCoordScale);
                     } else {
                         sourceDescriptor.polygonTable = std::make_shared<SimplePolygonTableIndex>();
                     }

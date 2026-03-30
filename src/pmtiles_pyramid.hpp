@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -39,7 +40,8 @@ public:
     SimplePolygonTableIndex(const std::string& path,
         const SimplePolygonTableReadOptions& options,
         uint8_t sourceZoom,
-        uint32_t extent);
+        uint32_t extent,
+        double coordScale = 1.0);
 
     void add_fragment(const std::string& polygonId,
         const std::vector<std::pair<int64_t, int64_t>>& globalRing);
@@ -70,6 +72,7 @@ struct BuildOptions {
     int32_t polygonSourceIcolX = 1;
     int32_t polygonSourceIcolY = 2;
     int32_t polygonSourceIcolOrder = -1;
+    double polygonSourceCoordScale = std::numeric_limits<double>::quiet_NaN();
 };
 
 void build_point_pmtiles_pyramid(const std::string& inPmtiles,
