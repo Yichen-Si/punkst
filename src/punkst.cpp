@@ -28,6 +28,8 @@ int32_t cmdDeconvPseudobulk(int argc, char** argv);
 int32_t cmdPseudoBulk(int argc, char** argv);
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
 int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv);
+int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv);
+int32_t cmdExportPmtiles(int32_t argc, char** argv);
 int32_t cmdConditionalTest(int32_t argc, char** argv);
 int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv);
 
@@ -63,7 +65,9 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("de-chisq", "Differential expression using Chi-squared test", cmdDeChisq)
         .add_command("deconv-pseudobulk", "Deconvolve pseudobulk matrix using a confusion matrix", cmdDeconvPseudobulk)
         .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk)
-        .add_command("hex2pmtiles-mlt", "Write single-zoom polygon MLT PMTiles from hex-grid factor TSV", cmdHex2PmtilesMlt)
+        .add_command("hex2pmtiles", "Write single-zoom polygon MLT PMTiles from factor TSV (hex or generic simple polygons)", cmdHex2PmtilesMlt)
+        .add_command("build-pyramid", "Build multi-zoom MLT PMTiles pyramids", cmdBuildPmtilesPyramid)
+        .add_command("export-pmtiles", "Export point-only MLT PMTiles to TSV plus TileOperator index", cmdExportPmtiles)
         .add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
 
     if (argc < 2) {

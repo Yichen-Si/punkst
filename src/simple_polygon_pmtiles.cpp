@@ -116,6 +116,23 @@ double signed_area_local(const std::vector<int32_t>& xs,
     return twiceArea * 0.5;
 }
 
+size_t count_distinct_local_vertices(const std::vector<std::pair<int32_t, int32_t>>& ring) {
+    size_t distinct = 0;
+    for (size_t i = 0; i < ring.size(); ++i) {
+        bool seen = false;
+        for (size_t j = 0; j < i; ++j) {
+            if (ring[j] == ring[i]) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            ++distinct;
+        }
+    }
+    return distinct;
+}
+
 std::vector<std::pair<int32_t, int32_t>> convert_clipped_ring_to_local(
     const Path64& clipped,
     int64_t tileX, int64_t tileY,
@@ -163,7 +180,7 @@ void append_local_polygon_fragment(mlt_pmtiles::PolygonTileData& tile,
     const std::vector<std::pair<int32_t, int32_t>>& localRing,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const PolygonFeatureProperties& properties) {
-    if (localRing.size() < 3) {
+    if (localRing.size() < 3 || count_distinct_local_vertices(localRing) < 3) {
         return;
     }
     ensure_tile_columns(tile, schema);
@@ -259,29 +276,130 @@ void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileDat
 
     for (int64_t tileY = tileY0; tileY <= tileY1; ++tileY) {
         for (int64_t tileX = tileX0; tileX <= tileX1; ++tileX) {
-            double worldMinX = 0.0;
-            double worldMaxY = 0.0;
-            double worldMaxX = 0.0;
-            double worldMinY = 0.0;
-            mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 0.0, 0.0, options.zoom, worldMinX, worldMaxY);
-            mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 256.0, 256.0, options.zoom, worldMaxX, worldMinY);
-            const Rect64 clipRect(
-                to_scaled_world(worldMinX - bufferWorld, options.clipScale),
-                to_scaled_world(worldMinY - bufferWorld, options.clipScale),
-                to_scaled_world(worldMaxX + bufferWorld, options.clipScale),
-                to_scaled_world(worldMaxY + bufferWorld, options.clipScale));
-            const Paths64 clipped = RectClip(clipRect, Paths64{source});
-            if (clipped.empty()) {
-                continue;
-            }
             TileKey key{static_cast<int32_t>(tileY), static_cast<int32_t>(tileX)};
-            auto& outTile = tileMap[key];
-            for (const auto& path : clipped) {
-                const auto localRing = convert_clipped_ring_to_local(path, tileX, tileY, options);
-                append_local_polygon_fragment(outTile, localRing, schema, properties);
-            }
+            append_simple_polygon_feature_to_tile(tileMap[key], schema, outerRing, properties,
+                static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY), options);
         }
     }
+}
+
+size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
+    const mlt_pmtiles::FeatureTableSchema& schema,
+    const std::vector<std::pair<double, double>>& outerRing,
+    const PolygonFeatureProperties& properties,
+    uint32_t tileX,
+    uint32_t tileY,
+    const SingleZoomPolygonWriterOptions& options) {
+    if (outerRing.size() < 3) {
+        return 0;
+    }
+    if (options.extent == 0) {
+        error("%s: extent must be positive", __func__);
+    }
+    if (options.clipScale <= 0) {
+        error("%s: clipScale must be positive", __func__);
+    }
+
+    Path64 source;
+    source.reserve(outerRing.size());
+    for (const auto& pt : outerRing) {
+        source.push_back(Point64(to_scaled_world(pt.first, options.clipScale),
+            to_scaled_world(pt.second, options.clipScale)));
+    }
+    if (source.size() < 3 || std::llround(std::abs(Area(source))) == 0) {
+        return 0;
+    }
+
+    const double bufferWorld = tile_buffer_world_units(options);
+    double worldMinX = 0.0;
+    double worldMaxY = 0.0;
+    double worldMaxX = 0.0;
+    double worldMinY = 0.0;
+    mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 0.0, 0.0, options.zoom, worldMinX, worldMaxY);
+    mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 256.0, 256.0, options.zoom, worldMaxX, worldMinY);
+    const Rect64 clipRect(
+        to_scaled_world(worldMinX - bufferWorld, options.clipScale),
+        to_scaled_world(worldMinY - bufferWorld, options.clipScale),
+        to_scaled_world(worldMaxX + bufferWorld, options.clipScale),
+        to_scaled_world(worldMaxY + bufferWorld, options.clipScale));
+    const Paths64 clipped = RectClip(clipRect, Paths64{source});
+    if (clipped.empty()) {
+        return 0;
+    }
+
+    const size_t before = outTile.size();
+    for (const auto& path : clipped) {
+        const auto localRing = convert_clipped_ring_to_local(path, tileX, tileY, options);
+        append_local_polygon_fragment(outTile, localRing, schema, properties);
+    }
+    return outTile.size() - before;
+}
+
+size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
+    const mlt_pmtiles::FeatureTableSchema& schema,
+    const std::vector<std::pair<int64_t, int64_t>>& globalRing,
+    const PolygonFeatureProperties& properties,
+    uint32_t tileX,
+    uint32_t tileY,
+    uint8_t sourceZoom,
+    const SingleZoomPolygonWriterOptions& options) {
+    if (globalRing.size() < 3) {
+        return 0;
+    }
+    if (sourceZoom < options.zoom) {
+        error("%s: sourceZoom must be >= destination zoom", __func__);
+    }
+    if (options.extent == 0) {
+        error("%s: extent must be positive", __func__);
+    }
+
+    Path64 source;
+    source.reserve(globalRing.size());
+    for (const auto& pt : globalRing) {
+        source.push_back(Point64(pt.first, pt.second));
+    }
+    if (source.size() < 3 || std::llround(std::abs(Area(source))) == 0) {
+        return 0;
+    }
+
+    const uint64_t scale = uint64_t{1} << static_cast<uint32_t>(sourceZoom - options.zoom);
+    const int64_t tileSpan = static_cast<int64_t>(options.extent) * static_cast<int64_t>(scale);
+    const int64_t originX = static_cast<int64_t>(tileX) * tileSpan;
+    const int64_t originY = static_cast<int64_t>(tileY) * tileSpan;
+    const int64_t buffer = static_cast<int64_t>(std::llround(
+        options.tileBufferPixels * static_cast<double>(tileSpan) / 256.0));
+
+    const Rect64 clipRect(originX - buffer, originY - buffer,
+        originX + tileSpan + buffer, originY + tileSpan + buffer);
+    const Paths64 clipped = RectClip(clipRect, Paths64{source});
+    if (clipped.empty()) {
+        return 0;
+    }
+
+    const size_t before = outTile.size();
+    for (const auto& path : clipped) {
+        std::vector<std::pair<int32_t, int32_t>> localRing;
+        localRing.reserve(path.size());
+        for (const auto& pt : path) {
+            const int32_t localX = static_cast<int32_t>(std::llround(
+                static_cast<double>(pt.x - originX) * static_cast<double>(options.extent) /
+                static_cast<double>(tileSpan)));
+            const int32_t localY = static_cast<int32_t>(std::llround(
+                static_cast<double>(pt.y - originY) * static_cast<double>(options.extent) /
+                static_cast<double>(tileSpan)));
+            if (!localRing.empty() &&
+                localRing.back().first == localX &&
+                localRing.back().second == localY) {
+                continue;
+            }
+            localRing.emplace_back(localX, localY);
+        }
+        if (localRing.size() >= 2 && localRing.front() == localRing.back()) {
+            localRing.pop_back();
+        }
+        append_local_polygon_fragment(outTile, localRing, schema, properties);
+    }
+    return outTile.size() - before;
 }
 
 std::vector<mlt_pmtiles::EncodedTilePayload> encode_polygon_tile_map(
@@ -334,10 +452,12 @@ nlohmann::json build_simple_polygon_metadata(const std::string& sourceFamily,
     out["polygon_pyramid_hint"] = {
         {"strategy", "canonical_id_reclip"},
         {"buffer_screen_px", options.tileBufferPixels},
+        {"geometry_backend", sourceFamily},
         {"source_family", sourceFamily},
         {"canonical_id_fields", canonicalIdFields},
     };
     out["polygon_source"] = {
+        {"geometry_backend", sourceFamily},
         {"family", sourceFamily},
         {"reconstructible", true},
         {"canonical_id_fields", canonicalIdFields},

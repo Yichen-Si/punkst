@@ -2787,12 +2787,13 @@ void TileOperator::annotatePlainToMltPmtiles(
         : kvec_;
     const size_t totalK = std::accumulate(headerKvec.begin(), headerKvec.end(), size_t(0));
     const std::vector<std::string> probColumnNames = build_merge_column_names(headerKvec, mergePrefixes);
+    std::string layer_name_suff0 = packaging.haveGeneBins ? "_all" : "";
     AnnotateQueryPlan queryPlan = build_annotate_query_plan(*this,
         ptPrefix, icol_x, icol_y, icol_z, icol_f, mltOptions.icol_count,
         mltOptions, probColumnNames,
         build_single_prob_nullable_flags(
             headerKvec, annoKeepAll, mltOptions.encode_prob_min, mltOptions.encode_prob_eps),
-        use3d, basename(outPrefix + "_all"));
+        use3d, basename(outPrefix + layer_name_suff0));
     queryPlan.resXY = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
     queryPlan.resZ = use3d ? queryPlan.resXY : 1.0f;
 
@@ -2888,7 +2889,7 @@ void TileOperator::annotatePlainToMltPmtiles(
     warning("%s: %zu features are not present in the feature dictionary",
         __func__, pipeline.missingPackagingFeatures.size());
 
-    const std::string allOutFile = outPrefix + "_all.pmtiles";
+    const std::string allOutFile = outPrefix + layer_name_suff0 + ".pmtiles";
     mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,
@@ -2975,6 +2976,7 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
         build_annotate_packaging_config(queryFeatureNames, mltOptions);
     const uint32_t ktotal = std::accumulate(k2keep.begin(), k2keep.end(), uint32_t(0));
     const std::vector<std::string> probColumnNames = build_merge_column_names(k2keep, mergePrefixes);
+    std::string layer_name_suff0 = packaging.haveGeneBins ? "_all" : "";
     AnnotateQueryPlan queryPlan = build_annotate_query_plan(*this,
         ptPrefix,
         icol_x, icol_y, icol_z, icol_f, mltOptions.icol_count,
@@ -2983,7 +2985,7 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
         build_merged_prob_nullable_flags(
             k2keep, annoKeepAll, keepAllMain, keepAll,
             mltOptions.encode_prob_min, mltOptions.encode_prob_eps),
-        use3d, basename(outPrefix + "_all"));
+        use3d, basename(outPrefix + layer_name_suff0));
     queryPlan.resXY = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
     queryPlan.resZ = use3d ? queryPlan.resXY : 1.0f;
 
@@ -3083,7 +3085,7 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
     warning("%s: %zu features are not present in the feature dictionary",
         __func__, pipeline.missingPackagingFeatures.size());
 
-    const std::string allOutFile = outPrefix + "_all.pmtiles";
+    const std::string allOutFile = outPrefix + layer_name_suff0 + ".pmtiles";
     mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,
@@ -3153,12 +3155,13 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
         ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
         : kvec_;
     const std::vector<std::string> probColumnNames = build_merge_column_names(headerKvec, mergePrefixes);
+    std::string layer_name_suff0 = packaging.haveGeneBins ? "_all" : "";
     const AnnotateQueryPlan queryPlan = build_annotate_query_plan(*this,
         ptPrefix, icol_x, icol_y, icol_z, icol_f, mltOptions.icol_count,
         mltOptions, probColumnNames,
         build_single_prob_nullable_flags(
             headerKvec, annoKeepAll, mltOptions.encode_prob_min, mltOptions.encode_prob_eps),
-        use3d, basename(outPrefix + "_all"));
+        use3d, basename(outPrefix +  layer_name_suff0));
 
     TileReader reader(ptPrefix + ".tsv", ptPrefix + ".index");
     assert(reader.getTileSize() == formatInfo_.tileSize);
@@ -3249,7 +3252,7 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
     if (pipeline.missingPackagingFeatures.size() > 0)
     warning("%s: %zu features are not present in the feature dictionary", __func__, pipeline.missingPackagingFeatures.size());
 
-    const std::string allOutFile = outPrefix + "_all.pmtiles";
+    const std::string allOutFile = outPrefix +  layer_name_suff0 + ".pmtiles";
     mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,
@@ -3343,6 +3346,7 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
     const AnnotatePackagingConfig packaging =
         build_annotate_packaging_config(featureRemap.canonicalNames, mltOptions);
     const std::vector<std::string> probColumnNames = build_merge_column_names(k2keep, mergePrefixes);
+    std::string layer_name_suff0 = packaging.haveGeneBins ? "_all" : "";
     const AnnotateQueryPlan queryPlan = build_annotate_query_plan(*this,
         ptPrefix,
         icol_x, icol_y, icol_z, icol_f, mltOptions.icol_count,
@@ -3351,7 +3355,7 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
         build_merged_prob_nullable_flags(
             k2keep, annoKeepAll, keepAllMain, keepAll,
             mltOptions.encode_prob_min, mltOptions.encode_prob_eps),
-        use3d, basename(outPrefix + "_all"));
+        use3d, basename(outPrefix +  layer_name_suff0));
     const uint32_t ktotal = std::accumulate(k2keep.begin(), k2keep.end(), 0);
 
     TileReader reader(ptPrefix + ".tsv", ptPrefix + ".index");
@@ -3449,7 +3453,7 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
     if (pipeline.missingPackagingFeatures.size() > 0)
     warning("%s: %zu features are not present in the feature dictionary", __func__, pipeline.missingPackagingFeatures.size());
 
-    const std::string allOutFile = outPrefix + "_all.pmtiles";
+    const std::string allOutFile = outPrefix +  layer_name_suff0 + ".pmtiles";
     mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,

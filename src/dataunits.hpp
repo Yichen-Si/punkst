@@ -281,7 +281,6 @@ private:
     uint64_t rowIndex_ = 0;
 };
 
-
 class HexReader {
 
 public:

@@ -21,8 +21,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string extractRegionGeoJSON;
     int64_t extractRegionScale = 10;
     bool dumpTSV = false;
-    bool exportPMTiles = false;
-    bool buildPyramid = false;
     bool probDot = false;
     bool cellAnno = false;
     bool spatialMetrics = false;
@@ -70,7 +68,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     float zmin = std::numeric_limits<float>::quiet_NaN();
     float zmax = std::numeric_limits<float>::quiet_NaN();
     TileOperator::MltPmtilesOptions mltOptions;
-    TileOperator::BuildPmtilesPyramidOptions pyramidOptions;
     int32_t threads = 1;
     int32_t debug_ = 0;
 
@@ -93,13 +90,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     // Basic inspection, conversion, and region query.
     pl.add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
-      .add_option("export-pmtiles", "Export an input PMTiles archive to TSV plus TileOperator index", exportPMTiles)
-      .add_option("build-pyramid", "Build a multi-zoom PMTiles pyramid from a max-zoom MLT PMTiles archive", buildPyramid)
       .add_option("write-mlt-pmtiles", "Write MLT-backed PMTiles", mltOptions.enabled)
-      .add_option("min-zoom", "Minimum zoom level for --build-pyramid", pyramidOptions.minZoom)
-      .add_option("max-tile-bytes", "Maximum compressed tile bytes for --build-pyramid", pyramidOptions.maxTileBytes)
-      .add_option("max-tile-features", "Maximum features per tile for --build-pyramid", pyramidOptions.maxTileFeatures)
-      .add_option("scale-factor-compression", "Compression aggressiveness estimate for --build-pyramid", pyramidOptions.scaleFactorCompression)
       .add_option("gene-bin-info", "JSON file with gene/count/bin rows; when provided with --write-mlt-pmtiles, gene-bin PMTiles packaging is activated", mltOptions.gene_bin_info_file)
       .add_option("feature-count-file", "Optional TSV with feature name in column 1 and total count in column 2; together with positive --n-gene-bins this activates gene-bin PMTiles packaging", mltOptions.feature_count_file)
       .add_option("n-gene-bins", "Positive number of gene bins to derive from --feature-count-file; zero disables TSV-derived gene-bin packaging", mltOptions.n_gene_bins)
@@ -188,45 +179,11 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         return 1;
     }
 
-    if (exportPMTiles && buildPyramid) {
-        error("--export-pmtiles and --build-pyramid are mutually exclusive");
-    }
-
     if (!inPrefix.empty()) {
-        if (exportPMTiles || buildPyramid) {
-            inData = inPrefix;
-        } else {
-            inData = inPrefix + (isBinary ? ".bin" : ".tsv");
-            inIndex = inPrefix + ".index";
-        }
-    } else if (inData.empty() || (!(exportPMTiles || buildPyramid) && inIndex.empty())) {
-        if (exportPMTiles || buildPyramid) {
-            error("Either --in or --in-data must be specified for the selected PMTiles operation");
-        }
+        inData = inPrefix + (isBinary ? ".bin" : ".tsv");
+        inIndex = inPrefix + ".index";
+    } else if (inData.empty() || inIndex.empty()) {
         error("Either --in or both --in-data and --in-index must be specified");
-    }
-
-    if (exportPMTiles) {
-        TileOperator::ExportPmtilesOptions exportOptions;
-        exportOptions.tileSize = tileSize;
-        exportOptions.probDigits = probDigits;
-        exportOptions.coordDigits = coordDigits;
-        exportOptions.geojsonFile = extractRegionGeoJSON;
-        exportOptions.geojsonScale = extractRegionScale;
-        exportOptions.xmin = xmin;
-        exportOptions.xmax = xmax;
-        exportOptions.ymin = ymin;
-        exportOptions.ymax = ymax;
-        exportOptions.zmin = zmin;
-        exportOptions.zmax = zmax;
-        TileOperator::exportPMTiles(inData, outPrefix, exportOptions);
-        return 0;
-    }
-
-    if (buildPyramid) {
-        pyramidOptions.threads = threads;
-        TileOperator::buildPmtilesPyramid(inData, outPrefix, pyramidOptions);
-        return 0;
     }
 
     TileOperator tileOp(inData, inIndex);

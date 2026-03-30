@@ -162,11 +162,14 @@ set(SOURCE_FILES
     src/mlt_utils.cpp
     src/pmtiles_utils.hpp
     src/pmtiles_utils.cpp
+    src/pmtiles_pyramid.hpp
+    src/pmtiles_pyramid.cpp
     src/simple_polygon_pmtiles.hpp
     src/simple_polygon_pmtiles.cpp
-    src/tileoperator_pyramid.cpp
     script/manipulate_tiles.cpp
-    script/hex2pmtiles_mlt.cpp
+    script/build_pyramid.cpp
+    script/export_pmtiles.cpp
+    script/hex2pmtiles.cpp
     script/multi_cde_lowres.cpp
     script/multi_cde_lowres_nb.cpp
     script/multi_cde_pixel_common.cpp

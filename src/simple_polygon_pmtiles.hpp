@@ -38,6 +38,23 @@ struct PolygonWriteSummary {
     double geoMaxY = -std::numeric_limits<double>::infinity();
 };
 
+size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
+    const mlt_pmtiles::FeatureTableSchema& schema,
+    const std::vector<std::pair<double, double>>& outerRing,
+    const PolygonFeatureProperties& properties,
+    uint32_t tileX,
+    uint32_t tileY,
+    const SingleZoomPolygonWriterOptions& options);
+
+size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
+    const mlt_pmtiles::FeatureTableSchema& schema,
+    const std::vector<std::pair<int64_t, int64_t>>& globalRing,
+    const PolygonFeatureProperties& properties,
+    uint32_t tileX,
+    uint32_t tileY,
+    uint8_t sourceZoom,
+    const SingleZoomPolygonWriterOptions& options);
+
 void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const std::vector<std::pair<double, double>>& outerRing,

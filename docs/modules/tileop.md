@@ -6,6 +6,8 @@ This module is under active development and any suggestions or requests will be 
 
 Acknowledgement: the new MLT PMTiles support heavily borrows from `pmpoint`, the [MLT cpp implementation](https://github.com/maplibre/maplibre-tile-spec/tree/86ad02b21c98e0b302272839cb7eaaa936e5d392/cpp), and `tippecanoe`.
 
+For PMTiles archive export and pyramid building see [pmtiles](pmtiles.md).
+
 Caution:
 
 Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` for Visium HD data. If the input was generated at a much finer grid, you can request a coarser raster grid for these operations with `--raster-pixel-res`.
@@ -18,10 +20,6 @@ Some operations related to smoothing, spatial profiling, and factor masks treat 
     - [Region Query](#region-query)
     - [Export as TSV](#convert-to-tsv)
     - [Export as MLT PMTiles](#write-mlt-pmtiles)
-
-- PMTiles utilities
-    - [Export PMTiles as TSV](#export-pmtiles-as-tsv)
-    - [Build MLT PMTiles pyramids](#build-mlt-pmtiles-pyramids)
 
 - Joining, annotating, and aggregation
     - [Merge Multiple Inference Results](#merge-multiple-inference-results)
@@ -359,72 +357,6 @@ punkst tile-op --in path/pixel.smol --binary \
 ```
 
 This follows the same merge and annotation rules described below, but writes PMTiles instead of TSV. The output is `path/out_all.pmtiles` plus optional gene-bin side outputs.
-
-### Export PMTiles as TSV
-
-`tile-op --export-pmtiles` reads an MLT-backed PMTiles archive (that only contains point data, produced by `punkst` or `pmpoint`) and exports it back to a plain TSV plus `.index` that `tile-op` can read again.
-
-```bash
-punkst tile-op --export-pmtiles \
-  --in path/pixel.bin1.pmtiles \
-  --tile-size 500 \
-  --out path/pixel.bin1.export
-```
-
-Requirements and behavior:
-
-- `--in` or `--in-data` must point to the PMTiles archive
-- `--tile-size` is required and defines the tile size recorded in the exported `.index`
-- output is `path/out.tsv` and `path/out.index`
-- the export reads rows from the archive max zoom
-- column order is `x`, `y`, optional `z`, then the decoded PMTiles schema columns
-- missing `K` and `P` values are rendered as `-1` and `0`; other nullable fields are rendered as `NA`
-
-Region filters are also supported in this mode:
-
-- `--xmin`, `--xmax`, `--ymin`, `--ymax`
-- `--extract-region-geojson`
-- `--zmin`, `--zmax`
-
-### Build MLT PMTiles pyramids
-
-`tile-op --build-pyramid` builds a multi-zoom MLT PMTiles archive from an existing MLT PMTiles input.
-
-This is the intended follow-up step after writing a max-zoom archive with `--write-mlt-pmtiles` (or the merge-and-export options), but the input may already contain multiple zoom levels.
-
-Current support is limited to **point-only MLT** PMTiles with **gzip**-compressed tile payloads.
-
-```bash
-punkst tile-op --build-pyramid \
-  --in path/pixel.z18.pmtiles \
-  --min-zoom 10 \
-  --max-tile-bytes 500000 \
-  --max-tile-features 50000 \
-  --scale-factor-compression 10 \
-  --threads 4 \
-  --out path/pixel.pyramid.pmtiles
-```
-
-Requirements:
-
-- `--in` (or `--in-data`, used equivalently) must point to the input PMTiles archive
-- `--out` must be a concrete PMTiles file path
-- `--export-pmtiles` and `--build-pyramid` are mutually exclusive
-
-Main options:
-
-- `--min-zoom` sets the coarsest zoom that should exist in the output archive
-- `--max-tile-bytes` is the target upper bound on compressed tile payload size (default: 500KB)
-- `--max-tile-features` is the target upper bound on features per tile (default: 50K)
-- `--scale-factor-compression` controls the pre-encode byte estimate used to choose a retention ratio; larger values assume stronger compression and therefore retain more features before the actual compressed-size backoff step (default: 10)
-- `--threads` controls parallel parent-tile construction and encoding
-
-Input handling:
-
-- if the input already contains zoom levels down to or below `--min-zoom`, the command exits directly
-- if the input already contains some lower zoom levels but not enough, those existing levels are preserved byte-for-byte and only the missing coarser levels are built
-- if the input is a max-zoom-only archive, the full pyramid from that zoom down to `--min-zoom` is built
-- if present, the input PMTiles metadata field `coordinate_mode` is copied to the output
 
 ### Merge Multiple Inference Results
 
