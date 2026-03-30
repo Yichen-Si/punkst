@@ -2,9 +2,11 @@
 
 #include "flex_io.hpp"
 #include "json.hpp"
+#include "mlt_utils.hpp"
 #include "PMTiles/pmtiles.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -49,6 +51,27 @@ struct ArchiveOptions {
     nlohmann::json metadata;
 };
 
+enum class VectorGeometryType {
+    Point,
+    Polygon,
+};
+
+struct SingleLayerVectorPmtilesOptions {
+    FeatureTableSchema schema;
+    VectorGeometryType geometryType = VectorGeometryType::Point;
+    uint64_t totalRecordCount = 0;
+    double coordScale = -1.0;
+    size_t featureDictionarySize = 0;
+    uint8_t outputZoom = 0;
+    double geoMinX = std::numeric_limits<double>::infinity();
+    double geoMinY = std::numeric_limits<double>::infinity();
+    double geoMaxX = -std::numeric_limits<double>::infinity();
+    double geoMaxY = -std::numeric_limits<double>::infinity();
+    std::string generator;
+    std::string description;
+    nlohmann::json extraMetadata;
+};
+
 struct LoadedPmtilesArchive {
     std::unique_ptr<flexio::FlexReader> reader;
     pmtiles::headerv3 header{};
@@ -69,5 +92,11 @@ void write_pmtiles_archive_from_blob_file(const std::string& outFile,
     const std::string& blobFile,
     std::vector<StoredTilePayloadRef> tiles,
     const ArchiveOptions& options);
+
+nlohmann::json build_schema_fields_json(const FeatureTableSchema& schema);
+
+void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
+    std::vector<EncodedTilePayload> encodedTiles,
+    const SingleLayerVectorPmtilesOptions& options);
 
 } // namespace mlt_pmtiles

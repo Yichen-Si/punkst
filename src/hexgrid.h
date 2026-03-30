@@ -170,7 +170,7 @@ public:
 };
 
 
-// generatelattice points within a bounding box
+// generate lattice points within a bounding box
 template <typename T>
 void hex_grid_cart(std::vector<std::vector<T> >& lattice, T xmin, T xmax, T ymin, T ymax, double size) {
     double spacing_x = size * std::sqrt(3.);

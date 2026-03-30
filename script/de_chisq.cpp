@@ -89,7 +89,7 @@ int32_t cmdDeChisq(int argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
     double maxLog10Pval = -std::log10(minPval);
@@ -434,7 +434,7 @@ int32_t cmdDeconvPseudobulk(int argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
     std::vector<std::string> rows, cols, rows_c, cols_c;
@@ -488,7 +488,7 @@ int32_t cmdPseudoBulk(int argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
 

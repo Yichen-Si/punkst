@@ -26,6 +26,18 @@ std::string maybe_decompress_pmtiles_blob(const std::string& data, uint8_t compr
     }
 }
 
+const char* geometry_type_name(VectorGeometryType geometryType) {
+    switch (geometryType) {
+    case VectorGeometryType::Point:
+        return "Point";
+    case VectorGeometryType::Polygon:
+        return "Polygon";
+    default:
+        error("%s: unsupported vector geometry type", __func__);
+        return "";
+    }
+}
+
 } // namespace
 
 LoadedPmtilesArchive load_pmtiles_archive(const std::string& inFile) {
@@ -264,6 +276,125 @@ void write_pmtiles_archive_from_blob_file(const std::string& outFile,
         error("%s: write failure while writing %s", __func__, outFile.c_str());
     }
     out.close();
+}
+
+nlohmann::json build_schema_fields_json(const FeatureTableSchema& schema) {
+    nlohmann::json fields = nlohmann::json::object();
+    for (const auto& col : schema.columns) {
+        switch (col.type) {
+        case ScalarType::STRING:
+            fields[col.name] = "String";
+            break;
+        case ScalarType::BOOLEAN:
+            fields[col.name] = "Boolean";
+            break;
+        default:
+            fields[col.name] = "Number";
+            break;
+        }
+    }
+    return fields;
+}
+
+void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
+    std::vector<EncodedTilePayload> encodedTiles,
+    const SingleLayerVectorPmtilesOptions& options) {
+    nlohmann::json metadata;
+    metadata["name"] = options.schema.layerName;
+    metadata["type"] = "overlay";
+    metadata["version"] = "2";
+    metadata["format"] = "pbf";
+    metadata["description"] = options.description.empty()
+        ? ("Generated PMTiles by punkst for MLT " + std::string(to_lower(geometry_type_name(options.geometryType))))
+        : options.description;
+    metadata["generator"] = options.generator;
+    if (options.coordScale > 0) {
+        metadata["coord_scale"] = options.coordScale;
+    }
+    metadata["feature_dictionary_size"] = options.featureDictionarySize;
+    metadata["coordinate_mode"] = "epsg3857";
+    metadata["zoom"] = options.outputZoom;
+
+    const nlohmann::json fields = build_schema_fields_json(options.schema);
+    nlohmann::json vectorLayer;
+    vectorLayer["id"] = options.schema.layerName;
+    vectorLayer["fields"] = fields;
+    vectorLayer["minzoom"] = options.outputZoom;
+    vectorLayer["maxzoom"] = options.outputZoom;
+    metadata["vector_layers"] = nlohmann::json::array({vectorLayer});
+
+    nlohmann::json tilestatsLayer;
+    tilestatsLayer["layer"] = options.schema.layerName;
+    tilestatsLayer["count"] = options.totalRecordCount;
+    tilestatsLayer["geometry"] = geometry_type_name(options.geometryType);
+    tilestatsLayer["attributeCount"] = fields.size();
+    nlohmann::json attributes = nlohmann::json::array();
+    for (auto it = fields.begin(); it != fields.end(); ++it) {
+        nlohmann::json attr;
+        attr["attribute"] = it.key();
+        attr["type"] = (it.value() == "String") ? "string" : "number";
+        attributes.push_back(attr);
+    }
+    tilestatsLayer["attributes"] = attributes;
+    nlohmann::json tilestats;
+    tilestats["layerCount"] = 1;
+    tilestats["layers"] = nlohmann::json::array({tilestatsLayer});
+    metadata["tilestats"] = tilestats;
+
+    if (options.extraMetadata.is_object()) {
+        for (auto it = options.extraMetadata.begin(); it != options.extraMetadata.end(); ++it) {
+            metadata[it.key()] = it.value();
+        }
+    }
+
+    ArchiveOptions archiveOptions;
+    archiveOptions.tileType = pmtiles::TILETYPE_MLT;
+    archiveOptions.minZoom = options.outputZoom;
+    archiveOptions.maxZoom = options.outputZoom;
+    archiveOptions.centerZoom = options.outputZoom;
+    archiveOptions.clustered = true;
+    archiveOptions.metadata = metadata;
+
+    if (std::isfinite(options.geoMinX) && std::isfinite(options.geoMinY) &&
+        std::isfinite(options.geoMaxX) && std::isfinite(options.geoMaxY)) {
+        double minLon = 0.0;
+        double minLat = 0.0;
+        double maxLon = 0.0;
+        double maxLat = 0.0;
+        epsg3857_to_wgs84(options.geoMinX, options.geoMinY, minLon, minLat);
+        epsg3857_to_wgs84(options.geoMaxX, options.geoMaxY, maxLon, maxLat);
+        archiveOptions.hasGeographicBounds = true;
+        archiveOptions.minLonE7 = static_cast<int32_t>(minLon * 10000000.0);
+        archiveOptions.minLatE7 = static_cast<int32_t>(minLat * 10000000.0);
+        archiveOptions.maxLonE7 = static_cast<int32_t>(maxLon * 10000000.0);
+        archiveOptions.maxLatE7 = static_cast<int32_t>(maxLat * 10000000.0);
+        if (!encodedTiles.empty()) {
+            const auto centerIt = std::max_element(encodedTiles.begin(), encodedTiles.end(),
+                [](const EncodedTilePayload& lhs, const EncodedTilePayload& rhs) {
+                    return lhs.featureCount < rhs.featureCount;
+                });
+            double centerX = 0.0;
+            double centerY = 0.0;
+            tilecoord_to_epsg3857(centerIt->x, centerIt->y, 128.0, 128.0,
+                centerIt->z, centerX, centerY);
+            double centerLon = 0.0;
+            double centerLat = 0.0;
+            epsg3857_to_wgs84(centerX, centerY, centerLon, centerLat);
+            archiveOptions.centerLonE7 = static_cast<int32_t>(centerLon * 10000000.0);
+            archiveOptions.centerLatE7 = static_cast<int32_t>(centerLat * 10000000.0);
+        }
+    } else {
+        archiveOptions.hasGeographicBounds = true;
+        archiveOptions.minLonE7 = -1800000000;
+        archiveOptions.minLatE7 = -850000000;
+        archiveOptions.maxLonE7 = 1800000000;
+        archiveOptions.maxLatE7 = 850000000;
+        archiveOptions.centerLonE7 = 0;
+        archiveOptions.centerLatE7 = 0;
+    }
+
+    notice("%s: writing %zu PMTiles tiles to %s", __func__, encodedTiles.size(), outFile.c_str());
+    write_pmtiles_archive(outFile, std::move(encodedTiles), archiveOptions);
 }
 
 } // namespace mlt_pmtiles

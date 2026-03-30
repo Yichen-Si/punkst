@@ -523,24 +523,6 @@ mlt_pmtiles::FeatureTableSchema build_point_schema(const std::string& layerName,
     return schema;
 }
 
-nlohmann::json build_schema_fields_json(const mlt_pmtiles::FeatureTableSchema& schema) {
-    nlohmann::json fields = nlohmann::json::object();
-    for (const auto& col : schema.columns) {
-        switch (col.type) {
-        case mlt_pmtiles::ScalarType::STRING:
-            fields[col.name] = "String";
-            break;
-        case mlt_pmtiles::ScalarType::BOOLEAN:
-            fields[col.name] = "Boolean";
-            break;
-        default:
-            fields[col.name] = "Number";
-            break;
-        }
-    }
-    return fields;
-}
-
 std::vector<bool> build_single_prob_nullable_flags(const std::vector<uint32_t>& kvec, bool annoKeepAll, double encodeProbMin, double encodeProbEps) {
     std::vector<bool> out;
     out.reserve(std::accumulate(kvec.begin(), kvec.end(), size_t(0)));
@@ -1637,92 +1619,20 @@ void write_single_layer_pmtiles_archive(const std::string& outFile,
     size_t featureDictionarySize, uint8_t outputZoom,
     double geoMinX, double geoMinY, double geoMaxX, double geoMaxY,
     const std::string& generator) {
-    nlohmann::json metadata;
-    metadata["name"] = schema.layerName;
-    metadata["type"] = "overlay";
-    metadata["version"] = "2";
-    metadata["format"] = "pbf";
-    metadata["description"] = "Generated PMTiles by punkst for MLT points";
-    metadata["generator"] = generator;
-    if (coordScale > 0) metadata["coord_scale"] = coordScale;
-    metadata["feature_dictionary_size"] = featureDictionarySize;
-    metadata["coordinate_mode"] = "epsg3857";
-    metadata["zoom"] = outputZoom;
-
-    const nlohmann::json fields = build_schema_fields_json(schema);
-    nlohmann::json vectorLayer;
-    vectorLayer["id"] = schema.layerName;
-    vectorLayer["fields"] = fields;
-    vectorLayer["minzoom"] = outputZoom;
-    vectorLayer["maxzoom"] = outputZoom;
-    metadata["vector_layers"] = nlohmann::json::array({vectorLayer});
-
-    nlohmann::json tilestatsLayer;
-    tilestatsLayer["layer"] = schema.layerName;
-    tilestatsLayer["count"] = totalRecordCount;
-    tilestatsLayer["geometry"] = "Point";
-    tilestatsLayer["attributeCount"] = fields.size();
-    nlohmann::json attributes = nlohmann::json::array();
-    for (auto it = fields.begin(); it != fields.end(); ++it) {
-        nlohmann::json attr;
-        attr["attribute"] = it.key();
-        attr["type"] = (it.value() == "String") ? "string" : "number";
-        attributes.push_back(attr);
-    }
-    tilestatsLayer["attributes"] = attributes;
-    nlohmann::json tilestats;
-    tilestats["layerCount"] = 1;
-    tilestats["layers"] = nlohmann::json::array({tilestatsLayer});
-    metadata["tilestats"] = tilestats;
-
-    mlt_pmtiles::ArchiveOptions archiveOptions;
-    archiveOptions.tileType = pmtiles::TILETYPE_MLT;
-    archiveOptions.minZoom = outputZoom;
-    archiveOptions.maxZoom = outputZoom;
-    archiveOptions.centerZoom = outputZoom;
-    archiveOptions.clustered = true;
-    archiveOptions.metadata = metadata;
-
-    if (std::isfinite(geoMinX) && std::isfinite(geoMinY) &&
-        std::isfinite(geoMaxX) && std::isfinite(geoMaxY)) {
-        double minLon = 0.0;
-        double minLat = 0.0;
-        double maxLon = 0.0;
-        double maxLat = 0.0;
-        mlt_pmtiles::epsg3857_to_wgs84(geoMinX, geoMinY, minLon, minLat);
-        mlt_pmtiles::epsg3857_to_wgs84(geoMaxX, geoMaxY, maxLon, maxLat);
-        archiveOptions.hasGeographicBounds = true;
-        archiveOptions.minLonE7 = static_cast<int32_t>(minLon * 10000000.0);
-        archiveOptions.minLatE7 = static_cast<int32_t>(minLat * 10000000.0);
-        archiveOptions.maxLonE7 = static_cast<int32_t>(maxLon * 10000000.0);
-        archiveOptions.maxLatE7 = static_cast<int32_t>(maxLat * 10000000.0);
-        if (!encodedTiles.empty()) {
-            const auto centerIt = std::max_element(encodedTiles.begin(), encodedTiles.end(),
-                [](const mlt_pmtiles::EncodedTilePayload& lhs, const mlt_pmtiles::EncodedTilePayload& rhs) {
-                    return lhs.featureCount < rhs.featureCount;
-                });
-            double centerX = 0.0;
-            double centerY = 0.0;
-            mlt_pmtiles::tilecoord_to_epsg3857(centerIt->x, centerIt->y, 128.0, 128.0,
-                centerIt->z, centerX, centerY);
-            double centerLon = 0.0;
-            double centerLat = 0.0;
-            mlt_pmtiles::epsg3857_to_wgs84(centerX, centerY, centerLon, centerLat);
-            archiveOptions.centerLonE7 = static_cast<int32_t>(centerLon * 10000000.0);
-            archiveOptions.centerLatE7 = static_cast<int32_t>(centerLat * 10000000.0);
-        }
-    } else {
-        archiveOptions.hasGeographicBounds = true;
-        archiveOptions.minLonE7 = -1800000000;
-        archiveOptions.minLatE7 = -850000000;
-        archiveOptions.maxLonE7 = 1800000000;
-        archiveOptions.maxLatE7 = 850000000;
-        archiveOptions.centerLonE7 = 0;
-        archiveOptions.centerLatE7 = 0;
-    }
-
-    notice("%s: writing %zu PMTiles tiles to %s", __func__, encodedTiles.size(), outFile.c_str());
-    mlt_pmtiles::write_pmtiles_archive(outFile, std::move(encodedTiles), archiveOptions);
+    mlt_pmtiles::SingleLayerVectorPmtilesOptions options;
+    options.schema = schema;
+    options.geometryType = mlt_pmtiles::VectorGeometryType::Point;
+    options.totalRecordCount = totalRecordCount;
+    options.coordScale = coordScale;
+    options.featureDictionarySize = featureDictionarySize;
+    options.outputZoom = outputZoom;
+    options.geoMinX = geoMinX;
+    options.geoMinY = geoMinY;
+    options.geoMaxX = geoMaxX;
+    options.geoMaxY = geoMaxY;
+    options.generator = generator;
+    options.description = "Generated PMTiles by punkst for MLT points";
+    mlt_pmtiles::write_single_layer_vector_pmtiles_archive(outFile, std::move(encodedTiles), options);
 }
 
 GeoTileRect source_tile_rect_epsg3857(const TileKey& sourceKey, int32_t sourceTileSize, double coordScale) {

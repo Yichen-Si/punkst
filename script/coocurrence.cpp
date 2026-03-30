@@ -38,7 +38,7 @@ int32_t cmdTiles2FeatureCooccurrence(int32_t argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
     if (debug > 0) {
@@ -171,7 +171,7 @@ int32_t cmdMergeCooccurrenceMtx(int32_t argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
 

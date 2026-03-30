@@ -56,6 +56,25 @@ struct DecodedPointTile {
     PointTileData tile;
 };
 
+struct PolygonTileData {
+    // currently supports exactly one outer ring per feature
+    // with no holes and no multipolygon
+    // ringOffsets has size featureCount + 1 and stores half-open vertex ranges
+    // figure i uses vertices in localX[ringOffsets[i] : ringOffsets[i+1]]
+    std::vector<uint32_t> ringOffsets;
+    std::vector<int32_t> localX;
+    std::vector<int32_t> localY;
+    std::vector<PropertyColumn> columns;
+
+    size_t size() const { return ringOffsets.empty() ? 0u : ringOffsets.size() - 1u; }
+    size_t vertexCount() const { return localX.size(); }
+};
+
+struct DecodedPolygonTile {
+    FeatureTableSchema schema;
+    PolygonTileData tile;
+};
+
 std::string gzip_compress(const std::string& data);
 std::string gzip_decompress(const std::string& data);
 
@@ -86,6 +105,19 @@ std::string encode_point_tile_subset(const FeatureTableSchema& schema,
     const std::vector<uint32_t>& order,
     size_t rowCount,
     const GlobalStringDictionary* stringDictionary);
+std::string encode_polygon_tile(const FeatureTableSchema& schema,
+    const PolygonTileData& tile,
+    const GlobalStringDictionary* stringDictionary);
+// Output: one MLT tile for feature 0..rowCount-1 (for pyramid building)
+std::string encode_polygon_tile_prefix(const FeatureTableSchema& schema,
+    const PolygonTileData& tile,
+    size_t rowCount,
+    const GlobalStringDictionary* stringDictionary);
+std::string encode_polygon_tile_subset(const FeatureTableSchema& schema,
+    const PolygonTileData& tile,
+    const std::vector<uint32_t>& order,
+    size_t rowCount,
+    const GlobalStringDictionary* stringDictionary);
 int32_t remap_child_local_to_parent_local(int32_t childLocal, uint32_t childIndex,
     uint32_t extent);
 void append_child_row_to_parent_tile(const DecodedPointTile& child,
@@ -98,5 +130,6 @@ void append_child_row_to_parent_tile(const DecodedPointTile& child,
 std::string rewrite_point_tile_layer_name(const std::string& rawTile,
     const std::string& newLayerName);
 DecodedPointTile decode_point_tile(const std::string& rawTile);
+DecodedPolygonTile decode_polygon_tile(const std::string& rawTile);
 
 } // namespace mlt_pmtiles

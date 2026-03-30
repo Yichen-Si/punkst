@@ -14,6 +14,15 @@ namespace {
 
 constexpr double kEpsg3857Radius = 6378137.0;
 constexpr double kEpsg3857Bound = 20037508.3428;
+constexpr uint8_t kGeometryColumnTypeCode = 4;
+constexpr uint8_t kGeometryTypePoint = static_cast<uint8_t>(mlt::metadata::tileset::GeometryType::POINT);
+constexpr uint8_t kGeometryTypePolygon = static_cast<uint8_t>(mlt::metadata::tileset::GeometryType::POLYGON);
+constexpr uint8_t kLengthStreamGeometries = 1;
+constexpr uint8_t kLengthStreamParts = 2;
+constexpr uint8_t kLengthStreamRings = 3;
+constexpr uint8_t kVertexDictionaryType = 3;
+constexpr uint8_t kEncodingVarint = 0x02;
+constexpr uint8_t kEncodingComponentwiseDeltaVarint = 0x42;
 
 using SpecColumn = mlt::metadata::tileset::Column;
 using SpecColumnScope = mlt::metadata::tileset::ColumnScope;
@@ -217,9 +226,56 @@ void append_stream(std::string& layer, uint8_t streamTag, uint8_t encodingTag,
     layer.append(data);
 }
 
+void decode_vertex_stream(std::vector<int32_t>& localX,
+    std::vector<int32_t>& localY,
+    const uint8_t* streamData,
+    uint64_t byteLen,
+    size_t vertexCount,
+    uint8_t encodingTag,
+    const char* funcName) {
+    const uint8_t logical1 = (encodingTag >> 5u) & 0x07u;
+    const uint8_t logical2 = (encodingTag >> 2u) & 0x07u;
+    const uint8_t physical = encodingTag & 0x03u;
+    if (logical2 != 0u) {
+        error("%s: unsupported secondary logical technique %u for vertex stream",
+            funcName, static_cast<unsigned>(logical2));
+    }
+    if (physical != kEncodingVarint) {
+        error("%s: unsupported physical technique %u for vertex stream",
+            funcName, static_cast<unsigned>(physical));
+    }
+
+    localX.reserve(vertexCount);
+    localY.reserve(vertexCount);
+    const uint8_t* valuePtr = streamData;
+    const uint8_t* valueEnd = streamData + byteLen;
+    if (logical1 != 2u) {
+        error("%s: vertex stream must use COMPONENTWISE_DELTA, found logical technique %u",
+            funcName, static_cast<unsigned>(logical1));
+    }
+    int32_t prevX = 0;
+    int32_t prevY = 0;
+    for (size_t row = 0; row < vertexCount; ++row) {
+        const int32_t dx = decode_zigzag32(read_varint(valuePtr, valueEnd, funcName));
+        const int32_t dy = decode_zigzag32(read_varint(valuePtr, valueEnd, funcName));
+        prevX += dx;
+        prevY += dy;
+        localX.push_back(prevX);
+        localY.push_back(prevY);
+    }
+    if (valuePtr != valueEnd) {
+        error("%s: vertex stream length mismatch", funcName);
+    }
+}
+
 void append_present_stream(std::string& layer, const std::vector<bool>& present, size_t rowCount) {
     const std::string rle = encode_bool_rle(present);
     append_stream(layer, 0x00, 0x02, rowCount, rle);
+}
+
+void append_length_stream(std::string& layer, uint8_t logicalType,
+    uint64_t numValues, const std::string& data) {
+    append_stream(layer, static_cast<uint8_t>(0x30u | logicalType), 0x02, numValues, data);
 }
 
 void encode_boolean_column(std::string& layer, const PropertyColumn& column,
@@ -520,6 +576,40 @@ void decode_string_column(PropertyColumn& column, const uint8_t*& ptr, const uin
     }
 }
 
+void validate_polygon_tile_geometry(const PolygonTileData& tile, size_t totalRowCount, const char* funcName) {
+    if (tile.ringOffsets.empty()) {
+        if (!tile.localX.empty() || !tile.localY.empty()) {
+            error("%s: polygon geometry has vertices but no ring offsets", funcName);
+        }
+        if (totalRowCount != 0) {
+            error("%s: polygon geometry has empty ringOffsets for non-empty tile", funcName);
+        }
+        return;
+    }
+    if (tile.ringOffsets.size() != totalRowCount + 1u) {
+        error("%s: polygon ringOffsets size mismatch", funcName);
+    }
+    if (tile.localY.size() != tile.localX.size()) {
+        error("%s: polygon vertex column length mismatch", funcName);
+    }
+    if (tile.ringOffsets.front() != 0u) {
+        error("%s: polygon ringOffsets must start at 0", funcName);
+    }
+    if (tile.ringOffsets.back() != tile.localX.size()) {
+        error("%s: polygon ringOffsets end mismatch", funcName);
+    }
+    for (size_t row = 0; row < totalRowCount; ++row) {
+        const uint32_t beg = tile.ringOffsets[row];
+        const uint32_t end = tile.ringOffsets[row + 1u];
+        if (beg > end || end > tile.localX.size()) {
+            error("%s: polygon ring offset range is invalid", funcName);
+        }
+        if (end - beg < 3u) {
+            error("%s: polygon rings must have at least 3 vertices", funcName);
+        }
+    }
+}
+
 } // namespace
 
 std::string gzip_compress(const std::string& data) {
@@ -710,7 +800,7 @@ std::string encode_point_tile_impl(const FeatureTableSchema& schema,
     layer.append(schema.layerName);
     append_varint(layer, schema.extent);
     append_varint(layer, 1 + schema.columns.size());
-    append_varint(layer, 4); // geometry column
+    append_varint(layer, kGeometryColumnTypeCode); // geometry column
     for (size_t i = 0; i < schema.columns.size(); ++i) {
         const auto& columnSchema = schema.columns[i];
         append_varint(layer, encode_column_type(columnSchema));
@@ -720,22 +810,148 @@ std::string encode_point_tile_impl(const FeatureTableSchema& schema,
 
     append_varint(layer, 2); // geometry stream count
     layer.push_back(0x10);
-    layer.push_back(0x02);
+    layer.push_back(kEncodingVarint);
     append_varint(layer, rowCount);
     append_varint(layer, rowCount);
     for (size_t i = 0; i < rowCount; ++i) {
-        layer.push_back(0); // point geometry
+        layer.push_back(static_cast<char>(kGeometryTypePoint));
     }
 
     std::string vertexData;
+    int32_t prevX = 0;
+    int32_t prevY = 0;
     for (size_t i = 0; i < rowCount; ++i) {
         const uint32_t row = row_at(order, i);
-        append_varint(vertexData, encode_zigzag32(tile.localX[row]));
-        append_varint(vertexData, encode_zigzag32(tile.localY[row]));
+        const int32_t x = tile.localX[row];
+        const int32_t y = tile.localY[row];
+        append_varint(vertexData, encode_zigzag32(x - prevX));
+        append_varint(vertexData, encode_zigzag32(y - prevY));
+        prevX = x;
+        prevY = y;
     }
-    layer.push_back(0x13);
-    layer.push_back(0x02);
+    layer.push_back(static_cast<char>(0x10u | kVertexDictionaryType));
+    layer.push_back(kEncodingComponentwiseDeltaVarint);
     append_varint(layer, rowCount * 2);
+    append_varint(layer, vertexData.size());
+    layer.append(vertexData);
+
+    for (size_t colIdx = 0; colIdx < schema.columns.size(); ++colIdx) {
+        const auto& columnSchema = schema.columns[colIdx];
+        const auto& column = tile.columns[colIdx];
+        const bool nullable = columnSchema.nullable;
+        const std::vector<bool> present =
+            resolve_present_bitmap_subset(column, nullable, order, rowCount);
+
+        switch (columnSchema.type) {
+        case ScalarType::BOOLEAN:
+            encode_boolean_column(layer, column, present, nullable, rowCount, order);
+            break;
+        case ScalarType::INT_32:
+            encode_int32_column(layer, column, present, nullable, rowCount, order);
+            break;
+        case ScalarType::FLOAT:
+            encode_float_column(layer, column, present, nullable, rowCount, order);
+            break;
+        case ScalarType::STRING:
+            encode_string_column(layer, column, present, nullable, rowCount, order,
+                stringDictionary);
+            break;
+        default:
+            error("%s: unsupported scalar column type %d",
+                __func__, static_cast<int>(columnSchema.type));
+        }
+    }
+
+    std::string out;
+    append_varint(out, 1 + layer.size());
+    out.push_back(1);
+    out.append(layer);
+    return out;
+}
+
+std::string encode_polygon_tile_impl(const FeatureTableSchema& schema,
+    const PolygonTileData& tile,
+    size_t rowCount,
+    const std::vector<uint32_t>* order,
+    const GlobalStringDictionary* stringDictionary) {
+    const size_t totalRowCount = tile.size();
+    validate_polygon_tile_geometry(tile, totalRowCount, __func__);
+    if (schema.columns.size() != tile.columns.size()) {
+        error("%s: schema/column count mismatch", __func__);
+    }
+    for (size_t i = 0; i < tile.columns.size(); ++i) {
+        validate_column_lengths(tile.columns[i], totalRowCount, __func__);
+    }
+    if (order != nullptr && rowCount > order->size()) {
+        error("%s: subset rowCount %zu exceeds order size %zu", __func__,
+            rowCount, order->size());
+    }
+
+    size_t totalVertices = 0;
+    std::string partData;
+    std::string ringData;
+    for (size_t i = 0; i < rowCount; ++i) {
+        const uint32_t row = row_at(order, i);
+        if (row >= totalRowCount) {
+            error("%s: subset row index %u is out of range for row count %zu", __func__,
+                row, totalRowCount);
+        }
+        const uint32_t beg = tile.ringOffsets[row];
+        const uint32_t end = tile.ringOffsets[row + 1u];
+        const uint32_t ringVertices = end - beg;
+        if (ringVertices < 3u) {
+            error("%s: polygon ring has fewer than 3 vertices", __func__);
+        }
+        totalVertices += static_cast<size_t>(ringVertices);
+        append_varint(partData, 1u); // one outer ring per feature
+        append_varint(ringData, ringVertices);
+    }
+
+    std::string layer;
+    append_varint(layer, schema.layerName.size());
+    layer.append(schema.layerName);
+    append_varint(layer, schema.extent);
+    append_varint(layer, 1 + schema.columns.size());
+    append_varint(layer, kGeometryColumnTypeCode); // geometry column
+    for (size_t i = 0; i < schema.columns.size(); ++i) {
+        const auto& columnSchema = schema.columns[i];
+        append_varint(layer, encode_column_type(columnSchema));
+        append_varint(layer, columnSchema.name.size());
+        layer.append(columnSchema.name);
+    }
+
+    append_varint(layer, 4); // GeometryType, NumParts, NumRings, VertexBuffer
+
+    layer.push_back(0x10);
+    layer.push_back(0x02);
+    append_varint(layer, rowCount);
+    append_varint(layer, rowCount);
+    for (size_t i = 0; i < rowCount; ++i) {
+        layer.push_back(static_cast<char>(kGeometryTypePolygon));
+    }
+
+    append_length_stream(layer, kLengthStreamParts, rowCount, partData);
+    append_length_stream(layer, kLengthStreamRings, rowCount, ringData);
+
+    std::string vertexData;
+    int32_t prevX = 0;
+    int32_t prevY = 0;
+    for (size_t i = 0; i < rowCount; ++i) {
+        const uint32_t row = row_at(order, i);
+        const uint32_t beg = tile.ringOffsets[row];
+        const uint32_t end = tile.ringOffsets[row + 1u];
+        for (uint32_t v = beg; v < end; ++v) {
+            const int32_t x = tile.localX[v];
+            const int32_t y = tile.localY[v];
+            append_varint(vertexData, encode_zigzag32(x - prevX));
+            append_varint(vertexData, encode_zigzag32(y - prevY));
+            prevX = x;
+            prevY = y;
+        }
+    }
+    layer.push_back(static_cast<char>(0x10u | kVertexDictionaryType));
+    layer.push_back(kEncodingComponentwiseDeltaVarint);
+    append_varint(layer, totalVertices * 2u);
     append_varint(layer, vertexData.size());
     layer.append(vertexData);
 
@@ -792,6 +1008,27 @@ std::string encode_point_tile_subset(const FeatureTableSchema& schema,
     size_t rowCount,
     const GlobalStringDictionary* stringDictionary) {
     return encode_point_tile_impl(schema, tile, rowCount, &order, stringDictionary);
+}
+
+std::string encode_polygon_tile(const FeatureTableSchema& schema,
+    const PolygonTileData& tile,
+    const GlobalStringDictionary* stringDictionary) {
+    return encode_polygon_tile_impl(schema, tile, tile.size(), nullptr, stringDictionary);
+}
+
+std::string encode_polygon_tile_prefix(const FeatureTableSchema& schema,
+    const PolygonTileData& tile,
+    size_t rowCount,
+    const GlobalStringDictionary* stringDictionary) {
+    return encode_polygon_tile_impl(schema, tile, rowCount, nullptr, stringDictionary);
+}
+
+std::string encode_polygon_tile_subset(const FeatureTableSchema& schema,
+    const PolygonTileData& tile,
+    const std::vector<uint32_t>& order,
+    size_t rowCount,
+    const GlobalStringDictionary* stringDictionary) {
+    return encode_polygon_tile_impl(schema, tile, rowCount, &order, stringDictionary);
 }
 
 int32_t remap_child_local_to_parent_local(int32_t childLocal, uint32_t childIndex,
@@ -914,7 +1151,7 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
     }
 
     const uint64_t geomTypeCode = read_varint(ptr, layerEnd, __func__);
-    if (geomTypeCode != 4) {
+    if (geomTypeCode != kGeometryColumnTypeCode) {
         error("%s: unsupported geometry column type %llu", __func__,
             static_cast<unsigned long long>(geomTypeCode));
     }
@@ -940,7 +1177,7 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
             error("%s: truncated geometry stream header", __func__);
         }
         const uint8_t h0 = *ptr++;
-        ptr++;
+        const uint8_t h1 = *ptr++;
         const uint64_t numValues = read_varint(ptr, layerEnd, __func__);
         const uint64_t byteLen = read_varint(ptr, layerEnd, __func__);
         const uint8_t* streamData = ptr;
@@ -954,17 +1191,7 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
                 error("%s: vertex stream length must be even", __func__);
             }
             rowCount = static_cast<size_t>(numValues / 2u);
-            out.tile.localX.reserve(rowCount);
-            out.tile.localY.reserve(rowCount);
-            const uint8_t* valuePtr = streamData;
-            const uint8_t* valueEnd = streamData + byteLen;
-            for (size_t row = 0; row < rowCount; ++row) {
-                out.tile.localX.push_back(decode_zigzag32(read_varint(valuePtr, valueEnd, __func__)));
-                out.tile.localY.push_back(decode_zigzag32(read_varint(valuePtr, valueEnd, __func__)));
-            }
-            if (valuePtr != valueEnd) {
-                error("%s: vertex stream length mismatch", __func__);
-            }
+            decode_vertex_stream(out.tile.localX, out.tile.localY, streamData, byteLen, rowCount, h1, __func__);
         }
     }
     if (out.tile.localX.size() != rowCount || out.tile.localY.size() != rowCount) {
@@ -992,6 +1219,188 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
         }
     }
 
+    if (ptr != layerEnd || layerEnd != end) {
+        error("%s: unexpected trailing MLT data", __func__);
+    }
+    return out;
+}
+
+DecodedPolygonTile decode_polygon_tile(const std::string& rawTile) {
+    DecodedPolygonTile out;
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(rawTile.data());
+    const uint8_t* end = ptr + rawTile.size();
+    if (ptr == end) {
+        return out;
+    }
+
+    const uint64_t layerLen = read_varint(ptr, end, __func__);
+    if (layerLen == 0 || ptr >= end) {
+        error("%s: malformed tile layer header", __func__);
+    }
+    if (layerLen > static_cast<uint64_t>(end - ptr)) {
+        error("%s: truncated tile layer", __func__);
+    }
+    const uint8_t* layerEnd = ptr + static_cast<size_t>(layerLen);
+    const uint8_t tag = *ptr++;
+    if (tag != 1) {
+        error("%s: expected polygon layer tag 1, found %u", __func__, static_cast<unsigned>(tag));
+    }
+
+    const uint64_t layerNameLen = read_varint(ptr, layerEnd, __func__);
+    if (layerNameLen > static_cast<uint64_t>(layerEnd - ptr)) {
+        error("%s: truncated layer name", __func__);
+    }
+    out.schema.layerName.assign(reinterpret_cast<const char*>(ptr), static_cast<size_t>(layerNameLen));
+    ptr += static_cast<size_t>(layerNameLen);
+    out.schema.extent = static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__));
+    const uint64_t numColumns = read_varint(ptr, layerEnd, __func__);
+    if (numColumns == 0) {
+        error("%s: MLT layer has no geometry column", __func__);
+    }
+
+    const uint64_t geomTypeCode = read_varint(ptr, layerEnd, __func__);
+    if (geomTypeCode != kGeometryColumnTypeCode) {
+        error("%s: unsupported geometry column type %llu", __func__,
+            static_cast<unsigned long long>(geomTypeCode));
+    }
+
+    out.schema.columns.reserve(static_cast<size_t>(numColumns - 1));
+    out.tile.columns.reserve(static_cast<size_t>(numColumns - 1));
+    for (uint64_t col = 1; col < numColumns; ++col) {
+        ColumnSchema schema = decode_column_type(static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__)));
+        const uint64_t colNameLen = read_varint(ptr, layerEnd, __func__);
+        if (colNameLen > static_cast<uint64_t>(layerEnd - ptr)) {
+            error("%s: truncated column name", __func__);
+        }
+        schema.name.assign(reinterpret_cast<const char*>(ptr), static_cast<size_t>(colNameLen));
+        ptr += static_cast<size_t>(colNameLen);
+        out.schema.columns.push_back(schema);
+        out.tile.columns.emplace_back(schema.type, schema.nullable);
+    }
+
+    const uint64_t geomNumStreams = read_varint(ptr, layerEnd, __func__);
+    size_t rowCount = 0;
+    std::vector<uint32_t> partCounts;
+    std::vector<uint32_t> ringVertexCounts;
+    size_t totalVertices = 0;
+    bool sawGeometryType = false;
+    bool sawParts = false;
+    bool sawRings = false;
+    bool sawVertices = false;
+    for (uint64_t streamIdx = 0; streamIdx < geomNumStreams; ++streamIdx) {
+        if (ptr + 2 > layerEnd) {
+            error("%s: truncated geometry stream header", __func__);
+        }
+        const uint8_t h0 = *ptr++;
+        const uint8_t h1 = *ptr++;
+        const uint64_t numValues = read_varint(ptr, layerEnd, __func__);
+        const uint64_t byteLen = read_varint(ptr, layerEnd, __func__);
+        const uint8_t* streamData = ptr;
+        ptr = checked_advance(ptr, layerEnd, byteLen, __func__);
+        const uint8_t physicalType = (h0 >> 4u) & 0x0Fu;
+        const uint8_t logicalType = h0 & 0x0Fu;
+
+        if (physicalType == 1 && logicalType == 0) {
+            const uint8_t* valuePtr = streamData;
+            const uint8_t* valueEnd = streamData + byteLen;
+            rowCount = static_cast<size_t>(numValues);
+            for (size_t row = 0; row < rowCount; ++row) {
+                const uint64_t geom = read_varint(valuePtr, valueEnd, __func__);
+                if (geom != kGeometryTypePolygon) {
+                    error("%s: only simple polygons are supported, found geometry type %llu",
+                        __func__, static_cast<unsigned long long>(geom));
+                }
+            }
+            if (valuePtr != valueEnd) {
+                error("%s: polygon geometry type stream length mismatch", __func__);
+            }
+            sawGeometryType = true;
+        } else if (physicalType == 3 && logicalType == kLengthStreamParts) {
+            const uint8_t* valuePtr = streamData;
+            const uint8_t* valueEnd = streamData + byteLen;
+            partCounts.clear();
+            partCounts.reserve(static_cast<size_t>(numValues));
+            for (uint64_t i = 0; i < numValues; ++i) {
+                partCounts.push_back(static_cast<uint32_t>(read_varint(valuePtr, valueEnd, __func__)));
+            }
+            if (valuePtr != valueEnd) {
+                error("%s: polygon NumParts stream length mismatch", __func__);
+            }
+            sawParts = true;
+        } else if (physicalType == 3 && logicalType == kLengthStreamRings) {
+            const uint8_t* valuePtr = streamData;
+            const uint8_t* valueEnd = streamData + byteLen;
+            ringVertexCounts.clear();
+            ringVertexCounts.reserve(static_cast<size_t>(numValues));
+            for (uint64_t i = 0; i < numValues; ++i) {
+                const uint32_t n = static_cast<uint32_t>(read_varint(valuePtr, valueEnd, __func__));
+                if (n < 3u) {
+                    error("%s: polygon ring has fewer than 3 vertices", __func__);
+                }
+                ringVertexCounts.push_back(n);
+                totalVertices += static_cast<size_t>(n);
+            }
+            if (valuePtr != valueEnd) {
+                error("%s: polygon NumRings stream length mismatch", __func__);
+            }
+            sawRings = true;
+        } else if (physicalType == 1 && logicalType == kVertexDictionaryType) {
+            if ((numValues % 2u) != 0u) {
+                error("%s: polygon vertex stream length must be even", __func__);
+            }
+            const size_t vertexCount = static_cast<size_t>(numValues / 2u);
+            decode_vertex_stream(out.tile.localX, out.tile.localY, streamData, byteLen, vertexCount, h1, __func__);
+            sawVertices = true;
+        }
+    }
+
+    if (!sawGeometryType || !sawParts || !sawRings || !sawVertices) {
+        error("%s: incomplete polygon geometry streams", __func__);
+    }
+    if (partCounts.size() != rowCount) {
+        error("%s: polygon NumParts row count mismatch", __func__);
+    }
+    for (uint32_t nParts : partCounts) {
+        if (nParts != 1u) {
+            error("%s: only one outer ring per polygon is supported", __func__);
+        }
+    }
+    if (ringVertexCounts.size() != rowCount) {
+        error("%s: polygon NumRings row count mismatch", __func__);
+    }
+    if (out.tile.localX.size() != totalVertices || out.tile.localY.size() != totalVertices) {
+        error("%s: polygon vertex count mismatch", __func__);
+    }
+    out.tile.ringOffsets.assign(rowCount + 1u, 0u);
+    size_t offset = 0;
+    for (size_t row = 0; row < rowCount; ++row) {
+        out.tile.ringOffsets[row] = static_cast<uint32_t>(offset);
+        offset += static_cast<size_t>(ringVertexCounts[row]);
+    }
+    out.tile.ringOffsets[rowCount] = static_cast<uint32_t>(offset);
+
+    for (size_t colIdx = 0; colIdx < out.schema.columns.size(); ++colIdx) {
+        auto& column = out.tile.columns[colIdx];
+        switch (out.schema.columns[colIdx].type) {
+        case ScalarType::BOOLEAN:
+            decode_boolean_column(column, ptr, layerEnd, rowCount);
+            break;
+        case ScalarType::INT_32:
+            decode_int32_column(column, ptr, layerEnd, rowCount);
+            break;
+        case ScalarType::FLOAT:
+            decode_float_column(column, ptr, layerEnd, rowCount);
+            break;
+        case ScalarType::STRING:
+            decode_string_column(column, ptr, layerEnd, rowCount);
+            break;
+        default:
+            error("%s: unsupported scalar column type %d", __func__,
+                static_cast<int>(out.schema.columns[colIdx].type));
+        }
+    }
+
+    validate_polygon_tile_geometry(out.tile, rowCount, __func__);
     if (ptr != layerEnd || layerEnd != end) {
         error("%s: unexpected trailing MLT data", __func__);
     }

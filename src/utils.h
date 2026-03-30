@@ -11,6 +11,7 @@
 #include <optional>
 #include <charconv>
 #include <locale>
+#include <memory>
 #include <stdexcept>
 #include "zlib.h"
 #include <Eigen/Dense>
@@ -30,6 +31,27 @@
 // };
 
 // void hprintf(htsFile* fp, const char * msg, ...);
+
+struct GzCloser {
+    void operator()(gzFile_s* fp) const noexcept {
+        if (fp) {
+            gzclose(fp);
+        }
+    }
+};
+
+using GzHandle = std::unique_ptr<gzFile_s, GzCloser>;
+
+class TextLineReader {
+public:
+    explicit TextLineReader(const std::string& path);
+    bool getline(std::string& out);
+
+private:
+    bool gz_ = false;
+    std::ifstream stream_;
+    GzHandle gzStream_ = nullptr;
+};
 
 // String manipulation functions
 void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str, uint32_t limit=UINT_MAX, bool clear=true, bool collapse=true, bool strip=false, bool keep_overflow=false);

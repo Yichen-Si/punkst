@@ -24,6 +24,53 @@
 
 // String manipulation functions
 
+TextLineReader::TextLineReader(const std::string& path) {
+    gz_ = ends_with(path, ".gz");
+    if (gz_) {
+        gzStream_.reset(gzopen(path.c_str(), "rb"));
+        if (!gzStream_) {
+            error("%s: cannot open gzipped input %s", __func__, path.c_str());
+        }
+    } else {
+        stream_.open(path);
+        if (!stream_.is_open()) {
+            error("%s: cannot open input %s", __func__, path.c_str());
+        }
+    }
+}
+
+bool TextLineReader::getline(std::string& out) {
+    out.clear();
+    if (gz_) {
+        constexpr int kChunk = 1 << 15;
+        char buffer[kChunk];
+        while (true) {
+            char* ret = gzgets(gzStream_.get(), buffer, kChunk);
+            if (ret == nullptr) {
+                if (out.empty()) {
+                    return false;
+                }
+                break;
+            }
+            out.append(buffer);
+            if (!out.empty() && out.back() == '\n') {
+                break;
+            }
+        }
+    } else {
+        if (!std::getline(stream_, out)) {
+            return false;
+        }
+    }
+    if (!out.empty() && out.back() == '\n') {
+        out.pop_back();
+    }
+    if (!out.empty() && out.back() == '\r') {
+        out.pop_back();
+    }
+    return true;
+}
+
 // Splits a line into a vector - one or more single character delimiters
 void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str,
     uint32_t limit, bool clear, bool collapse, bool strip, bool keep_overflow) {
@@ -161,35 +208,11 @@ std::vector<std::string> read_lines_maybe_gz(const std::string& path) {
     if (path.empty()) {
         error("Empty path provided");
     }
-    if (ends_with(path, ".gz")) {
-        gzFile gz = gzopen(path.c_str(), "rb");
-        if (!gz) {
-            error("Failed to open %s", path.c_str());
-        }
-        char buf[1 << 16];
-        while (gzgets(gz, buf, sizeof(buf))) {
-            std::string s(buf);
-            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) {
-                s.pop_back();
-            }
-            if (!s.empty()) {
-                lines.emplace_back(std::move(s));
-            }
-        }
-        gzclose(gz);
-    } else {
-        std::ifstream in(path);
-        if (!in) {
-            error("Failed to open %s", path.c_str());
-        }
-        std::string line;
-        while (std::getline(in, line)) {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (!line.empty()) {
-                lines.emplace_back(std::move(line));
-            }
+    TextLineReader reader(path);
+    std::string line;
+    while (reader.getline(line)) {
+        if (!line.empty()) {
+            lines.emplace_back(std::move(line));
         }
     }
     return lines;

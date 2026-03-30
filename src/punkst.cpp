@@ -27,6 +27,7 @@ int32_t cmdDeChisq(int argc, char** argv);
 int32_t cmdDeconvPseudobulk(int argc, char** argv);
 int32_t cmdPseudoBulk(int argc, char** argv);
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
+int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv);
 int32_t cmdConditionalTest(int32_t argc, char** argv);
 int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv);
 
@@ -62,6 +63,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("de-chisq", "Differential expression using Chi-squared test", cmdDeChisq)
         .add_command("deconv-pseudobulk", "Deconvolve pseudobulk matrix using a confusion matrix", cmdDeconvPseudobulk)
         .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk)
+        .add_command("hex2pmtiles-mlt", "Write single-zoom polygon MLT PMTiles from hex-grid factor TSV", cmdHex2PmtilesMlt)
         .add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
 
     if (argc < 2) {
