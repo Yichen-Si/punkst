@@ -17,6 +17,7 @@ namespace simple_polygon_pmtiles {
 
 enum class PolygonBoundaryMode {
     BufferClipDuplicate,
+    NoClippingDuplicate,
     SingleTileNoDuplication,
 };
 

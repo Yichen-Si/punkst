@@ -473,7 +473,7 @@ punkst tile-op --in ${opref1} --binary \
   --out ${opref} --threads ${threads}
 ```
 
-(In the above example we assume at least one of the merged sources is from the single-molecule version of [`pixel-decode`](../pixel-decode.md) so `--icol-feature` and `--pixel-res-override` are needed.)
+(In the above example we assume at least one of the merged sources is from the single-molecule version of [`pixel-decode`](pixel-decode.md) so `--icol-feature` and `--pixel-res-override` are needed.)
 
 This combined mode:
 

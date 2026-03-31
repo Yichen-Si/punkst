@@ -32,6 +32,7 @@ int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
       .add_option("icol-order", "Optional 0-based polygon source vertex-order column index", options.polygonSourceIcolOrder)
       .add_option("polygon-source-coord-scale", "Override scale applied to --polygon-source coordinates before EPSG:3857 tiling (default: archive coord_scale metadata)", options.polygonSourceCoordScale)
       .add_option("tile-buffer-px", "Override polygon tile buffer in screen pixels for parent construction", options.tileBufferPixels)
+      .add_option("no-clipping", "Duplicate polygons across touched tiles without clipping them to tile boundaries", options.polygonNoClipping)
       .add_option("no-duplication", "Store each polygon intact in exactly one tile per zoom level", options.polygonNoDuplication)
       .add_option("threads", "Number of threads to use", threads);
 
@@ -65,6 +66,9 @@ int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
     if (!std::isnan(options.tileBufferPixels) &&
         !(options.tileBufferPixels >= 0.0)) {
         error("%s: --tile-buffer-px must be non-negative", __func__);
+    }
+    if (options.polygonNoClipping && options.polygonNoDuplication) {
+        error("%s: --no-clipping cannot be used together with --no-duplication", __func__);
     }
     if (polygonPriorityMode == "random") {
         options.polygonPriorityMode = pmtiles_pyramid::PolygonPriorityMode::Random;

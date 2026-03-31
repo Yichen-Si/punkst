@@ -6,9 +6,11 @@
 - [Write single-level polygon-only PMTiles](#write-single-zoom-polygon-pmtiles)
 - [Build PMTiles pyramids](#build-mlt-pmtiles-pyramids)
 
-We only support PMTiles with the [MLT format](https://maplibre.org/maplibre-tile-spec/).
+We only support PMTiles with the [MLT format](https://maplibre.org/maplibre-tile-spec/)
 
 For writing point/pixel-only PMTiles see [tile-op](tileop.md)
+
+Acknowledgement: PMTiles support in `punkst` depends on [Clipper2](https://github.com/AngusJohnson/Clipper2) for polygon operations, borrows from [tippecanoe](https://github.com/felt/tippecanoe) (which supports MVT) and [MLT's cpp implementation](https://github.com/maplibre/maplibre-tile-spec/tree/main/cpp).
 
 ## Export PMTiles as TSV
 
@@ -65,7 +67,12 @@ Options:
 - `--x-col`, `--y-col`, `--topk-col`, and `--topp-col` set column names in the input factor table for the hex center coordinates (default: `x` and `y`), the top factor ID (default: `topK`), and the top factor probability (default: `topP`)
 - `--prob-thres` keeps only factor probabilities above the threshold as nullable properties (default: `1e-4`)
 - `--coord-scale` scales the input coordinates before Web Mercator tiling (default: `1`, no scaling)
-- `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries
+
+Parameters for boundary behavior and is similar to [tippecanoe's options](https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries)
+- `--tile-buffer-px` sets the screen-pixel buffer used by the default clipped/duplicated mode (default: `5`) (matching `tippecanoe -b`)
+- `--no-clipping` duplicates each polygon into every touched tile without clipping it to tile boundaries (matching `tippecanoe -pc`)
+- `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching `tippecanoe -pD`)
+- `--no-clipping` and `--no-duplication` are mutually exclusive
 
 ### Generic simple-polygon mode
 
@@ -92,7 +99,12 @@ Options:
 - `--keep-org-id` optionally keeps the original input string ID as a regular string property column in the PMTiles output
 - `--icol-id-geom`, `--icol-x-geom`, and `--icol-y-geom` set the 0-based geometry-file columns for polygon ID, `x`, and `y`
 - `--icol-order-geom` is optional; if omitted, the geometry rows are assumed to already be in vertex order
+
+Boundary behavior options are the same as in hexagon mode:
+- `--tile-buffer-px` sets the screen-pixel buffer used by the default clipped/duplicated mode (default: `5`)
+- `--no-clipping` duplicates each polygon into every touched tile without clipping it to tile boundaries
 - `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries
+- `--no-clipping` and `--no-duplication` are mutually exclusive
 
 Geometry file format:
 
@@ -121,7 +133,8 @@ Output:
 
 Boundary behavior:
 
-- by default, polygons that cross tile boundaries are clipped and may appear in more than one tile
+- by default, polygons that cross tile boundaries are clipped to each tile plus a `--tile-buffer-px` screen-pixel buffer, and may appear in more than one tile
+- with `--no-clipping`, polygons are duplicated across touched tiles but kept intact in each copy
 - with `--no-duplication`, each polygon is assigned to a single tile and stored there intact
 - `--no-duplication` is mainly useful when polygons are much smaller than the tile size
 
@@ -178,8 +191,11 @@ Behavior:
 - for PMTiles written by `punkst hex2pmtiles`, which contains only hexagons, a shortcut is taken by using the stored hexagonal grid coordinates to build the geometry instead of recovering it from the encoded geometry
 - for generic polygon inputs, uses the finest input zoom level to recover one canonical polygon per ID before building parent levels
 - if `--polygon-source` is provided, that file is used as the geometry source override
-- by default, parent tiles use clipped polygons that may appear in more than one tile
+- by default, parent tiles use clipped polygons that may appear in more than one tile, with clipping buffered by `--tile-buffer-px` screen pixels
+- `--tile-buffer-px` overrides that buffer in `--polygon` mode; if omitted, the value stored in the input archive metadata is used
+- with `--no-clipping`, parent tiles keep duplicated polygons intact instead of clipping them to tile boundaries
 - with `--no-duplication`, each polygon is kept intact and written to only one tile per zoom level
+- `--no-clipping` and `--no-duplication` are mutually exclusive
 
 Limitations for the generic polygon mode:
 
@@ -231,6 +247,8 @@ Main options:
 - `--polygon-id-col` is an optional hard override for polygon ID lookup in `--polygon` mode
 - `--polygon-priority` sets polygon retention mode for `--polygon`
 - `--polygon-source` and `--icol-*` options are used only for `--polygon` in generic polygon mode
+- `--tile-buffer-px` sets the screen-pixel clip buffer for the default clipped polygon mode
+- `--no-clipping` switches polygon output to intact duplicated polygons without tile-boundary clipping
 - `--no-duplication` switches polygon output from clipped/duplicated tiles to single-tile intact storage
 
 Input PMTiles handling:

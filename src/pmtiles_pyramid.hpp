@@ -76,6 +76,7 @@ struct BuildOptions {
     int32_t polygonSourceIcolOrder = -1;
     double polygonSourceCoordScale = std::numeric_limits<double>::quiet_NaN();
     double tileBufferPixels = std::numeric_limits<double>::quiet_NaN();
+    bool polygonNoClipping = false;
     bool polygonNoDuplication = false;
 };
 

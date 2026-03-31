@@ -243,6 +243,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     double coordScale = 1.0;
     double probThreshold = 1e-4;
     double tileBufferPixels = 5.0;
+    bool noClipping = false;
     bool noDuplication = false;
     bool idIsU32 = false;
     bool keepOrgId = false;
@@ -261,6 +262,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
       .add_option("coord-scale", "Scale factor applied to input coordinates before EPSG:3857 tiling", coordScale)
       .add_option("prob-thres", "Minimum factor probability retained as a nullable property", probThreshold)
       .add_option("tile-buffer-px", "Tile buffer in screen pixels for buffered clipping", tileBufferPixels)
+      .add_option("no-clipping", "Duplicate polygons across touched tiles without clipping them to tile boundaries", noClipping)
       .add_option("no-duplication", "Store each polygon intact in exactly one tile per zoom level", noDuplication)
       .add_option("clip-scale", "Integer scale used internally for polygon clipping", clipScale)
       .add_option("extent", "Vector tile extent", extent)
@@ -297,6 +299,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     }
     if (tileBufferPixels < 0.0) {
         error("%s: --tile-buffer-px must be non-negative", __func__);
+    }
+    if (noClipping && noDuplication) {
+        error("%s: --no-clipping cannot be used together with --no-duplication", __func__);
     }
     if (clipScale <= 0) {
         error("%s: --clip-scale must be positive", __func__);
@@ -363,7 +368,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     writerOptions.threads = threads;
     writerOptions.boundaryMode = noDuplication ?
         simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication :
-        simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate;
+        (noClipping ?
+            simple_polygon_pmtiles::PolygonBoundaryMode::NoClippingDuplicate :
+            simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate);
 
     std::map<TileKey, mlt_pmtiles::PolygonTileData> tileMap;
     simple_polygon_pmtiles::PolygonWriteSummary summary;
@@ -480,8 +487,11 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     }
     nlohmann::json extraMetadata = simple_polygon_pmtiles::build_simple_polygon_metadata(
         sourceFamily, {}, writerOptions, sourceMetadata);
-    extraMetadata["tile_buffer_rule"] = noDuplication ?
-        "single_tile_no_duplication" : "tippecanoe_default_like";
+    extraMetadata["tile_buffer_rule"] =
+        writerOptions.boundaryMode == simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication ?
+            "single_tile_no_duplication" :
+        (writerOptions.boundaryMode == simple_polygon_pmtiles::PolygonBoundaryMode::NoClippingDuplicate ?
+            "no_clipping_duplicate" : "tippecanoe_default_like");
     extraMetadata["tile_buffer_screen_px"] = tileBufferPixels;
 
     mlt_pmtiles::SingleLayerVectorPmtilesOptions archiveOptions;

@@ -395,7 +395,8 @@ void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileDat
         return;
     }
 
-    const double bufferWorld = tile_buffer_world_units(options);
+    const double bufferWorld = options.boundaryMode == PolygonBoundaryMode::NoClippingDuplicate ?
+        0.0 : tile_buffer_world_units(options);
     const double minXBuffered = minX - bufferWorld;
     const double minYBuffered = minY - bufferWorld;
     const double maxXBuffered = maxX + bufferWorld;
@@ -414,8 +415,13 @@ void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileDat
     for (int64_t tileY = tileY0; tileY <= tileY1; ++tileY) {
         for (int64_t tileX = tileX0; tileX <= tileX1; ++tileX) {
             TileKey key{static_cast<int32_t>(tileY), static_cast<int32_t>(tileX)};
-            append_scaled_polygon_source_to_tile(tileMap[key], schema, source, featureId, properties,
-                static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY), bufferWorld, options);
+            if (options.boundaryMode == PolygonBoundaryMode::NoClippingDuplicate) {
+                append_unclipped_scaled_polygon_source_to_tile(tileMap[key], schema, source, featureId,
+                    properties, static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY), options);
+            } else {
+                append_scaled_polygon_source_to_tile(tileMap[key], schema, source, featureId, properties,
+                    static_cast<uint32_t>(tileX), static_cast<uint32_t>(tileY), bufferWorld, options);
+            }
         }
     }
 }
@@ -439,7 +445,8 @@ size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTi
     }
 
     const Path64 source = build_scaled_world_path(outerRing, options.clipScale);
-    if (options.boundaryMode == PolygonBoundaryMode::SingleTileNoDuplication) {
+    if (options.boundaryMode == PolygonBoundaryMode::SingleTileNoDuplication ||
+        options.boundaryMode == PolygonBoundaryMode::NoClippingDuplicate) {
         return append_unclipped_scaled_polygon_source_to_tile(outTile, schema, source, featureId, properties,
             tileX, tileY, options);
     }
@@ -480,7 +487,8 @@ size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData
     const int64_t tileSpan = static_cast<int64_t>(options.extent) * static_cast<int64_t>(scale);
     const int64_t originX = static_cast<int64_t>(tileX) * tileSpan;
     const int64_t originY = static_cast<int64_t>(tileY) * tileSpan;
-    if (options.boundaryMode == PolygonBoundaryMode::SingleTileNoDuplication) {
+    if (options.boundaryMode == PolygonBoundaryMode::SingleTileNoDuplication ||
+        options.boundaryMode == PolygonBoundaryMode::NoClippingDuplicate) {
         const size_t before = outTile.size();
         std::vector<std::pair<int32_t, int32_t>> localRing;
         localRing.reserve(source.size());
@@ -581,6 +589,12 @@ nlohmann::json build_simple_polygon_metadata(const std::string& sourceFamily,
     const std::vector<std::string>& canonicalIdFields,
     const SingleZoomPolygonWriterOptions& options,
     const nlohmann::json& sourceMetadata) {
+    const char* boundaryModeName = "buffer_clip_duplicate";
+    if (options.boundaryMode == PolygonBoundaryMode::NoClippingDuplicate) {
+        boundaryModeName = "no_clipping_duplicate";
+    } else if (options.boundaryMode == PolygonBoundaryMode::SingleTileNoDuplication) {
+        boundaryModeName = "single_tile_no_duplication";
+    }
     nlohmann::json out;
     out["polygon_topology"] = {
         {"simple_polygon", true},
@@ -590,8 +604,7 @@ nlohmann::json build_simple_polygon_metadata(const std::string& sourceFamily,
     out["polygon_pyramid_hint"] = {
         {"strategy", "canonical_id_reclip"},
         {"buffer_screen_px", options.tileBufferPixels},
-        {"boundary_mode", options.boundaryMode == PolygonBoundaryMode::SingleTileNoDuplication ?
-            "single_tile_no_duplication" : "buffer_clip_duplicate"},
+        {"boundary_mode", boundaryModeName},
         {"geometry_backend", sourceFamily},
         {"source_family", sourceFamily},
         {"canonical_id_fields", canonicalIdFields},
@@ -600,8 +613,7 @@ nlohmann::json build_simple_polygon_metadata(const std::string& sourceFamily,
         {"geometry_backend", sourceFamily},
         {"family", sourceFamily},
         {"reconstructible", true},
-        {"boundary_mode", options.boundaryMode == PolygonBoundaryMode::SingleTileNoDuplication ?
-            "single_tile_no_duplication" : "buffer_clip_duplicate"},
+        {"boundary_mode", boundaryModeName},
         {"canonical_id_fields", canonicalIdFields},
         {"parameters", sourceMetadata},
     };

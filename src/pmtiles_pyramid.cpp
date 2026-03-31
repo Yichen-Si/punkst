@@ -1094,6 +1094,9 @@ simple_polygon_pmtiles::PolygonBoundaryMode parse_polygon_boundary_mode(
     if (name.empty() || name == "buffer_clip_duplicate") {
         return simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate;
     }
+    if (name == "no_clipping_duplicate") {
+        return simple_polygon_pmtiles::PolygonBoundaryMode::NoClippingDuplicate;
+    }
     if (name == "single_tile_no_duplication") {
         return simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication;
     }
@@ -1424,6 +1427,10 @@ PolygonSourceDescriptor resolve_polygon_source_descriptor(
     out.writerOptions.coordScale = metadata.value("coord_scale", 1.0);
     out.writerOptions.boundaryMode = parse_polygon_boundary_mode(
         hint.value("boundary_mode", source.value("boundary_mode", std::string())));
+    if (options.polygonNoClipping) {
+        out.writerOptions.boundaryMode =
+            simple_polygon_pmtiles::PolygonBoundaryMode::NoClippingDuplicate;
+    }
     if (options.polygonNoDuplication) {
         out.writerOptions.boundaryMode =
             simple_polygon_pmtiles::PolygonBoundaryMode::SingleTileNoDuplication;
