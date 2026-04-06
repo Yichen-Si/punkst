@@ -1,6 +1,13 @@
 #include "topic_svb.hpp"
 
 int32_t cmdTopicModelSVI(int argc, char** argv) {
+    enum class TenXFeatureMode {
+        Default,
+        FeatureFile,
+        ModelOnly,
+        RegexOnly,
+        PostloadCounts
+    };
 
     // --- Model Selection ---
     std::string model_type = "lda";
@@ -75,8 +82,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
 
     // Feature Preprocessing Options (Common)
     pl.add_option("feature-weights", "Input weights file", weightFile)
-      .add_option("features", "Feature names and total counts file", featureFile)
-      .add_option("min-count-per-feature", "Min count for features to be included (requires --features)", minCountFeature)
+      .add_option("features", "Feature list", featureFile)
+      .add_option("min-count-per-feature", "Min count for features to be included", minCountFeature)
       .add_option("default-weight", "Default weight for features not in weight file", defaultWeight)
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
@@ -149,56 +156,63 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     }
     int32_t nUnits;
 
-    // Check 10X input
-    bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
-    if (use_10x && featureFile.empty()) {
-        error("10X input requires --features with total counts (second column)");
-    }
-    bool tenx_cache_ready = false;
-    if (use_10x && !inFile.empty()) {
-        warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
-    }
-    if (!use_10x && inFile.empty()) {
-        error("Either --in-data or 10X inputs must be provided");
-    }
-    if (use_10x && !dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-        if (dge_dir.back() == '/') {
-            dge_dir.pop_back();
-        }
-        in_bc = dge_dir + "/barcodes.tsv.gz";
-        in_ft = dge_dir + "/features.tsv.gz";
-        in_mtx = dge_dir + "/matrix.mtx.gz";
-    }
-    if (use_10x && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-        error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
-    }
-    std::unique_ptr<DGEReader10X> dge_ptr;
-    if (use_10x) {
-        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
-        nUnits = dge_ptr->nBarcodes;
-    }
-
     // Set up data reader
     HexReader _reader;
+    std::unique_ptr<DGEReader10X> dge_ptr;
+    bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
     if (use_10x) {
-        _reader.initFromFeatures(featureFile, nUnits);
+        if (!inFile.empty()) {
+            warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
+        }
+        if (!dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
+            if (dge_dir.back() == '/') {
+                dge_dir.pop_back();
+            }
+            in_bc = dge_dir + "/barcodes.tsv.gz";
+            in_ft = dge_dir + "/features.tsv.gz";
+            in_mtx = dge_dir + "/matrix.mtx.gz";
+        }
+        if (in_bc.empty() || in_ft.empty() || in_mtx.empty()) {
+            error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
+        }
+        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
+        nUnits = dge_ptr->nBarcodes;
+        _reader.initFromFeatures(dge_ptr->features, nUnits);
     } else {
-        if (metaFile.empty()) {
-            error("Missing required --in-meta for non-10X input");
+        if (metaFile.empty() || inFile.empty()) {
+            error("Missing --in-data or --in-meta");
         }
         _reader.readMetadata(metaFile);
         nUnits = _reader.nUnits;
     }
-    if (!featureFile.empty())
+
+    // Set up feature ID and filter
+    TenXFeatureMode tenx_feature_mode = TenXFeatureMode::Default;
+    if (use_10x) {
+        const bool has_model_prior = (model_type == "lda" && !priorFile.empty());
+        if (!featureFile.empty()) {
+            tenx_feature_mode = TenXFeatureMode::FeatureFile;
+            _reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex, true);
+        } else if (has_model_prior) {
+            tenx_feature_mode = TenXFeatureMode::ModelOnly;
+        } else if (minCountFeature <= 1) {
+            tenx_feature_mode = TenXFeatureMode::RegexOnly;
+            if (!include_ftr_regex.empty() || !exclude_ftr_regex.empty()) {
+                _reader.filterCurrentFeatures(1, include_ftr_regex, exclude_ftr_regex);
+            }
+        } else {
+            tenx_feature_mode = TenXFeatureMode::PostloadCounts;
+        }
+    } else if (!featureFile.empty()) {
         _reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
+    }
     if (!weightFile.empty())
         _reader.setWeights(weightFile, defaultWeight);
-    if (use_10x && priorScaleRel > 0 && !_reader.readFullSums) {
-        error("--prior-scale-rel requires --features with total counts when using 10X input");
-    }
 
-    // Set up model object
+    // Set up the model runner and finalize the feature space
     std::unique_ptr<TopicModelWrapper> model_runner;
+    LDA4Hex* lda4hex = nullptr;
+    HDP4Hex* hdp4hex = nullptr;
     if (model_type == "lda") {
         if (projection_only) {
             transform = true;
@@ -206,7 +220,70 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (nTopics <= 0 && priorFile.empty()) {
             error("Number of topics must be greater than 0");
         }
-        auto lda4hex = new LDA4Hex(_reader, modal, 10);
+        lda4hex = new LDA4Hex(_reader, modal, 10);
+        if (!priorFile.empty()) {
+            lda4hex->preparePriorFeatureSpace(priorFile);
+        }
+        model_runner.reset(lda4hex);
+    } else if (model_type == "hdp") {
+        sort_topics = true;
+        if (projection_only || !priorFile.empty()) warning("--projection-only and --model-prior are not supported for HDP and will be ignored.");
+        if (max_topics_K <= 0) error("For HDP, --max-topics must be > 0.");
+        if (doc_trunc_T <= 0) error("For HDP, --doc-trunc-level must be > 0.");
+
+        hdp4hex = new HDP4Hex(_reader, modal, 10);
+        model_runner.reset(hdp4hex);
+    } else {
+        error("Unknown model type: '%s'. Choose 'lda' or 'hdp'.", model_type.c_str());
+    }
+
+    if (use_10x) {
+        if (tenx_feature_mode == TenXFeatureMode::ModelOnly &&
+            ((minCountFeature > 1) || !include_ftr_regex.empty() || !exclude_ftr_regex.empty())) {
+            warning("Ignoring --min-count-per-feature and feature regex filters for 10X input because the model prior defines the feature space");
+        }
+        int32_t n_overlap = dge_ptr->setFeatureIndexRemap(model_runner->getFeatureNames(), false);
+        if (n_overlap == 0) {
+            error("No overlapping features found between 10X input and model");
+        }
+        model_runner->prepare10XCache(*dge_ptr, minCountTrain, true);
+
+        if (tenx_feature_mode == TenXFeatureMode::PostloadCounts) {
+            const int32_t nFeaturesPrev = model_runner->nFeatures();
+            const int32_t nKept = model_runner->filterCurrentFeatures(minCountFeature, include_ftr_regex, exclude_ftr_regex);
+            if (nKept == 0) {
+                error("No features remain after applying feature filters");
+            }
+            if (model_runner->nFeatures() != nFeaturesPrev) {
+                n_overlap = dge_ptr->setFeatureIndexRemap(model_runner->getFeatureNames(), false);
+                if (n_overlap == 0) {
+                    error("No overlapping features found between 10X input and model");
+                }
+                model_runner->prepare10XCache(*dge_ptr, minCountTrain, true);
+            }
+        }
+        if (featureFile.empty()) {
+            const std::string outFeatures = outPrefix + ".features.tsv";
+            std::ofstream outFeatureStream(outFeatures);
+            if (!outFeatureStream) {
+                error("Error opening output file: %s for writing", outFeatures.c_str());
+            }
+            const auto featureNames = model_runner->getFeatureNames();
+            const auto& featureSums = model_runner->getFeatureSumsRaw();
+            if (featureNames.size() != featureSums.size()) {
+                error("Feature names and total counts have inconsistent sizes (%zu vs %zu)",
+                    featureNames.size(), featureSums.size());
+            }
+            outFeatureStream << std::fixed << std::setprecision(0);
+            for (size_t i = 0; i < featureNames.size(); ++i) {
+                outFeatureStream << featureNames[i] << "\t" << featureSums[i] << "\n";
+            }
+            outFeatureStream.close();
+            notice("Features and total counts written to %s", outFeatures.c_str());
+        }
+    }
+
+    if (lda4hex) {
         if (useSCVB0) {
             lda4hex->initialize_scvb0(nTopics, seed, nThreads, verbose,
                 alpha, eta, kappa, tau0, nUnits,
@@ -217,14 +294,6 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
                 priorFile, priorScale, priorScaleRel, maxIter, mDelta);
         }
         lda4hex->set_reproducible_init(reproducible_init);
-        if (use_10x) {
-            int32_t n_overlap = dge_ptr->setFeatureIndexRemap(lda4hex->getFeatureNames(), false);
-            if (n_overlap == 0) {
-                error("No overlapping features found between 10X input and model");
-            }
-            lda4hex->load10X(*dge_ptr, minCountTrain, true);
-            tenx_cache_ready = true;
-        }
         if (fitBackground && !useSCVB0) {
             if (warmInitUnits < 0) {
                 warmInitUnits = static_cast<int32_t>(warmInitEpoch * nUnits);
@@ -244,28 +313,9 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             double bgScale = lda4hex->hasFullFeatureSums() ?  bgInitScale : 1.;
             lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale, fixBackground);
         }
-        model_runner.reset(lda4hex);
-    } else if (model_type == "hdp") {
-        sort_topics = true;
-        if (projection_only || !priorFile.empty()) warning("--projection-only and --model-prior are not supported for HDP and will be ignored.");
-        if (max_topics_K <= 0) error("For HDP, --max-topics must be > 0.");
-        if (doc_trunc_T <= 0) error("For HDP, --doc-trunc-level must be > 0.");
-
-        // Instantiate HDP model runner
-        auto hdp4hex = new HDP4Hex(_reader, modal, 10);
+    } else if (hdp4hex) {
         hdp4hex->initialize(max_topics_K, doc_trunc_T, seed, nThreads, verbose,
             eta, hdp_alpha, hdp_omega, kappa, tau0, hdp4hex->nUnits(), maxIter, mDelta);
-        model_runner.reset(hdp4hex);
-    } else {
-        error("Unknown model type: '%s'. Choose 'lda' or 'hdp'.", model_type.c_str());
-    }
-    if (use_10x && !tenx_cache_ready) {
-        int32_t n_overlap = dge_ptr->setFeatureIndexRemap(model_runner->getFeatureNames(), false);
-        if (n_overlap == 0) {
-            error("No overlapping features found between 10X input and model");
-        }
-        model_runner->load10X(*dge_ptr, minCountTrain, true);
-        tenx_cache_ready = true;
     }
 
     if (!projection_only) {
@@ -318,7 +368,6 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     }
 
     if (transform) {
-        append_topk = true;
         model_runner->setTransformOutputOptions(append_topk, topk_colname, topp_colname, drop_random_key);
         if (use_10x) {
             model_runner->fitAndWriteToFile10X(*dge_ptr, outPrefix, batchSize);

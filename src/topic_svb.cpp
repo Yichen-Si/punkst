@@ -126,7 +126,7 @@ int32_t TopicModelWrapper::trainOnline(const std::string& inFile, int32_t _bsize
     return ntot;
 }
 
-void TopicModelWrapper::load10X(DGEReader10X& dge, int32_t _minCountTrain, bool force) {
+void TopicModelWrapper::prepare10XCache(DGEReader10X& dge, int32_t _minCountTrain, bool force) {
     if (dge_cache_ready_ && !force && _minCountTrain == dge_minCountTrain_cache_) {
         return;
     }
@@ -139,32 +139,42 @@ void TopicModelWrapper::load10X(DGEReader10X& dge, int32_t _minCountTrain, bool 
         dge_cache_ready_ = true;
         return;
     }
-    std::vector<double> feature_sums_raw(M_, 0.0);
     dge_train_idx_cache_.reserve(dge_docs_cache_.size());
     for (size_t i = 0; i < dge_docs_cache_.size(); ++i) {
         Document& doc = dge_docs_cache_[i];
-        double total = 0.0;
-        for (size_t j = 0; j < doc.ids.size(); ++j) {
-            uint32_t m = doc.ids[j];
-            if (m < feature_sums_raw.size()) {
-                feature_sums_raw[m] += doc.cnts[j];
-            }
-        }
         applyWeights(doc);
-        total = doc.get_sum();
-        if (total >= _minCountTrain) {
+        if (doc.get_sum() >= _minCountTrain) {
             dge_train_idx_cache_.push_back(static_cast<int32_t>(i));
         }
     }
     int32_t nTrain = static_cast<int32_t>(dge_train_idx_cache_.size());
+    std::vector<double> feature_sums_raw(dge.feature_totals.begin(), dge.feature_totals.end());
     reader.setFeatureSums(feature_sums_raw, true);
     dge_cache_ready_ = true;
     notice("%s: Loaded %d units, %d with total count >= %d for training", __func__, nUnits, nTrain, _minCountTrain);
 }
 
+int32_t TopicModelWrapper::filterCurrentFeatures(int32_t minCount,
+    const std::string& includeRegex, const std::string& excludeRegex) {
+    const int32_t oldM = M_;
+    const std::vector<std::string> oldFeatures = reader.features;
+    int32_t nKept = reader.filterCurrentFeatures(minCount, includeRegex, excludeRegex);
+    M_ = reader.nFeatures;
+    if (!featureNames.empty()) {
+        featureNames = reader.features;
+    }
+    if (M_ != oldM || reader.features != oldFeatures) {
+        dge_cache_ready_ = false;
+        dge_docs_cache_.clear();
+        dge_barcode_idx_cache_.clear();
+        dge_train_idx_cache_.clear();
+    }
+    return nKept;
+}
+
 int32_t TopicModelWrapper::trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed) {
     if (!initialized) error("Model must be initialized before training");
-    if (!dge_cache_ready_) error("10X cache is not initialized; call load10X() first");
+    if (!dge_cache_ready_) error("10X cache is not initialized; call prepare10XCache() first");
     batchSize = _bsize;
     ntot = 0;
     if (dge_train_idx_cache_.empty()) {
@@ -176,6 +186,7 @@ int32_t TopicModelWrapper::trainOnline10X(int32_t _bsize, int32_t maxUnits, int3
     std::shuffle(order.begin(), order.end(), rng);
 
     size_t cursor = 0;
+    int32_t b = 0;
     while (cursor < order.size()) {
         minibatch.clear();
         const size_t remaining = order.size() - cursor;
@@ -200,6 +211,10 @@ int32_t TopicModelWrapper::trainOnline10X(int32_t _bsize, int32_t maxUnits, int3
         ntot += static_cast<int32_t>(minibatch.size());
         if (ntot >= maxUnits) {
             break;
+        }
+        b++;
+        if (verbose_ > 0 && (b % verbose_ == 0)) {
+            printTopicAbundance();
         }
     }
     return ntot;
@@ -352,32 +367,30 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
     if (dge_cache_ready_ && !dge_docs_cache_.empty()) {
         size_t cursor = 0;
         while (cursor < dge_docs_cache_.size()) {
-            minibatch_local.clear();
             idens.clear();
             const size_t remaining = dge_docs_cache_.size() - cursor;
             const size_t take = std::min(static_cast<size_t>(batchSize), remaining);
-            minibatch_local.reserve(take);
             idens.reserve(take);
             for (size_t i = 0; i < take; ++i) {
                 const size_t idx = cursor + i;
-                minibatch_local.push_back(dge_docs_cache_[idx]);
                 if (idx < dge_barcode_idx_cache_.size()) {
                     idens.push_back(std::to_string(dge_barcode_idx_cache_[idx]));
                 } else {
                     idens.push_back(std::to_string(idx));
                 }
             }
+            std::span<const Document> minibatch_view(dge_docs_cache_.data() + cursor, take);
             cursor += take;
 
-            Eigen::MatrixXd doc_topic = do_transform(minibatch_local); // Virtual dispatch
+            Eigen::MatrixXd doc_topic = do_transform(minibatch_view); // Virtual dispatch
             if (pseudobulk.rows() == 0) {
                 pseudobulk = Eigen::MatrixXd::Zero(M_, doc_topic.cols());
             }
-            for (int i = 0; i < minibatch_local.size(); ++i) {
+            for (size_t i = 0; i < take; ++i) {
                 outFileStream << idens[i] << "\t";
-                writeTopicVectorWithTopK(outFileStream, doc_topic, i, unitCols, transformOutputOptions_);
+                writeTopicVectorWithTopK(outFileStream, doc_topic, static_cast<int>(i), unitCols, transformOutputOptions_);
                 outFileStream << "\n";
-                Document& doc = minibatch_local[i];
+                const Document& doc = minibatch_view[i];
                 for (int j = 0; j < doc.ids.size(); ++j) {
                     uint32_t m = doc.ids[j];
                     for (int k = 0; k < doc_topic.cols(); ++k) {

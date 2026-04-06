@@ -8,7 +8,12 @@ This document describes two related commands: `nmf-pois-log1p` for fitting a Poi
 
 ### Input format
 
-The input data format is the same as for `topic-model` (could be enerated from pixel level data by `tiles2hex`), including a data file and a corresponding metadata JSON file.
+The input data format is the same as for `topic-model`, including either:
+
+- the custom sparse text format with `--in-data` and `--in-meta` (generated from pixel level data by `tiles2hex`)
+- 10X MEX input with `--in-dge-dir`, or the explicit triplet `--in-barcodes`, `--in-features`, and `--in-matrix`
+
+As with `topic-model`, 10X input is loaded fully into memory. If `--features` is not provided for 10X input, `nmf-pois-log1p` also writes `<prefix>.features.tsv` containing the final feature names and total counts.
 
 ### Usage
 
@@ -17,28 +22,47 @@ punkst nmf-pois-log1p --in-data hex_data.txt --in-meta hex_meta.json \
 --K 15 --out-prefix nmf_results --threads 8 --seed 1984
 ```
 
+For 10X input:
+
+```bash
+punkst nmf-pois-log1p --in-dge-dir filtered_feature_bc_matrix \
+--K 15 --out-prefix nmf_results --threads 8 --seed 1984
+```
+
 ### Required
-
-`--in-data` - Input data file (created by `tiles2hex`).
-
-`--in-meta` - Metadata file created by `tiles2hex`.
 
 `--K` - The number of factors (topics) to learn.
 
 `--out-prefix` - Prefix for the output files.
 
+Input in one of the following two formats is required:
+
+#### For the custom format
+
+`--in-data` - Input data file (created by `tiles2hex`).
+
+`--in-meta` - Metadata file created by `tiles2hex`.
+
+#### For 10X DGE format
+
+`--in-dge-dir` - Input directory containing `barcodes.tsv.gz`, `features.tsv.gz`, and `matrix.mtx.gz`.
+
+Alternatively, specify the three files directly with `--in-barcodes`, `--in-features`, and `--in-matrix`.
+
 ### Optional
 
 #### Data and Feature Filtering
-(Similar to [`topic-model`](lda4hex.md))
+(Same behavior as [`topic-model`](lda4hex.md))
 
-`--features` - Path to a file where the first column contains gene names and the second column contains the total count of that gene. Used for filtering.
+`--features` - Path to a file where the first column contains feature names and the second column may contain total counts. Used to define/filter the feature space.
 
-`--min-count-per-feature` - Minimum total count for a feature to be included. Requires `--features`. Default: 100.
+`--min-count-per-feature` - Minimum total count for a feature to be included. Default: 100.
 
 `--include-feature-regex` - Regular expression to include only features matching this pattern.
 
 `--exclude-feature-regex` - Regular expression to exclude features matching this pattern.
+
+For the details on feature-selection behaviors with 10X input, including when `--features` is optional, when an input model defines the feature space, and when the (less ideal) two-pass 10X load is used, see [`topic-model`](lda4hex.md).
 
 `--min-count-train` - Minimum total count for a unit (hexagon/cell) to be included in training. Default: 50.
 

@@ -7,6 +7,7 @@
 #include <iostream>
 #include <random>
 #include <optional>
+#include <span>
 #include "numerical_utils.hpp"
 #include "dataunits.hpp"
 #include "error.hpp"
@@ -79,6 +80,7 @@ public:
 
     // Transform: compute document-topic distributions for a list of documents
     MatrixXd transform(const std::vector<Document>& docs);
+    MatrixXd transform(std::span<const Document> docs);
 
     void set_nthreads(int nThreads) {
         nThreads_ = nThreads;

@@ -1,6 +1,6 @@
 # topic-model
 
-**`topic-model` (alias for `lda4hex`) fits top model on the hexagon/spot/single cell data.**
+**`topic-model` (alias for `lda4hex`) fits topic model on the hexagon/spot/single cell data.**
 
 ## Input format
 
@@ -32,9 +32,9 @@ We require a json file with at least the following information:
 
 You can train directly from the 10X MEX format by passing `--in-dge-dir` or the explicit triplet `--in-barcodes`, `--in-features`, `--in-matrix`.
 
-When using 10X input, `--features` is required and must include per-feature totals (second column). These totals are used for prior scaling and background initialization.
-
 Due to the limit of the 10X DGE format, we load the entire dataset in memory and perform shuffling \& minibatching internally. For very large datasets, it would be memory intensive. You could use [punkst convert-10X-SC](../input/index.md) to convert the 10X DGE to the custom format once if you plan to train multiple models on a very large dataset.
+
+Feature names are read from the input `features.tsv.gz`. If duplicated names are present, the first occurrence keeps its name and later duplicates use the supposedly unique gene ID instead.
 
 ## Usage
 
@@ -65,21 +65,30 @@ Input in one of the following two formats is required:
 
 Alternatively, you can specify the three files directly by `--in-barcodes`, `--in-features`, and `--in-matrix`.
 
-`--features` - A tsv file containing at least two columns: the feature names and the total feature count in the dataset. (You will get it if you used `pts2tiles` or `multisample-prepare`) It is required for 10X input though optional for the custom format.
-
 ### Optional
 
 #### Feature Filtering
 
-`--features` - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene. It is also required for 10X input.
+`--features` - Optional. Path to a TSV file where the first column contains feature names and the second column may contain total feature counts, the counts are used for filtering according to `--min-count-per-feature`.
 
-`--min-count-per-feature` - Minimum total count for features to be included. Require `--features` to be specified. Default: 1.
+`--min-count-per-feature` - Minimum total count for features to be included. Default: 1.
 
 `--include-feature-regex` - Regular expression ([modified ECMAScript grammar](https://en.cppreference.com/w/cpp/regex/ecmascript)) to include only features matching this pattern. Default: include all features.
 
 `--exclude-feature-regex` - Regular expression (modified ECMAScript) to exclude features matching this pattern. Default: exclude no features.
 
-**Feature Selection Logic:** the above three filters are applied jointly, so only genes with at least the minimum count, matching the include regex (if provided), and not matching the exclude regex (if provided) will be included in the model.
+**feature selection logic when using 10X matrix input**
+
+For 10X input, feature selection follows this order:
+
+1. If `--features` is provided, use it to define/filter the feature space before loading the full matrix. If an LDA model prior is also provided, the feature space is further intersected with the features present in the prior model.
+2. If `--features` is not provided but `--model-prior` is provided, use all and only the features present in the prior model. In this case `--min-count-per-feature`, `--include-feature-regex`, and `--exclude-feature-regex` are ignored.
+3. If neither `--features` nor `--model-prior` is provided and `--min-count-per-feature <= 1`, regex filtering is applied to the 10X feature names before loading the full matrix.
+4. Only if neither `--features` nor `--model-prior` is provided and `--min-count-per-feature > 1` does `topic-model` load the 10X matrix first, compute feature totals, apply the feature filters, and then reload the matrix in the reduced feature space.
+
+When `--features` is not provided, `topic-model` writes `<prefix>.features.tsv` after the final 10X feature space is determined. This file has no header and contains two columns:
+- feature name as used by the model
+- total count of that feature in the loaded 10X data
 
 #### Feature Weighting
 
@@ -123,7 +132,7 @@ Alternatively, you can specify the three files directly by `--in-barcodes`, `--i
 
 #### Output Control
 
-`--transform` - Transform the data to the LDA space after training. If set, an output file `<prefix>.results.tsv` will be created. For 10X input, identifiers are 0-based barcode indices (in the input `barcodes.tsv.gz`).
+`--transform` - Transform the data to the LDA space after training. If set, an output file `<prefix>.results.tsv` will be created. For 10X input, identifiers are 0-based barcode indices in the order of the input `barcodes.tsv.gz`.
 
 With `--transform`, the result table now includes two appended columns by default:
 - `topK`: topic label (column name) with maximum probability in that row.

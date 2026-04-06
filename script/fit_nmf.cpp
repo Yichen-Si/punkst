@@ -11,6 +11,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
 	std::string inFile, metaFile, featureFile, covarFile, outPrefix;
     std::string modelFile, labelListFile;
+    std::string dge_dir, in_bc, in_ft, in_mtx;
     std::string include_ftr_regex, exclude_ftr_regex;
     std::vector<uint32_t> covar_idx;
     int32_t label_idx = -1;
@@ -42,8 +43,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
     ParamList pl;
     // Input Options
-    pl.add_option("in-data", "Input hex file", inFile, true)
-      .add_option("in-meta", "Metadata file", metaFile, true)
+    pl.add_option("in-data", "Input hex file", inFile)
+      .add_option("in-meta", "Metadata file", metaFile)
       .add_option("in-covar", "Covariate file", covarFile)
       .add_option("allow-na", "Replace non-numerical values in covariates with zero", allow_na)
       .add_option("icol-covar", "Column indices (0-based) in --in-covar to use", covar_idx)
@@ -52,7 +53,11 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("label-na", "String for missing labels", label_na)
       .add_option("in-model", "Input model (beta) file", modelFile)
       .add_option("random-init-missing", "Randomly initialize features missing from the model", random_init_missing_features);
-    pl.add_option("K", "K", K, true)
+    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
+      .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
+      .add_option("in-features", "Input features.tsv.gz", in_ft)
+      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx);
+	pl.add_option("K", "K", K, true)
       .add_option("mode", "Algorithm", mode)
       .add_option("fit-background", "Fit background noise", fit_background)
       .add_option("fix-background", "Fix background model during training", fix_background)
@@ -71,8 +76,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("covar-coef-max", "Upperbound for covariate coefficients", covar_coef_max)
       .add_option("seed", "Random seed", seed)
       .add_option("threads", "Number of threads", nThreads);
-    pl.add_option("features", "Feature names and total counts file", featureFile)
-      .add_option("min-count-per-feature", "Min count for features to be included (requires --features)", minCountFeature)
+    pl.add_option("features", "Feature list", featureFile)
+	  .add_option("min-count-per-feature", "Min count for features to be included", minCountFeature)
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex)
       .add_option("min-count-train", "Minimum total count per doc", minCountTrain);
@@ -105,19 +110,63 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     bool per_doc_c = c <= 0;
     std::mt19937 rng(seed > 0 ? seed : std::random_device{}());
 
-    HexReader reader(metaFile);
-    if (!featureFile.empty()) {
+    enum class TenXFeatureMode {
+        Default,
+        FeatureFile,
+        ModelOnly,
+        RegexOnly,
+        PostloadCounts
+    };
+
+    std::unique_ptr<DGEReader10X> dge_ptr;
+    HexReader reader;
+    bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
+    if (use_10x) {
+        if (!inFile.empty()) {
+            warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
+        }
+        if (!dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
+            if (dge_dir.back() == '/') {
+                dge_dir.pop_back();
+            }
+            in_bc = dge_dir + "/barcodes.tsv.gz";
+            in_ft = dge_dir + "/features.tsv.gz";
+            in_mtx = dge_dir + "/matrix.mtx.gz";
+        }
+        if (in_bc.empty() || in_ft.empty() || in_mtx.empty()) {
+            error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
+        }
+        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
+        reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
+    } else {
+        if (metaFile.empty() || inFile.empty()) {
+            error("Missing --in-data or --in-meta");
+        }
+        reader.readMetadata(metaFile);
+    }
+
+    TenXFeatureMode tenx_feature_mode = TenXFeatureMode::Default;
+    if (use_10x) {
+        const bool has_model_file = !modelFile.empty();
+        if (!featureFile.empty()) {
+            tenx_feature_mode = TenXFeatureMode::FeatureFile;
+            reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex, true);
+        } else if (has_model_file) {
+            tenx_feature_mode = TenXFeatureMode::ModelOnly;
+        } else if (minCountFeature <= 1) {
+            tenx_feature_mode = TenXFeatureMode::RegexOnly;
+            if (!include_ftr_regex.empty() || !exclude_ftr_regex.empty()) {
+                reader.filterCurrentFeatures(1, include_ftr_regex, exclude_ftr_regex);
+            }
+        } else {
+            tenx_feature_mode = TenXFeatureMode::PostloadCounts;
+        }
+    } else if (!featureFile.empty()) {
         reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
-    int32_t M = reader.nFeatures;
-    notice("Number of features: %d", M);
 
-    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, exact, debug_);
-    if (fit_background) {
-        nmf.set_background_model(pi0, nullptr, fix_background);
-    }
-
-    // Load model / warm start
+    RowMajorMatrixXd beta_init;
+    bool has_beta_init = false;
     std::vector<std::string> factor_names;
     if (!modelFile.empty()) {
         RowMajorMatrixXd beta;
@@ -145,35 +194,197 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         M1 = m;
         bool keep_unmapped = !featureFile.empty() && random_init_missing_features;
         reader.setFeatureIndexRemap(kept_model_features, keep_unmapped);
-        M = reader.nFeatures;
-        RowMajorMatrixXd beta1 = RowMajorMatrixXd::Zero(M, K);
-        beta1.topRows(M1) = beta.topRows(M1);
+        int32_t M = reader.nFeatures;
+        beta_init = RowMajorMatrixXd::Zero(M, K);
+        beta_init.topRows(M1) = beta.topRows(M1);
         if (M != M1) {
-            auto colmed = columnMedians(beta1.topRows(M1));
+            auto colmed = columnMedians(beta_init.topRows(M1));
             std::gamma_distribution<double> dist(100.0, 0.01);
             for (int32_t i = M1; i < M; i++) {
                 for (int k = 0; k < K; k++) {
-                    beta1(i, k) = dist(rng) * colmed(k);
+                    beta_init(i, k) = dist(rng) * colmed(k);
                 }
             }
             notice("Filled in %d missing features with random initial values", M - M1);
         }
-        nmf.set_beta(beta1);
+        has_beta_init = true;
     }
+
+    int32_t M = reader.nFeatures;
+    notice("Number of features: %d", M);
 
     // Load data
     // TODO: data loading with covariates is unsafe & messy
     std::vector<SparseObs> docs;
     std::vector<std::string> rnames, covar_names, labels;
-    SparseObsMinibatchReader minibatch_reader(inFile, reader,
-        minCountTrain, size_factor, c, debug_N);
-    if (!covarFile.empty() || label_idx >= 0) {
-        minibatch_reader.set_covariates(covarFile, &covar_idx, &covar_names,
-            allow_na, label_idx, label_na, &labels);
+    size_t N = 0;
+    int32_t n_covar = 0;
+    if (use_10x) {
+        if (tenx_feature_mode == TenXFeatureMode::ModelOnly &&
+            ((minCountFeature > 1) || !include_ftr_regex.empty() || !exclude_ftr_regex.empty())) {
+            warning("Ignoring --min-count-per-feature and feature regex filters for 10X input because the input model defines the feature space");
+        }
+
+        std::vector<Document> dge_docs;
+        std::vector<int32_t> dge_barcode_idx;
+        auto reload_10x_docs = [&]() {
+            int32_t n_overlap = dge_ptr->setFeatureIndexRemap(reader.features, false);
+            if (n_overlap == 0) {
+                error("No overlapping features found between 10X input and the configured feature space");
+            }
+            dge_ptr->readAll(dge_docs, dge_barcode_idx, 0);
+            std::vector<double> feature_sums_raw(dge_ptr->feature_totals.begin(), dge_ptr->feature_totals.end());
+            reader.setFeatureSums(feature_sums_raw, true);
+            notice("Loaded %zu 10X units", dge_docs.size());
+        };
+
+        reload_10x_docs();
+        if (tenx_feature_mode == TenXFeatureMode::PostloadCounts) {
+            const int32_t nFeaturesPrev = reader.nFeatures;
+            const int32_t nKept = reader.filterCurrentFeatures(minCountFeature, include_ftr_regex, exclude_ftr_regex);
+            if (nKept == 0) {
+                error("No features remain after applying feature filters");
+            }
+            if (reader.nFeatures != nFeaturesPrev) {
+                reload_10x_docs();
+            }
+        }
+
+        if (featureFile.empty()) {
+            const std::string outFeatures = outPrefix + ".features.tsv";
+            std::ofstream outFeatureStream(outFeatures);
+            if (!outFeatureStream) {
+                error("Error opening output file: %s for writing", outFeatures.c_str());
+            }
+            const auto& featureSums = reader.getFeatureSumsRaw();
+            if (reader.features.size() != featureSums.size()) {
+                error("Feature names and total counts have inconsistent sizes (%zu vs %zu)",
+                    reader.features.size(), featureSums.size());
+            }
+            outFeatureStream << std::fixed << std::setprecision(0);
+            for (size_t i = 0; i < reader.features.size(); ++i) {
+                outFeatureStream << reader.features[i] << "\t" << featureSums[i] << "\n";
+            }
+            outFeatureStream.close();
+            notice("Features and total counts written to %s", outFeatures.c_str());
+        }
+
+        std::ifstream covarStream;
+        bool has_covar = false;
+        bool has_labels = false;
+        int32_t n_tokens = 0;
+        if (!covarFile.empty() || label_idx >= 0) {
+            if (covarFile.empty()) {
+                error("Label index requires a non-empty covariate file");
+            }
+            covarStream.open(covarFile);
+            if (!covarStream) {
+                error("Fail to covariate file: %s", covarFile.c_str());
+            }
+            std::string line;
+            if (!std::getline(covarStream, line)) {
+                error("Fail to parse covariate file: %s", covarFile.c_str());
+            }
+            std::vector<std::string> covar_header;
+            split(covar_header, "\t ", line, UINT_MAX, true, true, true);
+            n_tokens = static_cast<int32_t>(covar_header.size());
+            has_labels = (label_idx >= 0);
+            if (covar_idx.empty() && !has_labels) {
+                n_covar = n_tokens - 1;
+                for (int32_t i = 1; i < n_tokens; i++) {
+                    covar_idx.push_back(i);
+                    covar_names.push_back(covar_header[i]);
+                }
+            } else {
+                n_covar = static_cast<int32_t>(covar_idx.size());
+                for (const auto i : covar_idx) {
+                    if (i >= static_cast<uint32_t>(n_tokens)) {
+                        error("Covariate index %d is out of range [0,%d)", static_cast<int32_t>(i), n_tokens);
+                    }
+                    covar_names.push_back(covar_header[i]);
+                }
+            }
+            has_covar = (n_covar > 0 || has_labels);
+            notice("Covariate file has %d columns, using %d as covariates and %d as label", n_tokens, n_covar, (int32_t) has_labels);
+        }
+
+        const size_t n_docs_raw = (debug_N > 0 && debug_N < static_cast<int32_t>(dge_docs.size()))
+            ? static_cast<size_t>(debug_N) : dge_docs.size();
+        docs.reserve(n_docs_raw);
+        rnames.reserve(n_docs_raw);
+        std::vector<std::string> tokens;
+        for (size_t i = 0; i < n_docs_raw; ++i) {
+            std::string covar_line;
+            if (has_covar) {
+                if (!std::getline(covarStream, covar_line)) {
+                    error("The number of lines in covariate file is less than that in data file");
+                }
+            }
+
+            SparseObs obs;
+            obs.doc = std::move(dge_docs[i]);
+            const double ct = obs.doc.get_sum();
+            if (ct < minCountTrain) {
+                continue;
+            }
+            obs.c = per_doc_c ? ct / size_factor : c;
+            obs.ct_tot = ct;
+
+            if (has_covar) {
+                split(tokens, "\t ", covar_line, UINT_MAX, true, true, true);
+                if (tokens.size() != static_cast<size_t>(n_tokens)) {
+                    error("Number of columns (%lu) of line [%s] in covariate file does not match header (%d)",
+                        tokens.size(), covar_line.c_str(), n_tokens);
+                }
+                if (n_covar > 0) {
+                    obs.covar = Eigen::VectorXd::Zero(n_covar);
+                    for (int32_t j = 0; j < n_covar; j++) {
+                        if (!str2double(tokens[covar_idx[j]], obs.covar(j))) {
+                            if (!allow_na) {
+                                error("Invalid value for %d-th covariate %s.", j+1, tokens[covar_idx[j]].c_str());
+                            }
+                            obs.covar(j) = 0;
+                        }
+                    }
+                }
+                if (has_labels) {
+                    if (tokens[label_idx] == label_na) {
+                        continue;
+                    }
+                    labels.push_back(tokens[label_idx]);
+                }
+            }
+
+            docs.push_back(std::move(obs));
+            if (i < dge_barcode_idx.size() &&
+                dge_barcode_idx[i] >= 0 &&
+                dge_barcode_idx[i] < dge_ptr->nBarcodes) {
+                rnames.push_back(dge_ptr->barcodes[dge_barcode_idx[i]]);
+            } else {
+                rnames.push_back(std::to_string(i));
+            }
+        }
+        N = docs.size();
+    } else {
+        SparseObsMinibatchReader minibatch_reader(inFile, reader,
+            minCountTrain, size_factor, c, debug_N);
+        if (!covarFile.empty() || label_idx >= 0) {
+            minibatch_reader.set_covariates(covarFile, &covar_idx, &covar_names,
+                allow_na, label_idx, label_na, &labels);
+        }
+        N = minibatch_reader.readAll(docs, rnames);
+        n_covar = static_cast<int32_t>(covar_idx.size());
     }
-    size_t N = minibatch_reader.readAll(docs, rnames);
-    int32_t n_covar = static_cast<int32_t>(covar_idx.size());
+    M = reader.nFeatures;
     notice("Read %lu units with %d features", N, M);
+
+    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, exact, debug_);
+    if (fit_background) {
+        nmf.set_background_model(pi0, nullptr, fix_background);
+    }
+    if (has_beta_init) {
+        nmf.set_beta(beta_init);
+    }
 
     std::vector<int32_t> labels_idx;
     if (labels.size() > 0) {

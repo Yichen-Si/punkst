@@ -3,6 +3,7 @@
 #include "hdp.hpp"
 #include <memory>
 #include <regex>
+#include <span>
 
 /**
  * Base class for online training of topic models.
@@ -31,15 +32,19 @@ public:
     virtual ~TopicModelWrapper() = default;
 
     int32_t trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits = INT32_MAX);
-    void load10X(DGEReader10X& dge, int32_t _minCountTrain, bool force = false);
+    void prepare10XCache(DGEReader10X& dge, int32_t _minCountTrain, bool force = false);
     int32_t trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed);
     void fitAndWriteToFile10X(DGEReader10X& dge, const std::string& outPrefix, int32_t _bsize);
+    int32_t filterCurrentFeatures(int32_t minCount = 1,
+                                  const std::string& includeRegex = "",
+                                  const std::string& excludeRegex = "");
     // transform and writing results
     void fitAndWriteToFile(const std::string& inFile, const std::string& outPrefix, int32_t _bsize);
 
     int32_t nUnits() const { return reader.nUnits; }
     int32_t nFeatures() const { return M_; }
     bool hasFullFeatureSums() const { return reader.readFullSums; }
+    const std::vector<double>& getFeatureSumsRaw() const { return reader.getFeatureSumsRaw(); }
     void getTopicAbundance(std::vector<double>& topic_weights);
     virtual void filterTopics(double threshold, double coverage) {}
     std::vector<std::string> getFeatureNames() const {
@@ -71,7 +76,7 @@ public:
     virtual const std::vector<std::string>& get_topic_names() = 0;
 
     virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
-    virtual MatrixXd do_transform(const std::vector<Document>& batch) = 0;
+    virtual MatrixXd do_transform(std::span<const Document> batch) = 0;
 
     bool readMinibatch(std::ifstream& inFileStream, std::vector<Document>& batch, std::vector<std::string>& idens, int32_t batchSizeOverride, int32_t minCount = 0, int32_t maxUnits = INT32_MAX);
 
@@ -187,6 +192,15 @@ public:
         }
         lda->set_deterministic_rng(enabled);
     }
+    void preparePriorFeatureSpace(const std::string& priorFile) {
+        if (priorFile.empty()) {
+            return;
+        }
+        std::vector<std::string> priorFeatureNames;
+        std::vector<std::uint32_t> kept_indices;
+        readModelFeatureNamesFromTsv(priorFile, priorFeatureNames);
+        setupPriorMapping(priorFeatureNames, kept_indices);
+    }
     void writeBackgroundModel(std::string& outFile) {
         if (lda->get_algorithm() != InferenceType::SVB_DN) {
             return;
@@ -256,7 +270,7 @@ public:
     void do_partial_fit(const std::vector<Document>& batch) override {
         lda->partial_fit(batch);
     }
-    MatrixXd do_transform(const std::vector<Document>& batch) override {
+    MatrixXd do_transform(std::span<const Document> batch) override {
         return lda->transform(batch);
     }
     const RowMajorMatrixXd& get_model_matrix() const override {
@@ -388,6 +402,39 @@ protected:
 
         notice("Read model matrix: %d topics x %d features from %s", K_, nFeatures, modelFile.c_str());
     }
+    void readModelFeatureNamesFromTsv(const std::string& modelFile, std::vector<std::string>& _featureNames) {
+        std::ifstream modelIn(modelFile, std::ios::in);
+        if (!modelIn) {
+            error("Failed to open model file: %s", modelFile.c_str());
+        }
+
+        std::string line;
+        std::vector<std::string> tokens;
+        if (!std::getline(modelIn, line)) {
+            error("Failed to read header from model file: %s", modelFile.c_str());
+        }
+        split(tokens, "\t", line);
+        if (tokens.size() < 2) {
+            error("Invalid model header in file: %s", modelFile.c_str());
+        }
+
+        _featureNames.clear();
+        while (std::getline(modelIn, line)) {
+            if (line.empty()) {
+                continue;
+            }
+            split(tokens, "\t", line);
+            if (tokens.empty()) {
+                continue;
+            }
+            _featureNames.push_back(tokens[0]);
+        }
+        modelIn.close();
+
+        if (_featureNames.empty()) {
+            error("No features found in model file: %s", modelFile.c_str());
+        }
+    }
 
 
 };
@@ -481,7 +528,7 @@ public:
     void do_partial_fit(const std::vector<Document>& batch) override {
         hdp->partial_fit(batch);
     }
-    MatrixXd do_transform(const std::vector<Document>& batch) override {
+    MatrixXd do_transform(std::span<const Document> batch) override {
         MatrixXd theta = hdp->transform(batch);
         colNormalizeInPlace(theta);
         return theta;
