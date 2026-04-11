@@ -47,7 +47,7 @@ Then `make -f Makefile` exectutes the workflow.
 
 `seed`: random seed for reproducibility. This seed is propagated to all steps in the workflow that involve randomness.
 
-`use_fixed_color_table`: controls how colors are assigned when rendering pixel maps. Default is `true`, which uses the fixed color table at `ext/py/cmap.48.tsv`. Set to `false` to run `ext/py/color_helper.py` and derive colors from model results (may be slow for a large dataset).
+`use_fixed_color_table`: controls how colors are assigned when rendering pixel maps. Default is `true`, which uses the fixed color table at `ext/py/cmap.256.tsv`. Set to `false` to run `ext/py/color_helper.py` and derive colors from model results (may be slow for a large dataset).
 
 `"datadir"`: the path to store all output
 
@@ -203,7 +203,7 @@ Key parameters:
 
 Visualize the pixel decoding results:
 
-The example Makefiles use a fixed color table (`ext/py/cmap.48.tsv`) by default (`"use_fixed_color_table": true` in `config.json`).
+The example Makefiles use a fixed color table (`ext/py/cmap.256.tsv`) by default (`"use_fixed_color_table": true` in `config.json`).
 
 Optional: set `"use_fixed_color_table": false` and generate a color table from model results using `color_helper.py`. (Python dependency: [jinja2](https://pypi.org/project/Jinja2/), pandas, matplotlib. It may be slow for a large dataset.)
 

@@ -248,7 +248,8 @@ public:
         const std::string& templateGeoJSON = "", const std::string& templateOutPrefix = "");
     void softMaskComposition(const std::string& outPrefix,
         const std::string& maskGeoJSON,
-        const std::vector<int32_t>& focalFactors = {});
+        const std::vector<int32_t>& focalFactors = {},
+        bool skipGlobalHistogram = false);
 
     /* Tile loaders */
     // Load raster tiles

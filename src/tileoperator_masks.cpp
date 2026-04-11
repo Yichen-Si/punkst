@@ -1069,7 +1069,8 @@ void TileOperator::softFactorMask(const std::string& outPrefix,
 }
 
 void TileOperator::softMaskComposition(const std::string& outPrefix,
-    const std::string& maskGeoJSON, const std::vector<int32_t>& focalFactors) {
+    const std::string& maskGeoJSON, const std::vector<int32_t>& focalFactors,
+    bool skipGlobalHistogram) {
     requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {
         warning("%s: No tiles to process", __func__);
@@ -1106,9 +1107,15 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
     std::vector<FocalMaskRegion> masks = load_focal_mask_regions(
         maskGeoJSON, formatInfo_.tileSize, selectedFocal, &foundFocal);
     if (masks.empty()) {
-        warning("%s: No focal masks selected from %s; output will contain only the global histogram",
-            __func__, maskGeoJSON.c_str());
+        if (skipGlobalHistogram) {
+            warning("%s: No focal masks selected from %s and global histogram is skipped; output will contain only the header",
+                __func__, maskGeoJSON.c_str());
+        } else {
+            warning("%s: No focal masks selected from %s; output will contain only the global histogram",
+                __func__, maskGeoJSON.c_str());
+        }
     }
+    size_t nMasks = masks.size();
     if (!focalFactors.empty()) {
         for (int32_t focalK = 0; focalK < K_; ++focalK) {
             if (selectedFocal[static_cast<size_t>(focalK)] && !foundFocal[static_cast<size_t>(focalK)]) {
@@ -1119,7 +1126,7 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
     }
 
     std::unordered_map<TileKey, std::vector<size_t>, TileKeyHash> masksByTile;
-    for (size_t mi = 0; mi < masks.size(); ++mi) {
+    for (size_t mi = 0; mi < nMasks; ++mi) {
         for (const auto& kv : masks[mi].region.tile_bins) {
             masksByTile[kv.first].push_back(mi);
         }
@@ -1130,11 +1137,11 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
         RegionTileState state = RegionTileState::Outside;
     };
 
-    std::vector<std::vector<std::pair<TileKey, RegionTileState>>> statesByMask(masks.size());
+    std::vector<std::vector<std::pair<TileKey, RegionTileState>>> statesByMask(nMasks);
     if (!masks.empty()) {
-        if (threads_ > 1 && masks.size() > 1) {
+        if (threads_ > 1 && nMasks > 1) { // parallelize over masks
             tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
-            tbb::parallel_for(tbb::blocked_range<size_t>(0, masks.size()),
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, nMasks),
                 [&](const tbb::blocked_range<size_t>& range) {
                     for (size_t mi = range.begin(); mi < range.end(); ++mi) {
                         auto& out = statesByMask[mi];
@@ -1145,7 +1152,7 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
                     }
                 });
         } else {
-            for (size_t mi = 0; mi < masks.size(); ++mi) {
+            for (size_t mi = 0; mi < nMasks; ++mi) {
                 auto& out = statesByMask[mi];
                 out.reserve(masks[mi].region.tile_bins.size());
                 for (const auto& kv : masks[mi].region.tile_bins) {
@@ -1173,6 +1180,20 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
         }
     }
 
+    std::vector<size_t> blocksToProcess;
+    blocksToProcess.reserve(blocks_.size());
+    for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+        if (!skipGlobalHistogram) {
+            blocksToProcess.push_back(bi);
+            continue;
+        }
+        const TileInfo& blk = blocks_[bi];
+        const auto it = tileCandidates.find(TileKey{blk.idx.row, blk.idx.col});
+        if (it != tileCandidates.end() && !it->second.empty()) {
+            blocksToProcess.push_back(bi);
+        }
+    }
+
     struct StageAccum {
         std::vector<double> globalHist;
         std::vector<double> maskHist;
@@ -1190,7 +1211,7 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
     const double pixelResolution = static_cast<double>(
         getRasterPixelResolution() > 0.0f ? getRasterPixelResolution() : 1.0f);
     const auto t0 = std::chrono::steady_clock::now();
-    StageAccum globalAccum(K_, masks.size());
+    StageAccum globalAccum(K_, nMasks);
 
     auto openTileStream = [&]() {
         std::ifstream in;
@@ -1220,6 +1241,9 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
         const TileKey tileKey{blk.idx.row, blk.idx.col};
         const auto candIt = tileCandidates.find(tileKey);
         if (candIt == tileCandidates.end() || candIt->second.empty()) {
+            if (skipGlobalHistogram) {
+                return;
+            }
             SoftMaskTileData tileData;
             loadSoftMaskTileData(blk, in, 0.0f, false, false, false, tileData,
                 accum.outOfRange, accum.badFactor, &accum.collisions, &accum.globalHist);
@@ -1227,8 +1251,9 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
         }
 
         SoftMaskTileData tileData;
+        std::vector<double>* histGlobal = skipGlobalHistogram ? nullptr : &accum.globalHist;
         loadSoftMaskTileData(blk, in, 0.0f, true, false, false, tileData,
-            accum.outOfRange, accum.badFactor, &accum.collisions, &accum.globalHist);
+            accum.outOfRange, accum.badFactor, &accum.collisions, histGlobal);
         if (tileData.records.empty()) {
             return;
         }
@@ -1279,15 +1304,15 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
         }
     };
 
-    if (threads_ > 1 && blocks_.size() > 1) {
+    if (threads_ > 1 && blocksToProcess.size() > 1) { // parallelize over tiles
         tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, static_cast<size_t>(threads_));
-        tbb::combinable<StageAccum> tls([&] { return StageAccum(K_, masks.size()); });
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocks_.size()),
+        tbb::combinable<StageAccum> tls([&] { return StageAccum(K_, nMasks); });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, blocksToProcess.size()),
             [&](const tbb::blocked_range<size_t>& range) {
                 std::ifstream in = openTileStream();
                 auto& local = tls.local();
-                for (size_t bi = range.begin(); bi < range.end(); ++bi) {
-                    processTile(bi, in, local);
+                for (size_t i = range.begin(); i < range.end(); ++i) {
+                    processTile(blocksToProcess[i], in, local);
                 }
             });
         tls.combine_each([&](const StageAccum& local) {
@@ -1306,12 +1331,12 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
         });
     } else {
         std::ifstream in = openTileStream();
-        for (size_t bi = 0; bi < blocks_.size(); ++bi) {
+        for (size_t bi : blocksToProcess) {
             processTile(bi, in, globalAccum);
         }
     }
 
-    const double globalTotal = std::accumulate(
+    const double globalTotal = skipGlobalHistogram ? 0.0 : std::accumulate(
         globalAccum.globalHist.begin(), globalAccum.globalHist.end(), 0.0);
     const std::string outFile = outPrefix + ".mask_composition.tsv";
     FILE* fp = fopen(outFile.c_str(), "w");
@@ -1319,7 +1344,7 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
         error("%s: Cannot open output file %s", __func__, outFile.c_str());
     }
     fprintf(fp, "k_focal\tk\tmass\tfrac\n");
-    for (size_t mi = 0; mi < masks.size(); ++mi) {
+    for (size_t mi = 0; mi < nMasks; ++mi) {
         const size_t base = mi * static_cast<size_t>(K_);
         const double denom = globalAccum.maskTotal[mi];
         for (int32_t k = 0; k < K_; ++k) {
@@ -1328,10 +1353,12 @@ void TileOperator::softMaskComposition(const std::string& outPrefix,
             fprintf(fp, "%d\t%d\t%.4e\t%.4e\n", masks[mi].focalK, k, mass, frac);
         }
     }
-    for (int32_t k = 0; k < K_; ++k) {
-        const double mass = globalAccum.globalHist[static_cast<size_t>(k)];
-        const double frac = (globalTotal > 0.0) ? (mass / globalTotal) : 0.0;
-        fprintf(fp, "%d\t%d\t%.4e\t%.4e\n", K_, k, mass, frac);
+    if (!skipGlobalHistogram) {
+        for (int32_t k = 0; k < K_; ++k) {
+            const double mass = globalAccum.globalHist[static_cast<size_t>(k)];
+            const double frac = (globalTotal > 0.0) ? (mass / globalTotal) : 0.0;
+            fprintf(fp, "%d\t%d\t%.4e\t%.4e\n", -1, k, mass, frac);
+        }
     }
     fclose(fp);
 

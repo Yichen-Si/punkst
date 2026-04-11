@@ -98,6 +98,7 @@ Current commands with meaningful parallel tile-local execution include:
 - `--annotate-pts`
 - `--prob-dot`
 - `--confusion`
+- `--write-mlt-pmtiles`
 - `--extract-region`
 - `--extract-region-geojson`
 - `--smooth-top-labels`
@@ -110,14 +111,10 @@ Current commands with meaningful parallel tile-local execution include:
 
 Notes:
 
-- PMTiles packaging paths also honor `--threads`, including direct `--write-mlt-pmtiles` export and `--annotate-pts` / `--merge-emb + --annotate-pts` packaging
+- PMTiles packaging paths honor `--threads`, including direct `--write-mlt-pmtiles` export and `--annotate-pts` / `--merge-emb + --annotate-pts` packaging.
 - Some commands are only partially parallelized: tile-local work is parallel, but later reduction, polygon assembly, or final writeback is still serial.
 - `--merge-emb` and `--annotate-pts` now use the same shared tile-result pipeline in both default pixel mode and feature-specific mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.
 - `--prob-dot` without `--merge-emb` has a serial fallback for bounded query mode and non-seekable text input such as stdin or gzipped streaming text.
-
-Feature-specific note:
-
-- `--merge-emb` and `--annotate-pts` are parallelized for feature-specific inputs as well
 
 ### Raster Resolution Override
 
@@ -202,7 +199,7 @@ To extract all records inside one axis-aligned rectangle:
 ```bash
 punkst tile-op --extract-region --in path/prefix [--binary] \
   --xmin 1000 --xmax 2000 --ymin 500 --ymax 1500 \
-  --out path/prefix.region
+  --out path/prefix.region --threads 4
 ```
 
 This keeps all records whose `(x, y)` coordinates fall inside the half-open rectangle `[xmin, xmax) x [ymin, ymax)`.
@@ -214,7 +211,7 @@ To extract all records inside the union of multiple polygons:
 ```bash
 punkst tile-op --extract-region-geojson path/region.geojson \
   --in path/prefix [--binary] \
-  --out path/prefix.region
+  --out path/prefix.region --threads 4
 ```
 
 Optional:
@@ -363,7 +360,7 @@ You can merge multiple inference files (e.g., from fitting different models) con
 ```bash
 punkst tile-op --in path/result1 [--binary] \
   --merge-emb path/result2.tsv path/result3.bin --k2keep 3 1 2 \
-  --out path/merged_result --binary-out --threads 1
+  --out path/merged_result --binary-out --threads 4
 ```
 
 `--merge-emb` - One or more other inference files (created by `pixel-decode`) to merge with the main input file. They can be in either TSV or binary format, but have to have proper index files stored ad `<prefix>.index`.
@@ -409,7 +406,7 @@ You can annotate a transcript file with the inference results. The query file is
 ```bash
 punkst tile-op --in path/prefix [--binary] \
   --annotate-pts path/transcripts --icol-x 0 --icol-y 1 \
-  --out path/merged --threads 1
+  --out path/merged --threads 4
 ```
 
 `--annotate-pts` - Prefix of the points file (the tool expects `<prefix>.tsv` and `<prefix>.index`) to be annotated.
@@ -541,7 +538,7 @@ Likely use cases: comparing factor sets; comparing factors with cell types.
 For a single inference result file:
 
 ```bash
-punkst tile-op --prob-dot --in path/result [--binary] --out path/out_prefix --threads 1
+punkst tile-op --prob-dot --in path/result [--binary] --out path/out_prefix --threads 4
 ```
 Output:
 
@@ -560,7 +557,7 @@ You can also compute these statistics while merging multiple inference result fi
 ```bash
 punkst tile-op --prob-dot --in path/result1 [--binary] \
   --merge-emb path/result2.tsv path/result3.bin \
-  --out path/out_prefix --threads 1
+  --out path/out_prefix --threads 4
 ```
 
 This supports `--k2keep` to reduce the number of top-K factors used in each source before computing the products.
@@ -582,7 +579,7 @@ Output:
 This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.
 
 ```bash
-punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix --threads 1
+punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix --threads 4
 ```
 
 `--confusion` - The resolution (side length of square bins in microns) for computing the confusion matrix.
@@ -602,7 +599,8 @@ It is meant for the case where you projected categorical cell types at high reso
 The output is a new tiled data file where for each pixel, only the smoothed top factor is kept. (The output can be used as input for `tile-op`, so you can dump it to a tsv file or do other operations)
 
 ```bash
-punkst tile-op --smooth-top-labels 2 --in path/result [--binary] --out path/smoothed_result
+punkst tile-op --smooth-top-labels 2 --in path/result [--binary] \
+  --out path/smoothed_result --threads 4
 ```
 
 `--smooth-top-labels` - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.
@@ -618,7 +616,8 @@ Optional:
 This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with `tile-op --smooth-top-labels r --fill-empty-islands` (see above).
 
 ```bash
-punkst tile-op --spatial-metrics --in path/result [--binary] --out path/prefix
+punkst tile-op --spatial-metrics --in path/result [--binary] \
+  --out path/prefix --threads 4
 ```
 
 The output includes two files:
@@ -654,7 +653,7 @@ Surface distance: for each pair of factors, we compute a histogram of the distan
 punkst tile-op --shell-surface --in path/result [--binary] \
   --shell-radii 5 10 20 --surface-dmax 25 \
   --cc-min-size 25 --spatial-min-pix-per-tile-label 20 \
-  --out path/out_prefix
+  --out path/out_prefix --threads 4
 ```
 
 `--shell-surface` - run shell occupancy and surface distance profiling.
@@ -693,7 +692,7 @@ Build a raster mask for one focal factor using local neighborhood probability ma
 punkst tile-op --profile-one-factor-mask --in path/result [--binary] \
   --focal-k 7 --mask-radius 2 --mask-threshold 0.35 \
   --mask-min-frac 0.05 --mask-min-component-area 20 \
-  --out path/out_prefix
+  --out path/out_prefix --threads 4
 ```
 
 Main parameters:
@@ -734,7 +733,7 @@ punkst tile-op --soft-factor-mask --in path/result [--binary] \
   --mask-radius 2 --mask-threshold 0.35 \
   --mask-min-pixel-prob 0.01 --mask-min-tile-mass 2 \
   --mask-min-component-area 20 --mask-min-hole-area 4 \
-  --mask-simplify 2 --out path/out_prefix
+  --mask-simplify 2 --out path/out_prefix --threads 4
 ```
 
 Main parameters:
@@ -781,23 +780,25 @@ Read the joined GeoJSON produced by `--soft-factor-mask`, treat each feature as 
 punkst tile-op --soft-mask-composition path/out_prefix.geojson \
   --soft-mask-composition-focal 3 7 \
   --in path/result [--binary] \
-  --out path/out_prefix
+  --out path/out_prefix --threads 4 \
+  --soft-mask-composition-skip-global
 ```
 
 Main parameters:
 
 - `--soft-mask-composition` - path to the joined GeoJSON written by `--soft-factor-mask`.
-- `--soft-mask-composition-focal` - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. The global histogram is always included in the output.
+- `--soft-mask-composition-focal` - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. By default, the global histogram is included in the output.
+- `--soft-mask-composition-skip-global` - skip the full-input global histogram. This also avoids scanning tiles that do not intersect any selected mask, which can improve throughput when the masks cover only a small fraction of the input.
 
 Output:
 
-- `path/out_prefix.mask_composition.tsv`: mask and global factor histograms with columns
+- `path/out_prefix.mask_composition.tsv`: mask factor histograms and, unless skipped, the global factor histogram, with columns
   - focal factor index (`k_focal`)
   - factor index (`k`)
   - total probability mass (`mass`)
   - fraction of the total mass for that focal mask (`frac`)
 
-For the global histogram block, `k_focal` is written as `K`, the total number of factors in the input.
+For the global histogram block, `k_focal` is written as `-1`. If `--soft-mask-composition-skip-global` is set, this global block is omitted.
 
 ### Hard factor mask
 
@@ -805,7 +806,7 @@ Build per-label hard masks from the top predicted factor at each raster pixel, m
 
 ```bash
 punkst tile-op --hard-factor-mask --in path/result [--binary] \
-  --cc-min-size 25 --out path/out_prefix
+  --cc-min-size 25 --out path/out_prefix --threads 4
 ```
 
 Main parameters:

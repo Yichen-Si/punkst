@@ -30,6 +30,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool runHardFactorMask = false;
     std::string softMaskCompositionGeoJSON;
     std::vector<int32_t> softMaskCompositionFocal;
+    bool skipSoftMaskCompositionGlobal = false;
     bool skipMaskOverlap = false;
     bool skipBoundaries = false;
     uint32_t minComponentSize = 1;
@@ -165,6 +166,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("soft-factor-mask", "Build per-factor soft masks, polygonize them, and export merged boundaries as GeoJSON", runSoftFactorMask)
       .add_option("soft-mask-composition", "Read the joined soft-mask GeoJSON and profile factor composition within each mask and globally", softMaskCompositionGeoJSON)
       .add_option("soft-mask-composition-focal", "Optional subset of focal factor IDs to profile from --soft-mask-composition", softMaskCompositionFocal)
+      .add_option("soft-mask-composition-skip-global", "Skip the global histogram in --soft-mask-composition and process only tiles intersecting selected masks", skipSoftMaskCompositionGlobal)
       .add_option("mask-min-tile-mass", "Skip factors whose total mass in a tile is below this threshold for --soft-factor-mask", minTileFactorMass)
       .add_option("mask-min-hole-area", "Minimum hole area retained in output polygons for --soft-factor-mask", maskMinHoleArea)
       .add_option("mask-simplify", "Optional simplification tolerance applied to output polygons for --soft-factor-mask", maskSimplify)
@@ -364,7 +366,8 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         return 0;
     }
     if (!softMaskCompositionGeoJSON.empty()) {
-        tileOp.softMaskComposition(outPrefix, softMaskCompositionGeoJSON, softMaskCompositionFocal);
+        tileOp.softMaskComposition(outPrefix, softMaskCompositionGeoJSON,
+            softMaskCompositionFocal, skipSoftMaskCompositionGlobal);
         return 0;
     }
     if (runHardFactorMask) {
