@@ -14,7 +14,7 @@
         <link rel="prev" href="../coexp/">
       
       
-        <link rel="next" href="../../input/">
+        <link rel="next" href="../pmtiles/">
       
       
         
@@ -587,6 +587,8 @@
       
         
           
+        
+      
         
       
         
@@ -1315,6 +1317,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pmtiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PMTiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1859,7 +1889,6 @@
 <h1 id="tile-op">tile-op<a class="headerlink" href="#tile-op" title="Permanent link">&para;</a></h1>
 <p><strong><code>tile-op</code> provides utilities to view and manipulate the tiled data files</strong> created by <code>punkst pixel-decode</code> or <code>punkst pts2tiles</code>.</p>
 <p>This module is under active development and any suggestions or requests will be most welcome.</p>
-<p>Acknowledgement: the new MLT PMTiles support heavily borrows from <code>pmpoint</code>, the <a href="https://github.com/maplibre/maplibre-tile-spec/tree/86ad02b21c98e0b302272839cb7eaaa936e5d392/cpp">MLT cpp implementation</a>, and <code>tippecanoe</code>.</p>
 <p>For PMTiles archive export and pyramid building see <a href="../pmtiles/">pmtiles</a>.</p>
 <p>Caution:</p>
 <p>Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when <code>pixel-decode</code> is run with a moderate <code>--pixel-res</code>, like <code>0.5</code> or <code>1</code> for submicron resolution data, or <code>2</code> for Visium HD data. If the input was generated at a much finer grid, you can request a coarser raster grid for these operations with <code>--raster-pixel-res</code>.</p>
@@ -2225,7 +2254,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">  </span>--merge-keep-all<span class="w"> </span>--anno-keep-all<span class="w"> </span>--null-k<span class="w"> </span>NA<span class="w"> </span>--null-p<span class="w"> </span>NA<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">  </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">opref</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
 </span></code></pre></div>
-<p>(In the above example we assume at least one of the merged sources is from the single-molecule version of <a href="../pixel-decode.md"><code>pixel-decode</code></a> so <code>--icol-feature</code> and <code>--pixel-res-override</code> are needed.)</p>
+<p>(In the above example we assume at least one of the merged sources is from the single-molecule version of <a href="../pixel-decode/"><code>pixel-decode</code></a> so <code>--icol-feature</code> and <code>--pixel-res-override</code> are needed.)</p>
 <p>This combined mode:</p>
 <ul>
 <li>without PMTiles packaging, output is TSV-only</li>
@@ -2586,13 +2615,13 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
         
         
           
-          <a href="../../input/" class="md-footer__link md-footer__link--next" aria-label="Next: Overview">
+          <a href="../pmtiles/" class="md-footer__link md-footer__link--next" aria-label="Next: PMTiles">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Overview
+                PMTiles
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -597,6 +597,8 @@
       
         
       
+        
+      
     
     
     
@@ -877,6 +879,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pmtiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PMTiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1058,6 +1088,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Required">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#for-the-custom-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For the custom format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#for-10x-dge-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For 10X DGE format
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1285,23 +1343,38 @@
 <h2 id="nmf-pois-log1p-fitting-the-model"><code>nmf-pois-log1p</code>: Fitting the model<a class="headerlink" href="#nmf-pois-log1p-fitting-the-model" title="Permanent link">&para;</a></h2>
 <p><strong><code>nmf-pois-log1p</code> fits a non-negative matrix factorization model with Poisson likelihood to single cell or spot level count data.</strong> It fits the model <span class="arithmatex">\(y_{im} \sim Pois(\lambda_{im}), \ \ g(\lambda_{im}) = \theta_i^T \beta_m\)</span> where <span class="arithmatex">\(g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)\)</span> with unit (cell) specific scaling <span class="arithmatex">\(c_i := n_i/L\)</span>. (<span class="arithmatex">\(n_i\)</span>: total transcript count of unit <span class="arithmatex">\(i\)</span>. <span class="arithmatex">\(L\)</span>: constnat size factor)</p>
 <h3 id="input-format">Input format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h3>
-<p>The input data format is the same as for <code>topic-model</code> (could be enerated from pixel level data by <code>tiles2hex</code>), including a data file and a corresponding metadata JSON file.</p>
+<p>The input data format is the same as for <code>topic-model</code>, including either:</p>
+<ul>
+<li>the custom sparse text format with <code>--in-data</code> and <code>--in-meta</code> (generated from pixel level data by <code>tiles2hex</code>)</li>
+<li>10X MEX input with <code>--in-dge-dir</code>, or the explicit triplet <code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code></li>
+</ul>
+<p>As with <code>topic-model</code>, 10X input is loaded fully into memory. If <code>--features</code> is not provided for 10X input, <code>nmf-pois-log1p</code> also writes <code>&lt;prefix&gt;.features.tsv</code> containing the final feature names and total counts.</p>
 <h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>nmf-pois-log1p<span class="w"> </span>--in-data<span class="w"> </span>hex_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>hex_meta.json<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--K<span class="w"> </span><span class="m">15</span><span class="w"> </span>--out-prefix<span class="w"> </span>nmf_results<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1984</span>
 </span></code></pre></div>
+<p>For 10X input:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>nmf-pois-log1p<span class="w"> </span>--in-dge-dir<span class="w"> </span>filtered_feature_bc_matrix<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--K<span class="w"> </span><span class="m">15</span><span class="w"> </span>--out-prefix<span class="w"> </span>nmf_results<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1984</span>
+</span></code></pre></div>
 <h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
-<p><code>--in-data</code> - Input data file (created by <code>tiles2hex</code>).</p>
-<p><code>--in-meta</code> - Metadata file created by <code>tiles2hex</code>.</p>
 <p><code>--K</code> - The number of factors (topics) to learn.</p>
 <p><code>--out-prefix</code> - Prefix for the output files.</p>
+<p>Input in one of the following two formats is required:</p>
+<h4 id="for-the-custom-format">For the custom format<a class="headerlink" href="#for-the-custom-format" title="Permanent link">&para;</a></h4>
+<p><code>--in-data</code> - Input data file (created by <code>tiles2hex</code>).</p>
+<p><code>--in-meta</code> - Metadata file created by <code>tiles2hex</code>.</p>
+<h4 id="for-10x-dge-format">For 10X DGE format<a class="headerlink" href="#for-10x-dge-format" title="Permanent link">&para;</a></h4>
+<p><code>--in-dge-dir</code> - Input directory containing <code>barcodes.tsv.gz</code>, <code>features.tsv.gz</code>, and <code>matrix.mtx.gz</code>.</p>
+<p>Alternatively, specify the three files directly with <code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code>.</p>
 <h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
 <h4 id="data-and-feature-filtering">Data and Feature Filtering<a class="headerlink" href="#data-and-feature-filtering" title="Permanent link">&para;</a></h4>
-<p>(Similar to <a href="../lda4hex/"><code>topic-model</code></a>)</p>
-<p><code>--features</code> - Path to a file where the first column contains gene names and the second column contains the total count of that gene. Used for filtering.</p>
-<p><code>--min-count-per-feature</code> - Minimum total count for a feature to be included. Requires <code>--features</code>. Default: 100.</p>
+<p>(Same behavior as <a href="../lda4hex/"><code>topic-model</code></a>)</p>
+<p><code>--features</code> - Path to a file where the first column contains feature names and the second column may contain total counts. Used to define/filter the feature space.</p>
+<p><code>--min-count-per-feature</code> - Minimum total count for a feature to be included. Default: 100.</p>
 <p><code>--include-feature-regex</code> - Regular expression to include only features matching this pattern.</p>
 <p><code>--exclude-feature-regex</code> - Regular expression to exclude features matching this pattern.</p>
+<p>For the details on feature-selection behaviors with 10X input, including when <code>--features</code> is optional, when an input model defines the feature space, and when the (less ideal) two-pass 10X load is used, see <a href="../lda4hex/"><code>topic-model</code></a>.</p>
 <p><code>--min-count-train</code> - Minimum total count for a unit (hexagon/cell) to be included in training. Default: 50.</p>
 <h4 id="input-for-warm-start-or-guided-mode">Input for warm-start or guided mode<a class="headerlink" href="#input-for-warm-start-or-guided-mode" title="Permanent link">&para;</a></h4>
 <p><code>--in-model</code> - Input model (beta) file for warm start.</p>
@@ -1341,9 +1414,9 @@
 <p><code>--covar-coef-min</code> - Lower bound for covariate coefficients. Default: -1e6.</p>
 <p><code>--covar-coef-max</code> - Upper bound for covariate coefficients. Default: 1e6.</p>
 <p>Example usage with covariates:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>nmf-pois-log1p<span class="w"> </span>--in-data<span class="w"> </span>hex_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>hex_meta.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--K<span class="w"> </span><span class="m">15</span><span class="w"> </span>--out-prefix<span class="w"> </span>nmf_results<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1984</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--in-covar<span class="w"> </span>covars.tsv<span class="w"> </span>--icol-covar<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">5</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>nmf-pois-log1p<span class="w"> </span>--in-data<span class="w"> </span>hex_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>hex_meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--K<span class="w"> </span><span class="m">15</span><span class="w"> </span>--out-prefix<span class="w"> </span>nmf_results<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1984</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>--in-covar<span class="w"> </span>covars.tsv<span class="w"> </span>--icol-covar<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">5</span>
 </span></code></pre></div>
 <h4 id="experimental-compute-de-statistics-from-covhat-beta">Experimental: compute DE statistics from Cov(<span class="arithmatex">\(\hat \beta\)</span>)<a class="headerlink" href="#experimental-compute-de-statistics-from-covhat-beta" title="Permanent link">&para;</a></h4>
 <p><code>--detest-vs-avg</code> - If set, compute DE statistics for each factor vs the average, for each feature.</p>
@@ -1384,8 +1457,8 @@
 <h2 id="nmf-transform-projecting-new-data-with-a-trained-model"><code>nmf-transform</code>: Projecting new data with a trained model<a class="headerlink" href="#nmf-transform-projecting-new-data-with-a-trained-model" title="Permanent link">&para;</a></h2>
 <p>The <code>nmf-transform</code> command applies a trained NMF model to new data to obtain the unit-factor matrix (<span class="arithmatex">\(\theta\)</span>) for the new units.</p>
 <h3 id="usage_1">Usage<a class="headerlink" href="#usage_1" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>nmf-transform<span class="w"> </span>--in-data<span class="w"> </span>new_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>new_meta.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--in-model<span class="w"> </span>nmf_results.model.tsv<span class="w"> </span>--out-prefix<span class="w"> </span>projected_results
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>nmf-transform<span class="w"> </span>--in-data<span class="w"> </span>new_data.txt<span class="w"> </span>--in-meta<span class="w"> </span>new_meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--in-model<span class="w"> </span>nmf_results.model.tsv<span class="w"> </span>--out-prefix<span class="w"> </span>projected_results
 </span></code></pre></div>
 <h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
 <p><code>--in-data</code> - Input data file for the new data.</p>

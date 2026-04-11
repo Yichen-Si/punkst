@@ -11,6 +11,10 @@
         <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/pmtiles/">
       
       
+        <link rel="prev" href="../tileop/">
+      
+      
+        <link rel="next" href="../../input/">
       
       
         
@@ -21,7 +25,7 @@
     
     
       
-        <title>pmtiles - punkst</title>
+        <title>PMTiles - punkst</title>
       
     
     
@@ -108,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              pmtiles
+              PMTiles
             
           </span>
         </div>
@@ -265,10 +269,12 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
+      <li class="md-tabs__item md-tabs__item--active">
         <a href="../" class="md-tabs__link">
           
   
@@ -572,6 +578,8 @@
       
   
   
+    
+  
   
   
     
@@ -597,22 +605,25 @@
       
         
       
+        
+      
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
           <div class="md-nav__link md-nav__container">
@@ -634,13 +645,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -872,6 +883,181 @@
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PMTiles
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PMTiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#export-pmtiles-as-tsv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export PMTiles as TSV
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#write-single-zoom-polygon-pmtiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write single-zoom polygon PMTiles
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Write single-zoom polygon PMTiles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hexagon-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hexagon mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generic-simple-polygon-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Generic simple-polygon mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-mlt-pmtiles-pyramids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build MLT PMTiles pyramids
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Build MLT PMTiles pyramids">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#point-only-pyramids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Point-only pyramids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#simple-polygon-pyramids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Simple-polygon pyramids
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shared-requirements-and-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shared requirements and options
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1143,8 +1329,9 @@
 <li><a href="#write-single-zoom-polygon-pmtiles">Write single-level polygon-only PMTiles</a></li>
 <li><a href="#build-mlt-pmtiles-pyramids">Build PMTiles pyramids</a></li>
 </ul>
-<p>We only support PMTiles with the <a href="https://maplibre.org/maplibre-tile-spec/">MLT format</a>.</p>
-<p>For point/pixel-only PMTiles writing paths, see <a href="../tileop/">tile-op</a> for <code>punkst tile-op --write-mlt-pmtiles</code></p>
+<p>We only support PMTiles with the <a href="https://maplibre.org/maplibre-tile-spec/">MLT format</a></p>
+<p>For writing point/pixel-only PMTiles see <a href="../tileop/">tile-op</a></p>
+<p>Acknowledgement: PMTiles support in <code>punkst</code> depends on <a href="https://github.com/AngusJohnson/Clipper2">Clipper2</a> for polygon operations, borrows from <a href="https://github.com/felt/tippecanoe">tippecanoe</a> (which supports MVT) and <a href="https://github.com/maplibre/maplibre-tile-spec/tree/main/cpp">MLT's cpp implementation</a>.</p>
 <h2 id="export-pmtiles-as-tsv">Export PMTiles as TSV<a class="headerlink" href="#export-pmtiles-as-tsv" title="Permanent link">&para;</a></h2>
 <p><code>punkst export-pmtiles</code> reads an MLT-backed PMTiles archive that contains <strong>only point data</strong> and exports it back to a plain TSV plus <code>.index</code> that <code>tile-op</code> can read again.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>export-pmtiles<span class="w"> </span><span class="se">\</span>
@@ -1190,6 +1377,11 @@
 <li><code>--prob-thres</code> keeps only factor probabilities above the threshold as nullable properties (default: <code>1e-4</code>)</li>
 <li><code>--coord-scale</code> scales the input coordinates before Web Mercator tiling (default: <code>1</code>, no scaling)</li>
 </ul>
+<p>Parameters for boundary behavior and is similar to <a href="https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries">tippecanoe's options</a>
+- <code>--tile-buffer-px</code> sets the screen-pixel buffer used by the default clipped/duplicated mode (default: <code>5</code>) (matching <code>tippecanoe -b</code>)
+- <code>--no-clipping</code> duplicates each polygon into every touched tile without clipping it to tile boundaries (matching <code>tippecanoe -pc</code>)
+- <code>--no-duplication</code> stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching <code>tippecanoe -pD</code>)
+- <code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</p>
 <h3 id="generic-simple-polygon-mode">Generic simple-polygon mode<a class="headerlink" href="#generic-simple-polygon-mode" title="Permanent link">&para;</a></h3>
 <p>Use this when the factor-probability table contains a polygon ID column and polygon geometry is provided in a separate file. For example, if you ran <code>punkst topic-model</code> on segmented cells and you want to create a PMTiles archive with cell boundaries as geometry.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>hex2pmtiles<span class="w"> </span><span class="se">\</span>
@@ -1206,9 +1398,17 @@
 <ul>
 <li><code>--in-geom</code> points to the polygon geometry file</li>
 <li><code>--id-col</code> is required in generic polygon mode and names the polygon ID column in the factor-probability table</li>
+<li><code>--id-is-u32</code> tells <code>punkst</code> to parse that input ID directly as a <code>u32</code> MLT feature ID</li>
+<li>if <code>--id-is-u32</code> is not used we assign each polygon an internal <code>u32</code> feature ID in first-encounter order from the geometry file and write a sidecar <code>*.idmap.tsv</code> with the mapping from the input string ID to the assigned integer ID</li>
+<li><code>--keep-org-id</code> optionally keeps the original input string ID as a regular string property column in the PMTiles output</li>
 <li><code>--icol-id-geom</code>, <code>--icol-x-geom</code>, and <code>--icol-y-geom</code> set the 0-based geometry-file columns for polygon ID, <code>x</code>, and <code>y</code></li>
 <li><code>--icol-order-geom</code> is optional; if omitted, the geometry rows are assumed to already be in vertex order</li>
 </ul>
+<p>Boundary behavior options are the same as in hexagon mode:
+- <code>--tile-buffer-px</code> sets the screen-pixel buffer used by the default clipped/duplicated mode (default: <code>5</code>)
+- <code>--no-clipping</code> duplicates each polygon into every touched tile without clipping it to tile boundaries
+- <code>--no-duplication</code> stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries
+- <code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</p>
 <p>Geometry file format:</p>
 <ul>
 <li>plain or gzipped TSV/CSV</li>
@@ -1226,8 +1426,17 @@
 <p>Output:</p>
 <ul>
 <li>writes one PMTiles archive at the requested zoom level</li>
-<li>stores polygon ID, <code>topK</code>, <code>topP</code>, and retained factor probabilities as feature properties</li>
+<li>stores the polygon ID in the dedicated MLT feature ID column</li>
+<li>stores <code>topK</code>, <code>topP</code>, and retained factor probabilities as feature properties</li>
+<li>if <code>--keep-org-id</code> is used, also stores the original string ID as a regular string property column</li>
 <li>output from this step can be passed to <code>punkst build-pyramid --polygon</code></li>
+</ul>
+<p>Boundary behavior:</p>
+<ul>
+<li>by default, polygons that cross tile boundaries are clipped to each tile plus a <code>--tile-buffer-px</code> screen-pixel buffer, and may appear in more than one tile</li>
+<li>with <code>--no-clipping</code>, polygons are duplicated across touched tiles but kept intact in each copy</li>
+<li>with <code>--no-duplication</code>, each polygon is assigned to a single tile and stored there intact</li>
+<li><code>--no-duplication</code> is mainly useful when polygons are much smaller than the tile size</li>
 </ul>
 <h2 id="build-mlt-pmtiles-pyramids">Build MLT PMTiles pyramids<a class="headerlink" href="#build-mlt-pmtiles-pyramids" title="Permanent link">&para;</a></h2>
 <p><code>punkst build-pyramid</code> builds a MLT PMTiles pyramid from an existing MLT PMTiles input.</p>
@@ -1254,24 +1463,30 @@ Exactly one of <code>--point</code> or <code>--polygon</code> must be specified.
 </ul>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>build-pyramid<span class="w"> </span>--polygon<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--in<span class="w"> </span>path/hex.z18.pmtiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--polygon-id-col<span class="w"> </span>ID<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--polygon-priority<span class="w"> </span>area<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--max-tile-bytes<span class="w"> </span><span class="m">5000000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--max-tile-features<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--scale-factor-compression<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span>--out<span class="w"> </span>path/hex.pyramid.pmtiles
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--polygon-priority<span class="w"> </span>area<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--max-tile-bytes<span class="w"> </span><span class="m">5000000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--max-tile-features<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--scale-factor-compression<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--out<span class="w"> </span>path/hex.pyramid.pmtiles
 </span></code></pre></div>
 <ul>
-<li><code>--polygon-id-col</code> sets the polygon ID column name in the input PMTiles schema</li>
 <li><code>--polygon-priority</code> chooses how polygons are retained when down-sampling is needed: <code>random</code>, <code>area</code> (default, in decreasing order)</li>
 </ul>
 <p>Behavior:</p>
 <ul>
+<li>by default, if the input PMTiles has an MLT feature ID column, that is used as the polygon ID</li>
+<li><code>--polygon-id-col</code> is optional and acts as a hard override when you want to use a regular property column instead of the MLT feature ID column</li>
+<li>if neither an MLT feature ID column nor <code>--polygon-id-col</code> is available, the command reports an error</li>
 <li>for PMTiles written by <code>punkst hex2pmtiles</code>, which contains only hexagons, a shortcut is taken by using the stored hexagonal grid coordinates to build the geometry instead of recovering it from the encoded geometry</li>
 <li>for generic polygon inputs, uses the finest input zoom level to recover one canonical polygon per ID before building parent levels</li>
 <li>if <code>--polygon-source</code> is provided, that file is used as the geometry source override</li>
+<li>by default, parent tiles use clipped polygons that may appear in more than one tile, with clipping buffered by <code>--tile-buffer-px</code> screen pixels</li>
+<li><code>--tile-buffer-px</code> overrides that buffer in <code>--polygon</code> mode; if omitted, the value stored in the input archive metadata is used</li>
+<li>with <code>--no-clipping</code>, parent tiles keep duplicated polygons intact instead of clipping them to tile boundaries</li>
+<li>with <code>--no-duplication</code>, each polygon is kept intact and written to only one tile per zoom level</li>
+<li><code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</li>
 </ul>
 <p>Limitations for the generic polygon mode:</p>
 <ul>
@@ -1280,11 +1495,13 @@ Exactly one of <code>--point</code> or <code>--polygon</code> must be specified.
 </ul>
 <p>Optional polygon source file:</p>
 <p><code>--polygon-source</code> optionally specifies a polygon-vertex table to override geometry recovery from the finest input zoom. Plain or gzipped TSV/CSV files are supported.</p>
+<p>By default, coordinates read from <code>--polygon-source</code> are multiplied by the input archive's <code>coord_scale</code> metadata before EPSG:3857 tiling so they match the packaged PMTiles coordinate space. Use <code>--polygon-source-coord-scale</code> to override that default when the source table is already pre-scaled or uses a different scale.</p>
 <p>Required fields (specified by 0-based column index):
 - polygon ID <code>--icol-id</code> (default: <code>0</code>)
 - <code>x</code> coordinate <code>--icol-x</code> (default: <code>1</code>)
 - <code>y</code> coordinate <code>--icol-y</code> (default: <code>2</code>)</p>
-<p>Optional field: vertex order <code>--icol-order</code>. If provided, it is used to assemble each polygon ring, otherwise, rows in the input file are assumed to already be in polygon-vertex order.</p>
+<p>Optional field: vertex order <code>--icol-order</code>. If provided, it is used to assemble each polygon ring, otherwise, rows in the input file are assumed to already be in polygon-vertex order.
+- <code>--polygon-source-coord-scale</code> optionally overrides the scale applied to <code>--polygon-source</code> coordinates before EPSG:3857 tiling</p>
 <p>(Empty lines and lines starting with <code>#</code> are ignored; if the first non-comment line does not have numeric <code>x</code> and <code>y</code> values at <code>--icol-x</code> and <code>--icol-y</code>, it is treated as a header line and skipped; after that first line, malformed numeric values are treated as errors)</p>
 <p>Example:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>ID,x,y
@@ -1307,9 +1524,12 @@ Exactly one of <code>--point</code> or <code>--polygon</code> must be specified.
 <li><code>--max-tile-features</code> sets a target upper bound on the number of features per tile (default: 50K)</li>
 <li><code>--scale-factor-compression</code> controls how aggressively features are kept before the final tile-size check (default: 10)</li>
 <li><code>--threads</code> controls parallel processing</li>
-<li><code>--polygon-id-col</code> sets the polygon ID column name in the PMTiles</li>
+<li><code>--polygon-id-col</code> is an optional hard override for polygon ID lookup in <code>--polygon</code> mode</li>
 <li><code>--polygon-priority</code> sets polygon retention mode for <code>--polygon</code></li>
 <li><code>--polygon-source</code> and <code>--icol-*</code> options are used only for <code>--polygon</code> in generic polygon mode</li>
+<li><code>--tile-buffer-px</code> sets the screen-pixel clip buffer for the default clipped polygon mode</li>
+<li><code>--no-clipping</code> switches polygon output to intact duplicated polygons without tile-boundary clipping</li>
+<li><code>--no-duplication</code> switches polygon output from clipped/duplicated tiles to single-tile intact storage</li>
 </ul>
 <p>Input PMTiles handling:</p>
 <ul>
@@ -1346,6 +1566,44 @@ Exactly one of <code>--point</code> or <code>--polygon</code> must be specified.
       
         <footer class="md-footer">
   
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../tileop/" class="md-footer__link md-footer__link--prev" aria-label="Previous: tile-op">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                tile-op
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../../input/" class="md-footer__link md-footer__link--next" aria-label="Next: Overview">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Overview
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
     
   
   <div class="md-footer-meta md-typeset">

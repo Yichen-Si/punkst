@@ -605,6 +605,8 @@
       
         
       
+        
+      
     
     
     
@@ -1128,6 +1130,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pmtiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PMTiles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1483,7 +1513,7 @@
 
 
 <h1 id="topic-model">topic-model<a class="headerlink" href="#topic-model" title="Permanent link">&para;</a></h1>
-<p><strong><code>topic-model</code> (alias for <code>lda4hex</code>) fits top model on the hexagon/spot/single cell data.</strong></p>
+<p><strong><code>topic-model</code> (alias for <code>lda4hex</code>) fits topic model on the hexagon/spot/single cell data.</strong></p>
 <h2 id="input-format">Input format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h2>
 <h3 id="custom-sparse-matrix-input-from-tiles2hex">Custom sparse matrix input (from <code>tiles2hex</code>)<a class="headerlink" href="#custom-sparse-matrix-input-from-tiles2hex" title="Permanent link">&para;</a></h3>
 <p>This format is required for training in streaming (minibatch) mode with low memory usage.</p>
@@ -1503,8 +1533,8 @@
 - "header_info": a list of size <code>offset_data</code> that contains the names of the fields before the required fields in the input data file. We will carry over these fields to the output files.</p>
 <h3 id="10x-dge-input-single-cell">10X DGE input (single-cell)<a class="headerlink" href="#10x-dge-input-single-cell" title="Permanent link">&para;</a></h3>
 <p>You can train directly from the 10X MEX format by passing <code>--in-dge-dir</code> or the explicit triplet <code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code>.</p>
-<p>When using 10X input, <code>--features</code> is required and must include per-feature totals (second column). These totals are used for prior scaling and background initialization.</p>
 <p>Due to the limit of the 10X DGE format, we load the entire dataset in memory and perform shuffling \&amp; minibatching internally. For very large datasets, it would be memory intensive. You could use <a href="../../input/">punkst convert-10X-SC</a> to convert the 10X DGE to the custom format once if you plan to train multiple models on a very large dataset.</p>
+<p>Feature names are read from the input <code>features.tsv.gz</code>. If duplicated names are present, the first occurrence keeps its name and later duplicates use the supposedly unique gene ID instead.</p>
 <h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>topic-model<span class="w"> </span>--n-topics<span class="w"> </span><span class="m">12</span><span class="w"> </span>--sort-topics<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt<span class="w"> </span>--in-meta<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.json<span class="w"> </span><span class="se">\</span>
@@ -1521,14 +1551,23 @@
 <h4 id="for-10x-dge-format">For 10X DGE format<a class="headerlink" href="#for-10x-dge-format" title="Permanent link">&para;</a></h4>
 <p><code>--in-dge-dir</code> - Specifies the input directory that contains the 10X DGE files: <code>barcodes.tsv.gz</code>, <code>features.tsv.gz</code>, and <code>matrix.mtx.gz</code>.</p>
 <p>Alternatively, you can specify the three files directly by <code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code>.</p>
-<p><code>--features</code> - A tsv file containing at least two columns: the feature names and the total feature count in the dataset. (You will get it if you used <code>pts2tiles</code> or <code>multisample-prepare</code>) It is required for 10X input though optional for the custom format.</p>
 <h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
 <h4 id="feature-filtering">Feature Filtering<a class="headerlink" href="#feature-filtering" title="Permanent link">&para;</a></h4>
-<p><code>--features</code> - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene. It is also required for 10X input.</p>
-<p><code>--min-count-per-feature</code> - Minimum total count for features to be included. Require <code>--features</code> to be specified. Default: 1.</p>
+<p><code>--features</code> - Optional. Path to a TSV file where the first column contains feature names and the second column may contain total feature counts, the counts are used for filtering according to <code>--min-count-per-feature</code>.</p>
+<p><code>--min-count-per-feature</code> - Minimum total count for features to be included. Default: 1.</p>
 <p><code>--include-feature-regex</code> - Regular expression (<a href="https://en.cppreference.com/w/cpp/regex/ecmascript">modified ECMAScript grammar</a>) to include only features matching this pattern. Default: include all features.</p>
 <p><code>--exclude-feature-regex</code> - Regular expression (modified ECMAScript) to exclude features matching this pattern. Default: exclude no features.</p>
-<p><strong>Feature Selection Logic:</strong> the above three filters are applied jointly, so only genes with at least the minimum count, matching the include regex (if provided), and not matching the exclude regex (if provided) will be included in the model.</p>
+<p><strong>feature selection logic when using 10X matrix input</strong></p>
+<p>For 10X input, feature selection follows this order:</p>
+<ol>
+<li>If <code>--features</code> is provided, use it to define/filter the feature space before loading the full matrix. If an LDA model prior is also provided, the feature space is further intersected with the features present in the prior model.</li>
+<li>If <code>--features</code> is not provided but <code>--model-prior</code> is provided, use all and only the features present in the prior model. In this case <code>--min-count-per-feature</code>, <code>--include-feature-regex</code>, and <code>--exclude-feature-regex</code> are ignored.</li>
+<li>If neither <code>--features</code> nor <code>--model-prior</code> is provided and <code>--min-count-per-feature &lt;= 1</code>, regex filtering is applied to the 10X feature names before loading the full matrix.</li>
+<li>Only if neither <code>--features</code> nor <code>--model-prior</code> is provided and <code>--min-count-per-feature &gt; 1</code> does <code>topic-model</code> load the 10X matrix first, compute feature totals, apply the feature filters, and then reload the matrix in the reduced feature space.</li>
+</ol>
+<p>When <code>--features</code> is not provided, <code>topic-model</code> writes <code>&lt;prefix&gt;.features.tsv</code> after the final 10X feature space is determined. This file has no header and contains two columns:
+- feature name as used by the model
+- total count of that feature in the loaded 10X data</p>
 <h4 id="feature-weighting">Feature Weighting<a class="headerlink" href="#feature-weighting" title="Permanent link">&para;</a></h4>
 <p><code>--feature-weights</code> - Path to a file containing a weight for each gene. Format should be gene name (first column) and weight (second column). If the json metadata file does not contain a dictionary, the first column should be the gene index (0-based) instead.</p>
 <p><code>--default-weight</code> - Default weight for features not present in the weights file. Set to 0 to ignore features not in the weights file. Default: 1.0.</p>
@@ -1551,7 +1590,7 @@
 <p><code>--prior-scale</code> - Scale the initial model matrix uniformly by this value. Default: use the matrix as is.</p>
 <p><code>--prior-scale-rel</code> - Scale the initial model matrix relative to the total feature counts in the data.</p>
 <h4 id="output-control">Output Control<a class="headerlink" href="#output-control" title="Permanent link">&para;</a></h4>
-<p><code>--transform</code> - Transform the data to the LDA space after training. If set, an output file <code>&lt;prefix&gt;.results.tsv</code> will be created. For 10X input, identifiers are 0-based barcode indices (in the input <code>barcodes.tsv.gz</code>).</p>
+<p><code>--transform</code> - Transform the data to the LDA space after training. If set, an output file <code>&lt;prefix&gt;.results.tsv</code> will be created. For 10X input, identifiers are 0-based barcode indices in the order of the input <code>barcodes.tsv.gz</code>.</p>
 <p>With <code>--transform</code>, the result table now includes two appended columns by default:
 - <code>topK</code>: topic label (column name) with maximum probability in that row.
 - <code>topP</code>: the corresponding maximum probability.</p>

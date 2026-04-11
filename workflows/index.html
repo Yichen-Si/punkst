@@ -606,6 +606,8 @@
       
         
       
+        
+      
     
     
     
@@ -873,6 +875,34 @@
     
   
     tile-op
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/pmtiles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PMTiles
   
 
     
@@ -1296,16 +1326,17 @@ It can have other columns (which will be ignored in analysis but can be optional
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span><span class="w"> </span>--output-original
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <p>Key parameters:</p>
 <p><code>--model</code>: Model file created by <code>topic-model</code></p>
 <p><code>--hex-grid-dist</code>: Center-to-center distance of the hexagonal grid</p>
 <p><code>--n-moves</code>: Number of sliding moves to generate anchors</p>
 <p><code>--pixel-res</code>: Resolution for the analysis (in the same unit as coordinates). Set to <code>2</code> for Visium HD.</p>
-<p><code>--output-original</code>: Write each transcript/input pixel as a separate line in the output. This will be slower and generates a bigger file, so only use it if matching the inference with the original input is useful. (Excluding this flag for Visium HD data is more sensible)</p>
+<p><code>--output-binary</code>: Write the main pixel-level output as <code>${path}/pixel.decode.bin</code> plus <code>${path}/pixel.decode.index</code>. This is the preferred output mode for downstream <code>tile-op</code>, visualization, and spatial tests.</p>
+<p><code>--output-original</code>: Optional text-output mode that writes each transcript/input pixel as a separate line in the output. This is slower, generates a larger file, and cannot be combined with <code>--output-binary</code>, so only use it if matching the inference with the original input is useful.</p>
 <p><a href="../modules/pixel-decode/">Detailed documentation for pixel-decode</a></p>
 <h3 id="step-5-visualize-the-results">Step 5: Visualize the results<a class="headerlink" href="#step-5-visualize-the-results" title="Permanent link">&para;</a></h3>
 <p>Visualize the pixel decoding results:</p>
@@ -1314,13 +1345,15 @@ It can have other columns (which will be ignored in analysis but can be optional
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>punkst/ext/py/color_helper.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.results.tsv<span class="w"> </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color<span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <p><strong>Generate an image</strong> for the pixel level factor assignment
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>punkst<span class="w"> </span>draw-pixel-factors<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode.tsv<span class="w"> </span><span class="se">\</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>punkst<span class="w"> </span>draw-pixel-factors<span class="w"> </span>--in<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--in-color<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color.rgb.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.png<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>--scale<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span>--xmin<span class="w"> </span><span class="si">${</span><span class="nv">xmin</span><span class="si">}</span><span class="w"> </span>--xmax<span class="w"> </span><span class="si">${</span><span class="nv">xmax</span><span class="si">}</span><span class="w"> </span>--ymin<span class="w"> </span><span class="si">${</span><span class="nv">ymin</span><span class="si">}</span><span class="w"> </span>--ymax<span class="w"> </span><span class="si">${</span><span class="nv">ymax</span><span class="si">}</span>
 </span></code></pre></div></p>
 <p>Key parameters:</p>
+<p><code>--in</code>: Prefix of the pixel decode output files.</p>
+<p><code>--binary</code>: Read the binary output written by <code>pixel-decode --output-binary</code>.</p>
 <p><code>--in-color</code>: TSV file with RGB colors for each factor</p>
 <p><code>--scale</code>: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel in the image). If the coordinates are in microns, 1 or 0.5 is suitable for high resolution data (imaging-based, Stereo-seq, Seq-scope, etc.); 2 is suitable for Visium HD.</p>
 <p><code>--xmin</code>, <code>--xmax</code>, <code>--ymin</code>, <code>--ymax</code>: Range of coordinates to visualize. If you specified <code>--icol-feature</code> and <code>--icol-int</code> in <code>pts2tiles</code>, you can either find the range in the <code>transcripts.tiled.coord_range.tsv</code> file or pass it directly with <code>--range transcripts.tiled.coord_range.tsv</code>.</p>
