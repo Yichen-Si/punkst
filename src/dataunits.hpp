@@ -347,6 +347,9 @@ public:
     void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap);
     void setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped = false);
     void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums = true);
+    int32_t filterCurrentFeatures(int32_t minCount = 1,
+        const std::string& include_ftr_regex = "",
+        const std::string& exclude_ftr_regex = "");
     void setFeatureSums(const std::vector<double>& sums, bool read_full = true);
     void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0);
     void applyWeights(Document& doc) const;

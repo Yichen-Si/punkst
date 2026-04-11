@@ -169,6 +169,16 @@ MatrixXd HDP::transform(const std::vector<Document>& docs) {
     return doc_topic_distr;
 }
 
+MatrixXd HDP::transform(std::span<const Document> docs) {
+    int n_docs = docs.size();
+    MatrixXd doc_topic_distr(n_docs, K_);
+    tbb::parallel_for(0, n_docs, [&](int d) {
+        MatrixXd zeta, phi;
+        doc_topic_distr.row(d) = fit_one_document(zeta, phi, docs[d]).transpose();
+    });
+    return doc_topic_distr;
+}
+
 void HDP::init() {
     set_nthreads(nThreads_);
     // Check parameters

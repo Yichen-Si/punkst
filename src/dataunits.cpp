@@ -454,6 +454,39 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     setFeatureIndexRemap(remap_new);
 }
 
+int32_t HexReader::filterCurrentFeatures(int32_t minCount,
+    const std::string& include_ftr_regex, const std::string& exclude_ftr_regex) {
+    if (features.empty()) {
+        return 0;
+    }
+    if (minCount > 1 && !readFullSums) {
+        error("%s: Feature totals are required to apply min-count filtering", __func__);
+    }
+
+    const bool check_include = !include_ftr_regex.empty();
+    const bool check_exclude = !exclude_ftr_regex.empty();
+    std::regex regex_include(include_ftr_regex);
+    std::regex regex_exclude(exclude_ftr_regex);
+
+    const std::vector<double>& sums = feature_sums_raw.empty() ? feature_sums : feature_sums_raw;
+    std::unordered_map<uint32_t, uint32_t> remap_new;
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(features.size()); ++i) {
+        if (minCount > 1 && i < sums.size() && sums[i] < minCount) {
+            continue;
+        }
+        const std::string& feature = features[i];
+        const bool include = !check_include || std::regex_match(feature, regex_include);
+        const bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
+        if (include && !exclude) {
+            remap_new[i] = kept++;
+        }
+    }
+    notice("%s: %d features are kept out of %d", __func__, kept, (int)features.size());
+    setFeatureIndexRemap(remap_new);
+    return static_cast<int32_t>(kept);
+}
+
 void HexReader::setWeights(const std::string& weightFile, double defaultWeight_) {
     std::ifstream inWeight(weightFile);
     if (!inWeight) {
