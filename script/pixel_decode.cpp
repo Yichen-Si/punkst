@@ -200,6 +200,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (singleMolecule) {
         if (pixelResolution > 0 || pixelResolutionZ > 0)
             error("--pixel-res and --pixel-res-z should not be set in single molecule mode");
+    } else {
         if (pixelResolution <= 0) {
             pixelResolution = 1.;
             warning("--pixel-res is not set. Using default resolution of 1.0");

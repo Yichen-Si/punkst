@@ -178,9 +178,9 @@ punkst pixel-decode --model ${path}/hex_12.model.tsv \
   --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
   --hex-grid-dist 12 --n-moves 2 \
   --pixel-res 0.5 \
-  --out-pref ${path}/pixel.decode \
+  --out-pref ${path}/pixel.decode --output-binary \
   --temp-dir ${tmpdir} \
-  --threads ${threads} --seed 1 --output-original
+  --threads ${threads} --seed 1
 ```
 
 Key parameters:
@@ -193,7 +193,9 @@ Key parameters:
 
 `--pixel-res`: Resolution for the analysis (in the same unit as coordinates). Set to `2` for Visium HD.
 
-`--output-original`: Write each transcript/input pixel as a separate line in the output. This will be slower and generates a bigger file, so only use it if matching the inference with the original input is useful. (Excluding this flag for Visium HD data is more sensible)
+`--output-binary`: Write the main pixel-level output as `${path}/pixel.decode.bin` plus `${path}/pixel.decode.index`. This is the preferred output mode for downstream `tile-op`, visualization, and spatial tests.
+
+`--output-original`: Optional text-output mode that writes each transcript/input pixel as a separate line in the output. This is slower, generates a larger file, and cannot be combined with `--output-binary`, so only use it if matching the inference with the original input is useful.
 
 [Detailed documentation for pixel-decode](../modules/pixel-decode.md)
 
@@ -211,7 +213,7 @@ python punkst/ext/py/color_helper.py --input ${path}/hex_12.results.tsv --output
 
 **Generate an image** for the pixel level factor assignment
 ```bash
-punkst draw-pixel-factors --in-tsv ${path}/pixel.decode.tsv \
+punkst draw-pixel-factors --in ${path}/pixel.decode --binary \
   --in-color ${path}/color.rgb.tsv \
   --out ${path}/pixel.png \
   --scale 1 \
@@ -219,6 +221,10 @@ punkst draw-pixel-factors --in-tsv ${path}/pixel.decode.tsv \
 ```
 
 Key parameters:
+
+`--in`: Prefix of the pixel decode output files.
+
+`--binary`: Read the binary output written by `pixel-decode --output-binary`.
 
 `--in-color`: TSV file with RGB colors for each factor
 

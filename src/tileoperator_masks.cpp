@@ -371,7 +371,8 @@ TileOperator::BorderMergeResult TileOperator::mergeSoftMaskTileBorders(
 
 void TileOperator::profileSoftFactorMasks(const std::string& outPrefix,
     int32_t focalK, int32_t radius, double neighborhoodThresholdFrac,
-    double minFactorFrac, float minPixelProb, const std::vector<int32_t>& morphologySteps,
+    double minFactorFrac, float minPixelProb,
+    const std::vector<int32_t>& morphologySteps,
     uint32_t minComponentArea, bool skipMaskOverlap) {
     requireNoFeatureIndex(__func__);
     if (blocks_.empty()) {

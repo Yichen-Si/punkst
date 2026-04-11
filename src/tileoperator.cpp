@@ -30,6 +30,9 @@ using tileoperator_detail::cellagg::CellAgg;
 using tileoperator_detail::cellagg::FactorSums;
 using tileoperator_detail::cellagg::write_cell_row;
 using tileoperator_detail::fmt::append_format;
+using tileoperator_detail::io::close_text_output;
+using tileoperator_detail::io::open_text_output;
+using tileoperator_detail::io::TextOutputHandle;
 using tileoperator_detail::io::TileWriteResult;
 using tileoperator_detail::io::write_tile_result;
 using tileoperator_detail::merge::build_merge_column_names;
@@ -198,9 +201,9 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
         mergeSingleMolecule(otherFiles, outPrefix, std::move(k2keep), binaryOutput, keepAllMain, keepAll, mergePrefixes);
         return;
     }
-    std::string outIndex = outPrefix + ".index";
-    int fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-    if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
+    if (binaryOutput && outPrefix == "-") {
+        error("%s: --out - is only supported for TSV merge output", __func__);
+    }
     if (k2keep.size() > 0) {assert(k2keep.size() == otherFiles.size() + 1);}
 
     // 1. Setup operators
@@ -245,7 +248,9 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
     std::string outFile;
     FILE* fp = nullptr;
     int fdMain = -1;
+    int fdIndex = -1;
     long currentOffset = 0;
+    TextOutputHandle textOut;
 
     // Index metadata
     IndexHeader idxHeader = formatInfo_;
@@ -258,14 +263,18 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
         outFile = outPrefix + ".bin";
         fdMain = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
         if (fdMain < 0) error("Cannot open output file %s", outFile.c_str());
+        const std::string outIndex = outPrefix + ".index";
+        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
         idxHeader.mode |= 0x1; // Binary mode
         uint32_t coordCount = use3d ? 3 : 2;
         idxHeader.recordSize = sizeof(int32_t) * coordCount + sizeof(int32_t) * totalK + sizeof(float) * totalK;
         currentOffset = 0;
     } else {
-        outFile = outPrefix + ".tsv";
-        fp = fopen(outFile.c_str(), "w");
-        if (!fp) error("Cannot open output file %s", outFile.c_str());
+        textOut = open_text_output(outPrefix, __func__);
+        outFile = textOut.outFile;
+        fp = textOut.fp;
+        fdIndex = textOut.fdIndex;
         idxHeader.mode &= ~0x1; // Text mode
         idxHeader.recordSize = 0;
 
@@ -279,10 +288,14 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
         }
         headerStr += "\n";
         fprintf(fp, "%s", headerStr.c_str());
-        currentOffset = ftell(fp);
+        currentOffset = textOut.writeStdout()
+            ? static_cast<long>(headerStr.size())
+            : ftell(fp);
     }
 
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index write error");
+    if (fdIndex >= 0 && !write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {
+        error("Index write error");
+    }
 
     // 4. Process tiles
     notice("%s: Start merging %u files across %lu main tiles", __func__, nSources, mainTiles.size());
@@ -294,10 +307,10 @@ void TileOperator::merge(const std::vector<std::string>& otherFiles, const std::
 
     if (binaryOutput) {
         close(fdMain);
+        close(fdIndex);
     } else {
-        fclose(fp);
+        close_text_output(textOut);
     }
-    close(fdIndex);
     notice("Merged %u files across %lu main tiles to %s", nSources, mainTiles.size(), outFile.c_str());
 }
 
@@ -353,16 +366,9 @@ void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
     assert(reader.getTileSize() == formatInfo_.tileSize);
     const bool use3d = (coord_dim_ == 3);
     const float res = formatInfo_.pixelResolution > 0.0f ? formatInfo_.pixelResolution : 1.0f;
-    const bool writeStdout = (outPrefix == "-");
-    const std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
-    const std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
-    FILE* fp = writeStdout ? stdout : std::fopen(outFile.c_str(), "w");
-    if (!fp) error("Cannot open output file %s", outFile.c_str());
-    int fdIndex = -1;
-    if (!writeStdout) {
-        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
-    }
+    TextOutputHandle textOut = open_text_output(outPrefix, __func__);
+    FILE* fp = textOut.fp;
+    int fdIndex = textOut.fdIndex;
 
     uint32_t ntok = static_cast<uint32_t>(std::max(icol_x, icol_y));
     if (use3d) {
@@ -376,7 +382,7 @@ void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
         }
         std::fprintf(fp, "%s\n", headerStr.c_str());
     }
-    long currentOffset = writeStdout
+    long currentOffset = textOut.writeStdout()
         ? static_cast<long>(reader.headerLine.empty() ? 0 : (reader.headerLine.size() + 1))
         : std::ftell(fp);
 
@@ -453,13 +459,8 @@ void TileOperator::annotateMerged(const std::vector<std::string>& otherFiles,
             buildTileResult, writeResult);
     }
 
-    if (fp != stdout) {
-        std::fclose(fp);
-    }
-    if (fdIndex >= 0) {
-        close(fdIndex);
-    }
-    notice("Merged annotation finished, data written to %s", outFile.c_str());
+    close_text_output(textOut);
+    notice("Merged annotation finished, data written to %s", textOut.outFile.c_str());
 }
 
 void TileOperator::annotate(const std::string& ptPrefix, const std::string& outPrefix, int32_t icol_x, int32_t icol_y, int32_t icol_z, int32_t icol_f,
@@ -488,16 +489,9 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
     TileReader reader(ptData, ptIndex);
     assert(reader.getTileSize() == formatInfo_.tileSize);
     bool use3d = (coord_dim_ == 3);
-    const bool writeStdout = (outPrefix == "-");
-    std::string outFile = writeStdout ? std::string("stdout") : (outPrefix + ".tsv");
-    std::string outIndex = writeStdout ? std::string() : (outPrefix + ".index");
-    FILE* fp = writeStdout ? stdout : fopen(outFile.c_str(), "w");
-    if (!fp) error("Cannot open output file %s", outFile.c_str());
-    int fdIndex = -1;
-    if (!writeStdout) {
-        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
-        if (fdIndex < 0) error("Cannot open output index %s", outIndex.c_str());
-    }
+    TextOutputHandle textOut = open_text_output(outPrefix, __func__);
+    FILE* fp = textOut.fp;
+    int fdIndex = textOut.fdIndex;
     float res = formatInfo_.pixelResolution;
     if (res <= 0) res = 1.0f;
     uint32_t ntok = static_cast<uint32_t>(std::max(icol_x, icol_y));
@@ -514,7 +508,7 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
         }
         fprintf(fp, "%s\n", headerStr.c_str());
     }
-    long currentOffset = writeStdout
+    long currentOffset = textOut.writeStdout()
         ? static_cast<long>(reader.headerLine.empty() ? 0 : (reader.headerLine.size() + 1))
         : ftell(fp);
     // Write index header
@@ -535,13 +529,8 @@ void TileOperator::annotate(const std::string& ptPrefix, const std::string& outP
             ntok, fp, fdIndex, currentOffset, annoKeepAll);
     }
 
-    if (fp != stdout) {
-        fclose(fp);
-    }
-    if (fdIndex >= 0) {
-        close(fdIndex);
-    }
-    notice("Annotation finished, data written to %s", outFile.c_str());
+    close_text_output(textOut);
+    notice("Annotation finished, data written to %s", textOut.outFile.c_str());
 }
 
 void TileOperator::pix2cell(const std::string& ptPrefix, const std::string& outPrefix, uint32_t icol_c, uint32_t icol_x, uint32_t icol_y, int32_t icol_s, int32_t icol_z, int32_t icol_f, uint32_t k_out, float max_cell_diameter) {

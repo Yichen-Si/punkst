@@ -4,6 +4,16 @@
 #include <cstring>
 #include <string>
 
+namespace {
+
+constexpr float kDefaultSingleMoleculePixelResolution = 0.001f;
+
+float effective_single_molecule_pixel_resolution(float resolution) {
+    return (resolution > 0.0f) ? resolution : kDefaultSingleMoleculePixelResolution;
+}
+
+} // namespace
+
 bool TileOperator::readNextRecord2DAsPixel(std::istream& dataStream, uint64_t& pos, uint64_t endPos, int32_t& recX, int32_t& recY, TopProbs& rec) const {
     if (coord_dim_ != 2) {
         error("%s: Only 2D records are supported by this helper", __func__);
@@ -166,7 +176,7 @@ bool TileOperator::readNextRecord2DFeatureAsPixel(std::istream& dataStream, uint
     if ((mode_ & 0x4) && formatInfo_.pixelResolution <= 0) {
         error("%s: Float coordinates require positive pixelResolution", __func__);
     }
-    const float resXY = formatInfo_.pixelResolution;
+    const float resXY = effective_single_molecule_pixel_resolution(formatInfo_.pixelResolution);
     while (pos < endPos) {
         if (mode_ & 0x4) {
             PixTopProbsFeature<int32_t> temp;
@@ -212,8 +222,8 @@ bool TileOperator::readNextRecord3DFeatureAsPixel(std::istream& dataStream, uint
     if ((mode_ & 0x4) && formatInfo_.pixelResolution <= 0) {
         error("%s: Float coordinates require positive pixelResolution", __func__);
     }    
-    float resXY = formatInfo_.pixelResolution;
-    float resZ = getPixelResolutionZ(); 
+    const float resXY = effective_single_molecule_pixel_resolution(formatInfo_.pixelResolution);
+    const float resZ = effective_single_molecule_pixel_resolution(getPixelResolutionZ());
     while (pos < endPos) {
         if (mode_ & 0x4) {
             PixTopProbsFeature3D<int32_t> temp;

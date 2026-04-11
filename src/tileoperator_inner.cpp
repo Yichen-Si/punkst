@@ -535,6 +535,7 @@ void TileOperator::mergeTiles2D(const std::vector<TileKey>& mainTiles,
     FILE* fp, int fdMain, int fdIndex, long& currentOffset) {
     const char* funcName = __func__;
     const size_t nSources = mergePlans.size();
+    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
     const size_t totalK = std::accumulate(mergePlans.begin(), mergePlans.end(), size_t(0),
         [](size_t sum, const MergeSourcePlan& plan) {
             return sum + static_cast<size_t>(plan.keepK);
@@ -645,7 +646,9 @@ void TileOperator::mergeTiles2D(const std::vector<TileKey>& mainTiles,
             if (binaryOutput) {
                 append_pix_top_probs_binary(result.binaryData, key.first, key.second, merged);
             } else {
-                append_format(result.textData, "%d\t%d", key.first, key.second);
+                append_format(result.textData, "%.2f\t%.2f",
+                    static_cast<double>(key.first) * resXY,
+                    static_cast<double>(key.second) * resXY);
                 appendTopProbsText(result.textData, merged);
                 result.textData.push_back('\n');
             }
@@ -668,6 +671,8 @@ void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
     FILE* fp, int fdMain, int fdIndex, long& currentOffset) {
     const char* funcName = __func__;
     const size_t nSources = mergePlans.size();
+    const float resXY = getPixelResolution() > 0.0f ? getPixelResolution() : 1.0f;
+    const float resZ = getPixelResolutionZ() > 0.0f ? getPixelResolutionZ() : resXY;
     const size_t totalK = std::accumulate(mergePlans.begin(), mergePlans.end(), size_t(0),
         [](size_t sum, const MergeSourcePlan& plan) {
             return sum + static_cast<size_t>(plan.keepK);
@@ -798,8 +803,10 @@ void TileOperator::mergeTiles3D(const std::vector<TileKey>& mainTiles,
                 append_pix_top_probs3d_binary(result.binaryData,
                     std::get<0>(key), std::get<1>(key), std::get<2>(key), merged);
             } else {
-                append_format(result.textData, "%d\t%d\t%d",
-                    std::get<0>(key), std::get<1>(key), std::get<2>(key));
+                append_format(result.textData, "%.2f\t%.2f\t%.2f",
+                    static_cast<double>(std::get<0>(key)) * resXY,
+                    static_cast<double>(std::get<1>(key)) * resXY,
+                    static_cast<double>(std::get<2>(key)) * resZ);
                 appendTopProbsText(result.textData, merged);
                 result.textData.push_back('\n');
             }
@@ -1187,14 +1194,14 @@ void TileOperator::classifyBlocks(int32_t tileSize) {
 }
 
 void TileOperator::initTileGeom(const TileInfo& blk, TileGeom& out) const {
-    const bool coordScaled = (mode_ & 0x2) != 0;
     out.key = TileKey{blk.idx.row, blk.idx.col};
     tile2bound(out.key, out.pixX0, out.pixX1, out.pixY0, out.pixY1, formatInfo_.tileSize);
-    if (coordScaled) {
-        out.pixX0 = coord2pix(out.pixX0);
-        out.pixX1 = coord2pix(out.pixX1);
-        out.pixY0 = coord2pix(out.pixY0);
-        out.pixY1 = coord2pix(out.pixY1);
+    if (formatInfo_.pixelResolution > 0.0f) {
+        const float res = formatInfo_.pixelResolution;
+        out.pixX0 = static_cast<int32_t>(std::floor(static_cast<float>(out.pixX0) / res));
+        out.pixX1 = static_cast<int32_t>(std::ceil(static_cast<float>(out.pixX1) / res));
+        out.pixY0 = static_cast<int32_t>(std::floor(static_cast<float>(out.pixY0) / res));
+        out.pixY1 = static_cast<int32_t>(std::ceil(static_cast<float>(out.pixY1) / res));
     }
     if (usesRasterResolutionOverride()) {
         out.pixX0 = mapPixelToRasterFloor(out.pixX0);

@@ -950,9 +950,7 @@ void TileOperator::setRasterPixelResolution(float resXY) {
             __func__, ratio);
     }
     int32_t tileSpanPixels = formatInfo_.tileSize;
-    if (rawCoordinatesAreScaled()) {
-        tileSpanPixels = coord2pix(tileSpanPixels);
-    }
+    tileSpanPixels = coord2pix(tileSpanPixels);
     if (tileSpanPixels <= 0 || (tileSpanPixels % static_cast<int32_t>(rounded)) != 0) {
         error("%s: tile size must align with requested raster resolution (tile span %d source pixels, ratio %lld)",
             __func__, tileSpanPixels, static_cast<long long>(rounded));
