@@ -1984,6 +1984,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--annotate-pts</code></li>
 <li><code>--prob-dot</code></li>
 <li><code>--confusion</code></li>
+<li><code>--write-mlt-pmtiles</code></li>
 <li><code>--extract-region</code></li>
 <li><code>--extract-region-geojson</code></li>
 <li><code>--smooth-top-labels</code></li>
@@ -1996,14 +1997,10 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </ul>
 <p>Notes:</p>
 <ul>
-<li>PMTiles packaging paths also honor <code>--threads</code>, including direct <code>--write-mlt-pmtiles</code> export and <code>--annotate-pts</code> / <code>--merge-emb + --annotate-pts</code> packaging</li>
+<li>PMTiles packaging paths honor <code>--threads</code>, including direct <code>--write-mlt-pmtiles</code> export and <code>--annotate-pts</code> / <code>--merge-emb + --annotate-pts</code> packaging.</li>
 <li>Some commands are only partially parallelized: tile-local work is parallel, but later reduction, polygon assembly, or final writeback is still serial.</li>
 <li><code>--merge-emb</code> and <code>--annotate-pts</code> now use the same shared tile-result pipeline in both default pixel mode and feature-specific mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.</li>
 <li><code>--prob-dot</code> without <code>--merge-emb</code> has a serial fallback for bounded query mode and non-seekable text input such as stdin or gzipped streaming text.</li>
-</ul>
-<p>Feature-specific note:</p>
-<ul>
-<li><code>--merge-emb</code> and <code>--annotate-pts</code> are parallelized for feature-specific inputs as well</li>
 </ul>
 <h3 id="raster-resolution-override">Raster Resolution Override<a class="headerlink" href="#raster-resolution-override" title="Permanent link">&para;</a></h3>
 <p>Raster-style commands can optionally run on a coarser 2D grid than the source data by passing:</p>
@@ -2061,14 +2058,14 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p>To extract all records inside one axis-aligned rectangle:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--extract-region<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--xmin<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--xmax<span class="w"> </span><span class="m">2000</span><span class="w"> </span>--ymin<span class="w"> </span><span class="m">500</span><span class="w"> </span>--ymax<span class="w"> </span><span class="m">1500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>This keeps all records whose <code>(x, y)</code> coordinates fall inside the half-open rectangle <code>[xmin, xmax) x [ymin, ymax)</code>.</p>
 <h4 id="geojson-region-query">GeoJSON region query<a class="headerlink" href="#geojson-region-query" title="Permanent link">&para;</a></h4>
 <p>To extract all records inside the union of multiple polygons:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--extract-region-geojson<span class="w"> </span>path/region.geojson<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix.region<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>Optional:</p>
 <ul>
@@ -2178,7 +2175,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p>You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. The main input (<code>--in</code>) defines the output lattice. Auxiliary inputs from <code>--merge-emb</code> are matched onto that lattice when they have the same tile size, the same or coarser resolution, and compatible dimensionality.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span>--k2keep<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged_result<span class="w"> </span>--binary-out<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged_result<span class="w"> </span>--binary-out<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p><code>--merge-emb</code> - One or more other inference files (created by <code>pixel-decode</code>) to merge with the main input file. They can be in either TSV or binary format, but have to have proper index files stored ad <code>&lt;prefix&gt;.index</code>.</p>
 <p><code>--k2keep</code> - (Optional) A list of integers specifying how many top factors to keep from each source file (including the main input). If not provided, all top in the input files are kept.</p>
@@ -2208,7 +2205,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p>You can annotate a transcript file with the inference results. The query file is required to be generated by <code>punkst pts2tiles</code> with the same tile structure as the result file (since you normally run <code>pixel-decode</code> with the output from <code>pts2tiles</code> as the input), but you can apply <code>pts2tiles</code> to any tsv file that contains X, Y coordinates as two of its columns.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p><code>--annotate-pts</code> - Prefix of the points file (the tool expects <code>&lt;prefix&gt;.tsv</code> and <code>&lt;prefix&gt;.index</code>) to be annotated.</p>
 <p><code>--icol-x</code> - 0-based column index for X coordinate in the points file.</p>
@@ -2295,7 +2292,7 @@ If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already 
 <p>Likely use cases: comparing factor sets; comparing factors with cell types.</p>
 <h4 id="single-input">Single Input<a class="headerlink" href="#single-input" title="Permanent link">&para;</a></h4>
 <p>For a single inference result file:</p>
-<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 Output:</p>
 <ul>
@@ -2312,7 +2309,7 @@ Output:</p>
 <p>You can also compute these statistics while merging multiple inference result files on the fly, without writing the merged file to disk.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--prob-dot<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--merge-emb<span class="w"> </span>path/result2.tsv<span class="w"> </span>path/result3.bin<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>This supports <code>--k2keep</code> to reduce the number of top-K factors used in each source before computing the products.</p>
 <p><code>--threads</code> - (Optional) Number of worker threads for shared-tile accumulation across input sources.</p>
@@ -2331,7 +2328,7 @@ Output:</p>
 </ul>
 <h3 id="compute-confusion-matrix">Compute Confusion Matrix<a class="headerlink" href="#compute-confusion-matrix" title="Permanent link">&para;</a></h3>
 <p>This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--confusion<span class="w"> </span><span class="m">10</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--confusion<span class="w"> </span><span class="m">10</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p><code>--confusion</code> - The resolution (side length of square bins in microns) for computing the confusion matrix.</p>
 <p><code>--threads</code> - (Optional) Number of worker threads for indexed tile-level confusion accumulation.</p>
@@ -2344,7 +2341,8 @@ Output:</p>
 <p>This is a heuristic denoising operation on the top-predicted factor labels for each pixel. It replace pixels where the predicted factor differs from most of its neighbors with the majority vote among its neighbors.
 It is meant for the case where you projected categorical cell types at high resolution data where you do not expect to see much mixing of cell types at single pixel level.
 The output is a new tiled data file where for each pixel, only the smoothed top factor is kept. (The output can be used as input for <code>tile-op</code>, so you can dump it to a tsv file or do other operations)</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--smooth-top-labels<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/smoothed_result
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--smooth-top-labels<span class="w"> </span><span class="m">2</span><span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">  </span>--out<span class="w"> </span>path/smoothed_result<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p><code>--smooth-top-labels</code> - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.</p>
 <p>Optional:</p>
@@ -2352,7 +2350,8 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <p><code>--raster-pixel-res</code> - (Optional) run smoothing on a coarser raster grid. The output header records the requested pixel resolution.</p>
 <h3 id="compute-basic-spatial-metrics">Compute Basic Spatial Metrics<a class="headerlink" href="#compute-basic-spatial-metrics" title="Permanent link">&para;</a></h3>
 <p>This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with <code>tile-op --smooth-top-labels r --fill-empty-islands</code> (see above).</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--spatial-metrics<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span>--out<span class="w"> </span>path/prefix
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--spatial-metrics<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span>--out<span class="w"> </span>path/prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>The output includes two files:</p>
 <ul>
@@ -2380,7 +2379,7 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--shell-surface<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span>--shell-radii<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="m">20</span><span class="w"> </span>--surface-dmax<span class="w"> </span><span class="m">25</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--spatial-min-pix-per-tile-label<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p><code>--shell-surface</code> - run shell occupancy and surface distance profiling.</p>
 <p><code>--shell-radii</code> - one or more shell radii (in pixels, NOT microns) for occupancy reporting.</p>
@@ -2412,7 +2411,7 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--profile-one-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span>--focal-k<span class="w"> </span><span class="m">7</span><span class="w"> </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span>--mask-min-frac<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>
@@ -2452,7 +2451,7 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="w">  </span>--mask-radius<span class="w"> </span><span class="m">2</span><span class="w"> </span>--mask-threshold<span class="w"> </span><span class="m">0</span>.35<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a><span class="w">  </span>--mask-min-pixel-prob<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span>--mask-min-tile-mass<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="w">  </span>--mask-min-component-area<span class="w"> </span><span class="m">20</span><span class="w"> </span>--mask-min-hole-area<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="w">  </span>--mask-simplify<span class="w"> </span><span class="m">2</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="w">  </span>--mask-simplify<span class="w"> </span><span class="m">2</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>
@@ -2504,26 +2503,28 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--soft-mask-composition<span class="w"> </span>path/out_prefix.geojson<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="w">  </span>--soft-mask-composition-focal<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">7</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a><span class="w">  </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="w">  </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="w">  </span>--soft-mask-composition-skip-global
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>
 <li><code>--soft-mask-composition</code> - path to the joined GeoJSON written by <code>--soft-factor-mask</code>.</li>
-<li><code>--soft-mask-composition-focal</code> - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. The global histogram is always included in the output.</li>
+<li><code>--soft-mask-composition-focal</code> - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. By default, the global histogram is included in the output.</li>
+<li><code>--soft-mask-composition-skip-global</code> - skip the full-input global histogram. This also avoids scanning tiles that do not intersect any selected mask, which can improve throughput when the masks cover only a small fraction of the input.</li>
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.mask_composition.tsv</code>: mask and global factor histograms with columns</li>
+<li><code>path/out_prefix.mask_composition.tsv</code>: mask factor histograms and, unless skipped, the global factor histogram, with columns</li>
 <li>focal factor index (<code>k_focal</code>)</li>
 <li>factor index (<code>k</code>)</li>
 <li>total probability mass (<code>mass</code>)</li>
 <li>fraction of the total mass for that focal mask (<code>frac</code>)</li>
 </ul>
-<p>For the global histogram block, <code>k_focal</code> is written as <code>K</code>, the total number of factors in the input.</p>
+<p>For the global histogram block, <code>k_focal</code> is written as <code>-1</code>. If <code>--soft-mask-composition-skip-global</code> is set, this global block is omitted.</p>
 <h3 id="hard-factor-mask">Hard factor mask<a class="headerlink" href="#hard-factor-mask" title="Permanent link">&para;</a></h3>
 <p>Build per-label hard masks from the top predicted factor at each raster pixel, merge connected components across tile boundaries, and write global summaries. By default this also writes one GeoJSON <code>MultiPolygon</code> feature per factor; use <code>--skip-boundaries</code> to disable boundary extraction and write only the summaries.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--hard-factor-mask<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix
+</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="w">  </span>--cc-min-size<span class="w"> </span><span class="m">25</span><span class="w"> </span>--out<span class="w"> </span>path/out_prefix<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>Main parameters:</p>
 <ul>

@@ -1246,7 +1246,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p>(The parameters in the example config file works for the example data, where the coordinates are in microns.)</p>
 <p><code>threads</code>: number of threads for parallel processing. (If you are submitting the workflow to a cluster, make sure the same number of CPUs is available)</p>
 <p><code>seed</code>: random seed for reproducibility. This seed is propagated to all steps in the workflow that involve randomness.</p>
-<p><code>use_fixed_color_table</code>: controls how colors are assigned when rendering pixel maps. Default is <code>true</code>, which uses the fixed color table at <code>ext/py/cmap.48.tsv</code>. Set to <code>false</code> to run <code>ext/py/color_helper.py</code> and derive colors from model results (may be slow for a large dataset).</p>
+<p><code>use_fixed_color_table</code>: controls how colors are assigned when rendering pixel maps. Default is <code>true</code>, which uses the fixed color table at <code>ext/py/cmap.256.tsv</code>. Set to <code>false</code> to run <code>ext/py/color_helper.py</code> and derive colors from model results (may be slow for a large dataset).</p>
 <p><code>"datadir"</code>: the path to store all output</p>
 <p><code>"tmpdir"</code>: the path to store temporary files (those files will be deleted automatically by the program). This directory must be empty or creatable.</p>
 <p><code>"transcripts"</code>: a tsv file with X coordinate, Y coordinate, gene/transcript name, and count columns. There could be other columns but they will be ignored.</p>
@@ -1340,7 +1340,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p><a href="../modules/pixel-decode/">Detailed documentation for pixel-decode</a></p>
 <h3 id="step-5-visualize-the-results">Step 5: Visualize the results<a class="headerlink" href="#step-5-visualize-the-results" title="Permanent link">&para;</a></h3>
 <p>Visualize the pixel decoding results:</p>
-<p>The example Makefiles use a fixed color table (<code>ext/py/cmap.48.tsv</code>) by default (<code>"use_fixed_color_table": true</code> in <code>config.json</code>).</p>
+<p>The example Makefiles use a fixed color table (<code>ext/py/cmap.256.tsv</code>) by default (<code>"use_fixed_color_table": true</code> in <code>config.json</code>).</p>
 <p>Optional: set <code>"use_fixed_color_table": false</code> and generate a color table from model results using <code>color_helper.py</code>. (Python dependency: <a href="https://pypi.org/project/Jinja2/">jinja2</a>, pandas, matplotlib. It may be slow for a large dataset.)</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>punkst/ext/py/color_helper.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.results.tsv<span class="w"> </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color<span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
