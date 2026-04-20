@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <sstream>
+#include <cstdlib>
 
 /**
  * CommandList: command handling for the entry of the program
@@ -214,7 +215,7 @@ public:
         }
     }
 
-    void print_help() const {
+    void print_help_noexit() const {
         std::cerr << "Options:\n";
         for (const auto& kv : options_) {
             std::cerr << "  --" << kv.first << " : " << kv.second.description;
@@ -222,6 +223,11 @@ public:
                 std::cerr << " (required)";
             std::cerr << "\n";
         }
+    }
+
+    [[noreturn]] void print_help() const {
+        print_help_noexit();
+        std::exit(0);
     }
 
     void print_options() const {

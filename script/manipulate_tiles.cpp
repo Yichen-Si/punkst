@@ -21,7 +21,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string extractRegionGeoJSON;
     int64_t extractRegionScale = 10;
     bool dumpTSV = false;
-    bool exportPMTiles = false;
     bool probDot = false;
     bool cellAnno = false;
     bool spatialMetrics = false;
@@ -31,6 +30,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     bool runHardFactorMask = false;
     std::string softMaskCompositionGeoJSON;
     std::vector<int32_t> softMaskCompositionFocal;
+    bool skipSoftMaskCompositionGlobal = false;
     bool skipMaskOverlap = false;
     bool skipBoundaries = false;
     uint32_t minComponentSize = 1;
@@ -91,7 +91,6 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     // Basic inspection, conversion, and region query.
     pl.add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
-      .add_option("export-pmtiles", "Export an input PMTiles archive to TSV plus TileOperator index", exportPMTiles)
       .add_option("write-mlt-pmtiles", "Write MLT-backed PMTiles", mltOptions.enabled)
       .add_option("gene-bin-info", "JSON file with gene/count/bin rows; when provided with --write-mlt-pmtiles, gene-bin PMTiles packaging is activated", mltOptions.gene_bin_info_file)
       .add_option("feature-count-file", "Optional TSV with feature name in column 1 and total count in column 2; together with positive --n-gene-bins this activates gene-bin PMTiles packaging", mltOptions.feature_count_file)
@@ -167,6 +166,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("soft-factor-mask", "Build per-factor soft masks, polygonize them, and export merged boundaries as GeoJSON", runSoftFactorMask)
       .add_option("soft-mask-composition", "Read the joined soft-mask GeoJSON and profile factor composition within each mask and globally", softMaskCompositionGeoJSON)
       .add_option("soft-mask-composition-focal", "Optional subset of focal factor IDs to profile from --soft-mask-composition", softMaskCompositionFocal)
+      .add_option("soft-mask-composition-skip-global", "Skip the global histogram in --soft-mask-composition and process only tiles intersecting selected masks", skipSoftMaskCompositionGlobal)
       .add_option("mask-min-tile-mass", "Skip factors whose total mass in a tile is below this threshold for --soft-factor-mask", minTileFactorMass)
       .add_option("mask-min-hole-area", "Minimum hole area retained in output polygons for --soft-factor-mask", maskMinHoleArea)
       .add_option("mask-simplify", "Optional simplification tolerance applied to output polygons for --soft-factor-mask", maskSimplify)
@@ -177,39 +177,15 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
 
     if (!inPrefix.empty()) {
-        if (exportPMTiles) {
-            inData = inPrefix;
-        } else {
-            inData = inPrefix + (isBinary ? ".bin" : ".tsv");
-            inIndex = inPrefix + ".index";
-        }
-    } else if (inData.empty() || (!exportPMTiles && inIndex.empty())) {
-        if (exportPMTiles) {
-            error("Either --in or --in-data must be specified for --export-pmtiles");
-        }
+        inData = inPrefix + (isBinary ? ".bin" : ".tsv");
+        inIndex = inPrefix + ".index";
+    } else if (inData.empty() || inIndex.empty()) {
         error("Either --in or both --in-data and --in-index must be specified");
-    }
-
-    if (exportPMTiles) {
-        TileOperator::ExportPmtilesOptions exportOptions;
-        exportOptions.tileSize = tileSize;
-        exportOptions.probDigits = probDigits;
-        exportOptions.coordDigits = coordDigits;
-        exportOptions.geojsonFile = extractRegionGeoJSON;
-        exportOptions.geojsonScale = extractRegionScale;
-        exportOptions.xmin = xmin;
-        exportOptions.xmax = xmax;
-        exportOptions.ymin = ymin;
-        exportOptions.ymax = ymax;
-        exportOptions.zmin = zmin;
-        exportOptions.zmax = zmax;
-        TileOperator::exportPMTiles(inData, outPrefix, exportOptions);
-        return 0;
     }
 
     TileOperator tileOp(inData, inIndex);
@@ -390,7 +366,8 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         return 0;
     }
     if (!softMaskCompositionGeoJSON.empty()) {
-        tileOp.softMaskComposition(outPrefix, softMaskCompositionGeoJSON, softMaskCompositionFocal);
+        tileOp.softMaskComposition(outPrefix, softMaskCompositionGeoJSON,
+            softMaskCompositionFocal, skipSoftMaskCompositionGlobal);
         return 0;
     }
     if (runHardFactorMask) {

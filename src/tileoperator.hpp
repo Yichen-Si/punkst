@@ -40,14 +40,6 @@ struct SparseObsDict {
 class TileOperator {
 
 public:
-    struct GzCloser {
-        void operator()(gzFile_s* fp) const noexcept {
-            if (fp) {
-                gzclose(fp);
-            }
-        }
-    };
-    using GzHandle = std::unique_ptr<gzFile_s, GzCloser>;
     using PixelKey3 = std::tuple<int32_t, int32_t, int32_t>;
     using PixelFeatureKey2 = std::tuple<int32_t, int32_t, uint32_t>;
     using PixelFeatureKey3 = std::tuple<int32_t, int32_t, int32_t, uint32_t>;
@@ -256,7 +248,8 @@ public:
         const std::string& templateGeoJSON = "", const std::string& templateOutPrefix = "");
     void softMaskComposition(const std::string& outPrefix,
         const std::string& maskGeoJSON,
-        const std::vector<int32_t>& focalFactors = {});
+        const std::vector<int32_t>& focalFactors = {},
+        bool skipGlobalHistogram = false);
 
     /* Tile loaders */
     // Load raster tiles

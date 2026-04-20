@@ -195,7 +195,7 @@ int32_t cmdMergeUnits(int32_t argc, char** argv) {
         pl.print_options();
     } catch (const std::exception& ex) {
         error("Error parsing options for cmdMergeUnits: %s", ex.what());
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
 

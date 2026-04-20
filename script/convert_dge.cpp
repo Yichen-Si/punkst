@@ -61,7 +61,7 @@ int32_t cmdConvertDGE(int argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
 
@@ -257,7 +257,7 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
 

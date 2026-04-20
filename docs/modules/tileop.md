@@ -4,6 +4,8 @@
 
 This module is under active development and any suggestions or requests will be most welcome.
 
+For PMTiles archive export and pyramid building see [pmtiles](pmtiles.md).
+
 Caution:
 
 Some operations related to smoothing, spatial profiling, and factor masks treat the inference output as a raster multi-channel image where the channel intensities are the factor probabilities. This works well when `pixel-decode` is run with a moderate `--pixel-res`, like `0.5` or `1` for submicron resolution data, or `2` for Visium HD data. If the input was generated at a much finer grid, you can request a coarser raster grid for these operations with `--raster-pixel-res`.
@@ -12,11 +14,10 @@ Some operations related to smoothing, spatial profiling, and factor masks treat 
 
 - Basic inspection, conversion, and region query
     - [Print Index](#print-index)
-    - [Export as TSV](#convert-to-tsv)
-    - [Export as MLT PMTiles](#write-mlt-pmtiles)
-    - [Export PMTiles as TSV](#export-pmtiles)
     - [Fix Fragmented Tiles](#fix-fragmented-tiles)
     - [Region Query](#region-query)
+    - [Export as TSV](#convert-to-tsv)
+    - [Export as MLT PMTiles](#write-mlt-pmtiles)
 
 - Joining, annotating, and aggregation
     - [Merge Multiple Inference Results](#merge-multiple-inference-results)
@@ -97,6 +98,7 @@ Current commands with meaningful parallel tile-local execution include:
 - `--annotate-pts`
 - `--prob-dot`
 - `--confusion`
+- `--write-mlt-pmtiles`
 - `--extract-region`
 - `--extract-region-geojson`
 - `--smooth-top-labels`
@@ -109,14 +111,10 @@ Current commands with meaningful parallel tile-local execution include:
 
 Notes:
 
-- PMTiles packaging paths also honor `--threads`, including direct `--write-mlt-pmtiles` export and `--annotate-pts` / `--merge-emb + --annotate-pts` packaging
+- PMTiles packaging paths honor `--threads`, including direct `--write-mlt-pmtiles` export and `--annotate-pts` / `--merge-emb + --annotate-pts` packaging.
 - Some commands are only partially parallelized: tile-local work is parallel, but later reduction, polygon assembly, or final writeback is still serial.
 - `--merge-emb` and `--annotate-pts` now use the same shared tile-result pipeline in both default pixel mode and feature-specific mode. Their output tiles may appear in an arbitrary order, but indexed lookup is valid.
 - `--prob-dot` without `--merge-emb` has a serial fallback for bounded query mode and non-seekable text input such as stdin or gzipped streaming text.
-
-Feature-specific note:
-
-- `--merge-emb` and `--annotate-pts` are parallelized for feature-specific inputs as well
 
 ### Raster Resolution Override
 
@@ -170,6 +168,62 @@ To inspect the index of a tiled file (it prints one tile per line after the head
 ```bash
 punkst tile-op --print-index --in path/prefix [--binary]
 ```
+
+### Fix fragmented Tiles
+
+The output of `punkst pixel-decode` is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.
+
+If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (`path/prefix.index`), currently we don't support generic reorganization)
+
+Note that this is **not** required for visualization `draw-pixel-factors`.
+
+```bash
+punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix
+```
+
+### Region Query
+
+You can extract a spatial subset of a tiled file and write it out as another indexed tiled file.
+
+Output:
+
+- `path/prefix.region.tsv` or `path/prefix.region.bin`
+- `path/prefix.region.index`
+
+The output remains in regular tiled format even when the query region may partially overlap some tiles, and contains all and only tiles with at least one retained record.
+
+#### Rectangle query
+
+To extract all records inside one axis-aligned rectangle:
+
+```bash
+punkst tile-op --extract-region --in path/prefix [--binary] \
+  --xmin 1000 --xmax 2000 --ymin 500 --ymax 1500 \
+  --out path/prefix.region --threads 4
+```
+
+This keeps all records whose `(x, y)` coordinates fall inside the half-open rectangle `[xmin, xmax) x [ymin, ymax)`.
+
+#### GeoJSON region query
+
+To extract all records inside the union of multiple polygons:
+
+```bash
+punkst tile-op --extract-region-geojson path/region.geojson \
+  --in path/prefix [--binary] \
+  --out path/prefix.region --threads 4
+```
+
+Optional:
+
+- `--extract-region-scale` controls the integer snapping scale used internally for polygon processing. Default is `10`, which corresponds to `0.1` units.
+- `--zmin` and `--zmax` can be provided for 3D input to keep only records in `[zmin, zmax)`
+
+**Requirements**
+
+Tiled input data: GeoJSON region query currently only supports tiled inputs in **regular square tile mode** (see [Fix Fragmented Tiles](#fix-fragmented-tiles) below). The input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation.
+
+GeoJSON / JSON file: see [GeoJSON Region Input](../input/geojson-region.md) for requirements and polygon validity handling.
 
 ### Convert to TSV
 
@@ -299,88 +353,6 @@ punkst tile-op --in path/pixel.smol --binary \
 
 This follows the same merge and annotation rules described below, but writes PMTiles instead of TSV. The output is `path/out_all.pmtiles` plus optional gene-bin side outputs.
 
-### Export PMTiles to TSV
-
-`tile-op --export-pmtiles` reads an MLT-backed PMTiles archive (that only contains point data, produced by `punkst` or `pmpoint`) and exports it back to a plain TSV plus `.index` that `tile-op` can read again.
-
-```bash
-punkst tile-op --export-pmtiles \
-  --in path/pixel.bin1.pmtiles \
-  --tile-size 500 \
-  --out path/pixel.bin1.export
-```
-
-Requirements and behavior:
-
-- `--in` or `--in-data` must point to the PMTiles archive
-- `--tile-size` is required and defines the tile size recorded in the exported `.index`
-- output is `path/out.tsv` and `path/out.index`
-- the export reads rows from the archive max zoom
-- column order is `x`, `y`, optional `z`, then the decoded PMTiles schema columns
-- missing `K` and `P` values are rendered as `-1` and `0`; other nullable fields are rendered as `NA`
-
-Region filters are also supported in this mode:
-
-- `--xmin`, `--xmax`, `--ymin`, `--ymax`
-- `--extract-region-geojson`
-- `--zmin`, `--zmax`
-
-### Fix fragmented Tiles
-
-The output of `punkst pixel-decode` is organized into non-overlapping rectangular tiles that jointly cover the entire space, but the tiles do not fit into a regular grid.
-
-If we would need to merge multiple sets of inference results or want to join the inference results with point level data, currently we have to reorganize the data to a regular grid first. (The tile size shoud be already stored in the input's index file (`path/prefix.index`), currently we don't support generic reorganization)
-
-Note that this is **not** required for visualization `draw-pixel-factors`.
-
-```bash
-punkst tile-op --reorganize --in path/prefix [--binary] --out path/reorg_prefix
-```
-
-### Region Query
-
-You can extract a spatial subset of a tiled file and write it out as another indexed tiled file.
-
-Output:
-
-- `path/prefix.region.tsv` or `path/prefix.region.bin`
-- `path/prefix.region.index`
-
-The output remains in regular tiled format even when the query region may partially overlap some tiles, and contains all and only tiles with at least one retained record.
-
-#### Rectangle query
-
-To extract all records inside one axis-aligned rectangle:
-
-```bash
-punkst tile-op --extract-region --in path/prefix [--binary] \
-  --xmin 1000 --xmax 2000 --ymin 500 --ymax 1500 \
-  --out path/prefix.region
-```
-
-This keeps all records whose `(x, y)` coordinates fall inside the half-open rectangle `[xmin, xmax) x [ymin, ymax)`.
-
-#### GeoJSON region query
-
-To extract all records inside the union of multiple polygons:
-
-```bash
-punkst tile-op --extract-region-geojson path/region.geojson \
-  --in path/prefix [--binary] \
-  --out path/prefix.region
-```
-
-Optional:
-
-- `--extract-region-scale` controls the integer snapping scale used internally for polygon processing. Default is `10`, which corresponds to `0.1` units.
-- `--zmin` and `--zmax` can be provided for 3D input to keep only records in `[zmin, zmax)`
-
-**Requirements**
-
-Tiled input data: GeoJSON region query currently only supports tiled inputs in **regular square tile mode** (see [Fix Fragmented Tiles](#fix-fragmented-tiles) below). The input can be either TSV or binary, but text input must be seekable, so stdin and gzipped streaming text input are not supported for this operation.
-
-GeoJSON / JSON file: see [GeoJSON Region Input](../input/geojson-region.md) for requirements and polygon validity handling.
-
 ### Merge Multiple Inference Results
 
 You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. The main input (`--in`) defines the output lattice. Auxiliary inputs from `--merge-emb` are matched onto that lattice when they have the same tile size, the same or coarser resolution, and compatible dimensionality.
@@ -388,7 +360,7 @@ You can merge multiple inference files (e.g., from fitting different models) con
 ```bash
 punkst tile-op --in path/result1 [--binary] \
   --merge-emb path/result2.tsv path/result3.bin --k2keep 3 1 2 \
-  --out path/merged_result --binary-out --threads 1
+  --out path/merged_result --binary-out --threads 4
 ```
 
 `--merge-emb` - One or more other inference files (created by `pixel-decode`) to merge with the main input file. They can be in either TSV or binary format, but have to have proper index files stored ad `<prefix>.index`.
@@ -434,7 +406,7 @@ You can annotate a transcript file with the inference results. The query file is
 ```bash
 punkst tile-op --in path/prefix [--binary] \
   --annotate-pts path/transcripts --icol-x 0 --icol-y 1 \
-  --out path/merged --threads 1
+  --out path/merged --threads 4
 ```
 
 `--annotate-pts` - Prefix of the points file (the tool expects `<prefix>.tsv` and `<prefix>.index`) to be annotated.
@@ -498,7 +470,7 @@ punkst tile-op --in ${opref1} --binary \
   --out ${opref} --threads ${threads}
 ```
 
-(In the above example we assume at least one of the merged sources is from the single-molecule version of [`pixel-decode`](../pixel-decode.md) so `--icol-feature` and `--pixel-res-override` are needed.)
+(In the above example we assume at least one of the merged sources is from the single-molecule version of [`pixel-decode`](pixel-decode.md) so `--icol-feature` and `--pixel-res-override` are needed.)
 
 This combined mode:
 
@@ -509,73 +481,6 @@ This combined mode:
 - if one of the merged sources is feature-specific, `--icol-feature` is required and feature names are resolved from the embedded dictionaries
 
 The same combined workflow also supports PMTiles packaging when `--write-mlt-pmtiles` and `--pmtiles-zoom` are provided. In that case the output is `path/out_all.pmtiles` plus optional gene-bin side outputs, and `--ext-col-*` can be used to carry selected query TSV columns into the packaged archive.
-
-### Compute Joint Probability Distributions
-
-You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from different models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file). To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.
-
-Note: the pixel level factor probabilities are not to be interpreted as full Bayesian posterior probabilities as they are from approximated computation with mean-field variational inference.
-
-Likely use cases: comparing factor sets; comparing factors with cell types.
-
-#### Single Input
-
-For a single inference result file:
-
-```bash
-punkst tile-op --prob-dot --in path/result [--binary] --out path/out_prefix --threads 1
-```
-Output:
-
-- `path/out_prefix.marginal.tsv`: Marginal sums of probabilities (mass) for each factor. (This should be roughly the same as the auxilliary pseudobulk matrix from `pixel-decode`).
-
-- `path/out_prefix.joint.tsv`: Sum of products for each pair of factors.
-
-`--threads` - (Optional) Number of worker threads for the indexed / seekable-input path.
-
-If the file contains multiple sets of results (e.g. a merged file), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., `path/out_prefix.0v1.cross.tsv`).
-
-#### Merging and Computing on the Fly
-
-You can also compute these statistics while merging multiple inference result files on the fly, without writing the merged file to disk.
-
-```bash
-punkst tile-op --prob-dot --in path/result1 [--binary] \
-  --merge-emb path/result2.tsv path/result3.bin \
-  --out path/out_prefix --threads 1
-```
-
-This supports `--k2keep` to reduce the number of top-K factors used in each source before computing the products.
-
-`--threads` - (Optional) Number of worker threads for shared-tile accumulation across input sources.
-
-For this multi-input mode, either all inputs must be standard pixel outputs or all inputs must be single-molecule outputs. In the single-molecule case, records are matched by coordinate plus feature index.
-
-Output:
-
-- `path/out_prefix.0.marginal.tsv`, `path/out_prefix.1.marginal.tsv`, ... (one per input source)
-
-- `path/out_prefix.0.joint.tsv`, ... (internal dot products for each source)
-
-- `path/out_prefix.0v1.cross.tsv`, `path/out_prefix.0v2.cross.tsv`, ... (cross-source dot products with `log10pval` from a naive chi-squared 2x2 enrichment test)
-
-### Compute Confusion Matrix
-
-This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.
-
-```bash
-punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix --threads 1
-```
-
-`--confusion` - The resolution (side length of square bins in microns) for computing the confusion matrix.
-
-`--threads` - (Optional) Number of worker threads for indexed tile-level confusion accumulation.
-
-For single-molecule input, the feature index is ignored for the confusion definition itself, but every feature-bearing record still contributes to the accumulated matrix.
-
-Output:
-
-- `path/out_prefix.confusion.tsv`: A matrix of co-occurrence counts between factors.
 
 ### Aggregate Results by Cell
 
@@ -619,6 +524,74 @@ A TSV file `path/cellular_results.tsv` containing aggregated factor probabilitie
 
 A TSV file `path/cellular_results.pseudobulk.tsv` containing the sum of factor probabilities across each subcellular component. Useful for comparing global factor abundance between components.
 
+
+### Compute Joint Probability Distributions
+
+You can compute the correlations or co-occurrences between factors, either from a single model or between inference results from different models applied to the same dataset. This is approximated by the sum of products of posterior probabilities across all pixels, although for each pixel only the top-K factors are considered (those stored in the inference result file). To compute co-occurrence between factors in a single model at different spatial resolutions, see the confusion matrix operation below.
+
+Note: the pixel level factor probabilities are not to be interpreted as full Bayesian posterior probabilities as they are from approximated computation with mean-field variational inference.
+
+Likely use cases: comparing factor sets; comparing factors with cell types.
+
+#### Single Input
+
+For a single inference result file:
+
+```bash
+punkst tile-op --prob-dot --in path/result [--binary] --out path/out_prefix --threads 4
+```
+Output:
+
+- `path/out_prefix.marginal.tsv`: Marginal sums of probabilities (mass) for each factor. (This should be roughly the same as the auxilliary pseudobulk matrix from `pixel-decode`).
+
+- `path/out_prefix.joint.tsv`: Sum of products for each pair of factors.
+
+`--threads` - (Optional) Number of worker threads for the indexed / seekable-input path.
+
+If the file contains multiple sets of results (e.g. a merged file), the output is the same as the multi-input case below, where it stores marginal and within-model joint output for each source separately, and produces cross-source products (e.g., `path/out_prefix.0v1.cross.tsv`).
+
+#### Merging and Computing on the Fly
+
+You can also compute these statistics while merging multiple inference result files on the fly, without writing the merged file to disk.
+
+```bash
+punkst tile-op --prob-dot --in path/result1 [--binary] \
+  --merge-emb path/result2.tsv path/result3.bin \
+  --out path/out_prefix --threads 4
+```
+
+This supports `--k2keep` to reduce the number of top-K factors used in each source before computing the products.
+
+`--threads` - (Optional) Number of worker threads for shared-tile accumulation across input sources.
+
+For this multi-input mode, either all inputs must be standard pixel outputs or all inputs must be single-molecule outputs. In the single-molecule case, records are matched by coordinate plus feature index.
+
+Output:
+
+- `path/out_prefix.0.marginal.tsv`, `path/out_prefix.1.marginal.tsv`, ... (one per input source)
+
+- `path/out_prefix.0.joint.tsv`, ... (internal dot products for each source)
+
+- `path/out_prefix.0v1.cross.tsv`, `path/out_prefix.0v2.cross.tsv`, ... (cross-source dot products with `log10pval` from a naive chi-squared 2x2 enrichment test)
+
+### Compute Confusion Matrix
+
+This operation computes a confusion matrix of factors at a given spatial resolution. It divides the space into squares of a specified size, then builds a matrix of co-occurrences among factors.
+
+```bash
+punkst tile-op --confusion 10 --in path/result [--binary] --out path/out_prefix --threads 4
+```
+
+`--confusion` - The resolution (side length of square bins in microns) for computing the confusion matrix.
+
+`--threads` - (Optional) Number of worker threads for indexed tile-level confusion accumulation.
+
+For single-molecule input, the feature index is ignored for the confusion definition itself, but every feature-bearing record still contributes to the accumulated matrix.
+
+Output:
+
+- `path/out_prefix.confusion.tsv`: A matrix of co-occurrence counts between factors.
+
 ### Denoise Top Labels
 
 This is a heuristic denoising operation on the top-predicted factor labels for each pixel. It replace pixels where the predicted factor differs from most of its neighbors with the majority vote among its neighbors.
@@ -626,7 +599,8 @@ It is meant for the case where you projected categorical cell types at high reso
 The output is a new tiled data file where for each pixel, only the smoothed top factor is kept. (The output can be used as input for `tile-op`, so you can dump it to a tsv file or do other operations)
 
 ```bash
-punkst tile-op --smooth-top-labels 2 --in path/result [--binary] --out path/smoothed_result
+punkst tile-op --smooth-top-labels 2 --in path/result [--binary] \
+  --out path/smoothed_result --threads 4
 ```
 
 `--smooth-top-labels` - The number of rounds to perform the denoising operation. A value greater than 0 enables the operation. One or two rounds is usually sufficient.
@@ -642,7 +616,8 @@ Optional:
 This is more interpretable for cell type/cluster projection (so the labels are categorical). It is recommended to denoise and fill in scattered empty pixels first with `tile-op --smooth-top-labels r --fill-empty-islands` (see above).
 
 ```bash
-punkst tile-op --spatial-metrics --in path/result [--binary] --out path/prefix
+punkst tile-op --spatial-metrics --in path/result [--binary] \
+  --out path/prefix --threads 4
 ```
 
 The output includes two files:
@@ -678,7 +653,7 @@ Surface distance: for each pair of factors, we compute a histogram of the distan
 punkst tile-op --shell-surface --in path/result [--binary] \
   --shell-radii 5 10 20 --surface-dmax 25 \
   --cc-min-size 25 --spatial-min-pix-per-tile-label 20 \
-  --out path/out_prefix
+  --out path/out_prefix --threads 4
 ```
 
 `--shell-surface` - run shell occupancy and surface distance profiling.
@@ -717,7 +692,7 @@ Build a raster mask for one focal factor using local neighborhood probability ma
 punkst tile-op --profile-one-factor-mask --in path/result [--binary] \
   --focal-k 7 --mask-radius 2 --mask-threshold 0.35 \
   --mask-min-frac 0.05 --mask-min-component-area 20 \
-  --out path/out_prefix
+  --out path/out_prefix --threads 4
 ```
 
 Main parameters:
@@ -758,7 +733,7 @@ punkst tile-op --soft-factor-mask --in path/result [--binary] \
   --mask-radius 2 --mask-threshold 0.35 \
   --mask-min-pixel-prob 0.01 --mask-min-tile-mass 2 \
   --mask-min-component-area 20 --mask-min-hole-area 4 \
-  --mask-simplify 2 --out path/out_prefix
+  --mask-simplify 2 --out path/out_prefix --threads 4
 ```
 
 Main parameters:
@@ -805,23 +780,25 @@ Read the joined GeoJSON produced by `--soft-factor-mask`, treat each feature as 
 punkst tile-op --soft-mask-composition path/out_prefix.geojson \
   --soft-mask-composition-focal 3 7 \
   --in path/result [--binary] \
-  --out path/out_prefix
+  --out path/out_prefix --threads 4 \
+  --soft-mask-composition-skip-global
 ```
 
 Main parameters:
 
 - `--soft-mask-composition` - path to the joined GeoJSON written by `--soft-factor-mask`.
-- `--soft-mask-composition-focal` - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. The global histogram is always included in the output.
+- `--soft-mask-composition-focal` - optional subset of focal factor IDs to profile from the GeoJSON. If not provided, all valid factor masks will be profiled. Duplicate IDs are ignored with a warning. By default, the global histogram is included in the output.
+- `--soft-mask-composition-skip-global` - skip the full-input global histogram. This also avoids scanning tiles that do not intersect any selected mask, which can improve throughput when the masks cover only a small fraction of the input.
 
 Output:
 
-- `path/out_prefix.mask_composition.tsv`: mask and global factor histograms with columns
+- `path/out_prefix.mask_composition.tsv`: mask factor histograms and, unless skipped, the global factor histogram, with columns
   - focal factor index (`k_focal`)
   - factor index (`k`)
   - total probability mass (`mass`)
   - fraction of the total mass for that focal mask (`frac`)
 
-For the global histogram block, `k_focal` is written as `K`, the total number of factors in the input.
+For the global histogram block, `k_focal` is written as `-1`. If `--soft-mask-composition-skip-global` is set, this global block is omitted.
 
 ### Hard factor mask
 
@@ -829,7 +806,7 @@ Build per-label hard masks from the top predicted factor at each raster pixel, m
 
 ```bash
 punkst tile-op --hard-factor-mask --in path/result [--binary] \
-  --cc-min-size 25 --out path/out_prefix
+  --cc-min-size 25 --out path/out_prefix --threads 4
 ```
 
 Main parameters:

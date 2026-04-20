@@ -13,6 +13,9 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
 #include <tbb/parallel_for.h>
@@ -50,6 +53,48 @@ struct TileWriteResult {
     std::string textData;
     std::vector<char> binaryData;
 };
+
+struct TextOutputHandle {
+    FILE* fp = stdout;
+    int fdIndex = -1;
+    std::string outFile = "stdout";
+    std::string outIndex;
+
+    bool writeStdout() const {
+        return fp == stdout;
+    }
+};
+
+inline TextOutputHandle open_text_output(const std::string& outPrefix,
+    const char* funcName) {
+    TextOutputHandle out;
+    if (outPrefix.empty() || outPrefix == "-") {
+        return out;
+    }
+    out.outFile = outPrefix + ".tsv";
+    out.outIndex = outPrefix + ".index";
+    out.fp = std::fopen(out.outFile.c_str(), "w");
+    if (!out.fp) {
+        error("%s: Cannot open output file %s", funcName, out.outFile.c_str());
+    }
+    out.fdIndex = open(out.outIndex.c_str(),
+        O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (out.fdIndex < 0) {
+        error("%s: Cannot open output index %s", funcName, out.outIndex.c_str());
+    }
+    return out;
+}
+
+inline void close_text_output(TextOutputHandle& out) {
+    if (out.fp != nullptr && out.fp != stdout) {
+        std::fclose(out.fp);
+        out.fp = nullptr;
+    }
+    if (out.fdIndex >= 0) {
+        close(out.fdIndex);
+        out.fdIndex = -1;
+    }
+}
 
 template<typename T>
 inline void append_binary_value(std::vector<char>& out, const T& value) {

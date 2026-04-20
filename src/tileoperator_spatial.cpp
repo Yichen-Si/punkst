@@ -76,7 +76,7 @@ void TileOperator::smoothTopLabels2D(const std::string& outPrefix, int32_t islan
     IndexHeader idxHeader = formatInfo_;
     std::vector<uint32_t> outKvec{1};
     idxHeader.packKvec(outKvec);
-    idxHeader.mode = (K_ << 16) | (mode_ & 0x2) | 0x5;
+    idxHeader.mode = (K_ << 16) | 0x7;
     idxHeader.pixelResolution = getRasterPixelResolution();
     idxHeader.recordSize = sizeof(int32_t) * 2 + sizeof(int32_t) + sizeof(float);
     if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) {

@@ -208,6 +208,78 @@ struct UnitValues3D {
     bool readFromLine(const std::string& line, int32_t nModal, bool labeled = false);
 };
 
+struct UnitFactorResultReadOptions {
+    std::string xColName = "x";
+    std::string yColName = "y";
+    std::string topKColName = "topK";
+    std::string topPColName = "topP";
+    std::string unitIdColName;
+    int32_t factorColBegin = -1;
+    int32_t factorColEnd = -1;
+};
+
+struct UnitFactorResultHeader {
+    std::vector<std::string> columns;
+    int32_t unitIdCol = -1;
+    int32_t xCol = -1;
+    int32_t yCol = -1;
+    int32_t topKCol = -1;
+    int32_t topPCol = -1;
+    std::vector<std::pair<int32_t, int32_t>> factorCols;
+    std::vector<std::string> factorNames;
+
+    bool hasUnitId() const {
+        return unitIdCol >= 0;
+    }
+    bool hasCoordinates() const {
+        return xCol >= 0 && yCol >= 0;
+    }
+    bool hasTopFactor() const {
+        return topKCol >= 0 && topPCol >= 0;
+    }
+};
+
+struct UnitFactorResultRow {
+    uint64_t rowIndex = 0;
+    std::string unitId;
+    double x = 0.0;
+    double y = 0.0;
+    int32_t topK = -1;
+    float topP = 0.0f;
+    std::vector<float> factorValues;
+    bool hasCoordinates = false;
+    bool hasTopFactor = false;
+};
+
+UnitFactorResultHeader parse_unit_factor_result_header(
+    const std::vector<std::string>& header,
+    const UnitFactorResultReadOptions& options = {});
+
+void parse_unit_factor_result_row(UnitFactorResultRow& row,
+    const std::vector<std::string>& fields,
+    const UnitFactorResultHeader& header,
+    uint64_t rowIndex = 0);
+
+class UnitFactorResultReader {
+public:
+    UnitFactorResultReader(const std::string& path,
+        const UnitFactorResultReadOptions& options = {});
+    UnitFactorResultReader(const std::string& path,
+        const std::string& xColName, const std::string& yColName,
+        const std::string& topKColName, const std::string& topPColName)
+        : UnitFactorResultReader(path, UnitFactorResultReadOptions{xColName, yColName, topKColName, topPColName, "", -1, -1}) {}
+
+    const UnitFactorResultHeader& header() const {
+        return header_;
+    }
+
+    bool next(UnitFactorResultRow& row);
+
+private:
+    TextLineReader reader_;
+    UnitFactorResultHeader header_;
+    uint64_t rowIndex_ = 0;
+};
 
 class HexReader {
 

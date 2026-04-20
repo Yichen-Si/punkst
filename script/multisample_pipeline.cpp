@@ -73,7 +73,7 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         pl.print_options();
     } catch (const std::exception& ex) {
         std::cerr << "Error parsing multisample options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
 

@@ -12,6 +12,7 @@ punkst provides several command-line tools for analyzing high resolution spatial
 - [visualization](visualization.md): Visualize the pixel level analysis results
 - [DE tests](de.md): Differential expression tests
 - [tile-op](tileop.md): View and manipulate high resolution spatial inference output (merge, annotate, denoise, bin, etc.)
+- [pmtiles](pmtiles.md): Export PMTiles archives and build point / polygon MLT pyramids
 <!-- - [nmf-pois-log1p](poisnmf.md): Fits a Poisson NMF model with a log(1+x) link. -->
 
 ## Input Data Format

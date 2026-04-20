@@ -178,7 +178,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         pl.print_options();
     } catch (const std::exception &ex) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
-        pl.print_help();
+        pl.print_help_noexit();
         return 1;
     }
     if (debug_ > 0) {
@@ -200,6 +200,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (singleMolecule) {
         if (pixelResolution > 0 || pixelResolutionZ > 0)
             error("--pixel-res and --pixel-res-z should not be set in single molecule mode");
+    } else {
         if (pixelResolution <= 0) {
             pixelResolution = 1.;
             warning("--pixel-res is not set. Using default resolution of 1.0");
