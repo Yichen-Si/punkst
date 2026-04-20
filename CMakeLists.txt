@@ -52,7 +52,7 @@ set_target_properties(Eigen3::Eigen PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
 
 # OpenCV
-find_package(OpenCV REQUIRED HINTS ../opencv/build /usr/lib /usr/local)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs HINTS ../opencv/build /usr/lib /usr/local)
 message(STATUS "Found OpenCV version ${OpenCV_VERSION} with include dirs: ${OpenCV_INCLUDE_DIRS}")
 
 # Clipper2

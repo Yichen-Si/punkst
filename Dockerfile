@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     zlib1g-dev \
     libbz2-dev \
     liblzma-dev \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -36,6 +37,7 @@ RUN apt-get update && apt-get install -y \
     libopencv-core4.6 \
     libopencv-imgproc4.6 \
     libopencv-imgcodecs4.6 \
+    libcurl4 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
