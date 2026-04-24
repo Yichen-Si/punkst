@@ -194,6 +194,8 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
     }
     doc.ids.clear();
     doc.cnts.clear();
+    doc.ct_tot = -1;
+    doc.raw_ct_tot = -1;
     if (remap) {
         doc.ids.reserve(nfeatures[modal]);
         doc.cnts.reserve(nfeatures[modal]);
@@ -222,10 +224,15 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
             i += 1;
         }
     }
+    doc.raw_ct_tot = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+    doc.ct_tot = doc.raw_ct_tot;
     if (weightFeatures) {
+        double weighted_total = 0.0;
         for (size_t i = 0; i < doc.ids.size(); i++) {
             doc.cnts[i] *= weights[doc.ids[i]];
+            weighted_total += doc.cnts[i];
         }
+        doc.ct_tot = weighted_total;
     }
     if (accumulate_sums && add2sums) {
         for (size_t i = 0; i < doc.ids.size(); ++i) {
@@ -557,12 +564,17 @@ void HexReader::applyWeights(Document& doc) const {
     if (!weightFeatures) {
         return;
     }
+    if (doc.raw_ct_tot < 0) { // keep the raw total count first
+        doc.raw_ct_tot = (doc.ct_tot >= 0) ? doc.ct_tot
+            : std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+    }
     for (size_t i = 0; i < doc.ids.size(); ++i) {
         uint32_t idx = doc.ids[i];
         if (idx < weights.size()) {
             doc.cnts[i] *= weights[idx];
         }
     }
+    doc.ct_tot = -1;
 }
 
 void HexReader::setFeatureSums(const std::vector<double>& sums, bool read_full) {
@@ -959,7 +971,8 @@ int32_t SparseObsMinibatchReader::readBatch(std::vector<Document> &docs,
                 error("The number of lines in covariate file is less than that in data file");
             }
         }
-        if (ct < minCountTrain_) {
+        const double raw_ct = (doc.raw_ct_tot >= 0.0) ? doc.raw_ct_tot : doc.get_sum();
+        if (raw_ct < minCountTrain_) {
             continue;
         }
         docs.push_back(std::move(doc));
@@ -1002,11 +1015,12 @@ int32_t SparseObsMinibatchReader::readBatch(std::vector<SparseObs> &docs,
                 error("The number of lines in covariate file is less than that in data file");
             }
         }
-        if (ct < minCountTrain_) {
+        const double raw_ct = (obs.doc.raw_ct_tot >= 0.0) ? obs.doc.raw_ct_tot : obs.doc.get_sum();
+        if (raw_ct < minCountTrain_) {
             continue;
         }
-        obs.c = per_doc_c_ ? ct / size_factor_ : c_;
-        obs.ct_tot = ct;
+        obs.c = per_doc_c_ ? raw_ct / size_factor_ : c_;
+        obs.ct_tot = raw_ct;
         if (has_covar_) {
             split(tokens, "\t ", covar_line, UINT_MAX, true, true, true);
             if (tokens.size() != static_cast<size_t>(n_tokens_)) {
@@ -1154,15 +1168,19 @@ bool DGEReader10X::next(Document& doc, int32_t* barcode_idx, std::string* barcod
     }
     doc.ids.clear();
     doc.cnts.clear();
+    doc.ct_tot = -1;
+    doc.raw_ct_tot = -1;
     if (done_) {
         return false;
     }
     int32_t current_bi = -1;
+    double raw_total = 0.0;
     if (has_buffer_) {
         current_bi = buffered_barcode_;
         doc.ids.push_back(buffered_feature_);
         doc.cnts.push_back(buffered_count_);
         feature_totals[buffered_feature_] += buffered_count_;
+        raw_total += buffered_count_;
         has_buffer_ = false;
     }
     bool reached_eof = false;
@@ -1187,6 +1205,7 @@ bool DGEReader10X::next(Document& doc, int32_t* barcode_idx, std::string* barcod
         doc.ids.push_back(gi);
         doc.cnts.push_back(ct);
         feature_totals[gi] += ct;
+        raw_total += ct;
     }
     if (doc.ids.empty() && current_bi < 0) {
         done_ = true;
@@ -1195,6 +1214,8 @@ bool DGEReader10X::next(Document& doc, int32_t* barcode_idx, std::string* barcod
     if (reached_eof) {
         done_ = true;
     }
+    doc.raw_ct_tot = raw_total;
+    doc.ct_tot = raw_total;
     if (barcode_idx) {
         *barcode_idx = current_bi;
     }
@@ -1249,6 +1270,8 @@ int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<std::stri
         if (sums[i] < min_count) {
             continue;
         }
+        docs_by_bc[i].raw_ct_tot = static_cast<double>(sums[i]);
+        docs_by_bc[i].ct_tot = docs_by_bc[i].raw_ct_tot;
         docs.push_back(std::move(docs_by_bc[i]));
         barcodes_out.push_back(barcodes[i]);
     }
@@ -1291,6 +1314,8 @@ int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<int32_t>&
         if (sums[i] < min_count) {
             continue;
         }
+        docs_by_bc[i].raw_ct_tot = static_cast<double>(sums[i]);
+        docs_by_bc[i].ct_tot = docs_by_bc[i].raw_ct_tot;
         docs.push_back(std::move(docs_by_bc[i]));
         barcode_idx_out.push_back(i);
     }

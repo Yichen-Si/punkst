@@ -323,12 +323,12 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
             SparseObs obs;
             obs.doc = std::move(dge_docs[i]);
-            const double ct = obs.doc.get_sum();
-            if (ct < minCountTrain) {
+            const double raw_ct = (obs.doc.raw_ct_tot >= 0.0) ? obs.doc.raw_ct_tot : obs.doc.get_sum();
+            if (raw_ct < minCountTrain) {
                 continue;
             }
-            obs.c = per_doc_c ? ct / size_factor : c;
-            obs.ct_tot = ct;
+            obs.c = per_doc_c ? raw_ct / size_factor : c;
+            obs.ct_tot = raw_ct;
 
             if (has_covar) {
                 split(tokens, "\t ", covar_line, UINT_MAX, true, true, true);
@@ -610,7 +610,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\n";
     for (size_t i = 0; i < N; i++) {
         ofs << rnames[i] << "\t"
-            << std::setprecision(2) << std::fixed << docs[i].ct_tot << "\t"
+            << static_cast<int32_t>(docs[i].ct_tot) << "\t"
             << std::setprecision(4) << stats[i].pll << "\t"
             << std::setprecision(4) << stats[i].residual << "\t"
             << std::setprecision(4) << stats[i].var_mu << "\n";

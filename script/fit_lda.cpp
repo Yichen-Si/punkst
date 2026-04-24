@@ -1,46 +1,131 @@
 #include "topic_svb.hpp"
 
-int32_t cmdTopicModelSVI(int argc, char** argv) {
-    enum class TenXFeatureMode {
-        Default,
-        FeatureFile,
-        ModelOnly,
-        RegexOnly,
-        PostloadCounts
-    };
+#include <filesystem>
+#include <sstream>
+#include <vector>
 
-    // --- Model Selection ---
-    std::string model_type = "lda";
-    // --- Common Parameters ---
+int32_t cmdLDATransform(int argc, char** argv);
+
+namespace {
+
+enum class TenXFeatureMode {
+    Default,
+    FeatureFile,
+    ModelOnly,
+    RegexOnly,
+    PostloadCounts
+};
+
+void appendFlag(std::vector<std::string>& args, const std::string& name) {
+    args.push_back("--" + name);
+}
+
+template <typename T>
+void appendOption(std::vector<std::string>& args, const std::string& name, const T& value) {
+    std::ostringstream oss;
+    oss << value;
+    args.push_back("--" + name);
+    args.push_back(oss.str());
+}
+
+int32_t runDelegatedTransform(const std::string& modelFile,
+        const std::string& outPrefix,
+        const std::string& inFile,
+        const std::string& metaFile,
+        const std::string& in_bc,
+        const std::string& in_ft,
+        const std::string& in_mtx,
+        const std::string& featureFile,
+        int32_t minCountFeature,
+        const std::string& includeFeatureRegex,
+        const std::string& excludeFeatureRegex,
+        const std::string& weightFile,
+        double defaultWeight,
+        int32_t maxIter,
+        double meanChangeTol,
+        int32_t nThreads,
+        int32_t modal,
+        int32_t debugN,
+        bool computeResiduals,
+        int32_t topkOnly) {
+    std::vector<std::string> args;
+    args.reserve(32);
+    args.push_back("lda-transform");
+    appendOption(args, "in-model", modelFile);
+    appendOption(args, "out-prefix", outPrefix);
+    appendOption(args, "min-count", 1);
+    appendOption(args, "threads", nThreads);
+    appendOption(args, "modal", modal);
+    appendOption(args, "max-iter", maxIter);
+    appendOption(args, "mean-change-tol", meanChangeTol);
+    if (debugN > 0) {
+        appendOption(args, "debug", debugN);
+    }
+    if (!inFile.empty()) {
+        appendOption(args, "in-data", inFile);
+        appendOption(args, "in-meta", metaFile);
+    } else {
+        appendOption(args, "in-barcodes", in_bc);
+        appendOption(args, "in-features", in_ft);
+        appendOption(args, "in-matrix", in_mtx);
+    }
+    if (!featureFile.empty()) {
+        appendOption(args, "features", featureFile);
+    }
+    appendOption(args, "min-count-per-feature", minCountFeature);
+    if (!includeFeatureRegex.empty()) {
+        appendOption(args, "include-feature-regex", includeFeatureRegex);
+    }
+    if (!excludeFeatureRegex.empty()) {
+        appendOption(args, "exclude-feature-regex", excludeFeatureRegex);
+    }
+    if (!weightFile.empty()) {
+        appendOption(args, "feature-weights", weightFile);
+        appendOption(args, "default-weight", defaultWeight);
+    }
+    if (computeResiduals) {
+        appendFlag(args, "residuals");
+    }
+    if (topkOnly > 0) {
+        appendOption(args, "topk-only", topkOnly);
+    }
+
+    std::vector<char*> argv;
+    argv.reserve(args.size());
+    for (auto& arg : args) {
+        argv.push_back(arg.data());
+    }
+    return cmdLDATransform(static_cast<int32_t>(argv.size()), argv.data());
+}
+
+} // namespace
+
+int32_t cmdTopicModelSVI(int argc, char** argv) {
     std::string inFile, metaFile, weightFile, outPrefix, priorFile, featureFile;
     std::string dge_dir, in_bc, in_ft, in_mtx;
-    std::string include_ftr_regex;
-    std::string exclude_ftr_regex;
+    std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
     int32_t nEpochs = 1, batchSize = 512;
     int32_t debug_ = 0, verbose = 0;
     int32_t nThreads = 0;
     int32_t modal = 0;
     int32_t minCountTrain = 20, minCountFeature = 1;
-    double defaultWeight = 1.;
+    int32_t topk_only = -1;
+    double defaultWeight = 1.0;
     bool transform = false;
-    bool append_topk = false;
-    std::string topk_colname = "topK";
-    std::string topp_colname = "topP";
-    bool drop_random_key = false;
+    bool computeResiduals = false;
     bool sort_topics = false;
     bool reproducible_init = false;
-    // --- Algorithm Parameters ---
+
     double kappa = 0.7, tau0 = 10.0;
-    double alpha = -1., eta = -1.;
+    double alpha = -1.0, eta = -1.0;
     int32_t maxIter = 100;
-    double  mDelta = 1e-3;
-    // --- LDA-Specific Parameters ---
+    double mDelta = 1e-3;
     int32_t nTopics = 0;
-    double priorScale = -1.;
-    double priorScaleRel = -1.;
+    double priorScale = -1.0;
+    double priorScaleRel = -1.0;
     bool projection_only = false;
-    // --- LDA + background noise ---
+
     bool fitBackground = false;
     bool fixBackground = false;
     std::string bgPriorFile;
@@ -48,39 +133,22 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double warmInitEpoch = 0.5;
     double bgInitScale = 0.5;
     int32_t warmInitUnits = -1;
-    // --- SCVB0 specific parameters ---
-    bool useSCVB0 = false;
-    int32_t z_burnin = 10;
-    double s_beta = 10, s_theta = 1, kappa_theta = 0.9, tau_theta = 10;
-    // --- HDP-Specific Parameters ---
-    int32_t max_topics_K = 100;
-    int32_t doc_trunc_T = 10;
-    double hdp_alpha = 1.0;
-    double hdp_omega = 1.0;
-    double topic_threshold = 1e-8;
-    double topic_coverage  = 1.0 - 1e-8;
 
     ParamList pl;
-    // --- Command-Line Option Definitions ---
-    pl.add_option("model-type", "Type of topic model to train [lda|hdp]", model_type);
-
-    // Input/Output Options (Common)
     pl.add_option("in-data", "Input hex file", inFile)
       .add_option("in-meta", "Metadata file", metaFile)
       .add_option("out-prefix", "Output prefix for model and results files", outPrefix, true)
       .add_option("transform", "Transform data to topic space after training", transform)
-      .add_option("append-topk", "Append topK/topP columns to transform output", append_topk)
-      .add_option("topk-colname", "Column name for topK output", topk_colname)
-      .add_option("topp-colname", "Column name for topP output", topp_colname)
-      .add_option("drop-random-key", "Drop random_key column from transform output", drop_random_key)
-      .add_option("sort-topics", "Sort topics by weight after training", sort_topics);
+      .add_option("sort-topics", "Sort topics by weight after training", sort_topics)
+      .add_option("residuals", "Compute residual-based transform summaries in .unit_meta.tsv", computeResiduals)
+      .add_option("feature-residuals", "Compute residual-based transform summaries in .unit_meta.tsv", computeResiduals)
+      .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
 
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
       .add_option("in-features", "Input features.tsv.gz", in_ft)
       .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx);
 
-    // Feature Preprocessing Options (Common)
     pl.add_option("feature-weights", "Input weights file", weightFile)
       .add_option("features", "Feature list", featureFile)
       .add_option("min-count-per-feature", "Min count for features to be included", minCountFeature)
@@ -88,7 +156,6 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
 
-    // General Training Options (Common)
     pl.add_option("seed", "Random seed", seed)
       .add_option("threads", "Number of threads", nThreads)
       .add_option("n-epochs", "Number of epochs", nEpochs)
@@ -98,42 +165,26 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("debug", "If >0, only process this many units", debug_)
       .add_option("verbose", "Verbose level", verbose);
 
-    // Algorithm Hyperparameters (Model-Specific)
-    pl.add_option("kappa", "(All) Learning decay rate", kappa)
-      .add_option("tau0", "(All) Learning offset", tau0)
-      .add_option("eta", "(LDA/HDP) Topic-word prior. LDA default: 1/K, HDP default: 0.01", eta)
-      .add_option("max-iter", "(LDA-SVB/HDP) Max iterations per doc", maxIter)
-      .add_option("mean-change-tol", "(LDA-SVB/HDP) Convergence tolerance per doc", mDelta)
-      // LDA Options
-      .add_option("n-topics", "(LDA) Number of topics", nTopics)
-      .add_option("alpha", "(LDA) Document-topic prior (default: 1/K)", alpha)
-      .add_option("reproducible-init", "(LDA) Enable deterministic per-document random initialization (slower)", reproducible_init)
-      .add_option("scvb0", "(LDA) Use SCVB0 inference instead of SVB", useSCVB0)
-      // HDP Options
-      .add_option("max-topics", "(HDP) Maximum number of topics (K)", max_topics_K)
-      .add_option("doc-trunc-level", "(HDP) Document topic truncation level (T)", doc_trunc_T)
-      .add_option("hdp-alpha", "(HDP) Document-level concentration", hdp_alpha)
-      .add_option("hdp-omega", "(HDP) Corpus-level concentration", hdp_omega)
-      .add_option("topic-threshold", "(HDP Output) Only output topics with relative weight > threshold", topic_threshold)
-      .add_option("topic-coverage", "(HDP Output) Output top topics that explain this proportion of the data", topic_coverage);
+    pl.add_option("kappa", "Learning decay rate", kappa)
+      .add_option("tau0", "Learning offset", tau0)
+      .add_option("eta", "Topic-word prior (default: 1/K)", eta)
+      .add_option("max-iter", "Max iterations per doc", maxIter)
+      .add_option("mean-change-tol", "Convergence tolerance per doc", mDelta)
+      .add_option("n-topics", "Number of topics", nTopics)
+      .add_option("alpha", "Document-topic prior (default: 1/K)", alpha)
+      .add_option("reproducible-init", "Enable deterministic per-document random initialization (slower)", reproducible_init);
 
-    // LDA-Specific Advanced Options
-    pl.add_option("model-prior", "(LDA) File with initial model matrix for continued training", priorFile)
-      .add_option("prior-scale", "(LDA) Uniform scaling factor for the prior model matrix", priorScale)
-      .add_option("prior-scale-rel", "(LDA) Scale prior model relative to the total feature counts in the data (overrides --prior-scale)", priorScaleRel)
-      .add_option("projection-only", "(LDA) Transform data using prior model without training", projection_only)
-      .add_option("fit-background", "(LDA-SVB) Fit a background noise in addition to topics", fitBackground)
-      .add_option("background-prior", "(LDA-SVB) File with background prior vector", bgPriorFile)
-      .add_option("background-init-scale", "(LDA-SVB) Scaling factor for constructing background prior from total feature counts", bgInitScale)
-      .add_option("fix-background", "(LDA-SVB) Fix the background model during training", fixBackground)
-      .add_option("bg-fraction-prior-a0", "(LDA-SVB) Background fraction hyper-parameter a0 in pi~beta(a0, b0) (default: 2)", a0)
-      .add_option("bg-fraction-prior-b0", "(LDA-SVB) Background fraction hyper-parameter b0 in pi~beta(a0, b0) (default: 8)", b0)
-      .add_option("warm-start-epochs", "(LDA-SVB) Number of epochs to warm start factors before fitting background (could be fractional)", warmInitEpoch);
-    pl.add_option("s-beta", "(LDA-SCVB0) Step size scheduler 's' for global params", s_beta)
-      .add_option("s-theta", "(LDA-SCVB0) Step size scheduler 's' for local params", s_theta)
-      .add_option("kappa-theta", "(LDA-SCVB0) Step size scheduler 'kappa' for local params", kappa_theta)
-      .add_option("tau-theta", "(LDA-SCVB0) Step size scheduler 'tau' for local params", tau_theta)
-      .add_option("z-burnin", "(LDA-SCVB0) Burn-in iterations for latent variables", z_burnin);
+    pl.add_option("model-prior", "File with initial model matrix for continued training", priorFile)
+      .add_option("prior-scale", "Uniform scaling factor for the prior model matrix", priorScale)
+      .add_option("prior-scale-rel", "Scale prior model relative to the total feature counts in the data (overrides --prior-scale)", priorScaleRel)
+      .add_option("projection-only", "Transform data using prior model without training", projection_only)
+      .add_option("fit-background", "Fit a background noise in addition to topics", fitBackground)
+      .add_option("background-prior", "File with background prior vector", bgPriorFile)
+      .add_option("background-init-scale", "Scaling factor for constructing background prior from total feature counts", bgInitScale)
+      .add_option("fix-background", "Fix the background model during training", fixBackground)
+      .add_option("bg-fraction-prior-a0", "Background fraction hyper-parameter a0 in pi~beta(a0, b0)", a0)
+      .add_option("bg-fraction-prior-b0", "Background fraction hyper-parameter b0 in pi~beta(a0, b0)", b0)
+      .add_option("warm-start-epochs", "Number of epochs to warm start factors before fitting background (could be fractional)", warmInitEpoch);
 
     try {
         pl.readArgs(argc, argv);
@@ -151,15 +202,17 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     if (nEpochs <= 0) {
         nEpochs = 1;
     }
+    if (topk_only == 0) {
+        error("--topk-only must be a positive integer");
+    }
     if (seed <= 0) {
         seed = std::random_device{}();
     }
-    int32_t nUnits;
 
-    // Set up data reader
-    HexReader _reader;
+    int32_t nUnits;
+    HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
-    bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
+    const bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
     if (use_10x) {
         if (!inFile.empty()) {
             warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
@@ -177,64 +230,48 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         }
         dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
         nUnits = dge_ptr->nBarcodes;
-        _reader.initFromFeatures(dge_ptr->features, nUnits);
+        reader.initFromFeatures(dge_ptr->features, nUnits);
     } else {
         if (metaFile.empty() || inFile.empty()) {
             error("Missing --in-data or --in-meta");
         }
-        _reader.readMetadata(metaFile);
-        nUnits = _reader.nUnits;
+        reader.readMetadata(metaFile);
+        nUnits = reader.nUnits;
     }
 
-    // Set up feature ID and filter
     TenXFeatureMode tenx_feature_mode = TenXFeatureMode::Default;
     if (use_10x) {
-        const bool has_model_prior = (model_type == "lda" && !priorFile.empty());
+        const bool has_model_prior = !priorFile.empty();
         if (!featureFile.empty()) {
             tenx_feature_mode = TenXFeatureMode::FeatureFile;
-            _reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex, true);
+            reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex, true);
         } else if (has_model_prior) {
             tenx_feature_mode = TenXFeatureMode::ModelOnly;
         } else if (minCountFeature <= 1) {
             tenx_feature_mode = TenXFeatureMode::RegexOnly;
             if (!include_ftr_regex.empty() || !exclude_ftr_regex.empty()) {
-                _reader.filterCurrentFeatures(1, include_ftr_regex, exclude_ftr_regex);
+                reader.filterCurrentFeatures(1, include_ftr_regex, exclude_ftr_regex);
             }
         } else {
             tenx_feature_mode = TenXFeatureMode::PostloadCounts;
         }
     } else if (!featureFile.empty()) {
-        _reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
+        reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
-    if (!weightFile.empty())
-        _reader.setWeights(weightFile, defaultWeight);
+    if (!weightFile.empty()) {
+        reader.setWeights(weightFile, defaultWeight);
+    }
 
-    // Set up the model runner and finalize the feature space
-    std::unique_ptr<TopicModelWrapper> model_runner;
-    LDA4Hex* lda4hex = nullptr;
-    HDP4Hex* hdp4hex = nullptr;
-    if (model_type == "lda") {
-        if (projection_only) {
-            transform = true;
-        }
-        if (nTopics <= 0 && priorFile.empty()) {
-            error("Number of topics must be greater than 0");
-        }
-        lda4hex = new LDA4Hex(_reader, modal, 10);
-        if (!priorFile.empty()) {
-            lda4hex->preparePriorFeatureSpace(priorFile);
-        }
-        model_runner.reset(lda4hex);
-    } else if (model_type == "hdp") {
-        sort_topics = true;
-        if (projection_only || !priorFile.empty()) warning("--projection-only and --model-prior are not supported for HDP and will be ignored.");
-        if (max_topics_K <= 0) error("For HDP, --max-topics must be > 0.");
-        if (doc_trunc_T <= 0) error("For HDP, --doc-trunc-level must be > 0.");
+    if (projection_only) {
+        transform = true;
+    }
+    if (nTopics <= 0 && priorFile.empty()) {
+        error("Number of topics must be greater than 0");
+    }
 
-        hdp4hex = new HDP4Hex(_reader, modal, 10);
-        model_runner.reset(hdp4hex);
-    } else {
-        error("Unknown model type: '%s'. Choose 'lda' or 'hdp'.", model_type.c_str());
+    auto lda4hex = std::make_unique<LDA4Hex>(reader, modal, 10);
+    if (!priorFile.empty()) {
+        lda4hex->preparePriorFeatureSpace(priorFile);
     }
 
     if (use_10x) {
@@ -242,24 +279,24 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             ((minCountFeature > 1) || !include_ftr_regex.empty() || !exclude_ftr_regex.empty())) {
             warning("Ignoring --min-count-per-feature and feature regex filters for 10X input because the model prior defines the feature space");
         }
-        int32_t n_overlap = dge_ptr->setFeatureIndexRemap(model_runner->getFeatureNames(), false);
+        int32_t n_overlap = dge_ptr->setFeatureIndexRemap(lda4hex->getFeatureNames(), false);
         if (n_overlap == 0) {
             error("No overlapping features found between 10X input and model");
         }
-        model_runner->prepare10XCache(*dge_ptr, minCountTrain, true);
+        lda4hex->prepare10XCache(*dge_ptr, minCountTrain, true);
 
         if (tenx_feature_mode == TenXFeatureMode::PostloadCounts) {
-            const int32_t nFeaturesPrev = model_runner->nFeatures();
-            const int32_t nKept = model_runner->filterCurrentFeatures(minCountFeature, include_ftr_regex, exclude_ftr_regex);
+            const int32_t nFeaturesPrev = lda4hex->nFeatures();
+            const int32_t nKept = lda4hex->filterCurrentFeatures(minCountFeature, include_ftr_regex, exclude_ftr_regex);
             if (nKept == 0) {
                 error("No features remain after applying feature filters");
             }
-            if (model_runner->nFeatures() != nFeaturesPrev) {
-                n_overlap = dge_ptr->setFeatureIndexRemap(model_runner->getFeatureNames(), false);
+            if (lda4hex->nFeatures() != nFeaturesPrev) {
+                n_overlap = dge_ptr->setFeatureIndexRemap(lda4hex->getFeatureNames(), false);
                 if (n_overlap == 0) {
                     error("No overlapping features found between 10X input and model");
                 }
-                model_runner->prepare10XCache(*dge_ptr, minCountTrain, true);
+                lda4hex->prepare10XCache(*dge_ptr, minCountTrain, true);
             }
         }
         if (featureFile.empty()) {
@@ -268,8 +305,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             if (!outFeatureStream) {
                 error("Error opening output file: %s for writing", outFeatures.c_str());
             }
-            const auto featureNames = model_runner->getFeatureNames();
-            const auto& featureSums = model_runner->getFeatureSumsRaw();
+            const auto featureNames = lda4hex->getFeatureNames();
+            const auto& featureSums = lda4hex->getFeatureSumsRaw();
             if (featureNames.size() != featureSums.size()) {
                 error("Feature names and total counts have inconsistent sizes (%zu vs %zu)",
                     featureNames.size(), featureSums.size());
@@ -283,46 +320,37 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         }
     }
 
-    if (lda4hex) {
-        if (useSCVB0) {
-            lda4hex->initialize_scvb0(nTopics, seed, nThreads, verbose,
-                alpha, eta, kappa, tau0, nUnits,
-                priorFile, priorScale, priorScaleRel, s_beta, s_theta, kappa_theta, tau_theta, z_burnin);
+    lda4hex->initialize_svb(nTopics, seed, nThreads, verbose,
+        alpha, eta, kappa, tau0, nUnits,
+        priorFile, priorScale, priorScaleRel, maxIter, mDelta);
+    lda4hex->set_reproducible_init(reproducible_init);
+    if (fitBackground) {
+        if (warmInitUnits < 0) {
+            warmInitUnits = static_cast<int32_t>(warmInitEpoch * nUnits);
         } else {
-            lda4hex->initialize_svb(nTopics, seed, nThreads, verbose,
-                alpha, eta, kappa, tau0, nUnits,
-                priorFile, priorScale, priorScaleRel, maxIter, mDelta);
+            warmInitEpoch = static_cast<double>(warmInitUnits) / nUnits;
         }
-        lda4hex->set_reproducible_init(reproducible_init);
-        if (fitBackground && !useSCVB0) {
-            if (warmInitUnits < 0) {
-                warmInitUnits = static_cast<int32_t>(warmInitEpoch * nUnits);
+        if (warmInitUnits > 0) {
+            notice("Warm-start using %d units before introducing background", warmInitUnits);
+            int32_t nWarm = 0;
+            if (use_10x) {
+                nWarm = lda4hex->trainOnline10X(batchSize, warmInitUnits, seed);
             } else {
-                warmInitEpoch = (double) warmInitUnits / nUnits;
+                nWarm = lda4hex->trainOnline(inFile, batchSize, minCountTrain, warmInitUnits);
             }
-            if (warmInitUnits > 0) {
-                notice("Warm-start using %d units before introducing background", warmInitUnits);
-                int32_t nWarm = 0;
-                if (use_10x) {
-                    nWarm = lda4hex->trainOnline10X(batchSize, warmInitUnits, seed);
-                } else {
-                    nWarm = lda4hex->trainOnline(inFile, batchSize, minCountTrain, warmInitUnits);
-                }
-                lda4hex->printTopicAbundance();
-            }
-            double bgScale = lda4hex->hasFullFeatureSums() ?  bgInitScale : 1.;
-            lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale, fixBackground);
+            notice("Warm-start processed %d documents", nWarm);
+            lda4hex->printTopicAbundance();
         }
-    } else if (hdp4hex) {
-        hdp4hex->initialize(max_topics_K, doc_trunc_T, seed, nThreads, verbose,
-            eta, hdp_alpha, hdp_omega, kappa, tau0, hdp4hex->nUnits(), maxIter, mDelta);
+        const double bgScale = lda4hex->hasFullFeatureSums() ? bgInitScale : 1.0;
+        lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale, fixBackground);
+    }
+
+    std::string outModel = outPrefix + ".model.tsv";
+    if (!projection_only && !priorFile.empty() && priorFile == outModel) {
+        outModel = outPrefix + ".model.updated.tsv";
     }
 
     if (!projection_only) {
-        std::string outModel = outPrefix + ".model.tsv";
-        if (!priorFile.empty() && priorFile == outModel) {
-            outModel = outPrefix + ".model.updated.tsv";
-        }
         std::ofstream outFileStream(outModel);
         if (!outFileStream) {
             error("Error opening output file: %s for writing", outModel.c_str());
@@ -331,50 +359,49 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (std::filesystem::exists(outModel)) {
             std::filesystem::remove(outModel);
         }
-        // Training
+
         notice("Starting model training....");
-        int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
+        const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
         for (int epoch = 0; epoch < nEpochs; ++epoch) {
             int32_t n = 0;
             if (use_10x) {
-                n = model_runner->trainOnline10X(batchSize, maxUnits, seed + epoch);
+                n = lda4hex->trainOnline10X(batchSize, maxUnits, seed + epoch);
             } else {
-                n = model_runner->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
+                n = lda4hex->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
             }
             notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
-            model_runner->printTopicAbundance();
+            lda4hex->printTopicAbundance();
         }
-        if (model_type == "lda" && sort_topics) {
-            model_runner->sortTopicsByWeight();
+        if (sort_topics) {
+            lda4hex->sortTopicsByWeight();
         }
-        if (model_type == "lda" && fitBackground) {
-            auto* lda_ptr = dynamic_cast<LDA4Hex*>(model_runner.get());
+        if (fitBackground) {
             std::string bgFile = outPrefix + ".background.tsv";
-            if (lda_ptr) {
-                lda_ptr->writeBackgroundModel(bgFile);
-            }
+            lda4hex->writeBackgroundModel(bgFile);
             notice("Background profile written to %s", bgFile.c_str());
         }
-        if (model_type == "hdp") {
-            auto* hdp_ptr = dynamic_cast<HDP4Hex*>(model_runner.get());
-            if (hdp_ptr) {
-                hdp_ptr->filterTopics(topic_threshold, topic_coverage);
-            }
-        }
 
-        // write model matrix to file
-        model_runner->writeModelToFile(outModel);
+        lda4hex->writeModelToFile(outModel);
         notice("Model written to %s", outModel.c_str());
     }
 
     if (transform) {
-        model_runner->setTransformOutputOptions(append_topk, topk_colname, topp_colname, drop_random_key);
+        const std::string transformModel = projection_only ? priorFile : outModel;
+        if (!fitBackground) {
+            return runDelegatedTransform(transformModel, outPrefix, inFile, metaFile,
+                in_bc, in_ft, in_mtx, featureFile, minCountFeature,
+                include_ftr_regex, exclude_ftr_regex, weightFile, defaultWeight,
+                maxIter, mDelta, nThreads, modal, debug_, computeResiduals, topk_only);
+        }
+        if (computeResiduals || topk_only > 0) {
+            warning("Keeping legacy transform output because background-enabled LDA does not yet support delegated residual/top-k transform");
+        }
         if (use_10x) {
-            model_runner->fitAndWriteToFile10X(*dge_ptr, outPrefix, batchSize);
+            lda4hex->fitAndWriteToFile10X(*dge_ptr, outPrefix, batchSize);
         } else {
-            model_runner->fitAndWriteToFile(inFile, outPrefix, batchSize);
+            lda4hex->fitAndWriteToFile(inFile, outPrefix, batchSize);
         }
     }
 
     return 0;
-};
+}

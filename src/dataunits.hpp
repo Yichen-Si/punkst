@@ -16,6 +16,7 @@ struct Document {
     std::vector<uint32_t> ids; // Length: number of nonzero words in the doc
     std::vector<double> cnts;
     double ct_tot = -1;
+    double raw_ct_tot = -1;
 
     inline Eigen::VectorXd to_dense(size_t n) const {
         Eigen::VectorXd y_dense = Eigen::VectorXd::Zero(n);

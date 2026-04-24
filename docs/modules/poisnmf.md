@@ -1,10 +1,16 @@
-# Poisson NMF with log(1+x) link
+# Poisson NMF with shifted log link
 
-This document describes two related commands: `nmf-pois-log1p` for fitting a Poisson NMF model, and `nmf-transform` for applying a fitted model to new data.
+This document describes two related commands: `nmf-pois-log1p` for fitting a non-negative matrix factorization model with Poisson likelihood to single cell or spot level count data, and `nmf-transform` for applying a fitted model to new data.
+
+Model:
+
+$y_{im} \sim Pois(\lambda_{im}), \ \ g(\lambda_{im}) = \theta_i^T \beta_m$ where $g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)$
+
+with unit (cell) specific scaling $c_i := n_i/L$.
+
+($n_i$: total transcript count of unit $i$. $L$: constnat size factor)
 
 ## `nmf-pois-log1p`: Fitting the model
-
-**`nmf-pois-log1p` fits a non-negative matrix factorization model with Poisson likelihood to single cell or spot level count data.** It fits the model $y_{im} \sim Pois(\lambda_{im}), \ \ g(\lambda_{im}) = \theta_i^T \beta_m$ where $g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)$ with unit (cell) specific scaling $c_i := n_i/L$. ($n_i$: total transcript count of unit $i$. $L$: constnat size factor)
 
 ### Input format
 
@@ -179,9 +185,9 @@ punkst nmf-pois-log1p --in-data hex_data.txt --in-meta hex_meta.json \
 - `{prefix}.bgprob.tsv`: (If `--fit-background` is set) Per-unit posterior probabilities of belonging to the background component.
 
 
-## `nmf-transform`: Projecting new data with a trained model
+## `nmf-transform`: Projecting new data with a fitted model
 
-The `nmf-transform` command applies a trained NMF model to new data to obtain the unit-factor matrix ($\theta$) for the new units.
+The `nmf-transform` command applies a fitted NMF model to new data to obtain the unit-factor matrix ($\theta$) for the new units.
 
 ### Usage
 
@@ -196,7 +202,7 @@ punkst nmf-transform --in-data new_data.txt --in-meta new_meta.json \
 
 `--in-meta` - Metadata file for the new data.
 
-`--in-model` - The trained feature-factor matrix (`.model.tsv` file from `nmf-pois-log1p`).
+`--in-model` - The fitted feature-factor matrix (the $\beta$'s, as the `.model.tsv` file from `nmf-pois-log1p`).
 
 `--out-prefix` - Prefix for the output files.
 
@@ -206,7 +212,7 @@ punkst nmf-transform --in-data new_data.txt --in-meta new_meta.json \
 
 `--in-covar` - Covariate file for the new data.
 
-`--in-covar-coef` - The trained feature-covariate coefficient matrix (`.covar.tsv` file from `nmf-pois-log1p`).
+`--in-covar-coef` - The fitted feature-covariate coefficient matrix (`.covar.tsv` file from `nmf-pois-log1p`).
 
 `--allow-na` - If set, replace non-numerical values in covariates with zero.
 
@@ -218,7 +224,7 @@ punkst nmf-transform --in-data new_data.txt --in-meta new_meta.json \
 
 `--mode` - Optimization algorithm. 1 for TRON (default), 2 for FISTA, 3 for a Newton method with line search.
 
-`--c` - Constant `c` in `log(1+lambda/c)`. If not set, it is calculated from `size-factor`.
+`--c` - Constant `c` in `log(1+lambda/c)`. If not set, it is unit-specific and calculated from `size-factor`.
 
 `--size-factor` - Constant to scale total counts to get per-unit scaling factors. Default: 10000.
 
@@ -233,6 +239,7 @@ punkst nmf-transform --in-data new_data.txt --in-meta new_meta.json \
 `--threads` - Number of threads. Default: 1.
 
 ### Output files
+(Similar to those from `nmf-pois-log1p`)
 
 - `{prefix}.theta.tsv`: The transformed unit-factor matrix ($\theta$) for the new data.
 
