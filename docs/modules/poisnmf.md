@@ -1,248 +1,256 @@
 # Poisson NMF with shifted log link
 
-This document describes two related commands: `nmf-pois-log1p` for fitting a non-negative matrix factorization model with Poisson likelihood to single cell or spot level count data, and `nmf-transform` for applying a fitted model to new data.
+This document describes the current behavior of:
 
-Model:
+- `punkst nmf-pois-log1p`: fit a Poisson NMF model
+- `punkst nmf-transform`: project new data with a fitted model
 
-$y_{im} \sim Pois(\lambda_{im}), \ \ g(\lambda_{im}) = \theta_i^T \beta_m$ where $g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)$
+The model is
 
-with unit (cell) specific scaling $c_i := n_i/L$.
+\[
+y_{im} \sim \mathrm{Poisson}(\lambda_{im}), \qquad
+\log(1 + \lambda_{im}/c_i) = \sum_k \theta_{ik}\beta_{mk} + \sum_p X_{ip} B_{mp},
+\]
 
-($n_i$: total transcript count of unit $i$. $L$: constnat size factor)
+where the covariate term is optional and the per-unit scale is typically
+\[
+c_i = n_i / L
+\]
+with total count \(n_i\) and size factor \(L\).
 
-## `nmf-pois-log1p`: Fitting the model
+## Input formats
 
-### Input format
+Both commands accept the same count inputs:
 
-The input data format is the same as for `topic-model`, including either:
+- custom sparse text input with `--in-data` and `--in-meta`
+- 10X MEX input via `--in-dge-dir`
+- or the explicit 10X triplet `--in-barcodes`, `--in-features`, `--in-matrix`
 
-- the custom sparse text format with `--in-data` and `--in-meta` (generated from pixel level data by `tiles2hex`)
-- 10X MEX input with `--in-dge-dir`, or the explicit triplet `--in-barcodes`, `--in-features`, and `--in-matrix`
+For 10X input, the data are loaded into memory. If `--features` is not provided during fitting, `nmf-pois-log1p` writes `{prefix}.features.tsv` with the final feature names and total counts.
 
-As with `topic-model`, 10X input is loaded fully into memory. If `--features` is not provided for 10X input, `nmf-pois-log1p` also writes `<prefix>.features.tsv` containing the final feature names and total counts.
-
-### Usage
-
-```bash
-punkst nmf-pois-log1p --in-data hex_data.txt --in-meta hex_meta.json \
---K 15 --out-prefix nmf_results --threads 8 --seed 1984
-```
-
-For 10X input:
-
-```bash
-punkst nmf-pois-log1p --in-dge-dir filtered_feature_bc_matrix \
---K 15 --out-prefix nmf_results --threads 8 --seed 1984
-```
+## `nmf-pois-log1p`
 
 ### Required
 
-`--K` - The number of factors (topics) to learn.
+`--K`  
+Number of factors.
 
-`--out-prefix` - Prefix for the output files.
+`--out-prefix`  
+Prefix for output files.
 
-Input in one of the following two formats is required:
+One input source is required:
 
-#### For the custom format
+- custom format: `--in-data` and `--in-meta`
+- 10X format: `--in-dge-dir`, or `--in-barcodes` + `--in-features` + `--in-matrix`
 
-`--in-data` - Input data file (created by `tiles2hex`).
+### Common options
 
-`--in-meta` - Metadata file created by `tiles2hex`.
+#### Feature and unit filtering
 
-#### For 10X DGE format
+`--features`  
+Feature list used to define or filter the feature space.
 
-`--in-dge-dir` - Input directory containing `barcodes.tsv.gz`, `features.tsv.gz`, and `matrix.mtx.gz`.
+`--min-count-per-feature`  
+Minimum feature total count. Default: `100`.
 
-Alternatively, specify the three files directly with `--in-barcodes`, `--in-features`, and `--in-matrix`.
+`--include-feature-regex`  
+Keep only matching features.
 
-### Optional
+`--exclude-feature-regex`  
+Drop matching features.
 
-#### Data and Feature Filtering
-(Same behavior as [`topic-model`](lda4hex.md))
+`--min-count-train`  
+Minimum total count per unit for training. Default: `50`.
 
-`--features` - Path to a file where the first column contains feature names and the second column may contain total counts. Used to define/filter the feature space.
+#### Optimization
 
-`--min-count-per-feature` - Minimum total count for a feature to be included. Default: 100.
+`--mode`  
+Regression solver for internal Poisson updates. `1` = TRON, `2` = FISTA, `3` = diagonal line search.
 
-`--include-feature-regex` - Regular expression to include only features matching this pattern.
+`--size-factor`  
+Size factor constant \(L\). Default: `10000`.
 
-`--exclude-feature-regex` - Regular expression to exclude features matching this pattern.
+`--c`  
+Use a fixed \(c\) instead of per-unit scaling.
 
-For the details on feature-selection behaviors with 10X input, including when `--features` is optional, when an input model defines the feature space, and when the (less ideal) two-pass 10X load is used, see [`topic-model`](lda4hex.md).
+`--max-iter-outer`  
+Maximum alternating-update iterations.
 
-`--min-count-train` - Minimum total count for a unit (hexagon/cell) to be included in training. Default: 50.
+`--tol-outer`  
+Outer-loop tolerance.
 
-#### Input for warm-start or guided mode
+`--max-iter-inner`  
+Maximum inner regression iterations.
 
-`--in-model` - Input model (beta) file for warm start.
+`--tol-inner`  
+Inner-loop tolerance.
 
-`--random-init-missing` - If set, randomly initialize features present in the data but missing from the input model.
+`--exact`  
+Use the exact likelihood for zeros instead of the approximation.
 
-`--icol-label` - Column index in `--in-covar` for labels to guide the factorization. This turns the model into a guided/supervised one where factors correspond to labels.
+`--minibatch-epoch`  
+Number of initial minibatch epochs.
 
-`--label-list` - A file containing a list of unique labels, one per line. The order determines the factor indices.
+`--minibatch-size`  
+Minibatch size.
 
-`--label-na` - String for missing labels in the label column (e.g., "NA"). These units are not used for guidance.
+`--t0`, `--kappa`  
+Step-size schedule parameters for minibatch fitting.
 
-#### Model and Training Parameters
-`--mode` - Optimization algorithm to use in each Poisson regression subproblem. 1 for TRON (trust-region Newton-CG, default), 2 for an accelerated gradient algorithm (FISTA), 3 for a Newton's method with line search.
+`--seed`, `--threads`
 
-`--size-factor` - A constant to scale the total counts per unit (matching $L$ in Seurat), used to calculate the per-observation scaling parameter $c_i=\frac{\sum_m y_{im}}{L}$ in $g(\lambda_{im}) = \log(1+\lambda_{im}/c_i)$. Default: 10000.
+#### Warm start and supervision
 
-`--c` - If specified, use a constant `c` for all units instead of calculating it from `size-factor`. Default: -1 (per-unit `c`).
+`--in-model`  
+Warm-start from an existing model matrix.
 
-`--feature-residuals` - If set, output per-feature residuals for diagnosis.
+`--random-init-missing`  
+Randomly initialize features that are present in the data but missing from the input model.
 
-`--fit-stats` - If set, compute and write goodness of fit statistics. Not compatible with `--fit-background`.
+`--icol-label`, `--label-list`, `--label-na`  
+Optional guided factorization using labels from `--in-covar`.
 
-`--write-se` - If set, compute and write standard errors for the model parameters ($\beta$). See also `--se-method`.
+#### Covariates
 
-`--max-iter-outer` - Maximum number of outer loop iterations (alternating between updating $\theta$ and $\beta$). Default: 50, but it often approximates convergence in $\lt 10$ iterations.
+`--in-covar`  
+Covariate table with one row per unit.
 
-`--max-iter-inner` - Maximum number of iterations for each Poisson regression optimization. Default: 20.
+`--icol-covar`  
+Selected covariate columns. If omitted, all columns except the first are used.
 
-`--tol-outer` - Convergence tolerance for the outer loop. Default: 1e-5.
+`--allow-na`  
+Replace non-numeric covariate values with zero.
 
-`--tol-inner` - Convergence tolerance for the inner optimization problems. Default: 1e-6.
+`--covar-coef-min`, `--covar-coef-max`  
+Bounds for covariate coefficients.
 
-`--exact` - Use the exact likelihood for all observations. If not set, uses a second-order approximation for zero-count observations to speed up computation.
+#### Optional diagnostics and inference
 
-`--seed` - Random seed for reproducibility.
+`--feature-residuals`  
+Write per-feature residual diagnostics.
 
-`--threads` - Number of threads to use. Default: 1.
+`--fit-stats`  
+Write per-unit fit statistics. This is currently skipped when `--fit-background` is enabled.
 
-#### Minibatch Training Options
+`--write-se`  
+Write standard errors for model coefficients.
 
-`--minibatch-epoch` - Number of minibatch epochs at the beginning of training. Default: 1.
+`--detest-vs-avg`  
+Compute factor-vs-average DE statistics.
 
-`--minibatch-size` - Minibatch size. Default: not set (full batch).
+`--se-method`  
+`1` = Fisher, `2` = robust, `3` = both.
 
-`--t0` - Decay parameter t0 for minibatch step size. Default: 1.
+`--min-fc`, `--max-p`, `--min-ct`  
+Filters for DE output.
 
-`--kappa` - Decay parameter kappa for minibatch step size. Default: 0.9.
+#### Background option
 
-#### Experimental: Background Noise Modeling
+`--fit-background`  
+Fit a background component.
 
-`--fit-background` - If set, fit a background noise component.
+`--fix-background`  
+Keep the background model fixed during fitting.
 
-`--fix-background` - If set, fix the background model during training (useful for warm starts).
+`--background-init`  
+Initial background proportion.
 
-`--background-init` - Initial background proportion (pi0). Default: 0.1.
+### Main outputs
 
-#### Experimental: including covariates
+`{prefix}.model.tsv`  
+Feature-by-factor matrix.
 
-We fit the model $g(\lambda_{im}) = \theta_i^T \beta_m + x_i^T b_m$ where $x_i$ contains covariates for unit $i$ provided in `--in-covar`.
+`{prefix}.theta.tsv`  
+Unit-by-factor matrix.
 
-Note: covariates and their effects are **not** constrained to be non-negative unless you specify so. We tried to make the optimization numerically stable but it may not always be interpretable if the non-negative $\theta_i^T \beta_m$ part is dominated by the covariate effects.
+`{prefix}.features.tsv`  
+Written for 10X fitting when `--features` is not supplied.
 
-`--in-covar` - Path to a file containing covariates, with a header line. The number of rows and the **order** of units should exactly match that in the input count data `--in-data`. Currently only numerical covariates are supported, you might try to fit categorical covariates as one-hot encoded binary variables.
+`{prefix}.covar.tsv`  
+Written when covariates are used.
 
-`--icol-covar` - Column indices (0-based) in the covariate file to use. If not specified, all columns except the first are used.
+`{prefix}.background.tsv`  
+Written when `--fit-background` is used.
 
-`--allow-na` - If set, non-numerical values in covariate columns are replaced with 0. Otherwise, all values must be numerical.
+`{prefix}.bgprob.tsv`  
+Per-unit posterior background probabilities when `--fit-background` is used.
 
-`--covar-coef-min` - Lower bound for covariate coefficients. Default: -1e6.
+`{prefix}.model.se.fisher.tsv`, `{prefix}.model.se.robust.tsv`  
+Written when standard errors are requested.
 
-`--covar-coef-max` - Upper bound for covariate coefficients. Default: 1e6.
+`{prefix}.de.fisher.tsv`, `{prefix}.de.robust.tsv`  
+Written when DE testing is requested.
 
-Example usage with covariates:
+`{prefix}.feature.residuals.tsv`  
+Written when `--feature-residuals` is used.
 
-```bash
-punkst nmf-pois-log1p --in-data hex_data.txt --in-meta hex_meta.json \
---K 15 --out-prefix nmf_results --threads 8 --seed 1984 \
---in-covar covars.tsv --icol-covar 1 3 5
-```
+`{prefix}.unit_stats.tsv`  
+Written when `--fit-stats` is used and `--fit-background` is not set. Current columns are:
 
-#### Experimental: compute DE statistics from Cov($\hat \beta$)
-`--detest-vs-avg` - If set, compute DE statistics for each factor vs the average, for each feature.
+- `#Index`
+- `TotalCount`
+- `ll`
+- `Residual`
+- `VarMu`
+- `entropy`
+- `sh_lcr`
+- `sh_q`
 
-`--se-method` - Method for calculating standard errors of $\beta$: `1` for Fisher's information based covariance (default), `2` for the robust sandwich estimator, or `3` to compute both. Used for DE testing or if `--write-se` is set.
+Here `entropy`, `sh_lcr`, and `sh_q` are computed from the row-normalized nonnegative factor loadings of each unit. The factor similarity matrix is built from cosine similarity among the L1-normalized model factors.
 
-`--min-fc` - Minimum approximated fold change to report. Note: due to the nonlinear link, we don't have an exact fold change interpretation, the reported value is $(\exp(\beta_{km})-1)/(\exp(\beta^0_{m})-1)$ where $\beta^0_m$ is a weighted average of $\beta_m$ across factors and $\theta$ is scaled to have column sums equal to $N/K$. Default: 1.5.
+## `nmf-transform`
 
-`--max-p` - Maximum p-value to report. Default: 0.05.
-
-`--min-ct` - Minimum total count for a feature to be included in DE testing. Default: 100.
-
-### Output files
-
-- `{prefix}.model.tsv`: The feature-factor matrix ($\beta$), where rows are features (genes) and columns are factors. It is scaled such that the column sums ($\sum_m \beta_{km}$ for each $k$) all equal to $M$, the number of features.
-
-- `{prefix}.model.se.{method}.tsv`: (If `--write-se` is set) Standard errors of $\beta$. `{method}` is either `fisher` or `robust`.
-
-- `{prefix}.theta.tsv`: The unit-factor matrix ($\theta$), where rows are units (cells/hexagons) and columns are factors. The relative magnitudes of values within each row are meaningful, and the total magnitude of each row is correlated with the total counts of that unit.
-
-- `{prefix}.fit_stats.tsv`: (If `--fit-stats` is set) Per-unit (cell/hexagon) statistics including total counts, log-likelihood, residuals, and the approximated variance of the Poisson rate estimates.
-
-- `{prefix}.covar.tsv`: (If covariates are used) The feature-covariate coefficient matrix containing $b_{jm}$ for each covariate $j$ and feature $m$.
-
-- `{prefix}.de.{method}.tsv`: (If `--detest-vs-avg` is set) Differential expression statistics for each factor vs the average, for each feature. `{method}` is either `fisher` or `robust`.
-
-- `{prefix}.feature.residuals.tsv`: (If `--feature-residuals` is set) Per-feature total residual (averaged over all data points).
-
-- `{prefix}.background.tsv`: (If `--fit-background` is set) Background expression rates for each feature.
-
-- `{prefix}.bgprob.tsv`: (If `--fit-background` is set) Per-unit posterior probabilities of belonging to the background component.
-
-
-## `nmf-transform`: Projecting new data with a fitted model
-
-The `nmf-transform` command applies a fitted NMF model to new data to obtain the unit-factor matrix ($\theta$) for the new units.
-
-### Usage
-
-```bash
-punkst nmf-transform --in-data new_data.txt --in-meta new_meta.json \
---in-model nmf_results.model.tsv --out-prefix projected_results
-```
+`nmf-transform` projects new data using a fitted NMF model and writes transformed unit loadings plus diagnostics.
 
 ### Required
 
-`--in-data` - Input data file for the new data.
+`--in-data`, `--in-meta`  
+Input counts in the custom sparse format.
 
-`--in-meta` - Metadata file for the new data.
+`--in-model`  
+Input model matrix from `nmf-pois-log1p`.
 
-`--in-model` - The fitted feature-factor matrix (the $\beta$'s, as the `.model.tsv` file from `nmf-pois-log1p`).
-
-`--out-prefix` - Prefix for the output files.
+`--out-prefix`
 
 ### Optional
 
-#### Input Data and Model
+`--in-covar`  
+Covariate table for the new data.
 
-`--in-covar` - Covariate file for the new data.
+`--in-covar-coef`  
+Covariate coefficient matrix from a previous fit.
 
-`--in-covar-coef` - The fitted feature-covariate coefficient matrix (`.covar.tsv` file from `nmf-pois-log1p`).
+`--icol-covar`, `--allow-na`
 
-`--allow-na` - If set, replace non-numerical values in covariates with zero.
+`--min-count`  
+Minimum total count per unit. Default: `50`.
 
-`--icol-covar` - Column indices (0-based) in `--in-covar` to use.
+`--mode`, `--c`, `--size-factor`, `--max-iter-inner`, `--tol-inner`, `--exact`, `--seed`, `--threads`
 
-`--min-count` - Minimum total count for a unit to be included. Default: 50.
+### Outputs
 
-#### Algorithm Parameters
+`{prefix}.theta.tsv`  
+Projected unit-by-factor matrix.
 
-`--mode` - Optimization algorithm. 1 for TRON (default), 2 for FISTA, 3 for a Newton method with line search.
+`{prefix}.feature_residuals.tsv`  
+Per-feature averaged residuals on the projected data.
 
-`--c` - Constant `c` in `log(1+lambda/c)`. If not set, it is unit-specific and calculated from `size-factor`.
+`{prefix}.unit_stats.tsv`  
+Per-unit summary statistics with columns:
 
-`--size-factor` - Constant to scale total counts to get per-unit scaling factors. Default: 10000.
+- `#Index`
+- `total_count`
+- `residual`
+- `ll`
+- `var_mu`
+- `entropy`
+- `sh_lcr`
+- `sh_q`
 
-`--max-iter-inner` - Maximum number of iterations. Default: 20.
+The entropy summaries use the row-normalized transformed `theta` values as a probability distribution over factors:
 
-`--tol-inner` - Convergence tolerance. Default: 1e-6.
+- `entropy = -\sum_k p_k \log p_k`
+- `sh_lcr = -\sum_k p_k \log((Zp)_k)`
+- `sh_q = 1 - p^T Z p`
 
-`--exact` - Use exact likelihood for all observations.
-
-`--seed` - Random seed.
-
-`--threads` - Number of threads. Default: 1.
-
-### Output files
-(Similar to those from `nmf-pois-log1p`)
-
-- `{prefix}.theta.tsv`: The transformed unit-factor matrix ($\theta$) for the new data.
-
-- `{prefix}.fit_stats.tsv`: Per-unit goodness-of-fit statistics for the new data.
-
-- `{prefix}.feature_residuals.tsv`: Per-feature averaged residuals on the new data.
+where `Z` is the cosine similarity matrix among the L1-normalized model factors.

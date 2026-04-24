@@ -113,6 +113,8 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     std::vector<MLEStats> stats;
     ArrayXd resids;
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats, &resids);
+    const MatrixXd similarity = pairwiseCosineSimilarityRows(rowNormalize(beta.transpose()));
+    const ThetaEntropyStats thetaStats = computeThetaEntropyStats(theta, similarity);
 
     std::string outf;
     std::ofstream ofs;
@@ -136,18 +138,21 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     write_matrix_to_file(outf, theta, 4, false, rnames, "#Index");
     notice("Wrote theta to %s", outf.c_str());
 
-    outf = outPrefix + ".fit_stats.tsv";
+    outf = outPrefix + ".unit_stats.tsv";
     ofs.open(outf);
     if (!ofs) {
         error("Cannot open output file %s", outf.c_str());
     }
-    ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\n";
+    ofs << "#Index\ttotal_count\tresidual\tll\tvar_mu\tentropy\tsh_lcr\tsh_q\n";
     for (size_t i = 0; i < N; i++) {
         ofs << rnames[i] << "\t"
             << std::setprecision(2) << std::fixed << docs[i].ct_tot << "\t"
-            << std::setprecision(4) << std::defaultfloat << stats[i].pll << "\t"
             << std::setprecision(4) << stats[i].residual << "\t"
-            << std::setprecision(4) << stats[i].var_mu << "\n";
+            << std::setprecision(4) << std::defaultfloat << stats[i].pll << "\t"
+            << std::setprecision(4) << stats[i].var_mu << "\t"
+            << std::setprecision(4) << thetaStats.entropy(i) << "\t"
+            << std::setprecision(4) << thetaStats.sh_lcr(i) << "\t"
+            << std::setprecision(4) << thetaStats.sh_q(i) << "\n";
     }
     ofs.close();
     notice("Wrote goodness of fit statistics to %s", outf.c_str());

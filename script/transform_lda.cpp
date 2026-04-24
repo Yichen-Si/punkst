@@ -93,52 +93,28 @@ struct ResidualState {
 
     explicit ResidualState(const RowMajorMatrixXd& model)
         : betaNorm(rowNormalize(model)),
-          topicSimilarity(buildTopicSimilarity(betaNorm)),
+          topicSimilarity(pairwiseCosineSimilarityRows(betaNorm)),
           featureResiduals(VectorXd::Zero(model.cols())),
           featureTotals(VectorXd::Zero(model.cols())) {}
-
-private:
-    static MatrixXd buildTopicSimilarity(const RowMajorMatrixXd& betaNorm) {
-        const int32_t K = static_cast<int32_t>(betaNorm.rows());
-        MatrixXd sim = MatrixXd::Zero(K, K);
-        VectorXd rowNorms(K);
-        for (int32_t k = 0; k < K; ++k) {
-            rowNorms(k) = betaNorm.row(k).norm();
-        }
-        for (int32_t k = 0; k < K; ++k) {
-            sim(k, k) = 1.0;
-            for (int32_t l = k + 1; l < K; ++l) {
-                const double denom = rowNorms(k) * rowNorms(l);
-                double cosine = 0.0;
-                if (denom > 0.0) {
-                    cosine = betaNorm.row(k).dot(betaNorm.row(l)) / denom;
-                    cosine = std::clamp(cosine, 0.0, 1.0);
-                }
-                sim(k, l) = cosine;
-                sim(l, k) = cosine;
-            }
-        }
-        return sim;
-    }
 };
 
 struct TransformOutputs {
     std::string resultsPath;
-    std::string unitMetaPath;
+    std::string unitStatsPath;
     std::ofstream results;
-    std::ofstream unitMeta;
+    std::ofstream unitStats;
 
-    TransformOutputs(const std::string& outPrefix, bool writeUnitMeta)
+    TransformOutputs(const std::string& outPrefix, bool writeUnitStats)
         : resultsPath(outPrefix + ".results.tsv"),
-          unitMetaPath(outPrefix + ".unit_meta.tsv"),
+          unitStatsPath(outPrefix + ".unit_stats.tsv"),
           results(resultsPath) {
         if (!results) {
             error("Error opening output file: %s for writing", resultsPath.c_str());
         }
-        if (writeUnitMeta) {
-            unitMeta.open(unitMetaPath);
-            if (!unitMeta) {
-                error("Error opening output file: %s for writing", unitMetaPath.c_str());
+        if (writeUnitStats) {
+            unitStats.open(unitStatsPath);
+            if (!unitStats) {
+                error("Error opening output file: %s for writing", unitStatsPath.c_str());
             }
         }
     }
@@ -197,9 +173,11 @@ public:
         if (residualState != nullptr) {
             unitResiduals = VectorXd::Zero(N);
             unitCosineSim = VectorXd::Zero(N);
-            unitEntropy = VectorXd::Zero(N);
-            unitSensitiveEntropyLCR = VectorXd::Zero(N);
-            unitSensitiveEntropyQ = VectorXd::Zero(N);
+            const ThetaEntropyStats thetaStats =
+                computeThetaEntropyStats(doc_topic, residualState->topicSimilarity);
+            unitEntropy = thetaStats.entropy;
+            unitSensitiveEntropyLCR = thetaStats.sh_lcr;
+            unitSensitiveEntropyQ = thetaStats.sh_q;
         }
 
         const size_t grainsize = std::max<size_t>(1, N / (2 * static_cast<size_t>(threadHint)));
@@ -207,7 +185,6 @@ public:
             [&](const tbb::blocked_range<size_t>& range) {
                 auto& local = tls.local();
                 RowVectorXd expected = RowVectorXd::Zero(M);
-                RowVectorXd ztheta = RowVectorXd::Zero(K);
 
                 for (size_t idx = range.begin(); idx < range.end(); ++idx) {
                     const int32_t i = static_cast<int32_t>(idx);
@@ -229,7 +206,6 @@ public:
                     }
 
                     expected = doc_topic.row(i) * residualState->betaNorm;
-                    ztheta = doc_topic.row(i) * residualState->topicSimilarity;
                     expected *= weighted_total;
                     local.featureResiduals += expected.transpose();
 
@@ -237,19 +213,6 @@ public:
                     double observed_norm_sq = 0.0;
                     double expected_norm_sq = expected.squaredNorm();
                     double doc_residual = expected.sum();
-                    double entropy = 0.0;
-                    double sh_lcr = 0.0;
-                    double theta_ztheta = 0.0;
-                    for (int32_t k = 0; k < K; ++k) {
-                        const double theta_k = doc_topic(i, k);
-                        if (theta_k <= 0.0) {
-                            continue;
-                        }
-                        entropy -= theta_k * std::log(theta_k);
-                        const double ztheta_k = std::max(ztheta(k), std::numeric_limits<double>::min());
-                        sh_lcr -= theta_k * std::log(ztheta_k);
-                        theta_ztheta += theta_k * ztheta(k);
-                    }
                     for (size_t j = 0; j < doc.ids.size(); ++j) {
                         const uint32_t m = doc.ids[j];
                         const double observed = doc.cnts[j];
@@ -265,9 +228,6 @@ public:
                     } else {
                         cosine_sim = 0.0;
                     }
-                    unitEntropy(idx) = entropy;
-                    unitSensitiveEntropyLCR(idx) = sh_lcr;
-                    unitSensitiveEntropyQ(idx) = 1.0 - theta_ztheta;
                     unitResiduals(idx) = doc_residual;
                     unitCosineSim(idx) = cosine_sim;
                 }
@@ -498,13 +458,13 @@ int32_t cmdLDATransform(int argc, char** argv) {
     writeResultHeader(outputs.results, lda, topk_only);
     outputs.results << std::fixed << std::setprecision(4);
     if (computeResiduals) {
-        writeUnitIdHeader(outputs.unitMeta, use_10x, info_header);
-        outputs.unitMeta << "total_count\tresidual\tcosine_sim\tentropy\tsh_lcr\tsh_q\n";
-        outputs.unitMeta << std::fixed;
+        writeUnitIdHeader(outputs.unitStats, use_10x, info_header);
+        outputs.unitStats << "total_count\tresidual\tcosine_sim\tentropy\tsh_lcr\tsh_q\n";
+        outputs.unitStats << std::fixed;
     }
 
     TransformBatchProcessor processor(lda, outputs.results,
-        computeResiduals ? &outputs.unitMeta : nullptr,
+        computeResiduals ? &outputs.unitStats : nullptr,
         pseudobulk, residualState.get(), topk_only, nThreads);
 
     bool fileopen = true;
@@ -581,8 +541,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
     outputs.results.close();
     notice("Transformation results written to %s", outputs.resultsPath.c_str());
     if (computeResiduals) {
-        outputs.unitMeta.close();
-        notice("Per-unit residuals written to %s", outputs.unitMetaPath.c_str());
+        outputs.unitStats.close();
+        notice("Per-unit residuals written to %s", outputs.unitStatsPath.c_str());
     }
 
     std::string outFile = outPrefix + ".pseudobulk.tsv";

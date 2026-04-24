@@ -601,19 +601,24 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
     std::vector<MLEStats> stats;
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats);
+    const MatrixXd similarity = pairwiseCosineSimilarityRows(rowNormalize(nmf.get_model().transpose()));
+    const ThetaEntropyStats thetaStats = computeThetaEntropyStats(theta, similarity);
 
-    outf = outPrefix + ".fit_stats.tsv";
+    outf = outPrefix + ".unit_stats.tsv";
     std::ofstream ofs(outf);
     if (!ofs) {
         error("Cannot open output file %s", outf.c_str());
     }
-    ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\n";
+    ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\tentropy\tsh_lcr\tsh_q\n";
     for (size_t i = 0; i < N; i++) {
         ofs << rnames[i] << "\t"
             << static_cast<int32_t>(docs[i].ct_tot) << "\t"
             << std::setprecision(4) << stats[i].pll << "\t"
             << std::setprecision(4) << stats[i].residual << "\t"
-            << std::setprecision(4) << stats[i].var_mu << "\n";
+            << std::setprecision(4) << stats[i].var_mu << "\t"
+            << std::setprecision(4) << thetaStats.entropy(i) << "\t"
+            << std::setprecision(4) << thetaStats.sh_lcr(i) << "\t"
+            << std::setprecision(4) << thetaStats.sh_q(i) << "\n";
     }
     ofs.close();
     notice("Wrote goodness of fit statistics to %s", outf.c_str());
