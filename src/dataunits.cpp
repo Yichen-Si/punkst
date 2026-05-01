@@ -1141,92 +1141,227 @@ DGEReader10X::~DGEReader10X() {
     closeMatrixStream();
 }
 
+std::vector<DGEReader10X::DatasetInput> resolveDge10XInputs(
+    const std::vector<std::string>& dgeDirs,
+    const std::vector<std::string>& barcodesFiles,
+    const std::vector<std::string>& featuresFiles,
+    const std::vector<std::string>& matrixFiles,
+    const std::vector<std::string>& datasetIds) {
+    std::vector<DGEReader10X::DatasetInput> inputs;
+    if (!barcodesFiles.empty() || !featuresFiles.empty() || !matrixFiles.empty()) {
+        if (barcodesFiles.empty() || featuresFiles.empty() || matrixFiles.empty()) {
+            error("10X inputs require --in-barcodes, --in-features, and --in-matrix together");
+        }
+        if (barcodesFiles.size() != featuresFiles.size() || barcodesFiles.size() != matrixFiles.size()) {
+            error("10X input lists must have matching lengths");
+        }
+        inputs.resize(barcodesFiles.size());
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            inputs[i].barcodes_file = barcodesFiles[i];
+            inputs[i].features_file = featuresFiles[i];
+            inputs[i].matrix_file = matrixFiles[i];
+        }
+    } else if (!dgeDirs.empty()) {
+        inputs.resize(dgeDirs.size());
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            std::string dir = dgeDirs[i];
+            if (dir.empty()) {
+                error("10X input directory is empty");
+            }
+            if (dir.back() == '/') {
+                dir.pop_back();
+            }
+            inputs[i].barcodes_file = dir + "/barcodes.tsv.gz";
+            inputs[i].features_file = dir + "/features.tsv.gz";
+            inputs[i].matrix_file = dir + "/matrix.mtx.gz";
+        }
+    }
+
+    if (inputs.empty()) {
+        return inputs;
+    }
+    if (!datasetIds.empty() && datasetIds.size() != inputs.size()) {
+        error("The number of dataset IDs (%zu) does not match the number of 10X datasets (%zu)",
+            datasetIds.size(), inputs.size());
+    }
+    std::unordered_set<std::string> seen_ids;
+    seen_ids.reserve(inputs.size());
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        std::string id = datasetIds.empty() ? std::to_string(i + 1) : datasetIds[i];
+        if (id.empty()) {
+            error("Dataset ID for dataset %zu is empty", i + 1);
+        }
+        if (!seen_ids.insert(id).second) {
+            error("Duplicate dataset ID: %s", id.c_str());
+        }
+        inputs[i].dataset_id = std::move(id);
+    }
+    return inputs;
+}
+
 void DGEReader10X::open(const std::string &dgeDir) {
-    if (dgeDir.empty()) {
-        error("DGE directory is empty");
-    }
-    std::string dir = dgeDir;
-    if (dir.back() == '/') {
-        dir.pop_back();
-    }
-    open(dir + "/barcodes.tsv.gz", dir + "/features.tsv.gz", dir + "/matrix.mtx.gz");
+    open(std::vector<std::string>{dgeDir});
+}
+
+void DGEReader10X::open(const std::vector<std::string> &dgeDirs,
+    const std::vector<std::string> &datasetIds) {
+    loadDatasets(resolveDge10XInputs(dgeDirs, {}, {}, {}, datasetIds));
 }
 
 void DGEReader10X::open(const std::string &barcodesFile, const std::string &featuresFile,
     const std::string &matrixFile) {
-    barcodesFile_ = barcodesFile;
-    featuresFile_ = featuresFile;
-    matrixFile_ = matrixFile;
-    readBarcodes(barcodesFile_);
-    readFeatures(featuresFile_);
-    openMatrixStream();
+    open(std::vector<std::string>{barcodesFile},
+        std::vector<std::string>{featuresFile},
+        std::vector<std::string>{matrixFile});
+}
+
+void DGEReader10X::open(const std::vector<std::string> &barcodesFiles,
+    const std::vector<std::string> &featuresFiles,
+    const std::vector<std::string> &matrixFiles,
+    const std::vector<std::string> &datasetIds) {
+    loadDatasets(resolveDge10XInputs({}, barcodesFiles, featuresFiles, matrixFiles, datasetIds));
+}
+
+void DGEReader10X::loadDatasets(const std::vector<DatasetInput>& inputs) {
+    closeMatrixStream();
+    datasets_.clear();
+    dataset_offsets_.clear();
+    barcodes.clear();
+    features.clear();
+    feature_ids.clear();
+    feature_totals.clear();
+    base_features_.clear();
+    target_features_.clear();
+    nBarcodes = 0;
+    nFeatures = 0;
+    nEntries = 0;
+    keep_unmapped_ = false;
+
+    if (inputs.empty()) {
+        error("No 10X datasets were provided");
+    }
+
+    datasets_.reserve(inputs.size());
+    for (const auto& input : inputs) {
+        DatasetState dataset;
+        dataset.input = input;
+        readBarcodes(dataset);
+        readFeatures(dataset);
+        nEntries += dataset.nEntries;
+        datasets_.push_back(std::move(dataset));
+    }
+
+    if (datasets_.size() == 1) {
+        base_features_ = datasets_[0].raw_features;
+        feature_ids = datasets_[0].feature_ids;
+    } else {
+        std::unordered_map<std::string, int32_t> feature_counts;
+        for (const auto& dataset : datasets_) {
+            std::unordered_set<std::string> seen;
+            seen.reserve(dataset.raw_features.size());
+            for (const auto& feature : dataset.raw_features) {
+                if (seen.insert(feature).second) {
+                    feature_counts[feature] += 1;
+                }
+            }
+        }
+        base_features_.reserve(datasets_[0].raw_features.size());
+        feature_ids.reserve(datasets_[0].raw_features.size());
+        for (size_t i = 0; i < datasets_[0].raw_features.size(); ++i) {
+            const auto& feature = datasets_[0].raw_features[i];
+            auto it = feature_counts.find(feature);
+            if (it != feature_counts.end() && it->second == static_cast<int32_t>(datasets_.size())) {
+                base_features_.push_back(feature);
+                feature_ids.push_back(i < datasets_[0].feature_ids.size() ? datasets_[0].feature_ids[i] : feature);
+            }
+        }
+        if (base_features_.empty()) {
+            error("No shared features remain in the intersection of all 10X datasets");
+        }
+    }
+
+    applyFeatureIndexRemap();
+    rebuildUnitMetadata();
 }
 
 bool DGEReader10X::next(Document& doc, int32_t* barcode_idx, std::string* barcode) {
-    if (!stream_open_) {
+    if (!stream_initialized_) {
         openMatrixStream();
     }
     doc.ids.clear();
     doc.cnts.clear();
     doc.ct_tot = -1;
     doc.raw_ct_tot = -1;
-    if (done_) {
-        return false;
-    }
-    int32_t current_bi = -1;
-    double raw_total = 0.0;
-    if (has_buffer_) {
-        current_bi = buffered_barcode_;
-        doc.ids.push_back(buffered_feature_);
-        doc.cnts.push_back(buffered_count_);
-        feature_totals[buffered_feature_] += buffered_count_;
-        raw_total += buffered_count_;
-        has_buffer_ = false;
-    }
-    bool reached_eof = false;
-    int32_t bi = -1;
-    uint32_t gi = 0;
-    uint32_t ct = 0;
-    while (true) {
-        if (!readNextEntry(bi, gi, ct)) {
-            reached_eof = true;
-            break;
+
+    while (current_dataset_ < datasets_.size()) {
+        auto& dataset = datasets_[current_dataset_];
+        if (dataset.done && !dataset.has_buffer) {
+            closeDatasetMatrixStream(dataset);
+            ++current_dataset_;
+            continue;
         }
-        if (current_bi < 0) {
-            current_bi = bi;
+        if (!dataset.stream_open) {
+            openDatasetMatrixStream(current_dataset_);
         }
-        if (bi != current_bi) {
-            has_buffer_ = true;
-            buffered_barcode_ = bi;
-            buffered_feature_ = gi;
-            buffered_count_ = ct;
-            break;
+
+        int32_t current_bi = -1;
+        double raw_total = 0.0;
+        if (dataset.has_buffer) {
+            current_bi = dataset.buffered_barcode;
+            doc.ids.push_back(dataset.buffered_feature);
+            doc.cnts.push_back(dataset.buffered_count);
+            feature_totals[dataset.buffered_feature] += dataset.buffered_count;
+            raw_total += dataset.buffered_count;
+            dataset.has_buffer = false;
         }
-        doc.ids.push_back(gi);
-        doc.cnts.push_back(ct);
-        feature_totals[gi] += ct;
-        raw_total += ct;
-    }
-    if (doc.ids.empty() && current_bi < 0) {
-        done_ = true;
-        return false;
-    }
-    if (reached_eof) {
-        done_ = true;
-    }
-    doc.raw_ct_tot = raw_total;
-    doc.ct_tot = raw_total;
-    if (barcode_idx) {
-        *barcode_idx = current_bi;
-    }
-    if (barcode) {
-        if (current_bi >= 0 && current_bi < nBarcodes) {
-            *barcode = barcodes[current_bi];
-        } else {
-            barcode->clear();
+
+        bool reached_eof = false;
+        int32_t bi = -1;
+        uint32_t gi = 0;
+        uint32_t ct = 0;
+        while (true) {
+            if (!readNextEntry(current_dataset_, bi, gi, ct)) {
+                reached_eof = true;
+                break;
+            }
+            if (current_bi < 0) {
+                current_bi = bi;
+            }
+            if (bi != current_bi) {
+                dataset.has_buffer = true;
+                dataset.buffered_barcode = bi;
+                dataset.buffered_feature = gi;
+                dataset.buffered_count = ct;
+                break;
+            }
+            doc.ids.push_back(gi);
+            doc.cnts.push_back(ct);
+            feature_totals[gi] += ct;
+            raw_total += ct;
         }
+
+        if (doc.ids.empty() && current_bi < 0) {
+            dataset.done = true;
+            closeDatasetMatrixStream(dataset);
+            ++current_dataset_;
+            continue;
+        }
+        if (reached_eof) {
+            dataset.done = true;
+        }
+        doc.raw_ct_tot = raw_total;
+        doc.ct_tot = raw_total;
+        const int32_t global_idx = dataset_offsets_[current_dataset_] + current_bi;
+        if (barcode_idx) {
+            *barcode_idx = global_idx;
+        }
+        if (barcode) {
+            *barcode = getUnitId(global_idx);
+        }
+        return true;
     }
-    return true;
+
+    return false;
 }
 
 int32_t DGEReader10X::readAll(std::vector<Document>& docs, int32_t minCount) {
@@ -1238,43 +1373,31 @@ int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<std::stri
     if (barcodes.empty() || features.empty()) {
         error("Barcodes and features must be loaded before readAll");
     }
-    openMatrixStream();
-    std::vector<Document> docs_by_bc(nBarcodes);
-    std::vector<uint64_t> sums(nBarcodes, 0);
-    std::vector<bool> seen(nBarcodes, false);
-    int32_t bi = -1;
-    uint32_t gi = 0;
-    uint32_t ct = 0;
-    while (true) {
-        if (!readNextEntry(bi, gi, ct)) {
-            break;
-        }
-        seen[bi] = true;
-        docs_by_bc[bi].ids.push_back(gi);
-        docs_by_bc[bi].cnts.push_back(ct);
-        sums[bi] += ct;
-        feature_totals[gi] += ct;
-    }
     closeMatrixStream();
+    openMatrixStream();
     docs.clear();
     barcodes_out.clear();
     if (nBarcodes > 0) {
         docs.reserve(nBarcodes);
         barcodes_out.reserve(nBarcodes);
     }
-    uint64_t min_count = minCount > 0 ? static_cast<uint64_t>(minCount) : 0;
-    for (int32_t i = 0; i < nBarcodes; ++i) {
-        if (!seen[i]) {
+    const uint64_t min_count = minCount > 0 ? static_cast<uint64_t>(minCount) : 0;
+    while (true) {
+        Document doc;
+        int32_t global_idx = -1;
+        if (!next(doc, &global_idx, nullptr)) {
+            break;
+        }
+        if (global_idx < 0) {
             continue;
         }
-        if (sums[i] < min_count) {
+        if (min_count > 0 && doc.get_sum() < min_count) {
             continue;
         }
-        docs_by_bc[i].raw_ct_tot = static_cast<double>(sums[i]);
-        docs_by_bc[i].ct_tot = docs_by_bc[i].raw_ct_tot;
-        docs.push_back(std::move(docs_by_bc[i]));
-        barcodes_out.push_back(barcodes[i]);
+        docs.push_back(std::move(doc));
+        barcodes_out.push_back(getUnitId(global_idx));
     }
+    closeMatrixStream();
     return static_cast<int32_t>(docs.size());
 }
 
@@ -1282,43 +1405,31 @@ int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<int32_t>&
     if (barcodes.empty() || features.empty()) {
         error("Barcodes and features must be loaded before readAll");
     }
-    openMatrixStream();
-    std::vector<Document> docs_by_bc(nBarcodes);
-    std::vector<uint64_t> sums(nBarcodes, 0);
-    std::vector<bool> seen(nBarcodes, false);
-    int32_t bi = -1;
-    uint32_t gi = 0;
-    uint32_t ct = 0;
-    while (true) {
-        if (!readNextEntry(bi, gi, ct)) {
-            break;
-        }
-        seen[bi] = true;
-        docs_by_bc[bi].ids.push_back(gi);
-        docs_by_bc[bi].cnts.push_back(ct);
-        sums[bi] += ct;
-        feature_totals[gi] += ct;
-    }
     closeMatrixStream();
+    openMatrixStream();
     docs.clear();
     barcode_idx_out.clear();
     if (nBarcodes > 0) {
         docs.reserve(nBarcodes);
         barcode_idx_out.reserve(nBarcodes);
     }
-    uint64_t min_count = minCount > 0 ? static_cast<uint64_t>(minCount) : 0;
-    for (int32_t i = 0; i < nBarcodes; ++i) {
-        if (!seen[i]) {
+    const uint64_t min_count = minCount > 0 ? static_cast<uint64_t>(minCount) : 0;
+    while (true) {
+        Document doc;
+        int32_t global_idx = -1;
+        if (!next(doc, &global_idx, nullptr)) {
+            break;
+        }
+        if (global_idx < 0) {
             continue;
         }
-        if (sums[i] < min_count) {
+        if (min_count > 0 && doc.get_sum() < min_count) {
             continue;
         }
-        docs_by_bc[i].raw_ct_tot = static_cast<double>(sums[i]);
-        docs_by_bc[i].ct_tot = docs_by_bc[i].raw_ct_tot;
-        docs.push_back(std::move(docs_by_bc[i]));
-        barcode_idx_out.push_back(i);
+        docs.push_back(std::move(doc));
+        barcode_idx_out.push_back(global_idx);
     }
+    closeMatrixStream();
     return static_cast<int32_t>(docs.size());
 }
 
@@ -1335,49 +1446,49 @@ bool DGEReader10X::readMinibatch(std::vector<Document>& docs, std::vector<int32_
     int32_t seen = 0;
     while (static_cast<int32_t>(docs.size()) < batchSize && (unlimited || seen < maxUnits)) {
         Document doc;
-        int32_t barcode_idx = -1;
-        if (!next(doc, &barcode_idx, nullptr)) {
+        int32_t unit_idx = -1;
+        if (!next(doc, &unit_idx, nullptr)) {
             return false;
         }
         seen++;
-        if (barcode_idx < 0) {
+        if (unit_idx < 0) {
             continue;
         }
         if (minCount > 0 && doc.get_sum() < minCount) {
             continue;
         }
         docs.push_back(std::move(doc));
-        barcode_idx_out.push_back(barcode_idx);
+        barcode_idx_out.push_back(unit_idx);
     }
     return true;
 }
 
-void DGEReader10X::readBarcodes(const std::string& path) {
-    barcodes.clear();
-    auto lines = read_lines_maybe_gz(path);
-    barcodes.reserve(lines.size());
+void DGEReader10X::readBarcodes(DatasetState& dataset) {
+    dataset.local_barcodes.clear();
+    auto lines = read_lines_maybe_gz(dataset.input.barcodes_file);
+    dataset.local_barcodes.reserve(lines.size());
     if (keep_barcodes_) {
         for (auto &l : lines) {
             std::string bc = trim(l);
-            barcodes.push_back(std::move(bc));
+            dataset.local_barcodes.push_back(std::move(bc));
         }
-    } else { // use 0-based indices
+    } else {
         for (size_t i = 0; i < lines.size(); ++i) {
-            barcodes.push_back(std::to_string(i));
+            dataset.local_barcodes.push_back(std::to_string(i));
         }
     }
-    if (barcodes.empty()) {
-        error("No barcodes found in %s", path.c_str());
+    if (dataset.local_barcodes.empty()) {
+        error("No barcodes found in %s", dataset.input.barcodes_file.c_str());
     }
-    nBarcodes = static_cast<int32_t>(barcodes.size());
+    dataset.nBarcodes = static_cast<int32_t>(dataset.local_barcodes.size());
 }
 
-void DGEReader10X::readFeatures(const std::string& path) {
-    base_features_.clear();
-    feature_ids.clear();
-    auto lines = read_lines_maybe_gz(path);
-    base_features_.reserve(lines.size());
-    feature_ids.reserve(lines.size());
+void DGEReader10X::readFeatures(DatasetState& dataset) {
+    dataset.raw_features.clear();
+    dataset.feature_ids.clear();
+    auto lines = read_lines_maybe_gz(dataset.input.features_file);
+    dataset.raw_features.reserve(lines.size());
+    dataset.feature_ids.reserve(lines.size());
     std::unordered_set<std::string> feature_set;
     for (auto &l : lines) {
         if (l.empty()) {
@@ -1392,27 +1503,19 @@ void DGEReader10X::readFeatures(const std::string& path) {
         if (name.empty()) {
             name = id;
         }
-        feature_ids.push_back(id);
+        dataset.feature_ids.push_back(id);
         std::string unique_name = name;
         if (feature_set.find(unique_name) != feature_set.end()) {
             unique_name = id;
         }
         feature_set.insert(unique_name);
-        base_features_.push_back(std::move(unique_name));
+        dataset.raw_features.push_back(std::move(unique_name));
     }
-    if (base_features_.empty()) {
-        error("No features found in %s", path.c_str());
+    if (dataset.raw_features.empty()) {
+        error("No features found in %s", dataset.input.features_file.c_str());
     }
-    nRawFeatures_ = static_cast<int32_t>(base_features_.size());
-    if (!target_features_.empty()) {
-        applyFeatureIndexRemap();
-    } else {
-        features = base_features_;
-        nFeatures = static_cast<int32_t>(features.size());
-        remap_ = false;
-        idx_remap_.clear();
-        resetFeatureTotals();
-    }
+    dataset.nRawFeatures = static_cast<int32_t>(dataset.raw_features.size());
+    dataset.nEntries = 0;
 }
 
 int32_t DGEReader10X::setFeatureIndexRemap(const std::vector<std::string>& new_features, bool keep_unmapped) {
@@ -1425,45 +1528,59 @@ int32_t DGEReader10X::setFeatureIndexRemap(const std::vector<std::string>& new_f
 }
 
 int32_t DGEReader10X::applyFeatureIndexRemap() {
-    if (target_features_.empty()) {
-        features = base_features_;
-        nFeatures = static_cast<int32_t>(features.size());
-        remap_ = false;
-        idx_remap_.clear();
+    if (keep_unmapped_ && datasets_.size() > 1) {
+        warning("%s: keep_unmapped is not supported for joint 10X datasets; ignoring unmapped features", __func__);
+    }
+    std::vector<std::string> active_features = target_features_.empty() ? base_features_ : target_features_;
+    if (active_features.empty()) {
+        features.clear();
+        nFeatures = 0;
         resetFeatureTotals();
-        return nFeatures;
+        return 0;
     }
-    std::unordered_map<std::string, uint32_t> dict;
-    dict.reserve(base_features_.size());
-    for (size_t i = 0; i < base_features_.size(); ++i) {
-        if (dict.find(base_features_[i]) == dict.end()) {
-            dict[base_features_[i]] = static_cast<uint32_t>(i);
+
+    std::unordered_map<std::string, uint32_t> target_dict;
+    target_dict.reserve(active_features.size());
+    for (size_t i = 0; i < active_features.size(); ++i) {
+        if (target_dict.find(active_features[i]) == target_dict.end()) {
+            target_dict[active_features[i]] = static_cast<uint32_t>(i);
         }
     }
-    idx_remap_.assign(base_features_.size(), -1);
+
     int32_t n_mapped = 0;
-    for (size_t i = 0; i < target_features_.size(); ++i) {
-        auto it = dict.find(target_features_[i]);
-        if (it != dict.end()) {
-            idx_remap_[it->second] = static_cast<int32_t>(i);
-            n_mapped++;
-        }
-    }
-    std::vector<std::string> new_list = target_features_;
-    int32_t n_unmapped = 0;
-    if (keep_unmapped_) {
-        for (size_t i = 0; i < base_features_.size(); ++i) {
-            if (idx_remap_[i] < 0) {
-                idx_remap_[i] = static_cast<int32_t>(new_list.size());
-                new_list.push_back(base_features_[i]);
-                n_unmapped++;
+    for (auto& dataset : datasets_) {
+        dataset.idx_remap.assign(dataset.raw_features.size(), -1);
+        for (size_t i = 0; i < dataset.raw_features.size(); ++i) {
+            auto it = target_dict.find(dataset.raw_features[i]);
+            if (it != target_dict.end()) {
+                dataset.idx_remap[i] = static_cast<int32_t>(it->second);
             }
         }
     }
+
+    std::vector<std::string> new_list = active_features;
+    if (keep_unmapped_ && datasets_.size() == 1) {
+        auto& dataset = datasets_[0];
+        std::unordered_set<std::string> seen(active_features.begin(), active_features.end());
+        for (size_t i = 0; i < dataset.raw_features.size(); ++i) {
+            if (dataset.idx_remap[i] >= 0) {
+                ++n_mapped;
+                continue;
+            }
+            const auto& feature = dataset.raw_features[i];
+            if (seen.insert(feature).second) {
+                dataset.idx_remap[i] = static_cast<int32_t>(new_list.size());
+                new_list.push_back(feature);
+            }
+        }
+    } else {
+        n_mapped = static_cast<int32_t>(new_list.size());
+    }
+
     features = std::move(new_list);
     nFeatures = static_cast<int32_t>(features.size());
-    remap_ = true;
-    notice("%s: %d features are kept out of %d, %d mapped to input set of size %d", __func__, n_mapped + n_unmapped, nRawFeatures_, n_mapped, (int)target_features_.size());
+    notice("%s: %d features are kept out of %zu shared features, mapped to input set of size %zu",
+        __func__, nFeatures, base_features_.size(), active_features.size());
     resetFeatureTotals();
     return n_mapped;
 }
@@ -1481,49 +1598,74 @@ void DGEReader10X::openMatrixStream() {
     if (barcodes.empty() || features.empty()) {
         error("Barcodes and features must be loaded before opening matrix");
     }
-    if (matrixFile_.empty()) {
-        error("Matrix file is empty");
-    }
-    if (ends_with(matrixFile_, ".gz")) {
-        gz_mtx_ = gzopen(matrixFile_.c_str(), "rb");
-        if (!gz_mtx_) {
-            error("Failed to open %s", matrixFile_.c_str());
-        }
-        gz_matrix_ = true;
-    } else {
-        mtx_in_.open(matrixFile_);
-        if (!mtx_in_) {
-            error("Failed to open %s", matrixFile_.c_str());
-        }
-        gz_matrix_ = false;
-    }
-    stream_open_ = true;
-    done_ = false;
-    has_buffer_ = false;
+    current_dataset_ = 0;
+    stream_initialized_ = true;
     resetFeatureTotals();
-    readMatrixHeader();
+    if (!datasets_.empty()) {
+        openDatasetMatrixStream(0);
+    }
 }
 
 void DGEReader10X::closeMatrixStream() {
-    if (gz_mtx_) {
-        gzclose(gz_mtx_);
-        gz_mtx_ = nullptr;
+    for (auto& dataset : datasets_) {
+        closeDatasetMatrixStream(dataset);
+        dataset.done = false;
+        dataset.has_buffer = false;
+        dataset.header_read = false;
+        dataset.buffered_barcode = -1;
+        dataset.buffered_feature = 0;
+        dataset.buffered_count = 0;
     }
-    if (mtx_in_.is_open()) {
-        mtx_in_.close();
-    }
-    stream_open_ = false;
-    header_read_ = false;
-    done_ = false;
-    has_buffer_ = false;
+    current_dataset_ = 0;
+    stream_initialized_ = false;
 }
 
-void DGEReader10X::readMatrixHeader() {
-    if (header_read_) {
+void DGEReader10X::openDatasetMatrixStream(size_t dataset_idx) {
+    if (dataset_idx >= datasets_.size()) {
+        return;
+    }
+    auto& dataset = datasets_[dataset_idx];
+    closeDatasetMatrixStream(dataset);
+    if (dataset.input.matrix_file.empty()) {
+        error("Matrix file is empty");
+    }
+    if (ends_with(dataset.input.matrix_file, ".gz")) {
+        dataset.gz_mtx = gzopen(dataset.input.matrix_file.c_str(), "rb");
+        if (!dataset.gz_mtx) {
+            error("Failed to open %s", dataset.input.matrix_file.c_str());
+        }
+        dataset.gz_matrix = true;
+    } else {
+        dataset.mtx_in.open(dataset.input.matrix_file);
+        if (!dataset.mtx_in) {
+            error("Failed to open %s", dataset.input.matrix_file.c_str());
+        }
+        dataset.gz_matrix = false;
+    }
+    dataset.stream_open = true;
+    dataset.done = false;
+    dataset.has_buffer = false;
+    dataset.header_read = false;
+    readMatrixHeader(dataset);
+}
+
+void DGEReader10X::closeDatasetMatrixStream(DatasetState& dataset) {
+    if (dataset.gz_mtx) {
+        gzclose(dataset.gz_mtx);
+        dataset.gz_mtx = nullptr;
+    }
+    if (dataset.mtx_in.is_open()) {
+        dataset.mtx_in.close();
+    }
+    dataset.stream_open = false;
+}
+
+void DGEReader10X::readMatrixHeader(DatasetState& dataset) {
+    if (dataset.header_read) {
         return;
     }
     std::string line;
-    while (readMatrixLine(line)) {
+    while (readMatrixLine(dataset, line)) {
         if (line.empty() || line[0] == '%' || line[0] == '\n') {
             continue;
         }
@@ -1536,22 +1678,22 @@ void DGEReader10X::readMatrixHeader() {
     if (std::sscanf(line.c_str(), "%zu %zu %zu", &nrows, &ncols, &nentries) != 3) {
         error("Invalid header line in matrix file: %s", line.c_str());
     }
-    nEntries = nentries;
-    if (nRawFeatures_ > 0 && nrows != static_cast<size_t>(nRawFeatures_)) {
-        warning("Matrix has %zu rows but features file has %d entries", nrows, nRawFeatures_);
+    dataset.nEntries = nentries;
+    if (dataset.nRawFeatures > 0 && nrows != static_cast<size_t>(dataset.nRawFeatures)) {
+        warning("Matrix has %zu rows but features file has %d entries", nrows, dataset.nRawFeatures);
     }
-    if (ncols != static_cast<size_t>(nBarcodes)) {
-        warning("Matrix has %zu columns but barcodes file has %d entries", ncols, nBarcodes);
+    if (ncols != static_cast<size_t>(dataset.nBarcodes)) {
+        warning("Matrix has %zu columns but barcodes file has %d entries", ncols, dataset.nBarcodes);
     }
-    header_read_ = true;
+    dataset.header_read = true;
 }
 
-bool DGEReader10X::readMatrixLine(std::string& line) {
-    if (gz_matrix_) {
-        if (!gz_mtx_) {
+bool DGEReader10X::readMatrixLine(DatasetState& dataset, std::string& line) {
+    if (dataset.gz_matrix) {
+        if (!dataset.gz_mtx) {
             return false;
         }
-        char *ret = gzgets(gz_mtx_, buf_.data(), static_cast<int>(buf_.size()));
+        char *ret = gzgets(dataset.gz_mtx, dataset.buf.data(), static_cast<int>(dataset.buf.size()));
         if (!ret) {
             return false;
         }
@@ -1561,7 +1703,7 @@ bool DGEReader10X::readMatrixLine(std::string& line) {
         }
         return true;
     }
-    if (!std::getline(mtx_in_, line)) {
+    if (!std::getline(dataset.mtx_in, line)) {
         return false;
     }
     if (!line.empty() && line.back() == '\r') {
@@ -1570,15 +1712,19 @@ bool DGEReader10X::readMatrixLine(std::string& line) {
     return true;
 }
 
-bool DGEReader10X::readNextEntry(int32_t& barcode_idx, uint32_t& feature_idx, uint32_t& count) {
-    if (!stream_open_) {
-        openMatrixStream();
+bool DGEReader10X::readNextEntry(size_t dataset_idx, int32_t& barcode_idx, uint32_t& feature_idx, uint32_t& count) {
+    if (dataset_idx >= datasets_.size()) {
+        return false;
     }
-    if (!header_read_) {
-        readMatrixHeader();
+    auto& dataset = datasets_[dataset_idx];
+    if (!dataset.stream_open) {
+        openDatasetMatrixStream(dataset_idx);
+    }
+    if (!dataset.header_read) {
+        readMatrixHeader(dataset);
     }
     std::string line;
-    while (readMatrixLine(line)) {
+    while (readMatrixLine(dataset, line)) {
         if (line.empty() || line[0] == '%' || line[0] == '\n') {
             continue;
         }
@@ -1593,19 +1739,50 @@ bool DGEReader10X::readNextEntry(int32_t& barcode_idx, uint32_t& feature_idx, ui
         }
         row -= 1;
         col -= 1;
-        if (row >= nRawFeatures_ || col >= nBarcodes) {
+        if (row >= dataset.nRawFeatures || col >= dataset.nBarcodes) {
             continue;
         }
-        if (remap_) {
-            row = idx_remap_[row];
-            if (row < 0) {
-                continue;
-            }
+        if (row >= static_cast<int32_t>(dataset.idx_remap.size())) {
+            continue;
         }
-        feature_idx = row;
+        row = dataset.idx_remap[row];
+        if (row < 0) {
+            continue;
+        }
+        feature_idx = static_cast<uint32_t>(row);
         barcode_idx = col;
         count = ct;
         return true;
     }
     return false;
+}
+
+void DGEReader10X::rebuildUnitMetadata() {
+    dataset_offsets_.clear();
+    dataset_offsets_.reserve(datasets_.size());
+    barcodes.clear();
+    nBarcodes = 0;
+    for (const auto& dataset : datasets_) {
+        dataset_offsets_.push_back(nBarcodes);
+        nBarcodes += dataset.nBarcodes;
+    }
+    barcodes.reserve(static_cast<size_t>(nBarcodes));
+    const bool add_prefix = datasets_.size() > 1;
+    for (const auto& dataset : datasets_) {
+        for (const auto& local_barcode : dataset.local_barcodes) {
+            if (add_prefix) {
+                barcodes.push_back(dataset.input.dataset_id + ":" + local_barcode);
+            } else {
+                barcodes.push_back(local_barcode);
+            }
+        }
+    }
+}
+
+const std::string& DGEReader10X::getUnitId(int32_t global_unit_idx) const {
+    if (global_unit_idx < 0 || global_unit_idx >= static_cast<int32_t>(barcodes.size())) {
+        error("%s: global unit index %d is out of range [0,%zu)",
+            __func__, global_unit_idx, barcodes.size());
+    }
+    return barcodes[global_unit_idx];
 }

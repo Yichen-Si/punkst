@@ -69,11 +69,15 @@ int64_t rawTotalCount(const Document& doc) {
     return static_cast<int64_t>(std::llround(raw_total));
 }
 
-void assignBarcodeIds(const std::vector<int32_t>& barcode_idx, std::vector<std::string>& ids) {
+void assignBarcodeIds(const DGEReader10X& dge, const std::vector<int32_t>& barcode_idx, std::vector<std::string>& ids) {
     ids.clear();
     ids.reserve(barcode_idx.size());
     for (auto idx : barcode_idx) {
-        ids.push_back(std::to_string(idx));
+        if (idx >= 0 && idx < static_cast<int32_t>(dge.barcodes.size())) {
+            ids.push_back(dge.barcodes[idx]);
+        } else {
+            ids.push_back(std::to_string(idx));
+        }
     }
 }
 
@@ -326,7 +330,7 @@ private:
 
 int32_t cmdLDATransform(int argc, char** argv) {
     std::string inFile, metaFile, modelFile, outPrefix, featureFile, weightFile;
-    std::string dge_dir, in_bc, in_ft, in_mtx;
+    std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
     int32_t batchSize = 1024;
@@ -355,10 +359,11 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("verbose", "Verbose level", verbose)
       .add_option("debug", "If >0, only process this many units", debug_);
 
-    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
+    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
       .add_option("in-features", "Input features.tsv.gz", in_ft)
       .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
+      .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids)
       .add_option("sorted-by-barcode", "Input matrix is sorted by barcode, use streaming mode", sorted_by_barcode);
 
     pl.add_option("features", "Feature names and total counts file", featureFile)
@@ -395,28 +400,22 @@ int32_t cmdLDATransform(int argc, char** argv) {
         seed = std::random_device{}();
     }
 
-    bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
+    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
+    bool use_10x = !dge_inputs.empty();
     if (use_10x && !inFile.empty()) {
         warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
     }
     if (!use_10x && inFile.empty()) {
         error("Either --in-data or 10X inputs must be provided");
     }
-    if (use_10x && !dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-        if (dge_dir.back() == '/') {
-            dge_dir.pop_back();
-        }
-        in_bc = dge_dir + "/barcodes.tsv.gz";
-        in_ft = dge_dir + "/features.tsv.gz";
-        in_mtx = dge_dir + "/matrix.mtx.gz";
-    }
-    if (use_10x && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-        error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
-    }
     HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
     if (use_10x) {
-        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
+        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
+            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
+        } else {
+            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
+        }
         reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
     } else {
         if (metaFile.empty()) {
@@ -492,7 +491,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
                     break;
                 }
                 applyWeights(batch.docs, lda);
-                assignBarcodeIds(barcode_idx, batch.ids);
+                assignBarcodeIds(dge, barcode_idx, batch.ids);
                 processor.process(batch);
                 processed += static_cast<int32_t>(batch.size());
             }
@@ -502,7 +501,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
             dge.readAll(all_docs, all_barcode_idx, minCountInt);
             applyWeights(all_docs, lda);
             std::vector<std::string> all_ids;
-            assignBarcodeIds(all_barcode_idx, all_ids);
+            assignBarcodeIds(dge, all_barcode_idx, all_ids);
             size_t cursor = 0;
             while (cursor < all_docs.size() && processed < maxUnits) {
                 batch.clear();

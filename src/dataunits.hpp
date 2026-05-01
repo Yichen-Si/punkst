@@ -393,6 +393,13 @@ private:
 
 class DGEReader10X {
 public:
+    struct DatasetInput {
+        std::string dataset_id;
+        std::string barcodes_file;
+        std::string features_file;
+        std::string matrix_file;
+    };
+
     int32_t nBarcodes = 0;
     int32_t nFeatures = 0;
     uint64_t nEntries = 0;
@@ -403,14 +410,31 @@ public:
 
     DGEReader10X(bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) {}
     DGEReader10X(const std::string &dgeDir, bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) { open(dgeDir); }
+    DGEReader10X(const std::vector<std::string> &dgeDirs,
+        const std::vector<std::string> &datasetIds = {}, bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) {
+        open(dgeDirs, datasetIds);
+    }
     DGEReader10X(const std::string &barcodesFile, const std::string &featuresFile, const std::string &matrixFile, bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) {
         open(barcodesFile, featuresFile, matrixFile);
+    }
+    DGEReader10X(const std::vector<std::string> &barcodesFiles,
+        const std::vector<std::string> &featuresFiles,
+        const std::vector<std::string> &matrixFiles,
+        const std::vector<std::string> &datasetIds = {},
+        bool keep_barcodes = false) : keep_barcodes_(keep_barcodes) {
+        open(barcodesFiles, featuresFiles, matrixFiles, datasetIds);
     }
     ~DGEReader10X();
 
     void open(const std::string &dgeDir);
+    void open(const std::vector<std::string> &dgeDirs,
+        const std::vector<std::string> &datasetIds = {});
     void open(const std::string &barcodesFile, const std::string &featuresFile,
         const std::string &matrixFile);
+    void open(const std::vector<std::string> &barcodesFiles,
+        const std::vector<std::string> &featuresFiles,
+        const std::vector<std::string> &matrixFiles,
+        const std::vector<std::string> &datasetIds = {});
 
     bool next(Document& doc, int32_t* barcode_idx = nullptr,
         std::string* barcode = nullptr);
@@ -423,41 +447,63 @@ public:
         int32_t batchSize, int32_t maxUnits, int32_t minCount = 0);
     int32_t setFeatureIndexRemap(const std::vector<std::string>& new_features,
         bool keep_unmapped = false);
+    bool isJointDataset() const { return datasets_.size() > 1; }
+    const std::string& getUnitId(int32_t global_unit_idx) const;
 
 private:
-    std::string barcodesFile_;
-    std::string featuresFile_;
-    std::string matrixFile_;
-    gzFile gz_mtx_ = nullptr;
-    std::ifstream mtx_in_;
-    bool gz_matrix_ = false;
-    bool stream_open_ = false;
-    bool header_read_ = false;
-    bool done_ = false;
-    bool has_buffer_ = false;
-    int32_t buffered_barcode_ = -1;
-    uint32_t buffered_feature_ = 0;
-    uint32_t buffered_count_ = 0;
-    int32_t nRawFeatures_ = 0;
-    bool remap_ = false;
+    struct DatasetState {
+        DatasetInput input;
+        int32_t nBarcodes = 0;
+        int32_t nRawFeatures = 0;
+        uint64_t nEntries = 0;
+        std::vector<std::string> local_barcodes;
+        std::vector<std::string> feature_ids;
+        std::vector<std::string> raw_features;
+        std::vector<int32_t> idx_remap;
+        gzFile gz_mtx = nullptr;
+        std::ifstream mtx_in;
+        bool gz_matrix = false;
+        bool stream_open = false;
+        bool header_read = false;
+        bool done = false;
+        bool has_buffer = false;
+        int32_t buffered_barcode = -1;
+        uint32_t buffered_feature = 0;
+        uint32_t buffered_count = 0;
+        std::array<char, 1 << 16> buf{};
+    };
+
     bool keep_unmapped_ = false;
     bool keep_barcodes_;
-    std::vector<int32_t> idx_remap_;
     std::vector<std::string> base_features_;
     std::vector<std::string> target_features_;
-    std::array<char, 1 << 16> buf_{};
+    std::vector<DatasetState> datasets_;
+    std::vector<int32_t> dataset_offsets_;
+    size_t current_dataset_ = 0;
+    bool stream_initialized_ = false;
 
-    void readBarcodes(const std::string& path);
-    void readFeatures(const std::string& path);
+    void loadDatasets(const std::vector<DatasetInput>& inputs);
+    void readBarcodes(DatasetState& dataset);
+    void readFeatures(DatasetState& dataset);
     int32_t applyFeatureIndexRemap();
     void openMatrixStream();
     void closeMatrixStream();
-    void readMatrixHeader();
-    bool readMatrixLine(std::string& line);
+    void openDatasetMatrixStream(size_t dataset_idx);
+    void closeDatasetMatrixStream(DatasetState& dataset);
+    void readMatrixHeader(DatasetState& dataset);
+    bool readMatrixLine(DatasetState& dataset, std::string& line);
     // Read next valid entry from matrix file, record 0-based indices
-    bool readNextEntry(int32_t& barcode_idx, uint32_t& feature_idx, uint32_t& count);
+    bool readNextEntry(size_t dataset_idx, int32_t& barcode_idx, uint32_t& feature_idx, uint32_t& count);
     void resetFeatureTotals();
+    void rebuildUnitMetadata();
 };
+
+std::vector<DGEReader10X::DatasetInput> resolveDge10XInputs(
+    const std::vector<std::string>& dgeDirs,
+    const std::vector<std::string>& barcodesFiles,
+    const std::vector<std::string>& featuresFiles,
+    const std::vector<std::string>& matrixFiles,
+    const std::vector<std::string>& datasetIds);
 
 struct SparseObsMinibatchReader {
     SparseObsMinibatchReader(const std::string &inFile, HexReader &reader,

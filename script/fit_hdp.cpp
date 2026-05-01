@@ -15,7 +15,7 @@ enum class TenXFeatureMode {
 
 int32_t cmdHDPSVI(int argc, char** argv) {
     std::string inFile, metaFile, weightFile, outPrefix, featureFile;
-    std::string dge_dir, in_bc, in_ft, in_mtx;
+    std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
     int32_t nEpochs = 1, batchSize = 512;
@@ -51,10 +51,11 @@ int32_t cmdHDPSVI(int argc, char** argv) {
       .add_option("topp-colname", "Column name for topP output", topp_colname)
       .add_option("drop-random-key", "Drop random_key column from transform output", drop_random_key);
 
-    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
+    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
       .add_option("in-features", "Input features.tsv.gz", in_ft)
-      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx);
+      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
+      .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids);
 
     pl.add_option("feature-weights", "Input weights file", weightFile)
       .add_option("features", "Feature list", featureFile)
@@ -113,23 +114,17 @@ int32_t cmdHDPSVI(int argc, char** argv) {
     int32_t nUnits;
     HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
-    const bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
+    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
+    const bool use_10x = !dge_inputs.empty();
     if (use_10x) {
         if (!inFile.empty()) {
             warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
         }
-        if (!dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-            if (dge_dir.back() == '/') {
-                dge_dir.pop_back();
-            }
-            in_bc = dge_dir + "/barcodes.tsv.gz";
-            in_ft = dge_dir + "/features.tsv.gz";
-            in_mtx = dge_dir + "/matrix.mtx.gz";
+        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
+            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
+        } else {
+            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
         }
-        if (in_bc.empty() || in_ft.empty() || in_mtx.empty()) {
-            error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
-        }
-        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
         nUnits = dge_ptr->nBarcodes;
         reader.initFromFeatures(dge_ptr->features, nUnits);
     } else {

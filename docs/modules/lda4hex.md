@@ -30,21 +30,24 @@ The sparse payload contains:
 
 You can also use:
 
-- `--in-dge-dir`
-- or `--in-barcodes` + `--in-features` + `--in-matrix`
+- one or more `--in-dge-dir` values (For example, `--in-dge-dir path/d1 path/d2` where each directory contains `matrix.mtx.gz`, `features.tsv.gz`, and `barcodes.tsv.gz`)
+- or matching lists for `--in-barcodes`, `--in-features`, and `--in-matrix` (For example, `--in-barcodes path/d1/barcodes.tsv.gz path/d2/barcodes.tsv.gz --in-features path/d1/features.tsv.gz path/d1/features.tsv.gz --in-matrix path/d1/matrix.mtx.gz path/d2/matrix.mtx.gz`)
+- optional `--dataset-id` values, one per dataset (For example, `--dataset-id d1 d2` in the above example)
 
-For 10X input, the data are loaded into memory. When `--features` is not supplied during fitting, `{prefix}.features.tsv` is written with the final feature names and total counts.
+For 10X input, the data are loaded into memory. When multiple datasets are provided, they are treated as one joint corpus and the default feature space is the intersection of all input feature lists. When `--features` is not supplied during fitting, `{prefix}.features.tsv` is written with the final feature names and total counts.
+
+If `--dataset-id` is omitted, dataset IDs default to `1`, `2`, `3`, ... in input order.
 
 ## `lda4hex` / `topic-model`
 
 ### Required
 
-`--out-prefix`
+- Output prefix `--out-prefix`
 
 Either:
 
 - custom input: `--in-data` and `--in-meta`
-- 10X input: `--in-dge-dir`, or `--in-barcodes` + `--in-features` + `--in-matrix`
+- 10X input: one or more `--in-dge-dir`, or matching repeated `--in-barcodes` + `--in-features` + `--in-matrix`
 
 And one of:
 
@@ -55,19 +58,19 @@ If `--projection-only` is used, `--model-prior` is required and no training is p
 
 ### Feature selection and weighting
 
-`--features`  
+`--features`
 Optional feature list used to define or filter the feature space.
 
-`--min-count-per-feature`  
+`--min-count-per-feature`
 Minimum feature total count. Default: `1`.
 
-`--include-feature-regex`, `--exclude-feature-regex`  
+`--include-feature-regex`, `--exclude-feature-regex`
 Regex-based feature filtering.
 
-`--feature-weights`  
+`--feature-weights`
 Per-feature weights applied during fitting and transform.
 
-`--default-weight`  
+`--default-weight`
 Default weight for features missing from the weight file.
 
 For 10X input, the feature-selection behavior is:
@@ -77,103 +80,105 @@ For 10X input, the feature-selection behavior is:
 3. If neither is provided and `--min-count-per-feature <= 1`, regex filtering is applied directly to the 10X feature list.
 4. Otherwise the 10X matrix is loaded, feature totals are computed, and filtering is applied afterward.
 
+With multiple 10X datasets, the starting 10X feature list in steps 1 and 3 is the intersection across all datasets.
+
 ### LDA fitting options
 
-`--n-topics`  
+`--n-topics`
 Number of topics.
 
 `--threads`, `--seed`
 
-`--n-epochs`  
+`--n-epochs`
 Number of training passes. Default: `1`.
 
-`--minibatch-size`  
+`--minibatch-size`
 Minibatch size. Default: `512`.
 
-`--min-count-train`  
+`--min-count-train`
 Minimum total count per unit for training. Default: `20`.
 
-`--modal`  
+`--modal`
 Modality index for multi-modal custom input.
 
-`--kappa`, `--tau0`  
+`--kappa`, `--tau0`
 Online SVI learning-rate parameters.
 
-`--alpha`  
+`--alpha`
 Document-topic prior. Default: `1/K`.
 
-`--eta`  
+`--eta`
 Topic-word prior. Default: `1/K`.
 
-`--max-iter`  
+`--max-iter`
 Maximum per-document iterations in inference/transform. Default: `100`.
 
-`--mean-change-tol`  
+`--mean-change-tol`
 Per-document convergence tolerance. Default: `1e-3`.
 
-`--reproducible-init`  
+`--reproducible-init`
 Use deterministic per-document random initialization.
 
 ### Prior model and projection options
 
-`--model-prior`  
+`--model-prior`
 Initialize from an existing model matrix.
 
-`--prior-scale`  
+`--prior-scale`
 Uniform scaling for the prior model.
 
-`--prior-scale-rel`  
+`--prior-scale-rel`
 Scale the prior relative to observed feature totals.
 
-`--projection-only`  
+`--projection-only`
 Use the prior model to transform the data without fitting. Implies `--transform`.
 
-`--sort-topics`  
+`--sort-topics`
 Sort learned topics by abundance before writing the model.
 
 ### Optional background model
 
-`--fit-background`  
+`--fit-background`
 Fit an additional background profile together with the LDA factors.
 
-`--background-prior`  
+`--background-prior`
 Input prior for the background profile.
 
-`--background-init-scale`  
+`--background-init-scale`
 Scale used when initializing the background from feature totals.
 
-`--fix-background`  
+`--fix-background`
 Keep the background profile fixed during training.
 
-`--bg-fraction-prior-a0`, `--bg-fraction-prior-b0`  
+`--bg-fraction-prior-a0`, `--bg-fraction-prior-b0`
 Beta prior parameters for the background fraction.
 
-`--warm-start-epochs`  
+`--warm-start-epochs`
 Warm-start the topic model before enabling the background.
 
 ### Transform-related options
 
-`--transform`  
+`--transform`
 Transform the input units after fitting.
 
-`--residuals`  
+`--residuals`
 For the plain LDA path, also write residual-based summaries and feature residuals.
 
-`--feature-residuals`  
+`--feature-residuals`
 Alias for `--residuals`.
 
-`--topk-only <int>`  
+`--topk-only <int>`
 For the plain LDA path, write only the top-k topic indices and probabilities to `{prefix}.results.tsv`.
 
 ### Main outputs
 
-`{prefix}.model.tsv`  
+`{prefix}.model.tsv`
 Feature-by-topic model matrix.
 
-`{prefix}.features.tsv`  
+`{prefix}.features.tsv`
 Written for 10X fitting when `--features` is not supplied.
 
-`{prefix}.background.tsv`  
+`{prefix}.background.tsv`
 Written when `--fit-background` is used.
 
 When `--transform` is used:
@@ -185,13 +190,13 @@ For the delegated plain-LDA path used by `lda4hex --transform`, the transform st
 
 For the plain LDA path, transform outputs are:
 
-`{prefix}.results.tsv`  
+`{prefix}.results.tsv`
 Topic proportions per unit. By default this contains all topics. With `--topk-only k`, it instead contains columns `K1..Kk` and `P1..Pk`.
 
-`{prefix}.pseudobulk.tsv`  
+`{prefix}.pseudobulk.tsv`
 Feature-by-topic pseudobulk counts formed from the transformed topic proportions.
 
-`{prefix}.unit_stats.tsv`  
+`{prefix}.unit_stats.tsv`
 Written when `--residuals` is enabled. Current columns are:
 
 - `total_count`
@@ -201,12 +206,12 @@ Written when `--residuals` is enabled. Current columns are:
 - `sh_lcr`
 - `sh_q`
 
-`{prefix}.feature_residuals.tsv`  
+`{prefix}.feature_residuals.tsv`
 Written when `--residuals` is enabled.
 
 The `entropy`, `sh_lcr`, and `sh_q` summaries are computed from each unit's topic proportions, treating them as a probability distribution over topics. Topic similarity is defined by cosine similarity among the row-normalized topic-word profiles.
 
-For custom sparse input, carried-over metadata columns from `header_info` appear before the transform outputs. For 10X input, the leading identifier column is `#barcode` and contains 0-based barcode indices.
+For custom sparse input, carried-over metadata columns from `header_info` appear before the transform outputs. For 10X input, the leading identifier column is `#barcode`. With a single 10X dataset it keeps the original barcode/identifier form; with multiple 10X datasets it is written as `<dataset_id>:<barcode>`.
 
 ## `lda-transform`
 
@@ -214,7 +219,7 @@ For custom sparse input, carried-over metadata columns from `header_info` appear
 
 ### Required
 
-`--in-model`  
+`--in-model`
 Input topic-word model matrix.
 
 `--out-prefix`
@@ -222,7 +227,7 @@ Input topic-word model matrix.
 Either:
 
 - `--in-data` and `--in-meta`
-- or `--in-dge-dir`, or `--in-barcodes` + `--in-features` + `--in-matrix`
+- or one or more `--in-dge-dir`, or matching repeated `--in-barcodes` + `--in-features` + `--in-matrix`
 
 ### Optional
 
@@ -234,7 +239,7 @@ Either:
 
 `--features`, `--min-count-per-feature`
 
-`--min-count`  
+`--min-count`
 Minimum total count per unit to keep. Default: `20`.
 
 `--feature-weights`, `--default-weight`
@@ -243,29 +248,29 @@ Minimum total count per unit to keep. Default: `20`.
 
 `--max-iter`, `--mean-change-tol`
 
-`--sorted-by-barcode`  
-Use streaming mode for 10X input sorted by barcode.
+`--sorted-by-barcode`
+Use streaming mode for 10X input sorted by barcode. With multiple datasets, streaming follows dataset order first, then barcode order within each dataset.
 
-`--residuals`  
+`--residuals`
 Write `{prefix}.unit_stats.tsv` and `{prefix}.feature_residuals.tsv`.
 
-`--feature-residuals`  
+`--feature-residuals`
 Alias for `--residuals`.
 
-`--topk-only <int>`  
+`--topk-only <int>`
 Write sparse top-k output to `{prefix}.results.tsv`. The value must be a positive integer.
 
 ### Outputs
 
-`{prefix}.results.tsv`  
+`{prefix}.results.tsv`
 Per-unit topic proportions, or top-k topic indices/probabilities when `--topk-only` is used.
 
 `{prefix}.pseudobulk.tsv`
 
-`{prefix}.unit_stats.tsv`  
+`{prefix}.unit_stats.tsv`
 Written only when `--residuals` is enabled.
 
-`{prefix}.feature_residuals.tsv`  
+`{prefix}.feature_residuals.tsv`
 Written only when `--residuals` is enabled.
 
 In `{prefix}.unit_stats.tsv`, `total_count` is the raw total count after feature remap and filtering but before feature weights are applied.

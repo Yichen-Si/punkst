@@ -28,13 +28,28 @@ void appendOption(std::vector<std::string>& args, const std::string& name, const
     args.push_back(oss.str());
 }
 
+template <typename T>
+void appendOptions(std::vector<std::string>& args, const std::string& name, const std::vector<T>& values) {
+    if (values.empty()) {
+        return;
+    }
+    args.push_back("--" + name);
+    for (const auto& value : values) {
+        std::ostringstream oss;
+        oss << value;
+        args.push_back(oss.str());
+    }
+}
+
 int32_t runDelegatedTransform(const std::string& modelFile,
         const std::string& outPrefix,
         const std::string& inFile,
         const std::string& metaFile,
-        const std::string& in_bc,
-        const std::string& in_ft,
-        const std::string& in_mtx,
+        const std::vector<std::string>& dge_dirs,
+        const std::vector<std::string>& in_bc,
+        const std::vector<std::string>& in_ft,
+        const std::vector<std::string>& in_mtx,
+        const std::vector<std::string>& dataset_ids,
         const std::string& featureFile,
         int32_t minCountFeature,
         const std::string& includeFeatureRegex,
@@ -65,9 +80,14 @@ int32_t runDelegatedTransform(const std::string& modelFile,
         appendOption(args, "in-data", inFile);
         appendOption(args, "in-meta", metaFile);
     } else {
-        appendOption(args, "in-barcodes", in_bc);
-        appendOption(args, "in-features", in_ft);
-        appendOption(args, "in-matrix", in_mtx);
+        if (!dge_dirs.empty()) {
+            appendOptions(args, "in-dge-dir", dge_dirs);
+        } else {
+            appendOptions(args, "in-barcodes", in_bc);
+            appendOptions(args, "in-features", in_ft);
+            appendOptions(args, "in-matrix", in_mtx);
+        }
+        appendOptions(args, "dataset-id", dataset_ids);
     }
     if (!featureFile.empty()) {
         appendOption(args, "features", featureFile);
@@ -102,7 +122,7 @@ int32_t runDelegatedTransform(const std::string& modelFile,
 
 int32_t cmdTopicModelSVI(int argc, char** argv) {
     std::string inFile, metaFile, weightFile, outPrefix, priorFile, featureFile;
-    std::string dge_dir, in_bc, in_ft, in_mtx;
+    std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
     int32_t nEpochs = 1, batchSize = 512;
@@ -144,10 +164,11 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("feature-residuals", "Compute residual-based transform summaries in .unit_meta.tsv", computeResiduals)
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
 
-    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
+    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
       .add_option("in-features", "Input features.tsv.gz", in_ft)
-      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx);
+      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
+      .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids);
 
     pl.add_option("feature-weights", "Input weights file", weightFile)
       .add_option("features", "Feature list", featureFile)
@@ -212,23 +233,17 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     int32_t nUnits;
     HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
-    const bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
+    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
+    const bool use_10x = !dge_inputs.empty();
     if (use_10x) {
         if (!inFile.empty()) {
             warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
         }
-        if (!dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-            if (dge_dir.back() == '/') {
-                dge_dir.pop_back();
-            }
-            in_bc = dge_dir + "/barcodes.tsv.gz";
-            in_ft = dge_dir + "/features.tsv.gz";
-            in_mtx = dge_dir + "/matrix.mtx.gz";
+        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
+            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
+        } else {
+            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
         }
-        if (in_bc.empty() || in_ft.empty() || in_mtx.empty()) {
-            error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
-        }
-        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
         nUnits = dge_ptr->nBarcodes;
         reader.initFromFeatures(dge_ptr->features, nUnits);
     } else {
@@ -389,7 +404,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         const std::string transformModel = projection_only ? priorFile : outModel;
         if (!fitBackground) {
             return runDelegatedTransform(transformModel, outPrefix, inFile, metaFile,
-                in_bc, in_ft, in_mtx, featureFile, minCountFeature,
+                dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
                 include_ftr_regex, exclude_ftr_regex, weightFile, defaultWeight,
                 maxIter, mDelta, nThreads, modal, debug_, computeResiduals, topk_only);
         }

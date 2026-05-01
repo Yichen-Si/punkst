@@ -94,7 +94,7 @@ protected:
     int32_t verbose_;
     TransformOutputOptions transformOutputOptions_;
     std::vector<Document> dge_docs_cache_;
-    std::vector<int32_t> dge_barcode_idx_cache_;
+    std::vector<std::string> dge_unit_id_cache_;
     std::vector<int32_t> dge_train_idx_cache_;
     int32_t dge_minCountTrain_cache_ = -1;
     bool dge_cache_ready_ = false;
