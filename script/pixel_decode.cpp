@@ -90,6 +90,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double mDelta = 1e-3;
 
     std::string algo = "slda"; // or "nmf"
+    bool spatialPriorV1 = false;
     double a0 = 1.0, b0 = 9.0;
     double pi0 = 0.1;
     std::string bgModelFile;
@@ -135,6 +136,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("ignore-outside-zrange", "Ignore observations with z coordinates outside the specified [zmin, zmax] range", ignoreOutsideZrange)
       .add_option("max-iter", "Maximum number of iterations (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
+      .add_option("spatial-prior-v1", "Use v1 spatial prior: log(w) followed by softmax normalization", spatialPriorV1)
       .add_option("radius", "Support radius", decoderRadius)
       .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
@@ -187,6 +189,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     if (algo != "slda" && algo != "nmf") {
         error("Invalid --algo (%s). Must be either \"slda\" or \"nmf\"", algo.c_str());
+    }
+    if (spatialPriorV1 && algo != "slda") {
+        error("--spatial-prior-v1 is supported only with --algo slda");
     }
     if (thin3D && standard3D) {
         error("Use either --thin-3D or --standard-3D, not both");
@@ -498,6 +503,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         if (coordsAreInt) {
             Tiles2SLDA<int32_t> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves, inMemory);
+            tiles2slda.setSpatialPriorV1(spatialPriorV1);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
@@ -505,6 +511,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             tiles2slda.run();
         } else {
             Tiles2SLDA<float> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves, inMemory);
+            tiles2slda.setSpatialPriorV1(spatialPriorV1);
             if (fit_background) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }

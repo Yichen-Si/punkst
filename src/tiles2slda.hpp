@@ -23,6 +23,7 @@ public:
         bool useMemoryBuffer = false);
 
     void setLloydIter(int32_t nIter) { nLloydIter_ = nIter; }
+    void setSpatialPriorV1(bool enabled = true);
     void set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand = false);
     void set_background_prior(std::string& bgModelFile, double a0, double b0, bool outputExpand = false);
     int32_t getFactorCount() const override { return K_; }
@@ -57,9 +58,11 @@ public:
     RowMajorMatrixXf confusion_; // K x K
     std::mutex pseudobulkMutex_; // Protects pseudobulk
     bool fitBackground_ = false;
+    bool spatialPriorV1_ = false;
 
     int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
     int32_t initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
+    void initAnchorGamma(Minibatch& minibatch);
     double makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
     void processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) override;
     void postRun() override;

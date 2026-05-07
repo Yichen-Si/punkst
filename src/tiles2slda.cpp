@@ -1,5 +1,6 @@
 #include "tiles2slda.hpp"
 #include <algorithm>
+#include <limits>
 
 template<typename T>
 Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadius,
@@ -76,6 +77,37 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
 }
 
 template<typename T>
+void Tiles2SLDA<T>::setSpatialPriorV1(bool enabled) {
+    spatialPriorV1_ = enabled;
+    slda_.set_spatial_prior_v1(enabled);
+}
+
+template<typename T>
+void Tiles2SLDA<T>::initAnchorGamma(Minibatch& minibatch) {
+    if (spatialPriorV1_) {
+        const float lower = 0.2f / static_cast<float>(K_);
+        const float upper = 1.0f - lower;
+        for (int i = 0; i < minibatch.gamma.rows(); ++i) {
+            for (int k = 0; k < minibatch.gamma.cols(); ++k) {
+                minibatch.gamma(i, k) = std::clamp(minibatch.gamma(i, k), lower, upper);
+            }
+            float sum = minibatch.gamma.row(i).sum();
+            if (sum > 0) {
+                minibatch.gamma.row(i) /= sum;
+            }
+        }
+        return;
+    }
+
+    for (int i = 0; i < minibatch.gamma.rows(); ++i) {
+        float sum = minibatch.gamma.row(i).sum();
+        if (sum > 0) {
+            minibatch.gamma.row(i) /= sum / K_;
+        }
+    }
+}
+
+template<typename T>
 void Tiles2SLDA<T>::set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand) {
     if (eta0.size() != M_) {
         error("%s: size of background prior (%d) does not match feature number (%d)", __func__, (int32_t)eta0.size(), M_);
@@ -148,14 +180,7 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoin
     }
 
     minibatch.gamma = lda_.transform(documents).template cast<float>();
-    // TODO: need to test if scaling/normalizing gamma is better
-    // scale each row so that the mean is 1
-    for (int i = 0; i < minibatch.gamma.rows(); ++i) {
-        float sum = minibatch.gamma.row(i).sum();
-        if (sum > 0) {
-            minibatch.gamma.row(i) /= sum / K_;
-        }
-    }
+    initAnchorGamma(minibatch);
     minibatch.n = documents.size();
     return anchors.size();
 }
@@ -181,12 +206,16 @@ double Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoi
     if (minibatch.storageMode == Minibatch::StorageMode::GenericSparse) {
         for (int i = 0; i < minibatch.wij.outerSize(); ++i) {
             for (typename SparseMatrix<float, Eigen::RowMajor>::InnerIterator it(minibatch.wij, i); it; ++it) {
-                it.valueRef() = logit(it.value());
+                it.valueRef() = spatialPriorV1_
+                    ? std::log(std::max(it.value(), std::numeric_limits<float>::min()))
+                    : logit(it.value());
             }
         }
     } else if (minibatch.storageMode == Minibatch::StorageMode::SingleMolecule) {
         for (float& val : minibatch.wijVal) {
-            val = logit(val);
+            val = spatialPriorV1_
+                ? std::log(std::max(val, std::numeric_limits<float>::min()))
+                : logit(val);
         }
     }
 
@@ -316,12 +345,7 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<Anch
 
     anchors = std::move(finalAnchors);
     minibatch.gamma = lda_.transform(docs).template cast<float>();
-    for (int i = 0; i < minibatch.gamma.rows(); ++i) {
-        float sum = minibatch.gamma.row(i).sum();
-        if (sum > 0) {
-            minibatch.gamma.row(i) /= sum / K_;
-        }
-    }
+    initAnchorGamma(minibatch);
     minibatch.n = docs.size();
     minibatch.M = M_;
     return anchors.size();

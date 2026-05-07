@@ -70,6 +70,9 @@ public:
     void set_heuristic_final_hardcall() {
         heuristic_final_hardcall_ = true;
     }
+    void set_spatial_prior_v1(bool enabled = true) {
+        spatial_prior_v1_ = enabled;
+    }
     void set_thread_rng_stream(uint64_t stream) {
         auto& rngs = thread_rng_map();
         auto it = rngs.find(this);
@@ -225,9 +228,10 @@ public:
         RowMajorMatrixXf Xb = batch.mtx * Elog_beta_;
         // If gamma is not set, initialize with random values
         init_gamma(batch);
+        RowMajorMatrixXf alpha = get_alpha(batch);
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
-            expitAndRowNormalize(batch.psi);
+            normalize_spatial_scores(batch.psi);
         }
         if (verbose_ > 1) {
             approx_ll(batch);
@@ -260,12 +264,10 @@ public:
                     batch.psi.coeffRef(i, j) = it2.value() + sum_val + extra(i);
                 }
             }
-            expitAndRowNormalize(batch.psi);
+            normalize_spatial_scores(batch.psi);
             // Update gamma: gamma = alpha + psi^T * phi.
             // psi^T: (n x N), phi: (N x K) → gamma: (n x K)
-            // broadcast alpha_
-            batch.gamma = batch.psi.transpose() * batch.phi;
-            batch.gamma += alpha_.replicate(batch.n, 1);
+            batch.gamma = alpha + batch.psi.transpose() * batch.phi;
             // Check convergence
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = batch.gamma;
@@ -325,16 +327,16 @@ public:
             Xb.row(i) = Elog_beta_.row(batch.featureIdx[i]);
         }
         init_gamma(batch);
+        RowMajorMatrixXf alpha = get_alpha(batch);
 
         RowMajorMatrixXf gamma_old = batch.gamma;
         RowMajorMatrixXf phi_old;
-        RowMajorMatrixXf Elog_theta; // (n x K)
+        RowMajorMatrixXf Elog_theta = dirichlet_entropy_2d(batch.gamma);
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
         while (it < max_iter_inner_ && meanchange_phi > tol_) {
             it++;
-            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             batch.phi = Xb;
             // Update phi: phi_i = Xb_i + sum_{j in N(i)} psi_ij * Elog_theta_j
             for (int32_t i = 0; i < batch.N; ++i) {
@@ -343,42 +345,16 @@ public:
                 }
             }
             rowSoftmaxInPlace(batch.phi);
-            // Update psi
-            VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
-            for (int32_t i = 0; i < batch.N; ++i) {
-                float rowsum = 0.0f;
-                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
-                    const uint32_t j = batch.edgeAnchorIdx[e];
-                    const float score = batch.wijVal[e] + batch.phi.row(i).dot(Elog_theta.row(j)) + extra(i);
-                    const float val = expit(score);
-                    batch.psiVal[e] = val;
-                    rowsum += val;
-                }
-                if (rowsum <= 0.0f) {
-                    const uint32_t degree = batch.rowOffsets[i + 1] - batch.rowOffsets[i];
-                    if (degree == 0) {
-                        continue;
-                    }
-                    const float uniform = 1.0f / static_cast<float>(degree);
-                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
-                        batch.psiVal[e] = uniform;
-                    }
-                } else {
-                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
-                        batch.psiVal[e] /= rowsum;
-                    }
-                }
-            }
-
-            batch.gamma = alpha_.replicate(batch.n, 1);
+            update_single_molecule_psi(batch, Xb, Elog_theta);
+            batch.gamma = alpha;
             for (int32_t i = 0; i < batch.N; ++i) {
                 for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
                     batch.gamma.row(batch.edgeAnchorIdx[e]) += (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
                 }
             }
-
+            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
-            gamma_old = batch.gamma;
+            gamma_old = std::move(batch.gamma);
             if (it > 0)
                 meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
@@ -441,10 +417,11 @@ public:
         RowMajorMatrixXf Xb = fgmtx * Elog_beta_;
         // If gamma is not set, initialize with random values
         init_gamma(batch);
+        RowMajorMatrixXf alpha = get_alpha(batch);
 
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
-            expitAndRowNormalize(batch.psi);
+            normalize_spatial_scores(batch.psi);
         }
         if (verbose_ > 1) {
             approx_ll(batch);
@@ -452,13 +429,12 @@ public:
         }
         RowMajorMatrixXf gamma_old = batch.gamma;
         RowMajorMatrixXf phi_old;
-        RowMajorMatrixXf Elog_theta; // (n x K)
+        RowMajorMatrixXf Elog_theta = dirichlet_entropy_2d(batch.gamma);
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
         while (it < max_iter_inner_ && meanchange > tol_) {
             it++;
-            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             // Update phi.
             // psi: (N x n) * Elog_theta (n x K) → phi: (N x K)
             batch.phi = batch.psi * Elog_theta + Xb;
@@ -471,17 +447,15 @@ public:
                 // Iterate over the nonzero entries
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                     int j = it1.col();
-                    // dot product of i-th row of phi with j-th row of Elog_theta
                     float sum_val = batch.phi.row(i).dot(Elog_theta.row(j));
                     // Updated value at (i,j)
                     batch.psi.coeffRef(i, j) = it2.value() + sum_val + extra(i);
                 }
             }
-            expitAndRowNormalize(batch.psi);
+            normalize_spatial_scores(batch.psi);
             // Update gamma: gamma = alpha + psi^T * phi.
             // psi^T: (n x N), phi: (N x K) → gamma: (n x K)
-            batch.gamma = batch.psi.transpose() * batch.phi;
-            batch.gamma += alpha_.replicate(batch.n, 1);
+            batch.gamma = alpha + batch.psi.transpose() * batch.phi;
             // Update background fractions
             for (int i = 0; i < batch.mtx.rows(); ++i) {
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.mtx, i), it2(fgmtx, i); it1 && it2; ++it1, ++it2) {
@@ -492,10 +466,11 @@ public:
                     it2.valueRef() = it1.value() * (1.-b);
                 }
             }
+            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             Xb = fgmtx * Elog_beta_;
             // Check convergence
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
-            gamma_old = batch.gamma;
+            gamma_old = std::move(batch.gamma);
             if (it > 0)
                 meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
@@ -562,16 +537,16 @@ public:
             Xb.row(i) = (1.0 - pi0) * Elog_beta_.row(batch.featureIdx[i]);
         }
         init_gamma(batch);
+        RowMajorMatrixXf alpha = get_alpha(batch);
 
         RowMajorMatrixXf gamma_old = batch.gamma;
         RowMajorMatrixXf phi_old;
-        RowMajorMatrixXf Elog_theta;
+        RowMajorMatrixXf Elog_theta = dirichlet_entropy_2d(batch.gamma);
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
         while (it < max_iter_inner_ && meanchange > tol_) {
             it++;
-            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             batch.phi = Xb;
             for (int32_t i = 0; i < batch.N; ++i) {
                 for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
@@ -580,38 +555,15 @@ public:
             }
             rowSoftmaxInPlace(batch.phi);
 
-            VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
-            for (int32_t i = 0; i < batch.N; ++i) {
-                float rowsum = 0.0f;
-                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) { // for each connected anchors
-                    const uint32_t j = batch.edgeAnchorIdx[e];
-                    const float score = batch.wijVal[e] + batch.phi.row(i).dot(Elog_theta.row(j)) + extra(i);
-                    const float val = expit(score);
-                    batch.psiVal[e] = val;
-                    rowsum += val;
-                }
-                if (rowsum <= 0.0f) {
-                    const uint32_t degree = batch.rowOffsets[i + 1] - batch.rowOffsets[i];
-                    if (degree == 0) {
-                        continue;
-                    }
-                    const float uniform = 1.0f / static_cast<float>(degree);
-                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
-                        batch.psiVal[e] = uniform;
-                    }
-                } else {
-                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
-                        batch.psiVal[e] /= rowsum;
-                    }
-                }
-            }
+            update_single_molecule_psi(batch, Xb, Elog_theta);
             // Update gamma
-            batch.gamma = alpha_.replicate(batch.n, 1);
+            batch.gamma = alpha;
             for (int32_t i = 0; i < batch.N; ++i) {
                 for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
                     batch.gamma.row(batch.edgeAnchorIdx[e]) += (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
                 }
             }
+            Elog_theta = dirichlet_entropy_2d(batch.gamma);
             // Update background probabilities
             for (size_t i = 0; i < (size_t) batch.N; ++i) {
                 const uint32_t m = batch.featureIdx[i];
@@ -623,7 +575,7 @@ public:
             }
 
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
-            gamma_old = batch.gamma;
+            gamma_old = std::move(batch.gamma);
             if (it > 0)
                 meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
@@ -693,6 +645,76 @@ private:
         return it->second.rng;
     }
 
+    void normalize_spatial_scores(SparseMatrix<float, Eigen::RowMajor>& psi) const {
+        if (spatial_prior_v1_) {
+            rowSoftmaxInPlace(psi);
+        } else {
+            expitAndRowNormalize(psi);
+        }
+    }
+
+    static void normalize_single_molecule_psi_row(Minibatch& batch,
+        uint32_t start, uint32_t end, float rowsum)
+    {
+        if (rowsum <= 0.0f || !std::isfinite(rowsum)) {
+            const uint32_t degree = end - start;
+            const float uniform = 1.0f / static_cast<float>(degree);
+            for (uint32_t e = start; e < end; ++e) {
+                batch.psiVal[e] = uniform;
+            }
+            return;
+        }
+        for (uint32_t e = start; e < end; ++e) {
+            batch.psiVal[e] /= rowsum;
+        }
+    }
+
+    void update_single_molecule_psi(Minibatch& batch,
+        const RowMajorMatrixXf& Xb, const RowMajorMatrixXf& Elog_theta) const
+    {
+        VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
+        for (int32_t i = 0; i < batch.N; ++i) {
+            const uint32_t start = batch.rowOffsets[i];
+            const uint32_t end = batch.rowOffsets[i + 1];
+            if (start == end) {
+                continue;
+            }
+            if (spatial_prior_v1_) {
+                float rowMax = -std::numeric_limits<float>::infinity();
+                for (uint32_t e = start; e < end; ++e) {
+                    const uint32_t j = batch.edgeAnchorIdx[e];
+                    const float score = batch.wijVal[e] + batch.phi.row(i).dot(Elog_theta.row(j)) + extra(i);
+                    batch.psiVal[e] = score;
+                    rowMax = std::max(rowMax, score);
+                }
+                float rowsum = 0.0f;
+                for (uint32_t e = start; e < end; ++e) {
+                    const float val = std::exp(batch.psiVal[e] - rowMax);
+                    batch.psiVal[e] = val;
+                    rowsum += val;
+                }
+                normalize_single_molecule_psi_row(batch, start, end, rowsum);
+            } else {
+                float rowsum = 0.0f;
+                for (uint32_t e = start; e < end; ++e) {
+                    const uint32_t j = batch.edgeAnchorIdx[e];
+                    const float score = batch.wijVal[e] + batch.phi.row(i).dot(Elog_theta.row(j)) + extra(i);
+                    const float val = expit(score);
+                    batch.psiVal[e] = val;
+                    rowsum += val;
+                }
+                normalize_single_molecule_psi_row(batch, start, end, rowsum);
+            }
+        }
+    }
+
+    RowMajorMatrixXf get_alpha(const Minibatch& batch) const {
+        if (spatial_prior_v1_ && batch.gamma.size() == batch.n * K_) {
+                return batch.gamma;
+        }
+        return alpha_.replicate(batch.n, 1);
+    }
+
     int K_;   // number of topics
     int M_;   // number of features
     int N_;   // total number of pixels (global)
@@ -720,6 +742,7 @@ private:
     VectorXf bg_marginal_;
 
     bool heuristic_final_hardcall_ = false;
+    bool spatial_prior_v1_ = false;
 
     void init_gamma(Minibatch& batch) {
         if (batch.gamma.size() == batch.n * K_) {
