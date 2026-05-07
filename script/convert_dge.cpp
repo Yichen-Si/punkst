@@ -232,7 +232,7 @@ int32_t cmdConvertDGE(int argc, char** argv) {
 // matching the spot/hexagon level format used by punkst
 // key\tOrgIndex\tM\tC\tidx0 cnt0\tidx1 cnt1 ...
 int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
-    std::string in_bc, in_ft, in_mtx, dge_dir;
+    std::vector<std::string> in_bc, in_ft, in_mtx, dge_dirs, dataset_ids;
     std::string outPref;
     uint64_t verbose = 1000000;
     bool sorted_by_barcode = false;
@@ -241,10 +241,11 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
     bool use_internal_sort = false;
 
     ParamList pl;
-    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
+    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
       .add_option("in-features", "Input features.tsv.gz", in_ft)
       .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
+      .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids)
       .add_option("sorted-by-barcode", "Input matrix is sorted by barcode, use streaming mode", sorted_by_barcode)
       .add_option("out", "Output prefix", outPref, true)
       .add_option("randomize", "Randomize output order", randomize_output)
@@ -261,32 +262,24 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
         return 1;
     }
 
-    if (!dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-        if (dge_dir.back() == '/') dge_dir.pop_back();
-        in_bc = dge_dir + "/barcodes.tsv.gz";
-        in_ft = dge_dir + "/features.tsv.gz";
-        in_mtx = dge_dir + "/matrix.mtx.gz";
+    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
+    if (dge_inputs.empty()) {
+        error("Missing required 10X inputs");
     }
 
-    // Check files exist
-    int file_idx = 0;
-    for (const auto &f : {in_bc, in_ft, in_mtx}) {
-        if (f.empty()) {
-            error("Missing required input file (%d)", file_idx);
-        }
-        std::ifstream fs(f);
-        if (!fs) throw std::runtime_error("Failed to open " + f);
-        file_idx++;
+    DGEReader10X dge;
+    if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
+        dge.open(in_bc, in_ft, in_mtx, dataset_ids);
+    } else {
+        dge.open(dge_dirs, dataset_ids);
     }
-
-    DGEReader10X dge(in_bc, in_ft, in_mtx);
     size_t B = static_cast<size_t>(dge.nBarcodes);
     size_t F = static_cast<size_t>(dge.nFeatures);
     if (B == 0) {
-        error("No barcodes found in %s", in_bc.c_str());
+        error("No barcodes found in the provided 10X input");
     }
     if (F == 0) {
-        error("No features found in %s", in_ft.c_str());
+        error("No features found in the provided 10X input");
     }
     notice("Read %zu barcodes", B);
     notice("Read %zu features", F);
@@ -329,17 +322,10 @@ int32_t cmdConvert10xToHexTSV(int argc, char** argv) {
         }
     } else {
         std::vector<Document> all_docs;
-        std::vector<std::string> all_barcodes;
-        dge.readAll(all_docs, all_barcodes, 0);
+        std::vector<int32_t> all_indices;
+        dge.readAll(all_docs, all_indices, 0);
         for (size_t i = 0; i < all_docs.size(); ++i) {
-            int32_t cell_idx = -1;
-            if (i < all_barcodes.size() && !all_barcodes[i].empty()) {
-                if (!str2int32(all_barcodes[i], cell_idx)) {
-                    cell_idx = static_cast<int32_t>(i);
-                }
-            } else {
-                cell_idx = static_cast<int32_t>(i);
-            }
+            const int32_t cell_idx = (i < all_indices.size()) ? all_indices[i] : static_cast<int32_t>(i);
             write_cell(cell_idx, all_docs[i]);
         }
     }

@@ -11,7 +11,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
 	std::string inFile, metaFile, featureFile, covarFile, outPrefix;
     std::string modelFile, labelListFile;
-    std::string dge_dir, in_bc, in_ft, in_mtx;
+    std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     std::vector<uint32_t> covar_idx;
     int32_t label_idx = -1;
@@ -53,10 +53,11 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("label-na", "String for missing labels", label_na)
       .add_option("in-model", "Input model (beta) file", modelFile)
       .add_option("random-init-missing", "Randomly initialize features missing from the model", random_init_missing_features);
-    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dir)
+    pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
       .add_option("in-features", "Input features.tsv.gz", in_ft)
-      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx);
+      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
+      .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids);
 	pl.add_option("K", "K", K, true)
       .add_option("mode", "Algorithm", mode)
       .add_option("fit-background", "Fit background noise", fit_background)
@@ -120,23 +121,17 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
     std::unique_ptr<DGEReader10X> dge_ptr;
     HexReader reader;
-    bool use_10x = !dge_dir.empty() || !in_bc.empty() || !in_ft.empty() || !in_mtx.empty();
+    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
+    bool use_10x = !dge_inputs.empty();
     if (use_10x) {
         if (!inFile.empty()) {
             warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
         }
-        if (!dge_dir.empty() && (in_bc.empty() || in_ft.empty() || in_mtx.empty())) {
-            if (dge_dir.back() == '/') {
-                dge_dir.pop_back();
-            }
-            in_bc = dge_dir + "/barcodes.tsv.gz";
-            in_ft = dge_dir + "/features.tsv.gz";
-            in_mtx = dge_dir + "/matrix.mtx.gz";
+        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
+            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
+        } else {
+            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
         }
-        if (in_bc.empty() || in_ft.empty() || in_mtx.empty()) {
-            error("Missing required 10X inputs (--in-barcodes, --in-features, --in-matrix)");
-        }
-        dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx);
         reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
     } else {
         if (metaFile.empty() || inFile.empty()) {
@@ -323,12 +318,12 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
             SparseObs obs;
             obs.doc = std::move(dge_docs[i]);
-            const double ct = obs.doc.get_sum();
-            if (ct < minCountTrain) {
+            const double raw_ct = (obs.doc.raw_ct_tot >= 0.0) ? obs.doc.raw_ct_tot : obs.doc.get_sum();
+            if (raw_ct < minCountTrain) {
                 continue;
             }
-            obs.c = per_doc_c ? ct / size_factor : c;
-            obs.ct_tot = ct;
+            obs.c = per_doc_c ? raw_ct / size_factor : c;
+            obs.ct_tot = raw_ct;
 
             if (has_covar) {
                 split(tokens, "\t ", covar_line, UINT_MAX, true, true, true);
@@ -601,19 +596,24 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
     std::vector<MLEStats> stats;
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats);
+    const MatrixXd similarity = pairwiseCosineSimilarityRows(rowNormalize(nmf.get_model().transpose()));
+    const ThetaEntropyStats thetaStats = computeThetaEntropyStats(theta, similarity);
 
-    outf = outPrefix + ".fit_stats.tsv";
+    outf = outPrefix + ".unit_stats.tsv";
     std::ofstream ofs(outf);
     if (!ofs) {
         error("Cannot open output file %s", outf.c_str());
     }
-    ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\n";
+    ofs << "#Index\tTotalCount\tll\tResidual\tVarMu\tentropy\tsh_lcr\tsh_q\n";
     for (size_t i = 0; i < N; i++) {
         ofs << rnames[i] << "\t"
-            << std::setprecision(2) << std::fixed << docs[i].ct_tot << "\t"
+            << static_cast<int32_t>(docs[i].ct_tot) << "\t"
             << std::setprecision(4) << stats[i].pll << "\t"
             << std::setprecision(4) << stats[i].residual << "\t"
-            << std::setprecision(4) << stats[i].var_mu << "\n";
+            << std::setprecision(4) << stats[i].var_mu << "\t"
+            << std::setprecision(4) << thetaStats.entropy(i) << "\t"
+            << std::setprecision(4) << thetaStats.sh_lcr(i) << "\t"
+            << std::setprecision(4) << thetaStats.sh_q(i) << "\n";
     }
     ofs.close();
     notice("Wrote goodness of fit statistics to %s", outf.c_str());

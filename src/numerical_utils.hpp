@@ -340,6 +340,79 @@ rowNormalize(const Eigen::MatrixBase<Derived>& X)
     return out;
 }
 
+struct ThetaEntropyStats {
+    Eigen::VectorXd entropy;
+    Eigen::VectorXd sh_lcr;
+    Eigen::VectorXd sh_q;
+};
+
+template <typename Derived>
+Eigen::MatrixXd pairwiseCosineSimilarityRows(const Eigen::MatrixBase<Derived>& X)
+{
+    const Eigen::Index K = X.rows();
+    Eigen::MatrixXd sim = Eigen::MatrixXd::Zero(K, K);
+    Eigen::VectorXd rowNorms = Eigen::VectorXd::Zero(K);
+    for (Eigen::Index k = 0; k < K; ++k) {
+        rowNorms(k) = X.row(k).norm();
+        sim(k, k) = 1.0;
+    }
+    for (Eigen::Index k = 0; k < K; ++k) {
+        for (Eigen::Index l = k + 1; l < K; ++l) {
+            const double denom = rowNorms(k) * rowNorms(l);
+            double cosine = 0.0;
+            if (denom > 0.0) {
+                cosine = X.row(k).dot(X.row(l)) / denom;
+                cosine = std::clamp(cosine, 0.0, 1.0);
+            }
+            sim(k, l) = cosine;
+            sim(l, k) = cosine;
+        }
+    }
+    return sim;
+}
+
+template <typename Derived>
+ThetaEntropyStats computeThetaEntropyStats(const Eigen::MatrixBase<Derived>& theta,
+                                           const Eigen::MatrixXd& similarity)
+{
+    if (theta.cols() != similarity.rows() || similarity.rows() != similarity.cols()) {
+        throw std::invalid_argument("theta/similarity dimensions do not match");
+    }
+
+    const Eigen::Index N = theta.rows();
+    const Eigen::Index K = theta.cols();
+    ThetaEntropyStats stats;
+    stats.entropy = Eigen::VectorXd::Zero(N);
+    stats.sh_lcr = Eigen::VectorXd::Zero(N);
+    stats.sh_q = Eigen::VectorXd::Zero(N);
+
+    for (Eigen::Index i = 0; i < N; ++i) {
+        const double thetaSum = theta.row(i).sum();
+        if (thetaSum <= 0.0) {
+            continue;
+        }
+        const Eigen::RowVectorXd prob = theta.row(i) / thetaSum;
+        const Eigen::RowVectorXd ztheta = prob * similarity;
+        double entropy = 0.0;
+        double shLcr = 0.0;
+        double thetaZtheta = 0.0;
+        for (Eigen::Index k = 0; k < K; ++k) {
+            const double pk = prob(k);
+            if (pk <= 0.0) {
+                continue;
+            }
+            entropy -= pk * std::log(pk);
+            const double zk = std::max(ztheta(k), std::numeric_limits<double>::min());
+            shLcr -= pk * std::log(zk);
+            thetaZtheta += pk * ztheta(k);
+        }
+        stats.entropy(i) = entropy;
+        stats.sh_lcr(i) = shLcr;
+        stats.sh_q(i) = 1.0 - thetaZtheta;
+    }
+    return stats;
+}
+
 
 template <typename Scalar, int StorageOrder>
 void colNormalizeInPlace(Eigen::SparseMatrix<Scalar, StorageOrder>& mat, bool nonNeg = true) {

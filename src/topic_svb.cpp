@@ -131,10 +131,10 @@ void TopicModelWrapper::prepare10XCache(DGEReader10X& dge, int32_t _minCountTrai
         return;
     }
     dge_docs_cache_.clear();
-    dge_barcode_idx_cache_.clear();
+    dge_unit_id_cache_.clear();
     dge_train_idx_cache_.clear();
     dge_minCountTrain_cache_ = _minCountTrain;
-    int32_t nUnits = dge.readAll(dge_docs_cache_, dge_barcode_idx_cache_, 0);
+    int32_t nUnits = dge.readAll(dge_docs_cache_, dge_unit_id_cache_, 0);
     if (dge_docs_cache_.empty()) {
         dge_cache_ready_ = true;
         return;
@@ -166,7 +166,7 @@ int32_t TopicModelWrapper::filterCurrentFeatures(int32_t minCount,
     if (M_ != oldM || reader.features != oldFeatures) {
         dge_cache_ready_ = false;
         dge_docs_cache_.clear();
-        dge_barcode_idx_cache_.clear();
+        dge_unit_id_cache_.clear();
         dge_train_idx_cache_.clear();
     }
     return nKept;
@@ -373,8 +373,8 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
             idens.reserve(take);
             for (size_t i = 0; i < take; ++i) {
                 const size_t idx = cursor + i;
-                if (idx < dge_barcode_idx_cache_.size()) {
-                    idens.push_back(std::to_string(dge_barcode_idx_cache_[idx]));
+                if (idx < dge_unit_id_cache_.size()) {
+                    idens.push_back(dge_unit_id_cache_[idx]);
                 } else {
                     idens.push_back(std::to_string(idx));
                 }
@@ -409,17 +409,20 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
             int32_t barcode_idx = -1;
             while ((int32_t)minibatch_local.size() < batchSize) {
                 Document doc;
-                if (!dge.next(doc, &barcode_idx, nullptr)) {
+                std::string unit_id;
+                if (!dge.next(doc, &barcode_idx, &unit_id)) {
                     fileopen = false;
                     break;
                 }
-                std::string ident;
-                if (barcode_idx >= 0) {
-                    ident = std::to_string(barcode_idx);
-                }
                 applyWeights(doc);
                 minibatch_local.push_back(std::move(doc));
-                idens.push_back(std::move(ident));
+                if (!unit_id.empty()) {
+                    idens.push_back(std::move(unit_id));
+                } else if (barcode_idx >= 0) {
+                    idens.push_back(std::to_string(barcode_idx));
+                } else {
+                    idens.emplace_back();
+                }
             }
             if (minibatch_local.empty()) {
                 break;

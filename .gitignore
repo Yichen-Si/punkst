@@ -60,6 +60,7 @@ zz/
 
 claude_log/
 .claude/
+.codex
 
 .cache/
 .scratch/
