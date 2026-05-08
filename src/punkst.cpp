@@ -4,6 +4,7 @@ int32_t test(int32_t argc, char** argv);
 int32_t cmdPts2TilesTsv(int32_t argc, char** argv);
 int32_t cmdPts2TilesBinary(int32_t argc, char** argv);
 int32_t cmdTiles2HexTxt(int32_t argc, char** argv);
+int32_t cmdTiles2Rois(int32_t argc, char** argv);
 int32_t cmdTopicModelSVI(int argc, char** argv);
 int32_t cmdHDPSVI(int argc, char** argv);
 int32_t cmdLDATransform(int argc, char** argv);
@@ -41,6 +42,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("pts2tiles", "Assign points to tiles", cmdPts2TilesTsv)
         .add_command("pts2tiles-binary", "Assign points to tiles in binary format", cmdPts2TilesBinary)
         .add_command("tiles2hex", "Convert points in tiles to hexagons", cmdTiles2HexTxt)
+        .add_command("tiles2rois", "Aggregate tiled transcript counts into GeoJSON ROI polygons", cmdTiles2Rois)
         .add_command("lda4hex", "Train LDA model", cmdTopicModelSVI) // backward compatibility
         .add_command("topic-model", "Train LDA model", cmdTopicModelSVI)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)

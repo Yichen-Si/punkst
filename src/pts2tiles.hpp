@@ -7,9 +7,14 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <cctype>
+#include <cerrno>
+#include <cstring>
 #include <unordered_map>
 #include <memory>
 #include <array>
+#include <fcntl.h>
+#include <unistd.h>
 #include "zlib.h"
 #include "threads.hpp"
 #include "nanoflann.hpp"
@@ -26,7 +31,8 @@ public:
         bool streamingMode = false,
         int32_t tileBuffer = 1000, int32_t batchSize = 10000,
         double scale_x = 1, double scale_y = 1, double scale_z = 1,
-        int digits=2, char inputDelimiter = '\t') :
+        int digits=2, char inputDelimiter = '\t',
+        bool tileOpFactorTsv = false) :
         nThreads_(nthreads),
         inFile_(inFile), tmpDir_(tmpDir),
         outPref_(outPref), tileSize_(tileSize),
@@ -35,7 +41,8 @@ public:
         streamingMode_(streamingMode),
         tileBuffer_(tileBuffer), batchSize_(batchSize),
         scale_x_(scale_x), scale_y_(scale_y), scale_z_(scale_z),
-        digits_(digits), inputDelimiter_(1, inputDelimiter)
+        digits_(digits), inputDelimiter_(1, inputDelimiter),
+        tileOpFactorTsv_(tileOpFactorTsv)
     {
         ntokens_ = std::max(icol_x_, icol_y_);
         if (icol_z_ >= 0) {
@@ -50,7 +57,7 @@ public:
         scaling_ = std::abs(scale_x_ - 1) > 1e-8
             || std::abs(scale_y_ - 1) > 1e-8
             || (icol_z_ >= 0 && std::abs(scale_z_ - 1) > 1e-8);
-        appendDummyCount_ = icol_ints_.empty();
+        appendDummyCount_ = !tileOpFactorTsv_ && icol_ints_.empty();
         rewriteLine_ = scaling_ || inputDelimiter_ != "\t" || appendDummyCount_;
         ntokens_ += 1;
         notice("Created temporary directory: %s", tmpDir_.path.string().c_str());
@@ -71,11 +78,14 @@ public:
     bool run() {
         if (!streamingMode_) {
             collectSkippedLinesFromFile();
+            discoverTileOpFactorHeaderFromFile();
+            validateTileOpFactorTsvConfig();
             if (!launchWorkerThreads()) {
                 error("Error launching worker threads_");
             }
         } else {
             openInput();
+            validateTileOpFactorTsvConfig();
             for (int i = 0; i < nThreads_; ++i) {
                 threads_.emplace_back(&Pts2Tiles::streamingWorker, this, i);
             }
@@ -110,6 +120,8 @@ protected:
     bool scaling_;
     bool appendDummyCount_;
     bool rewriteLine_;
+    bool tileOpFactorTsv_;
+    int32_t tileOpTopK_ = 0;
     int32_t digits_;
     std::string inputDelimiter_;
     Rectangle<float> globalBox_;
@@ -137,16 +149,171 @@ protected:
         std::vector<int32_t> vals = {1};
     };
 
-    std::string normalizeSkippedLine(const std::string& line, bool isHeader) const {
+    static std::string normalizeHeaderKey(std::string key) {
+        key = std::string(strip_str(key));
+        std::transform(key.begin(), key.end(), key.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        return key;
+    }
+
+    struct KPColumnName {
+        bool ok = false;
+        bool isK = false;
+        uint32_t idx = 0;
+    };
+
+    static KPColumnName parseKPColumnName(const std::string& key) {
+        KPColumnName out;
+        if (key.size() < 2) {
+            return out;
+        }
+        size_t pos = key.size();
+        while (pos > 0 && std::isdigit(static_cast<unsigned char>(key[pos - 1]))) {
+            --pos;
+        }
+        if (pos == key.size() || pos == 0) {
+            return out;
+        }
+        const char kp = static_cast<char>(std::toupper(static_cast<unsigned char>(key[pos - 1])));
+        if (kp != 'K' && kp != 'P') {
+            return out;
+        }
+        if (pos > 1) {
+            const std::string prefix = key.substr(0, pos - 1);
+            if (!prefix.empty() && prefix.back() != '_') {
+                return out;
+            }
+        }
+        uint32_t parsedIdx = 0;
+        if (!str2uint32(key.substr(pos), parsedIdx) || parsedIdx == 0) {
+            return out;
+        }
+        out.ok = true;
+        out.isK = (kp == 'K');
+        out.idx = parsedIdx;
+        return out;
+    }
+
+    bool isTileOpFactorHeaderCandidate(const std::string& line) const {
+        size_t nhash = 0;
+        while (nhash < line.size() && line[nhash] == '#') {
+            ++nhash;
+        }
+        std::string header = std::string(strip_str(line.substr(nhash)));
+        std::vector<std::string> tokens;
+        tokenizeLine(header, tokens);
+        bool hasX = false, hasY = false, hasK1 = false, hasP1 = false;
+        for (const auto& token : tokens) {
+            const std::string key = normalizeHeaderKey(token);
+            if (key == "x") {
+                hasX = true;
+            } else if (key == "y") {
+                hasY = true;
+            }
+            const KPColumnName kp = parseKPColumnName(key);
+            if (kp.ok && kp.idx == 1) {
+                if (kp.isK) {
+                    hasK1 = true;
+                } else {
+                    hasP1 = true;
+                }
+            }
+        }
+        return hasX && hasY && hasK1 && hasP1;
+    }
+
+    void parseTileOpFactorHeader(std::vector<std::string>& tokens) {
+        int32_t headerX = -1, headerY = -1, headerZ = -1;
+        std::unordered_map<uint32_t, uint32_t> kcols;
+        std::unordered_map<uint32_t, uint32_t> pcols;
+        for (uint32_t i = 0; i < tokens.size(); ++i) {
+            std::string key = normalizeHeaderKey(tokens[i]);
+            tokens[i] = key;
+            if (key == "x") {
+                headerX = static_cast<int32_t>(i);
+            } else if (key == "y") {
+                headerY = static_cast<int32_t>(i);
+            } else if (key == "z") {
+                headerZ = static_cast<int32_t>(i);
+            }
+            const KPColumnName kp = parseKPColumnName(key);
+            if (!kp.ok) {
+                continue;
+            }
+            auto& target = kp.isK ? kcols : pcols;
+            if (!target.emplace(kp.idx, i).second) {
+                error("%s: duplicate %c%u column in TileOperator factor TSV header",
+                    __func__, kp.isK ? 'K' : 'P', kp.idx);
+            }
+        }
+        if (icol_x_ < 0) {
+            icol_x_ = headerX;
+        }
+        if (icol_y_ < 0) {
+            icol_y_ = headerY;
+        }
+        if (icol_z_ < 0 && headerZ >= 0) {
+            icol_z_ = headerZ;
+        }
+        if (icol_x_ < 0 || icol_y_ < 0) {
+            error("%s: --tile-op-factor-tsv requires x and y header columns", __func__);
+        }
+        int32_t topK = 0;
+        for (uint32_t idx = 1; ; ++idx) {
+            const bool hasK = kcols.find(idx) != kcols.end();
+            const bool hasP = pcols.find(idx) != pcols.end();
+            if (!hasK && !hasP) {
+                break;
+            }
+            if (!hasK || !hasP) {
+                error("%s: TileOperator factor TSV header must include both K%u and P%u",
+                    __func__, idx, idx);
+            }
+            topK++;
+        }
+        if (topK <= 0) {
+            error("%s: --tile-op-factor-tsv requires at least one K/P pair", __func__);
+        }
+        tileOpTopK_ = topK;
+        scaling_ = std::abs(scale_x_ - 1) > 1e-8
+            || std::abs(scale_y_ - 1) > 1e-8
+            || (icol_z_ >= 0 && std::abs(scale_z_ - 1) > 1e-8);
+        rewriteLine_ = scaling_ || inputDelimiter_ != "\t" || appendDummyCount_;
+        ntokens_ = std::max(icol_x_, icol_y_);
+        if (icol_z_ >= 0) {
+            ntokens_ = std::max(ntokens_, icol_z_);
+        }
+        for (int32_t idx = 1; idx <= tileOpTopK_; ++idx) {
+            ntokens_ = std::max(ntokens_, static_cast<int32_t>(kcols[static_cast<uint32_t>(idx)]));
+            ntokens_ = std::max(ntokens_, static_cast<int32_t>(pcols[static_cast<uint32_t>(idx)]));
+        }
+        ntokens_ += 1;
+    }
+
+    void parseTileOpFactorHeaderLine(const std::string& line) {
+        size_t nhash = 0;
+        while (nhash < line.size() && line[nhash] == '#') {
+            ++nhash;
+        }
+        std::string header = std::string(strip_str(line.substr(nhash)));
+        std::vector<std::string> tokens;
+        tokenizeLine(header, tokens);
+        parseTileOpFactorHeader(tokens);
+    }
+
+    std::string normalizeSkippedLine(const std::string& line, bool isHeader) {
         size_t nhash = 0;
         while (nhash < line.size() && line[nhash] == '#') {
             ++nhash;
         }
         if (isHeader) {
             std::string header = std::string(strip_str(line.substr(nhash)));
-            if (inputDelimiter_ != "\t" || appendDummyCount_) {
+            if (inputDelimiter_ != "\t" || appendDummyCount_ || tileOpFactorTsv_) {
                 std::vector<std::string> tokens;
                 tokenizeLine(header, tokens);
+                if (tileOpFactorTsv_) {
+                    parseTileOpFactorHeader(tokens);
+                }
                 if (appendDummyCount_) {
                     tokens.push_back("count");
                 }
@@ -163,6 +330,71 @@ protected:
     void appendSkippedLineAsMeta(const std::string& line, bool isHeader) {
         metaLines_ += normalizeSkippedLine(line, isHeader);
         metaLines_ += "\n";
+    }
+
+    void appendCommentLineAsMeta(const std::string& line) {
+        const bool isTileOpHeader = tileOpFactorTsv_ && isTileOpFactorHeaderCandidate(line);
+        appendSkippedLineAsMeta(line, isTileOpHeader);
+    }
+
+    void discoverTileOpFactorHeaderFromFile() {
+        if (!tileOpFactorTsv_ || tileOpTopK_ > 0 || streamingMode_) {
+            return;
+        }
+        if (inFile_ == "-" || ends_with(inFile_, ".gz")) {
+            return;
+        }
+        std::ifstream inFile(inFile_);
+        if (!inFile) {
+            error("Error opening input file: %s", inFile_.c_str());
+        }
+        std::string line;
+        while (std::getline(inFile, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (line.empty()) {
+                continue;
+            }
+            if (line[0] == '#') {
+                if (isTileOpFactorHeaderCandidate(line)) {
+                    parseTileOpFactorHeaderLine(line);
+                    return;
+                }
+                continue;
+            }
+            break;
+        }
+    }
+
+    void requireTileOpFactorHeaderFromStream() {
+        if (!tileOpFactorTsv_ || tileOpTopK_ > 0) {
+            return;
+        }
+        std::string line;
+        while (readNextInputLine(line)) {
+            if (line.empty()) {
+                continue;
+            }
+            if (line[0] != '#') {
+                error("%s: --tile-op-factor-tsv requires a header line starting with '#', or --skip-last-is-header for a non-comment header",
+                    __func__);
+            }
+            appendCommentLineAsMeta(line);
+            if (tileOpTopK_ > 0) {
+                return;
+            }
+        }
+    }
+
+    void validateTileOpFactorTsvConfig() const {
+        if (!tileOpFactorTsv_) {
+            return;
+        }
+        if (icol_x_ < 0 || icol_y_ < 0 || tileOpTopK_ <= 0) {
+            error("%s: --tile-op-factor-tsv requires a parsed header with x, y, and K/P columns",
+                __func__);
+        }
     }
 
     bool readNextInputLine(std::string& line) {
@@ -238,13 +470,12 @@ protected:
                 error("Error opening input file: %s", inFile_.c_str());
             }
         }
-        if (nskip_ <= 0) return;
-
         std::string line;
         while (nskipped_ < nskip_ && readNextInputLine(line)) {
             ++nskipped_;
             appendSkippedLineAsMeta(line, skipLastLineIsHeader_ && nskipped_ == nskip_);
         }
+        requireTileOpFactorHeaderFromStream();
     }
 
     void tokenizeLine(const std::string& line, std::vector<std::string>& tokens) const {
@@ -401,7 +632,7 @@ protected:
             if (line.empty()) continue;
             if (line[0] == '#') {
                 std::lock_guard lk(globalTilesMutex_);
-                metaLines_ += line + "\n";
+                appendCommentLineAsMeta(line);
                 continue;
             }
             consumeLine(threadId, line,
@@ -445,9 +676,12 @@ protected:
             }
             if (batch.empty()) break;
             for (auto &ln : batch) {
+                if (ln.empty()) {
+                    continue;
+                }
                 if (ln[0] == '#') {
                     std::lock_guard lk(globalTilesMutex_);
-                    metaLines_ += ln + "\n";
+                    appendCommentLineAsMeta(ln);
                     continue;
                 }
                 consumeLine(threadId, ln, buffers, localTileMinMax,
@@ -500,30 +734,61 @@ protected:
     }
 
     // Merge temporary files belonging to one tile
-    void mergeTmpFileToOutput(const TileKey& tile, std::ofstream& outfile) {
+    bool mergeTmpFileToOutput(const TileKey& tile, int fdOut, uint64_t& currentOffset) {
+        constexpr size_t bufSz = 1024 * 1024;
+        std::vector<char> buffer(bufSz);
         for (uint32_t threadId = 0; threadId < nThreads_; ++threadId) {
             auto tmpFilename = getTmpFilename(tile, static_cast<int>(threadId));
             std::ifstream tmpFile(tmpFilename, std::ios::binary);
             if (tmpFile) {
-                outfile << tmpFile.rdbuf();
+                while (tmpFile) {
+                    tmpFile.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+                    const std::streamsize got = tmpFile.gcount();
+                    if (got > 0) {
+                        if (!write_all(fdOut, buffer.data(), static_cast<size_t>(got))) {
+                            const int err = errno;
+                            error("%s: failed writing temporary shard %s to output %s.tsv: %s",
+                                __func__, tmpFilename.string().c_str(), outPref_.c_str(), std::strerror(err));
+                            return false;
+                        }
+                        currentOffset += static_cast<uint64_t>(got);
+                    }
+                }
+                if (!tmpFile.eof()) {
+                    error("%s: failed reading temporary shard %s",
+                        __func__, tmpFilename.string().c_str());
+                    return false;
+                }
                 tmpFile.close();
                 // Remove temporary file after merging.
                 std::filesystem::remove(tmpFilename);
             }
         }
+        return true;
     }
 
     // Merge all temporary files and write index file
     bool mergeAndWriteIndex() {
-        std::ofstream outfile(outPref_ + ".tsv", std::ios::binary);
-        if (!outfile) {
-            error("Error opening output file for writing: %s.tsv", outPref_.c_str());
+        std::string outFile = outPref_ + ".tsv";
+        int fdOut = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdOut < 0) {
+            error("Error opening output file for writing: %s: %s", outFile.c_str(), std::strerror(errno));
         }
-        if (!metaLines_.empty()) {outfile << metaLines_;}
+        uint64_t currentOffset = 0;
+        if (!metaLines_.empty()) {
+            if (!write_all(fdOut, metaLines_.data(), metaLines_.size())) {
+                const int err = errno;
+                close(fdOut);
+                error("%s: failed writing metadata header to %s: %s",
+                    __func__, outFile.c_str(), std::strerror(err));
+            }
+            currentOffset += static_cast<uint64_t>(metaLines_.size());
+        }
 
         std::string indexFilename = outPref_ + ".index";
         std::ofstream indexfile(indexFilename, std::ios::binary);
         if (!indexfile) {
+            close(fdOut);
             error("Error opening index file for writing: %s", indexFilename.c_str());
         }
 
@@ -532,6 +797,12 @@ protected:
         header.magic = PUNKST_INDEX_MAGIC;
         header.mode = 0; // tsv, no scaling, float coords, regular tiles
         if (icol_z_ >= 0) {header.mode |= 0x10;} // 3D
+        if (tileOpFactorTsv_) {
+            if (!header.packKvec({static_cast<uint32_t>(tileOpTopK_)})) {
+                error("%s: cannot encode topK=%d in TileOperator index header",
+                    __func__, tileOpTopK_);
+            }
+        }
         header.tileSize = tileSize_;
         header.xmin = globalBox_.xmin; header.xmax = globalBox_.xmax;
         header.ymin = globalBox_.ymin; header.ymax = globalBox_.ymax;
@@ -544,19 +815,33 @@ protected:
         std::sort(sortedTiles.begin(), sortedTiles.end());
 
         for (const auto& tile : sortedTiles) {
-            std::streampos startOffset = outfile.tellp();
-            mergeTmpFileToOutput(tile, outfile);
-            std::streampos endOffset = outfile.tellp();
+            const uint64_t startOffset = currentOffset;
+            if (!mergeTmpFileToOutput(tile, fdOut, currentOffset)) {
+                close(fdOut);
+                return false;
+            }
+            const uint64_t endOffset = currentOffset;
             IndexEntryF entry(tile.row, tile.col);
             entry.st = startOffset;
             entry.ed = endOffset;
             entry.n = static_cast<uint32_t>(globalTiles_[tile]);
             tile2bound(tile.row, tile.col, entry.xmin, entry.xmax, entry.ymin, entry.ymax, tileSize_);
             indexfile.write(reinterpret_cast<const char*>(&entry), sizeof(entry));
+            if (!indexfile) {
+                error("%s: failed writing index entry for tile (%d, %d)",
+                    __func__, tile.row, tile.col);
+            }
         }
 
-        outfile.close();
+        if (close(fdOut) != 0) {
+            const int err = errno;
+            error("%s: failed closing output file %s: %s",
+                __func__, outFile.c_str(), std::strerror(err));
+        }
         indexfile.close();
+        if (!indexfile) {
+            error("%s: failed closing index file %s", __func__, indexFilename.c_str());
+        }
         return true;
     }
 

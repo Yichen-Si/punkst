@@ -49,6 +49,13 @@ struct PreparedRegionRasterMask2D {
                                    const TileKey* tile_hint = nullptr) const;
 };
 
+struct PreparedGeoJSONFeature2D {
+    std::string id;
+    PreparedRegionMask2D region;
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
 PreparedRegionMask2D prepareRegionFromPaths(const Clipper2Lib::Paths64& paths,
                                         int32_t tileSize,
                                         int64_t scale = 10);
@@ -62,6 +69,12 @@ PreparedRegionMask2D prepareRegionFromGeoJSONGeometry(const nlohmann::json& geom
 PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
                                            int32_t tileSize,
                                            int64_t scale = 10);
+
+std::vector<PreparedGeoJSONFeature2D> loadPreparedGeoJSONFeatures(
+    const std::string& geojsonFile,
+    int32_t tileSize,
+    int64_t scale = 10,
+    const std::string& idProperty = "title");
 
 PreparedRegionRasterMask2D prepareRegionRasterMask2D(const PreparedRegionMask2D& region,
                                                      float pixelResolution,

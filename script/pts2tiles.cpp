@@ -9,9 +9,9 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     int nThreads0 = 1, tileSize = -1;
     int tileBuffer = 1000, batchSize = 10000;
     int debug = 0, verbose = 1000000;
-    int icol_x, icol_y, icol_z = -1, nskip = 0;
+    int icol_x = -1, icol_y = -1, icol_z = -1, nskip = 0;
     int icol_feature = -1;
-    bool skip_last_is_header = false, csv_input = false;
+    bool skip_last_is_header = false, csv_input = false, tile_op_factor_tsv = false;
     double scale = 1;
     double scale_x = std::numeric_limits<double>::quiet_NaN();
     double scale_y = std::numeric_limits<double>::quiet_NaN();
@@ -27,6 +27,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
       .add_option("icol-z", "Column index for z coordinate (0-based, optional)", icol_z)
       .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
       .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
+      .add_option("tile-op-factor-tsv", "Input is a TileOperator factor-probability TSV with x/y[/z] and K1/P1 columns; write a tile-op compatible index", tile_op_factor_tsv)
       .add_option("csv", "Treat the input as comma-delimited CSV instead of tab-delimited text", csv_input)
       .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
       .add_option("skip-last-is-header", "Treat the last skipped line as the header line", skip_last_is_header)
@@ -60,6 +61,12 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     if (skip_last_is_header && nskip <= 0) {
         error("--skip-last-is-header requires --skip to be greater than 0");
     }
+    if (tile_op_factor_tsv && (icol_feature >= 0 || !icol_ints.empty())) {
+        error("--tile-op-factor-tsv cannot be combined with --icol-feature or --icol-int");
+    }
+    if (!tile_op_factor_tsv && (icol_x < 0 || icol_y < 0)) {
+        error("--icol-x and --icol-y are required unless --tile-op-factor-tsv is used");
+    }
 
     if (std::isnan(scale_x)) {
         scale_x = scale;
@@ -85,7 +92,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
     streaming = true;
 
     const char input_delimiter = csv_input ? ',' : '\t';
-    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip, skip_last_is_header, streaming, tileBuffer, batchSize, scale_x, scale_y, scale_z, digits, input_delimiter);
+    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip, skip_last_is_header, streaming, tileBuffer, batchSize, scale_x, scale_y, scale_z, digits, input_delimiter, tile_op_factor_tsv);
     if (!pts2Tiles.run()) {
         return 1;
     }

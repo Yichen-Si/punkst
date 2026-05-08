@@ -484,8 +484,8 @@ The same combined workflow also supports PMTiles packaging when `--write-mlt-pmt
 
 ### Aggregate Results by Cell
 
-This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tailed) transcript file that contains cell/compartment annotations per transcript/pixel.
-If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run `punkst pts2tiles` on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file should contain the necessary information.
+This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tiled) transcript file that contains cell/compartment annotations per transcript/pixel.
+If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run `punkst pts2tiles` on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tiled file should contain the necessary information.
 
 ```bash
 punkst tile-op --annotate-cell --in path/result [--binary] \

@@ -107,6 +107,7 @@ set(SOURCE_FILES
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
+    script/tiles2rois.cpp
     script/fit_lda.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp

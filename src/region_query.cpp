@@ -8,6 +8,7 @@
 #include <string>
 
 #include "json.hpp"
+#include "error.hpp"
 
 namespace {
 
@@ -25,6 +26,7 @@ using Clipper2Lib::PointInPolygonResult;
 using Clipper2Lib::Rect64;
 using Clipper2Lib::RectClip;
 using Clipper2Lib::SegmentsIntersect;
+using Clipper2Lib::SimplifyPaths;
 using Clipper2Lib::TrimCollinear;
 using Clipper2Lib::Union;
 using Clipper2Lib::EndType;
@@ -185,7 +187,8 @@ bool has_self_intersection(const Path64& path) {
     return false;
 }
 
-bool append_polygon_rings(Paths64& rings, const json& polygon, int64_t scale) {
+bool append_polygon_rings(Paths64& rings, const json& polygon, int64_t scale,
+                          bool rejectSelfIntersections = true) {
     if (!polygon.is_array() || polygon.empty()) {
         return false;
     }
@@ -195,7 +198,7 @@ bool append_polygon_rings(Paths64& rings, const json& polygon, int64_t scale) {
         if (path.empty()) {
             return false;
         }
-        if (has_self_intersection(path)) {
+        if (rejectSelfIntersections && has_self_intersection(path)) {
             return false;
         }
         if (std::llround(std::abs(Clipper2Lib::Area(path))) == 0) {
@@ -218,7 +221,76 @@ bool append_polygon_rings(Paths64& rings, const json& polygon, int64_t scale) {
     return true;
 }
 
-void append_geometry_rings(Paths64& rings, const json& obj, int64_t scale) {
+Paths64 repair_region_paths_with_clipper(const Paths64& input_rings,
+                                         const std::string& featureId) {
+    if (input_rings.empty()) {
+        return {};
+    }
+    try {
+        Paths64 out = Union(input_rings, FillRule::NonZero);
+        if (!out.empty()) {
+            return out;
+        }
+    } catch (const std::exception& e) {
+        warning("%s: Clipper union failed for GeoJSON feature '%s': %s",
+            __func__, featureId.c_str(), e.what());
+    } catch (...) {
+        warning("%s: Clipper union failed for GeoJSON feature '%s'",
+            __func__, featureId.c_str());
+    }
+
+    try {
+        Paths64 simplified = SimplifyPaths(input_rings, 1.0, true);
+        Paths64 cleaned;
+        cleaned.reserve(simplified.size());
+        for (auto& path : simplified) {
+            path = TrimCollinear(path, false);
+            if (path.size() < 3) {
+                continue;
+            }
+            if (std::llround(std::abs(Clipper2Lib::Area(path))) == 0) {
+                continue;
+            }
+            if (!IsPositive(path)) {
+                std::reverse(path.begin(), path.end());
+            }
+            cleaned.push_back(std::move(path));
+        }
+        if (!cleaned.empty()) {
+            Paths64 out = Union(cleaned, FillRule::NonZero);
+            if (!out.empty()) {
+                warning("%s: Repaired GeoJSON feature '%s' using Clipper simplification",
+                    __func__, featureId.c_str());
+                return out;
+            }
+        }
+    } catch (const std::exception& e) {
+        warning("%s: Clipper simplification repair failed for GeoJSON feature '%s': %s",
+            __func__, featureId.c_str(), e.what());
+    } catch (...) {
+        warning("%s: Clipper simplification repair failed for GeoJSON feature '%s'",
+            __func__, featureId.c_str());
+    }
+
+    try {
+        Paths64 out = Union(input_rings, FillRule::EvenOdd);
+        if (!out.empty()) {
+            warning("%s: Repaired GeoJSON feature '%s' using even-odd fill",
+                __func__, featureId.c_str());
+            return out;
+        }
+    } catch (const std::exception& e) {
+        warning("%s: Clipper even-odd repair failed for GeoJSON feature '%s': %s",
+            __func__, featureId.c_str(), e.what());
+    } catch (...) {
+        warning("%s: Clipper even-odd repair failed for GeoJSON feature '%s'",
+            __func__, featureId.c_str());
+    }
+    return {};
+}
+
+void append_geometry_rings(Paths64& rings, const json& obj, int64_t scale,
+                           bool rejectSelfIntersections = true) {
     if (!obj.is_object()) {
         return;
     }
@@ -226,12 +298,12 @@ void append_geometry_rings(Paths64& rings, const json& obj, int64_t scale) {
     if (type_it == obj.end() || !type_it->is_string()) {
         const auto geom_it = obj.find("geometry");
         if (geom_it != obj.end() && geom_it->is_object()) {
-            append_geometry_rings(rings, *geom_it, scale);
+            append_geometry_rings(rings, *geom_it, scale, rejectSelfIntersections);
         }
         const auto features_it = obj.find("features");
         if (features_it != obj.end() && features_it->is_array()) {
             for (const auto& feature : *features_it) {
-                append_geometry_rings(rings, feature, scale);
+                append_geometry_rings(rings, feature, scale, rejectSelfIntersections);
             }
         }
         return;
@@ -240,7 +312,7 @@ void append_geometry_rings(Paths64& rings, const json& obj, int64_t scale) {
     if (type == "Polygon") {
         const auto coords_it = obj.find("coordinates");
         if (coords_it != obj.end()) {
-            (void) append_polygon_rings(rings, *coords_it, scale);
+            (void) append_polygon_rings(rings, *coords_it, scale, rejectSelfIntersections);
         }
         return;
     }
@@ -250,14 +322,14 @@ void append_geometry_rings(Paths64& rings, const json& obj, int64_t scale) {
             return;
         }
         for (const auto& polygon : *coords_it) {
-            (void) append_polygon_rings(rings, polygon, scale);
+            (void) append_polygon_rings(rings, polygon, scale, rejectSelfIntersections);
         }
         return;
     }
     if (type == "Feature") {
         const auto geom_it = obj.find("geometry");
         if (geom_it != obj.end() && geom_it->is_object()) {
-            append_geometry_rings(rings, *geom_it, scale);
+            append_geometry_rings(rings, *geom_it, scale, rejectSelfIntersections);
         }
         return;
     }
@@ -267,7 +339,7 @@ void append_geometry_rings(Paths64& rings, const json& obj, int64_t scale) {
             return;
         }
         for (const auto& feature : *features_it) {
-            append_geometry_rings(rings, feature, scale);
+            append_geometry_rings(rings, feature, scale, rejectSelfIntersections);
         }
     }
 }
@@ -436,6 +508,114 @@ PreparedRegionMask2D loadPreparedRegionGeoJSON(const std::string& geojsonFile,
     json root;
     in >> root;
     return prepareRegionFromGeoJSONGeometry(root, tileSize, scale);
+}
+
+std::vector<PreparedGeoJSONFeature2D> loadPreparedGeoJSONFeatures(
+    const std::string& geojsonFile,
+    int32_t tileSize,
+    int64_t scale,
+    const std::string& idProperty) {
+    if (tileSize <= 0) {
+        throw std::runtime_error("tileSize must be positive");
+    }
+    if (scale <= 0) {
+        scale = kDefaultScale;
+    }
+    if (idProperty.empty()) {
+        throw std::runtime_error("GeoJSON ID property must not be empty");
+    }
+
+    std::ifstream in(geojsonFile);
+    if (!in.is_open()) {
+        throw std::runtime_error("Failed to open GeoJSON file: " + geojsonFile);
+    }
+
+    json root;
+    in >> root;
+    if (!root.is_object()) {
+        throw std::runtime_error("GeoJSON root must be an object");
+    }
+    const auto type_it = root.find("type");
+    if (type_it == root.end() || !type_it->is_string()) {
+        throw std::runtime_error("GeoJSON root is missing string field 'type'");
+    }
+
+    std::vector<const json*> features;
+    const std::string rootType = type_it->get<std::string>();
+    if (rootType == "FeatureCollection") {
+        const auto features_it = root.find("features");
+        if (features_it == root.end() || !features_it->is_array()) {
+            throw std::runtime_error("GeoJSON FeatureCollection is missing array-valued 'features'");
+        }
+        features.reserve(features_it->size());
+        for (const auto& feature : *features_it) {
+            features.push_back(&feature);
+        }
+    } else if (rootType == "Feature") {
+        features.push_back(&root);
+    } else {
+        throw std::runtime_error("Expected GeoJSON FeatureCollection or Feature root");
+    }
+
+    std::vector<PreparedGeoJSONFeature2D> out;
+    out.reserve(features.size());
+    std::unordered_map<std::string, uint32_t> seenIds;
+    for (size_t i = 0; i < features.size(); ++i) {
+        const json& feature = *features[i];
+        if (!feature.is_object()) {
+            throw std::runtime_error("GeoJSON feature must be an object");
+        }
+        const auto feature_type_it = feature.find("type");
+        if (feature_type_it == feature.end() || !feature_type_it->is_string() ||
+            feature_type_it->get<std::string>() != "Feature") {
+            throw std::runtime_error("Expected GeoJSON Feature entries");
+        }
+        const auto props_it = feature.find("properties");
+        if (props_it == feature.end() || !props_it->is_object()) {
+            throw std::runtime_error("GeoJSON feature is missing object-valued 'properties'");
+        }
+        const auto id_it = props_it->find(idProperty);
+        if (id_it == props_it->end() || !id_it->is_string()) {
+            throw std::runtime_error("GeoJSON feature is missing string property '" + idProperty + "'");
+        }
+        const std::string id = id_it->get<std::string>();
+        if (id.empty()) {
+            throw std::runtime_error("GeoJSON feature has empty string property '" + idProperty + "'");
+        }
+        if (!seenIds.emplace(id, static_cast<uint32_t>(i)).second) {
+            throw std::runtime_error("Duplicate GeoJSON feature ID: " + id);
+        }
+        const auto geom_it = feature.find("geometry");
+        if (geom_it == feature.end() || !geom_it->is_object()) {
+            throw std::runtime_error("GeoJSON feature '" + id + "' is missing object-valued geometry");
+        }
+
+        Paths64 input_rings;
+        append_geometry_rings(input_rings, *geom_it, scale, false);
+        if (input_rings.empty()) {
+            warning("%s: Skipping GeoJSON feature '%s': no valid Polygon or MultiPolygon rings found",
+                __func__, id.c_str());
+            continue;
+        }
+        const Paths64 region_union = repair_region_paths_with_clipper(input_rings, id);
+        if (region_union.empty()) {
+            warning("%s: Skipping GeoJSON feature '%s': polygon repair produced an empty geometry",
+                __func__, id.c_str());
+            continue;
+        }
+
+        try {
+            PreparedGeoJSONFeature2D prepared;
+            prepared.id = id;
+            prepared.region = prepareRegionFromPaths(region_union, tileSize, scale);
+            prepared.x = 0.5f * (prepared.region.bbox_f.xmin + prepared.region.bbox_f.xmax);
+            prepared.y = 0.5f * (prepared.region.bbox_f.ymin + prepared.region.bbox_f.ymax);
+            out.push_back(std::move(prepared));
+        } catch (const std::exception& e) {
+            warning("%s: Skipping GeoJSON feature '%s': %s", __func__, id.c_str(), e.what());
+        }
+    }
+    return out;
 }
 
 bool PreparedRegionMask2D::containsPoint(float x, float y, const TileKey* tile_hint) const {

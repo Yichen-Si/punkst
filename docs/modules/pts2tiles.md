@@ -42,6 +42,17 @@ punkst pts2tiles \
   --out-prefix ${path}/transcripts.tiled
 ```
 
+Example for retiling a factor-probability TSV for `tile-op`:
+
+```bash
+punkst pts2tiles \
+  --in-tsv ${path}/legacy_factors.tsv \
+  --tile-op-factor-tsv \
+  --tile-size 500 \
+  --temp-dir ${tmpdir} \
+  --out-prefix ${path}/legacy_factors.tiled
+```
+
 ### Accepted Input Forms
 
 `pts2tiles` currently accepts these input forms through `--in-tsv`:
@@ -113,6 +124,9 @@ Behavior of `prefix.features.tsv`:
 
 `--skip-last-is-header`
 : Treat the last skipped line as the header line. Requires `--skip > 0`.
+
+`--tile-op-factor-tsv`
+: Retile a TSV with `x`, `y`, optional `z`, and contiguous `K1/P1`, `K2/P2`, ... factor-probability columns. This mode ignores any existing index, infers coordinate and K/P columns from a header line starting with `#`, and writes an index that `tile-op` can read directly. For a non-comment header, use `--skip N --skip-last-is-header`.
 
 `--tile-buffer`
 : Per-thread, per-tile in-memory buffer size in number of records before flushing to disk. Default: `1000`.
