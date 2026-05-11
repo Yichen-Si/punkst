@@ -77,12 +77,25 @@ void split(std::vector<std::string>& vec, std::string_view delims, std::string_v
     if (clear)
         vec.clear();
 
+    if (limit == 0) {
+        if (keep_overflow && !str.empty()) {
+            std::string_view token = str;
+            if (strip)
+                token = strip_str(token);
+            if (!collapse || !token.empty())
+                vec.emplace_back(token);
+        }
+        return;
+    }
+
     uint32_t tokenCount = 0;
     size_t start = 0;
-    while (start < str.size() && tokenCount < limit) {
+    while (start <= str.size() && tokenCount < limit) {
         size_t pos = str.find_first_of(delims, start);
         // Get the current token
-        std::string_view token = str.substr(start, pos - start);
+        std::string_view token = (pos == std::string_view::npos)
+            ? str.substr(start)
+            : str.substr(start, pos - start);
         if (strip)
             token = strip_str(token);
         // Only add token if not collapsing empty tokens

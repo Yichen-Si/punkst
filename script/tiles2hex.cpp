@@ -1,49 +1,12 @@
-#include "tiles2bins.hpp"
+#include "preprocess_options.hpp"
 
 int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
 
-    std::string inTsv, inIndex, outFile, tmpDir, dictFile;
-    std::vector<std::string> anchorFiles;
-    std::vector<float> radius;
-    int nThreads = 1, debug = 0, verbose = 1000000;
-    int32_t seed = -1;
-    int icol_x, icol_y, icol_z = -1, icol_feature;
-    double hexSize = -1, hexGridDist = -1, bccSize = -1, bccGridDist = -1;
-    std::vector<int32_t> icol_ints;
-    std::vector<int32_t> min_counts;
-    bool noBackground = false;
-    std::vector<double> boundingBoxes;
-    bool randomize_output = false;
-    std::string sort_mem;
-    bool use_internal_sort = false;
+    Tiles2HexOptions opts;
+    int debug = 0, verbose = 1000000;
 
     ParamList pl;
-    // Input Options
-    pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
-        .add_option("in-index", "Input index file", inIndex)
-        .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
-        .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
-        .add_option("icol-z", "Column index for z coordinate (0-based, enables 3D BCC aggregation)", icol_z)
-        .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
-        .add_option("feature-dict", "If feature column is not integer, provide the list of feature names", dictFile)
-        .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
-        .add_option("bounding-boxes", "Rectangular query regions (xmin ymin xmax ymax)*", boundingBoxes)
-        .add_option("anchor-files", "Anchor files", anchorFiles)
-        .add_option("radius", "Radius for each set of anchors", radius)
-        .add_option("hex-size", "Hexagon size (size length)", hexSize)
-        .add_option("hex-grid-dist", "Hexagon grid distance (center-to-center distance)", hexGridDist)
-        .add_option("bcc-size", "BCC lattice size for 3D aggregation", bccSize)
-        .add_option("bcc-grid-dist", "BCC grid distance (nearest center-to-center distance) for 3D aggregation", bccGridDist)
-        .add_option("temp-dir", "Directory to store temporary files", tmpDir)
-        .add_option("seed", "Random seed for randomized output keys", seed)
-        .add_option("threads", "Number of threads to use (default: 1)", nThreads);
-    // Output Options
-    pl.add_option("out", "Output TSV file", outFile)
-        .add_option("randomize", "Randomize output order", randomize_output)
-        .add_option("sort-mem", "Memory to use for sorting, with units K, M, or G similar to -S in linux sort", sort_mem)
-        .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort)
-        .add_option("min-count", "Minimum count for each integer column, applied with OR", min_counts)
-        .add_option("ignore-background", "Ignore pixels not within radius of any of the anchors", noBackground)
+    opts.addStandaloneOptions(pl)
         .add_option("verbose", "Verbose", verbose)
         .add_option("debug", "Debug", debug);
 
@@ -56,92 +19,35 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
         return 1;
     }
 
-    const bool use3D = (icol_z >= 0);
-    if (use3D) {
-        if (!anchorFiles.empty()) {
-            error("Anchor-based aggregation is currently only supported for 2D input");
-        }
-        if (bccSize > 0 && bccGridDist > 0) {
-            warning("If both --bcc-size and --bcc-grid-dist are specified, only --bcc-size will be used");
-        }
-        if (bccSize <= 0) {
-            if (bccGridDist <= 0) {
-                error("3D input requires --bcc-size or --bcc-grid-dist");
-            } else {
-                bccSize = 2.0 * bccGridDist / sqrt(3.0);
-            }
-        }
-        if (hexSize > 0 || hexGridDist > 0) {
-            warning("Ignoring --hex-size/--hex-grid-dist for 3D input; using --bcc-size/--bcc-grid-dist");
-        }
-    } else {
-        if (bccSize > 0 || bccGridDist > 0) {
-            warning("Ignoring --bcc-size/--bcc-grid-dist for 2D input");
-        }
-        if (hexSize <= 0) {
-            if (hexGridDist <= 0) {
-                error("Hexagon size or hexagon grid distance must be specified");
-            } else {
-                hexSize = hexGridDist / sqrt(3);
-            }
-        }
-    }
-    HexGrid hexGrid(use3D ? bccSize : hexSize);
+    opts.validateColumns();
+    opts.resolveStandaloneGrid();
+    HexGrid hexGrid = opts.makeGrid();
+    std::vector<Rectangle<double>> rects = opts.parseBoundingBoxes();
 
-    std::vector<Rectangle<double>> rects;
-    if (boundingBoxes.size() > 0) {
-        int32_t nrects = parseCoordsToRects(rects, boundingBoxes);
-        if (nrects <= 0) {
-            error("Error parsing bounding boxes");
-        }
-        notice("Received %d bounding boxes", nrects);
-    }
-
-    TileReader tileReader(inTsv, inIndex, &rects);
+    TileReader tileReader(opts.inTsv, opts.inIndex, &rects);
     if (!tileReader.isValid()) {
-        error("Error opening input file: %s", inTsv.c_str());
+        error("Error opening input file: %s", opts.inTsv.c_str());
     }
-    lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dictFile, &rects);
-    if (use3D) {
-        parser.setZ(static_cast<size_t>(icol_z));
-    }
-    if (parser.n_ct == 0) {
-        error("No integer columns specified");
-    }
+    lineParser parser = opts.makeParser(&rects, true);
 
-    if (anchorFiles.empty()) {
-        Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, min_counts, seed, bccSize);
+    if (opts.anchorFiles.empty()) {
+        Tiles2Hex tiles2Hex(opts.nThreads, opts.tmpDir, opts.outFile, hexGrid, tileReader, parser, opts.min_counts, opts.seed, opts.bccSize);
         if (!tiles2Hex.run()) {
             return 1;
         }
         tiles2Hex.writeMetadata();
     } else {
-        Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, anchorFiles, radius, min_counts, noBackground, seed);
+        Tiles2UnitsByAnchor tiles2Hex(opts.nThreads, opts.tmpDir, opts.outFile, hexGrid, tileReader, parser, opts.anchorFiles, opts.radius, opts.min_counts, opts.noBackground, opts.seed);
         if (!tiles2Hex.run()) {
             return 1;
         }
         tiles2Hex.writeMetadata();
     }
-    if (randomize_output) {
-        if (use_internal_sort) {
-            size_t maxMemBytes = ExternalSorter::parseMemoryString(sort_mem);
-            try {
-                ExternalSorter::sortBy1stColHex(outFile, outFile, maxMemBytes, tmpDir, nThreads);
-            } catch (const std::exception& e) {
-                warning("Error shuffling output %s: %s", outFile.c_str(), e.what());
-            }
-        } else {
-            std::vector<std::string> sort_flags = {"-k1,1", "-o", outFile};
-            #if defined(__linux__)
-            sort_flags.push_back("--parallel="+std::to_string(nThreads));
-            #endif
-            if (sys_sort(outFile.c_str(), nullptr, sort_flags) != 0) {
-                warning("Error shuffling output %s", outFile.c_str());
-            }
-        }
+    if (opts.randomize_output) {
+        opts.sortOutput(false);
     }
 
-    notice("Processing completed. Output is written to %s", outFile.c_str());
+    notice("Processing completed. Output is written to %s", opts.outFile.c_str());
 
     return 0;
 }

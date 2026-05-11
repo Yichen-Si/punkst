@@ -70,9 +70,17 @@ sample_B	/path/to/sample_B_transcripts.tsv
 
 **`pts2tiles` options:**
 
-`--icol-x <int>`, `--icol-y <int>`, `--icol-feature <int>`, `--icol-int <int>`: (Required) 0-based column indices for X/Y coordinates, the feature name, and the count/value.
+`--icol-x <int>`, `--icol-y <int>`, `--icol-feature <int>`: (Required) 0-based column indices for X/Y coordinates and the feature name.
+
+`--icol-int <int>`: Optional 0-based column index for count/value. If omitted, each input row is treated as one observation with count 1.
 
 `--skip`: If your input file has a header, use `--skip 1` to skip the first (or more) lines.
+
+`--csv`: Parse raw transcript inputs as comma-delimited text. Output tiled files remain tab-delimited.
+
+`--scale`, `--scale-x`, `--scale-y`, `--scale-z`, `--digits`: Apply the same coordinate scaling behavior as [`pts2tiles`](../modules/pts2tiles.md).
+
+`--include-cols`, `--exclude-cols`: Keep or remove raw input columns in the tiled per-sample outputs. Coordinate, feature, and count columns required by the pipeline are always kept, and downstream aggregation uses the remapped tiled-output columns automatically.
 
 `--tile-size <int>`: (Required) The size of the square tiles for pre-processing. Should be big enough, say 500 microns.
 
@@ -80,7 +88,11 @@ sample_B	/path/to/sample_B_transcripts.tsv
 
 `--hex-grid-dist <float>`: The center-to-center distance for the hexagonal grid. Alternatively, provide `--hex-size <float>`, side length of the hexagons (exactly one of the two options must be provided). Multiple values can be provided, separated by spaces.
 
+`--bcc-grid-dist <float>`: For 3D input, the nearest center-to-center distance for the BCC lattice. Alternatively, provide `--bcc-size <float>`. Multiple values can be provided. If neither `--bcc-grid-dist` nor `--bcc-size` is provided, 3D input is aggregated as 2D hexagons using only X/Y coordinates.
+
 `--min-count <int>`: The minimum total count for a hexagon (unit) to be included in the output.
+
+`--seed <int>`: Random seed for per-sample unit random keys. Merged outputs are still sorted by random key.
 
 ### Output Files
 
@@ -94,7 +106,7 @@ All outputs are under the specified `--out-dir`
 
 `[--out-joint-pref].features.tsv`: The final list of features used for the merged output.
 
-`[--out-joint-pref].hex_[dist].txt` and `.json`: The final merged hexagon data and its corresponding metadata file, ready for `topic-model`.
+`[--out-joint-pref].hex_[dist].txt` and `.json`: The final merged hexagon data and its corresponding metadata file, ready for `topic-model`. The JSON includes `sample_list`, the sample IDs in the same order as the 0-based sample indices in the merged data file.
 
 **In per-sample subdirectories (`--out-dir/samples/[sample_id]/`):**
 

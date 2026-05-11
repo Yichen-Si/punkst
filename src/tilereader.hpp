@@ -37,9 +37,12 @@ struct lineParser {
     std::vector<std::string> name_ints, name_floats, name_strs;
     bool isExtended = false;
     bool hasZ = false;
+    bool implicitCount = false;
+    bool allowImplicitCount = false;
 
     lineParser() {isFeatureDict = false; weighted = false;}
-    lineParser(size_t _ix, size_t _iy, size_t _iw, const std::vector<int32_t>& _ivals, const std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr) {
+    lineParser(size_t _ix, size_t _iy, size_t _iw, const std::vector<int32_t>& _ivals, const std::string& _dfile, std::vector<Rectangle<double>>* _rects = nullptr, bool _allowImplicitCount = false) {
+        allowImplicitCount = _allowImplicitCount;
         weighted = false;
         if (_rects != nullptr && !_rects->empty()) {
             rects = *_rects;

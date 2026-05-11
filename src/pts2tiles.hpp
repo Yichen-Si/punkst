@@ -32,7 +32,9 @@ public:
         int32_t tileBuffer = 1000, int32_t batchSize = 10000,
         double scale_x = 1, double scale_y = 1, double scale_z = 1,
         int digits=2, char inputDelimiter = '\t',
-        bool tileOpFactorTsv = false) :
+        bool tileOpFactorTsv = false,
+        std::vector<int32_t> includeCols = {},
+        std::vector<int32_t> excludeCols = {}) :
         nThreads_(nthreads),
         inFile_(inFile), tmpDir_(tmpDir),
         outPref_(outPref), tileSize_(tileSize),
@@ -42,8 +44,16 @@ public:
         tileBuffer_(tileBuffer), batchSize_(batchSize),
         scale_x_(scale_x), scale_y_(scale_y), scale_z_(scale_z),
         digits_(digits), inputDelimiter_(1, inputDelimiter),
-        tileOpFactorTsv_(tileOpFactorTsv)
+        tileOpFactorTsv_(tileOpFactorTsv),
+        includeCols_(std::move(includeCols)), excludeCols_(std::move(excludeCols))
     {
+        if (!includeCols_.empty() && !excludeCols_.empty()) {
+            error("--include-cols and --exclude-cols are mutually exclusive");
+        }
+        if (tileOpFactorTsv_ && (!includeCols_.empty() || !excludeCols_.empty())) {
+            error("--include-cols/--exclude-cols cannot be combined with --tile-op-factor-tsv");
+        }
+        filterColumns_ = !includeCols_.empty() || !excludeCols_.empty();
         ntokens_ = std::max(icol_x_, icol_y_);
         if (icol_z_ >= 0) {
             ntokens_ = std::max(ntokens_, icol_z_);
@@ -58,7 +68,7 @@ public:
             || std::abs(scale_y_ - 1) > 1e-8
             || (icol_z_ >= 0 && std::abs(scale_z_ - 1) > 1e-8);
         appendDummyCount_ = !tileOpFactorTsv_ && icol_ints_.empty();
-        rewriteLine_ = scaling_ || inputDelimiter_ != "\t" || appendDummyCount_;
+        rewriteLine_ = scaling_ || inputDelimiter_ != "\t" || appendDummyCount_ || filterColumns_;
         ntokens_ += 1;
         notice("Created temporary directory: %s", tmpDir_.path.string().c_str());
     }
@@ -78,6 +88,7 @@ public:
     bool run() {
         if (!streamingMode_) {
             collectSkippedLinesFromFile();
+            collectInitialCommentLinesFromFile();
             discoverTileOpFactorHeaderFromFile();
             validateTileOpFactorTsvConfig();
             if (!launchWorkerThreads()) {
@@ -121,9 +132,11 @@ protected:
     bool appendDummyCount_;
     bool rewriteLine_;
     bool tileOpFactorTsv_;
+    bool filterColumns_;
     int32_t tileOpTopK_ = 0;
     int32_t digits_;
     std::string inputDelimiter_;
+    std::vector<int32_t> includeCols_, excludeCols_;
     Rectangle<float> globalBox_;
     bool hasGlobalZRange_ = false;
     float globalZMin_ = 0, globalZMax_ = 0;
@@ -141,6 +154,8 @@ protected:
     gzFile         gz_    = nullptr;
     std::istream*  inPtr_ = nullptr;
     std::mutex readMutex_;
+    bool hasPendingLine_ = false;
+    std::string pendingLine_;
 
     struct PtRecord {
         float x, y;
@@ -278,7 +293,7 @@ protected:
         scaling_ = std::abs(scale_x_ - 1) > 1e-8
             || std::abs(scale_y_ - 1) > 1e-8
             || (icol_z_ >= 0 && std::abs(scale_z_ - 1) > 1e-8);
-        rewriteLine_ = scaling_ || inputDelimiter_ != "\t" || appendDummyCount_;
+        rewriteLine_ = scaling_ || inputDelimiter_ != "\t" || appendDummyCount_ || filterColumns_;
         ntokens_ = std::max(icol_x_, icol_y_);
         if (icol_z_ >= 0) {
             ntokens_ = std::max(ntokens_, icol_z_);
@@ -301,6 +316,72 @@ protected:
         parseTileOpFactorHeader(tokens);
     }
 
+    bool shouldKeepColumn(size_t idx, size_t ncols) const {
+        if (!filterColumns_) {
+            return true;
+        }
+        bool keep = true;
+        if (!includeCols_.empty()) {
+            keep = false;
+            for (const auto& col : includeCols_) {
+                if (col >= 0 && static_cast<size_t>(col) == idx) {
+                    keep = true;
+                    break;
+                }
+            }
+        } else {
+            for (const auto& col : excludeCols_) {
+                if (col >= 0 && static_cast<size_t>(col) == idx) {
+                    keep = false;
+                    break;
+                }
+            }
+        }
+        if (icol_x_ >= 0 && static_cast<size_t>(icol_x_) == idx) keep = true;
+        if (icol_y_ >= 0 && static_cast<size_t>(icol_y_) == idx) keep = true;
+        if (icol_z_ >= 0 && static_cast<size_t>(icol_z_) == idx) keep = true;
+        if (icol_feature_ >= 0 && static_cast<size_t>(icol_feature_) == idx) keep = true;
+        for (const auto& col : icol_ints_) {
+            if (col >= 0 && static_cast<size_t>(col) == idx) {
+                keep = true;
+                break;
+            }
+        }
+        if (appendDummyCount_ && idx + 1 == ncols) {
+            keep = true;
+        }
+        return keep;
+    }
+
+    std::string filterLineTokens(const std::vector<std::string>& tokens) const {
+        if (!filterColumns_) {
+            return join(tokens, "\t");
+        }
+        std::vector<std::string> out;
+        out.reserve(tokens.size());
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            if (shouldKeepColumn(i, tokens.size())) {
+                out.push_back(tokens[i]);
+            }
+        }
+        return join(out, "\t");
+    }
+
+    void normalizeExplicitHeaderColumns(std::vector<std::string>& tokens) const {
+        if (icol_x_ >= 0 && static_cast<size_t>(icol_x_) < tokens.size()) {
+            tokens[icol_x_] = "X";
+        }
+        if (icol_y_ >= 0 && static_cast<size_t>(icol_y_) < tokens.size()) {
+            tokens[icol_y_] = "Y";
+        }
+        if (icol_z_ >= 0 && static_cast<size_t>(icol_z_) < tokens.size()) {
+            tokens[icol_z_] = "Z";
+        }
+        if (icol_feature_ >= 0 && static_cast<size_t>(icol_feature_) < tokens.size()) {
+            tokens[icol_feature_] = "Feature";
+        }
+    }
+
     std::string normalizeSkippedLine(const std::string& line, bool isHeader) {
         size_t nhash = 0;
         while (nhash < line.size() && line[nhash] == '#') {
@@ -308,23 +389,19 @@ protected:
         }
         if (isHeader) {
             std::string header = std::string(strip_str(line.substr(nhash)));
-            if (inputDelimiter_ != "\t" || appendDummyCount_ || tileOpFactorTsv_) {
-                std::vector<std::string> tokens;
-                tokenizeLine(header, tokens);
-                if (tileOpFactorTsv_) {
-                    parseTileOpFactorHeader(tokens);
-                }
-                if (appendDummyCount_) {
-                    tokens.push_back("count");
-                }
-                header = join(tokens, "\t");
+            std::vector<std::string> tokens;
+            tokenizeLine(header, tokens);
+            if (tileOpFactorTsv_) {
+                parseTileOpFactorHeader(tokens);
             }
+            normalizeExplicitHeaderColumns(tokens);
+            if (appendDummyCount_) {
+                tokens.push_back("count");
+            }
+            header = filterLineTokens(tokens);
             return "#" + header;
         }
-        if (nhash >= 2) {
-            return line;
-        }
-        return std::string(2 - nhash, '#') + line;
+        return line;
     }
 
     void appendSkippedLineAsMeta(const std::string& line, bool isHeader) {
@@ -398,6 +475,12 @@ protected:
     }
 
     bool readNextInputLine(std::string& line) {
+        if (hasPendingLine_) {
+            line = std::move(pendingLine_);
+            pendingLine_.clear();
+            hasPendingLine_ = false;
+            return true;
+        }
         if (gz_) {
             char buf[1<<16];
             if (!gzgets(gz_, buf, sizeof(buf))) {
@@ -449,7 +532,34 @@ protected:
             if (!line.empty() && line.back() == '\r') {
                 line.pop_back();
             }
-            appendSkippedLineAsMeta(line, skipLastLineIsHeader_ && i + 1 == nskip_);
+            if (skipLastLineIsHeader_ && i + 1 == nskip_) {
+                appendSkippedLineAsMeta(line, true);
+            }
+        }
+    }
+
+    void collectInitialCommentLinesFromFile() {
+        if (inFile_ == "-" || ends_with(inFile_, ".gz")) {
+            return;
+        }
+        std::ifstream inFile(inFile_);
+        if (!inFile) {
+            error("Error opening input file: %s", inFile_.c_str());
+        }
+        std::string line;
+        for (int32_t i = 0; i < nskip_ && std::getline(inFile, line); ++i) {}
+        while (std::getline(inFile, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (line.empty()) {
+                continue;
+            }
+            if (line[0] == '#') {
+                appendCommentLineAsMeta(line);
+                continue;
+            }
+            break;
         }
     }
 
@@ -473,7 +583,21 @@ protected:
         std::string line;
         while (nskipped_ < nskip_ && readNextInputLine(line)) {
             ++nskipped_;
-            appendSkippedLineAsMeta(line, skipLastLineIsHeader_ && nskipped_ == nskip_);
+            if (skipLastLineIsHeader_ && nskipped_ == nskip_) {
+                appendSkippedLineAsMeta(line, true);
+            }
+        }
+        while (readNextInputLine(line)) {
+            if (line.empty()) {
+                continue;
+            }
+            if (line[0] == '#') {
+                appendCommentLineAsMeta(line);
+                continue;
+            }
+            pendingLine_ = std::move(line);
+            hasPendingLine_ = true;
+            break;
         }
         requireTileOpFactorHeaderFromStream();
     }
@@ -497,7 +621,7 @@ protected:
             }
         }
         if (rewriteLine_) {
-            line = join(tokens, "\t");
+            line = filterLineTokens(tokens);
         }
     }
 
@@ -629,10 +753,11 @@ protected:
         std::string line;
 
         while (file.tellg() < end && std::getline(file, line)) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
             if (line.empty()) continue;
             if (line[0] == '#') {
-                std::lock_guard lk(globalTilesMutex_);
-                appendCommentLineAsMeta(line);
                 continue;
             }
             consumeLine(threadId, line,
@@ -680,8 +805,6 @@ protected:
                     continue;
                 }
                 if (ln[0] == '#') {
-                    std::lock_guard lk(globalTilesMutex_);
-                    appendCommentLineAsMeta(ln);
                     continue;
                 }
                 consumeLine(threadId, ln, buffers, localTileMinMax,

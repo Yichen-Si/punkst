@@ -104,6 +104,7 @@ set(SOURCE_FILES
     src/numerical_utils.hpp
     src/numerical_utils.cpp
     src/pts2tiles.hpp
+    script/preprocess_options.hpp
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp

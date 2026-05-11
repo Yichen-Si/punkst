@@ -1,66 +1,38 @@
 #include "punkst.h"
-#include "pts2tiles.hpp"
+#include "preprocess_options.hpp"
 #include "tiles2bins.hpp"
 #include <regex>
 
 int32_t cmdMultiSample(int32_t argc, char** argv) {
-    std::string inTsvListFile, tmpDir, outDir;
+    std::string inTsvListFile, outDir;
     std::string jointPref = "";
     std::vector<std::string> inTsvList;
-    int nThreads0 = 1, tileSize = -1;
-    int tileBuffer = 1000, batchSize = 10000;
+    Pts2TilesOptions ptsOpts;
     int debug = 0, verbose = 1000000;
-    int icol_x, icol_y, icol_z = -1, icol_feature, icol_int;
-    int nskip = 0;
-    bool skip_last_is_header = false;
     int minTotalCountPerSample = 1;
 
-    std::vector<double> hexSizes, hexGridDists;
+    std::vector<double> hexSizes, hexGridDists, bccSizes, bccGridDists;
     std::string anchorListFile;
-    std::vector<std::string> anchorList;
-    float radius = -1.0f;
-    bool noBackground = false;
-    int32_t minCtPerUnit;
+    Tiles2HexOptions hexOpts;
+    std::vector<std::string>& anchorList = hexOpts.anchorFiles;
     bool tiles2hex_only = false;
     bool forceTileSize = false;
     std::string include_ftr_regex;
     std::string exclude_ftr_regex;
-    std::string sort_mem;
-    bool use_internal_sort = false;
     bool overwrite = false;
 
     ParamList pl;
     pl.add_option("in-tsv", "List of input TSV files separated by space", inTsvList)
-        .add_option("in-tsv-list", "A file containing the ID and the path to the input transcript file for each sample (tab/space delimited, one sample per line)", inTsvListFile)
-        .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x, true)
-        .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y, true)
-        .add_option("icol-z", "Column index for z coordinate (0-based, optional)", icol_z)
-        .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, true)
-        .add_option("icol-int", "Column index for integer value (0-based)", icol_int, true)
-        .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
-        .add_option("skip-last-is-header", "Treat the last skipped line as the header line", skip_last_is_header)
-        .add_option("threads", "Number of threads to use (default: 1)", nThreads0)
+        .add_option("in-tsv-list", "A file containing the ID and the path to the input transcript file for each sample (tab/space delimited, one sample per line)", inTsvListFile);
+    ptsOpts.addProcessingOptions(pl, true, true, false, false, true)
         .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
-        .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex)
-        .add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample);
-    // pts2tiles Options
-    pl.add_option("tile-size", "Tile size (in the same unit as the input coordinates)", tileSize)
-        .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
-        .add_option("batch-size", "(Only used if the input is gzipped or a stdin stream.) Batch size in terms of the number of lines (default: 10000)", batchSize);
+        .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
     // tiles2hex Options
-    pl.add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample)
-        .add_option("hex-size", "Hexagon size(s) (size length)", hexSizes)
-        .add_option("hex-grid-dist", "Hexagon grid distance(s) (center-to-center distance)", hexGridDists)
-        .add_option("anchor-files", "Anchor files (one for each sample)", anchorList)
-        .add_option("anchor-files-list", "A file containing the path to the anchor file for each sample", anchorListFile)
-        .add_option("radius", "Radius for each set of anchors", radius)
-        .add_option("min-count", "Minimum count for a unit to be included in output", minCtPerUnit)
-        .add_option("ignore-background", "Ignore pixels not within radius of any of the anchors", noBackground)
-        .add_option("sort-mem", "Memory to use for sorting, with units K, M, or G similar to -S in linux sort", sort_mem)
-        .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort);
+    pl.add_option("min-total-count-per-sample", "Minimum total gene count per sample (default: 1) to include in the joint model", minTotalCountPerSample);
+    hexOpts.addMultisampleOptions(pl, hexSizes, hexGridDists, bccSizes, bccGridDists, anchorListFile);
     // Output Options
     pl.add_option("out-dir", "Output base director", outDir, true)
-        .add_option("temp-dir", "Directory to store temporary files", tmpDir, true)
+        .add_option("temp-dir", "Directory to store temporary files", ptsOpts.tmpDir, true)
         .add_option("out-joint-pref", "Prefix for joint analysis outputs", jointPref)
         .add_option("tiles2hex-only", "Only run tiles2hex and merge the output files. Note: if set, the file in --in-tsv-list should contain the following columns instead: sample ID, path to the tiled pixel level data, path to the corresponding index, path to the per-sample feature count file.", tiles2hex_only)
         .add_option("force-tile-size", "Disable tile size checks (we strongly advice against using this option)", forceTileSize)
@@ -78,17 +50,16 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     }
 
     // Determine the number of threads to use.
-    unsigned int nThreads = std::thread::hardware_concurrency();
-    if (nThreads == 0 || nThreads >= nThreads0) {
-        nThreads = nThreads0;
-    }
+    unsigned int nThreads = ptsOpts.resolveThreads();
+    hexOpts.nThreads = static_cast<int32_t>(nThreads);
+    hexOpts.tmpDir = ptsOpts.tmpDir;
     notice("Using %u threads for processing", nThreads);
 
     // Check parameters
     if (inTsvList.empty() && inTsvListFile.empty()) {
         error("No input specified. Use --in-tsv or --in-tsv-list to specify input files.");
     }
-    if (skip_last_is_header && nskip <= 0) {
+    if (ptsOpts.skip_last_is_header && ptsOpts.nskip <= 0) {
         error("--skip-last-is-header requires --skip to be greater than 0");
     }
     if (tiles2hex_only) {
@@ -96,27 +67,29 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
             error("If --tiles2hex-only is set, --in-tsv is not allowed and --in-tsv-list is required. The file in --in-tsv-list should contain the following columns: sample ID, path to the tiled pixel level data, path to the corresponding index, path to the per-sample feature count file (all output from pts2tiles).");
     }
 
-    std::vector<int32_t> icol_ints = {icol_int};
-    if (hexGridDists.empty() && hexSizes.empty()) {
+    ptsOpts.normalizeScales();
+    const int32_t out_icol_x = tiles2hex_only ? ptsOpts.icol_x : ptsOpts.remapColumn(ptsOpts.icol_x);
+    const int32_t out_icol_y = tiles2hex_only ? ptsOpts.icol_y : ptsOpts.remapColumn(ptsOpts.icol_y);
+    const int32_t out_icol_z = tiles2hex_only ? ptsOpts.icol_z : ptsOpts.remapColumn(ptsOpts.icol_z);
+    const int32_t out_icol_feature = tiles2hex_only ? ptsOpts.icol_feature : ptsOpts.remapColumn(ptsOpts.icol_feature);
+    const std::vector<int32_t> out_icol_ints = tiles2hex_only ? ptsOpts.icol_ints : ptsOpts.remapIntColumns();
+    const bool useBcc3D = ptsOpts.icol_z >= 0 && (!bccGridDists.empty() || !bccSizes.empty());
+    if (!useBcc3D && hexGridDists.empty() && hexSizes.empty()) {
         warning("Neither --hex-grid-dist nor --hex-size is specified, the program exits after generating tiled pixels without generating hexagons.");
-    } else if (!hexGridDists.empty() && !hexSizes.empty()) {
-        warning("If both --hex-grid-dist and --hex-size are specified, only --hex-size will be used");
-    }
-    if (!hexGridDists.empty() && hexSizes.empty()) {
-        for (auto & v : hexGridDists) {
-            hexSizes.push_back(v / sqrt(3));
-        }
+    } else {
+        Tiles2HexOptions::resolveGridVectors(useBcc3D, hexSizes, hexGridDists, bccSizes, bccGridDists, hexOpts.anchorFiles.empty() && anchorListFile.empty());
     }
     if (!tiles2hex_only) {
-        if (tileSize <= 0) {
+        if (ptsOpts.tileSize <= 0) {
             error("--tile-size must be specified and greater than 0 (500~1000 microns is a good choice for most datasets)");
         }
         bool toosmall = false;
-        if (!hexSizes.empty()) {
-            double minHexSize = *std::min_element(hexSizes.begin(), hexSizes.end());
-            toosmall = tileSize < minHexSize * 20;
+        const auto& unitSizes = useBcc3D ? bccSizes : hexSizes;
+        if (!unitSizes.empty()) {
+            double minUnitSize = *std::min_element(unitSizes.begin(), unitSizes.end());
+            toosmall = ptsOpts.tileSize < minUnitSize * 20;
         } else {
-            toosmall = tileSize < 100;
+            toosmall = ptsOpts.tileSize < 100;
         }
         if (toosmall) {
             warning("--tile-size seems too small, this is likely to cause the failure of pixel level decoding. (50~100x the hexagon's size length or 500~1000 microns is a good choice for most datasets)");
@@ -128,7 +101,7 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     if (!outDir.empty() && (outDir.back() == '/' || outDir.back() == '\\')) {
         outDir.pop_back();
     }
-    if (jointPref.back() != '.') {
+    if (!jointPref.empty() && jointPref.back() != '.') {
         jointPref += ".";
     }
     bool check_include = !include_ftr_regex.empty();
@@ -236,11 +209,14 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
     if (!(anchorList.size() == 0 || anchorList.size() == S)) {
         error("Anchor list size (%zu) does not match number of samples (%zu)", anchorList.size(), S);
     }
-    if (anchorList.size() > 0 && radius < 0) {
+    if (anchorList.size() > 0 && (hexOpts.radius.empty() || hexOpts.radius.front() < 0)) {
         error("--radius (a positive number) must be specified when using anchor files");
     }
 }
     notice("Found %zu samples", S);
+    if (!tiles2hex_only && std::find(inTsvList.begin(), inTsvList.end(), "-") != inTsvList.end() && S > 1) {
+        error("--in-tsv - can only be used with one sample in multisample-prepare");
+    }
 
 if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
     std::string fileList = outDir + "/" + jointPref + "persample_file_list.tsv";
@@ -257,9 +233,10 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             notice("pts2tiles output is present for sample %s. To overwrite, add --overwrite", sn.c_str());
             continue;
         }
-        bool streaming = inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0;
         notice("[multisample] Running pts2tiles for sample %s", sn.c_str());
-        Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip, skip_last_is_header, streaming, tileBuffer, batchSize);
+        ptsOpts.inTsv = inTsv;
+        ptsOpts.outPref = outPref;
+        Pts2Tiles pts2Tiles = ptsOpts.makeRunner(nThreads);
         if (!pts2Tiles.run()) {
             return 1;
         }
@@ -368,7 +345,8 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
     notice("[multisample] Step 1.5 completed,selected %zu/%zu shared features for joint analysis", n_shared, unionFeatures.size());
 }
 
-    if (hexGridDists.empty() && hexSizes.empty()) {
+    const auto& activeUnitSizes = useBcc3D ? bccSizes : hexSizes;
+    if (activeUnitSizes.empty()) {
         return 0;
     }
     std::unordered_map<std::string, uint32_t> featureDict;
@@ -377,69 +355,63 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         featureDict[kv.first] = nFeatures++;
     }
 { // 2) Run tiles2hex
-    for (auto &hexSize : hexSizes) {
-        std::string hexIden = "hex_" + std::to_string(static_cast<int32_t>(std::round(hexSize * sqrt(3))));
-        HexGrid hexGrid(hexSize);
+    for (auto &unitSize : activeUnitSizes) {
+        std::string hexIden = useBcc3D ?
+            "bcc_" + std::to_string(static_cast<int32_t>(std::round(unitSize * sqrt(3.0) / 2.0))) :
+            "hex_" + std::to_string(static_cast<int32_t>(std::round(unitSize * sqrt(3.0))));
+        HexGrid hexGrid(unitSize);
         std::string dfile;
         for (size_t s = 0; s < S; ++s) { // 2) Run tiles2hex on each sample
             std::string outFile = outDirs[s] + "/" + samples[s] + "." + hexIden + ".txt";
             std::string outJson = outDirs[s] + "/" + samples[s] + "." + hexIden + ".json";
             if (!overwrite && std::filesystem::exists(outFile) &&
                               std::filesystem::exists(outJson)) {
-                notice("tiles2hex output is present for sample %s and size %.1f (%s).\nTo overwrite, add --overwrite", samples[s].c_str(), hexSize, outFile.c_str());
+                notice("tiles2hex output is present for sample %s and size %.1f (%s).\nTo overwrite, add --overwrite", samples[s].c_str(), unitSize, outFile.c_str());
                 continue;
             }
             TileReader tileReader(tileTsvs[s], tileIndexes[s]);
             if (!tileReader.isValid()) {
                 error("Error opening input file: %s", tileTsvs[s].c_str());
             }
-            lineParser parser(icol_x, icol_y, icol_feature, icol_ints, dfile);
+            lineParser parser(out_icol_x, out_icol_y, out_icol_feature, out_icol_ints, dfile, nullptr, true);
+            if (useBcc3D) {
+                parser.setZ(static_cast<size_t>(out_icol_z));
+            }
             parser.setFeatureDict(featureDict);
             if (anchorList.size() != S || anchorList[s].empty()) {
-                Tiles2Hex tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, {minCtPerUnit});
+                Tiles2Hex tiles2Hex(nThreads, ptsOpts.tmpDir, outFile, hexGrid, tileReader, parser, hexOpts.min_counts, hexOpts.seed, useBcc3D ? unitSize : -1.0);
                 if (!tiles2Hex.run()) {
                     error("Error running tiles2hex for sample %s", samples[s].c_str());
                 }
                 tiles2Hex.writeMetadata();
             } else {
                 std::vector<std::string> localAnchor = {anchorList[s]};
-                std::vector<float> localRadius = {radius};
-                Tiles2UnitsByAnchor tiles2Hex(nThreads, tmpDir, outFile, hexGrid, tileReader, parser, localAnchor, localRadius, {minCtPerUnit}, noBackground);
+                std::vector<float> localRadius = {hexOpts.radius.front()};
+                Tiles2UnitsByAnchor tiles2Hex(nThreads, ptsOpts.tmpDir, outFile, hexGrid, tileReader, parser, localAnchor, localRadius, hexOpts.min_counts, hexOpts.noBackground, hexOpts.seed);
                 if (!tiles2Hex.run()) {
                     error("Error running tiles2hex for sample %s", samples[s].c_str());
                 }
                 tiles2Hex.writeMetadata();
             }
             // sort output file
-            if (use_internal_sort) {
-                size_t maxMemBytes = ExternalSorter::parseMemoryString(sort_mem);
-                try {
-                    ExternalSorter::sortBy1stColHex(outFile, outFile, maxMemBytes, tmpDir, nThreads);
-                } catch (const std::exception& e) {
-                    error("Error sorting hexagon file for sample %s: %s", samples[s].c_str(), e.what());
-                }
-            } else {
-                std::vector<std::string> sort_flags = {"-k1,1", "-o", outFile};
-                if (!sort_mem.empty()) {
-                    sort_flags.insert(sort_flags.begin()+1, "-S");
-                    sort_flags.insert(sort_flags.begin()+2, sort_mem);
-                }
-                #if defined(__linux__)
-                sort_flags.push_back("--parallel="+std::to_string(nThreads));
-                #endif
-                if (sys_sort(outFile.c_str(), nullptr, sort_flags) != 0) {
-                    error("Error sorting hexagon file for sample %s", samples[s].c_str());
-                }
-            }
+            hexOpts.outFile = outFile;
+            hexOpts.sortOutput(true);
         }
-        notice("[multisample] Step 2 completed for size %.1f: created sample specific hexagon files", hexSize);
+        notice("[multisample] Step 2 completed for size %.1f: created sample specific units", unitSize);
 
     { // 2.5) Create a merged hexagon file containing only the shared features
         std::string mergedFile = outDir + "/" + jointPref + hexIden + ".txt";
         nlohmann::json meta;
-        meta["hex_size"] = hexGrid.size;
+        if (useBcc3D) {
+            meta["bcc_size"] = hexGrid.size;
+            meta["coord_dim"] = 3;
+        } else {
+            meta["hex_size"] = hexGrid.size;
+            meta["coord_dim"] = 2;
+        }
         meta["random_key"] = 0;
         meta["sample"] = 1;
+        meta["sample_list"] = samples;
         meta["offset_data"] = 2;
         meta["header_info"] = {"random_key", "sample"};
         meta["n_features"] = n_shared;
@@ -483,7 +455,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
                         totCount += v;
                     }
                 }
-                if (totCount < minCtPerUnit) {
+                if (totCount < hexOpts.minCount()) {
                     continue;
                 }
                 nUnits++;
@@ -501,27 +473,9 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         mergedOut << std::setw(4) << meta << std::endl;
         mergedOut.close();
 
-        if (use_internal_sort) {
-            size_t maxMemBytes = ExternalSorter::parseMemoryString(sort_mem);
-            try {
-                ExternalSorter::sortBy1stColHex(mergedFile, mergedFile, maxMemBytes, tmpDir, nThreads);
-            } catch (const std::exception& e) {
-                error("Error sorting merged hexagon file: %s", e.what());
-            }
-        } else {
-            std::vector<std::string> sort_flags = {"-k1,1", "-o", mergedFile};
-            if (!sort_mem.empty()) {
-                sort_flags.insert(sort_flags.begin()+1, "-S");
-                sort_flags.insert(sort_flags.begin()+2, sort_mem);
-            }
-            #if defined(__linux__)
-            sort_flags.push_back("--parallel="+std::to_string(nThreads));
-            #endif
-            if (sys_sort(mergedFile.c_str(), nullptr, sort_flags) != 0) {
-                error("Error sorting merged hexagon file: %s", mergedFile.c_str());
-            }
-        }
-        notice("[multisample] Step 2.5 completed for size %.1f: merged hexagon files into %s", hexSize, mergedFile.c_str());
+        hexOpts.outFile = mergedFile;
+        hexOpts.sortOutput(true);
+        notice("[multisample] Step 2.5 completed for size %.1f: merged unit files into %s", unitSize, mergedFile.c_str());
     }
     }
 }

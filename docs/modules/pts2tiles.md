@@ -75,12 +75,11 @@ Current parser behavior:
 
 Header and metadata handling:
 
-Lines starting with `#` are automatically treated as metadata/header and copied directly to the output regardless of `--skip`, the following options are mainly for lines that do not start with `#` but should be treated as metadata/header.
+Initial lines starting with `#` are automatically treated as metadata/header and copied directly to the output. Comment lines that appear later in the file are skipped and are not copied to the output.
 
 - `--skip N` skips the first `N` lines from parsing.
-- Skipped lines are copied to the output as metadata comments.
-- `--skip-last-is-header` marks the last skipped line as the header row and rewrites it to start with a single `#`.
-- Earlier skipped lines are normalized to start with at least two `#` characters.
+- By default, skipped lines are not copied to the output.
+- `--skip-last-is-header` marks only the last skipped line as the header row and rewrites it to start with a single `#`.
 
 ### Main Parameters
 
@@ -142,6 +141,12 @@ Behavior of `prefix.features.tsv`:
 
 `--digits`
 : Decimal precision used when rewritten scaled coordinates are written to the output. Default: `2`.
+
+`--include-cols`
+: Optional list of 0-based input column indices to keep in the tiled output. Explicit parser columns (`--icol-x`, `--icol-y`, `--icol-z`, `--icol-feature`, and `--icol-int`) are always kept. Output columns are compacted in their original order. Cannot be combined with `--exclude-cols`.
+
+`--exclude-cols`
+: Optional list of 0-based input column indices to remove from the tiled output. Explicit parser columns are always kept. Output columns are compacted in their original order. Cannot be combined with `--include-cols`.
 
 `--threads`
 : Number of worker threads. Default: `1`.

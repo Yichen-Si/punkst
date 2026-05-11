@@ -1,48 +1,16 @@
 #include "punkst.h"
-#include "pts2tiles.hpp"
-#include <limits>
-#include <cmath>
+#include "preprocess_options.hpp"
 
 int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
 
-    std::string inTsv, outPref, tmpDir;
-    int nThreads0 = 1, tileSize = -1;
-    int tileBuffer = 1000, batchSize = 10000;
+    Pts2TilesOptions opts;
     int debug = 0, verbose = 1000000;
-    int icol_x = -1, icol_y = -1, icol_z = -1, nskip = 0;
-    int icol_feature = -1;
-    bool skip_last_is_header = false, csv_input = false, tile_op_factor_tsv = false;
-    double scale = 1;
-    double scale_x = std::numeric_limits<double>::quiet_NaN();
-    double scale_y = std::numeric_limits<double>::quiet_NaN();
-    double scale_z = std::numeric_limits<double>::quiet_NaN();
-    int digits = 2;
-    std::vector<int32_t> icol_ints;
 
     ParamList pl;
     // Input Options
-    pl.add_option("in-tsv", "Input delimited text file.", inTsv)
-      .add_option("icol-x", "Column index for x coordinate (0-based)", icol_x)
-      .add_option("icol-y", "Column index for y coordinate (0-based)", icol_y)
-      .add_option("icol-z", "Column index for z coordinate (0-based, optional)", icol_z)
-      .add_option("icol-feature", "Column index for feature (0-based)", icol_feature)
-      .add_option("icol-int", "Column index for integer values (0-based)", icol_ints)
-      .add_option("tile-op-factor-tsv", "Input is a TileOperator factor-probability TSV with x/y[/z] and K1/P1 columns; write a tile-op compatible index", tile_op_factor_tsv)
-      .add_option("csv", "Treat the input as comma-delimited CSV instead of tab-delimited text", csv_input)
-      .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
-      .add_option("skip-last-is-header", "Treat the last skipped line as the header line", skip_last_is_header)
-      .add_option("temp-dir", "Directory to store temporary files", tmpDir)
-      .add_option("tile-size", "Tile size (in the same unit as the input coordinates)", tileSize)
-      .add_option("tile-buffer", "Buffer size per tile per thread (default: 1000 lines)", tileBuffer)
-      .add_option("batch-size", "(Only used if the input is gzipped or a stdin stream.) Batch size in terms of the number of lines (default: 10000)", batchSize)
-      .add_option("scale", "Uniformly scale x/y/(z) coordinates by this factor unless axis-specific overrides are provided", scale)
-      .add_option("scale-x", "Scale factor for the x coordinate", scale_x)
-      .add_option("scale-y", "Scale factor for the y coordinate", scale_y)
-      .add_option("scale-z", "Scale factor for the z coordinate", scale_z)
-      .add_option("digits", "Precision for rewritten output coordinates when scaling is applied (default 2)", digits)
-      .add_option("threads", "Number of threads to use (default: 1)", nThreads0);
+    opts.addInputOptions(pl);
     // Output Options
-    pl.add_option("out-prefix", "Output TSV file", outPref)
+    opts.addOutputOptions(pl)
       .add_option("verbose", "Verbose", verbose)
       .add_option("debug", "Debug", debug);
 
@@ -55,48 +23,17 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
         return 1;
     }
 
-    if (tileSize <= 0) {
-        error("Tile size is required to be a positive integer");
-    }
-    if (skip_last_is_header && nskip <= 0) {
-        error("--skip-last-is-header requires --skip to be greater than 0");
-    }
-    if (tile_op_factor_tsv && (icol_feature >= 0 || !icol_ints.empty())) {
-        error("--tile-op-factor-tsv cannot be combined with --icol-feature or --icol-int");
-    }
-    if (!tile_op_factor_tsv && (icol_x < 0 || icol_y < 0)) {
-        error("--icol-x and --icol-y are required unless --tile-op-factor-tsv is used");
-    }
-
-    if (std::isnan(scale_x)) {
-        scale_x = scale;
-    }
-    if (std::isnan(scale_y)) {
-        scale_y = scale;
-    }
-    if (std::isnan(scale_z)) {
-        scale_z = scale;
-    }
+    opts.validateStandalone();
 
     // Determine the number of threads to use.
-    unsigned int nThreads = std::thread::hardware_concurrency();
-    if (nThreads == 0 || nThreads >= nThreads0) {
-        nThreads = nThreads0;
-    }
+    unsigned int nThreads = opts.resolveThreads();
     notice("Using %u threads for processing", nThreads);
 
-    // Determine the input type and thus the streaming mode
-    bool streaming = false;
-    if (inTsv == "-" ||
-        (inTsv.size()>3 && inTsv.compare(inTsv.size()-3,3,".gz")==0))
-    streaming = true;
-
-    const char input_delimiter = csv_input ? ',' : '\t';
-    Pts2Tiles pts2Tiles(nThreads, inTsv, tmpDir, outPref, tileSize, icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip, skip_last_is_header, streaming, tileBuffer, batchSize, scale_x, scale_y, scale_z, digits, input_delimiter, tile_op_factor_tsv);
+    Pts2Tiles pts2Tiles = opts.makeRunner(nThreads);
     if (!pts2Tiles.run()) {
         return 1;
     }
 
-    notice("Processing completed. Output is written to %s.tsv and index file is written to %s.index", outPref.c_str(), outPref.c_str());
+    notice("Processing completed. Output is written to %s.tsv and index file is written to %s.index", opts.outPref.c_str(), opts.outPref.c_str());
     return 0;
 }

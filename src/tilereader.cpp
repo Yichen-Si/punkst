@@ -10,10 +10,11 @@ void lineParser::init(size_t _ix, size_t _iy, size_t _iw,
     icol_x = _ix;
     icol_y = _iy;
     icol_feature = _iw;
-    n_ct = _ivals.size();
-    icol_ct.resize(n_ct);
+    implicitCount = allowImplicitCount && _ivals.empty();
+    n_ct = implicitCount ? 1 : _ivals.size();
+    icol_ct.resize(_ivals.size());
     n_tokens = icol_feature;
-    for (size_t i = 0; i < n_ct; ++i) {
+    for (size_t i = 0; i < _ivals.size(); ++i) {
         icol_ct[i] = _ivals[i];
         n_tokens = std::max(n_tokens, icol_ct[i]);
     }
@@ -183,6 +184,10 @@ int32_t lineParser::parse(PixelValues& pixel, std::string& line, bool checkBound
             return -1;
         }
     }
+    if (implicitCount) {
+        pixel.intvals.assign(1, 1);
+        return 1;
+    }
     pixel.intvals.resize(n_ct);
     int32_t totVal = 0;
     for (size_t i = 0; i < n_ct; ++i) {
@@ -228,6 +233,10 @@ int32_t lineParser::parse(PixelValues3D& pixel, std::string& line, bool checkBou
         if (!str2uint32(tokens[icol_feature], pixel.feature)) {
             return -1;
         }
+    }
+    if (implicitCount) {
+        pixel.intvals.assign(1, 1);
+        return 1;
     }
     pixel.intvals.resize(n_ct);
     int32_t totVal = 0;

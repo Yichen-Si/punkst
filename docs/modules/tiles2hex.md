@@ -23,7 +23,7 @@ punkst tiles2hex --in-tsv ${ptpref}.tsv --in-index ${ptpref}.index \
 
 `--icol-x`, `--icol-y`, `--icol-feature` specify the column indices corresponding to X and Y coordinates and feature (0-based).
 
-`--icol-int` specifies the column index for count/value (0-based). You can specify multiple count columns with `--icol-int`, separated by space.
+`--icol-int` optionally specifies the column index for count/value (0-based). You can specify multiple count columns with `--icol-int`, separated by space. If omitted, each input row is treated as one observation with count 1.
 
 `--hex-size` specifies the **side length** of the hexagons. The unit is the same as the coordinates in the input file.
 
@@ -120,7 +120,7 @@ In 2D, the next two numbers after the random key are the Cartesian center coordi
 
 In 3D, the next three numbers after the random key are the Cartesian center coordinates `(x, y, z)` of the BCC cell.
 
-The next 2K tokens (K pairs of non-negative integers) are the number of unique features ($M_k$) and the total count ($C_k$) for each modality. The number of modalities (K) is the same as the number of column indices specified in `--icol-int`.
+The next 2K tokens (K pairs of non-negative integers) are the number of unique features ($M_k$) and the total count ($C_k$) for each modality. The number of modalities (K) is the same as the number of column indices specified in `--icol-int`, or 1 when `--icol-int` is omitted.
 
 Then there are K chunks of feature values, the k-th chunk containing $2M_k$ (or $M_k$ values) of non-negative integers where $M_k$ is what you read from the previous tokens. The first number in each pair is the indices of the feature, the second is the count of that feature in the hexagon. The indices are 0-based and correspond to the order of features in the `--feature-dict` file. If `--feature-dict` is not provided (so the input already codes features as indices), the indices are the same as those in the input file.
 
