@@ -41,7 +41,7 @@ void LatentDirichletAllocation::set_model_from_matrix(std::vector<std::vector<do
         n_topics_ = lambdaVals.size();
         n_features_ = lambdaVals[0].size();
     }
-    notice("Global variational parameters are reset, but online training status (if any) is not. It is only safe for transform.");
+    debug("Global variational parameters are reset, but online training status (if any) is not. It is only safe for transform.");
     components_.resize(n_topics_, n_features_);
     for (int i = 0; i < n_topics_; i++) {
         for (int j = 0; j < n_features_; j++) {
@@ -58,7 +58,7 @@ void LatentDirichletAllocation::set_model_from_matrix(RowMajorMatrixXd& lambda) 
         n_topics_ = lambda.rows();
         n_features_ = lambda.cols();
     }
-    notice("Global variational parameters are reset, but online training status (if any) is not. It is only safe for transform.");
+    debug("Global variational parameters are reset, but online training status (if any) is not. It is only safe for transform.");
     components_ = std::move(lambda);
     compute_global_mtx();
 }

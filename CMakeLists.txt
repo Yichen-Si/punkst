@@ -112,6 +112,7 @@ set(SOURCE_FILES
     script/fit_lda.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
+    script/factor_evaluation.cpp
     src/slda.hpp
     src/tiles2minibatch.hpp
     src/tiles2minibatch.cpp

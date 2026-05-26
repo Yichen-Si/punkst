@@ -8,6 +8,7 @@ int32_t cmdTiles2Rois(int32_t argc, char** argv);
 int32_t cmdTopicModelSVI(int argc, char** argv);
 int32_t cmdHDPSVI(int argc, char** argv);
 int32_t cmdLDATransform(int argc, char** argv);
+int32_t cmdLDAFactorEval(int argc, char** argv);
 int32_t cmdPixelDecode(int32_t argc, char** argv);
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv);
 int32_t cmdDrawLowresFactors(int32_t argc, char** argv);
@@ -47,6 +48,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("topic-model", "Train LDA model", cmdTopicModelSVI)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)
         .add_command("lda-transform", "Transform data using fitted LDA model", cmdLDATransform)
+        .add_command("lda-factor-eval", "Evaluate leave-one-out LDA factor contribution", cmdLDAFactorEval)
         .add_command("pixel-decode", "Decoding pixel-level data", cmdPixelDecode)
         .add_command("draw-pixel-factors", "Draw pixel level factors", cmdDrawPixelFactors)
         .add_command("draw-lowres-factors", "Draw low-resolution factor map", cmdDrawLowresFactors)

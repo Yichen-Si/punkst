@@ -79,6 +79,9 @@ public:
     virtual MatrixXd do_transform(std::span<const Document> batch) = 0;
 
     bool readMinibatch(std::ifstream& inFileStream, std::vector<Document>& batch, std::vector<std::string>& idens, int32_t batchSizeOverride, int32_t minCount = 0, int32_t maxUnits = INT32_MAX);
+    int32_t readAllDocuments(std::vector<Document>& docs,
+                             const std::string& inFile,
+                             int32_t minCount = 0, int32_t maxUnits = INT32_MAX);
 
 protected:
     HexReader reader;
@@ -171,6 +174,7 @@ public:
         initialize(0, priorMatrix, modelFile, -1, -1);
         lda = std::make_unique<LatentDirichletAllocation>(
             priorMatrix, seed, nThreads, verbose);
+        lda->set_svb_parameters(maxIter, mDelta);
         initialized = true;
     }
 

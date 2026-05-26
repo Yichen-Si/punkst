@@ -541,6 +541,12 @@ bool TopicModelWrapper::readMinibatch(std::ifstream& inFileStream, std::vector<D
     return true;
 }
 
+int32_t TopicModelWrapper::readAllDocuments(std::vector<Document>& docs,
+        const std::string& inFile,
+        int32_t minCount, int32_t maxUnits) {
+    return reader.readAll(docs, inFile, minCount, true, maxUnits, modal);
+}
+
 void TopicModelWrapper::setupPriorMapping(std::vector<std::string>& feature_names_, std::vector<std::uint32_t>& kept_indices) {
     // Use the current filtered feature set
     std::unordered_map<std::string, uint32_t> dict;

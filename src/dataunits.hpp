@@ -31,6 +31,18 @@ struct Document {
         }
         return ct_tot;
     }
+    double get_raw_sum() {
+        if (raw_ct_tot < 0) {
+            raw_ct_tot = std::accumulate(cnts.begin(), cnts.end(), 0.0);
+        }
+        return raw_ct_tot;
+    }
+    double get_raw_sum() const {
+        if (raw_ct_tot >= 0) {
+            return raw_ct_tot;
+        }
+        return std::accumulate(cnts.begin(), cnts.end(), 0.0);
+    }
 };
 
 struct SparseObs {
