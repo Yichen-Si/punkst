@@ -1,4 +1,5 @@
 #include "topic_svb.hpp"
+#include "eb_topic_activity.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -35,14 +36,25 @@ struct FactorEvalOptions {
     int32_t verbose = 0;
     int32_t maxIter = 100;
     int32_t projectionMaxIter = 200;
+    int32_t ebMaxIter = 10000;
+    int32_t ebQuadSubdivisions = 8;
     double minCount = 20.0;
     double defaultWeight = 1.0;
     double meanChangeTol = 1e-3;
     double candidateThreshold = 0.005;
     double projectionTol = 1e-7;
+    double alpha = -1.0;
+    double ebNullEps = 0.01;
+    double ebTol = 1e-10;
+    double ebPseudocount = 1e-8;
+    double ebProbFloor = 1e-12;
+    std::string ebMethod = "both";
+    std::vector<double> ebUniformSlabs;
+    std::vector<double> ebBetaSlabs;
     bool writeUnitFactorStats = false;
     bool runProjection = false;
     bool runRefit = false;
+    bool ebActivity = false;
 };
 
 struct EvaluationData {
@@ -185,6 +197,108 @@ RowMajorMatrixXd reducedBetaRows(const RowMajorMatrixXd& beta, const std::vector
     return out;
 }
 
+std::vector<ebact::Component> buildEbComponents(const FactorEvalOptions& opt) {
+    std::vector<ebact::Component> comps;
+    comps.push_back(ebact::Component::Uniform(0.0, opt.ebNullEps, true));
+    if (opt.ebUniformSlabs.empty()) {
+        const std::vector<double> bounds = {
+            opt.ebNullEps, 0.05,
+            0.05, 0.10,
+            0.10, 0.25,
+            0.25, 0.50,
+            0.50, 1.00
+        };
+        for (size_t i = 0; i < bounds.size(); i += 2) {
+            if (bounds[i] < bounds[i + 1]) {
+                comps.push_back(ebact::Component::Uniform(bounds[i], bounds[i + 1]));
+            }
+        }
+    } else {
+        if (opt.ebUniformSlabs.size() % 2 != 0) {
+            error("--eb-uniform-slabs must contain l/u pairs");
+        }
+        for (size_t i = 0; i < opt.ebUniformSlabs.size(); i += 2) {
+            comps.push_back(ebact::Component::Uniform(opt.ebUniformSlabs[i], opt.ebUniformSlabs[i + 1]));
+        }
+    }
+    if (opt.ebBetaSlabs.size() % 2 != 0) {
+        error("--eb-beta-slabs must contain c/d shape pairs");
+    }
+    for (size_t i = 0; i < opt.ebBetaSlabs.size(); i += 2) {
+        comps.push_back(ebact::Component::Beta(opt.ebBetaSlabs[i], opt.ebBetaSlabs[i + 1]));
+    }
+    try {
+        ebact::validate_components(comps);
+    } catch (const std::exception& ex) {
+        error("Invalid EB activity components: %s", ex.what());
+    }
+    return comps;
+}
+
+bool runEbMultinomial(const FactorEvalOptions& opt) {
+    return opt.ebActivity && (opt.ebMethod == "both" || opt.ebMethod == "multinomial");
+}
+
+bool runEbBetaMarginal(const FactorEvalOptions& opt) {
+    return opt.ebActivity && (opt.ebMethod == "both" || opt.ebMethod == "beta-marginal");
+}
+
+void writeEbResults(const std::string& method, int32_t k, const std::string& factorName,
+        const std::vector<ebact::Component>& comps, const ebact::FitResult& fit,
+        const RowMajorMatrixXd& theta, double nullEps, double runtime,
+        std::ofstream& factorOut, std::ofstream& compOut, std::ofstream& unitOut) {
+    double nActive = 0.0;
+    for (double z : fit.z_null) {
+        nActive += 1.0 - z;
+    }
+    factorOut << method
+        << "\t" << factorName
+        << "\t" << k
+        << "\t" << std::setprecision(6) << nullEps
+        << "\t" << fit.z_null.size()
+        << "\t" << std::setprecision(8) << nActive
+        << "\t" << std::setprecision(8) << fit.eta[0]
+        << "\t" << std::setprecision(10) << fit.loglik
+        << "\t" << fit.iterations
+        << "\t" << std::setprecision(6) << runtime << "\n";
+
+    for (int32_t g = 0; g < static_cast<int32_t>(comps.size()); ++g) {
+        const auto& comp = comps[g];
+        compOut << method
+            << "\t" << factorName
+            << "\t" << k
+            << "\t" << g
+            << "\t" << (comp.is_null ? 1 : 0)
+            << "\t" << ebact::component_kind_name(comp.kind)
+            << "\t" << std::setprecision(8) << comp.l
+            << "\t" << std::setprecision(8) << comp.u
+            << "\t" << std::setprecision(8) << comp.c
+            << "\t" << std::setprecision(8) << comp.d
+            << "\t" << std::setprecision(8) << fit.eta[g] << "\n";
+    }
+
+    for (int32_t i = 0; i < static_cast<int32_t>(fit.resp.size()); ++i) {
+        int32_t best = 0;
+        for (int32_t g = 1; g < static_cast<int32_t>(fit.resp[i].size()); ++g) {
+            if (fit.resp[i][g] > fit.resp[i][best]) {
+                best = g;
+            }
+        }
+        unitOut << method
+            << "\t" << factorName
+            << "\t" << k
+            << "\t" << i
+            << "\t" << std::setprecision(8) << theta(i, k)
+            << "\t" << std::setprecision(8) << fit.z_null[i]
+            << "\t" << std::setprecision(8) << (1.0 - fit.z_null[i])
+            << "\t" << best;
+        for (double r : fit.resp[i]) {
+            unitOut << "\t" << std::setprecision(8) << r;
+        }
+        unitOut << "\n";
+    }
+}
+
 UnitGofStats computeUnitGof(const std::vector<Document>& docs, const RowMajorMatrixXd& theta,
         const RowMajorMatrixXd& betaNorm) {
     const int32_t N = static_cast<int32_t>(docs.size());
@@ -283,6 +397,32 @@ void validateOptions(const FactorEvalOptions& opt) {
     if (opt.projectionTol <= 0.0) {
         error("--projection-tol must be positive");
     }
+    if (opt.alpha != -1.0 && opt.alpha <= 0.0) {
+        error("--alpha must be positive");
+    }
+    if (opt.ebActivity) {
+        if (opt.ebMethod != "both" && opt.ebMethod != "multinomial" && opt.ebMethod != "beta-marginal") {
+            error("--eb-method must be one of: both, multinomial, beta-marginal");
+        }
+        if (!(opt.ebNullEps > 0.0 && opt.ebNullEps < 0.05)) {
+            error("--eb-null-eps must be greater than 0 and less than 0.05");
+        }
+        if (opt.ebMaxIter <= 0) {
+            error("--eb-max-iter must be positive");
+        }
+        if (opt.ebQuadSubdivisions <= 0) {
+            error("--eb-quad-subdivisions must be positive");
+        }
+        if (opt.ebTol <= 0.0) {
+            error("--eb-tol must be positive");
+        }
+        if (opt.ebPseudocount < 0.0) {
+            error("--eb-pseudocount must be non-negative");
+        }
+        if (!(opt.ebProbFloor > 0.0 && opt.ebProbFloor < 1.0)) {
+            error("--eb-prob-floor must be in (0, 1)");
+        }
+    }
 }
 
 } // namespace
@@ -321,10 +461,22 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
       .add_option("thresholds", "Theta thresholds for selecting units and computing factor-level summaries", opt.thresholds, true)
       .add_option("projection-max-iter", "Maximum projected-gradient iterations", opt.projectionMaxIter)
       .add_option("projection-tol", "Projection convergence tolerance", opt.projectionTol)
+      .add_option("alpha", "Document-topic prior override for LDA transform and EB beta-marginal analysis", opt.alpha)
       .add_option("projection", "Run direct convex projection leave-one-out evaluation", opt.runProjection)
       .add_option("refit", "Run reduced fixed-model refit leave-one-out evaluation", opt.runRefit)
       .add_option("write-unit-factor-stats", "Write per-factor unit-level leave-one-out statistics", opt.writeUnitFactorStats)
       .add_option("unit-factor-stats-out", "Output path for per-factor unit-level leave-one-out statistics", opt.unitFactorStatsOut);
+
+    pl.add_option("eb-activity", "Run sparse EB topic-activity analysis for selected candidate factors", opt.ebActivity)
+      .add_option("eb-method", "EB evidence method: both, multinomial, or beta-marginal", opt.ebMethod)
+      .add_option("eb-null-eps", "Near-zero null interval upper bound", opt.ebNullEps)
+      .add_option("eb-uniform-slabs", "Uniform active slab l/u pairs", opt.ebUniformSlabs)
+      .add_option("eb-beta-slabs", "Beta active slab c/d shape pairs", opt.ebBetaSlabs)
+      .add_option("eb-max-iter", "Maximum EM iterations for EB mixture weights", opt.ebMaxIter)
+      .add_option("eb-tol", "EB EM convergence tolerance", opt.ebTol)
+      .add_option("eb-pseudocount", "EB mixture weight pseudocount", opt.ebPseudocount)
+      .add_option("eb-prob-floor", "Probability floor before multinomial EB evidence", opt.ebProbFloor)
+      .add_option("eb-quad-subdivisions", "Number of Gauss-Legendre subintervals for EB integrals", opt.ebQuadSubdivisions);
 
     try {
         pl.readArgs(argc, argv);
@@ -381,7 +533,7 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
 
     LDA4Hex lda(reader, opt.modal, opt.verbose);
     lda.initialize_transform(opt.modelFile, opt.seed, opt.nThreads,
-        opt.verbose, opt.maxIter, opt.meanChangeTol);
+        opt.verbose, opt.maxIter, opt.meanChangeTol, opt.alpha);
 
     if (use10x) {
         const std::vector<std::string> modelFeatures = lda.getFeatureNames();
@@ -403,6 +555,11 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
     notice("Loaded %d units for factor evaluation", static_cast<int32_t>(data.docs.size()));
 
     RowMajorMatrixXd theta = lda.do_transform(std::span<const Document>(data.docs.data(), data.docs.size()));
+    RowMajorMatrixXd gammaCounts;
+    const double ldaAlpha = lda.get_doc_topic_prior();
+    if (runEbBetaMarginal(opt)) {
+        gammaCounts = lda.do_transform_gamma(std::span<const Document>(data.docs.data(), data.docs.size()));
+    }
     RowMajorMatrixXd betaNorm = rowNormalize(lda.get_model_matrix());
     UnitGofStats gof = computeUnitGof(data.docs, theta, betaNorm);
     const std::string unitGofPath = opt.outPrefix + ".unit_gof.tsv";
@@ -489,6 +646,30 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
         // unitFactorOut << std::fixed;
     }
 
+    std::vector<ebact::Component> ebComponents;
+    std::ofstream ebFactorOut;
+    std::ofstream ebCompOut;
+    std::ofstream ebUnitOut;
+    if (opt.ebActivity) {
+        ebComponents = buildEbComponents(opt);
+        const std::string ebFactorPath = opt.outPrefix + ".eb_factor_activity.tsv";
+        const std::string ebCompPath = opt.outPrefix + ".eb_components.tsv";
+        const std::string ebUnitPath = opt.outPrefix + ".eb_unit_activity.tsv";
+        ebFactorOut.open(ebFactorPath);
+        ebCompOut.open(ebCompPath);
+        ebUnitOut.open(ebUnitPath);
+        if (!ebFactorOut || !ebCompOut || !ebUnitOut) {
+            error("Error opening EB activity output files for writing");
+        }
+        ebFactorOut << "method\tfactor\tk\tnull_eps\tN\tN_active\teta_null\tloglik\titerations\truntime_sec\n";
+        ebCompOut << "method\tfactor\tk\tcomponent\tis_null\tkind\tl\tu\tc\td\teta\n";
+        ebUnitOut << "method\tfactor\tk\tunit_id\ttheta_k\tz_null\tp_active\tbest_component";
+        for (int32_t g = 0; g < static_cast<int32_t>(ebComponents.size()); ++g) {
+            ebUnitOut << "\tresp_" << g;
+        }
+        ebUnitOut << "\n";
+    }
+
     const RowMajorMatrixXd originalModel = lda.copy_model_matrix();
     for (int32_t k : candidates) {
         std::vector<int32_t> evalRows;
@@ -537,7 +718,8 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
         if (opt.runRefit) {
             auto t0 = std::chrono::steady_clock::now();
             RowMajorMatrixXd reducedModel = removeFactorRows(originalModel, k);
-            LatentDirichletAllocation reducedLda(reducedModel, opt.seed, opt.nThreads, opt.verbose);
+            LatentDirichletAllocation reducedLda(reducedModel, opt.seed, opt.nThreads,
+                opt.verbose, InferenceType::SVB, ldaAlpha);
             reducedLda.set_svb_parameters(opt.maxIter, opt.meanChangeTol);
             std::vector<Document> selectedDocs;
             selectedDocs.reserve(evalRows.size());
@@ -617,6 +799,44 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
                 }
             }
         }
+
+        if (opt.ebActivity) {
+            const std::string factorName = k < static_cast<int32_t>(topicNames.size())
+                ? topicNames[k]
+                : std::to_string(k);
+
+            if (runEbMultinomial(opt)) {
+                auto t0 = std::chrono::steady_clock::now();
+                RowMajorMatrixXd reducedModel = removeFactorRows(originalModel, k);
+                LatentDirichletAllocation reducedLda(reducedModel, opt.seed, opt.nThreads,
+                    opt.verbose, InferenceType::SVB, ldaAlpha);
+                reducedLda.set_svb_parameters(opt.maxIter, opt.meanChangeTol);
+                RowMajorMatrixXd thetaReducedAll = reducedLda.transform(
+                    std::span<const Document>(data.docs.data(), data.docs.size()));
+                RowMajorMatrixXd q = thetaReducedAll * betaReduced;
+                std::vector<std::vector<double>> logH = ebact::multinomial_log_evidence(
+                    data.docs, q, betaNorm.row(k), ebComponents,
+                    opt.ebProbFloor, opt.ebQuadSubdivisions);
+                ebact::FitResult fit = ebact::fit_eta_em(logH, opt.ebMaxIter,
+                    opt.ebTol, opt.ebPseudocount);
+                auto t1 = std::chrono::steady_clock::now();
+                const double runtime = std::chrono::duration<double>(t1 - t0).count();
+                writeEbResults("multinomial", k, factorName, ebComponents, fit, theta,
+                    opt.ebNullEps, runtime, ebFactorOut, ebCompOut, ebUnitOut);
+            }
+
+            if (runEbBetaMarginal(opt)) {
+                auto t0 = std::chrono::steady_clock::now();
+                std::vector<std::vector<double>> logH = ebact::beta_marginal_log_evidence(
+                    gammaCounts, k, ldaAlpha, ebComponents, opt.ebQuadSubdivisions);
+                ebact::FitResult fit = ebact::fit_eta_em(logH, opt.ebMaxIter,
+                    opt.ebTol, opt.ebPseudocount);
+                auto t1 = std::chrono::steady_clock::now();
+                const double runtime = std::chrono::duration<double>(t1 - t0).count();
+                writeEbResults("beta-marginal", k, factorName, ebComponents, fit, theta,
+                    opt.ebNullEps, runtime, ebFactorOut, ebCompOut, ebUnitOut);
+            }
+        }
     }
 
     factorOut.close();
@@ -624,6 +844,12 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
     if (unitFactorOut) {
         unitFactorOut.close();
         notice("Per-factor unit-level statistics written to %s", unitFactorPath.c_str());
+    }
+    if (opt.ebActivity) {
+        ebFactorOut.close();
+        ebCompOut.close();
+        ebUnitOut.close();
+        notice("EB topic-activity statistics written with prefix %s", opt.outPrefix.c_str());
     }
 
     return 0;

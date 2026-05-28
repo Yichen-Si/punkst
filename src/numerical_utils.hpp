@@ -20,6 +20,77 @@ using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, E
 template<typename Scalar>
 using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
 
+constexpr double NEG_INF = -std::numeric_limits<double>::infinity();
+constexpr double TINY = 1e-300;
+
+inline double logsumexp(const std::vector<double>& x) {
+    double m = *std::max_element(x.begin(), x.end());
+    if (!std::isfinite(m)) {
+        return m;
+    }
+    double s = 0.0;
+    for (double v : x) {
+        s += std::exp(v - m);
+    }
+    return m + std::log(s);
+}
+
+inline double safe_log(double x) {
+    return std::log(std::max(x, TINY));
+}
+
+inline double log_beta_fn(double a, double b) {
+    if (!(a > 0.0 && b > 0.0)) {
+        throw std::invalid_argument("invalid beta shapes");
+    }
+    return std::lgamma(a) + std::lgamma(b) - std::lgamma(a + b);
+}
+
+inline double log_beta_density(double x, double c, double d) {
+    if (!(x > 0.0 && x < 1.0)) {
+        return NEG_INF;
+    }
+    return (c - 1.0) * std::log(x) + (d - 1.0) * std::log1p(-x) - log_beta_fn(c, d);
+}
+
+struct GaussLegendre16 {
+    static constexpr int Q = 16;
+    static constexpr std::array<double, Q> node = {
+        -0.9894009349916499, -0.9445750230732326, -0.8656312023878318, -0.7554044083550030,
+        -0.6178762444026438, -0.4580167776572274, -0.2816035507792589, -0.0950125098376374,
+         0.0950125098376374,  0.2816035507792589,  0.4580167776572274,  0.6178762444026438,
+         0.7554044083550030,  0.8656312023878318,  0.9445750230732326,  0.9894009349916499
+    };
+    static constexpr std::array<double, Q> weight = {
+        0.0271524594117541, 0.0622535239386479, 0.0951585116824928, 0.1246289712555339,
+        0.1495959888165767, 0.1691565193950025, 0.1826034150449236, 0.1894506104550685,
+        0.1894506104550685, 0.1826034150449236, 0.1691565193950025, 0.1495959888165767,
+        0.1246289712555339, 0.0951585116824928, 0.0622535239386479, 0.0271524594117541
+    };
+
+    template <class LogF>
+    static double log_integrate(LogF logf, double l, double u, int32_t subdivisions = 1) {
+        if (!(l < u)) {
+            throw std::invalid_argument("invalid integration interval");
+        }
+        subdivisions = std::max<int32_t>(1, subdivisions);
+        std::vector<double> all_terms;
+        all_terms.reserve(static_cast<size_t>(subdivisions) * Q);
+        const double width = (u - l) / static_cast<double>(subdivisions);
+        for (int32_t s = 0; s < subdivisions; ++s) {
+            const double a = l + static_cast<double>(s) * width;
+            const double b = a + width;
+            const double mid = 0.5 * (a + b);
+            const double half = 0.5 * (b - a);
+            for (int32_t j = 0; j < Q; ++j) {
+                const double x = mid + half * node[j];
+                all_terms.push_back(std::log(half) + std::log(weight[j]) + logf(x));
+            }
+        }
+        return logsumexp(all_terms);
+    }
+};
+
 // Calculate the mean absolute difference between two arrays.
 template<typename T>
 T mean_change(const std::vector<T>& arr1, const std::vector<T>& arr2) {

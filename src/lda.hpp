@@ -68,8 +68,10 @@ public:
     LatentDirichletAllocation(
         const std::string& modelFile,
         int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
-        InferenceType algo = InferenceType::SVB) : seed_(normalize_seed(seed)),
+        InferenceType algo = InferenceType::SVB,
+        double doc_topic_prior = -1.) : seed_(normalize_seed(seed)),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
+        alpha_(doc_topic_prior),
         total_doc_count_(-1), update_count_(0) {
         random_engine_.seed(seed_);
         set_model_from_tsv(modelFile);
@@ -78,8 +80,10 @@ public:
     LatentDirichletAllocation(
         RowMajorMatrixXd& modelMtx,
         int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
-        InferenceType algo = InferenceType::SVB) : seed_(normalize_seed(seed)),
+        InferenceType algo = InferenceType::SVB,
+        double doc_topic_prior = -1.) : seed_(normalize_seed(seed)),
         nThreads_(nThreads), verbose_(verbose), algo_(algo),
+        alpha_(doc_topic_prior),
         total_doc_count_(-1), update_count_(0) {
         random_engine_.seed(seed_);
         set_model_from_matrix(modelMtx);
@@ -119,6 +123,9 @@ public:
     }
     int32_t get_N_global() const {
         return total_doc_count_;
+    }
+    double get_doc_topic_prior() const {
+        return alpha_;
     }
     const std::vector<std::string>& get_topic_names();
     void get_topic_abundance(std::vector<double>& weights) const;
@@ -174,6 +181,9 @@ public:
     }
     RowMajorMatrixXd transform(const std::vector<SparseObs>& docs) {
         return transform_common(docs, [](const auto& d) -> const Document& { return d.doc; });
+    }
+    RowMajorMatrixXd transform_gamma(std::span<const Document> docs) {
+        return transform_gamma_common(docs, [](const auto& d) -> const Document& { return d; });
     }
 
     // SVB only
@@ -239,6 +249,32 @@ private:
                 default:
                     error("%s: Unknown inference type", __func__);
             }
+        };
+
+        if (nThreads_ == 1) {
+            for (int d = 0; d < n_docs; ++d) process_doc(d);
+        } else {
+            tbb::parallel_for(0, n_docs, [&](int d) { process_doc(d); });
+        }
+        return gamma;
+    }
+
+    template <typename Docs, typename DocAccessor>
+    RowMajorMatrixXd transform_gamma_common(const Docs& docs, DocAccessor&& doc_of) {
+        if (algo_ != InferenceType::SVB) {
+            error("%s: raw gamma transform is only supported for SVB", __func__);
+        }
+        const int n_docs = static_cast<int>(docs.size());
+        RowMajorMatrixXd gamma(n_docs, n_topics_);
+
+        auto process_doc = [&](int d) {
+            const uint64_t stream = deterministic_rng_
+                ? doc_stream(static_cast<uint64_t>(d),
+                    0x41f2c7d3ULL ^ static_cast<uint64_t>(update_count_))
+                : 0;
+            VectorXd gamma_d, exp_Elog_theta_d;
+            (void)svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc_of(docs[d]), stream);
+            gamma.row(d) = gamma_d.transpose();
         };
 
         if (nThreads_ == 1) {

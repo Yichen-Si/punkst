@@ -169,11 +169,11 @@ public:
 
     void initialize_transform(const std::string& modelFile,
         int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
-        int32_t maxIter = 100, double mDelta = -1.) {
+        int32_t maxIter = 100, double mDelta = -1., double alpha = -1.) {
         RowMajorMatrixXd priorMatrix;
         initialize(0, priorMatrix, modelFile, -1, -1);
         lda = std::make_unique<LatentDirichletAllocation>(
-            priorMatrix, seed, nThreads, verbose);
+            priorMatrix, seed, nThreads, verbose, InferenceType::SVB, alpha);
         lda->set_svb_parameters(maxIter, mDelta);
         initialized = true;
     }
@@ -276,6 +276,15 @@ public:
     }
     MatrixXd do_transform(std::span<const Document> batch) override {
         return lda->transform(batch);
+    }
+    RowMajorMatrixXd do_transform_gamma(std::span<const Document> batch) {
+        return lda->transform_gamma(batch);
+    }
+    double get_doc_topic_prior() const {
+        if (!initialized || !lda) {
+            error("%s: LDA4Hex is not initialized", __FUNCTION__);
+        }
+        return lda->get_doc_topic_prior();
     }
     const RowMajorMatrixXd& get_model_matrix() const override {
         return lda->get_model();
