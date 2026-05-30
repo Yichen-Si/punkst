@@ -11,17 +11,14 @@
         <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/lda4hex/">
       
       
-        <link rel="prev" href="../tiles2hex/">
+        <link rel="prev" href="../tiles2rois/">
       
       
         <link rel="next" href="../pixel-decode/">
       
       
-        
-      
-      
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.47">
     
     
       
@@ -29,10 +26,10 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.6f8fc17f.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -57,6 +54,7 @@
 
     
     
+    
   </head>
   
   
@@ -76,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#topic-model" class="md-skip">
+        <a href="#lda-with-stochastic-variational-inference" class="md-skip">
           Skip to content
         </a>
       
@@ -160,13 +158,11 @@
     
     
     
-      
-      
-        <label class="md-header__button md-icon" for="__search">
-          
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
-        </label>
-        <div class="md-search" data-md-component="search" role="dialog">
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
@@ -198,14 +194,13 @@
     </div>
   </div>
 </div>
-      
     
     
       <div class="md-header__source">
         <a href="https://github.com/Yichen-Si/punkst" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
   </div>
   <div class="md-source__repository">
     Yichen-Si/punkst
@@ -225,13 +220,11 @@
   
   
   
-  
     
     
       <li class="md-tabs__item">
         <a href="../.." class="md-tabs__link">
           
-  
   
     
   
@@ -247,13 +240,11 @@
   
   
   
-  
     
     
       <li class="md-tabs__item">
         <a href="../../workflows/" class="md-tabs__link">
           
-  
   
     
   
@@ -268,7 +259,6 @@
         
   
   
-  
     
   
   
@@ -277,7 +267,6 @@
       <li class="md-tabs__item md-tabs__item--active">
         <a href="../" class="md-tabs__link">
           
-  
   
     
   
@@ -293,13 +282,11 @@
   
   
   
-  
     
     
       <li class="md-tabs__item">
         <a href="../../input/" class="md-tabs__link">
           
-  
   
     
   
@@ -352,7 +339,7 @@
       <a href="https://github.com/Yichen-Si/punkst" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
   </div>
   <div class="md-source__repository">
     Yichen-Si/punkst
@@ -379,7 +366,6 @@
       
     
     
-    
       
       
         
@@ -395,20 +381,14 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1" >
         
           
+          
           <div class="md-nav__link md-nav__container">
             <a href="../.." class="md-nav__link ">
               
   
-  
   <span class="md-ellipsis">
-    
-  
     Intro
-  
-
-    
   </span>
-  
   
 
             </a>
@@ -423,11 +403,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_1">
             <span class="md-nav__icon md-icon"></span>
-            
-  
-    Intro
-  
-
+            Intro
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -443,16 +419,9 @@
       <a href="../../install/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     Install
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -483,7 +452,6 @@
       
         
       
-    
     
     
       
@@ -501,20 +469,14 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
         
           
+          
           <div class="md-nav__link md-nav__container">
             <a href="../../workflows/" class="md-nav__link ">
               
   
-  
   <span class="md-ellipsis">
-    
-  
     Quickstart
-  
-
-    
   </span>
-  
   
 
             </a>
@@ -529,11 +491,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
-            
-  
-    Quickstart
-  
-
+            Quickstart
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -549,16 +507,9 @@
       <a href="../../workflows/multisample/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     Multisample
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -605,7 +556,10 @@
       
         
       
-    
+        
+      
+        
+      
     
     
       
@@ -624,20 +578,14 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
+          
           <div class="md-nav__link md-nav__container">
             <a href="../" class="md-nav__link ">
               
   
-  
   <span class="md-ellipsis">
-    
-  
     Modules
-  
-
-    
   </span>
-  
   
 
             </a>
@@ -652,11 +600,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
-            
-  
-    Modules
-  
-
+            Modules
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -672,16 +616,9 @@
       <a href="../pts2tiles/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     pts2tiles
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -700,16 +637,30 @@
       <a href="../tiles2hex/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     tiles2hex
-  
-
-    
   </span>
   
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tiles2rois/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    tiles2rois
+  </span>
   
 
       </a>
@@ -737,16 +688,9 @@
         <label class="md-nav__link md-nav__link--active" for="__toc">
           
   
-  
   <span class="md-ellipsis">
-    
-  
     topic-model
-  
-
-    
   </span>
-  
   
 
           <span class="md-nav__icon md-icon"></span>
@@ -755,16 +699,9 @@
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     topic-model
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -785,62 +722,28 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#input-format" class="md-nav__link">
+  <a href="#input-formats" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Input format
-      
+      Input formats
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Input format">
+    <nav class="md-nav" aria-label="Input formats">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#custom-sparse-matrix-input-from-tiles2hex" class="md-nav__link">
+  <a href="#custom-sparse-text-input" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Custom sparse matrix input (from tiles2hex)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Custom sparse matrix input (from tiles2hex)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required data
-      
+      Custom sparse text input
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#required-metadata" class="md-nav__link">
+  <a href="#10x-mex-input" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Required metadata
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#10x-dge-input-single-cell" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        10X DGE input (single-cell)
-      
+      10X MEX input
     </span>
   </a>
   
@@ -852,46 +755,73 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
+  <a href="#lda4hex-topic-model" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Usage
-      
+      lda4hex / topic-model
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Usage">
+    <nav class="md-nav" aria-label="lda4hex / topic-model">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#required" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Required">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#for-the-custom-format" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        For the custom format
-      
+      Required
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#for-10x-dge-format" class="md-nav__link">
+  <a href="#feature-selection-and-weighting" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        For 10X DGE format
-      
+      Feature selection and weighting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lda-fitting-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      LDA fitting options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prior-model-and-projection-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prior model and projection options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-background-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional background model
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transform-related-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Transform-related options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#main-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Main outputs
     </span>
   </a>
   
@@ -899,78 +829,43 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lda-transform" class="md-nav__link">
+    <span class="md-ellipsis">
+      lda-transform
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="lda-transform">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required
+    </span>
+  </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#optional" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#feature-filtering" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Feature Filtering
-      
+      Optional
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#feature-weighting" class="md-nav__link">
+  <a href="#outputs" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Feature Weighting
-      
+      Outputs
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lda-training-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        LDA Training Parameters
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#model-initialization" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Model Initialization
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-control" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output Control
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -998,16 +893,9 @@
       <a href="../pixel-decode/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     pixel-decode
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -1026,16 +914,9 @@
       <a href="../de/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     DE tests
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -1054,16 +935,9 @@
       <a href="../visualization/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     visualize
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -1082,16 +956,9 @@
       <a href="../coexp/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     co-occurrence
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -1110,16 +977,30 @@
       <a href="../tileop/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     tile-op
-  
-
-    
   </span>
   
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pmtiles/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PMTiles
+  </span>
   
 
       </a>
@@ -1152,7 +1033,6 @@
       
     
     
-    
       
       
         
@@ -1168,20 +1048,14 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
         
           
+          
           <div class="md-nav__link md-nav__container">
             <a href="../../input/" class="md-nav__link ">
               
   
-  
   <span class="md-ellipsis">
-    
-  
     Input
-  
-
-    
   </span>
-  
   
 
             </a>
@@ -1196,11 +1070,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
-            
-  
-    Input
-  
-
+            Input
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -1216,16 +1086,9 @@
       <a href="../../input/geojson-region/" class="md-nav__link">
         
   
-  
   <span class="md-ellipsis">
-    
-  
     Region query
-  
-
-    
   </span>
-  
   
 
       </a>
@@ -1268,62 +1131,28 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#input-format" class="md-nav__link">
+  <a href="#input-formats" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Input format
-      
+      Input formats
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Input format">
+    <nav class="md-nav" aria-label="Input formats">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#custom-sparse-matrix-input-from-tiles2hex" class="md-nav__link">
+  <a href="#custom-sparse-text-input" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Custom sparse matrix input (from tiles2hex)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Custom sparse matrix input (from tiles2hex)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required data
-      
+      Custom sparse text input
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#required-metadata" class="md-nav__link">
+  <a href="#10x-mex-input" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Required metadata
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#10x-dge-input-single-cell" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        10X DGE input (single-cell)
-      
+      10X MEX input
     </span>
   </a>
   
@@ -1335,46 +1164,73 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
+  <a href="#lda4hex-topic-model" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Usage
-      
+      lda4hex / topic-model
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Usage">
+    <nav class="md-nav" aria-label="lda4hex / topic-model">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#required" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Required">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#for-the-custom-format" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        For the custom format
-      
+      Required
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#for-10x-dge-format" class="md-nav__link">
+  <a href="#feature-selection-and-weighting" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        For 10X DGE format
-      
+      Feature selection and weighting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lda-fitting-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      LDA fitting options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prior-model-and-projection-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prior model and projection options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-background-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional background model
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transform-related-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Transform-related options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#main-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Main outputs
     </span>
   </a>
   
@@ -1382,78 +1238,43 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lda-transform" class="md-nav__link">
+    <span class="md-ellipsis">
+      lda-transform
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="lda-transform">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required
+    </span>
+  </a>
   
 </li>
         
           <li class="md-nav__item">
   <a href="#optional" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Optional">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#feature-filtering" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Feature Filtering
-      
+      Optional
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#feature-weighting" class="md-nav__link">
+  <a href="#outputs" class="md-nav__link">
     <span class="md-ellipsis">
-      
-        Feature Weighting
-      
+      Outputs
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lda-training-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        LDA Training Parameters
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#model-initialization" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Model Initialization
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#output-control" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Output Control
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -1472,100 +1293,208 @@
           
           
             <div class="md-content" data-md-component="content">
-              
               <article class="md-content__inner md-typeset">
                 
                   
 
-
   
   
 
 
-<h1 id="topic-model">topic-model<a class="headerlink" href="#topic-model" title="Permanent link">&para;</a></h1>
-<p><strong><code>topic-model</code> (alias for <code>lda4hex</code>) fits top model on the hexagon/spot/single cell data.</strong></p>
-<h2 id="input-format">Input format<a class="headerlink" href="#input-format" title="Permanent link">&para;</a></h2>
-<h3 id="custom-sparse-matrix-input-from-tiles2hex">Custom sparse matrix input (from <code>tiles2hex</code>)<a class="headerlink" href="#custom-sparse-matrix-input-from-tiles2hex" title="Permanent link">&para;</a></h3>
-<p>This format is required for training in streaming (minibatch) mode with low memory usage.</p>
-<p>The input data is a plain text file where each line containing the sparse encoding of the gene counts for one unit (hexagon, cell, etc.). The orders of the units should be <strong>randomized</strong> (it would be if you set <code>--randomize</code> in <code>tiles2hex</code>, or if you sorted the file by the first column (random keys)).</p>
-<p>If generated hexagon data from <code>tiles2hex</code> you probably don't need to know the following details.</p>
-<p>If you are converting from 10X single cell DGE, see <a href="../../input/"><code>convert-10X-SC</code></a> for details.</p>
-<h4 id="required-data">Required data<a class="headerlink" href="#required-data" title="Permanent link">&para;</a></h4>
-<p>The required structure of each line is as follows (entries are separated by tabs):
-- one integer (m) for the number of unique genes in this unit
-- one integer for the total count of all genes in this unit
-- followed by m pairs of integers, each pair consisting of a gene index (0-based) and the count of that gene in this unit (separated by a single space). In a cell-by-gene count matrix, the pairs are the (column, value) pairs of all non-zero entries in one row corresponding to a cell.</p>
-<p>There could be other fields in the input before the above required (m+2) fields, the number of data fields before the required fields should be specified under the key "offset_data" in the json metadata file.</p>
-<h4 id="required-metadata">Required metadata<a class="headerlink" href="#required-metadata" title="Permanent link">&para;</a></h4>
-<p>We require a json file with at least the following information:
-- "dictionary": a dictionary that contains key: value pairs where each key is a gene name and each value is the corresponding index of that gene in the sparse encoding in the input data file. (You could skip this dictionary if you provides all and only the present genes' information in the order consistent with the indices (the column names and column sums in a cell-by-gene matrix) by <code>--features</code> in <code>lda2hex</code> (see below))
-- "offset_data": an integer that specifies the number of fields before the required fields in the input data file.
-- "header_info": a list of size <code>offset_data</code> that contains the names of the fields before the required fields in the input data file. We will carry over these fields to the output files.</p>
-<h3 id="10x-dge-input-single-cell">10X DGE input (single-cell)<a class="headerlink" href="#10x-dge-input-single-cell" title="Permanent link">&para;</a></h3>
-<p>You can train directly from the 10X MEX format by passing <code>--in-dge-dir</code> or the explicit triplet <code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code>.</p>
-<p>When using 10X input, <code>--features</code> is required and must include per-feature totals (second column). These totals are used for prior scaling and background initialization.</p>
-<p>Due to the limit of the 10X DGE format, we load the entire dataset in memory and perform shuffling \&amp; minibatching internally. For very large datasets, it would be memory intensive. You could use <a href="../../input/">punkst convert-10X-SC</a> to convert the 10X DGE to the custom format once if you plan to train multiple models on a very large dataset.</p>
-<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>topic-model<span class="w"> </span>--n-topics<span class="w"> </span><span class="m">12</span><span class="w"> </span>--sort-topics<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt<span class="w"> </span>--in-meta<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12<span class="w"> </span>--transform<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--min-count-train<span class="w"> </span><span class="m">50</span><span class="w"> </span>--minibatch-size<span class="w"> </span><span class="m">512</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
-</span></code></pre></div>
+<h1 id="lda-with-stochastic-variational-inference">LDA with stochastic variational inference<a class="headerlink" href="#lda-with-stochastic-variational-inference" title="Permanent link">&para;</a></h1>
+<p>This document describes the current behavior of:</p>
+<ul>
+<li><code>punkst lda4hex</code></li>
+<li><code>punkst topic-model</code></li>
+<li><code>punkst lda-transform</code></li>
+</ul>
+<p><code>lda4hex</code> and <code>topic-model</code> are aliases for the same command. They currently expose only the SVI-based LDA workflow. This document does not cover HDP or SCVB0.</p>
+<h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
+<h3 id="custom-sparse-text-input">Custom sparse text input<a class="headerlink" href="#custom-sparse-text-input" title="Permanent link">&para;</a></h3>
+<p>This is the sparse unit-by-feature format produced by <code>tiles2hex</code>.</p>
+<p>Each line contains the sparse encoding for one unit. The metadata JSON supplies:</p>
+<ul>
+<li><code>dictionary</code>: feature name to feature index mapping, unless you instead provide the feature list explicitly with <code>--features</code></li>
+<li><code>offset_data</code>: number of prefix columns before the sparse payload</li>
+<li><code>header_info</code>: names of those prefix columns</li>
+</ul>
+<p>The sparse payload contains:</p>
+<ul>
+<li>number of nonzero features</li>
+<li>total count for the unit</li>
+<li><code>(feature_index, count)</code> pairs</li>
+</ul>
+<h3 id="10x-mex-input">10X MEX input<a class="headerlink" href="#10x-mex-input" title="Permanent link">&para;</a></h3>
+<p>You can also use:</p>
+<ul>
+<li>one or more <code>--in-dge-dir</code> values (For example, <code>--in-dge-dir path/d1 path/d2</code> where each directory contains <code>matrix.mtx.gz</code>, <code>features.tsv.gz</code>, and <code>barcodes.tsv.gz</code>)</li>
+<li>or matching lists for <code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code> (For example, <code>--in-barcodes path/d1/barcodes.tsv.gz path/d2/barcodes.tsv.gz --in-features path/d1/features.tsv.gz path/d1/features.tsv.gz --in-matrix path/d1/matrix.mtx.gz path/d2/matrix.mtx.gz</code>)</li>
+<li>optional <code>--dataset-id</code> values, one per dataset (For example, <code>--dataset-id d1 d2</code> in the above example)</li>
+</ul>
+<p>For 10X input, the data are loaded into memory. When multiple datasets are provided, they are treated as one joint corpus and the default feature space is the intersection of all input feature lists. When <code>--features</code> is not supplied during fitting, <code>{prefix}.features.tsv</code> is written with the final feature names and total counts.</p>
+<p>If <code>--dataset-id</code> is omitted, dataset IDs default to <code>1</code>, <code>2</code>, <code>3</code>, ... in input order.</p>
+<h2 id="lda4hex-topic-model"><code>lda4hex</code> / <code>topic-model</code><a class="headerlink" href="#lda4hex-topic-model" title="Permanent link">&para;</a></h2>
 <h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
-<p><code>--n-topics</code> - Specifies the number of topics to learn.</p>
-<p><code>--out-prefix</code> - Specifies the prefix for the output files.</p>
-<p>Input in one of the following two formats is required:</p>
-<h4 id="for-the-custom-format">For the custom format<a class="headerlink" href="#for-the-custom-format" title="Permanent link">&para;</a></h4>
-<p><code>--in-data</code> - Specifies the input data file (created by <code>tiles2hex</code>)</p>
-<p><code>--in-meta</code> - Specifies the metadata (file created by <code>tiles2hex</code>)</p>
-<h4 id="for-10x-dge-format">For 10X DGE format<a class="headerlink" href="#for-10x-dge-format" title="Permanent link">&para;</a></h4>
-<p><code>--in-dge-dir</code> - Specifies the input directory that contains the 10X DGE files: <code>barcodes.tsv.gz</code>, <code>features.tsv.gz</code>, and <code>matrix.mtx.gz</code>.</p>
-<p>Alternatively, you can specify the three files directly by <code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code>.</p>
-<p><code>--features</code> - A tsv file containing at least two columns: the feature names and the total feature count in the dataset. (You will get it if you used <code>pts2tiles</code> or <code>multisample-prepare</code>) It is required for 10X input though optional for the custom format.</p>
+<ul>
+<li>Output prefix <code>--out-prefix</code></li>
+</ul>
+<p>Either:</p>
+<ul>
+<li>custom input: <code>--in-data</code> and <code>--in-meta</code></li>
+<li>10X input: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
+</ul>
+<p>And one of:</p>
+<ul>
+<li><code>--n-topics</code></li>
+<li><code>--model-prior</code></li>
+</ul>
+<p>If <code>--projection-only</code> is used, <code>--model-prior</code> is required and no training is performed.</p>
+<h3 id="feature-selection-and-weighting">Feature selection and weighting<a class="headerlink" href="#feature-selection-and-weighting" title="Permanent link">&para;</a></h3>
+<p><code>--features</code>
+Optional feature list used to define or filter the feature space.</p>
+<p><code>--min-count-per-feature</code>
+Minimum feature total count. Default: <code>1</code>.</p>
+<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code>
+Regex-based feature filtering.</p>
+<p><code>--feature-weights</code>
+Per-feature weights applied during fitting and transform.</p>
+<p><code>--default-weight</code>
+Default weight for features missing from the weight file.</p>
+<p>For 10X input, the feature-selection behavior is:</p>
+<ol>
+<li>If <code>--features</code> is provided, it defines the feature space before loading the full matrix.</li>
+<li>If <code>--features</code> is not provided but <code>--model-prior</code> is provided, the prior model defines the feature space.</li>
+<li>If neither is provided and <code>--min-count-per-feature &lt;= 1</code>, regex filtering is applied directly to the 10X feature list.</li>
+<li>Otherwise the 10X matrix is loaded, feature totals are computed, and filtering is applied afterward.</li>
+</ol>
+<p>With multiple 10X datasets, the starting 10X feature list in steps 1 and 3 is the intersection across all datasets.</p>
+<h3 id="lda-fitting-options">LDA fitting options<a class="headerlink" href="#lda-fitting-options" title="Permanent link">&para;</a></h3>
+<p><code>--n-topics</code>
+Number of topics.</p>
+<p><code>--threads</code>, <code>--seed</code></p>
+<p><code>--n-epochs</code>
+Number of training passes. Default: <code>1</code>.</p>
+<p><code>--minibatch-size</code>
+Minibatch size. Default: <code>512</code>.</p>
+<p><code>--min-count-train</code>
+Minimum total count per unit for training. Default: <code>20</code>.</p>
+<p><code>--modal</code>
+Modality index for multi-modal custom input.</p>
+<p><code>--kappa</code>, <code>--tau0</code>
+Online SVI learning-rate parameters.</p>
+<p><code>--alpha</code>
+Document-topic prior. Default: <code>1/K</code>.</p>
+<p><code>--eta</code>
+Topic-word prior. Default: <code>1/K</code>.</p>
+<p><code>--max-iter</code>
+Maximum per-document iterations in inference/transform. Default: <code>100</code>.</p>
+<p><code>--mean-change-tol</code>
+Per-document convergence tolerance. Default: <code>1e-3</code>.</p>
+<p><code>--reproducible-init</code>
+Use deterministic per-document random initialization.</p>
+<h3 id="prior-model-and-projection-options">Prior model and projection options<a class="headerlink" href="#prior-model-and-projection-options" title="Permanent link">&para;</a></h3>
+<p><code>--model-prior</code>
+Initialize from an existing model matrix.</p>
+<p><code>--prior-scale</code>
+Uniform scaling for the prior model.</p>
+<p><code>--prior-scale-rel</code>
+Scale the prior relative to observed feature totals.</p>
+<p><code>--projection-only</code>
+Use the prior model to transform the data without fitting. Implies <code>--transform</code>.</p>
+<p><code>--sort-topics</code>
+Sort learned topics by abundance before writing the model.</p>
+<h3 id="optional-background-model">Optional background model<a class="headerlink" href="#optional-background-model" title="Permanent link">&para;</a></h3>
+<p><code>--fit-background</code>
+Fit an additional background profile together with the LDA factors.</p>
+<p><code>--background-prior</code>
+Input prior for the background profile.</p>
+<p><code>--background-init-scale</code>
+Scale used when initializing the background from feature totals.</p>
+<p><code>--fix-background</code>
+Keep the background profile fixed during training.</p>
+<p><code>--bg-fraction-prior-a0</code>, <code>--bg-fraction-prior-b0</code>
+Beta prior parameters for the background fraction.</p>
+<p><code>--warm-start-epochs</code>
+Warm-start the topic model before enabling the background.</p>
+<h3 id="transform-related-options">Transform-related options<a class="headerlink" href="#transform-related-options" title="Permanent link">&para;</a></h3>
+<p><code>--transform</code>
+Transform the input units after fitting.</p>
+<p><code>--residuals</code>
+For the plain LDA path, also write residual-based summaries and feature residuals.</p>
+<p><code>--feature-residuals</code>
+Alias for <code>--residuals</code>.</p>
+<p><code>--topk-only &lt;int&gt;</code>
+For the plain LDA path, write only the top-k topic indices and probabilities to <code>{prefix}.results.tsv</code>.</p>
+<h3 id="main-outputs">Main outputs<a class="headerlink" href="#main-outputs" title="Permanent link">&para;</a></h3>
+<p><code>{prefix}.model.tsv</code>
+Feature-by-topic model matrix.</p>
+<p><code>{prefix}.features.tsv</code>
+Written for 10X fitting when <code>--features</code> is not supplied.</p>
+<p><code>{prefix}.background.tsv</code>
+Written when <code>--fit-background</code> is used.</p>
+<p>When <code>--transform</code> is used:</p>
+<ul>
+<li>plain LDA without background delegates to <code>lda-transform</code></li>
+<li>background-enabled LDA keeps the older transform path</li>
+</ul>
+<p>For the delegated plain-LDA path used by <code>lda4hex --transform</code>, the transform stage keeps all non-empty units by using <code>--min-count 1</code>.</p>
+<p>For the plain LDA path, transform outputs are:</p>
+<p><code>{prefix}.results.tsv</code>
+Topic proportions per unit. By default this contains all topics. With <code>--topk-only k</code>, it instead contains columns <code>K1..Kk</code> and <code>P1..Pk</code>.</p>
+<p><code>{prefix}.pseudobulk.tsv</code>
+Feature-by-topic pseudobulk counts formed from the transformed topic proportions.</p>
+<p><code>{prefix}.unit_stats.tsv</code>
+Written when <code>--residuals</code> is enabled. Current columns are:</p>
+<ul>
+<li><code>total_count</code></li>
+<li><code>residual</code></li>
+<li><code>cosine_sim</code></li>
+<li><code>entropy</code></li>
+<li><code>sh_lcr</code></li>
+<li><code>sh_q</code></li>
+</ul>
+<p><code>{prefix}.feature_residuals.tsv</code>
+Written when <code>--residuals</code> is enabled.</p>
+<p>The <code>entropy</code>, <code>sh_lcr</code>, and <code>sh_q</code> summaries are computed from each unit's topic proportions, treating them as a probability distribution over topics. Topic similarity is defined by cosine similarity among the row-normalized topic-word profiles.</p>
+<p>For custom sparse input, carried-over metadata columns from <code>header_info</code> appear before the transform outputs. For 10X input, the leading identifier column is <code>#barcode</code>. With a single 10X dataset it keeps the original barcode/identifier form; with multiple 10X datasets it is written as <code>&lt;dataset_id&gt;:&lt;barcode&gt;</code>.</p>
+<h2 id="lda-transform"><code>lda-transform</code><a class="headerlink" href="#lda-transform" title="Permanent link">&para;</a></h2>
+<p><code>lda-transform</code> applies a fitted plain LDA model to new data.</p>
+<h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
+<p><code>--in-model</code>
+Input topic-word model matrix.</p>
+<p><code>--out-prefix</code></p>
+<p>Either:</p>
+<ul>
+<li><code>--in-data</code> and <code>--in-meta</code></li>
+<li>or one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
+</ul>
 <h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
-<h4 id="feature-filtering">Feature Filtering<a class="headerlink" href="#feature-filtering" title="Permanent link">&para;</a></h4>
-<p><code>--features</code> - Required and used only when either of the following three parameters are specified. Path to a file where the first column contains gene names and the second column contains the total count of that gene. It is also required for 10X input.</p>
-<p><code>--min-count-per-feature</code> - Minimum total count for features to be included. Require <code>--features</code> to be specified. Default: 1.</p>
-<p><code>--include-feature-regex</code> - Regular expression (<a href="https://en.cppreference.com/w/cpp/regex/ecmascript">modified ECMAScript grammar</a>) to include only features matching this pattern. Default: include all features.</p>
-<p><code>--exclude-feature-regex</code> - Regular expression (modified ECMAScript) to exclude features matching this pattern. Default: exclude no features.</p>
-<p><strong>Feature Selection Logic:</strong> the above three filters are applied jointly, so only genes with at least the minimum count, matching the include regex (if provided), and not matching the exclude regex (if provided) will be included in the model.</p>
-<h4 id="feature-weighting">Feature Weighting<a class="headerlink" href="#feature-weighting" title="Permanent link">&para;</a></h4>
-<p><code>--feature-weights</code> - Path to a file containing a weight for each gene. Format should be gene name (first column) and weight (second column). If the json metadata file does not contain a dictionary, the first column should be the gene index (0-based) instead.</p>
-<p><code>--default-weight</code> - Default weight for features not present in the weights file. Set to 0 to ignore features not in the weights file. Default: 1.0.</p>
-<!-- `--modal` - Modality to use (0-based). Default: 0. (Only if your input data is generated by `tiles2hex` in multi-modality mode.) -->
-
-<h4 id="lda-training-parameters">LDA Training Parameters<a class="headerlink" href="#lda-training-parameters" title="Permanent link">&para;</a></h4>
-<p><code>--threads</code> - Number of threads to use. Default: 1.</p>
-<p><code>--seed</code> - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.</p>
-<p><code>--minibatch-size</code> - Size of the minibatches to use during training. Default: 512.</p>
-<p><code>--min-count-train</code> - Minimum total count for a hexagon to be included in the training set. Default: 20.</p>
-<p><code>--n-epochs</code> - Number of epochs to train for. Default: 1.</p>
-<p><code>--mean-change-tol</code> - Tolerance for convergence in the e-step in terms of the mean absolute change in the topic proportions of a document. Default: 1e-3.</p>
-<p><code>--max-iter</code> - Maximum number of iterations for each document. Default: 100.</p>
-<p><code>--kappa</code> - Learning decay parameter for online LDA. Default: 0.7.</p>
-<p><code>--tau0</code> - Learning offset parameter for online LDA. Default: 10.0.</p>
-<p><code>--alpha</code> - Document-topic prior. Default: 1/K (where K is the number of topics).</p>
-<p><code>--eta</code> - Topic-word prior. Default: 1/K (where K is the number of topics).</p>
-<h4 id="model-initialization">Model Initialization<a class="headerlink" href="#model-initialization" title="Permanent link">&para;</a></h4>
-<p><code>--model-prior</code> - File that contains the initial model matrix.</p>
-<p><code>--prior-scale</code> - Scale the initial model matrix uniformly by this value. Default: use the matrix as is.</p>
-<p><code>--prior-scale-rel</code> - Scale the initial model matrix relative to the total feature counts in the data.</p>
-<h4 id="output-control">Output Control<a class="headerlink" href="#output-control" title="Permanent link">&para;</a></h4>
-<p><code>--transform</code> - Transform the data to the LDA space after training. If set, an output file <code>&lt;prefix&gt;.results.tsv</code> will be created. For 10X input, identifiers are 0-based barcode indices (in the input <code>barcodes.tsv.gz</code>).</p>
-<p>With <code>--transform</code>, the result table now includes two appended columns by default:
-- <code>topK</code>: topic label (column name) with maximum probability in that row.
-- <code>topP</code>: the corresponding maximum probability.</p>
-<p>For custom-format input, the output header is:
-- <code>#&lt;header_info...&gt;\t&lt;topic columns...&gt;\ttopK\ttopP</code></p>
-<p>For 10X input, the output header is:
-- <code>#barcode\t&lt;topic columns...&gt;\ttopK\ttopP</code></p>
-<p><code>--append-topk</code> - Explicitly request appending <code>topK</code> and <code>topP</code> columns in transform output. (Current behavior: <code>--transform</code> already enables this by default.)</p>
-<p><code>--topk-colname</code> - Column name for the top-topic label field. Default: <code>topK</code>.</p>
-<p><code>--topp-colname</code> - Column name for the top-topic probability field. Default: <code>topP</code>.</p>
-<p><code>--drop-random-key</code> - For custom-format input, drop <code>random_key</code> from carried-over prefix columns in <code>&lt;prefix&gt;.results.tsv</code> when present in <code>header_info</code>. Default: off.</p>
-<p><code>--projection-only</code> - Transform the data using the prior model without further training. Implies <code>--transform</code>.</p>
-<p><code>--sort-topics</code> - Order the topics with decreasing abundance.</p>
-<p><code>--verbose</code> - Control the verbosity level of output messages.</p>
+<p><code>--minibatch-size</code></p>
+<p><code>--modal</code></p>
+<p><code>--threads</code>, <code>--seed</code>, <code>--verbose</code>, <code>--debug</code></p>
+<p><code>--features</code>, <code>--min-count-per-feature</code></p>
+<p><code>--min-count</code>
+Minimum total count per unit to keep. Default: <code>20</code>.</p>
+<p><code>--feature-weights</code>, <code>--default-weight</code></p>
+<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code></p>
+<p><code>--max-iter</code>, <code>--mean-change-tol</code></p>
+<p><code>--sorted-by-barcode</code>
+Use streaming mode for 10X input sorted by barcode. With multiple datasets, streaming follows dataset order first, then barcode order within each dataset.</p>
+<p><code>--residuals</code>
+Write <code>{prefix}.unit_stats.tsv</code> and <code>{prefix}.feature_residuals.tsv</code>.</p>
+<p><code>--feature-residuals</code>
+Alias for <code>--residuals</code>.</p>
+<p><code>--topk-only &lt;int&gt;</code>
+Write sparse top-k output to <code>{prefix}.results.tsv</code>. The value must be a positive integer.</p>
+<h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
+<p><code>{prefix}.results.tsv</code>
+Per-unit topic proportions, or top-k topic indices/probabilities when <code>--topk-only</code> is used.</p>
+<p><code>{prefix}.pseudobulk.tsv</code></p>
+<p><code>{prefix}.unit_stats.tsv</code>
+Written only when <code>--residuals</code> is enabled.</p>
+<p><code>{prefix}.feature_residuals.tsv</code>
+Written only when <code>--residuals</code> is enabled.</p>
+<p>In <code>{prefix}.unit_stats.tsv</code>, <code>total_count</code> is the raw total count after feature remap and filtering but before feature weights are applied.</p>
 
 
 
@@ -1601,7 +1530,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../tiles2hex/" class="md-footer__link md-footer__link--prev" aria-label="Previous: tiles2hex">
+          <a href="../tiles2rois/" class="md-footer__link md-footer__link--prev" aria-label="Previous: tiles2rois">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1611,7 +1540,7 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                tiles2hex
+                tiles2rois
               </div>
             </div>
           </a>
@@ -1658,13 +1587,10 @@
     </div>
     
     
-    
-      
-      
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tooltips", "navigation.expand", "navigation.footer", "navigation.indexes", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.annotate", "content.code.copy", "content.tooltips", "navigation.expand", "navigation.footer", "navigation.indexes", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.83f73b43.min.js"></script>
       
         <script src="../../javascripts/mathjax.js"></script>
       

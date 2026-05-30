@@ -8,13 +8,9 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/pts2tiles/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/topic_eval/">
       
       
-        <link rel="prev" href="../">
-      
-      
-        <link rel="next" href="../tiles2hex/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +18,7 @@
     
     
       
-        <title>pts2tiles - punkst</title>
+        <title>LDA topic evaluation - punkst</title>
       
     
     
@@ -74,7 +70,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#pts2tiles" class="md-skip">
+        <a href="#lda-topic-evaluation" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              pts2tiles
+              LDA topic evaluation
             
           </span>
         </div>
@@ -259,12 +255,10 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../" class="md-tabs__link">
           
   
@@ -529,8 +523,6 @@
       
   
   
-    
-  
   
   
     
@@ -563,19 +555,18 @@
     
     
       
-        
-        
-      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           
@@ -591,13 +582,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Modules
@@ -610,30 +601,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    pts2tiles
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../pts2tiles/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -642,89 +613,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#group-points-into-square-tiles-for-faster-downstream-access" class="md-nav__link">
-    <span class="md-ellipsis">
-      Group points into square tiles for faster downstream access
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#accepted-input-forms" class="md-nav__link">
-    <span class="md-ellipsis">
-      Accepted Input Forms
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#main-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      Main Parameters
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#feature-and-value-columns" class="md-nav__link">
-    <span class="md-ellipsis">
-      Feature and Value Columns
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#optional-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      Optional Parameters
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#scaling-notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Scaling Notes
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      Output Files
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1041,65 +929,128 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#group-points-into-square-tiles-for-faster-downstream-access" class="md-nav__link">
+  <a href="#shared-options" class="md-nav__link">
     <span class="md-ellipsis">
-      Group points into square tiles for faster downstream access
+      Shared options
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Shared options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#accepted-input-forms" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#optional" class="md-nav__link">
     <span class="md-ellipsis">
-      Accepted Input Forms
+      Optional
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#main-parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      Main Parameters
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#feature-and-value-columns" class="md-nav__link">
+  <a href="#lda-factor-eval" class="md-nav__link">
     <span class="md-ellipsis">
-      Feature and Value Columns
+      lda-factor-eval
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="lda-factor-eval">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multinomial-eb-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Multinomial EB workflow
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#optional-parameters" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#eb-components" class="md-nav__link">
     <span class="md-ellipsis">
-      Optional Parameters
+      EB components
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#scaling-notes" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
     <span class="md-ellipsis">
-      Scaling Notes
+      Outputs
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#output-files" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
     <span class="md-ellipsis">
-      Output Files
+      Example
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lda-factor-eval-naive" class="md-nav__link">
+    <span class="md-ellipsis">
+      lda-factor-eval-naive
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="lda-factor-eval-naive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-naive-option" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required naive option
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#naive-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Naive outputs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1121,143 +1072,216 @@
   
 
 
-<h1 id="pts2tiles">pts2tiles<a class="headerlink" href="#pts2tiles" title="Permanent link">&para;</a></h1>
-<h3 id="group-points-into-square-tiles-for-faster-downstream-access">Group points into square tiles for faster downstream access<a class="headerlink" href="#group-points-into-square-tiles-for-faster-downstream-access" title="Permanent link">&para;</a></h3>
-<p><code>pts2tiles</code> rewrites a delimited text point file so records are grouped into non-overlapping square tiles in <code>(x, y)</code> space. It writes a tiled <code>.tsv</code> output file plus a binary index storing byte offsets for each tile to help faster region query.</p>
-<p>The row order is preserved only at the tile level. Records inside a tile may be arbitrary.</p>
-<p>Example usage:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
+<h1 id="lda-topic-evaluation">LDA topic evaluation<a class="headerlink" href="#lda-topic-evaluation" title="Permanent link">&para;</a></h1>
+<p>This document describes:</p>
+<ul>
+<li><code>punkst lda-factor-eval</code>: empirical Bayes topic activity and factor evaluation</li>
+<li><code>punkst lda-factor-eval-naive</code>: naive (fast) theta-threshold leave-one-factor-out evaluation</li>
+</ul>
+<p>Both commands evaluate factors from a fitted LDA model. They use the same input
+formats as <code>lda-transform</code> and require a fitted topic-by-feature model supplied
+with <code>--in-model</code>.</p>
+<h2 id="shared-options">Shared options<a class="headerlink" href="#shared-options" title="Permanent link">&para;</a></h2>
+<h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
+<p>One input source is required:</p>
+<ul>
+<li>custom sparse text input with <code>--in-data</code> and <code>--in-meta</code></li>
+<li>10X MEX input via one or more <code>--in-dge-dir</code></li>
+<li>or matching repeated 10X triplets: <code>--in-barcodes</code>, <code>--in-features</code>,
+  <code>--in-matrix</code></li>
+</ul>
+<p>For 10X input, optional <code>--dataset-id</code> values may be provided, one per dataset.
+If both custom and 10X inputs are supplied, the 10X input is used.</p>
+<p><code>--in-model</code>
+Input topic-by-feature model matrix. Required.</p>
+<p><code>--out-prefix</code>
+Prefix for output files. Required.</p>
+<h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
+<p><code>--min-count-per-factor</code>
+Minimum weighted total count for a factor to be considered a candidate for evaluation. Defaults to <code>50</code>.</p>
+<p><code>--candidate-threshold</code>
+Maximum weighted total count fraction for a factor to be considered a candidate for evaluation. Defaults to <code>0.005</code>. Set it to <code>1</code> to perform leave-one-out evaluation for all factors passing the <code>--min-count-per-factor</code> threshold.</p>
+<p><code>--features</code> - Feature names and total counts file used to define or filter features.</p>
+<p><code>--min-count-per-feature</code>
+Minimum feature total count when <code>--features</code> is supplied.</p>
+<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code>
+Regex filters for feature selection.</p>
+<p><code>--min-count</code>
+Minimum total feature count for a unit to be kept.</p>
+<p><code>--threads</code>
+Number of threads used by LDA transforms. <code>lda-factor-eval</code> also uses this for
+multinomial EB evidence and posterior activity integration.</p>
+<p><code>--seed</code>
+Random seed. If not positive, a random seed is generated.</p>
+<p><code>--max-iter</code>, <code>--mean-change-tol</code>
+Per-document LDA transform controls.</p>
+<p><code>--alpha</code>
+Document-topic prior override. By default the fitted transform uses <code>1 / K</code>.</p>
+<p><code>--write-theta</code>
+Write <code>{prefix}.theta.tsv</code>, a dense unit-by-factor theta matrix. Rows are
+zero-based unit ids and columns are zero-based factor indices.</p>
+<p>Both commands also write:</p>
+<ul>
+<li><code>{prefix}.unit_gof.tsv</code>: full-model per-unit goodness-of-fit diagnostics</li>
+<li><code>{prefix}.theta_hist.tsv</code>: per-factor histogram of full-model theta values</li>
+</ul>
+<h2 id="lda-factor-eval"><code>lda-factor-eval</code><a class="headerlink" href="#lda-factor-eval" title="Permanent link">&para;</a></h2>
+<p><code>lda-factor-eval</code> is the main topic-activity evaluator. It fits a sparse
+empirical-Bayes mixture for each selected candidate factor using a multinomial
+likelihood. The beta-marginal EB method can be requested as an additional output
+with <code>--eb-method both</code>, but factor evaluation itself is always based on the
+multinomial EB fit.</p>
+<h3 id="multinomial-eb-workflow">Multinomial EB workflow<a class="headerlink" href="#multinomial-eb-workflow" title="Permanent link">&para;</a></h3>
+<p>For each selected factor <span class="arithmatex">\(k\)</span>:</p>
+<ol>
+<li>Remove factor <span class="arithmatex">\(k\)</span> from the topic model.</li>
+<li>Refit units to the reduced fixed model to obtain a background distribution
+   <span class="arithmatex">\(q_i\)</span>.</li>
+<li>Evaluate fixed EB component evidences for the focal factor.</li>
+<li>Fit component mixture weights by EM.</li>
+<li>Assign each unit to its most probable posterior component <span class="arithmatex">\(c_i\)</span>.</li>
+<li>Summarize units at component cutoffs <span class="arithmatex">\(c = 1, 2, ...\)</span>, excluding the null
+   component 0.</li>
+</ol>
+<p><code>--refit-min-theta</code>
+Optional approximation for the reduced-model refit. Units with full-model
+<span class="arithmatex">\(\theta_{ik}\)</span> below this threshold are not refit. Instead, their reduced theta
+is approximated by removing factor <span class="arithmatex">\(k\)</span> from the full theta row and
+renormalizing the remaining factors. The default is <code>1e-5</code>. Set
+<code>--refit-min-theta 0</code> or a negative value to disable this approximation and
+refit all units.</p>
+<h3 id="eb-components">EB components<a class="headerlink" href="#eb-components" title="Permanent link">&para;</a></h3>
+<p>Component 0 is always the null interval <code>[0, eps]</code>, where <code>eps</code> is set by
+<code>--eb-null-eps</code>.</p>
+<p><code>--eb-uniform-slabs b1 b2 b3 ...</code>
+Defines active uniform slab breakpoints. The intervals are <code>[eps,b1]</code>,
+<code>[b1,b2]</code>, <code>[b2,b3]</code>, and, if the largest breakpoint is less than 1,
+<code>[b_max,1]</code>. If omitted, the default active slabs are <code>[eps,0.05]</code>,
+<code>[0.05,0.10]</code>, <code>[0.10,0.25]</code>, <code>[0.25,0.50]</code>, and <code>[0.50,1.0]</code>.</p>
+<p><code>--eb-beta-slabs c1 d1 c2 d2 ...</code>
+Appends beta-distributed active slabs with the given shape pairs.</p>
+<p><code>--eb-method multinomial|both</code>
+Default: <code>multinomial</code>. Use <code>both</code> to also write beta-marginal EB outputs.
+<code>beta-marginal</code> alone is rejected because <code>factor_eval.tsv</code> depends on
+multinomial EB quantities.</p>
+<p><code>--eb-max-iter</code>, <code>--eb-tol</code>, <code>--eb-pseudocount</code>
+EM controls for mixture weight fitting.</p>
+<p><code>--eb-prob-floor</code>, <code>--eb-quad-subdivisions</code>
+Numerical controls for multinomial evidence integration.</p>
+<p><code>--eb-top-components</code>
+Number of top posterior components reported in unit-activity files. Default:
+<code>2</code>.</p>
+<h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
+<p><code>{prefix}.factor_eval.tsv</code>
+Component-threshold factor summaries:</p>
+<ul>
+<li><code>factor</code>: zero-based factor index</li>
+<li><code>theta_sum</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} \theta_{ik}\)</span></li>
+<li><code>c</code>: smallest component id included in the row</li>
+<li><code>N</code>: number of units with <code>c_i &gt;= c</code></li>
+<li><code>S</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} a_i n_i\)</span>, where <span class="arithmatex">\(a_i\)</span> is posterior activity</li>
+<li><code>W</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} a_i\)</span></li>
+<li><code>I</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} \mathrm{llr}_i\)</span></li>
+<li><code>avg_llr_per_token</code>: average of <span class="arithmatex">\(\mathrm{llr}_i / n_i\)</span> over included units</li>
+</ul>
+<p>Here <span class="arithmatex">\(\mathrm{llr}_i\)</span> is the multinomial log likelihood ratio between the
+full-model distribution and the reduced-model background distribution.</p>
+<p><code>{prefix}.eb_factor_activity.tsv</code>
+One row per EB method and factor:</p>
+<ul>
+<li><code>method</code>: <code>org</code> for multinomial EB, <code>marginal</code> for beta-marginal EB</li>
+<li><code>factor</code></li>
+<li><code>N_active</code></li>
+<li><code>eta_null</code></li>
+<li><code>loglik</code></li>
+<li><code>iterations</code></li>
+</ul>
+<p><code>{prefix}.eb_components.tsv</code>
+Wide component mixture-weight table when only uniform components are present.
+If beta slabs are also present, outputs are split into:</p>
+<ul>
+<li><code>{prefix}.uniform.eb_components.tsv</code></li>
+<li><code>{prefix}.beta.eb_components.tsv</code></li>
+</ul>
+<p>Rows are method/factor fits. Eta columns are named with component ids and
+component parameters, for example <code>c1_0.01_0.05</code>.</p>
+<p><code>{prefix}.unit_activity.tsv</code>
+Multinomial EB active unit rows. Only units with <code>p_active &gt; 0.5</code> are written.
+Columns are:</p>
+<ul>
+<li><code>factor</code></li>
+<li><code>unit_id</code></li>
+<li><code>p_active</code></li>
+<li>repeated <code>c_j</code>, <code>resp_j</code> pairs for top posterior components</li>
+</ul>
+<p>If <code>--eb-method both</code> is used, beta-marginal active unit rows are written to
+<code>{prefix}.marginal.unit_activity.tsv</code>.</p>
+<p><code>{prefix}.unit_factor_eval.tsv</code>
+Written when <code>--write-unit-factor-stats</code> or <code>--unit-factor-stats-out</code> is used.
+Columns are <code>factor</code>, <code>unit_id</code>, <code>theta_factor</code>, <code>component</code>, <code>a</code>, <code>llr</code>, and
+<code>llr_per_token</code>.</p>
+<h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>lda-factor-eval<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in-data<span class="w"> </span>units.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--in-meta<span class="w"> </span>meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--in-model<span class="w"> </span>lda_model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span>eval/topic_activity<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--candidate-threshold<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--min-count-per-factor<span class="w"> </span><span class="m">50</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div>
-<p>Example with per-axis scaling:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--scale-x<span class="w"> </span><span class="m">0</span>.108<span class="w"> </span>--scale-y<span class="w"> </span><span class="m">0</span>.108<span class="w"> </span>--scale-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled
+<h2 id="lda-factor-eval-naive"><code>lda-factor-eval-naive</code><a class="headerlink" href="#lda-factor-eval-naive" title="Permanent link">&para;</a></h2>
+<p>Candidate factors are selected by count-weighted topic abundance, matching
+<code>lda-factor-eval</code>: <span class="arithmatex">\(T_k = \sum_i n_i \theta_{ik}\)</span>, and a factor is selected
+when <span class="arithmatex">\(T_k / \sum_i n_i\)</span> is at most <code>--candidate-threshold</code>. The output keeps
+the historical <code>theta_sum</code> column as the unweighted <span class="arithmatex">\(\sum_i \theta_{ik}\)</span> and
+reports <span class="arithmatex">\(T_k\)</span> in the <code>weight</code> column.</p>
+<p>For each candidate factor, units with <span class="arithmatex">\(\theta_{ik} &gt; \min(\text{--thresholds})\)</span>
+are evaluated. The command can use:</p>
+<ul>
+<li><code>--refit</code>: remove the focal factor and transform selected units with the
+  reduced fixed model</li>
+<li><code>--projection</code>: project the full-model expected distribution onto the convex
+  hull of non-focal factors</li>
+</ul>
+<p>If neither <code>--refit</code> nor <code>--projection</code> is supplied, <code>--refit</code> is used.</p>
+<h3 id="required-naive-option">Required naive option<a class="headerlink" href="#required-naive-option" title="Permanent link">&para;</a></h3>
+<p><code>--thresholds</code>
+Theta thresholds used to define factor summary rows. A row for threshold <code>tau</code>
+summarizes units with <span class="arithmatex">\(\theta_{ik} &gt; \tau\)</span>.</p>
+<h3 id="naive-outputs">Naive outputs<a class="headerlink" href="#naive-outputs" title="Permanent link">&para;</a></h3>
+<p><code>{prefix}.factor_eval.tsv</code>
+Refit summaries, when <code>--refit</code> is enabled.</p>
+<p><code>{prefix}.prj.factor_eval.tsv</code>
+Projection summaries, when <code>--projection</code> is enabled.</p>
+<p>Both summary files use:</p>
+<ul>
+<li><code>factor</code></li>
+<li><code>theta_sum</code>: total full-model theta abundance for the factor</li>
+<li><code>weight</code>: total count-weighted theta abundance for the factor</li>
+<li><code>tau</code>: theta threshold</li>
+<li><code>N</code>: number of units above threshold</li>
+<li><code>S</code>: total counts among units above threshold</li>
+<li><code>W</code>: sum of theta values among units above threshold</li>
+<li><code>I</code>: summed leave-one-factor-out information loss</li>
+<li><code>runtime_sec</code>: method runtime for the focal factor</li>
+</ul>
+<p><code>{prefix}.unit_factor_eval.tsv</code>
+Written when <code>--write-unit-factor-stats</code> or <code>--unit-factor-stats-out</code> is used.
+Columns are <code>method</code>, <code>factor</code>, <code>unit_id</code>, <code>theta_factor</code>, and <code>B</code>, where <code>B</code>
+is the Bhattacharyya coefficient used by the selected leave-one-factor-out
+method.</p>
+<h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>lda-factor-eval-naive<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in-data<span class="w"> </span>units.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--in-meta<span class="w"> </span>meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--in-model<span class="w"> </span>lda_model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span>eval/topic_naive<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--thresholds<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--candidate-threshold<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span>--refit<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div>
-<p>Example with CSV input:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.csv.gz<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--csv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled
-</span></code></pre></div>
-<p>Example for retiling a factor-probability TSV for <code>tile-op</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/legacy_factors.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--tile-op-factor-tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/legacy_factors.tiled
-</span></code></pre></div>
-<h3 id="accepted-input-forms">Accepted Input Forms<a class="headerlink" href="#accepted-input-forms" title="Permanent link">&para;</a></h3>
-<p><code>pts2tiles</code> currently accepts these input forms through <code>--in-tsv</code>:</p>
-<ul>
-<li>A plain text file on disk.</li>
-<li>A gzipped text file whose path ends with <code>.gz</code>.</li>
-<li>Standard input, using <code>--in-tsv -</code>.</li>
-</ul>
-<p>Delimiter handling:</p>
-<ul>
-<li>By default, input is parsed as tab-delimited text.</li>
-<li>With <code>--csv</code>, input is parsed as comma-delimited text.</li>
-<li>Output is always written as tab-delimited <code>.tsv</code>, even when the input is CSV.</li>
-</ul>
-<p>Current parser behavior:</p>
-<ul>
-<li>The parser splits each line on a single-character delimiter only.</li>
-<li>It does not implement full RFC-style CSV quoting or escaping.</li>
-<li>In practice, <code>--csv</code> should be used only for simple comma-delimited records where commas do not appear inside quoted fields.</li>
-</ul>
-<p>Header and metadata handling:</p>
-<p>Initial lines starting with <code>#</code> are automatically treated as metadata/header and copied directly to the output. Comment lines that appear later in the file are skipped and are not copied to the output.</p>
-<ul>
-<li><code>--skip N</code> skips the first <code>N</code> lines from parsing.</li>
-<li>By default, skipped lines are not copied to the output.</li>
-<li><code>--skip-last-is-header</code> marks only the last skipped line as the header row and rewrites it to start with a single <code>#</code>.</li>
-</ul>
-<h3 id="main-parameters">Main Parameters<a class="headerlink" href="#main-parameters" title="Permanent link">&para;</a></h3>
-<dl>
-<dt><code>--in-tsv</code></dt>
-<dd>Input text file, gzipped text file, or <code>-</code> for stdin.</dd>
-<dt><code>--icol-x</code>, <code>--icol-y</code></dt>
-<dd>Zero-based column indices for the <code>x</code> and <code>y</code> coordinates used for tiling.</dd>
-<dt><code>--tile-size</code></dt>
-<dd>Side length of each square tile, in the same units as the effective coordinates after optional scaling.</dd>
-<dt><code>--out-prefix</code></dt>
-<dd>Prefix for output files.</dd>
-<dt><code>--temp-dir</code></dt>
-<dd>Directory used for temporary per-tile files during processing.</dd>
-</dl>
-<h3 id="feature-and-value-columns">Feature and Value Columns<a class="headerlink" href="#feature-and-value-columns" title="Permanent link">&para;</a></h3>
-<dl>
-<dt><code>--icol-feature</code></dt>
-<dd>Optional zero-based feature column. If provided, <code>pts2tiles</code> can also write <code>prefix.features.tsv</code>.</dd>
-<dt><code>--icol-int</code></dt>
-<dd>Optional zero-based integer column to aggregate per feature. Multiple columns can be provided as <code>--icol-int 3 4 5</code>. If not provided, a dummy value of <code>1</code> is used assuming each record is one transcript.</dd>
-</dl>
-<p>Behavior of <code>prefix.features.tsv</code>:</p>
-<ul>
-<li>If <code>--icol-feature</code> and one or more <code>--icol-int</code> columns are provided, each row contains the feature followed by aggregated integer totals for those columns.</li>
-</ul>
-<h3 id="optional-parameters">Optional Parameters<a class="headerlink" href="#optional-parameters" title="Permanent link">&para;</a></h3>
-<dl>
-<dt><code>--icol-z</code></dt>
-<dd>Optional zero-based <code>z</code> coordinate column. Tiling still uses only <code>x</code> and <code>y</code>, but if <code>z</code> is provided the command also records <code>zmin</code>/<code>zmax</code> and writes <code>prefix.z_hist.tsv</code>.</dd>
-<dt><code>--csv</code></dt>
-<dd>Parse the input as comma-delimited text instead of tab-delimited text.</dd>
-<dt><code>--skip</code></dt>
-<dd>Number of initial lines to skip from parsing and preserve as metadata in the output. Default: <code>0</code>.</dd>
-<dt><code>--skip-last-is-header</code></dt>
-<dd>Treat the last skipped line as the header line. Requires <code>--skip &gt; 0</code>.</dd>
-<dt><code>--tile-op-factor-tsv</code></dt>
-<dd>Retile a TSV with <code>x</code>, <code>y</code>, optional <code>z</code>, and contiguous <code>K1/P1</code>, <code>K2/P2</code>, ... factor-probability columns. This mode ignores any existing index, infers coordinate and K/P columns from a header line starting with <code>#</code>, and writes an index that <code>tile-op</code> can read directly. For a non-comment header, use <code>--skip N --skip-last-is-header</code>.</dd>
-<dt><code>--tile-buffer</code></dt>
-<dd>Per-thread, per-tile in-memory buffer size in number of records before flushing to disk. Default: <code>1000</code>.</dd>
-<dt><code>--batch-size</code></dt>
-<dd>Batch size in number of lines when reading from stdin or a gzipped input stream. Only relevant for <code>--in-tsv -</code> and inputs ending in <code>.gz</code>. Default: <code>10000</code>.</dd>
-<dt><code>--scale</code></dt>
-<dd>Uniform scaling factor applied to <code>x</code>, <code>y</code>, and <code>z</code> if present, unless axis-specific overrides are supplied. Default: <code>1</code>.</dd>
-<dt><code>--scale-x</code>, <code>--scale-y</code>, <code>--scale-z</code></dt>
-<dd>Axis-specific scaling factors. If an axis-specific scale is omitted, it falls back to <code>--scale</code>.</dd>
-<dt><code>--digits</code></dt>
-<dd>Decimal precision used when rewritten scaled coordinates are written to the output. Default: <code>2</code>.</dd>
-<dt><code>--include-cols</code></dt>
-<dd>Optional list of 0-based input column indices to keep in the tiled output. Explicit parser columns (<code>--icol-x</code>, <code>--icol-y</code>, <code>--icol-z</code>, <code>--icol-feature</code>, and <code>--icol-int</code>) are always kept. Output columns are compacted in their original order. Cannot be combined with <code>--exclude-cols</code>.</dd>
-<dt><code>--exclude-cols</code></dt>
-<dd>Optional list of 0-based input column indices to remove from the tiled output. Explicit parser columns are always kept. Output columns are compacted in their original order. Cannot be combined with <code>--include-cols</code>.</dd>
-<dt><code>--threads</code></dt>
-<dd>Number of worker threads. Default: <code>1</code>.</dd>
-<dt><code>--verbose</code></dt>
-<dd>Verbosity level for logging.</dd>
-<dt><code>--debug</code></dt>
-<dd>Enable additional debug output.</dd>
-</dl>
-<h3 id="scaling-notes">Scaling Notes<a class="headerlink" href="#scaling-notes" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Tile assignment is computed from scaled coordinates.</li>
-<li>If no scaling is requested, coordinates are copied through unchanged.</li>
-<li>If scaling is requested, rewritten coordinate values are emitted using <code>--digits</code> decimal places.</li>
-<li><code>--scale-z</code> has an effect only when <code>--icol-z</code> is provided.</li>
-</ul>
-<h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
-<ul>
-<li><code>prefix.tsv</code>: tiled tab-delimited output records.</li>
-<li><code>prefix.index</code>: binary tile index with per-tile byte offsets and bounding boxes.</li>
-<li><code>prefix.coord_range.tsv</code>: global coordinate range containing <code>xmin</code>, <code>xmax</code>, <code>ymin</code>, <code>ymax</code>, and also <code>zmin</code>, <code>zmax</code> if <code>--icol-z</code> is provided.</li>
-<li><code>prefix.z_hist.tsv</code>: two-column tab-delimited histogram of <code>z</code> using unit-width bins. The unit is the same as the effective <code>z</code> after scaling. Written only when <code>--icol-z</code> is provided.</li>
-<li><code>prefix.features.tsv</code>: sorted feature summary file. Written only when <code>--icol-feature</code> is provided.</li>
-</ul>
 
 
 
@@ -1288,44 +1312,6 @@
       
         <footer class="md-footer">
   
-    
-      
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
-        
-          
-          <a href="../" class="md-footer__link md-footer__link--prev" aria-label="Previous: Overview">
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
-            </div>
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Previous
-              </span>
-              <div class="md-ellipsis">
-                Overview
-              </div>
-            </div>
-          </a>
-        
-        
-          
-          <a href="../tiles2hex/" class="md-footer__link md-footer__link--next" aria-label="Next: tiles2hex">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                tiles2hex
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
-        
-      </nav>
     
   
   <div class="md-footer-meta md-typeset">
