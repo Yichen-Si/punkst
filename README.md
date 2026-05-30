@@ -16,12 +16,12 @@ If you have difficulty installing, let us known (by opening an issue). You can a
 **Prerequisites**
 
 - Git
-- CMake: 3.15 to 3.23
-- C++20 compiler* (GCC >= 8, Clang >= 6, Apple Clang >= 10, MSVC >= 19.22)
+- CMake >= 3.15
+- C++17 compiler* (GCC >= 9, Clang/Apple Clang/MSVC with C++17 standard library support)
 - TBB, OpenCV
 - libcurl (optional; enabled by default for `http(s)` / `s3://` input support)
 
-*We do assume your [compiler](https://en.cppreference.com/w/cpp/compiler_support/20.html) properly supports C++20. Consider updating the compiler if you encounter issues.
+*GCC 9 or newer is the supported Linux baseline. GCC 8 may work in some environments, but older `std::filesystem` support varies across distributions.
 
 ```bash
 # 1) Clone the repository

@@ -9,12 +9,12 @@ This guide walks you through building **punkst** on Linux and macOS, including e
 Prerequisites
 
 - Git
-- CMake: 3.15 to 3.23
-- C++20 compiler* (GCC/Clang/MSVC with C++20 support)
+- CMake >= 3.15
+- C++17 compiler* (GCC >= 9, Clang/Apple Clang/MSVC with C++17 standard library support)
 - TBB, OpenCV
 - libcurl (optional; only needed when `ENABLE_REMOTE_IO=ON`)
 
-*We assume your compiler properly supports C++20. Consider updating your compiler if you encounter issues.
+*GCC 9 or newer is the supported Linux baseline. GCC 8 may work in some environments, but older `std::filesystem` support varies across distributions.
 
 ```bash
 # 1) Clone the repository

@@ -3,7 +3,6 @@
 #include "hdp.hpp"
 #include <memory>
 #include <regex>
-#include <span>
 
 /**
  * Base class for online training of topic models.
@@ -76,7 +75,7 @@ public:
     virtual const std::vector<std::string>& get_topic_names() = 0;
 
     virtual void do_partial_fit(const std::vector<Document>& batch) = 0;
-    virtual MatrixXd do_transform(std::span<const Document> batch) = 0;
+    virtual MatrixXd do_transform(DocumentView batch) = 0;
 
     bool readMinibatch(std::ifstream& inFileStream, std::vector<Document>& batch, std::vector<std::string>& idens, int32_t batchSizeOverride, int32_t minCount = 0, int32_t maxUnits = INT32_MAX);
 
@@ -270,7 +269,7 @@ public:
     void do_partial_fit(const std::vector<Document>& batch) override {
         lda->partial_fit(batch);
     }
-    MatrixXd do_transform(std::span<const Document> batch) override {
+    MatrixXd do_transform(DocumentView batch) override {
         return lda->transform(batch);
     }
     const RowMajorMatrixXd& get_model_matrix() const override {
@@ -528,7 +527,7 @@ public:
     void do_partial_fit(const std::vector<Document>& batch) override {
         hdp->partial_fit(batch);
     }
-    MatrixXd do_transform(std::span<const Document> batch) override {
+    MatrixXd do_transform(DocumentView batch) override {
         MatrixXd theta = hdp->transform(batch);
         colNormalizeInPlace(theta);
         return theta;
