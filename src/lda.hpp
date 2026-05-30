@@ -181,7 +181,7 @@ public:
     RowMajorMatrixXd transform(const std::vector<SparseObs>& docs) {
         return transform_common(docs, [](const auto& d) -> const Document& { return d.doc; });
     }
-    RowMajorMatrixXd transform_gamma(std::span<const Document> docs) {
+    RowMajorMatrixXd transform_gamma(DocumentView docs) {
         return transform_gamma_common(docs, [](const auto& d) -> const Document& { return d; });
     }
 

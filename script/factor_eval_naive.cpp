@@ -7,7 +7,6 @@
 #include <iomanip>
 #include <limits>
 #include <numeric>
-#include <span>
 
 namespace {
 
@@ -222,7 +221,7 @@ int32_t cmdLDAFactorEvalNaive(int argc, char** argv) {
     }
     notice("Loaded %d units for factor evaluation", static_cast<int32_t>(data.docs.size()));
 
-    RowMajorMatrixXd theta = lda.do_transform(std::span<const Document>(data.docs.data(), data.docs.size()));
+    RowMajorMatrixXd theta = lda.do_transform(DocumentView(data.docs.data(), data.docs.size()));
     const double ldaAlpha = lda.get_doc_topic_prior();
     RowMajorMatrixXd betaNorm = rowNormalize(lda.get_model_matrix());
     UnitGofStats gof = computeUnitGof(data.docs, theta, betaNorm);
@@ -338,7 +337,7 @@ int32_t cmdLDAFactorEvalNaive(int argc, char** argv) {
             }
             RowMajorMatrixXd thetaReduced;
             if (!selectedDocs.empty()) {
-                thetaReduced = reducedLda.transform(std::span<const Document>(selectedDocs.data(), selectedDocs.size()));
+                thetaReduced = reducedLda.transform(DocumentView(selectedDocs.data(), selectedDocs.size()));
             }
             for (int32_t local = 0; local < static_cast<int32_t>(evalRows.size()); ++local) {
                 const int32_t i = evalRows[local];

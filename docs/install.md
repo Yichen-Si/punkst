@@ -81,10 +81,22 @@ cmake .. \
   -DCMAKE_PREFIX_PATH="$HOME/.local"
 ```
 
+### TBB
 For TBB, a local oneTBB install is documented upstream:
 
 - [oneTBB installation guide](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md)
 
+Install from released packages:
+```bash
+wget https://github.com/uxlfoundation/oneTBB/releases/download/v2023.0.0/oneapi-tbb-2023.0.0-lin.tgz
+tar -zxvf oneapi-tbb-2023.0.0-lin.tgz
+```
+Then do the following (everytime) before you build punkst
+```bash
+source oneapi-tbb-2023.0.0/env/vars.sh
+```
+
+### libpng
 For libpng without root access, use a user-level package manager when available:
 
 ```bash

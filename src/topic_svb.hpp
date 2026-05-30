@@ -276,7 +276,7 @@ public:
     MatrixXd do_transform(DocumentView batch) override {
         return lda->transform(batch);
     }
-    RowMajorMatrixXd do_transform_gamma(std::span<const Document> batch) {
+    RowMajorMatrixXd do_transform_gamma(DocumentView batch) {
         return lda->transform_gamma(batch);
     }
     double get_doc_topic_prior() const {

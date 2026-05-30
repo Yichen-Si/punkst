@@ -7,7 +7,6 @@
 #include <fstream>
 #include <iomanip>
 #include <numeric>
-#include <span>
 #include <sstream>
 
 namespace {
@@ -385,11 +384,11 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
     }
     notice("Loaded %d units for factor evaluation", static_cast<int32_t>(data.docs.size()));
 
-    RowMajorMatrixXd theta = lda.do_transform(std::span<const Document>(data.docs.data(), data.docs.size()));
+    RowMajorMatrixXd theta = lda.do_transform(DocumentView(data.docs.data(), data.docs.size()));
     RowMajorMatrixXd gammaCounts;
     const double ldaAlpha = lda.get_doc_topic_prior();
     if (runEbBetaMarginal(opt)) {
-        gammaCounts = lda.do_transform_gamma(std::span<const Document>(data.docs.data(), data.docs.size()));
+        gammaCounts = lda.do_transform_gamma(DocumentView(data.docs.data(), data.docs.size()));
     }
     RowMajorMatrixXd betaNorm = rowNormalize(lda.get_model_matrix());
     UnitGofStats gof = computeUnitGof(data.docs, theta, betaNorm);
@@ -512,7 +511,7 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
             k, static_cast<int32_t>(refitRows.size()));
         if (!refitDocs.empty()) {
             RowMajorMatrixXd thetaReducedRefit = reducedLda.transform(
-                std::span<const Document>(refitDocs.data(), refitDocs.size()));
+                DocumentView(refitDocs.data(), refitDocs.size()));
             for (int32_t local = 0; local < static_cast<int32_t>(refitRows.size()); ++local) {
                 thetaReducedAll.row(refitRows[local]) = thetaReducedRefit.row(local);
             }
