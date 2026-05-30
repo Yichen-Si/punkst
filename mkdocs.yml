@@ -42,9 +42,10 @@ nav:
   - Intro:
     - Intro: index.md
     - Install: install.md
-  - Quickstart:
+  - Workflows:
     - Quickstart: workflows/index.md
     - Multisample: workflows/multisample.md
+    - Deployment: workflows/deploy_carto.md
   - Modules:
     - Overview: modules/index.md
     - pts2tiles: modules/pts2tiles.md

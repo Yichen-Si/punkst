@@ -214,13 +214,14 @@ int32_t cmdDeChisq(int argc, char** argv) {
 
         std::ofstream out(outputFile);
         if (!out) error("Cannot open output file: %s", outputFile.c_str());
-        out << "Feature\tFactor\tChi2\tFoldChange\tlog10pval\tCount1\tCount2\n";
+        out << "gene\tfactor\tChi2\tpval\tFoldChange\tgene_total\tlog10pval\tCount1\tCount2\n";
         out << std::fixed << std::setprecision(4);
         for (const auto& r : results) {
+            const double count1 = (*mat1_used)(commonRows[r.j].first, r.k);
+            const double count2 = (*mat2_used)(commonRows[r.j].second, r.k);
             out << commonRowNames[r.j] << "\t" << cols1[r.k] << "\t"
-                << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\t"
-                << (*mat1_used)(commonRows[r.j].first, r.k) << "\t"
-                << (*mat2_used)(commonRows[r.j].second, r.k) << "\n";
+                << r.chi2 << "\t\t" << r.fc << "\t" << (count1 + count2) << "\t"
+                << r.log10pval << "\t" << count1 << "\t" << count2 << "\n";
         }
 
         return 0;
@@ -312,11 +313,12 @@ int32_t cmdDeChisq(int argc, char** argv) {
 
     std::ofstream out(outputFile);
     if (!out) error("Cannot open output file: %s", outputFile.c_str());
-    out << "Feature\tFactor\tChi2\tFoldChange\tlog10pval\n";
+    out << "gene\tfactor\tChi2\tpval\tFoldChange\tgene_total\tlog10pval\n";
     out << std::fixed << std::setprecision(4);
     for (const auto& r : results) {
         out << geneNames[r.j] << "\t" << factorNames[r.k] << "\t"
-            << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\n";
+            << r.chi2 << "\t\t" << r.fc << "\t" << rowSums[r.j] << "\t"
+            << r.log10pval << "\n";
     }
     if (neighborK <= 0) {
         return 0;
@@ -411,11 +413,12 @@ int32_t cmdDeChisq(int argc, char** argv) {
 
     std::ofstream outNeighbor(outputFile);
     if (!outNeighbor) error("Cannot open output file: %s", outputFile.c_str());
-    outNeighbor << "Feature\tFactor\tChi2\tFoldChange\tlog10pval\n";
+    outNeighbor << "gene\tfactor\tChi2\tpval\tFoldChange\tgene_total\tlog10pval\n";
     outNeighbor << std::fixed << std::setprecision(4);
     for (const auto& r : neighborResults) {
         outNeighbor << geneNames[r.j] << "\t" << factorNames[r.k] << "\t"
-            << r.chi2 << "\t" << r.fc << "\t" << r.log10pval << "\n";
+            << r.chi2 << "\t\t" << r.fc << "\t" << rowSums[r.j] << "\t"
+            << r.log10pval << "\n";
     }
 
     return 0;

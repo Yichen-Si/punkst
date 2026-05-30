@@ -60,6 +60,9 @@ std::string trim(const std::string& str);
 std::string to_lower(const std::string& str);
 std::string to_upper(const std::string& str);
 std::string join(const std::vector<std::string>& tokens, const std::string& delim);
+std::vector<std::string> split_tab(const std::string& line);
+bool header_has(const std::vector<std::string>& header, const std::string& name);
+int32_t find_header_column(const std::vector<std::string>& header, const std::vector<std::string>& names);
 std::string basename(const std::string& path, bool stripExtension = false);
 static bool ends_with(const std::string &s, const std::string &suffix) {
     return s.size() >= suffix.size()

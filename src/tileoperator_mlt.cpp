@@ -498,7 +498,8 @@ mlt_pmtiles::PointTileData build_point_tile_data(const AccumTileData& in) {
 mlt_pmtiles::FeatureTableSchema build_point_schema(const std::string& layerName,
     uint32_t extent, bool hasZ, const std::vector<std::string>& probColumnNames,
     const std::vector<bool>& probPairNullable = {},
-    const std::vector<mlt_pmtiles::ColumnSchema>& extraColumns = {}) {
+    const std::vector<mlt_pmtiles::ColumnSchema>& extraColumns = {},
+    const std::string& featureFieldName = "feature") {
     if ((probColumnNames.size() % 2) != 0) {
         error("%s: probability column names must come in K/P pairs", __func__);
     }
@@ -508,7 +509,7 @@ mlt_pmtiles::FeatureTableSchema build_point_schema(const std::string& layerName,
     mlt_pmtiles::FeatureTableSchema schema;
     schema.layerName = layerName;
     schema.extent = extent;
-    schema.columns.push_back({"feature", mlt_pmtiles::ScalarType::STRING, false});
+    schema.columns.push_back({featureFieldName, mlt_pmtiles::ScalarType::STRING, false});
     schema.columns.push_back({"ct", mlt_pmtiles::ScalarType::INT_32, false});
     if (hasZ) {
         schema.columns.push_back({"z", mlt_pmtiles::ScalarType::FLOAT, false});
@@ -1097,8 +1098,9 @@ uint32_t required_query_token_count(int32_t icol_x, int32_t icol_y,
 }
 
 std::vector<std::string> build_reserved_column_names(
-    const std::vector<std::string>& probColumnNames, bool hasZ) {
-    std::vector<std::string> out{"feature", "ct"};
+    const std::vector<std::string>& probColumnNames, bool hasZ,
+    const std::string& featureFieldName = "feature") {
+    std::vector<std::string> out{featureFieldName, "ct"};
     if (hasZ) {
         out.push_back("z");
     }
@@ -1230,10 +1232,11 @@ AnnotateQueryPlan build_annotate_query_plan(const TileOperator& sourceOp,
     AnnotateQueryPlan out;
     out.extColumns = build_ext_column_plans(queryOp,
         icol_x, icol_y, icol_z, icol_f, icol_count,
-        mltOptions, build_reserved_column_names(probColumnNames, hasZ));
+        mltOptions, build_reserved_column_names(probColumnNames, hasZ, mltOptions.feature_field_name));
     out.schema = build_point_schema(layerName, 4096, hasZ,
         probColumnNames, probPairNullable,
-        build_extra_column_schemas(out.extColumns));
+        build_extra_column_schemas(out.extColumns),
+        mltOptions.feature_field_name);
     out.resXY = sourceOp.getPixelResolution() > 0.0f ? sourceOp.getPixelResolution() : 0.001f;
     out.resZ = hasZ ? sourceOp.getPixelResolutionZ() : 0.001f;
     out.ntok = required_query_token_count(
@@ -2790,7 +2793,8 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
     const std::vector<bool> probPairNullable = build_single_prob_nullable_flags(
         kvec_, false, mltOptions.encode_prob_min, mltOptions.encode_prob_eps);
     const mlt_pmtiles::FeatureTableSchema schema = build_point_schema(
-        basename(outPrefix), 4096, hasZ, probColumnNames, probPairNullable);
+        basename(outPrefix), 4096, hasZ, probColumnNames, probPairNullable,
+        {}, mltOptions.feature_field_name);
     const auto readRecord = [this, hasZ](std::ifstream& dataStream,
         float& x, float& y, float& z, uint32_t& featureIdx, std::vector<int32_t>& ks, std::vector<float>& ps)
     {

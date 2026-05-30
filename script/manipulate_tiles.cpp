@@ -96,6 +96,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("gene-bin-info", "JSON file with gene/count/bin rows; when provided with --write-mlt-pmtiles, gene-bin PMTiles packaging is activated", mltOptions.gene_bin_info_file)
       .add_option("feature-count-file", "Optional TSV with feature name in column 1 and total count in column 2; together with positive --n-gene-bins this activates gene-bin PMTiles packaging", mltOptions.feature_count_file)
       .add_option("n-gene-bins", "Positive number of gene bins to derive from --feature-count-file; zero disables TSV-derived gene-bin packaging", mltOptions.n_gene_bins)
+      .add_option("feature-field-name", "Property name used for feature/gene names in point PMTiles output", mltOptions.feature_field_name)
       .add_option("coord-scale", "Scale factor applied to x/y before PMTiles export", mltOptions.coordScale)
       .add_option("encode-prob-min", "For PMTiles export, encode P2+ values below this threshold as null together with their K values; negative disables pruning", mltOptions.encode_prob_min)
       .add_option("encode-prob-eps", "For PMTiles export, mark P1 nullable and omit it when P1 > 1-eps; non-positive disables this rule", mltOptions.encode_prob_eps)
@@ -241,6 +242,9 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
         }
         if (mltOptions.zoom > 31) {
             error("--pmtiles-zoom must be between 0 and 31");
+        }
+        if (mltOptions.feature_field_name.empty()) {
+            error("--feature-field-name must not be empty");
         }
     }
     const bool hasExtractRegionZMin = !std::isnan(zmin);

@@ -8,8 +8,8 @@ import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
 
-COL_FACTOR = "Factor"
-COL_FEATURE = "Feature"
+COL_FACTOR = "factor"
+COL_FEATURE = "gene"
 COL_FC = "FoldChange"
 COL_PVAL = "pval"
 COL_LOG10PVAL = "log10pval"
@@ -93,7 +93,7 @@ def _normalize_color_table(path):
 def _normalize_pseudobulk(path, feature_label):
     post = _read_table(path, "pseudobulk file")
 
-    feature_col = _find_column(post.columns, [feature_label, "Feature", "feature", "Gene", "gene"])
+    feature_col = _find_column(post.columns, [feature_label, "gene", "Feature", "feature", "Gene"])
     if feature_col is None:
         feature_col = post.columns[0]
         logging.warning(
@@ -124,11 +124,11 @@ def _normalize_pseudobulk(path, feature_label):
 def _normalize_de(path, feature_label, factor_label):
     df = _read_table(path, "DE file")
 
-    factor_col = _find_column(df.columns, [factor_label, "Factor", "factor", "Topic", "topic"])
+    factor_col = _find_column(df.columns, [factor_label, "factor", "Factor", "Topic", "topic"])
     if factor_col is None:
         sys.exit(f"Cannot find factor column in DE file: {path}")
 
-    feature_col = _find_column(df.columns, [feature_label, "Feature", "feature", "Gene", "gene"])
+    feature_col = _find_column(df.columns, [feature_label, "gene", "Feature", "feature", "Gene"])
     if feature_col is None:
         logging.warning("Cannot find feature column in DE file; using row index as feature labels")
         feat = df.index.astype(str)
@@ -214,8 +214,8 @@ def factor_report(_args):
     parser.add_argument("--de", type=str, required=True, help="")
     parser.add_argument("--de_neighbor", type=str, default="", help="")
     parser.add_argument("--pseudobulk", type=str, required=True, help="")
-    parser.add_argument("--feature_label", type=str, default="Feature", help="")
-    parser.add_argument("--factor_label", type=str, default="Factor", help="")
+    parser.add_argument("--feature_label", type=str, default="gene", help="")
+    parser.add_argument("--factor_label", type=str, default="factor", help="")
     parser.add_argument("--color_table", type=str, required=True, help="")
     parser.add_argument("--n_top_gene", type=int, default=20, help="")
     parser.add_argument("--min_top_gene", type=int, default=10, help="")

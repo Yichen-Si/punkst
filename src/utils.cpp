@@ -71,6 +71,26 @@ bool TextLineReader::getline(std::string& out) {
     return true;
 }
 
+std::vector<std::string> split_tab(const std::string& line) {
+    std::vector<std::string> out;
+    split(out, "\t", line);
+    return out;
+}
+
+bool header_has(const std::vector<std::string>& header, const std::string& name) {
+    return std::find(header.begin(), header.end(), name) != header.end();
+}
+
+int32_t find_header_column(const std::vector<std::string>& header, const std::vector<std::string>& names) {
+    for (const std::string& name : names) {
+        auto it = std::find(header.begin(), header.end(), name);
+        if (it != header.end()) {
+            return static_cast<int32_t>(std::distance(header.begin(), it));
+        }
+    }
+    return -1;
+}
+
 // Splits a line into a vector - one or more single character delimiters
 void split(std::vector<std::string>& vec, std::string_view delims, std::string_view str,
     uint32_t limit, bool clear, bool collapse, bool strip, bool keep_overflow) {

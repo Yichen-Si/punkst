@@ -34,6 +34,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv);
 int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv);
 int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv);
 int32_t cmdExportPmtiles(int32_t argc, char** argv);
+int32_t cmdDeployCartoscope(int32_t argc, char** argv);
 int32_t cmdConditionalTest(int32_t argc, char** argv);
 int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv);
 
@@ -76,6 +77,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("hex2pmtiles", "Write single-zoom polygon MLT/MVT PMTiles from factor TSV (hex or generic simple polygons)", cmdHex2PmtilesMlt)
         .add_command("build-pyramid", "Build multi-zoom MLT/MVT PMTiles pyramids", cmdBuildPmtilesPyramid)
         .add_command("export-pmtiles", "Export MLT/MVT PMTiles to TSV", cmdExportPmtiles)
+        .add_command("deploy-cartoscope", "Package punkst workflow outputs into a minimal CartoScope deployment", cmdDeployCartoscope)
         .add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
 
     if (argc < 2) {

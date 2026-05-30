@@ -181,6 +181,7 @@ set(SOURCE_FILES
     script/build_pyramid.cpp
     script/export_pmtiles.cpp
     script/hex2pmtiles.cpp
+    script/deploy_cartoscope.cpp
     script/multi_cde_lowres.cpp
     script/multi_cde_lowres_nb.cpp
     script/multi_cde_pixel_common.cpp

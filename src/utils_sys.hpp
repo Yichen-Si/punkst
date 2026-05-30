@@ -28,6 +28,19 @@
 bool createDirectory(const std::string& dir);
 
 std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t maxTries = 100);
+std::filesystem::path resolve_path(const std::filesystem::path& base, const std::string& value);
+bool file_exists(const std::filesystem::path& path);
+bool all_files_exist(const std::vector<std::filesystem::path>& paths);
+std::vector<std::filesystem::path> existing_files(const std::vector<std::filesystem::path>& paths);
+void require_file(const std::filesystem::path& path, const std::string& label);
+void copy_file_checked(const std::filesystem::path& src, const std::filesystem::path& dst);
+void copy_file_checked(const std::filesystem::path& src, const std::filesystem::path& dst,
+    bool overwrite, const std::string& label);
+std::string read_all_text(const std::filesystem::path& path);
+void write_text(const std::filesystem::path& path, const std::string& text);
+void write_text_checked(const std::filesystem::path& path, const std::string& text,
+    bool overwrite, const std::string& label);
+void write_binary(const std::filesystem::path& path, const std::string& data);
 
 struct ScopedTempDir {
     std::filesystem::path path;

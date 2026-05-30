@@ -82,6 +82,7 @@ public:
         return data_[static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)];
     }
 
+    std::vector<T>& data() { return data_; }
     const std::vector<T>& data() const { return data_; }
 
 private:
@@ -106,3 +107,5 @@ inline IntRect intersect_rect(const IntRect& lhs, const IntRect& rhs) {
 }
 
 void save_png_rgb8(const std::string& filename, const Image2D<Rgb8>& image);
+Image2D<Rgb8> load_png_rgb8(const std::string& filename);
+std::string encode_png_rgb8(const Image2D<Rgb8>& image);

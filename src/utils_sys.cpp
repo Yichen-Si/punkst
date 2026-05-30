@@ -38,6 +38,112 @@ std::filesystem::path makeTempDir(const std::filesystem::path& parent, size_t ma
                               + parent.string());
 }
 
+std::filesystem::path resolve_path(const std::filesystem::path& base, const std::string& value) {
+    std::filesystem::path p(value);
+    if (p.is_absolute()) {
+        return p;
+    }
+    return base / p;
+}
+
+bool file_exists(const std::filesystem::path& path) {
+    return std::filesystem::exists(path) && std::filesystem::is_regular_file(path);
+}
+
+bool all_files_exist(const std::vector<std::filesystem::path>& paths) {
+    for (const std::filesystem::path& path : paths) {
+        if (!file_exists(path)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::vector<std::filesystem::path> existing_files(const std::vector<std::filesystem::path>& paths) {
+    std::vector<std::filesystem::path> out;
+    for (const std::filesystem::path& path : paths) {
+        if (file_exists(path)) {
+            out.push_back(path);
+        }
+    }
+    return out;
+}
+
+void require_file(const std::filesystem::path& path, const std::string& label) {
+    if (!file_exists(path)) {
+        error("%s: missing %s: %s", __func__, label.c_str(), path.string().c_str());
+    }
+}
+
+void copy_file_checked(const std::filesystem::path& src, const std::filesystem::path& dst) {
+    require_file(src, "source file");
+    if (dst.has_parent_path()) {
+        std::filesystem::create_directories(dst.parent_path());
+    }
+    std::error_code ec;
+    std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) {
+        error("%s: failed copying %s to %s: %s", __func__,
+            src.string().c_str(), dst.string().c_str(), ec.message().c_str());
+    }
+}
+
+void copy_file_checked(const std::filesystem::path& src, const std::filesystem::path& dst,
+    bool overwrite, const std::string& label) {
+    if (!overwrite && file_exists(dst)) {
+        notice("%s: %s already exists; skipping %s", __func__, dst.string().c_str(), label.c_str());
+        return;
+    }
+    copy_file_checked(src, dst);
+}
+
+std::string read_all_text(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        error("%s: cannot open %s", __func__, path.string().c_str());
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+void write_text(const std::filesystem::path& path, const std::string& text) {
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        error("%s: cannot open %s", __func__, path.string().c_str());
+    }
+    out << text;
+    if (!out.good()) {
+        error("%s: failed writing %s", __func__, path.string().c_str());
+    }
+}
+
+void write_text_checked(const std::filesystem::path& path, const std::string& text,
+    bool overwrite, const std::string& label) {
+    if (!overwrite && file_exists(path)) {
+        notice("%s: %s already exists; skipping %s", __func__, path.string().c_str(), label.c_str());
+        return;
+    }
+    write_text(path, text);
+}
+
+void write_binary(const std::filesystem::path& path, const std::string& data) {
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream out(path, std::ios::binary);
+    if (!out.is_open()) {
+        error("%s: cannot open %s", __func__, path.string().c_str());
+    }
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    if (!out.good()) {
+        error("%s: failed writing %s", __func__, path.string().c_str());
+    }
+}
+
 bool write_all(int fd, const void* buf, size_t len) {
     const uint8_t* p = static_cast<const uint8_t*>(buf);
     size_t left = len;

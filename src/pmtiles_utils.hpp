@@ -37,6 +37,7 @@ struct StoredTilePayloadRef {
 
 struct ArchiveOptions {
     uint8_t tileType = 0x06;
+    uint8_t tileCompression = pmtiles::COMPRESSION_GZIP;
     uint8_t minZoom = 0;
     uint8_t maxZoom = 0;
     uint8_t centerZoom = 0;
@@ -49,6 +50,17 @@ struct ArchiveOptions {
     int32_t centerLonE7 = 0;
     int32_t centerLatE7 = 0;
     nlohmann::json metadata;
+};
+
+struct RasterBounds {
+    double xmin = std::numeric_limits<double>::quiet_NaN();
+    double xmax = std::numeric_limits<double>::quiet_NaN();
+    double ymin = std::numeric_limits<double>::quiet_NaN();
+    double ymax = std::numeric_limits<double>::quiet_NaN();
+
+    bool valid() const {
+        return xmax > xmin && ymax > ymin;
+    }
 };
 
 enum class VectorGeometryType {
@@ -99,5 +111,12 @@ nlohmann::json build_schema_fields_json(const FeatureTableSchema& schema);
 void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
     std::vector<EncodedTilePayload> encodedTiles,
     const SingleLayerVectorPmtilesOptions& options);
+
+void write_png_raster_pmtiles_archive(const std::string& pngFile,
+    const std::string& outFile,
+    const std::string& tempBlobFile,
+    const RasterBounds& bounds,
+    int32_t minZoom,
+    int32_t maxZoom);
 
 } // namespace mlt_pmtiles

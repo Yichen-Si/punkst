@@ -53,6 +53,7 @@ public:
         std::vector<std::string> ext_col_ints;
         std::vector<std::string> ext_col_floats;
         std::vector<std::string> ext_col_strs;
+        std::string feature_field_name = "feature";
         double coordScale = -1.0;
         double encode_prob_min = 1e-4;
         double encode_prob_eps = 1e-6;
