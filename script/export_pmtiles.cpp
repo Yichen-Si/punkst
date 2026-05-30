@@ -8,6 +8,7 @@ int32_t cmdExportPmtiles(int32_t argc, char** argv) {
     std::string inData;
     std::string outPrefix;
     int32_t tileSize = -1;
+    bool polygon = false;
     int32_t probDigits = 4;
     int32_t coordDigits = 2;
     std::string extractRegionGeoJSON;
@@ -24,7 +25,8 @@ int32_t cmdExportPmtiles(int32_t argc, char** argv) {
     pl.add_option("in", "Input PMTiles file", inPrefix)
       .add_option("in-data", "Input PMTiles file", inData)
       .add_option("out", "Output prefix", outPrefix, true)
-      .add_option("tile-size", "Tile size in the exported TileOperator index", tileSize, true)
+      .add_option("polygon", "Export simple-polygon PMTiles to TSV instead of point PMTiles to TSV/index", polygon)
+      .add_option("tile-size", "Tile size in the exported TileOperator index (required for point export)", tileSize)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities", probDigits)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates", coordDigits)
       .add_option("extract-region-geojson", "Export only rows inside a GeoJSON Polygon/MultiPolygon region", extractRegionGeoJSON)
@@ -55,6 +57,7 @@ int32_t cmdExportPmtiles(int32_t argc, char** argv) {
         error("%s: either --in or --in-data must be specified", __func__);
     }
 
+    options.polygon = polygon;
     options.tileSize = tileSize;
     options.probDigits = probDigits;
     options.coordDigits = coordDigits;

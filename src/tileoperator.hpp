@@ -46,6 +46,7 @@ public:
 
     struct MltPmtilesOptions {
         bool enabled = false;
+        bool write_mvt_pmtiles = false;
         int32_t icol_count = -1;
         std::string gene_bin_info_file;
         std::string feature_count_file;
@@ -60,6 +61,7 @@ public:
     };
 
     struct ExportPmtilesOptions {
+        bool polygon = false;
         int32_t tileSize = -1;
         int32_t probDigits = 4;
         int32_t coordDigits = 2;

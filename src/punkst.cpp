@@ -73,9 +73,9 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("de-chisq", "Differential expression using Chi-squared test", cmdDeChisq)
         .add_command("deconv-pseudobulk", "Deconvolve pseudobulk matrix using a confusion matrix", cmdDeconvPseudobulk)
         .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk)
-        .add_command("hex2pmtiles", "Write single-zoom polygon MLT PMTiles from factor TSV (hex or generic simple polygons)", cmdHex2PmtilesMlt)
-        .add_command("build-pyramid", "Build multi-zoom MLT PMTiles pyramids", cmdBuildPmtilesPyramid)
-        .add_command("export-pmtiles", "Export point-only MLT PMTiles to TSV plus TileOperator index", cmdExportPmtiles)
+        .add_command("hex2pmtiles", "Write single-zoom polygon MLT/MVT PMTiles from factor TSV (hex or generic simple polygons)", cmdHex2PmtilesMlt)
+        .add_command("build-pyramid", "Build multi-zoom MLT/MVT PMTiles pyramids", cmdBuildPmtilesPyramid)
+        .add_command("export-pmtiles", "Export MLT/MVT PMTiles to TSV", cmdExportPmtiles)
         .add_command("tile-op", "View/manipulate tiles", cmdManipulateTiles);
 
     if (argc < 2) {

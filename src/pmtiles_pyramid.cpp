@@ -2,6 +2,7 @@
 
 #include "hexgrid.h"
 #include "mlt_utils.hpp"
+#include "mvt_utils.hpp"
 #include "pmtiles_utils.hpp"
 #include "simple_polygon_pmtiles.hpp"
 #include "utils.h"
@@ -875,7 +876,8 @@ void parallel_for_tiles(size_t n, int32_t threads,
 PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& input,
     const mlt_pmtiles::FeatureTableSchema& schema,
     int blobFd,
-    int priorityFd) {
+    int priorityFd,
+    bool useMvt) {
     PointParentTileCandidate candidate;
     candidate.z = input.z;
     candidate.x = input.x;
@@ -896,7 +898,7 @@ PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& in
         const std::string compressed = read_stored_tile_blob(blobFd, *child);
         const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
         ChildSequence childSeq;
-        childSeq.decoded = mlt_pmtiles::decode_point_tile(raw);
+        childSeq.decoded = useMvt ? mvt_pmtiles::decode_point_tile(raw) : mlt_pmtiles::decode_point_tile(raw);
         validate_schema_equal(schema, childSeq.decoded.schema, "building point pyramid parent tiles");
         childSeq.priorities = read_priority_store(priorityFd, *child);
         childSeq.totalRows = childSeq.decoded.tile.size();
@@ -997,7 +999,8 @@ std::optional<EncodedParentTile> encode_point_parent_candidate(
     const PointParentTileCandidate& candidate,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const BuildOptions& options,
-    double levelRatio) {
+    double levelRatio,
+    bool useMvt) {
     if (candidate.rawFeatureCount == 0) {
         return std::nullopt;
     }
@@ -1021,8 +1024,9 @@ std::optional<EncodedParentTile> encode_point_parent_candidate(
             continue;
         }
 
-        const std::string raw = mlt_pmtiles::encode_point_tile_prefix(
-            schema, candidate.data, targetCount, nullptr);
+        const std::string raw = useMvt
+            ? mvt_pmtiles::encode_point_tile_prefix(schema, candidate.data, targetCount, nullptr)
+            : mlt_pmtiles::encode_point_tile_prefix(schema, candidate.data, targetCount, nullptr);
         std::string compressed = mlt_pmtiles::gzip_compress(raw);
         if (compressed.size() <= static_cast<size_t>(options.maxTileBytes) || targetCount == 1u) {
             if (compressed.size() > static_cast<size_t>(options.maxTileBytes) && targetCount == 1u) {
@@ -1580,7 +1584,8 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
     const mlt_pmtiles::FeatureTableSchema& schema,
     const PolygonSourceDescriptor& descriptor,
     int blobFd,
-    int priorityFd) {
+    int priorityFd,
+    bool useMvt) {
     PolygonParentTileCandidate candidate;
     candidate.z = input.z;
     candidate.x = input.x;
@@ -1602,7 +1607,7 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
         const std::string compressed = read_stored_tile_blob(blobFd, *child);
         const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
         ChildSequence childSeq;
-        childSeq.decoded = mlt_pmtiles::decode_polygon_tile(raw);
+        childSeq.decoded = useMvt ? mvt_pmtiles::decode_polygon_tile(raw) : mlt_pmtiles::decode_polygon_tile(raw);
         validate_schema_equal(schema, childSeq.decoded.schema, "building polygon pyramid parent tiles");
         childSeq.priorities = read_priority_store(priorityFd, *child);
         childSeq.totalRows = childSeq.decoded.tile.size();
@@ -1749,7 +1754,8 @@ std::optional<EncodedParentTile> encode_polygon_parent_candidate(
     const PolygonParentTileCandidate& candidate,
     const mlt_pmtiles::FeatureTableSchema& schema,
     const BuildOptions& options,
-    double levelRatio) {
+    double levelRatio,
+    bool useMvt) {
     if (candidate.rawFeatureCount == 0) {
         return std::nullopt;
     }
@@ -1773,8 +1779,9 @@ std::optional<EncodedParentTile> encode_polygon_parent_candidate(
             continue;
         }
 
-        const std::string raw = mlt_pmtiles::encode_polygon_tile_prefix(
-            schema, candidate.data, targetCount, nullptr);
+        const std::string raw = useMvt
+            ? mvt_pmtiles::encode_polygon_tile_prefix(schema, candidate.data, targetCount, nullptr)
+            : mlt_pmtiles::encode_polygon_tile_prefix(schema, candidate.data, targetCount, nullptr);
         std::string compressed = mlt_pmtiles::gzip_compress(raw);
         if (compressed.size() <= static_cast<size_t>(options.maxTileBytes) || targetCount == 1u) {
             if (compressed.size() > static_cast<size_t>(options.maxTileBytes) && targetCount == 1u) {
@@ -1936,8 +1943,9 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
     validate_common_pyramid_inputs(inPmtiles, outPmtiles, options, __func__);
     const mlt_pmtiles::LoadedPmtilesArchive archive =
         mlt_pmtiles::load_pmtiles_archive(inPmtiles);
-    if (archive.header.tile_type != pmtiles::TILETYPE_MLT) {
-        error("%s: expected MLT PMTiles input, got tile_type=%u", __func__,
+    const bool useMvt = archive.header.tile_type == pmtiles::TILETYPE_MVT;
+    if (archive.header.tile_type != pmtiles::TILETYPE_MLT && !useMvt) {
+        error("%s: expected MLT or MVT PMTiles input, got tile_type=%u", __func__,
             static_cast<unsigned>(archive.header.tile_type));
     }
     if (archive.header.tile_compression != pmtiles::COMPRESSION_GZIP) {
@@ -1984,7 +1992,9 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         tile.dataOffset = append_blob_to_store(stores.blobFd, stores.blobSize, compressed);
         if (entry.z == existingMinZoom) {
             const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
-            const mlt_pmtiles::DecodedPointTile decoded = mlt_pmtiles::decode_point_tile(raw);
+            const mlt_pmtiles::DecodedPointTile decoded = useMvt
+                ? mvt_pmtiles::decode_point_tile(raw)
+                : mlt_pmtiles::decode_point_tile(raw);
             if (!haveSchema) {
                 schema = decoded.schema;
                 haveSchema = true;
@@ -2018,7 +2028,7 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         std::vector<PointParentTileCandidate> candidates(parents.size());
         parallel_for_tiles(parents.size(), threads, [&](size_t i) {
             candidates[i] = build_point_parent_candidate(
-                parents[i], schema, stores.blobFd, stores.priorityFd);
+                parents[i], schema, stores.blobFd, stores.priorityFd, useMvt);
         });
 
         uint32_t maxRawFeatures = 0;
@@ -2047,7 +2057,7 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         std::vector<std::optional<mlt_pmtiles::StoredTilePayloadRef>> nextLevel(candidates.size());
         parallel_for_tiles(candidates.size(), threads, [&](size_t i) {
             std::optional<EncodedParentTile> encoded =
-                encode_point_parent_candidate(candidates[i], schema, options, levelRatio);
+                encode_point_parent_candidate(candidates[i], schema, options, levelRatio, useMvt);
             if (!encoded.has_value()) {
                 return;
             }
@@ -2095,8 +2105,9 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     validate_common_pyramid_inputs(inPmtiles, outPmtiles, options, __func__);
     const mlt_pmtiles::LoadedPmtilesArchive archive =
         mlt_pmtiles::load_pmtiles_archive(inPmtiles);
-    if (archive.header.tile_type != pmtiles::TILETYPE_MLT) {
-        error("%s: expected MLT PMTiles input, got tile_type=%u", __func__,
+    const bool useMvt = archive.header.tile_type == pmtiles::TILETYPE_MVT;
+    if (archive.header.tile_type != pmtiles::TILETYPE_MLT && !useMvt) {
+        error("%s: expected MLT or MVT PMTiles input, got tile_type=%u", __func__,
             static_cast<unsigned>(archive.header.tile_type));
     }
     if (archive.header.tile_compression != pmtiles::COMPRESSION_GZIP) {
@@ -2144,7 +2155,9 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         tile.dataOffset = append_blob_to_store(stores.blobFd, stores.blobSize, compressed);
         if (entry.z == existingMinZoom || entry.z == maxZoom) {
             const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
-            const mlt_pmtiles::DecodedPolygonTile decoded = mlt_pmtiles::decode_polygon_tile(raw);
+            const mlt_pmtiles::DecodedPolygonTile decoded = useMvt
+                ? mvt_pmtiles::decode_polygon_tile(raw)
+                : mlt_pmtiles::decode_polygon_tile(raw);
             if (!haveSchema) {
                 schema = decoded.schema;
                 sourceDescriptor = resolve_polygon_source_descriptor(archive.metadata, schema, options);
@@ -2206,7 +2219,9 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     for (auto& tile : currentLevel) {
         const std::string compressed = read_stored_tile_blob(stores.blobFd, tile);
         const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
-        const mlt_pmtiles::DecodedPolygonTile decoded = mlt_pmtiles::decode_polygon_tile(raw);
+        const mlt_pmtiles::DecodedPolygonTile decoded = useMvt
+            ? mvt_pmtiles::decode_polygon_tile(raw)
+            : mlt_pmtiles::decode_polygon_tile(raw);
         validate_schema_equal(schema, decoded.schema, "seeding polygon priorities from existing min zoom");
         const std::vector<uint64_t> priorities =
             build_polygon_seed_priorities(decoded, sourceDescriptor);
@@ -2227,7 +2242,7 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         std::vector<PolygonParentTileCandidate> candidates(parents.size());
         parallel_for_tiles(parents.size(), threads, [&](size_t i) {
             candidates[i] = build_polygon_parent_candidate(
-                parents[i], schema, sourceDescriptor, stores.blobFd, stores.priorityFd);
+                parents[i], schema, sourceDescriptor, stores.blobFd, stores.priorityFd, useMvt);
         });
 
         uint32_t maxRawFeatures = 0;
@@ -2260,7 +2275,7 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         std::vector<std::optional<mlt_pmtiles::StoredTilePayloadRef>> nextLevel(candidates.size());
         parallel_for_tiles(candidates.size(), threads, [&](size_t i) {
             std::optional<EncodedParentTile> encoded =
-                encode_polygon_parent_candidate(candidates[i], schema, options, levelRatio);
+                encode_polygon_parent_candidate(candidates[i], schema, options, levelRatio, useMvt);
             if (!encoded.has_value()) {
                 return;
             }

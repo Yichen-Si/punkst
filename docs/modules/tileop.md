@@ -268,9 +268,9 @@ In this mode:
 
 For 3D TSV dumping with GeoJSON, `--zmin/--zmax` are supported only together with `--extract-region-geojson`.
 
-### Write MLT PMTiles
+### Write PMTiles
 
-`tile-op` can write point-only MLT-backed PMTiles in EPSG:3857 coordinates.
+`tile-op` can write point-only MLT- or MVT-backed PMTiles in EPSG:3857 coordinates. Use `--write-mlt-pmtiles` for MLT or `--write-mvt-pmtiles` for MVT.
 
 A valid `--pmtiles-zoom` in `[0, 31]` is required for all PMTiles packaging modes. For the purpose of generating a max-zoom PMTiles for building a pyramid later with `pmpoint`, a typical setting is `--pmtiles-zoom 18`.
 
@@ -287,6 +287,8 @@ punkst tile-op --in path/pixel.smol --binary --write-mlt-pmtiles \
   --n-gene-bins 5 --feature-count-file path/transcripts.tiled.features.tsv \
   --out path/pixel.smol.z18 --threads 4
 ```
+
+For MVT output, replace `--write-mlt-pmtiles` with `--write-mvt-pmtiles`.
 
 Main points:
 
@@ -323,6 +325,8 @@ punkst tile-op --in path/pixel.ann2d --binary \
   --out path/pixel.ann2d.z18 --threads 4
 ```
 
+For MVT output, use `--write-mvt-pmtiles` with the same annotate options.
+
 This mode writes `feature` from the query TSV `--icol-feature` column and `ct` from `--icol-count`, then appends the annotated `K/P` columns. The main archive is always `path/out_all.pmtiles`; gene-bin side outputs are written only when gene-bin packaging is active.
 
 You can also carry selected extra query TSV columns into the packaged PMTiles schema:
@@ -350,6 +354,8 @@ punkst tile-op --in path/pixel.smol --binary \
   --write-mlt-pmtiles --pmtiles-zoom 18 --encode-prob-min 0.01 \
   --out path/pixel.merge.z18 --threads 4
 ```
+
+For MVT output, use `--write-mvt-pmtiles`.
 
 This follows the same merge and annotation rules described below, but writes PMTiles instead of TSV. The output is `path/out_all.pmtiles` plus optional gene-bin side outputs.
 

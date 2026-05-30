@@ -2,6 +2,7 @@
 
 #include "dataunits.hpp"
 #include "hexgrid.h"
+#include "mvt_utils.hpp"
 #include "pmtiles_utils.hpp"
 #include "simple_polygon_pmtiles.hpp"
 #include "utils.h"
@@ -234,6 +235,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     std::string yColName = "y";
     std::string topKColName = "topK";
     std::string topPColName = "topP";
+    std::string format = "MLT";
     std::string idColName;
     int32_t icolIdGeom = 0;
     int32_t icolXGeom = 1;
@@ -256,6 +258,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     pl.add_option("in-tsv", "Input TSV(.gz)", inTsv, true)
       .add_option("in-geom", "Optional polygon geometry TSV/CSV(.gz) for generic simple-polygon export", inGeom)
       .add_option("out", "Output single-zoom PMTiles file", outFile, true)
+      .add_option("format", "Tile encoding format: MLT or MVT", format)
       .add_option("layer-name", "Optional PMTiles layer name (default: basename of --out)", layerName)
       .add_option("hex-grid-dist", "Distance between adjacent hex centers in the input coordinate system (hex mode only)", hexGridDist)
       .add_option("pmtiles-zoom", "Web Mercator zoom level for PMTiles export", zoom, true)
@@ -290,6 +293,11 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
 
     if (zoom < 0 || zoom > 31) {
         error("%s: --pmtiles-zoom must be in [0, 31]", __func__);
+    }
+    std::transform(format.begin(), format.end(), format.begin(),
+        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    if (format != "MLT" && format != "MVT") {
+        error("%s: --format must be MLT or MVT", __func__);
     }
     if (coordScale <= 0.0) {
         error("%s: --coord-scale must be positive", __func__);
@@ -456,8 +464,24 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
         ++nRows;
     }
 
-    std::vector<mlt_pmtiles::EncodedTilePayload> encodedTiles =
-        simple_polygon_pmtiles::encode_polygon_tile_map(tileMap, schema, nullptr, writerOptions);
+    std::vector<mlt_pmtiles::EncodedTilePayload> encodedTiles;
+    if (format == "MVT") {
+        encodedTiles.reserve(tileMap.size());
+        for (const auto& kv : tileMap) {
+            const std::string raw = mvt_pmtiles::encode_polygon_tile(schema, kv.second, nullptr);
+            mlt_pmtiles::EncodedTilePayload payload;
+            payload.z = static_cast<uint8_t>(zoom);
+            payload.x = static_cast<uint32_t>(kv.first.col);
+            payload.y = static_cast<uint32_t>(kv.first.row);
+            payload.tileId = pmtiles::zxy_to_tileid(payload.z, payload.x, payload.y);
+            payload.featureCount = static_cast<uint32_t>(kv.second.size());
+            payload.compressedData = mlt_pmtiles::gzip_compress(raw);
+            encodedTiles.push_back(std::move(payload));
+        }
+    } else {
+        encodedTiles =
+            simple_polygon_pmtiles::encode_polygon_tile_map(tileMap, schema, nullptr, writerOptions);
+    }
     nlohmann::json sourceMetadata;
     std::string sourceFamily;
     if (genericPolygonMode) {
@@ -497,6 +521,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     mlt_pmtiles::SingleLayerVectorPmtilesOptions archiveOptions;
     archiveOptions.schema = schema;
     archiveOptions.geometryType = mlt_pmtiles::VectorGeometryType::Polygon;
+    archiveOptions.tileType = format == "MVT" ? pmtiles::TILETYPE_MVT : pmtiles::TILETYPE_MLT;
     archiveOptions.totalRecordCount = summary.featureCount;
     archiveOptions.coordScale = coordScale;
     archiveOptions.featureDictionarySize = 0;
@@ -506,7 +531,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     archiveOptions.geoMaxX = summary.geoMaxX;
     archiveOptions.geoMaxY = summary.geoMaxY;
     archiveOptions.generator = genericPolygonMode ? "punkst hex2pmtiles --in-geom" : "punkst hex2pmtiles";
-    archiveOptions.description = "Generated PMTiles by punkst for MLT polygons";
+    archiveOptions.description = format == "MVT"
+        ? "Generated PMTiles by punkst for MVT polygons"
+        : "Generated PMTiles by punkst for MLT polygons";
     archiveOptions.extraMetadata = extraMetadata;
     mlt_pmtiles::write_single_layer_vector_pmtiles_archive(outFile, std::move(encodedTiles), archiveOptions);
 

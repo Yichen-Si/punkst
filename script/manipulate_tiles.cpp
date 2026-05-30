@@ -92,13 +92,14 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     pl.add_option("print-index", "Print the index entries to stdout", printIndex)
       .add_option("dump-tsv", "Dump all records to TSV format", dumpTSV)
       .add_option("write-mlt-pmtiles", "Write MLT-backed PMTiles", mltOptions.enabled)
+      .add_option("write-mvt-pmtiles", "Write MVT-backed PMTiles", mltOptions.write_mvt_pmtiles)
       .add_option("gene-bin-info", "JSON file with gene/count/bin rows; when provided with --write-mlt-pmtiles, gene-bin PMTiles packaging is activated", mltOptions.gene_bin_info_file)
       .add_option("feature-count-file", "Optional TSV with feature name in column 1 and total count in column 2; together with positive --n-gene-bins this activates gene-bin PMTiles packaging", mltOptions.feature_count_file)
       .add_option("n-gene-bins", "Positive number of gene bins to derive from --feature-count-file; zero disables TSV-derived gene-bin packaging", mltOptions.n_gene_bins)
-      .add_option("coord-scale", "Scale factor applied to x/y before MLT-PMTiles export", mltOptions.coordScale)
-      .add_option("encode-prob-min", "For MLT PMTiles export, encode P2+ values below this threshold as null together with their K values; negative disables pruning", mltOptions.encode_prob_min)
-      .add_option("encode-prob-eps", "For MLT PMTiles export, mark P1 nullable and omit it when P1 > 1-eps; non-positive disables this rule", mltOptions.encode_prob_eps)
-      .add_option("pmtiles-zoom", "Web Mercator zoom level for EPSG:3857 MLT-PMTiles export", mltOptions.zoom)
+      .add_option("coord-scale", "Scale factor applied to x/y before PMTiles export", mltOptions.coordScale)
+      .add_option("encode-prob-min", "For PMTiles export, encode P2+ values below this threshold as null together with their K values; negative disables pruning", mltOptions.encode_prob_min)
+      .add_option("encode-prob-eps", "For PMTiles export, mark P1 nullable and omit it when P1 > 1-eps; non-positive disables this rule", mltOptions.encode_prob_eps)
+      .add_option("pmtiles-zoom", "Web Mercator zoom level for EPSG:3857 PMTiles export", mltOptions.zoom)
       .add_option("coord-digits", "Number of decimal digits to output for coordinates (for --dump-tsv)", coordDigits)
       .add_option("prob-digits", "Number of decimal digits to output for probabilities (for --dump-tsv)", probDigits)
       .add_option("reorganize", "Reorganize fragmented tiles", reorganize)
@@ -224,7 +225,10 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
           profileOneFactorMask || runSoftFactorMask || runHardFactorMask)) {
         error("--raster-pixel-res is currently supported only with raster-style tile-op commands");
     }
-    mltOptions.enabled = mltOptions.zoom > 0;
+    if (mltOptions.enabled && mltOptions.write_mvt_pmtiles) {
+        error("--write-mlt-pmtiles and --write-mvt-pmtiles are mutually exclusive");
+    }
+    mltOptions.enabled = mltOptions.enabled || mltOptions.write_mvt_pmtiles || mltOptions.zoom > 0;
     if (mltOptions.enabled) {
         if (mltOptions.encode_prob_min > 1.0) {
             error("--encode-prob-min must be <= 1");

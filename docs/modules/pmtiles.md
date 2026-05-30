@@ -4,9 +4,9 @@
 
 - [Export point-only PMTiles as TSV](#export-pmtiles-as-tsv)
 - [Write single-level polygon-only PMTiles](#write-single-zoom-polygon-pmtiles)
-- [Build PMTiles pyramids](#build-mlt-pmtiles-pyramids)
+- [Build PMTiles pyramids](#build-pmtiles-pyramids)
 
-We only support PMTiles with the [MLT format](https://maplibre.org/maplibre-tile-spec/)
+Point and simple-polygon PMTiles support both [MLT](https://maplibre.org/maplibre-tile-spec/) and MVT.
 
 For writing point/pixel-only PMTiles see [tile-op](tileop.md)
 
@@ -14,7 +14,7 @@ Acknowledgement: PMTiles support in `punkst` depends on [Clipper2](https://githu
 
 ## Export PMTiles as TSV
 
-`punkst export-pmtiles` reads an MLT-backed PMTiles archive that contains **only point data** and exports it back to a plain TSV plus `.index` that `tile-op` can read again.
+`punkst export-pmtiles` reads an MLT- or MVT-backed PMTiles archive. Point archives export back to a plain TSV plus `.index` that `tile-op` can read again. Simple-polygon archives export to a TSV with centroid, vertices, optional feature ID, and properties.
 
 ```bash
 punkst export-pmtiles \
@@ -25,7 +25,7 @@ punkst export-pmtiles \
 
 Requirements and behavior:
 
-- `--in` or `--in-data` must point to the PMTiles archive with **MLT** format
+- `--in` or `--in-data` must point to a point PMTiles archive with **MLT** or **MVT** format
 - `--out` specify the output prefix. The output includes `path/prefix.tsv` and `path/prefix.index`
 - `--tile-size` is required and defines the tile size for the output file (in the original units)
 - the data is read from the archive's max-zoom level
@@ -39,9 +39,11 @@ Region filters are supported in this mode:
 - `--extract-region-geojson`
 - `--zmin`, `--zmax`
 
+For simple-polygon archives, add `--polygon`. Polygon export writes only `path/prefix.tsv`; `--tile-size` is not required.
+
 ## Write single-zoom polygon PMTiles
 
-`punkst hex2pmtiles` writes a **polygon-only MLT PMTiles with a single zoom level** from a factor-probability table (output from [`punkst topic-model`](lda4hex.md)).
+`punkst hex2pmtiles` writes a **polygon-only MLT or MVT PMTiles with a single zoom level** from a factor-probability table (output from [`punkst topic-model`](lda4hex.md)). Use `--format MVT` for MVT output; the default is `MLT`.
 
 It supports two input styles:
 
@@ -138,9 +140,9 @@ Boundary behavior:
 - with `--no-duplication`, each polygon is assigned to a single tile and stored there intact
 - `--no-duplication` is mainly useful when polygons are much smaller than the tile size
 
-## Build MLT PMTiles pyramids
+## Build PMTiles pyramids
 
-`punkst build-pyramid` builds a MLT PMTiles pyramid from an existing MLT PMTiles input.
+`punkst build-pyramid` builds an MLT or MVT PMTiles pyramid from an existing PMTiles input.
 
 Currently it only support point-only and simple-polygon-only PMTiles. (This is the intended next step after writing a max-zoom archive with `punkst tile-op` or `punkst hex2pmtiles`)
 Exactly one of `--point` or `--polygon` must be specified.

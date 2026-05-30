@@ -59,6 +59,7 @@ enum class VectorGeometryType {
 struct SingleLayerVectorPmtilesOptions {
     FeatureTableSchema schema;
     VectorGeometryType geometryType = VectorGeometryType::Point;
+    uint8_t tileType = 0x06;
     uint64_t totalRecordCount = 0;
     double coordScale = -1.0;
     size_t featureDictionarySize = 0;

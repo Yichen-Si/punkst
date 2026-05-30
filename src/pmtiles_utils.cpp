@@ -304,8 +304,10 @@ void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
     metadata["type"] = "overlay";
     metadata["version"] = "2";
     metadata["format"] = "pbf";
+    const bool isMvt = options.tileType == pmtiles::TILETYPE_MVT;
     metadata["description"] = options.description.empty()
-        ? ("Generated PMTiles by punkst for MLT " + std::string(to_lower(geometry_type_name(options.geometryType))))
+        ? ("Generated PMTiles by punkst for " + std::string(isMvt ? "MVT " : "MLT ") +
+            std::string(to_lower(geometry_type_name(options.geometryType))))
         : options.description;
     metadata["generator"] = options.generator;
     if (options.coordScale > 0) {
@@ -348,7 +350,7 @@ void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
     }
 
     ArchiveOptions archiveOptions;
-    archiveOptions.tileType = pmtiles::TILETYPE_MLT;
+    archiveOptions.tileType = options.tileType;
     archiveOptions.minZoom = options.outputZoom;
     archiveOptions.maxZoom = options.outputZoom;
     archiveOptions.centerZoom = options.outputZoom;

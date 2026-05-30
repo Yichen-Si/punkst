@@ -169,6 +169,8 @@ set(SOURCE_FILES
     src/flex_io.cpp
     src/mlt_utils.hpp
     src/mlt_utils.cpp
+    src/mvt_utils.hpp
+    src/mvt_utils.cpp
     src/pmtiles_utils.hpp
     src/pmtiles_utils.cpp
     src/pmtiles_pyramid.hpp
