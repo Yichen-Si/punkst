@@ -10,6 +10,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <tbb/parallel_for.h>
 #include <vector>
 
 namespace ebact {
@@ -168,7 +169,72 @@ inline double multinomial_log_lr(const Document& doc, const RowVectorXd& q,
     return ans;
 }
 
+template <typename F>
+inline void parallel_for_units(int32_t n, int32_t n_threads, F&& f) {
+    if (n_threads == 1 || n <= 1) {
+        for (int32_t i = 0; i < n; ++i) {
+            f(i);
+        }
+    } else {
+        tbb::parallel_for(0, n, [&](int32_t i) { f(i); });
+    }
+}
+
+inline double multinomial_component_log_evidence(const Document& doc,
+        const RowVectorXd& q_safe, const RowVectorXd& beta_safe,
+        const Component& comp, int32_t quad_subdivisions) {
+    if (comp.kind == ComponentKind::Uniform) {
+        auto logf = [&](double a) { return multinomial_log_lr(doc, q_safe, beta_safe, a); };
+        return GaussLegendre16::log_integrate(logf, comp.l, comp.u, quad_subdivisions)
+            - std::log(comp.u - comp.l);
+    }
+    auto logf = [&](double a) {
+        return multinomial_log_lr(doc, q_safe, beta_safe, a)
+            + log_beta_density(a, comp.c, comp.d);
+    };
+    return GaussLegendre16::log_integrate(logf, 0.0, 1.0, quad_subdivisions);
+}
+
+inline double multinomial_component_log_activity_numerator(const Document& doc,
+        const RowVectorXd& q_safe, const RowVectorXd& beta_safe,
+        const Component& comp, int32_t quad_subdivisions) {
+    if (comp.kind == ComponentKind::Uniform) {
+        auto logaf = [&](double a) {
+            return std::log(a) + multinomial_log_lr(doc, q_safe, beta_safe, a);
+        };
+        return GaussLegendre16::log_integrate(logaf, comp.l, comp.u, quad_subdivisions)
+            - std::log(comp.u - comp.l);
+    }
+    auto logaf = [&](double a) {
+        return std::log(a) + multinomial_log_lr(doc, q_safe, beta_safe, a)
+            + log_beta_density(a, comp.c, comp.d);
+    };
+    return GaussLegendre16::log_integrate(logaf, 0.0, 1.0, quad_subdivisions);
+}
+
 inline std::vector<std::vector<double>> multinomial_log_evidence(
+        const std::vector<Document>& docs, const RowMajorMatrixXd& q,
+        const RowVectorXd& beta, const std::vector<Component>& comps,
+        double prob_floor, int32_t quad_subdivisions, int32_t n_threads = 1) {
+    validate_components(comps);
+    if (q.rows() != static_cast<Eigen::Index>(docs.size()) || q.cols() != beta.cols()) {
+        throw std::invalid_argument("EB multinomial dimensions do not match");
+    }
+    const int32_t N = static_cast<int32_t>(docs.size());
+    const int32_t C = static_cast<int32_t>(comps.size());
+    const RowVectorXd beta_safe = floored_normalized(beta, prob_floor);
+    std::vector<std::vector<double>> out(N, std::vector<double>(C, NEG_INF));
+    parallel_for_units(N, n_threads, [&](int32_t i) {
+        const RowVectorXd q_safe = floored_normalized(q.row(i), prob_floor);
+        for (int32_t g = 0; g < C; ++g) {
+            out[i][g] = multinomial_component_log_evidence(docs[i], q_safe, beta_safe,
+                comps[g], quad_subdivisions);
+        }
+    });
+    return out;
+}
+
+inline std::vector<std::vector<double>> multinomial_component_activity_means(
         const std::vector<Document>& docs, const RowMajorMatrixXd& q,
         const RowVectorXd& beta, const std::vector<Component>& comps,
         double prob_floor, int32_t quad_subdivisions) {
@@ -179,24 +245,123 @@ inline std::vector<std::vector<double>> multinomial_log_evidence(
     const int32_t N = static_cast<int32_t>(docs.size());
     const int32_t C = static_cast<int32_t>(comps.size());
     const RowVectorXd beta_safe = floored_normalized(beta, prob_floor);
-    std::vector<std::vector<double>> out(N, std::vector<double>(C, NEG_INF));
+    std::vector<std::vector<double>> out(N, std::vector<double>(C, 0.0));
     for (int32_t i = 0; i < N; ++i) {
         const RowVectorXd q_safe = floored_normalized(q.row(i), prob_floor);
         for (int32_t g = 0; g < C; ++g) {
             const Component& comp = comps[g];
+            double log_denom = NEG_INF;
+            double log_num = NEG_INF;
             if (comp.kind == ComponentKind::Uniform) {
                 auto logf = [&](double a) { return multinomial_log_lr(docs[i], q_safe, beta_safe, a); };
-                out[i][g] = GaussLegendre16::log_integrate(logf, comp.l, comp.u, quad_subdivisions)
-                    - std::log(comp.u - comp.l);
+                auto logaf = [&](double a) { return std::log(a) + multinomial_log_lr(docs[i], q_safe, beta_safe, a); };
+                log_denom = GaussLegendre16::log_integrate(logf, comp.l, comp.u, quad_subdivisions);
+                log_num = GaussLegendre16::log_integrate(logaf, comp.l, comp.u, quad_subdivisions);
             } else {
                 auto logf = [&](double a) {
                     return multinomial_log_lr(docs[i], q_safe, beta_safe, a)
                         + log_beta_density(a, comp.c, comp.d);
                 };
-                out[i][g] = GaussLegendre16::log_integrate(logf, 0.0, 1.0, quad_subdivisions);
+                auto logaf = [&](double a) {
+                    return std::log(a) + multinomial_log_lr(docs[i], q_safe, beta_safe, a)
+                        + log_beta_density(a, comp.c, comp.d);
+                };
+                log_denom = GaussLegendre16::log_integrate(logf, 0.0, 1.0, quad_subdivisions);
+                log_num = GaussLegendre16::log_integrate(logaf, 0.0, 1.0, quad_subdivisions);
             }
+            out[i][g] = std::exp(log_num - log_denom);
         }
     }
+    return out;
+}
+
+inline std::vector<double> posterior_activity_means(const FitResult& fit,
+        const std::vector<std::vector<double>>& component_means) {
+    const int32_t N = static_cast<int32_t>(fit.resp.size());
+    if (static_cast<int32_t>(component_means.size()) != N) {
+        throw std::invalid_argument("posterior activity mean dimensions do not match");
+    }
+    std::vector<double> out(N, 0.0);
+    for (int32_t i = 0; i < N; ++i) {
+        if (component_means[i].size() != fit.resp[i].size()) {
+            throw std::invalid_argument("posterior activity mean component dimensions do not match");
+        }
+        for (int32_t g = 0; g < static_cast<int32_t>(fit.resp[i].size()); ++g) {
+            out[i] += fit.resp[i][g] * component_means[i][g];
+        }
+    }
+    return out;
+}
+
+inline double multinomial_unit_posterior_activity_mean(
+        const Document& doc, const RowVectorXd& q, const RowVectorXd& beta,
+        const std::vector<Component>& comps, const std::vector<double>& resp,
+        double prob_floor, int32_t quad_subdivisions) {
+    validate_components(comps);
+    if (q.cols() != beta.cols() || resp.size() != comps.size()) {
+        throw std::invalid_argument("EB multinomial posterior activity dimensions do not match");
+    }
+    const RowVectorXd q_safe = floored_normalized(q, prob_floor);
+    const RowVectorXd beta_safe = floored_normalized(beta, prob_floor);
+    double out = 0.0;
+    for (int32_t g = 0; g < static_cast<int32_t>(comps.size()); ++g) {
+        const double log_denom = multinomial_component_log_evidence(doc, q_safe, beta_safe,
+            comps[g], quad_subdivisions);
+        const double log_num = multinomial_component_log_activity_numerator(doc, q_safe, beta_safe,
+            comps[g], quad_subdivisions);
+        out += resp[g] * std::exp(log_num - log_denom);
+    }
+    return out;
+}
+
+inline double multinomial_unit_posterior_activity_mean_from_logH(
+        const Document& doc, const RowVectorXd& q, const RowVectorXd& beta,
+        const std::vector<Component>& comps, const std::vector<double>& resp,
+        const std::vector<double>& logH_row,
+        double prob_floor, int32_t quad_subdivisions) {
+    validate_components(comps);
+    if (q.cols() != beta.cols() || resp.size() != comps.size() || logH_row.size() != comps.size()) {
+        throw std::invalid_argument("EB multinomial posterior activity dimensions do not match");
+    }
+    const RowVectorXd q_safe = floored_normalized(q, prob_floor);
+    const RowVectorXd beta_safe = floored_normalized(beta, prob_floor);
+    double out = 0.0;
+    for (int32_t g = 0; g < static_cast<int32_t>(comps.size()); ++g) {
+        const double log_num = multinomial_component_log_activity_numerator(doc, q_safe, beta_safe,
+            comps[g], quad_subdivisions);
+        out += resp[g] * std::exp(log_num - logH_row[g]);
+    }
+    return out;
+}
+
+inline std::vector<double> multinomial_posterior_activity_means_from_logH(
+        const std::vector<Document>& docs, const RowMajorMatrixXd& q,
+        const RowVectorXd& beta, const std::vector<Component>& comps,
+        const FitResult& fit, const std::vector<int32_t>& component_assignments,
+        const std::vector<std::vector<double>>& logH,
+        double prob_floor, int32_t quad_subdivisions, int32_t n_threads = 1) {
+    validate_components(comps);
+    const int32_t N = static_cast<int32_t>(docs.size());
+    if (q.rows() != N || q.cols() != beta.cols() ||
+            static_cast<int32_t>(fit.resp.size()) != N ||
+            static_cast<int32_t>(component_assignments.size()) != N ||
+            static_cast<int32_t>(logH.size()) != N) {
+        throw std::invalid_argument("EB multinomial posterior activity dimensions do not match");
+    }
+    std::vector<int32_t> active_units;
+    active_units.reserve(N);
+    for (int32_t i = 0; i < N; ++i) {
+        if (component_assignments[i] > 0) {
+            active_units.push_back(i);
+        }
+    }
+    std::vector<double> out(N, 0.0);
+    parallel_for_units(static_cast<int32_t>(active_units.size()), n_threads, [&](int32_t j) {
+        const int32_t i = active_units[j];
+        out[i] = multinomial_unit_posterior_activity_mean_from_logH(
+            docs[i], q.row(i), beta, comps, fit.resp[i], logH[i],
+            prob_floor, quad_subdivisions);
+    });
     return out;
 }
 

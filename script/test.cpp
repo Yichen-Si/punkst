@@ -103,6 +103,64 @@ void test_multinomial_evidence() {
         0.5 - (1.0 + 1.5) / 3.0 + (1.5 + 0.5625) / 4.0 - 0.5625 / 5.0);
     check_close("multinomial beta-slab evidence analytic",
         std::exp(logH[0][1]), beta_expected, 2e-13, 1e-13);
+
+    const auto compMeans = ebact::multinomial_component_activity_means({doc}, q, beta, comps, 1e-12, 8);
+    const double uniform_num = 0.5 - 1.5 / 3.0 + 0.5625 / 4.0;
+    check_close("multinomial uniform posterior activity mean analytic",
+        compMeans[0][0], uniform_num / uniform_expected, 2e-13, 1e-13);
+    const double beta_num = 6.0 * (
+        1.0 / 3.0 - (1.0 + 1.5) / 4.0 + (1.5 + 0.5625) / 5.0 - 0.5625 / 6.0);
+    check_close("multinomial beta posterior activity mean analytic",
+        compMeans[0][1], beta_num / beta_expected, 2e-13, 1e-13);
+
+    ebact::FitResult fit;
+    fit.resp = {{0.25, 0.75}};
+    const auto postMean = ebact::posterior_activity_means(fit, compMeans);
+    check_close("posterior activity mean responsibility weighted",
+        postMean[0], 0.25 * compMeans[0][0] + 0.75 * compMeans[0][1], 1e-15, 0.0);
+    check_close("single-unit posterior activity mean responsibility weighted",
+        ebact::multinomial_unit_posterior_activity_mean(doc, q.row(0), beta, comps, fit.resp[0], 1e-12, 8),
+        postMean[0], 2e-13, 1e-13);
+    check_close("single-unit posterior activity mean reuses logH",
+        ebact::multinomial_unit_posterior_activity_mean_from_logH(
+            doc, q.row(0), beta, comps, fit.resp[0], logH[0], 1e-12, 8),
+        postMean[0], 2e-13, 1e-13);
+
+    std::vector<Document> docs = {doc, doc, doc, doc};
+    RowMajorMatrixXd q_many(4, 2);
+    q_many << 0.8, 0.2,
+        0.7, 0.3,
+        0.6, 0.4,
+        0.5, 0.5;
+    const auto logH_serial = ebact::multinomial_log_evidence(docs, q_many, beta, comps, 1e-12, 8, 1);
+    const auto logH_threaded = ebact::multinomial_log_evidence(docs, q_many, beta, comps, 1e-12, 8, 4);
+    double max_logh_diff = 0.0;
+    for (size_t i = 0; i < logH_serial.size(); ++i) {
+        for (size_t g = 0; g < logH_serial[i].size(); ++g) {
+            max_logh_diff = std::max(max_logh_diff, std::abs(logH_serial[i][g] - logH_threaded[i][g]));
+        }
+    }
+    check_true("threaded multinomial evidence matches serial", max_logh_diff < 1e-14);
+
+    ebact::FitResult fit_many;
+    fit_many.resp = {
+        {0.25, 0.75},
+        {0.80, 0.20},
+        {0.10, 0.90},
+        {0.60, 0.40}
+    };
+    std::vector<int32_t> assignments = {1, 0, 1, 0};
+    const auto activity_serial = ebact::multinomial_posterior_activity_means_from_logH(
+        docs, q_many, beta, comps, fit_many, assignments, logH_serial, 1e-12, 8, 1);
+    const auto activity_threaded = ebact::multinomial_posterior_activity_means_from_logH(
+        docs, q_many, beta, comps, fit_many, assignments, logH_serial, 1e-12, 8, 4);
+    double max_activity_diff = 0.0;
+    for (size_t i = 0; i < activity_serial.size(); ++i) {
+        max_activity_diff = std::max(max_activity_diff, std::abs(activity_serial[i] - activity_threaded[i]));
+    }
+    check_true("threaded posterior activity matches serial", max_activity_diff < 1e-14);
+    check_close("posterior activity leaves null-assigned unit at zero",
+        activity_serial[1], 0.0, 0.0, 0.0);
 }
 
 void test_fit_eta_em() {

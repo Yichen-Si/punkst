@@ -105,6 +105,8 @@ set(SOURCE_FILES
     src/numerical_utils.cpp
     src/pts2tiles.hpp
     script/preprocess_options.hpp
+    script/factor_eval_common.hpp
+    script/factor_eval_common.cpp
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp
@@ -113,6 +115,7 @@ set(SOURCE_FILES
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp
+    script/factor_eval_naive.cpp
     src/slda.hpp
     src/tiles2minibatch.hpp
     src/tiles2minibatch.cpp
