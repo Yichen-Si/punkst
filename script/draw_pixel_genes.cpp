@@ -2,7 +2,7 @@
 #include "tilereader.hpp"
 #include "utils.h"
 #include "threads.hpp"
-#include <opencv2/opencv.hpp>
+#include "image_utils.hpp"
 #include <unordered_map>
 #include <thread>
 #include <mutex>
@@ -11,8 +11,8 @@
 struct TileResult {
     int top;
     int left;
-    cv::Mat3f color_accumulator;
-    cv::Mat1f weight_accumulator;
+    Image2D<Color3f> color_accumulator;
+    Image2D<float> weight_accumulator;
     float median_weight;
 };
 
@@ -46,8 +46,8 @@ void draw_worker(
         TileResult result;
         result.top = top;
         result.left = left;
-        result.color_accumulator = cv::Mat3f::zeros(tile_h, tile_w);
-        result.weight_accumulator = cv::Mat1f::zeros(tile_h, tile_w);
+        result.color_accumulator = Image2D<Color3f>(tile_h, tile_w, Color3f{0.f, 0.f, 0.f});
+        result.weight_accumulator = Image2D<float>(tile_h, tile_w, 0.f);
 
         auto iter = tileReader.get_block_iterator(block);
         if (!iter) continue;
@@ -64,17 +64,17 @@ void draw_worker(
 
             auto it = feature_color_map.find(rec.idx);
             if (it != feature_color_map.end()) {
-                const auto& color = it->second; // BGR
+                const auto& color = it->second;
                 float weight = static_cast<float>(rec.ct);
-                result.color_accumulator(ypix, xpix) += cv::Vec3f(color[0] * weight, color[1] * weight, color[2] * weight);
+                result.color_accumulator(ypix, xpix) += Color3f(color[0] * weight, color[1] * weight, color[2] * weight);
                 result.weight_accumulator(ypix, xpix) += weight;
             }
         }
 
         std::vector<float> non_zero_weights;
-        for (int r = 0; r < result.weight_accumulator.rows; ++r) {
-            for (int c = 0; c < result.weight_accumulator.cols; ++c) {
-                float w = result.weight_accumulator.at<float>(r, c);
+        for (int r = 0; r < result.weight_accumulator.height(); ++r) {
+            for (int c = 0; c < result.weight_accumulator.width(); ++c) {
+                float w = result.weight_accumulator(r, c);
                 if (w > 0) {
                     non_zero_weights.push_back(w);
                 }
@@ -217,9 +217,9 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
             if (tokens.size() < 2) continue;
             auto it = parser.featureDict.find(tokens[0]);
             if (it != parser.featureDict.end()) {
-                std::vector<int32_t> bgr;
-                if (set_rgb(tokens[1].c_str(), bgr)) {
-                    feature_color_map[it->second] = bgr;
+                std::vector<int32_t> rgb;
+                if (set_rgb(tokens[1].c_str(), rgb)) {
+                    feature_color_map[it->second] = rgb;
                 } else {
                     warning("Invalid color format for feature %s: %s", tokens[0].c_str(), tokens[1].c_str());
                 }
@@ -234,9 +234,9 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
         for (size_t i = 0; i < featureListStr.size(); ++i) {
             auto it = parser.featureDict.find(featureListStr[i]);
             if (it != parser.featureDict.end()) {
-                std::vector<int32_t> bgr;
-                if (set_rgb(colorListStr[i].c_str(), bgr)) {
-                    feature_color_map[it->second] = bgr;
+                std::vector<int32_t> rgb;
+                if (set_rgb(colorListStr[i].c_str(), rgb)) {
+                    feature_color_map[it->second] = rgb;
                 } else {
                     warning("Invalid color format for feature %s: %s", featureListStr[i].c_str(), colorListStr[i].c_str());
                 }
@@ -281,18 +281,25 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
 
     notice("Finished processing tiles. Assembling final image from %zu tile results...", results.size());
 
-    cv::Mat3f global_color_accumulator = cv::Mat3f::zeros(height, width);
-    cv::Mat1f global_weight_accumulator = cv::Mat1f::zeros(height, width);
-    cv::Rect global_rect(0, 0, width, height);
+    Image2D<Color3f> global_color_accumulator(height, width, Color3f{0.f, 0.f, 0.f});
+    Image2D<float> global_weight_accumulator(height, width, 0.f);
+    IntRect global_rect{0, 0, width, height};
     std::vector<float> per_tile_medians;
 
     for (const auto& res : results) {
-        cv::Rect tile_rect(res.left, res.top, res.color_accumulator.cols, res.color_accumulator.rows);
-        cv::Rect roi = global_rect & tile_rect;
+        IntRect tile_rect{res.left, res.top, res.color_accumulator.width(), res.color_accumulator.height()};
+        IntRect roi = intersect_rect(global_rect, tile_rect);
         if (roi.width > 0 && roi.height > 0) {
-            cv::Rect src_rect(roi.x - res.left, roi.y - res.top, roi.width, roi.height);
-            global_color_accumulator(roi) += res.color_accumulator(src_rect);
-            global_weight_accumulator(roi) += res.weight_accumulator(src_rect);
+            const int src_x0 = roi.x - res.left;
+            const int src_y0 = roi.y - res.top;
+            for (int yy = 0; yy < roi.height; ++yy) {
+                for (int xx = 0; xx < roi.width; ++xx) {
+                    global_color_accumulator(roi.y + yy, roi.x + xx) +=
+                        res.color_accumulator(src_y0 + yy, src_x0 + xx);
+                    global_weight_accumulator(roi.y + yy, roi.x + xx) +=
+                        res.weight_accumulator(src_y0 + yy, src_x0 + xx);
+                }
+            }
         }
         if (res.median_weight > 0) {
             per_tile_medians.push_back(res.median_weight);
@@ -310,27 +317,23 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
     }
     notice("Global median weight calculated: %.2f", global_median_weight);
 
-    cv::Mat out_image(height, width, CV_8UC3, cv::Scalar(0, 0, 0));
+    Image2D<Rgb8> out_image(height, width, Rgb8{0, 0, 0});
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             float total_weight = global_weight_accumulator(y, x);
             if (total_weight > 0) {
-                cv::Vec3f avg_color = global_color_accumulator(y, x) / total_weight;
+                Color3f avg_color = global_color_accumulator(y, x) / total_weight;
                 float intensity = (global_median_weight > 0) ? std::min(1.0f, total_weight / global_median_weight) : 0.0f;
-                cv::Vec3f final_color = avg_color * intensity;
-                out_image.at<cv::Vec3b>(y, x) = cv::Vec3b(
-                    cv::saturate_cast<uchar>(final_color[2]), // B
-                    cv::saturate_cast<uchar>(final_color[1]), // G
-                    cv::saturate_cast<uchar>(final_color[0])  // R
-                );
+                Color3f final_color = avg_color * intensity;
+                out_image(y, x) = Rgb8{clamp_u8(final_color.r),
+                                        clamp_u8(final_color.g),
+                                        clamp_u8(final_color.b)};
             }
         }
     }
 
     notice("Writing image to %s", outFile.c_str());
-    if (!cv::imwrite(outFile, out_image)) {
-        error("Failed to write output image to %s", outFile.c_str());
-    }
+    save_png_rgb8(outFile, out_image);
 
     return 0;
 }

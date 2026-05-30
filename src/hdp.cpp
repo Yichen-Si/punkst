@@ -169,7 +169,7 @@ MatrixXd HDP::transform(const std::vector<Document>& docs) {
     return doc_topic_distr;
 }
 
-MatrixXd HDP::transform(std::span<const Document> docs) {
+MatrixXd HDP::transform(DocumentView docs) {
     int n_docs = docs.size();
     MatrixXd doc_topic_distr(n_docs, K_);
     tbb::parallel_for(0, n_docs, [&](int d) {

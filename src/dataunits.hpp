@@ -45,6 +45,23 @@ struct Document {
     }
 };
 
+class DocumentView {
+public:
+    DocumentView() : data_(nullptr), size_(0) {}
+    explicit DocumentView(const std::vector<Document>& docs)
+        : data_(docs.data()), size_(docs.size()) {}
+    DocumentView(const Document* data, size_t size)
+        : data_(data), size_(size) {}
+
+    const Document& operator[](size_t idx) const { return data_[idx]; }
+    size_t size() const { return size_; }
+    bool empty() const { return size_ == 0; }
+
+private:
+    const Document* data_;
+    size_t size_;
+};
+
 struct SparseObs {
     Document doc;
     double c;

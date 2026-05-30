@@ -1,5 +1,7 @@
 # Visualization
 
+Note: PNG is the only supported output format, make sure the output file name ends with `.png`.
+
 ## High resolution image of pixel level factorization results
 
 **`draw-pixel-factors` visualizes the results of `pixel-decode`**

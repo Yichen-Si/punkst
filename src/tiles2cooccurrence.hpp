@@ -4,7 +4,7 @@
 #include "tilereader.hpp"
 #include "threads.hpp"
 #include "utils.h"
-#include "nanoflann_utils.h"
+#include "kdtree_utils.hpp"
 #include <cinttypes>
 #include <fstream>
 #include <unordered_map>

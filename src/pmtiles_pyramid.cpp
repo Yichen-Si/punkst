@@ -9,10 +9,10 @@
 
 #include <algorithm>
 #include <atomic>
-#include <bit>
 #include <cmath>
 #include <cinttypes>
 #include <cstdint>
+#include <cstring>
 #include <fcntl.h>
 #include <functional>
 #include <limits>
@@ -22,6 +22,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,6 +43,16 @@ using Clipper2Lib::Path64;
 using Clipper2Lib::Paths64;
 using Clipper2Lib::Point64;
 using Clipper2Lib::Union;
+
+template <typename To, typename From>
+To bit_cast_compat(const From& from) {
+    static_assert(sizeof(To) == sizeof(From), "bit_cast_compat requires same-size types");
+    static_assert(std::is_trivially_copyable<To>::value, "destination must be trivially copyable");
+    static_assert(std::is_trivially_copyable<From>::value, "source must be trivially copyable");
+    To to;
+    std::memcpy(&to, &from, sizeof(To));
+    return to;
+}
 
 char infer_simple_polygon_delimiter(const std::string& line) {
     if (line.find('\t') != std::string::npos) {
@@ -1073,7 +1084,7 @@ uint64_t make_area_priority(const std::string& canonicalKey, double area) {
     if (!(area > 0.0) || !std::isfinite(area)) {
         return make_random_priority(canonicalKey);
     }
-    const uint64_t areaBits = std::bit_cast<uint64_t>(area);
+    const uint64_t areaBits = bit_cast_compat<uint64_t>(area);
     const uint64_t major = (~areaBits) & 0xffffffffffff0000ull;
     return major | (hash_priority_key(canonicalKey) & 0xffffull);
 }
@@ -1150,7 +1161,7 @@ std::string canonical_key_for_polygon_row(const mlt_pmtiles::FeatureTableSchema&
             break;
         }
         case mlt_pmtiles::ScalarType::FLOAT: {
-            const uint32_t bits = std::bit_cast<uint32_t>(column.floatValues[row]);
+            const uint32_t bits = bit_cast_compat<uint32_t>(column.floatValues[row]);
             key.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
             break;
         }

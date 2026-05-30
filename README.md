@@ -16,12 +16,13 @@ If you have difficulty installing, let us known (by opening an issue). You can a
 **Prerequisites**
 
 - Git
-- CMake: 3.15 to 3.23
-- C++20 compiler* (GCC >= 8, Clang >= 6, Apple Clang >= 10, MSVC >= 19.22)
-- TBB, OpenCV
+- CMake >= 3.15
+- C++17 compiler* (GCC >= 9, Clang/Apple Clang/MSVC with C++17 standard library support)
+- TBB
+- libpng (optional; enabled by default for generating `png` images)
 - libcurl (optional; enabled by default for `http(s)` / `s3://` input support)
 
-*We do assume your [compiler](https://en.cppreference.com/w/cpp/compiler_support/20.html) properly supports C++20. Consider updating the compiler if you encounter issues.
+*GCC 9 or newer is the supported Linux baseline. GCC 8 may work in some environments, but older `std::filesystem` support varies across distributions.
 
 ```bash
 # 1) Clone the repository
@@ -40,28 +41,17 @@ If you did not clone the submodule (Eigen) initially, you can do
 git submodule update --init
 ```
 
-If TBB is not found, you can install it by `sudo apt-get install libtbb-dev` or `yum install tbb-devel` on linux and `brew install tbb` on macOS.
+If TBB is not found, you can install it by `sudo apt-get install libtbb-dev` or `yum install tbb-devel` on linux and `brew install tbb` on macOS. If you don't have root access on linux, you can [install oneTBB](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md) locally.
 
-If you don't have root access on linux, you can [install oneTBB](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md) locally.
+Remote readers for `http(s)` and `s3://` inputs are controlled by the CMake option `ENABLE_REMOTE_IO` (default `ON`). It requires libcurl at configure/build time, set `-DENABLE_REMOTE_IO=OFF` to build without libcurl; local-file input still works, but remote URL input is disabled
 
-If you installed some dependencies locally, you may need to specify their paths like
+If you installed some dependencies locally, you might need to specify their paths like
+
 ```bash
-cmake .. \
-  -DOpenCV_DIR=$HOME/.local/lib/cmake/opencv4 \
-  -DTBB_DIR=$HOME/user/opt/tbb/lib/cmake/tbb \
-  -DCMAKE_PREFIX_PATH="$HOME/.local"
+cmake .. -DTBB_DIR=$HOME/user/opt/tbb/lib/cmake/tbb \
+    -DCMAKE_PREFIX_PATH="$HOME/.local"
 ```
 
-Remote random-access readers for `http(s)` and `s3://` inputs are controlled by the CMake option `ENABLE_REMOTE_IO`.
-
-- Default: `-DENABLE_REMOTE_IO=ON`
-- Requires libcurl at configure/build time
-- Set `-DENABLE_REMOTE_IO=OFF` to build without libcurl; local-file input still works, but remote URL input is disabled
-
-Example:
-```bash
-cmake .. -DENABLE_REMOTE_IO=OFF
-```
 
 The `punkst` binary will be placed in `bin/` under the project root.
 
@@ -83,6 +73,10 @@ The following commands are available:
 
 ```bash
 docker pull philo1984/punkst:latest
+```
+If your machine does not support `x86-64-v3`, use the `portable` tag instead (but it may be significantly slower):
+```bash
+docker pull philo1984/punkst:portable
 ```
 
 Viirfy the installation:

@@ -300,7 +300,7 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
         fileopen = readMinibatch(inFileStream, idens, reader.getNlayer() > 1);
         if (minibatch.empty()) break;
 
-        Eigen::MatrixXd doc_topic = do_transform(minibatch); // Virtual dispatch
+        Eigen::MatrixXd doc_topic = do_transform(DocumentView(minibatch)); // Virtual dispatch
         if (pseudobulk.rows() == 0) {
             pseudobulk = Eigen::MatrixXd::Zero(M_, doc_topic.cols());
         }
@@ -379,7 +379,7 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
                     idens.push_back(std::to_string(idx));
                 }
             }
-            std::span<const Document> minibatch_view(dge_docs_cache_.data() + cursor, take);
+            DocumentView minibatch_view(dge_docs_cache_.data() + cursor, take);
             cursor += take;
 
             Eigen::MatrixXd doc_topic = do_transform(minibatch_view); // Virtual dispatch
@@ -428,7 +428,7 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
                 break;
             }
 
-            Eigen::MatrixXd doc_topic = do_transform(minibatch_local); // Virtual dispatch
+            Eigen::MatrixXd doc_topic = do_transform(DocumentView(minibatch_local)); // Virtual dispatch
             if (pseudobulk.rows() == 0) {
                 pseudobulk = Eigen::MatrixXd::Zero(M_, doc_topic.cols());
             }

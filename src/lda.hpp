@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <optional>
 #include <numeric>
-#include <span>
 #include <unordered_map>
 #include "numerical_utils.hpp"
 #include "dataunits.hpp"
@@ -176,7 +175,7 @@ public:
     RowMajorMatrixXd transform(const std::vector<Document>& docs) {
         return transform_common(docs, [](const auto& d) -> const Document& { return d; });
     }
-    RowMajorMatrixXd transform(std::span<const Document> docs) {
+    RowMajorMatrixXd transform(DocumentView docs) {
         return transform_common(docs, [](const auto& d) -> const Document& { return d; });
     }
     RowMajorMatrixXd transform(const std::vector<SparseObs>& docs) {

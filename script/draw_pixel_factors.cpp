@@ -2,8 +2,8 @@
 #include "utils_sys.hpp"
 #include "tileoperator.hpp"
 #include "dataunits.hpp"
-#include "img_utils.hpp"
-#include <opencv2/opencv.hpp>
+#include "geometry_utils.hpp"
+#include "image_utils.hpp"
 
 int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
     std::string dataFile, inPrefix, indexFile, headerFile, rangeFile, colorFile, outFile;
@@ -160,7 +160,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         error("Image dimensions are zero; check your bounds/scale");
 
     if (topOnly && islandSmooth > 0) {
-        cv::Mat1i topCh(height, width, int(-1)); // store the top assignment
+        Image2D<int32_t> topCh(height, width, -1); // store the top assignment
         PixTopProbs<float> rec;
         int32_t ret, nline=0, nskip=0, nkept=0;
         // 1) Read and record top label per pixel
@@ -178,8 +178,8 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 }
             }
         };
-        cv::Mat1b cnt0(height, width, uchar(0));
-        cv::Mat1b tot(height, width, uchar(0));
+        Image2D<uint8_t> cnt0(height, width, 0);
+        Image2D<uint8_t> tot(height, width, 0);
         std::unordered_map<int, SmallCounts> extra; // only pixels with collisions end up here
         std::vector<int> coords;
         while ((ret = reader.next(rec)) >= 0) {
@@ -275,7 +275,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
         }
 
         // 3) Render RGB from smoothed labels
-        cv::Mat out(height, width, CV_8UC3, cv::Scalar(0,0,0));
+        Image2D<Rgb8> out(height, width, Rgb8{0, 0, 0});
 
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
@@ -295,24 +295,21 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                     B = cmtx[lbl][2];
                 }
 
-                out.at<cv::Vec3b>(y,x) = cv::Vec3b(
-                    cv::saturate_cast<uchar>(B),
-                    cv::saturate_cast<uchar>(G),
-                    cv::saturate_cast<uchar>(R)
-                );
+                out(y, x) = Rgb8{clamp_u8(static_cast<float>(R)),
+                                  clamp_u8(static_cast<float>(G)),
+                                  clamp_u8(static_cast<float>(B))};
             }
         }
 
         notice("Writing image to %s ...", outFile.c_str());
-        if (!cv::imwrite(outFile, out))
-            error("Error writing output image: %s", outFile.c_str());
+        save_png_rgb8(outFile, out);
 
         return 0;
     }
 
     // accumulators
-    cv::Mat3f sumImg(height, width, cv::Vec3f(0,0,0));
-    cv::Mat1b countImg(height, width, uchar(0));
+    Image2D<Color3f> sumImg(height, width, Color3f{0.f, 0.f, 0.f});
+    Image2D<uint8_t> countImg(height, width, 0);
     // read & accumulate
     PixTopProbs<float> rec;
     int32_t ret, nline=0, nskip=0, nkept=0;
@@ -367,7 +364,7 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
                 G = cmtx[ch][1];
                 B = cmtx[ch][2];
             }
-            sumImg(ypix, xpix) += cv::Vec3f(R,G,B);
+            sumImg(ypix, xpix) += Color3f(R, G, B);
             countImg(ypix, xpix) += 1;
             ++nkept;
             continue;
@@ -409,30 +406,25 @@ int32_t cmdDrawPixelFactors(int32_t argc, char** argv) {
             continue;
         }
         R /= psum; G /= psum; B /= psum;
-        sumImg(ypix, xpix) += cv::Vec3f(R,G,B);
+        sumImg(ypix, xpix) += Color3f(R, G, B);
         countImg(ypix, xpix) += 1;
         ++nkept;
     }
     notice("Finished reading input; building image");
 
     // finalize image
-    cv::Mat out(height, width, CV_8UC3, cv::Scalar(0,0,0));
+    Image2D<Rgb8> out(height, width, Rgb8{0, 0, 0});
     for (int y=0;y<height;++y) {
         for (int x=0;x<width;++x) {
             if (countImg(y,x)) {
-                cv::Vec3f avg = sumImg(y,x) / countImg(y,x);
-                out.at<cv::Vec3b>(y,x) = cv::Vec3b(
-                    cv::saturate_cast<uchar>(avg[2]),  // B
-                    cv::saturate_cast<uchar>(avg[1]),  // G
-                    cv::saturate_cast<uchar>(avg[0])   // R
-                );
+                Color3f avg = sumImg(y,x) / static_cast<float>(countImg(y,x));
+                out(y, x) = Rgb8{clamp_u8(avg.r), clamp_u8(avg.g), clamp_u8(avg.b)};
             }
         }
     }
 
     notice("Writing image to %s ...", outFile.c_str());
-    if (!cv::imwrite(outFile, out))
-        error("Error writing output image: %s", outFile.c_str());
+    save_png_rgb8(outFile, out);
 
     return 0;
 }

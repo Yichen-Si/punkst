@@ -36,7 +36,8 @@ if (NOT TBB_FOUND)
 endif()
 
 set(APP_EXE punkst)
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(PUNKST_RUNTIME_OUTPUT_DIRECTORY
   "${CMAKE_CURRENT_SOURCE_DIR}/bin"
   CACHE PATH "Directory for punkst executable output"
@@ -51,9 +52,13 @@ add_library(Eigen3::Eigen INTERFACE IMPORTED)
 set_target_properties(Eigen3::Eigen PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
 
-# OpenCV
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs HINTS ../opencv/build /usr/lib /usr/local)
-message(STATUS "Found OpenCV version ${OpenCV_VERSION} with include dirs: ${OpenCV_INCLUDE_DIRS}")
+option(ENABLE_IMAGE_OUTPUT "Build PNG image output commands" ON)
+if (ENABLE_IMAGE_OUTPUT)
+  find_package(PNG REQUIRED)
+  message(STATUS "Found libpng version ${PNG_VERSION_STRING}")
+else()
+  message(STATUS "ENABLE_IMAGE_OUTPUT=OFF: PNG image output commands disabled.")
+endif()
 
 # Clipper2
 set(CLIPPER2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ext/clipper2")
@@ -77,8 +82,8 @@ set(SOURCE_FILES
     src/punkst.cpp
     src/utils.h
     src/utils.cpp
-    src/img_utils.hpp
-    src/img_utils.cpp
+    src/geometry_utils.hpp
+    src/kdtree_utils.hpp
     src/utils_sys.hpp
     src/utils_sys.cpp
     src/hexgrid.h
@@ -122,8 +127,6 @@ set(SOURCE_FILES
     src/tiles2slda.hpp
     src/tiles2slda.cpp
     script/pixel_decode.cpp
-    script/draw_pixel_factors.cpp
-    script/draw_lowres_factors.cpp
     src/tiles2cooccurrence.hpp
     script/coocurrence.cpp
     src/markerselection.hpp
@@ -141,7 +144,6 @@ set(SOURCE_FILES
     src/poisnmf.cpp
     script/fit_nmf.cpp
     script/transform_nmf.cpp
-    script/draw_pixel_genes.cpp
     src/vst.hpp
     src/glm.hpp
     src/glm.cpp
@@ -184,6 +186,20 @@ set(SOURCE_FILES
     script/multi_cde_region_pixel.cpp
   )
 
+if (ENABLE_IMAGE_OUTPUT)
+  list(APPEND SOURCE_FILES
+    src/image_utils.hpp
+    src/image_utils.cpp
+    script/draw_pixel_factors.cpp
+    script/draw_lowres_factors.cpp
+    script/draw_pixel_genes.cpp
+  )
+else()
+  list(APPEND SOURCE_FILES
+    script/image_output_disabled.cpp
+  )
+endif()
+
 add_executable(${APP_EXE} ${SOURCE_FILES})
 set_target_properties(${APP_EXE} PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${PUNKST_RUNTIME_OUTPUT_DIRECTORY}"
@@ -192,13 +208,11 @@ set_target_properties(${APP_EXE} PROPERTIES
 target_include_directories(${APP_EXE} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/script
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${OpenCV_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/ext
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/cimg
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanoflann
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nlohmann
 )
-
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(BZip2 REQUIRED)
@@ -216,6 +230,7 @@ target_compile_options(${APP_EXE} PRIVATE
 )
 target_compile_definitions(${APP_EXE} PRIVATE
   PUNKST_ENABLE_REMOTE_IO=$<BOOL:${ENABLE_REMOTE_IO}>
+  PUNKST_ENABLE_IMAGE_OUTPUT=$<BOOL:${ENABLE_IMAGE_OUTPUT}>
 )
 
 # Faster Debug builds
@@ -281,7 +296,6 @@ elseif (ENABLE_X86_64_V3)
 endif()
 
 target_link_libraries(${APP_EXE} PRIVATE
-    ${OpenCV_LIBRARIES}
     Eigen3::Eigen
     Clipper2_core
     TBB::tbb
@@ -290,7 +304,12 @@ target_link_libraries(${APP_EXE} PRIVATE
     BZip2::BZip2
     ${LibLZMA_LIBRARIES}
     $<$<CXX_COMPILER_ID:GNU>:stdc++fs>
+    $<$<CXX_COMPILER_ID:IntelLLVM>:stdc++fs>
 )
+
+if (ENABLE_IMAGE_OUTPUT)
+  target_link_libraries(${APP_EXE} PRIVATE PNG::PNG)
+endif()
 
 if (ENABLE_REMOTE_IO)
   target_link_libraries(${APP_EXE} PRIVATE CURL::libcurl)

@@ -146,7 +146,7 @@ public:
         }
 
         const size_t N = batch.size();
-        RowMajorMatrixXd doc_topic = lda.do_transform(batch.docs);
+        RowMajorMatrixXd doc_topic = lda.do_transform(DocumentView(batch.docs));
         writeTopicRows(batch.ids, doc_topic);
 
         struct LocalAgg {
