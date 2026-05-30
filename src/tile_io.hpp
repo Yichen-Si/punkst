@@ -8,7 +8,7 @@
 #include <limits>
 #include <functional>
 #include "utils.h"
-#include "img_utils.hpp"
+#include "geometry_utils.hpp"
 #include "utils_sys.hpp"
 
 // Magic for binary index

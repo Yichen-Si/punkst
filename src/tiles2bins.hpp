@@ -17,7 +17,7 @@
 #include <filesystem>
 #include "json.hpp"
 #include "nanoflann.hpp"
-#include "nanoflann_utils.h"
+#include "kdtree_utils.hpp"
 
 class Tiles2Hex {
 

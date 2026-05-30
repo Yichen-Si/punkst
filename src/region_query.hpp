@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "clipper2/clipper.h"
-#include "img_utils.hpp"
+#include "geometry_utils.hpp"
 #include "json.hpp"
 #include "tile_io.hpp"
 

@@ -14,8 +14,7 @@
 #include "error.hpp"
 #include "json.hpp"
 #include "nanoflann.hpp"
-#include "nanoflann_utils.h"
-#include <opencv2/imgproc.hpp>
+#include "kdtree_utils.hpp"
 #include "dataunits.hpp"
 #include "tile_io.hpp"
 #include "tilereader.hpp"

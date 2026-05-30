@@ -1,7 +1,7 @@
 #pragma once
 
 #include "utils.h"
-#include "img_utils.hpp"
+#include "geometry_utils.hpp"
 #include "utils_sys.hpp"
 #include <iostream>
 #include <fstream>
@@ -18,7 +18,7 @@
 #include "zlib.h"
 #include "threads.hpp"
 #include "nanoflann.hpp"
-#include "nanoflann_utils.h"
+#include "kdtree_utils.hpp"
 #include "tileoperator.hpp"
 
 class Pts2Tiles {

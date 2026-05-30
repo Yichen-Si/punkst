@@ -2,7 +2,7 @@
 #include "tileoperator_common.hpp"
 #include "region_query.hpp"
 #include "numerical_utils.hpp"
-#include "img_utils.hpp"
+#include "geometry_utils.hpp"
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>

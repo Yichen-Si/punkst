@@ -3,8 +3,8 @@
 #include "utils_sys.hpp"
 #include "dataunits.hpp"
 #include "nanoflann.hpp"
-#include "nanoflann_utils.h"
-#include <opencv2/opencv.hpp>
+#include "kdtree_utils.hpp"
+#include "image_utils.hpp"
 
 #include <array>
 #include <fstream>
@@ -124,7 +124,7 @@ int32_t cmdDrawLowresFactors(int32_t argc, char** argv) {
 
     std::string line;
     std::vector<std::string> tokens;
-    std::vector<cv::Vec3f> factorColors(static_cast<size_t>(K), cv::Vec3f(-1.f, -1.f, -1.f));
+    std::vector<Color3f> factorColors(static_cast<size_t>(K), Color3f(-1.f, -1.f, -1.f));
     std::vector<bool> channelMask(static_cast<size_t>(K), false);
 
     // Parse color scheme
@@ -143,7 +143,7 @@ int32_t cmdDrawLowresFactors(int32_t argc, char** argv) {
             if (!(str2uint32(channelListStr[i], idx) && idx < K)) {
                 error("Channel %s not found in factor columns", channelListStr[i].c_str());
             }
-            factorColors[idx] = cv::Vec3f(rgb[0], rgb[1], rgb[2]);
+            factorColors[idx] = Color3f(rgb[0], rgb[1], rgb[2]);
             channelMask[idx] = true;
         }
     } else {
@@ -157,7 +157,7 @@ int32_t cmdDrawLowresFactors(int32_t argc, char** argv) {
             std::istringstream iss(line);
             int r, g, b;
             if (iss >> r >> g >> b) {
-                factorColors[k] = cv::Vec3f(r, g, b);
+                factorColors[k] = Color3f(r, g, b);
             }
             k++;
         }
@@ -168,8 +168,8 @@ int32_t cmdDrawLowresFactors(int32_t argc, char** argv) {
 
     int32_t lineNo = 0;
     int32_t kept = 0, skipped = 0;
-    PointCloudCV<float> cloud;
-    std::vector<cv::Vec3f> anchor_colors;
+    PointCloud<float> cloud;
+    std::vector<Color3f> anchor_colors;
     while (std::getline(dataStream, line)) {
         lineNo++;
         if (line.empty() || line[0] == '#') continue;
@@ -223,7 +223,7 @@ int32_t cmdDrawLowresFactors(int32_t argc, char** argv) {
             anchor_colors.push_back(factorColors[static_cast<size_t>(top_idx)]);
         } else {
             float wsum = 0.f;
-            cv::Vec3f color(0.f, 0.f, 0.f);
+            Color3f color(0.f, 0.f, 0.f);
             if (use_topk) {
                 for (size_t t = 0; t < topk.size(); ++t) {
                     uint32_t k;
@@ -267,33 +267,28 @@ int32_t cmdDrawLowresFactors(int32_t argc, char** argv) {
     if (width <= 1 || height <= 1)
         error("Image dimensions are zero; check your bounds/scale");
 
-    kd_tree_cv2f_t kdtree(2, cloud, {10});
+    kd_tree_f2_t kdtree(2, cloud, {10});
     std::vector<nanoflann::ResultItem<uint32_t, float>> indices_dists;
     const float radius2 = static_cast<float>(radius * radius);
     std::vector<float> xcoords(width);
     for (size_t x = 0; x < width; ++x) {
         xcoords[x] = static_cast<float>(xmin + x * scale);
     }
-    cv::Mat out(height, width, CV_8UC3, cv::Scalar(0, 0, 0));
+    Image2D<Rgb8> out(static_cast<int>(height), static_cast<int>(width), Rgb8{0, 0, 0});
     float query_pt[2];
     for (int y = 0; y < height; ++y) {
         query_pt[1] = static_cast<float>(ymin + y * scale);
-        auto* row = out.ptr<cv::Vec3b>(y);
         for (int x = 0; x < width; ++x) {
             query_pt[0] = xcoords[x];
             size_t found = kdtree.radiusSearch(query_pt, radius2, indices_dists);
             if (found == 0) continue;
             const auto& c = anchor_colors[indices_dists[0].first];
-            row[x] = cv::Vec3b(
-                cv::saturate_cast<uchar>(c[2]),
-                cv::saturate_cast<uchar>(c[1]),
-                cv::saturate_cast<uchar>(c[0]));
+            out(y, x) = Rgb8{clamp_u8(c.r), clamp_u8(c.g), clamp_u8(c.b)};
         }
     }
 
     notice("Writing image to %s ...", outFile.c_str());
-    if (!cv::imwrite(outFile, out))
-        error("Error writing output image: %s", outFile.c_str());
+    save_png_rgb8(outFile, out);
 
     return 0;
 }
