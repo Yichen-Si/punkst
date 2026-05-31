@@ -13,7 +13,7 @@ The deployment contains transcript PMTiles, gene-bin PMTiles, merged raw-pixel f
 
 ```bash
 punkst deploy-cartoscope \
-  --in-dir /path/to/punkst/output \
+  --config /path/to/punkst/output/config.json \
   --out-dir /path/to/cartoscope_deploy \
   --id sample-id \
   --title "Sample title" \
@@ -27,7 +27,7 @@ Existing output files are reused by default. Add `--overwrite` to regenerate fil
 
 ```bash
 punkst deploy-cartoscope \
-  --in-dir /path/to/punkst/output \
+  --config /path/to/punkst/output/config.json \
   --out-dir /path/to/cartoscope_deploy \
   --id sample-id \
   --title "Sample title" \
@@ -39,31 +39,33 @@ punkst deploy-cartoscope \
 
 ## Input Modes
 
-### Standard Workflow Directory
+### Standard Workflow Config
 
-Use `--in-dir` as above for output produced by the standard workflow template (see [Quickstart](index.md) and `punkst/examples/basic/`)
-
-By default, the command reads `/path/to/out/config.json` (override the config path with `--config`) and discovers model prefixes from `workflow.hexgrids` and `workflow.topics`, for example:
-
-```text
-hex_12.k12
-hex_12.k24
-```
+Use `--config` for output produced by the standard workflow template (see [Quickstart](index.md) and `punkst/examples/basic/`).
 
 For each model prefix, the workflow output should contain files like:
 
 ```text
-hex_12.k12.results.tsv
-hex_12.k12.model.tsv
-hex_12.k12.color.rgb.tsv
-hex_12.k12.pixel.bin
-hex_12.k12.pixel.index
-hex_12.k12.pixel.pseudobulk.tsv
-hex_12.k12.pixel.de_bulk.tsv
-hex_12.k12.pixel.info.tsv
+<model-prefix>.results.tsv
+<model-prefix>.model.tsv
+<model-prefix>.color.rgb.tsv
+<model-prefix>.pixel.bin
+<model-prefix>.pixel.index
+<model-prefix>.pixel.pseudobulk.tsv
+<model-prefix>.pixel.de_bulk.tsv
 ```
 
-Deploy only selected models with `--model-prefix`, e.g. `--model-prefix hex_12.k12 hex_12.k24`
+If `workflow.pixel_decode_mode` is set, deployment uses the matching pixel-output suffix:
+
+```text
+pixel             -> <model-prefix>.pixel.*
+feature_pixel     -> <model-prefix>.sf_pixel.*
+single_molecule   -> <model-prefix>.sgl_mol.*
+```
+
+Default deployment model IDs use names such as `h12-k12`, `h12-k12-sf-pixel`, and `h12-k12-sgl-mol`.
+
+Deploy only selected models with `--model-prefix`, e.g. `--model-prefix <model-prefix> hex_12.k24`
 
 ### Explicit Input JSON
 
@@ -98,16 +100,18 @@ Example:
       "model_tsv": "/path/to/hex_12.k12.model.tsv",
       "color_rgb_tsv": "/path/to/hex_12.k12.color.rgb.tsv",
       "pixel_prefix": "/path/to/hex_12.k12.pixel",
+      "pixel_decode_mode": "pixel",
       "pixel_png": "/path/to/hex_12.k12.pixel.png",
       "pseudobulk_tsv": "/path/to/hex_12.k12.pixel.pseudobulk.tsv",
-      "de_tsv": "/path/to/hex_12.k12.pixel.de_bulk.tsv",
-      "info_tsv": "/path/to/hex_12.k12.pixel.info.tsv"
+      "de_tsv": "/path/to/hex_12.k12.pixel.de_bulk.tsv"
     }
   ]
 }
 ```
 
-Relative paths are resolved relative to the JSON file. `info_tsv` and `pixel_png` are optional. When `pixel_png` is omitted, the factor is deployed without `pmtiles.raster`; raw-pixel vector rendering still uses the annotated transcript PMTiles.
+Relative paths are resolved relative to the JSON file. `pixel_decode_mode` is optional; when omitted, deployment infers the mode from `<pixel_prefix>.index`. `pixel_png` is optional. When `pixel_png` is omitted, the factor is deployed without `pmtiles.raster`; raw-pixel vector rendering still uses the annotated transcript PMTiles.
+
+If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different `id` values. The entries can reuse the same `results_tsv`, `model_tsv`, and `color_rgb_tsv` while pointing to different pixel prefixes, pseudobulk tables, DE tables, and optional PNGs.
 
 ## Output
 
@@ -141,22 +145,22 @@ assets:
     - genes_bin1.pmtiles
     counts: genes_bin_counts.json
   factors:
-  - id: hex-12-k12
-    model_id: hex-12-k12
-    decode_id: hex-12-k12-pixel
-    raw_pixel_col: hex-12-k12-pixel
-    de: hex-12-k12-bulk-de.tsv
-    info: hex-12-k12-info.tsv
-    rgb: hex-12-k12-rgb.tsv
+  - id: h12-k12
+    model_id: h12-k12
+    decode_id: h12-k12-pixel
+    raw_pixel_col: h12-k12-pixel
+    de: h12-k12-bulk-de.tsv
+    info: h12-k12-info.tsv
+    rgb: h12-k12-rgb.tsv
     pmtiles:
-      hex: hex-12-k12.pmtiles
-      raster: hex-12-k12-pixel-raster.pmtiles
+      hex: h12-k12.pmtiles
+      raster: h12-k12-pixel-raster.pmtiles
       raw_pixel: genes_all.pmtiles
 ```
 
-`pmtiles.raw_pixel` points to `genes_all.pmtiles`, which contains transcript points annotated with per-model pixel factor columns such as `hex-12-k12-pixel_K1` and `hex-12-k12-pixel_P1`.
+`pmtiles.raw_pixel` points to `genes_all.pmtiles`, which contains transcript points annotated with per-model pixel factor columns such as `h12-k12-pixel_K1` and `h12-k12-pixel_P1`.
 
-Model IDs in output filenames and catalog entries are normalized by replacing `_` and `.` with `-`.
+Explicit JSON model IDs in output filenames and catalog entries are normalized by replacing `_` and `.` with `-`.
 
 ## PMTiles and Zooms
 

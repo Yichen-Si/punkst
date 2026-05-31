@@ -17,7 +17,7 @@ Some operations related to smoothing, spatial profiling, and factor masks treat 
     - [Fix Fragmented Tiles](#fix-fragmented-tiles)
     - [Region Query](#region-query)
     - [Export as TSV](#convert-to-tsv)
-    - [Export as MLT PMTiles](#write-mlt-pmtiles)
+    - [Export as MLT PMTiles](#write-pmtiles)
 
 - Joining, annotating, and aggregation
     - [Merge Multiple Inference Results](#merge-multiple-inference-results)

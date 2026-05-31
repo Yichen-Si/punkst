@@ -419,6 +419,8 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleFeaturePixel3D(TileData<T
     uint32_t idxOriginal = 0;
     uint32_t nPixels = 0;
     const auto& stdInput = tileData.standard3D();
+    pixelLookup.reserve(stdInput.pts3d.size());
+    groupedPixels.reserve(stdInput.pts3d.size());
     tileData.orgpts2pixel.assign(stdInput.pts3d.size(), -1);
     for (const auto& pt : stdInput.pts3d) {
         if (ignoreOutsideZrange_ && (pt.z < zMin_ || pt.z > zMax_)) {
@@ -428,16 +430,15 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleFeaturePixel3D(TileData<T
         const int32_t y = static_cast<int32_t>(std::floor(pt.y / res));
         const int32_t z = static_cast<int32_t>(std::floor(pt.z / resZ));
         const SingleMoleculeKey3D key{x, y, z, pt.idx};
-        auto it = pixelLookup.find(key);
-        if (it == pixelLookup.end()) {
+        auto [it, inserted] = pixelLookup.try_emplace(key, nPixels);
+        if (inserted) {
             SingleMoleculePixel3D pix;
             pix.x = x;
             pix.y = y;
             pix.z = z;
             pix.feature = pt.idx;
             groupedPixels.push_back(std::move(pix));
-            pixelLookup.emplace(key, nPixels++);
-            it = pixelLookup.find(key);
+            ++nPixels;
         }
         SingleMoleculePixel3D& pix = groupedPixels[it->second];
         float weight = static_cast<float>(pt.ct);
@@ -456,6 +457,9 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleFeaturePixel3D(TileData<T
     minibatch.featureWeight.reserve(nPixels);
     minibatch.rowOffsets.reserve(nPixels + 1);
     minibatch.rowOffsets.push_back(0);
+    minibatch.edgeAnchorIdx.reserve(nPixels * 4);
+    minibatch.wijVal.reserve(nPixels * 4);
+    minibatch.psiVal.reserve(nPixels * 4);
 
     std::vector<AnchorPoint> originalAnchors = anchors;
     std::map<AnchorKey3D, uint32_t> anchorKeyToIndex;

@@ -19,8 +19,25 @@ USE_FIXED_COLOR_TABLE := {USE_FIXED_COLOR_TABLE}
 NEPOCHS	     := {NEPOCHS}
 PIXHEX       := {PIXHEX}
 NMOVE        := {NMOVE}
+PIXEL_DECODE_MODE := {PIXEL_DECODE_MODE}
 RES          := {RES}
 SCALE        := {SCALE}
+
+ifeq ($(PIXEL_DECODE_MODE),pixel)
+PIXEL_SUFFIX := pixel
+PIXEL_DECODE_MODE_FLAG :=
+PIXEL_RES_ARG := --pixel-res $(RES)
+else ifeq ($(PIXEL_DECODE_MODE),feature_pixel)
+PIXEL_SUFFIX := sf_pixel
+PIXEL_DECODE_MODE_FLAG := --single-feature-pixel
+PIXEL_RES_ARG := --pixel-res $(RES)
+else ifeq ($(PIXEL_DECODE_MODE),single_molecule)
+PIXEL_SUFFIX := sgl_mol
+PIXEL_DECODE_MODE_FLAG := --single-molecule
+PIXEL_RES_ARG :=
+else
+$(error Unsupported PIXEL_DECODE_MODE '$(PIXEL_DECODE_MODE)'; expected pixel, feature_pixel, or single_molecule)
+endif
 
 PUNKST       := $(GITPATH)/bin/punkst
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
@@ -33,8 +50,8 @@ DEFAULT_COLOR_TABLE := $(GITPATH)/ext/py/cmap.48.tsv
 REPORTS := \
   $(foreach H,$(HEXGRIDS),\
     $(foreach K,$(TOPICS),\
-      $(DATADIR)/hex_$(H).k$(K).pixel.info.html\
-	  $(DATADIR)/hex_$(H).k$(K).pixel.png\
+      $(DATADIR)/hex_$(H).k$(K).$(PIXEL_SUFFIX).info.html\
+	  $(DATADIR)/hex_$(H).k$(K).$(PIXEL_SUFFIX).png\
     )\
   )
 
@@ -117,7 +134,7 @@ $(foreach H,$(HEXGRIDS),\
 
 # ─── Step 4: pixel-decode → .tsv + .pseudobulk.tsv ────────────────────
 define PIXEL_RULE
-$(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp: \
+$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp: \
 	$(DATADIR)/prepare.stamp \
     $(DATADIR)/hex_$(1).k$(2).model.stamp
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$*.tsv"
@@ -126,11 +143,12 @@ $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp: \
 	  --in-tsv $(TILETSV) --in-index $(TILEINDEX) \
 	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) \
 	  --icol-feature $(ICOL_FEATURE) --icol-val $(ICOL_COUNT) \
-	  --hex-grid-dist $(PIXHEX) --n-moves $(NMOVE) --pixel-res $(RES) \
+	  --hex-grid-dist $(PIXHEX) --n-moves $(NMOVE) $(PIXEL_RES_ARG) \
+	  $(PIXEL_DECODE_MODE_FLAG) \
 	  --min-init-count 20 \
-	  --out-pref $(DATADIR)/hex_$(1).k$(2).pixel --output-binary \
+	  --out-pref $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX) --output-binary \
 	  --temp-dir $(TMPDIR) --threads $(THREADS) --seed $(SEED)
-	touch $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp
+	touch $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\
@@ -140,12 +158,12 @@ $(foreach H,$(HEXGRIDS),\
 
 # ─── Step 5: draw-pixel-factors → png ───────────────────────────
 define DRAW_RULE
-$(DATADIR)/hex_$(1).k$(2).pixel.png: \
-    $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp \
+$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).png: \
+    $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp \
     $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv
 	@echo "[5/6] draw-pixel-factors (K=$(2), hex=$(1)) → $$@"
 	 $(PUNKST) draw-pixel-factors \
-	  --in $(DATADIR)/hex_$(1).k$(2).pixel --binary \
+	  --in $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX) --binary \
 	  --in-color $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv \
 	  --out $$@ \
 	  --range $(COORD_RANGE) --scale $(SCALE)
@@ -158,12 +176,12 @@ $(foreach H,$(HEXGRIDS),\
 
 # ─── Step 6: de_bulk + factor_report → final .report ───────────────
 define DE_RULE
-$(DATADIR)/hex_$(1).k$(2).pixel.de_bulk.tsv: \
-    $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp
+$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv: \
+    $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp
 	@echo "[6/6] de_bulk (K=$(2), hex=$(1)) → $$@"
 	$(PUNKST) de-chisq \
-	  --input $(DATADIR)/hex_$(1).k$(2).pixel.pseudobulk.tsv \
-	  --out $(DATADIR)/hex_$(1).k$(2).pixel.de_bulk.tsv \
+	  --input $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).pseudobulk.tsv \
+	  --out $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
 	  --threads $(THREADS)
 endef
 $(foreach H,$(HEXGRIDS),\
@@ -173,18 +191,18 @@ $(foreach H,$(HEXGRIDS),\
 )
 
 define REPORT_RULE
-$(DATADIR)/hex_$(1).k$(2).pixel.info.html: \
-    $(DATADIR)/hex_$(1).k$(2).pixel.decode.stamp \
-	$(DATADIR)/hex_$(1).k$(2).pixel.de_bulk.tsv \
+$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).info.html: \
+    $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp \
+	$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
     $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv
 	@echo "[6/6] factor_report (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/factor_report.py \
-	  --de $(DATADIR)/hex_$(1).k$(2).pixel.de_bulk.tsv \
-	  --de_neighbor $(DATADIR)/hex_$(1).k$(2).pixel.de_bulk.1vsNeighbors.tsv \
-	  --pseudobulk $(DATADIR)/hex_$(1).k$(2).pixel.pseudobulk.tsv \
+	  --de $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
+	  --de_neighbor $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.1vsNeighbors.tsv \
+	  --pseudobulk $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).pseudobulk.tsv \
 	  --feature_label Feature \
 	  --color_table $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv \
-	  --output_pref $(DATADIR)/hex_$(1).k$(2).pixel
+	  --output_pref $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX)
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\

@@ -69,6 +69,8 @@ Specify the 0-based column indices in "transcripts" for X coordinate, Y coordina
 
 `"nmove"`: "pixhex" divided by "nmove" is the distance between adjacent anchor points in the algorithm. We recommend pixhex/nmove to be around $4~6\mu m$ for high resolution results.
 
+`"pixel_decode_mode"`: controls the mode for [pixel-decode](../modules/pixel-decode.md). Valid values are `"pixel"` for fixed-resolution pixel level decoding, `"feature_pixel"` for `pixel-decode --single-feature-pixel`, and `"single_molecule"` for `pixel-decode --single-molecule`. The output has suffixes `.pixel`, `.sf_pixel`, and `.sgl_mol`, respectively.
+
 `"res"`: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using $0.5\mu m$.
 
 `"scale"`: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want $0.5 \mu m$ to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is $2 \mu m$, you probably want to set scale to 2.
@@ -192,6 +194,8 @@ Key parameters:
 `--n-moves`: Number of sliding moves to generate anchors
 
 `--pixel-res`: Resolution for the analysis (in the same unit as coordinates). Set to `2` for Visium HD.
+
+The generated basic workflow controls this step with `workflow.pixel_decode_mode`. `pixel` uses the command above, `feature_pixel` adds `--single-feature-pixel`, and `single_molecule` adds `--single-molecule` and omits `--pixel-res`.
 
 `--output-binary`: Write the main pixel-level output as `${path}/pixel.decode.bin` plus `${path}/pixel.decode.index`. This is the preferred output mode for downstream `tile-op`, visualization, and spatial tests.
 

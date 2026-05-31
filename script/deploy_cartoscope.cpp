@@ -9,6 +9,7 @@
 
 #include "json.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -26,6 +27,12 @@ namespace {
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+enum class PixelDecodeMode {
+    Pixel,
+    FeaturePixel,
+    SingleMolecule
+};
+
 struct TranscriptInputs {
     fs::path tiledPrefix;
     fs::path featureCountTsv;
@@ -38,6 +45,7 @@ struct TranscriptInputs {
 struct ModelInputs {
     std::string sourcePrefix;
     std::string id;
+    PixelDecodeMode pixelMode = PixelDecodeMode::Pixel;
     double hexGridDist = 0.0;
     fs::path resultsTsv;
     fs::path modelTsv;
@@ -46,7 +54,6 @@ struct ModelInputs {
     fs::path pixelPng;
     fs::path pseudobulkTsv;
     fs::path deTsv;
-    fs::path infoTsv;
 };
 
 struct DeployInputs {
@@ -61,6 +68,79 @@ std::string normalize_id(std::string s) {
         }
     }
     return s;
+}
+
+std::string pixel_mode_name(PixelDecodeMode mode) {
+    switch (mode) {
+    case PixelDecodeMode::Pixel:
+        return "pixel";
+    case PixelDecodeMode::FeaturePixel:
+        return "feature_pixel";
+    case PixelDecodeMode::SingleMolecule:
+        return "single_molecule";
+    }
+    return "pixel";
+}
+
+PixelDecodeMode parse_pixel_mode(const std::string& raw, const char* context) {
+    const std::string mode = to_lower(raw);
+    if (mode == "pixel") {
+        return PixelDecodeMode::Pixel;
+    }
+    if (mode == "feature_pixel" || mode == "sf_pixel" || mode == "single_feature_pixel") {
+        return PixelDecodeMode::FeaturePixel;
+    }
+    if (mode == "single_molecule" || mode == "sgl_mol") {
+        return PixelDecodeMode::SingleMolecule;
+    }
+    error("%s: unsupported pixel_decode_mode '%s' in %s", __func__, raw.c_str(), context);
+    return PixelDecodeMode::Pixel;
+}
+
+std::string pixel_mode_suffix(PixelDecodeMode mode) {
+    switch (mode) {
+    case PixelDecodeMode::Pixel:
+        return "pixel";
+    case PixelDecodeMode::FeaturePixel:
+        return "sf_pixel";
+    case PixelDecodeMode::SingleMolecule:
+        return "sgl_mol";
+    }
+    return "pixel";
+}
+
+std::string default_model_id(int32_t hex, int32_t topics, PixelDecodeMode mode) {
+    std::string id = "h" + std::to_string(hex) + "-k" + std::to_string(topics);
+    if (mode == PixelDecodeMode::FeaturePixel) {
+        id += "-sf-pixel";
+    } else if (mode == PixelDecodeMode::SingleMolecule) {
+        id += "-sgl-mol";
+    }
+    return id;
+}
+
+int32_t pixel_mode_specificity(PixelDecodeMode mode) {
+    switch (mode) {
+    case PixelDecodeMode::SingleMolecule:
+        return 2;
+    case PixelDecodeMode::FeaturePixel:
+        return 1;
+    case PixelDecodeMode::Pixel:
+        return 0;
+    }
+    return 0;
+}
+
+PixelDecodeMode infer_pixel_mode_from_index(const fs::path& pixelPrefix) {
+    LoadedTileIndexData loaded = loadTileIndexData(pixelPrefix.string() + ".index");
+    const uint32_t mode = loaded.header.mode & 0xFFFFu;
+    if ((mode & 0x40u) == 0u) {
+        return PixelDecodeMode::Pixel;
+    }
+    if ((mode & 0x4u) != 0u) {
+        return PixelDecodeMode::FeaturePixel;
+    }
+    return PixelDecodeMode::SingleMolecule;
 }
 
 std::string pixel_decode_id(const ModelInputs& model) {
@@ -462,6 +542,38 @@ void write_cartoscope_de(const fs::path& src, const fs::path& dst, bool overwrit
     }
 }
 
+void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& dst, bool overwrite) {
+    if (!overwrite && file_exists(dst)) {
+        notice("%s: %s already exists; skipping info sidecar", __func__, dst.string().c_str());
+        return;
+    }
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> pseudobulk;
+    std::vector<std::string> featureNames;
+    std::vector<std::string> factorNames;
+    try {
+        read_matrix_from_file<double>(src.string(), pseudobulk, &featureNames, &factorNames);
+    } catch (const std::exception& e) {
+        error("%s: failed reading pseudobulk table %s: %s", __func__, src.string().c_str(), e.what());
+    }
+    if (pseudobulk.cols() == 0) {
+        error("%s: pseudobulk table has no factor columns: %s", __func__, src.string().c_str());
+    }
+
+    fs::create_directories(dst.parent_path());
+    std::ofstream out(dst);
+    if (!out.is_open()) {
+        error("%s: cannot open %s", __func__, dst.string().c_str());
+    }
+    out << "Factor\tWeight\n";
+    const Eigen::Matrix<double, 1, Eigen::Dynamic> weights = pseudobulk.colwise().sum();
+    for (Eigen::Index j = 0; j < pseudobulk.cols(); ++j) {
+        out << factorNames[static_cast<size_t>(j)] << "\t" << fp_to_string(weights(j), 6) << "\n";
+    }
+    if (!out.good()) {
+        error("%s: failed writing %s", __func__, dst.string().c_str());
+    }
+}
+
 void gzip_copy_text(const fs::path& src, const fs::path& dst, bool overwrite) {
     if (!overwrite && file_exists(dst)) {
         notice("%s: %s already exists; skipping gzip sidecar", __func__, dst.string().c_str());
@@ -523,9 +635,16 @@ json read_json_file(const fs::path& path) {
     return json::parse(in);
 }
 
-DeployInputs load_from_config_dir(const fs::path& inDir, const fs::path& configPath) {
+DeployInputs load_from_config(const fs::path& configPath) {
     json root = read_json_file(configPath);
     const json& wf = root.at("workflow");
+    if (!wf.contains("datadir")) {
+        error("%s: workflow config must contain workflow.datadir", __func__);
+    }
+    const fs::path inDir = wf.at("datadir").get<std::string>();
+    const PixelDecodeMode pixelMode =
+        parse_pixel_mode(wf.value("pixel_decode_mode", std::string("pixel")), configPath.string().c_str());
+    const std::string pixelSuffix = pixel_mode_suffix(pixelMode);
     DeployInputs out;
     out.transcripts.tiledPrefix = inDir / "transcripts.tiled";
     out.transcripts.featureCountTsv = inDir / "transcripts.tiled.features.tsv";
@@ -540,17 +659,18 @@ DeployInputs load_from_config_dir(const fs::path& inDir, const fs::path& configP
             const int32_t topics = k.get<int32_t>();
             ModelInputs model;
             model.sourcePrefix = "hex_" + std::to_string(hex) + ".k" + std::to_string(topics);
-            model.id = normalize_id(model.sourcePrefix);
+            model.id = default_model_id(hex, topics, pixelMode);
+            model.pixelMode = pixelMode;
             model.hexGridDist = static_cast<double>(hex);
             fs::path pref = inDir / model.sourcePrefix;
+            fs::path pixelPref = inDir / (model.sourcePrefix + "." + pixelSuffix);
             model.resultsTsv = pref.string() + ".results.tsv";
             model.modelTsv = pref.string() + ".model.tsv";
             model.colorRgbTsv = pref.string() + ".color.rgb.tsv";
-            model.pixelPrefix = pref.string() + ".pixel";
-            model.pixelPng = pref.string() + ".pixel.png";
-            model.pseudobulkTsv = pref.string() + ".pixel.pseudobulk.tsv";
-            model.deTsv = pref.string() + ".pixel.de_bulk.tsv";
-            model.infoTsv = pref.string() + ".pixel.info.tsv";
+            model.pixelPrefix = pixelPref;
+            model.pixelPng = pixelPref.string() + ".png";
+            model.pseudobulkTsv = pixelPref.string() + ".pseudobulk.tsv";
+            model.deTsv = pixelPref.string() + ".de_bulk.tsv";
             out.models.push_back(std::move(model));
         }
     }
@@ -578,14 +698,22 @@ DeployInputs load_from_input_json(const fs::path& inputJson) {
         model.modelTsv = resolve_path(base, m.at("model_tsv").get<std::string>());
         model.colorRgbTsv = resolve_path(base, m.at("color_rgb_tsv").get<std::string>());
         model.pixelPrefix = resolve_path(base, m.at("pixel_prefix").get<std::string>());
+        const PixelDecodeMode inferredMode = infer_pixel_mode_from_index(model.pixelPrefix);
+        if (m.contains("pixel_decode_mode") && !m.at("pixel_decode_mode").is_null()) {
+            model.pixelMode = parse_pixel_mode(m.at("pixel_decode_mode").get<std::string>(), inputJson.string().c_str());
+            if (model.pixelMode != inferredMode) {
+                error("%s: pixel_decode_mode '%s' does not match %s.index inferred mode '%s'",
+                    __func__, pixel_mode_name(model.pixelMode).c_str(),
+                    model.pixelPrefix.string().c_str(), pixel_mode_name(inferredMode).c_str());
+            }
+        } else {
+            model.pixelMode = inferredMode;
+        }
         if (m.contains("pixel_png") && !m.at("pixel_png").is_null()) {
             model.pixelPng = resolve_path(base, m.at("pixel_png").get<std::string>());
         }
         model.pseudobulkTsv = resolve_path(base, m.at("pseudobulk_tsv").get<std::string>());
         model.deTsv = resolve_path(base, m.at("de_tsv").get<std::string>());
-        if (m.contains("info_tsv") && !m.at("info_tsv").is_null()) {
-            model.infoTsv = resolve_path(base, m.at("info_tsv").get<std::string>());
-        }
         out.models.push_back(std::move(model));
     }
     return out;
@@ -608,14 +736,17 @@ void validate_inputs(const DeployInputs& inputs) {
         require_file(model.colorRgbTsv, "color RGB TSV");
         require_file(model.pixelPrefix.string() + ".bin", "pixel decode binary");
         require_file(model.pixelPrefix.string() + ".index", "pixel decode index");
+        const PixelDecodeMode inferredMode = infer_pixel_mode_from_index(model.pixelPrefix);
+        if (inferredMode != model.pixelMode) {
+            error("%s: model %s declares pixel_decode_mode '%s' but %s.index indicates '%s'",
+                __func__, model.id.c_str(), pixel_mode_name(model.pixelMode).c_str(),
+                model.pixelPrefix.string().c_str(), pixel_mode_name(inferredMode).c_str());
+        }
         if (!model.pixelPng.empty()) {
             require_file(model.pixelPng, "pixel PNG");
         }
         require_file(model.pseudobulkTsv, "pseudobulk TSV");
         require_file(model.deTsv, "bulk DE TSV");
-        if (!model.infoTsv.empty()) {
-            require_file(model.infoTsv, "factor info TSV");
-        }
         if (model.hexGridDist <= 0.0) {
             error("%s: model %s has non-positive hex_grid_dist", __func__, model.id.c_str());
         }
@@ -633,12 +764,25 @@ DeployInputs filter_models(DeployInputs inputs, const std::vector<std::string>& 
     }
     std::vector<ModelInputs> kept;
     for (ModelInputs& model : inputs.models) {
-        if (wanted.count(model.id) || wanted.count(model.sourcePrefix)) {
+        if (wanted.count(model.id) || wanted.count(model.sourcePrefix) ||
+            wanted.count(normalize_id(model.sourcePrefix))) {
             kept.push_back(std::move(model));
         }
     }
     inputs.models = std::move(kept);
     return inputs;
+}
+
+std::vector<size_t> raw_pixel_packaging_order(const std::vector<ModelInputs>& models) {
+    std::vector<size_t> order(models.size());
+    for (size_t i = 0; i < models.size(); ++i) {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return pixel_mode_specificity(models[a].pixelMode) >
+            pixel_mode_specificity(models[b].pixelMode);
+    });
+    return order;
 }
 
 void build_pyramid_inplace(const fs::path& pmtilesPath, const fs::path& tmpDir,
@@ -716,7 +860,6 @@ void write_catalog_yaml(const fs::path& outPath, const std::string& id, const st
 } // namespace
 
 int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
-    std::string inDir;
     std::string inputJson;
     std::string configPath;
     std::string outDir;
@@ -740,9 +883,8 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     bool overwrite = false;
 
     ParamList pl;
-    pl.add_option("in-dir", "Standard punkst workflow output directory", inDir)
+    pl.add_option("config", "Standard workflow config JSON", configPath)
       .add_option("input-json", "Explicit deployment input JSON", inputJson)
-      .add_option("config", "Workflow config JSON (default: <in-dir>/config.json)", configPath)
       .add_option("out-dir", "Output deployment directory", outDir, true)
       .add_option("id", "Dataset ID", datasetId, true)
       .add_option("title", "Dataset title", title)
@@ -776,8 +918,8 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     if (pmtilesFormat != "MLT" && pmtilesFormat != "MVT") {
         error("%s: --pmtiles-format must be MLT or MVT", __func__);
     }
-    if (inDir.empty() == inputJson.empty()) {
-        error("%s: provide exactly one of --in-dir or --input-json", __func__);
+    if (configPath.empty() == inputJson.empty()) {
+        error("%s: provide exactly one of --config or --input-json", __func__);
     }
     if (nGeneBins <= 0) {
         error("%s: --n-gene-bins must be positive", __func__);
@@ -792,9 +934,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     if (!inputJson.empty()) {
         inputs = load_from_input_json(inputJson);
     } else {
-        fs::path inRoot(inDir);
-        fs::path cfg = configPath.empty() ? (inRoot / "config.json") : fs::path(configPath);
-        inputs = load_from_config_dir(inRoot, cfg);
+        inputs = load_from_config(configPath);
     }
     inputs = filter_models(std::move(inputs), modelPrefixes);
     validate_inputs(inputs);
@@ -817,10 +957,11 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
                 __func__, join_paths(presentPointOutputs).c_str());
         }
 
+        const std::vector<size_t> rawPixelOrder = raw_pixel_packaging_order(inputs.models);
         fs::path genesPrefix = outRoot / "genes";
         std::vector<std::string> tileArgs = {
             "tile-op",
-            "--in", inputs.models.front().pixelPrefix.string(),
+            "--in", inputs.models[rawPixelOrder.front()].pixelPrefix.string(),
             "--binary",
             "--annotate-pts", annotateTiledPrefix.string(),
             "--icol-x", std::to_string(inputs.transcripts.icolX),
@@ -840,13 +981,13 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             tileArgs.push_back("gene");
         }
         tileArgs.push_back("--emb-prefix");
-        for (const ModelInputs& model : inputs.models) {
-            tileArgs.push_back(pixel_decode_id(model));
+        for (size_t modelIdx : rawPixelOrder) {
+            tileArgs.push_back(pixel_decode_id(inputs.models[modelIdx]));
         }
         if (inputs.models.size() > 1) {
             tileArgs.push_back("--merge-emb");
-            for (size_t i = 1; i < inputs.models.size(); ++i) {
-                tileArgs.push_back(inputs.models[i].pixelPrefix.string() + ".bin");
+            for (size_t i = 1; i < rawPixelOrder.size(); ++i) {
+                tileArgs.push_back(inputs.models[rawPixelOrder[i]].pixelPrefix.string() + ".bin");
             }
             tileArgs.push_back("--merge-keep-all");
         }
@@ -926,11 +1067,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         copy_file_checked(model.modelTsv, outRoot / (model.id + "-model.tsv"), overwrite, "model sidecar");
         write_cartoscope_rgb(model.colorRgbTsv, outRoot / (model.id + "-rgb.tsv"), overwrite);
         write_cartoscope_de(model.deTsv, outRoot / (model.id + "-bulk-de.tsv"), overwrite);
-        if (!model.infoTsv.empty() && file_exists(model.infoTsv)) {
-            copy_file_checked(model.infoTsv, outRoot / (model.id + "-info.tsv"), overwrite, "info sidecar");
-        } else {
-            write_text_checked(outRoot / (model.id + "-info.tsv"), "Factor\tWeight\n", overwrite, "info sidecar");
-        }
+        write_cartoscope_info_from_pseudobulk(model.pseudobulkTsv, outRoot / (model.id + "-info.tsv"), overwrite);
         gzip_copy_text(model.pseudobulkTsv, outRoot / (model.id + "-pseudobulk.tsv.gz"), overwrite);
 
         json asset;

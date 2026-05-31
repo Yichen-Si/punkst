@@ -589,20 +589,21 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleFeaturePixel(TileData<T>&
     uint32_t idxOriginal = 0;
     uint32_t nPixels = 0;
     const auto& stdInput = tileData.standard2D();
+    pixelLookup.reserve(stdInput.pts.size());
+    groupedPixels.reserve(stdInput.pts.size());
     tileData.orgpts2pixel.assign(stdInput.pts.size(), -1);
     for (const auto& pt : stdInput.pts) {
         const int32_t x = static_cast<int32_t>(std::floor(pt.x / res));
         const int32_t y = static_cast<int32_t>(std::floor(pt.y / res));
         const SingleMoleculeKey2D key{x, y, pt.idx};
-        auto it = pixelLookup.find(key);
-        if (it == pixelLookup.end()) {
+        auto [it, inserted] = pixelLookup.try_emplace(key, nPixels);
+        if (inserted) {
             SingleMoleculePixel2D pix;
             pix.x = x;
             pix.y = y;
             pix.feature = pt.idx;
             groupedPixels.push_back(std::move(pix));
-            pixelLookup.emplace(key, nPixels++);
-            it = pixelLookup.find(key);
+            ++nPixels;
         }
         SingleMoleculePixel2D& pix = groupedPixels[it->second];
         float weight = static_cast<float>(pt.ct);
@@ -622,6 +623,8 @@ double Tiles2MinibatchBase<T>::buildMinibatchCoreSingleFeaturePixel(TileData<T>&
     minibatch.rowOffsets.reserve(nPixels + 1);
     minibatch.rowOffsets.push_back(0);
     minibatch.edgeAnchorIdx.reserve(nPixels * 4);
+    minibatch.wijVal.reserve(nPixels * 4);
+    minibatch.psiVal.reserve(nPixels * 4);
 
     uint32_t npt = 0;
     for (const auto& pix : groupedPixels) {

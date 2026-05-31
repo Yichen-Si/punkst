@@ -4,6 +4,36 @@
 #include "punkst.h"
 #include "tileoperator.hpp"
 
+namespace {
+
+bool print_index_only_invocation(int32_t argc, char** argv) {
+    auto takesValue = [](const std::string& opt) {
+        return opt == "--in" || opt == "--in-data" || opt == "--in-index" || opt == "--out";
+    };
+    auto isFlag = [](const std::string& opt) {
+        return opt == "--binary" || opt == "--print-index";
+    };
+
+    for (int32_t i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        const size_t eq = arg.find('=');
+        const std::string opt = eq == std::string::npos ? arg : arg.substr(0, eq);
+        if (takesValue(opt)) {
+            if (eq == std::string::npos) {
+                ++i;
+            }
+            continue;
+        }
+        if (isFlag(opt)) {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
 int32_t cmdManipulateTiles(int32_t argc, char** argv) {
     std::string inPrefix, inData, inIndex, outPrefix;
     std::vector<std::string> inMergeEmbFiles;
@@ -214,6 +244,9 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
 
     if(printIndex) {
         tileOp.printIndex();
+        if (print_index_only_invocation(argc, argv)) {
+            return 0;
+        }
     }
     if (outPrefix.empty()) {
         return 0;

@@ -94,6 +94,8 @@ def main():
     # Backward-compatible defaults for optional workflow switches.
     if "use_fixed_color_table" not in wf:
         wf["use_fixed_color_table"] = True
+    if "pixel_decode_mode" not in wf:
+        wf["pixel_decode_mode"] = "pixel"
     # Render Makefile
     render_makefile(args.template, args.makefile, wf)
     # Emit sbatch wrapper

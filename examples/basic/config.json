@@ -19,6 +19,7 @@
       "nepochs": 1,
       "pixhex": 12,
       "nmove": 2,
+      "pixel_decode_mode": "pixel",
       "res": 0.5,
       "scale": 1
     },
