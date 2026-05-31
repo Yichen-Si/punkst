@@ -1,9 +1,11 @@
 #include "punkst.h"
 #include "dataunits.hpp"
+#include "image_utils.hpp"
 #include "mlt_utils.hpp"
 #include "pmtiles_utils.hpp"
 #include "pmtiles_pyramid.hpp"
 #include "tile_io.hpp"
+#include "tileoperator.hpp"
 #include "utils.h"
 #include "utils_sys.hpp"
 
@@ -14,10 +16,12 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <array>
 #include <set>
 #include <sstream>
 #include <cstring>
 #include <functional>
+#include <tuple>
 
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
 int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv);
@@ -54,11 +58,18 @@ struct ModelInputs {
     fs::path pixelPng;
     fs::path pseudobulkTsv;
     fs::path deTsv;
+    bool pixelPngExplicit = false;
 };
 
 struct DeployInputs {
     TranscriptInputs transcripts;
     std::vector<ModelInputs> models;
+};
+
+struct RgbColorEntry {
+    std::string name;
+    std::string colorIndex;
+    std::array<int32_t, 3> rgb{0, 0, 0};
 };
 
 std::string normalize_id(std::string s) {
@@ -145,6 +156,10 @@ PixelDecodeMode infer_pixel_mode_from_index(const fs::path& pixelPrefix) {
 
 std::string pixel_decode_id(const ModelInputs& model) {
     return model.id + "-pixel";
+}
+
+bool use_png_raster_for_model(const ModelInputs& model, bool usePngFlag, bool configMode) {
+    return configMode ? usePngFlag : model.pixelPngExplicit;
 }
 
 std::string join_paths(const std::vector<fs::path>& paths) {
@@ -425,10 +440,9 @@ fs::path prepare_hex_results_with_topk(const ModelInputs& model, const fs::path&
     return outPath;
 }
 
-void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, bool overwrite) {
-    if (!overwrite && file_exists(dst)) {
-        notice("%s: %s already exists; skipping RGB sidecar", __func__, dst.string().c_str());
-        return;
+std::vector<RgbColorEntry> load_normalized_colors(const fs::path& src, size_t k) {
+    if (k == 0) {
+        error("%s: factor count must be positive for %s", __func__, src.string().c_str());
     }
     std::ifstream in(src);
     if (!in.is_open()) {
@@ -448,12 +462,8 @@ void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, bool overwri
     }
     const bool hasName = col.count("Name") > 0;
     const bool hasColorIndex = col.count("Color_index") > 0;
-    fs::create_directories(dst.parent_path());
-    std::ofstream out(dst);
-    if (!out.is_open()) {
-        error("%s: cannot open %s", __func__, dst.string().c_str());
-    }
-    out << "Name\tColor_index\tR\tG\tB\n";
+
+    std::vector<RgbColorEntry> sourceColors;
     std::string line;
     int32_t row = 0;
     while (std::getline(in, line)) {
@@ -468,20 +478,86 @@ void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, bool overwri
             !str2double(fields[static_cast<size_t>(col["B"])], b)) {
             error("%s: malformed color row in %s", __func__, src.string().c_str());
         }
-        if (r > 1.0 || g > 1.0 || b > 1.0) {
-            r /= 255.0;
-            g /= 255.0;
-            b /= 255.0;
+        if (r <= 1.0 && g <= 1.0 && b <= 1.0) {
+            r *= 255.0;
+            g *= 255.0;
+            b *= 255.0;
         }
-        std::string name = hasName && fields.size() > static_cast<size_t>(col["Name"])
+        RgbColorEntry entry;
+        entry.name = hasName && fields.size() > static_cast<size_t>(col["Name"])
             ? fields[static_cast<size_t>(col["Name"])] : std::to_string(row);
-        std::string colorIndex = hasColorIndex && fields.size() > static_cast<size_t>(col["Color_index"])
+        entry.colorIndex = hasColorIndex && fields.size() > static_cast<size_t>(col["Color_index"])
             ? fields[static_cast<size_t>(col["Color_index"])] : std::to_string(row);
-        out << name << "\t" << colorIndex << "\t"
-            << fp_to_string(r, 6) << "\t"
-            << fp_to_string(g, 6) << "\t"
-            << fp_to_string(b, 6) << "\n";
+        entry.rgb = {
+            static_cast<int32_t>(clamp_u8(static_cast<float>(r))),
+            static_cast<int32_t>(clamp_u8(static_cast<float>(g))),
+            static_cast<int32_t>(clamp_u8(static_cast<float>(b)))
+        };
+        sourceColors.push_back(std::move(entry));
         ++row;
+    }
+    if (sourceColors.empty()) {
+        error("%s: color table has no colors: %s", __func__, src.string().c_str());
+    }
+
+    std::vector<RgbColorEntry> out;
+    out.reserve(k);
+    for (size_t i = 0; i < k; ++i) {
+        RgbColorEntry entry = sourceColors[i % sourceColors.size()];
+        if (i >= sourceColors.size()) {
+            entry.name = std::to_string(i);
+            entry.colorIndex = std::to_string(i);
+        }
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
+size_t infer_factor_count_from_pseudobulk(const fs::path& src) {
+    std::ifstream in(src);
+    if (!in.is_open()) {
+        error("%s: cannot open %s", __func__, src.string().c_str());
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            break;
+        }
+    }
+    if (line.empty()) {
+        error("%s: empty pseudobulk table %s", __func__, src.string().c_str());
+    }
+    if (!line.empty() && line[0] == '#') {
+        line.erase(line.begin());
+    }
+    const std::vector<std::string> header = split_tab(line);
+    if (header.size() <= 1u) {
+        error("%s: pseudobulk table has no factor columns: %s", __func__, src.string().c_str());
+    }
+    return header.size() - 1u;
+}
+
+void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, size_t factorCount,
+    bool overwrite) {
+    if (!overwrite && file_exists(dst)) {
+        notice("%s: %s already exists; skipping RGB sidecar", __func__, dst.string().c_str());
+        return;
+    }
+    const std::vector<RgbColorEntry> colors = load_normalized_colors(src, factorCount);
+    fs::create_directories(dst.parent_path());
+    std::ofstream out(dst);
+    if (!out.is_open()) {
+        error("%s: cannot open %s", __func__, dst.string().c_str());
+    }
+    out << "Name\tColor_index\tR\tG\tB\n";
+    for (const RgbColorEntry& color : colors) {
+        out << color.name << "\t" << color.colorIndex << "\t"
+            << fp_to_string(static_cast<double>(color.rgb[0]) / 255.0, 6) << "\t"
+            << fp_to_string(static_cast<double>(color.rgb[1]) / 255.0, 6) << "\t"
+            << fp_to_string(static_cast<double>(color.rgb[2]) / 255.0, 6) << "\n";
+    }
+    if (!out.good()) {
+        error("%s: failed writing %s", __func__, dst.string().c_str());
     }
 }
 
@@ -566,8 +642,14 @@ void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& 
     }
     out << "Factor\tWeight\n";
     const Eigen::Matrix<double, 1, Eigen::Dynamic> weights = pseudobulk.colwise().sum();
+    const double totalWeight = weights.sum();
+    if (!(totalWeight > 0.0)) {
+        error("%s: pseudobulk table has non-positive total factor weight: %s",
+            __func__, src.string().c_str());
+    }
     for (Eigen::Index j = 0; j < pseudobulk.cols(); ++j) {
-        out << factorNames[static_cast<size_t>(j)] << "\t" << fp_to_string(weights(j), 6) << "\n";
+        out << factorNames[static_cast<size_t>(j)] << "\t"
+            << fp_to_string(weights(j) / totalWeight, 6) << "\n";
     }
     if (!out.good()) {
         error("%s: failed writing %s", __func__, dst.string().c_str());
@@ -625,6 +707,194 @@ mlt_pmtiles::RasterBounds resolve_raster_bounds(const TranscriptInputs& transcri
     error("%s: cannot determine raster bounds from %s or index headers",
         __func__, coordRangePath.string().c_str());
     return bounds;
+}
+
+struct RasterTileKey {
+    uint8_t z = 0;
+    uint32_t x = 0;
+    uint32_t y = 0;
+
+    bool operator<(const RasterTileKey& other) const {
+        return std::tie(z, x, y) < std::tie(other.z, other.x, other.y);
+    }
+};
+
+struct RasterTileAccum {
+    Image2D<Color3f> sum;
+    Image2D<uint8_t> count;
+
+    RasterTileAccum() = default;
+    RasterTileAccum(int32_t tileSize)
+        : sum(tileSize, tileSize, Color3f{0.0f, 0.0f, 0.0f}),
+          count(tileSize, tileSize, 0) {}
+};
+
+void append_png_tile_to_blob(std::ofstream& blob, const std::string& tempBlobFile,
+    const std::string& encoded, uint64_t& dataOffset,
+    const RasterTileKey& key, std::vector<mlt_pmtiles::StoredTilePayloadRef>& tiles) {
+    blob.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+    if (!blob.good()) {
+        error("%s: failed writing temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
+    }
+    mlt_pmtiles::StoredTilePayloadRef ref;
+    ref.z = key.z;
+    ref.x = key.x;
+    ref.y = key.y;
+    ref.featureCount = 1;
+    ref.tileId = pmtiles::zxy_to_tileid(ref.z, ref.x, ref.y);
+    ref.dataOffset = dataOffset;
+    ref.dataLength = static_cast<uint32_t>(encoded.size());
+    dataOffset += encoded.size();
+    tiles.push_back(ref);
+}
+
+void write_raw_pixel_raster_pmtiles_archive(const ModelInputs& model,
+    const std::string& outFile,
+    const std::string& tempBlobFile,
+    const mlt_pmtiles::RasterBounds& bounds,
+    int32_t minZoom,
+    int32_t maxZoom) {
+    constexpr int32_t tileSize = 256;
+    constexpr float minProb = 1e-3f;
+    if (!bounds.valid()) {
+        error("%s: invalid raster bounds for model %s", __func__, model.id.c_str());
+    }
+    if (minZoom < 0 || maxZoom < minZoom || maxZoom > 30) {
+        error("%s: invalid zoom range %d..%d", __func__, minZoom, maxZoom);
+    }
+
+    const size_t factorCount = infer_factor_count_from_pseudobulk(model.pseudobulkTsv);
+    const std::vector<RgbColorEntry> colors =
+        load_normalized_colors(model.colorRgbTsv, factorCount);
+
+    std::filesystem::path blobPath(tempBlobFile);
+    if (blobPath.has_parent_path()) {
+        std::filesystem::create_directories(blobPath.parent_path());
+    }
+    std::ofstream blob(blobPath, std::ios::binary | std::ios::trunc);
+    if (!blob.is_open()) {
+        error("%s: cannot open temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
+    }
+
+    std::vector<mlt_pmtiles::StoredTilePayloadRef> tiles;
+    uint64_t dataOffset = 0;
+    for (int32_t z = minZoom; z <= maxZoom; ++z) {
+        std::map<RasterTileKey, RasterTileAccum> accumByTile;
+        TileOperator reader(model.pixelPrefix.string() + ".bin",
+            model.pixelPrefix.string() + ".index", "");
+        reader.openDataStream();
+        PixTopProbs<float> rec;
+        int32_t ret = 0;
+        while ((ret = reader.next(rec)) >= 0) {
+            if (ret == 0) {
+                error("%s: invalid or corrupted pixel decode input for model %s",
+                    __func__, model.id.c_str());
+            }
+            if (rec.x < bounds.xmin || rec.x > bounds.xmax ||
+                rec.y < bounds.ymin || rec.y > bounds.ymax) {
+                continue;
+            }
+            double r = 0.0, g = 0.0, b = 0.0, psum = 0.0;
+            const size_t n = std::min(rec.ks.size(), rec.ps.size());
+            for (size_t i = 0; i < n; ++i) {
+                const int32_t ch = rec.ks[i];
+                const float p = rec.ps[i];
+                if (ch < 0 || p < minProb) {
+                    continue;
+                }
+                const RgbColorEntry& color = colors[static_cast<size_t>(ch) % colors.size()];
+                r += static_cast<double>(color.rgb[0]) * p;
+                g += static_cast<double>(color.rgb[1]) * p;
+                b += static_cast<double>(color.rgb[2]) * p;
+                psum += p;
+            }
+            if (psum < 1e-3) {
+                continue;
+            }
+            r /= psum;
+            g /= psum;
+            b /= psum;
+
+            int64_t tx = 0, ty = 0;
+            double localX = 0.0, localY = 0.0;
+            mlt_pmtiles::epsg3857_to_tilecoord(rec.x, rec.y, static_cast<uint8_t>(z),
+                tx, ty, localX, localY);
+            if (tx < 0 || ty < 0) {
+                continue;
+            }
+            const int32_t px = std::clamp(static_cast<int32_t>(std::floor(localX)),
+                0, tileSize - 1);
+            const int32_t py = std::clamp(static_cast<int32_t>(std::floor(localY)),
+                0, tileSize - 1);
+            RasterTileKey key{static_cast<uint8_t>(z),
+                static_cast<uint32_t>(tx), static_cast<uint32_t>(ty)};
+            auto it = accumByTile.find(key);
+            if (it == accumByTile.end()) {
+                it = accumByTile.emplace(key, RasterTileAccum(tileSize)).first;
+            }
+            if (it->second.count(py, px) == 255) {
+                continue;
+            }
+            it->second.sum(py, px) += Color3f{
+                static_cast<float>(r), static_cast<float>(g), static_cast<float>(b)};
+            it->second.count(py, px) += 1;
+        }
+
+        for (auto& kv : accumByTile) {
+            Image2D<Rgb8> tile(tileSize, tileSize, Rgb8{0, 0, 0});
+            for (int32_t y = 0; y < tileSize; ++y) {
+                for (int32_t x = 0; x < tileSize; ++x) {
+                    const uint8_t count = kv.second.count(y, x);
+                    if (count == 0) {
+                        continue;
+                    }
+                    const Color3f avg = kv.second.sum(y, x) / static_cast<float>(count);
+                    tile(y, x) = Rgb8{
+                        clamp_u8(avg.r), clamp_u8(avg.g), clamp_u8(avg.b)};
+                }
+            }
+            const std::string encoded = encode_png_rgb8(tile);
+            append_png_tile_to_blob(blob, tempBlobFile, encoded, dataOffset, kv.first, tiles);
+        }
+        notice("%s: z%d wrote %zu raster tile(s) for model %s",
+            __func__, z, accumByTile.size(), model.id.c_str());
+    }
+    blob.close();
+    if (tiles.empty()) {
+        error("%s: no raster tiles generated for model %s", __func__, model.id.c_str());
+    }
+
+    double minLon = 0.0, minLat = 0.0, maxLon = 0.0, maxLat = 0.0;
+    mlt_pmtiles::epsg3857_to_wgs84(bounds.xmin, bounds.ymin, minLon, minLat);
+    mlt_pmtiles::epsg3857_to_wgs84(bounds.xmax, bounds.ymax, maxLon, maxLat);
+    json metadata = {
+        {"version", "1.1"},
+        {"name", fs::path(outFile).filename().string()},
+        {"description", fs::path(outFile).filename().string()},
+        {"format", "png"},
+        {"type", "overlay"},
+        {"minzoom", minZoom},
+        {"maxzoom", maxZoom}
+    };
+
+    mlt_pmtiles::ArchiveOptions options;
+    options.tileType = pmtiles::TILETYPE_PNG;
+    options.tileCompression = pmtiles::COMPRESSION_NONE;
+    options.minZoom = static_cast<uint8_t>(minZoom);
+    options.maxZoom = static_cast<uint8_t>(maxZoom);
+    options.centerZoom = static_cast<uint8_t>(minZoom);
+    options.hasGeographicBounds = true;
+    options.minLonE7 = static_cast<int32_t>(std::llround(minLon * 10000000.0));
+    options.minLatE7 = static_cast<int32_t>(std::llround(minLat * 10000000.0));
+    options.maxLonE7 = static_cast<int32_t>(std::llround(maxLon * 10000000.0));
+    options.maxLatE7 = static_cast<int32_t>(std::llround(maxLat * 10000000.0));
+    options.centerLonE7 = static_cast<int32_t>(std::llround((minLon + maxLon) * 5000000.0));
+    options.centerLatE7 = static_cast<int32_t>(std::llround((minLat + maxLat) * 5000000.0));
+    options.metadata = std::move(metadata);
+    mlt_pmtiles::write_pmtiles_archive_from_blob_file(
+        outFile, tempBlobFile, std::move(tiles), options);
+    std::error_code ec;
+    fs::remove(blobPath, ec);
 }
 
 json read_json_file(const fs::path& path) {
@@ -711,15 +981,20 @@ DeployInputs load_from_input_json(const fs::path& inputJson) {
         }
         if (m.contains("pixel_png") && !m.at("pixel_png").is_null()) {
             model.pixelPng = resolve_path(base, m.at("pixel_png").get<std::string>());
+            model.pixelPngExplicit = true;
         }
-        model.pseudobulkTsv = resolve_path(base, m.at("pseudobulk_tsv").get<std::string>());
+        if (m.contains("pseudobulk_tsv") && !m.at("pseudobulk_tsv").is_null()) {
+            model.pseudobulkTsv = resolve_path(base, m.at("pseudobulk_tsv").get<std::string>());
+        } else {
+            model.pseudobulkTsv = model.pixelPrefix.string() + ".pseudobulk.tsv";
+        }
         model.deTsv = resolve_path(base, m.at("de_tsv").get<std::string>());
         out.models.push_back(std::move(model));
     }
     return out;
 }
 
-void validate_inputs(const DeployInputs& inputs) {
+void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMode) {
     require_file(inputs.transcripts.tiledPrefix.string() + ".tsv", "tiled transcript TSV");
     require_file(inputs.transcripts.tiledPrefix.string() + ".index", "tiled transcript index");
     require_file(inputs.transcripts.featureCountTsv, "feature-count TSV");
@@ -742,7 +1017,7 @@ void validate_inputs(const DeployInputs& inputs) {
                 __func__, model.id.c_str(), pixel_mode_name(model.pixelMode).c_str(),
                 model.pixelPrefix.string().c_str(), pixel_mode_name(inferredMode).c_str());
         }
-        if (!model.pixelPng.empty()) {
+        if (use_png_raster_for_model(model, usePngFlag, configMode)) {
             require_file(model.pixelPng, "pixel PNG");
         }
         require_file(model.pseudobulkTsv, "pseudobulk TSV");
@@ -849,9 +1124,7 @@ void write_catalog_yaml(const fs::path& outPath, const std::string& id, const st
         y << "    rgb: " << q(model.id + "-rgb.tsv") << "\n";
         y << "    pmtiles:\n";
         y << "      hex: " << q(model.id + ".pmtiles") << "\n";
-        if (!model.pixelPng.empty()) {
-            y << "      raster: " << q(model.id + "-pixel-raster.pmtiles") << "\n";
-        }
+        y << "      raster: " << q(model.id + "-pixel-raster.pmtiles") << "\n";
         y << "      raw_pixel: " << q(rawPixelPmtilesName) << "\n";
     }
     write_text_checked(outPath, y.str(), overwrite, "catalog");
@@ -881,6 +1154,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     double compressionScale = 10.0;
     double hexProbThreshold = 0.001;
     bool overwrite = false;
+    bool usePng = false;
 
     ParamList pl;
     pl.add_option("config", "Standard workflow config JSON", configPath)
@@ -903,6 +1177,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
       .add_option("max-polygon-tile-features", "Maximum features per polygon tile", maxPolygonTileFeatures)
       .add_option("scale-factor-compression", "Pyramid compression aggressiveness estimate", compressionScale)
       .add_option("hex-prob-thres", "Minimum hex factor probability retained", hexProbThreshold)
+      .add_option("use-png", "Use pre-rendered pixel PNGs for raster PMTiles in --config mode", usePng)
       .add_option("overwrite", "Overwrite existing deployment output files", overwrite);
 
     try {
@@ -930,6 +1205,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     fs::create_directories(outRoot);
     fs::create_directories(tmpDir);
 
+    const bool configMode = inputJson.empty();
     DeployInputs inputs;
     if (!inputJson.empty()) {
         inputs = load_from_input_json(inputJson);
@@ -937,7 +1213,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         inputs = load_from_config(configPath);
     }
     inputs = filter_models(std::move(inputs), modelPrefixes);
-    validate_inputs(inputs);
+    validate_inputs(inputs, usePng, configMode);
     const fs::path annotateTiledPrefix = prepare_headered_transcripts(inputs.transcripts, tmpDir);
 
     fs::path dotIndex = outRoot / "genes.pmtiles_index.tsv";
@@ -1017,17 +1293,8 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
 
     std::string rawPixelPmtilesName = "genes_all.pmtiles";
 
-    bool needsRasterBounds = false;
-    for (const ModelInputs& model : inputs.models) {
-        if (!model.pixelPng.empty()) {
-            needsRasterBounds = true;
-            break;
-        }
-    }
-    mlt_pmtiles::RasterBounds rasterBounds;
-    if (needsRasterBounds) {
-        rasterBounds = resolve_raster_bounds(inputs.transcripts, inputs.models.front());
-    }
+    mlt_pmtiles::RasterBounds rasterBounds =
+        resolve_raster_bounds(inputs.transcripts, inputs.models.front());
 
     for (const ModelInputs& model : inputs.models) {
         fs::path hexPmtiles = outRoot / (model.id + ".pmtiles");
@@ -1053,19 +1320,25 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         }
 
         fs::path rasterPmtiles = outRoot / (model.id + "-pixel-raster.pmtiles");
-        if (!model.pixelPng.empty()) {
-            if (!overwrite && file_exists(rasterPmtiles)) {
-                notice("%s: %s already exists; skipping pixel raster PMTiles", __func__,
-                    rasterPmtiles.string().c_str());
-            } else {
+        if (!overwrite && file_exists(rasterPmtiles)) {
+            notice("%s: %s already exists; skipping pixel raster PMTiles", __func__,
+                rasterPmtiles.string().c_str());
+        } else {
+            if (use_png_raster_for_model(model, usePng, configMode)) {
                 mlt_pmtiles::write_png_raster_pmtiles_archive(model.pixelPng.string(),
+                    rasterPmtiles.string(), (tmpDir / (model.id + ".raster.blob")).string(),
+                    rasterBounds, polygonMinZoom, polygonMaxZoom);
+            } else {
+                write_raw_pixel_raster_pmtiles_archive(model,
                     rasterPmtiles.string(), (tmpDir / (model.id + ".raster.blob")).string(),
                     rasterBounds, polygonMinZoom, polygonMaxZoom);
             }
         }
 
         copy_file_checked(model.modelTsv, outRoot / (model.id + "-model.tsv"), overwrite, "model sidecar");
-        write_cartoscope_rgb(model.colorRgbTsv, outRoot / (model.id + "-rgb.tsv"), overwrite);
+        const size_t factorCount = infer_factor_count_from_pseudobulk(model.pseudobulkTsv);
+        write_cartoscope_rgb(model.colorRgbTsv, outRoot / (model.id + "-rgb.tsv"),
+            factorCount, overwrite);
         write_cartoscope_de(model.deTsv, outRoot / (model.id + "-bulk-de.tsv"), overwrite);
         write_cartoscope_info_from_pseudobulk(model.pseudobulkTsv, outRoot / (model.id + "-info.tsv"), overwrite);
         gzip_copy_text(model.pseudobulkTsv, outRoot / (model.id + "-pseudobulk.tsv.gz"), overwrite);
@@ -1084,11 +1357,9 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         asset["rgb"] = model.id + "-rgb.tsv";
         asset["pmtiles"] = {
             {"hex", model.id + ".pmtiles"},
+            {"raster", model.id + "-pixel-raster.pmtiles"},
             {"raw_pixel", rawPixelPmtilesName}
         };
-        if (!model.pixelPng.empty()) {
-            asset["pmtiles"]["raster"] = model.id + "-pixel-raster.pmtiles";
-        }
         factorAssets.push_back(asset);
     }
 

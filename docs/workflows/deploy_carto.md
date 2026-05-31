@@ -7,18 +7,15 @@ Run it after the standard punkst [workflow](./index.md) has finished and one or 
 ## Scope
 The command does not run fitting or decoding. It starts from existing tiled transcripts, model outputs, pixel decode files, then writes the PMTiles and metadata files CartoScope needs.
 
-The deployment contains transcript PMTiles, gene-bin PMTiles, merged raw-pixel factor annotations, hexagon factor PMTiles, optional pixel-raster factor PMTiles, sidecar tables, `ficture_assets.json`, and `catalog.yaml`. It does not package imaging, basemaps, UMAPs, cells, or boundaries.
+The deployment contains transcript PMTiles, gene-bin PMTiles, merged raw-pixel factor annotations, hexagon factor PMTiles, pixel-raster factor PMTiles, sidecar tables, `ficture_assets.json`, and `catalog.yaml`. It does not package imaging, basemaps, UMAPs, cells, or boundaries.
 
 ## Basic Usage
 
 ```bash
-punkst deploy-cartoscope \
+punkst deploy-cartoscope --pmtiles-format MVT \
   --config /path/to/punkst/output/config.json \
-  --out-dir /path/to/cartoscope_deploy \
-  --id sample-id \
-  --title "Sample title" \
-  --pmtiles-format MVT \
-  --threads 4
+  --id sample-id --title "Sample title" \
+  --out-dir /path/to/cartoscope_deploy --threads 4
 ```
 
 `--pmtiles-format` is required and must be either `MLT` or `MVT`.
@@ -65,19 +62,19 @@ single_molecule   -> <model-prefix>.sgl_mol.*
 
 Default deployment model IDs use names such as `h12-k12`, `h12-k12-sf-pixel`, and `h12-k12-sgl-mol`.
 
+<!-- By default, raster PMTiles are rendered directly from the pixel decode files. Add `--use-png` to use the legacy PNG-to-PMTiles path from `<model-prefix>.<pixel-suffix>.png`. -->
+
 Deploy only selected models with `--model-prefix`, e.g. `--model-prefix <model-prefix> hex_12.k24`
 
 ### Explicit Input JSON
 
-Use `--input-json` when inputs are not arranged like the standard workflow output.
+Use `--input-json` when your data was not produced by (a single run of) the standard workflow template.
 
 ```bash
-punkst deploy-cartoscope \
-  --input-json deploy_inputs.json \
-  --out-dir /path/to/deploy \
-  --id sample-id \
-  --title "Sample title" \
-  --pmtiles-format MVT
+punkst deploy-cartoscope --pmtiles-format MVT \
+  --input-json /path/to/deploy_inputs.json \
+  --id sample-id --title "Sample title" \
+  --out-dir /path/to/cartoscope_deploy --threads 4
 ```
 
 Example:
@@ -99,19 +96,21 @@ Example:
       "results_tsv": "/path/to/hex_12.k12.results.tsv",
       "model_tsv": "/path/to/hex_12.k12.model.tsv",
       "color_rgb_tsv": "/path/to/hex_12.k12.color.rgb.tsv",
-      "pixel_prefix": "/path/to/hex_12.k12.pixel",
       "pixel_decode_mode": "pixel",
-      "pixel_png": "/path/to/hex_12.k12.pixel.png",
-      "pseudobulk_tsv": "/path/to/hex_12.k12.pixel.pseudobulk.tsv",
-      "de_tsv": "/path/to/hex_12.k12.pixel.de_bulk.tsv"
+      "pixel_prefix": "/path/to/hex_12.k12.pixel",
+      "de_tsv": "/path/to/hex_12.k12.pixel.de_bulk.tsv",
+      "pseudobulk_tsv": "/path/to/hex_12.k12.pixel.pseudobulk.tsv"
     }
   ]
 }
 ```
 
-Relative paths are resolved relative to the JSON file. `pixel_decode_mode` is optional; when omitted, deployment infers the mode from `<pixel_prefix>.index`. `pixel_png` is optional. When `pixel_png` is omitted, the factor is deployed without `pmtiles.raster`; raw-pixel vector rendering still uses the annotated transcript PMTiles.
+File paths can be absolute or relative to the directory of the input JSON file.
 
-If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different `id` values. The entries can reuse the same `results_tsv`, `model_tsv`, and `color_rgb_tsv` while pointing to different pixel prefixes, pseudobulk tables, DE tables, and optional PNGs.
+`pixel_decode_mode` is optional; when omitted, deployment infers the mode from `<pixel_prefix>.index`.
+When `pseudobulk_tsv` is omitted, it is assumed to be `<pixel_prefix>.pseudobulk.tsv`.
+
+If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different `id` values. The entries can reuse the same `results_tsv`, `model_tsv`, and `color_rgb_tsv` while pointing to different pixel prefixes, pseudobulk tables, and DE tables.
 
 ## Output
 
@@ -133,7 +132,7 @@ genes_pmtiles_index.tsv
 <model-id>-rgb.tsv
 ```
 
-`<model-id>-pixel-raster.pmtiles` is written only when a pixel PNG is available. Raster bounds are read from the transcript coordinate range file produced by `pts2tiles`; if that file is absent, deployment falls back to bounds stored in the transcript or pixel index headers.
+`<model-id>-pixel-raster.pmtiles` is written for each deployed model. Raster bounds are read from the transcript coordinate range file produced by `pts2tiles`; if that file is absent, deployment falls back to bounds stored in the transcript or pixel index headers.
 
 The catalog registers each factor with the available PMTiles:
 

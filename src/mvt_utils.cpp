@@ -695,7 +695,7 @@ void initialize_decoded_schema(const DecodedLayer& layer, FeatureTableSchema& sc
         }
     }
     auto inferred_type_for_name = [](const std::string& name) {
-        if (name == "feature") {
+        if (name == "feature" || name == "gene") {
             return ScalarType::STRING;
         }
         if (name == "ct" || name == "topK" || name == "hex_q" || name == "hex_r") {
@@ -704,12 +704,17 @@ void initialize_decoded_schema(const DecodedLayer& layer, FeatureTableSchema& sc
         if (name == "z" || name == "topP") {
             return ScalarType::FLOAT;
         }
-        if (name.size() > 1 && name[0] == 'K' &&
-            std::all_of(name.begin() + 1, name.end(), [](unsigned char c) { return std::isdigit(c); })) {
+        std::string suffix = name;
+        const size_t underscore = suffix.rfind('_');
+        if (underscore != std::string::npos && underscore + 1u < suffix.size()) {
+            suffix = suffix.substr(underscore + 1u);
+        }
+        if (suffix.size() > 1 && suffix[0] == 'K' &&
+            std::all_of(suffix.begin() + 1, suffix.end(), [](unsigned char c) { return std::isdigit(c); })) {
             return ScalarType::INT_32;
         }
-        if (name.size() > 1 && name[0] == 'P' &&
-            std::all_of(name.begin() + 1, name.end(), [](unsigned char c) { return std::isdigit(c); })) {
+        if (suffix.size() > 1 && suffix[0] == 'P' &&
+            std::all_of(suffix.begin() + 1, suffix.end(), [](unsigned char c) { return std::isdigit(c); })) {
             return ScalarType::FLOAT;
         }
         if (!name.empty() &&
