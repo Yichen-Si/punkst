@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
@@ -259,7 +259,7 @@
   
     
   
-  Quickstart
+  Workflows
 
         </a>
       </li>
@@ -485,6 +485,8 @@
       
         
       
+        
+      
     
     
     
@@ -512,7 +514,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Workflows
   
 
     
@@ -534,7 +536,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Quickstart
+    Workflows
   
 
           </label>
@@ -570,6 +572,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="deploy_carto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -588,6 +618,8 @@
       
         
           
+        
+      
         
       
         
@@ -707,6 +739,34 @@
     
   
     tiles2hex
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/tiles2rois/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    tiles2rois
   
 
     
@@ -1257,6 +1317,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p><code>"topics"</code> (list): the number of topics (factors) to learn.</p>
 <p><code>"pixhex"</code>: often set to be the same as "hexgrids" or slightly smaller.</p>
 <p><code>"nmove"</code>: "pixhex" divided by "nmove" is the distance between adjacent anchor points in the algorithm. We recommend pixhex/nmove to be around <span class="arithmatex">\(4~6\mu m\)</span> for high resolution results.</p>
+<p><code>"pixel_decode_mode"</code>: controls the mode for <a href="../modules/pixel-decode/">pixel-decode</a>. Valid values are <code>"pixel"</code> for fixed-resolution pixel level decoding, <code>"feature_pixel"</code> for <code>pixel-decode --single-feature-pixel</code>, and <code>"single_molecule"</code> for <code>pixel-decode --single-molecule</code>. The output has suffixes <code>.pixel</code>, <code>.sf_pixel</code>, and <code>.sgl_mol</code>, respectively.</p>
 <p><code>"res"</code>: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using <span class="arithmatex">\(0.5\mu m\)</span>.</p>
 <p><code>"scale"</code>: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want <span class="arithmatex">\(0.5 \mu m\)</span> to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is <span class="arithmatex">\(2 \mu m\)</span>, you probably want to set scale to 2.</p>
 <p>Section <code>"job"</code>: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".</p>
@@ -1335,6 +1396,7 @@ It can have other columns (which will be ignored in analysis but can be optional
 <p><code>--hex-grid-dist</code>: Center-to-center distance of the hexagonal grid</p>
 <p><code>--n-moves</code>: Number of sliding moves to generate anchors</p>
 <p><code>--pixel-res</code>: Resolution for the analysis (in the same unit as coordinates). Set to <code>2</code> for Visium HD.</p>
+<p>The generated basic workflow controls this step with <code>workflow.pixel_decode_mode</code>. <code>pixel</code> uses the command above, <code>feature_pixel</code> adds <code>--single-feature-pixel</code>, and <code>single_molecule</code> adds <code>--single-molecule</code> and omits <code>--pixel-res</code>.</p>
 <p><code>--output-binary</code>: Write the main pixel-level output as <code>${path}/pixel.decode.bin</code> plus <code>${path}/pixel.decode.index</code>. This is the preferred output mode for downstream <code>tile-op</code>, visualization, and spatial tests.</p>
 <p><code>--output-original</code>: Optional text-output mode that writes each transcript/input pixel as a separate line in the output. This is slower, generates a larger file, and cannot be combined with <code>--output-binary</code>, so only use it if matching the inference with the original input is useful.</p>
 <p><a href="../modules/pixel-decode/">Detailed documentation for pixel-decode</a></p>

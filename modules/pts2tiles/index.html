@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
@@ -257,7 +257,7 @@
   
     
   
-  Quickstart
+  Workflows
 
         </a>
       </li>
@@ -483,6 +483,8 @@
       
         
       
+        
+      
     
     
     
@@ -509,7 +511,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Workflows
   
 
     
@@ -531,7 +533,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Quickstart
+    Workflows
   
 
           </label>
@@ -567,6 +569,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/deploy_carto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -587,6 +617,8 @@
       
         
           
+        
+      
         
       
         
@@ -831,6 +863,34 @@
     
   
     tiles2hex
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tiles2rois/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    tiles2rois
   
 
     
@@ -1307,6 +1367,14 @@
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled
 </span></code></pre></div>
+<p>Example for retiling a factor-probability TSV for <code>tile-op</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/legacy_factors.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--tile-op-factor-tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/legacy_factors.tiled
+</span></code></pre></div>
 <h3 id="accepted-input-forms">Accepted Input Forms<a class="headerlink" href="#accepted-input-forms" title="Permanent link">&para;</a></h3>
 <p><code>pts2tiles</code> currently accepts these input forms through <code>--in-tsv</code>:</p>
 <ul>
@@ -1327,12 +1395,11 @@
 <li>In practice, <code>--csv</code> should be used only for simple comma-delimited records where commas do not appear inside quoted fields.</li>
 </ul>
 <p>Header and metadata handling:</p>
-<p>Lines starting with <code>#</code> are automatically treated as metadata/header and copied directly to the output regardless of <code>--skip</code>, the following options are mainly for lines that do not start with <code>#</code> but should be treated as metadata/header.</p>
+<p>Initial lines starting with <code>#</code> are automatically treated as metadata/header and copied directly to the output. Comment lines that appear later in the file are skipped and are not copied to the output.</p>
 <ul>
 <li><code>--skip N</code> skips the first <code>N</code> lines from parsing.</li>
-<li>Skipped lines are copied to the output as metadata comments.</li>
-<li><code>--skip-last-is-header</code> marks the last skipped line as the header row and rewrites it to start with a single <code>#</code>.</li>
-<li>Earlier skipped lines are normalized to start with at least two <code>#</code> characters.</li>
+<li>By default, skipped lines are not copied to the output.</li>
+<li><code>--skip-last-is-header</code> marks only the last skipped line as the header row and rewrites it to start with a single <code>#</code>.</li>
 </ul>
 <h3 id="main-parameters">Main Parameters<a class="headerlink" href="#main-parameters" title="Permanent link">&para;</a></h3>
 <dl>
@@ -1368,6 +1435,8 @@
 <dd>Number of initial lines to skip from parsing and preserve as metadata in the output. Default: <code>0</code>.</dd>
 <dt><code>--skip-last-is-header</code></dt>
 <dd>Treat the last skipped line as the header line. Requires <code>--skip &gt; 0</code>.</dd>
+<dt><code>--tile-op-factor-tsv</code></dt>
+<dd>Retile a TSV with <code>x</code>, <code>y</code>, optional <code>z</code>, and contiguous <code>K1/P1</code>, <code>K2/P2</code>, ... factor-probability columns. This mode ignores any existing index, infers coordinate and K/P columns from a header line starting with <code>#</code>, and writes an index that <code>tile-op</code> can read directly. For a non-comment header, use <code>--skip N --skip-last-is-header</code>.</dd>
 <dt><code>--tile-buffer</code></dt>
 <dd>Per-thread, per-tile in-memory buffer size in number of records before flushing to disk. Default: <code>1000</code>.</dd>
 <dt><code>--batch-size</code></dt>
@@ -1378,6 +1447,10 @@
 <dd>Axis-specific scaling factors. If an axis-specific scale is omitted, it falls back to <code>--scale</code>.</dd>
 <dt><code>--digits</code></dt>
 <dd>Decimal precision used when rewritten scaled coordinates are written to the output. Default: <code>2</code>.</dd>
+<dt><code>--include-cols</code></dt>
+<dd>Optional list of 0-based input column indices to keep in the tiled output. Explicit parser columns (<code>--icol-x</code>, <code>--icol-y</code>, <code>--icol-z</code>, <code>--icol-feature</code>, and <code>--icol-int</code>) are always kept. Output columns are compacted in their original order. Cannot be combined with <code>--exclude-cols</code>.</dd>
+<dt><code>--exclude-cols</code></dt>
+<dd>Optional list of 0-based input column indices to remove from the tiled output. Explicit parser columns are always kept. Output columns are compacted in their original order. Cannot be combined with <code>--include-cols</code>.</dd>
 <dt><code>--threads</code></dt>
 <dd>Number of worker threads. Default: <code>1</code>.</dd>
 <dt><code>--verbose</code></dt>

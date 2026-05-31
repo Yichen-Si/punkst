@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.1">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
@@ -257,7 +257,7 @@
   
     
   
-  Quickstart
+  Workflows
 
         </a>
       </li>
@@ -483,6 +483,8 @@
       
         
       
+        
+      
     
     
     
@@ -509,7 +511,7 @@
   <span class="md-ellipsis">
     
   
-    Quickstart
+    Workflows
   
 
     
@@ -531,7 +533,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Quickstart
+    Workflows
   
 
           </label>
@@ -567,6 +569,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/deploy_carto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -587,6 +617,8 @@
       
         
           
+        
+      
         
       
         
@@ -707,6 +739,34 @@
     
   
     tiles2hex
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tiles2rois/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    tiles2rois
   
 
     
@@ -1077,15 +1137,15 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#write-mlt-pmtiles" class="md-nav__link">
+  <a href="#write-pmtiles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Write MLT PMTiles
+        Write PMTiles
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Write MLT PMTiles">
+    <nav class="md-nav" aria-label="Write PMTiles">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1635,15 +1695,15 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#write-mlt-pmtiles" class="md-nav__link">
+  <a href="#write-pmtiles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Write MLT PMTiles
+        Write PMTiles
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Write MLT PMTiles">
+    <nav class="md-nav" aria-label="Write PMTiles">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1901,7 +1961,7 @@
 <li><a href="#fix-fragmented-tiles">Fix Fragmented Tiles</a></li>
 <li><a href="#region-query">Region Query</a></li>
 <li><a href="#convert-to-tsv">Export as TSV</a></li>
-<li><a href="#write-mlt-pmtiles">Export as MLT PMTiles</a></li>
+<li><a href="#write-pmtiles">Export as MLT PMTiles</a></li>
 </ul>
 </li>
 <li>
@@ -2101,8 +2161,8 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li>the output TSV index header and per-tile entries reflect the records actually written</li>
 </ul>
 <p>For 3D TSV dumping with GeoJSON, <code>--zmin/--zmax</code> are supported only together with <code>--extract-region-geojson</code>.</p>
-<h3 id="write-mlt-pmtiles">Write MLT PMTiles<a class="headerlink" href="#write-mlt-pmtiles" title="Permanent link">&para;</a></h3>
-<p><code>tile-op</code> can write point-only MLT-backed PMTiles in EPSG:3857 coordinates.</p>
+<h3 id="write-pmtiles">Write PMTiles<a class="headerlink" href="#write-pmtiles" title="Permanent link">&para;</a></h3>
+<p><code>tile-op</code> can write point-only MLT- or MVT-backed PMTiles in EPSG:3857 coordinates. Use <code>--write-mlt-pmtiles</code> for MLT or <code>--write-mvt-pmtiles</code> for MVT.</p>
 <p>A valid <code>--pmtiles-zoom</code> in <code>[0, 31]</code> is required for all PMTiles packaging modes. For the purpose of generating a max-zoom PMTiles for building a pyramid later with <code>pmpoint</code>, a typical setting is <code>--pmtiles-zoom 18</code>.</p>
 <h4 id="direct-export-from-feature-bearing-binary-input">Direct export from feature-bearing binary input<a class="headerlink" href="#direct-export-from-feature-bearing-binary-input" title="Permanent link">&para;</a></h4>
 <p>This path is for binary feature-bearing decode output such as:</p>
@@ -2115,6 +2175,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>--n-gene-bins<span class="w"> </span><span class="m">5</span><span class="w"> </span>--feature-count-file<span class="w"> </span>path/transcripts.tiled.features.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>--out<span class="w"> </span>path/pixel.smol.z18<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
+<p>For MVT output, replace <code>--write-mlt-pmtiles</code> with <code>--write-mvt-pmtiles</code>.</p>
 <p>Main points:</p>
 <ul>
 <li>this direct writer is used only when neither <code>--annotate-pts</code> nor <code>--merge-emb</code> is present</li>
@@ -2147,6 +2208,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span>--write-mlt-pmtiles<span class="w"> </span>--pmtiles-zoom<span class="w"> </span><span class="m">18</span><span class="w"> </span>--encode-prob-min<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span>--out<span class="w"> </span>path/pixel.ann2d.z18<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
+<p>For MVT output, use <code>--write-mvt-pmtiles</code> with the same annotate options.</p>
 <p>This mode writes <code>feature</code> from the query TSV <code>--icol-feature</code> column and <code>ct</code> from <code>--icol-count</code>, then appends the annotated <code>K/P</code> columns. The main archive is always <code>path/out_all.pmtiles</code>; gene-bin side outputs are written only when gene-bin packaging is active.</p>
 <p>You can also carry selected extra query TSV columns into the packaged PMTiles schema:</p>
 <ul>
@@ -2170,6 +2232,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">  </span>--write-mlt-pmtiles<span class="w"> </span>--pmtiles-zoom<span class="w"> </span><span class="m">18</span><span class="w"> </span>--encode-prob-min<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span>--out<span class="w"> </span>path/pixel.merge.z18<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
+<p>For MVT output, use <code>--write-mvt-pmtiles</code>.</p>
 <p>This follows the same merge and annotation rules described below, but writes PMTiles instead of TSV. The output is <code>path/out_all.pmtiles</code> plus optional gene-bin side outputs.</p>
 <h3 id="merge-multiple-inference-results">Merge Multiple Inference Results<a class="headerlink" href="#merge-multiple-inference-results" title="Permanent link">&para;</a></h3>
 <p>You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. The main input (<code>--in</code>) defines the output lattice. Auxiliary inputs from <code>--merge-emb</code> are matched onto that lattice when they have the same tile size, the same or coarser resolution, and compatible dimensionality.</p>
@@ -2262,8 +2325,8 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </ul>
 <p>The same combined workflow also supports PMTiles packaging when <code>--write-mlt-pmtiles</code> and <code>--pmtiles-zoom</code> are provided. In that case the output is <code>path/out_all.pmtiles</code> plus optional gene-bin side outputs, and <code>--ext-col-*</code> can be used to carry selected query TSV columns into the packaged archive.</p>
 <h3 id="aggregate-results-by-cell">Aggregate Results by Cell<a class="headerlink" href="#aggregate-results-by-cell" title="Permanent link">&para;</a></h3>
-<p>This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tailed) transcript file that contains cell/compartment annotations per transcript/pixel.
-If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run <code>punkst pts2tiles</code> on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tailed file should contain the necessary information.</p>
+<p>This operation aggregates pixel-level inference results at cell and subcellular compartment level, based on the (tiled) transcript file that contains cell/compartment annotations per transcript/pixel.
+If your data is from CosMx, Xenium, or Visium MERSCOPE, you should have already run <code>punkst pts2tiles</code> on the raw transcript file which contains cell ID and possibly a column indicating if the transcript is nuclear or cytoplasmic. Then the tiled file should contain the necessary information.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--annotate-cell<span class="w"> </span>--in<span class="w"> </span>path/result<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts_with_cells<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-c<span class="w"> </span><span class="m">5</span><span class="w"> </span>--icol-s<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="se">\</span>

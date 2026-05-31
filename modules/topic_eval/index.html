@@ -8,13 +8,9 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/lda4hex/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/topic_eval/">
       
       
-        <link rel="prev" href="../tiles2rois/">
-      
-      
-        <link rel="next" href="../pixel-decode/">
       
       
         
@@ -25,7 +21,7 @@
     
     
       
-        <title>topic-model - punkst</title>
+        <title>LDA topic evaluation - punkst</title>
       
     
     
@@ -76,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#lda-with-stochastic-variational-inference" class="md-skip">
+        <a href="#lda-topic-evaluation" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              topic-model
+              LDA topic evaluation
             
           </span>
         </div>
@@ -269,12 +265,10 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../" class="md-tabs__link">
           
   
@@ -608,8 +602,6 @@
       
   
   
-    
-  
   
   
     
@@ -643,19 +635,18 @@
     
     
       
-        
-        
-      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -677,13 +668,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -784,37 +775,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    topic-model
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../lda4hex/" class="md-nav__link">
         
   
   
@@ -830,209 +794,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#input-formats" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Input formats
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Input formats">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#custom-sparse-text-input" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom sparse text input
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#10x-mex-input" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        10X MEX input
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#lda4hex-topic-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        lda4hex / topic-model
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="lda4hex / topic-model">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#feature-selection-and-weighting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Feature selection and weighting
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lda-fitting-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        LDA fitting options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#prior-model-and-projection-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prior model and projection options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional-background-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional background model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transform-related-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transform-related options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#main-outputs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Main outputs
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#lda-transform" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        lda-transform
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="lda-transform">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#outputs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outputs
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1346,152 +1107,19 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#input-formats" class="md-nav__link">
+  <a href="#shared-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Input formats
+        Shared options
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Input formats">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#custom-sparse-text-input" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Custom sparse text input
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#10x-mex-input" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        10X MEX input
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#lda4hex-topic-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        lda4hex / topic-model
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="lda4hex / topic-model">
+    <nav class="md-nav" aria-label="Shared options">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#required" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#feature-selection-and-weighting" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Feature selection and weighting
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lda-fitting-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        LDA fitting options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#prior-model-and-projection-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prior model and projection options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#optional-background-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional background model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transform-related-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transform-related options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#main-outputs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Main outputs
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#lda-transform" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        lda-transform
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="lda-transform">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Required
@@ -1512,11 +1140,111 @@
   
 </li>
         
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lda-factor-eval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lda-factor-eval
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="lda-factor-eval">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multinomial-eb-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multinomial EB workflow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#eb-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EB components
+      
+    </span>
+  </a>
+  
+</li>
+        
           <li class="md-nav__item">
   <a href="#outputs" class="md-nav__link">
     <span class="md-ellipsis">
       
         Outputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lda-factor-eval-naive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        lda-factor-eval-naive
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="lda-factor-eval-naive">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required-naive-option" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required naive option
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#naive-outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Naive outputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
       
     </span>
   </a>
@@ -1548,200 +1276,216 @@
   
 
 
-<h1 id="lda-with-stochastic-variational-inference">LDA with stochastic variational inference<a class="headerlink" href="#lda-with-stochastic-variational-inference" title="Permanent link">&para;</a></h1>
-<p>This document describes the current behavior of:</p>
+<h1 id="lda-topic-evaluation">LDA topic evaluation<a class="headerlink" href="#lda-topic-evaluation" title="Permanent link">&para;</a></h1>
+<p>This document describes:</p>
 <ul>
-<li><code>punkst lda4hex</code></li>
-<li><code>punkst topic-model</code></li>
-<li><code>punkst lda-transform</code></li>
+<li><code>punkst lda-factor-eval</code>: empirical Bayes topic activity and factor evaluation</li>
+<li><code>punkst lda-factor-eval-naive</code>: naive (fast) theta-threshold leave-one-factor-out evaluation</li>
 </ul>
-<p><code>lda4hex</code> and <code>topic-model</code> are aliases for the same command. They currently expose only the SVI-based LDA workflow. This document does not cover HDP or SCVB0.</p>
-<h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
-<h3 id="custom-sparse-text-input">Custom sparse text input<a class="headerlink" href="#custom-sparse-text-input" title="Permanent link">&para;</a></h3>
-<p>This is the sparse unit-by-feature format produced by <code>tiles2hex</code>.</p>
-<p>Each line contains the sparse encoding for one unit. The metadata JSON supplies:</p>
-<ul>
-<li><code>dictionary</code>: feature name to feature index mapping, unless you instead provide the feature list explicitly with <code>--features</code></li>
-<li><code>offset_data</code>: number of prefix columns before the sparse payload</li>
-<li><code>header_info</code>: names of those prefix columns</li>
-</ul>
-<p>The sparse payload contains:</p>
-<ul>
-<li>number of nonzero features</li>
-<li>total count for the unit</li>
-<li><code>(feature_index, count)</code> pairs</li>
-</ul>
-<h3 id="10x-mex-input">10X MEX input<a class="headerlink" href="#10x-mex-input" title="Permanent link">&para;</a></h3>
-<p>You can also use:</p>
-<ul>
-<li>one or more <code>--in-dge-dir</code> values (For example, <code>--in-dge-dir path/d1 path/d2</code> where each directory contains <code>matrix.mtx.gz</code>, <code>features.tsv.gz</code>, and <code>barcodes.tsv.gz</code>)</li>
-<li>or matching lists for <code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code> (For example, <code>--in-barcodes path/d1/barcodes.tsv.gz path/d2/barcodes.tsv.gz --in-features path/d1/features.tsv.gz path/d1/features.tsv.gz --in-matrix path/d1/matrix.mtx.gz path/d2/matrix.mtx.gz</code>)</li>
-<li>optional <code>--dataset-id</code> values, one per dataset (For example, <code>--dataset-id d1 d2</code> in the above example)</li>
-</ul>
-<p>For 10X input, the data are loaded into memory. When multiple datasets are provided, they are treated as one joint corpus and the default feature space is the intersection of all input feature lists. When <code>--features</code> is not supplied during fitting, <code>{prefix}.features.tsv</code> is written with the final feature names and total counts.</p>
-<p>If <code>--dataset-id</code> is omitted, dataset IDs default to <code>1</code>, <code>2</code>, <code>3</code>, ... in input order.</p>
-<h2 id="lda4hex-topic-model"><code>lda4hex</code> / <code>topic-model</code><a class="headerlink" href="#lda4hex-topic-model" title="Permanent link">&para;</a></h2>
+<p>Both commands evaluate factors from a fitted LDA model. They use the same input
+formats as <code>lda-transform</code> and require a fitted topic-by-feature model supplied
+with <code>--in-model</code>.</p>
+<h2 id="shared-options">Shared options<a class="headerlink" href="#shared-options" title="Permanent link">&para;</a></h2>
 <h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
+<p>One input source is required:</p>
 <ul>
-<li>Output prefix <code>--out-prefix</code></li>
+<li>custom sparse text input with <code>--in-data</code> and <code>--in-meta</code></li>
+<li>10X MEX input via one or more <code>--in-dge-dir</code></li>
+<li>or matching repeated 10X triplets: <code>--in-barcodes</code>, <code>--in-features</code>,
+  <code>--in-matrix</code></li>
 </ul>
-<p>Either:</p>
-<ul>
-<li>custom input: <code>--in-data</code> and <code>--in-meta</code></li>
-<li>10X input: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
-</ul>
-<p>And one of:</p>
-<ul>
-<li><code>--n-topics</code></li>
-<li><code>--model-prior</code></li>
-</ul>
-<p>If <code>--projection-only</code> is used, <code>--model-prior</code> is required and no training is performed.</p>
-<h3 id="feature-selection-and-weighting">Feature selection and weighting<a class="headerlink" href="#feature-selection-and-weighting" title="Permanent link">&para;</a></h3>
-<p><code>--features</code>
-Optional feature list used to define or filter the feature space.</p>
-<p><code>--min-count-per-feature</code>
-Minimum feature total count. Default: <code>1</code>.</p>
-<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code>
-Regex-based feature filtering.</p>
-<p><code>--feature-weights</code>
-Per-feature weights applied during fitting and transform.</p>
-<p><code>--default-weight</code>
-Default weight for features missing from the weight file.</p>
-<p>For 10X input, the feature-selection behavior is:</p>
-<ol>
-<li>If <code>--features</code> is provided, it defines the feature space before loading the full matrix.</li>
-<li>If <code>--features</code> is not provided but <code>--model-prior</code> is provided, the prior model defines the feature space.</li>
-<li>If neither is provided and <code>--min-count-per-feature &lt;= 1</code>, regex filtering is applied directly to the 10X feature list.</li>
-<li>Otherwise the 10X matrix is loaded, feature totals are computed, and filtering is applied afterward.</li>
-</ol>
-<p>With multiple 10X datasets, the starting 10X feature list in steps 1 and 3 is the intersection across all datasets.</p>
-<h3 id="lda-fitting-options">LDA fitting options<a class="headerlink" href="#lda-fitting-options" title="Permanent link">&para;</a></h3>
-<p><code>--n-topics</code>
-Number of topics.</p>
-<p><code>--threads</code>, <code>--seed</code></p>
-<p><code>--n-epochs</code>
-Number of training passes. Default: <code>1</code>.</p>
-<p><code>--minibatch-size</code>
-Minibatch size. Default: <code>512</code>.</p>
-<p><code>--min-count-train</code>
-Minimum total count per unit for training. Default: <code>20</code>.</p>
-<p><code>--modal</code>
-Modality index for multi-modal custom input.</p>
-<p><code>--kappa</code>, <code>--tau0</code>
-Online SVI learning-rate parameters.</p>
-<p><code>--alpha</code>
-Document-topic prior. Default: <code>1/K</code>.</p>
-<p><code>--eta</code>
-Topic-word prior. Default: <code>1/K</code>.</p>
-<p><code>--max-iter</code>
-Maximum per-document iterations in inference/transform. Default: <code>100</code>.</p>
-<p><code>--mean-change-tol</code>
-Per-document convergence tolerance. Default: <code>1e-3</code>.</p>
-<p><code>--reproducible-init</code>
-Use deterministic per-document random initialization.</p>
-<h3 id="prior-model-and-projection-options">Prior model and projection options<a class="headerlink" href="#prior-model-and-projection-options" title="Permanent link">&para;</a></h3>
-<p><code>--model-prior</code>
-Initialize from an existing model matrix.</p>
-<p><code>--prior-scale</code>
-Uniform scaling for the prior model.</p>
-<p><code>--prior-scale-rel</code>
-Scale the prior relative to observed feature totals.</p>
-<p><code>--projection-only</code>
-Use the prior model to transform the data without fitting. Implies <code>--transform</code>.</p>
-<p><code>--sort-topics</code>
-Sort learned topics by abundance before writing the model.</p>
-<h3 id="optional-background-model">Optional background model<a class="headerlink" href="#optional-background-model" title="Permanent link">&para;</a></h3>
-<p><code>--fit-background</code>
-Fit an additional background profile together with the LDA factors.</p>
-<p><code>--background-prior</code>
-Input prior for the background profile.</p>
-<p><code>--background-init-scale</code>
-Scale used when initializing the background from feature totals.</p>
-<p><code>--fix-background</code>
-Keep the background profile fixed during training.</p>
-<p><code>--bg-fraction-prior-a0</code>, <code>--bg-fraction-prior-b0</code>
-Beta prior parameters for the background fraction.</p>
-<p><code>--warm-start-epochs</code>
-Warm-start the topic model before enabling the background.</p>
-<h3 id="transform-related-options">Transform-related options<a class="headerlink" href="#transform-related-options" title="Permanent link">&para;</a></h3>
-<p><code>--transform</code>
-Transform the input units after fitting.</p>
-<p><code>--residuals</code>
-For the plain LDA path, also write residual-based summaries and feature residuals.</p>
-<p><code>--feature-residuals</code>
-Alias for <code>--residuals</code>.</p>
-<p><code>--topk-only &lt;int&gt;</code>
-For the plain LDA path, write only the top-k topic indices and probabilities to <code>{prefix}.results.tsv</code>.</p>
-<h3 id="main-outputs">Main outputs<a class="headerlink" href="#main-outputs" title="Permanent link">&para;</a></h3>
-<p><code>{prefix}.model.tsv</code>
-Feature-by-topic model matrix.</p>
-<p><code>{prefix}.features.tsv</code>
-Written for 10X fitting when <code>--features</code> is not supplied.</p>
-<p><code>{prefix}.background.tsv</code>
-Written when <code>--fit-background</code> is used.</p>
-<p>When <code>--transform</code> is used:</p>
-<ul>
-<li>plain LDA without background delegates to <code>lda-transform</code></li>
-<li>background-enabled LDA keeps the older transform path</li>
-</ul>
-<p>For the delegated plain-LDA path used by <code>lda4hex --transform</code>, the transform stage keeps all non-empty units by using <code>--min-count 1</code>.</p>
-<p>For the plain LDA path, transform outputs are:</p>
-<p><code>{prefix}.results.tsv</code>
-Topic proportions per unit. By default this contains all topics. With <code>--topk-only k</code>, it instead contains columns <code>K1..Kk</code> and <code>P1..Pk</code>.</p>
-<p><code>{prefix}.pseudobulk.tsv</code>
-Feature-by-topic pseudobulk counts formed from the transformed topic proportions.</p>
-<p><code>{prefix}.unit_stats.tsv</code>
-Written when <code>--residuals</code> is enabled. Current columns are:</p>
-<ul>
-<li><code>total_count</code></li>
-<li><code>residual</code></li>
-<li><code>cosine_sim</code></li>
-<li><code>entropy</code></li>
-<li><code>sh_lcr</code></li>
-<li><code>sh_q</code></li>
-</ul>
-<p><code>{prefix}.feature_residuals.tsv</code>
-Written when <code>--residuals</code> is enabled.</p>
-<p>The <code>entropy</code>, <code>sh_lcr</code>, and <code>sh_q</code> summaries are computed from each unit's topic proportions, treating them as a probability distribution over topics. Topic similarity is defined by cosine similarity among the row-normalized topic-word profiles.</p>
-<p>For custom sparse input, carried-over metadata columns from <code>header_info</code> appear before the transform outputs. For 10X input, the leading identifier column is <code>#barcode</code>. With a single 10X dataset it keeps the original barcode/identifier form; with multiple 10X datasets it is written as <code>&lt;dataset_id&gt;:&lt;barcode&gt;</code>.</p>
-<h2 id="lda-transform"><code>lda-transform</code><a class="headerlink" href="#lda-transform" title="Permanent link">&para;</a></h2>
-<p><code>lda-transform</code> applies a fitted plain LDA model to new data.</p>
-<h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
+<p>For 10X input, optional <code>--dataset-id</code> values may be provided, one per dataset.
+If both custom and 10X inputs are supplied, the 10X input is used.</p>
 <p><code>--in-model</code>
-Input topic-word model matrix.</p>
-<p><code>--out-prefix</code></p>
-<p>Either:</p>
-<ul>
-<li><code>--in-data</code> and <code>--in-meta</code></li>
-<li>or one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
-</ul>
+Input topic-by-feature model matrix. Required.</p>
+<p><code>--out-prefix</code>
+Prefix for output files. Required.</p>
 <h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
-<p><code>--minibatch-size</code></p>
-<p><code>--modal</code></p>
-<p><code>--threads</code>, <code>--seed</code>, <code>--verbose</code>, <code>--debug</code></p>
-<p><code>--features</code>, <code>--min-count-per-feature</code></p>
+<p><code>--min-count-per-factor</code>
+Minimum weighted total count for a factor to be considered a candidate for evaluation. Defaults to <code>50</code>.</p>
+<p><code>--candidate-threshold</code>
+Maximum weighted total count fraction for a factor to be considered a candidate for evaluation. Defaults to <code>0.005</code>. Set it to <code>1</code> to perform leave-one-out evaluation for all factors passing the <code>--min-count-per-factor</code> threshold.</p>
+<p><code>--features</code> - Feature names and total counts file used to define or filter features.</p>
+<p><code>--min-count-per-feature</code>
+Minimum feature total count when <code>--features</code> is supplied.</p>
+<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code>
+Regex filters for feature selection.</p>
 <p><code>--min-count</code>
-Minimum total count per unit to keep. Default: <code>20</code>.</p>
-<p><code>--feature-weights</code>, <code>--default-weight</code></p>
-<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code></p>
-<p><code>--max-iter</code>, <code>--mean-change-tol</code></p>
-<p><code>--sorted-by-barcode</code>
-Use streaming mode for 10X input sorted by barcode. With multiple datasets, streaming follows dataset order first, then barcode order within each dataset.</p>
-<p><code>--residuals</code>
-Write <code>{prefix}.unit_stats.tsv</code> and <code>{prefix}.feature_residuals.tsv</code>.</p>
-<p><code>--feature-residuals</code>
-Alias for <code>--residuals</code>.</p>
-<p><code>--topk-only &lt;int&gt;</code>
-Write sparse top-k output to <code>{prefix}.results.tsv</code>. The value must be a positive integer.</p>
+Minimum total feature count for a unit to be kept.</p>
+<p><code>--threads</code>
+Number of threads used by LDA transforms. <code>lda-factor-eval</code> also uses this for
+multinomial EB evidence and posterior activity integration.</p>
+<p><code>--seed</code>
+Random seed. If not positive, a random seed is generated.</p>
+<p><code>--max-iter</code>, <code>--mean-change-tol</code>
+Per-document LDA transform controls.</p>
+<p><code>--alpha</code>
+Document-topic prior override. By default the fitted transform uses <code>1 / K</code>.</p>
+<p><code>--write-theta</code>
+Write <code>{prefix}.theta.tsv</code>, a dense unit-by-factor theta matrix. Rows are
+zero-based unit ids and columns are zero-based factor indices.</p>
+<p>Both commands also write:</p>
+<ul>
+<li><code>{prefix}.unit_gof.tsv</code>: full-model per-unit goodness-of-fit diagnostics</li>
+<li><code>{prefix}.theta_hist.tsv</code>: per-factor histogram of full-model theta values</li>
+</ul>
+<h2 id="lda-factor-eval"><code>lda-factor-eval</code><a class="headerlink" href="#lda-factor-eval" title="Permanent link">&para;</a></h2>
+<p><code>lda-factor-eval</code> is the main topic-activity evaluator. It fits a sparse
+empirical-Bayes mixture for each selected candidate factor using a multinomial
+likelihood. The beta-marginal EB method can be requested as an additional output
+with <code>--eb-method both</code>, but factor evaluation itself is always based on the
+multinomial EB fit.</p>
+<h3 id="multinomial-eb-workflow">Multinomial EB workflow<a class="headerlink" href="#multinomial-eb-workflow" title="Permanent link">&para;</a></h3>
+<p>For each selected factor <span class="arithmatex">\(k\)</span>:</p>
+<ol>
+<li>Remove factor <span class="arithmatex">\(k\)</span> from the topic model.</li>
+<li>Refit units to the reduced fixed model to obtain a background distribution
+   <span class="arithmatex">\(q_i\)</span>.</li>
+<li>Evaluate fixed EB component evidences for the focal factor.</li>
+<li>Fit component mixture weights by EM.</li>
+<li>Assign each unit to its most probable posterior component <span class="arithmatex">\(c_i\)</span>.</li>
+<li>Summarize units at component cutoffs <span class="arithmatex">\(c = 1, 2, ...\)</span>, excluding the null
+   component 0.</li>
+</ol>
+<p><code>--refit-min-theta</code>
+Optional approximation for the reduced-model refit. Units with full-model
+<span class="arithmatex">\(\theta_{ik}\)</span> below this threshold are not refit. Instead, their reduced theta
+is approximated by removing factor <span class="arithmatex">\(k\)</span> from the full theta row and
+renormalizing the remaining factors. The default is <code>1e-5</code>. Set
+<code>--refit-min-theta 0</code> or a negative value to disable this approximation and
+refit all units.</p>
+<h3 id="eb-components">EB components<a class="headerlink" href="#eb-components" title="Permanent link">&para;</a></h3>
+<p>Component 0 is always the null interval <code>[0, eps]</code>, where <code>eps</code> is set by
+<code>--eb-null-eps</code>.</p>
+<p><code>--eb-uniform-slabs b1 b2 b3 ...</code>
+Defines active uniform slab breakpoints. The intervals are <code>[eps,b1]</code>,
+<code>[b1,b2]</code>, <code>[b2,b3]</code>, and, if the largest breakpoint is less than 1,
+<code>[b_max,1]</code>. If omitted, the default active slabs are <code>[eps,0.05]</code>,
+<code>[0.05,0.10]</code>, <code>[0.10,0.25]</code>, <code>[0.25,0.50]</code>, and <code>[0.50,1.0]</code>.</p>
+<p><code>--eb-beta-slabs c1 d1 c2 d2 ...</code>
+Appends beta-distributed active slabs with the given shape pairs.</p>
+<p><code>--eb-method multinomial|both</code>
+Default: <code>multinomial</code>. Use <code>both</code> to also write beta-marginal EB outputs.
+<code>beta-marginal</code> alone is rejected because <code>factor_eval.tsv</code> depends on
+multinomial EB quantities.</p>
+<p><code>--eb-max-iter</code>, <code>--eb-tol</code>, <code>--eb-pseudocount</code>
+EM controls for mixture weight fitting.</p>
+<p><code>--eb-prob-floor</code>, <code>--eb-quad-subdivisions</code>
+Numerical controls for multinomial evidence integration.</p>
+<p><code>--eb-top-components</code>
+Number of top posterior components reported in unit-activity files. Default:
+<code>2</code>.</p>
 <h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
-<p><code>{prefix}.results.tsv</code>
-Per-unit topic proportions, or top-k topic indices/probabilities when <code>--topk-only</code> is used.</p>
-<p><code>{prefix}.pseudobulk.tsv</code></p>
-<p><code>{prefix}.unit_stats.tsv</code>
-Written only when <code>--residuals</code> is enabled.</p>
-<p><code>{prefix}.feature_residuals.tsv</code>
-Written only when <code>--residuals</code> is enabled.</p>
-<p>In <code>{prefix}.unit_stats.tsv</code>, <code>total_count</code> is the raw total count after feature remap and filtering but before feature weights are applied.</p>
+<p><code>{prefix}.factor_eval.tsv</code>
+Component-threshold factor summaries:</p>
+<ul>
+<li><code>factor</code>: zero-based factor index</li>
+<li><code>theta_sum</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} \theta_{ik}\)</span></li>
+<li><code>c</code>: smallest component id included in the row</li>
+<li><code>N</code>: number of units with <code>c_i &gt;= c</code></li>
+<li><code>S</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} a_i n_i\)</span>, where <span class="arithmatex">\(a_i\)</span> is posterior activity</li>
+<li><code>W</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} a_i\)</span></li>
+<li><code>I</code>: <span class="arithmatex">\(\sum_{i: c_i \ge c} \mathrm{llr}_i\)</span></li>
+<li><code>avg_llr_per_token</code>: average of <span class="arithmatex">\(\mathrm{llr}_i / n_i\)</span> over included units</li>
+</ul>
+<p>Here <span class="arithmatex">\(\mathrm{llr}_i\)</span> is the multinomial log likelihood ratio between the
+full-model distribution and the reduced-model background distribution.</p>
+<p><code>{prefix}.eb_factor_activity.tsv</code>
+One row per EB method and factor:</p>
+<ul>
+<li><code>method</code>: <code>org</code> for multinomial EB, <code>marginal</code> for beta-marginal EB</li>
+<li><code>factor</code></li>
+<li><code>N_active</code></li>
+<li><code>eta_null</code></li>
+<li><code>loglik</code></li>
+<li><code>iterations</code></li>
+</ul>
+<p><code>{prefix}.eb_components.tsv</code>
+Wide component mixture-weight table when only uniform components are present.
+If beta slabs are also present, outputs are split into:</p>
+<ul>
+<li><code>{prefix}.uniform.eb_components.tsv</code></li>
+<li><code>{prefix}.beta.eb_components.tsv</code></li>
+</ul>
+<p>Rows are method/factor fits. Eta columns are named with component ids and
+component parameters, for example <code>c1_0.01_0.05</code>.</p>
+<p><code>{prefix}.unit_activity.tsv</code>
+Multinomial EB active unit rows. Only units with <code>p_active &gt; 0.5</code> are written.
+Columns are:</p>
+<ul>
+<li><code>factor</code></li>
+<li><code>unit_id</code></li>
+<li><code>p_active</code></li>
+<li>repeated <code>c_j</code>, <code>resp_j</code> pairs for top posterior components</li>
+</ul>
+<p>If <code>--eb-method both</code> is used, beta-marginal active unit rows are written to
+<code>{prefix}.marginal.unit_activity.tsv</code>.</p>
+<p><code>{prefix}.unit_factor_eval.tsv</code>
+Written when <code>--write-unit-factor-stats</code> or <code>--unit-factor-stats-out</code> is used.
+Columns are <code>factor</code>, <code>unit_id</code>, <code>theta_factor</code>, <code>component</code>, <code>a</code>, <code>llr</code>, and
+<code>llr_per_token</code>.</p>
+<h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>lda-factor-eval<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in-data<span class="w"> </span>units.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--in-meta<span class="w"> </span>meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--in-model<span class="w"> </span>lda_model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span>eval/topic_activity<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--candidate-threshold<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--min-count-per-factor<span class="w"> </span><span class="m">50</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">8</span>
+</span></code></pre></div>
+<h2 id="lda-factor-eval-naive"><code>lda-factor-eval-naive</code><a class="headerlink" href="#lda-factor-eval-naive" title="Permanent link">&para;</a></h2>
+<p>Candidate factors are selected by count-weighted topic abundance, matching
+<code>lda-factor-eval</code>: <span class="arithmatex">\(T_k = \sum_i n_i \theta_{ik}\)</span>, and a factor is selected
+when <span class="arithmatex">\(T_k / \sum_i n_i\)</span> is at most <code>--candidate-threshold</code>. The output keeps
+the historical <code>theta_sum</code> column as the unweighted <span class="arithmatex">\(\sum_i \theta_{ik}\)</span> and
+reports <span class="arithmatex">\(T_k\)</span> in the <code>weight</code> column.</p>
+<p>For each candidate factor, units with <span class="arithmatex">\(\theta_{ik} &gt; \min(\text{--thresholds})\)</span>
+are evaluated. The command can use:</p>
+<ul>
+<li><code>--refit</code>: remove the focal factor and transform selected units with the
+  reduced fixed model</li>
+<li><code>--projection</code>: project the full-model expected distribution onto the convex
+  hull of non-focal factors</li>
+</ul>
+<p>If neither <code>--refit</code> nor <code>--projection</code> is supplied, <code>--refit</code> is used.</p>
+<h3 id="required-naive-option">Required naive option<a class="headerlink" href="#required-naive-option" title="Permanent link">&para;</a></h3>
+<p><code>--thresholds</code>
+Theta thresholds used to define factor summary rows. A row for threshold <code>tau</code>
+summarizes units with <span class="arithmatex">\(\theta_{ik} &gt; \tau\)</span>.</p>
+<h3 id="naive-outputs">Naive outputs<a class="headerlink" href="#naive-outputs" title="Permanent link">&para;</a></h3>
+<p><code>{prefix}.factor_eval.tsv</code>
+Refit summaries, when <code>--refit</code> is enabled.</p>
+<p><code>{prefix}.prj.factor_eval.tsv</code>
+Projection summaries, when <code>--projection</code> is enabled.</p>
+<p>Both summary files use:</p>
+<ul>
+<li><code>factor</code></li>
+<li><code>theta_sum</code>: total full-model theta abundance for the factor</li>
+<li><code>weight</code>: total count-weighted theta abundance for the factor</li>
+<li><code>tau</code>: theta threshold</li>
+<li><code>N</code>: number of units above threshold</li>
+<li><code>S</code>: total counts among units above threshold</li>
+<li><code>W</code>: sum of theta values among units above threshold</li>
+<li><code>I</code>: summed leave-one-factor-out information loss</li>
+<li><code>runtime_sec</code>: method runtime for the focal factor</li>
+</ul>
+<p><code>{prefix}.unit_factor_eval.tsv</code>
+Written when <code>--write-unit-factor-stats</code> or <code>--unit-factor-stats-out</code> is used.
+Columns are <code>method</code>, <code>factor</code>, <code>unit_id</code>, <code>theta_factor</code>, and <code>B</code>, where <code>B</code>
+is the Bhattacharyya coefficient used by the selected leave-one-factor-out
+method.</p>
+<h3 id="example_1">Example<a class="headerlink" href="#example_1" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>lda-factor-eval-naive<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in-data<span class="w"> </span>units.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--in-meta<span class="w"> </span>meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--in-model<span class="w"> </span>lda_model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span>eval/topic_naive<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--thresholds<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="m">0</span>.05<span class="w"> </span><span class="m">0</span>.10<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--candidate-threshold<span class="w"> </span><span class="m">0</span>.01<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span>--refit<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">8</span>
+</span></code></pre></div>
 
 
 
@@ -1772,44 +1516,6 @@ Written only when <code>--residuals</code> is enabled.</p>
       
         <footer class="md-footer">
   
-    
-      
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
-        
-          
-          <a href="../tiles2rois/" class="md-footer__link md-footer__link--prev" aria-label="Previous: tiles2rois">
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
-            </div>
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Previous
-              </span>
-              <div class="md-ellipsis">
-                tiles2rois
-              </div>
-            </div>
-          </a>
-        
-        
-          
-          <a href="../pixel-decode/" class="md-footer__link md-footer__link--next" aria-label="Next: pixel-decode">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                pixel-decode
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
-        
-      </nav>
     
   
   <div class="md-footer-meta md-typeset">
