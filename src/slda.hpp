@@ -226,9 +226,9 @@ public:
         int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
         // (N x M) * (M x K) = (N x K)
         RowMajorMatrixXf Xb = batch.mtx * Elog_beta_;
+        RowMajorMatrixXf alpha = get_alpha(batch);
         // If gamma is not set, initialize with random values
         init_gamma(batch);
-        RowMajorMatrixXf alpha = get_alpha(batch);
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
             normalize_spatial_scores(batch.psi);
@@ -326,8 +326,8 @@ public:
             }
             Xb.row(i) = Elog_beta_.row(batch.featureIdx[i]);
         }
-        init_gamma(batch);
         RowMajorMatrixXf alpha = get_alpha(batch);
+        init_gamma(batch);
 
         RowMajorMatrixXf gamma_old = batch.gamma;
         RowMajorMatrixXf phi_old;
@@ -415,9 +415,9 @@ public:
         }
         // (N x M) * (M x K) = (N x K)
         RowMajorMatrixXf Xb = fgmtx * Elog_beta_;
+        RowMajorMatrixXf alpha = get_alpha(batch);
         // If gamma is not set, initialize with random values
         init_gamma(batch);
-        RowMajorMatrixXf alpha = get_alpha(batch);
 
         if (batch.psi.size() == 0) {
             batch.psi = batch.wij; // (N x n)
@@ -536,8 +536,8 @@ public:
             phi0.push_back({{batch.featureIdx[i], 0.0f}});
             Xb.row(i) = (1.0 - pi0) * Elog_beta_.row(batch.featureIdx[i]);
         }
-        init_gamma(batch);
         RowMajorMatrixXf alpha = get_alpha(batch);
+        init_gamma(batch);
 
         RowMajorMatrixXf gamma_old = batch.gamma;
         RowMajorMatrixXf phi_old;
@@ -709,7 +709,7 @@ private:
     }
 
     RowMajorMatrixXf get_alpha(const Minibatch& batch) const {
-        if (spatial_prior_v1_ && batch.gamma.size() == batch.n * K_) {
+        if (batch.gamma.size() == batch.n * K_) {
                 return batch.gamma;
         }
         return alpha_.replicate(batch.n, 1);

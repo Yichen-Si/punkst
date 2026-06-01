@@ -1,8 +1,8 @@
-# Gene cooccurrence and marker selection
+# Gene co-occurrence and marker selection
 
 **`cooccurrence` computes gene co-occurrence within a specified radius and `coloc2markers` selects markers from the co-occurrence matrix.**
 
-## cooccurrence
+## co-occurrence
 
 The `cooccurrence` command computes how frequently each pair of genes appear together within a specified radius, either as a binary relation or weighted by distance with exponential decay. (We also have a `merge-mtx` command in case you want to add up multiple co-occurrence matrices potentially computed from different datasets.)
 

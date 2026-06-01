@@ -84,27 +84,24 @@ void Tiles2SLDA<T>::setSpatialPriorV1(bool enabled) {
 
 template<typename T>
 void Tiles2SLDA<T>::initAnchorGamma(Minibatch& minibatch) {
-    if (spatialPriorV1_) {
-        const float lower = 0.2f / static_cast<float>(K_);
-        const float upper = 1.0f - lower;
-        for (int i = 0; i < minibatch.gamma.rows(); ++i) {
-            for (int k = 0; k < minibatch.gamma.cols(); ++k) {
-                minibatch.gamma(i, k) = std::clamp(minibatch.gamma(i, k), lower, upper);
-            }
-            float sum = minibatch.gamma.row(i).sum();
-            if (sum > 0) {
-                minibatch.gamma.row(i) /= sum;
-            }
-        }
-        return;
-    }
-
+    const float lower = 0.2f / static_cast<float>(K_);
+    const float upper = 1.0f - lower;
     for (int i = 0; i < minibatch.gamma.rows(); ++i) {
+        for (int k = 0; k < minibatch.gamma.cols(); ++k) {
+            minibatch.gamma(i, k) = std::clamp(minibatch.gamma(i, k), lower, upper);
+        }
         float sum = minibatch.gamma.row(i).sum();
         if (sum > 0) {
-            minibatch.gamma.row(i) /= sum / K_;
+            minibatch.gamma.row(i) /= sum;
         }
     }
+
+    // for (int i = 0; i < minibatch.gamma.rows(); ++i) {
+    //     float sum = minibatch.gamma.row(i).sum();
+    //     if (sum > 0) {
+    //         minibatch.gamma.row(i) /= sum / K_;
+    //     }
+    // }
 }
 
 template<typename T>

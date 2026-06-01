@@ -294,13 +294,13 @@ If the two regions overlap, transcripts in the overlap contribute to both groups
 
 For gene $m$ and unit $i$, the model is: $Y_{im} \sim \text{Pois}(\lambda_{im})$ with rate $\lambda_{im}$ defined by a mixture across cell types:
 $\lambda_{im} = \sum_k \theta_{ik} g^{-1}( \eta_{mk}^0 + x_i b_{mk} )$
-where $\theta_{ik}$ is the proportion of cell type $k$ in unit $i$, $x_i \in \set{\pm 1}$ indicates the group that unit $i$ belongs to. The null hypothesis is $b_{mk}=0$, and $g$ is a link function. The `log1p` link $g^{-1}(\eta)=c_i (\exp(\eta) - 1) \ (c_i=n_i/L)$ is much more efficient than the canonical `log` link with similar performance in practice.
+where $\theta_{ik}$ is the proportion of cell type $k$ in unit $i$, $x_i \in \{\pm 1\}$ indicates the group that unit $i$ belongs to. The null hypothesis is $b_{mk}=0$, and $g$ is a link function. The `log1p` link $g^{-1}(\eta)=c_i (\exp(\eta) - 1) \ (c_i=n_i/L)$ is much more efficient than the canonical `log` link with similar performance in practice.
 
 Example usage with explicit contrast file:
 ```bash
 punkst multi-conditional-de-pois \
   --contrast contrast.tsv \
-  --model my_lda_model.bin \
+  --model model.tsv \
   --link log1p \
   --out de/unit_de --threads 8
 ```
