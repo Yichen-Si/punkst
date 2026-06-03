@@ -44,7 +44,7 @@ TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
 COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv
 FEATURES     := $(DATADIR)/transcripts.tiled.features.tsv
-DEFAULT_COLOR_TABLE := $(GITPATH)/ext/py/cmap.48.tsv
+DEFAULT_COLOR_TABLE := $(GITPATH)/ext/py/cmap.256.tsv
 
 # ─── Compute the full list of final report files ──────────────────────────
 REPORTS := \

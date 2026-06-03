@@ -8,6 +8,6 @@ Check the [Input](input/index.md) page for help on preparing your data from vair
 
 See [Modules](modules/index.md) for available operations.
 
-punkst also includes a pipeline for efficient pixel level factor analysis ([FICTURE (2024)](https://doi.org/10.1038/s41592-024-02415-2)) with improved efficiency and flexibility. ([Previous python package](https://github.com/seqscope/ficture) is still available but will be deprecated)
+Check [Quickstart](workflows/index.md) to run a basic pipeline on the example data, and [Basics](workflows/basics.md) for details on the workflow.
 
-Check [the quick start page](workflows/index.md) for help on generating a basic pipeline using Makefile or running each command step by step.
+punkst includes a pipeline for efficient pixel level factor analysis ([FICTURE (2024)](https://doi.org/10.1038/s41592-024-02415-2)) with improved efficiency and flexibility. ([Previous python package](https://github.com/seqscope/ficture) is still available but will be deprecated)

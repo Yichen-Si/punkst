@@ -177,10 +177,13 @@ set(SOURCE_FILES
     src/pmtiles_pyramid.cpp
     src/simple_polygon_pmtiles.hpp
     src/simple_polygon_pmtiles.cpp
+    src/tiles2mono.hpp
+    src/tiles2mono.cpp
     script/manipulate_tiles.cpp
     script/build_pyramid.cpp
     script/export_pmtiles.cpp
     script/hex2pmtiles.cpp
+    script/tiles2mono.cpp
     script/deploy_cartoscope.cpp
     script/multi_cde_lowres.cpp
     script/multi_cde_lowres_nb.cpp

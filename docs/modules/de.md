@@ -290,11 +290,11 @@ If the two regions overlap, transcripts in the overlap contribute to both groups
 
 ## multi-conditional-de-pois
 
-`multi-conditional-de-pois` performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from `tiles2hex`, other binned data, single cells, or low resolution data like Visium). It leverages a pre-trained topic model (e.g., LDA from `punkst topic-model`) to estimate cell type mixture proportions within each unit first, then for each gene and cell type, it fits a Poisson regression model to estimate differential expression between specified groups of datasets.
+`multi-conditional-de-pois` performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from `tiles2hex`, other binned data, single cells, or low resolution data like Visium). It leverages a pre-trained topic model (e.g., LDA from `punkst topic-model`) to estimate cell type mixture proportions within each unit, then for each gene fits a Poisson regression model to estimate differential expression between specified groups of datasets.
 
 For gene $m$ and unit $i$, the model is: $Y_{im} \sim \text{Pois}(\lambda_{im})$ with rate $\lambda_{im}$ defined by a mixture across cell types:
-$\lambda_{im} = \sum_k \theta_{ik} g^{-1}( \eta_{mk}^0 + x_i b_{mk} )$
-where $\theta_{ik}$ is the proportion of cell type $k$ in unit $i$, $x_i \in \{\pm 1\}$ indicates the group that unit $i$ belongs to. The null hypothesis is $b_{mk}=0$, and $g$ is a link function. The `log1p` link $g^{-1}(\eta)=c_i (\exp(\eta) - 1) \ (c_i=n_i/L)$ is much more efficient than the canonical `log` link with similar performance in practice.
+$$\lambda_{im} = \sum_k \theta_{ik} g^{-1}( \eta_{mk}^0 + x_i b_{mk} )$$
+where $\theta_{ik}$ is the proportion of cell type $k$ in unit $i$, $x_i \in \{\pm 1\}$ indicates the group that unit $i$ belongs to, and the null hypothesis is $b_{mk}=0$. $g$ is a link function with non-negative domain. The `log1p` link $g^{-1}(\eta)=c_i (\exp(\eta) - 1)$ (where $c_i=n_i/L$) is much more efficient than the canonical `log` link.
 
 Example usage with explicit contrast file:
 ```bash

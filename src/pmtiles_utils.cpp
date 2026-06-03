@@ -64,6 +64,106 @@ Rgb8 sample_nearest(const Image2D<Rgb8>& src, double x, double y, const RasterBo
 
 } // namespace
 
+size_t RasterTileKeyHash::operator()(const RasterTileKey& key) const {
+    uint64_t v = static_cast<uint64_t>(key.z);
+    v = (v << 32u) ^ static_cast<uint64_t>(key.x);
+    v = (v << 32u) ^ static_cast<uint64_t>(key.y);
+    v ^= v >> 33u;
+    v *= 0xff51afd7ed558ccdULL;
+    v ^= v >> 33u;
+    return static_cast<size_t>(v);
+}
+
+void validate_raster_archive_options(const RasterBounds& bounds,
+    int32_t minZoom,
+    int32_t maxZoom,
+    const char* context) {
+    if (!bounds.valid()) {
+        error("%s: invalid raster bounds", context);
+    }
+    if (minZoom < 0 || maxZoom < minZoom || maxZoom > 30) {
+        error("%s: invalid zoom range %d..%d", context, minZoom, maxZoom);
+    }
+}
+
+RasterPixelCoord epsg3857_to_raster_pixel(double x, double y, int32_t zoom) {
+    int64_t tx = 0;
+    int64_t ty = 0;
+    double localX = 0.0;
+    double localY = 0.0;
+    epsg3857_to_tilecoord(x, y, static_cast<uint8_t>(zoom), tx, ty, localX, localY);
+    RasterPixelCoord out;
+    out.key.z = static_cast<uint8_t>(zoom);
+    out.key.x = clamp_tile_coord(tx, zoom);
+    out.key.y = clamp_tile_coord(ty, zoom);
+    out.px = std::clamp(static_cast<int32_t>(std::floor(localX)), 0, kRasterTileSize - 1);
+    out.py = std::clamp(static_cast<int32_t>(std::floor(localY)), 0, kRasterTileSize - 1);
+    return out;
+}
+
+void append_png_tile_to_blob(std::ofstream& blob,
+    const std::string& tempBlobFile,
+    const std::string& encoded,
+    uint64_t& dataOffset,
+    const RasterTileKey& key,
+    std::vector<StoredTilePayloadRef>& tiles) {
+    blob.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+    if (!blob.good()) {
+        error("%s: failed writing temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
+    }
+    StoredTilePayloadRef ref;
+    ref.z = key.z;
+    ref.x = key.x;
+    ref.y = key.y;
+    ref.featureCount = 1;
+    ref.tileId = pmtiles::zxy_to_tileid(ref.z, ref.x, ref.y);
+    ref.dataOffset = dataOffset;
+    ref.dataLength = static_cast<uint32_t>(encoded.size());
+    dataOffset += encoded.size();
+    tiles.push_back(ref);
+}
+
+void write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
+    const std::string& tempBlobFile,
+    std::vector<StoredTilePayloadRef> tiles,
+    const RasterBounds& bounds,
+    int32_t minZoom,
+    int32_t maxZoom) {
+    validate_raster_archive_options(bounds, minZoom, maxZoom, __func__);
+    if (tiles.empty()) {
+        error("%s: no raster tiles generated for %s", __func__, outFile.c_str());
+    }
+
+    double minLon = 0.0, minLat = 0.0, maxLon = 0.0, maxLat = 0.0;
+    epsg3857_to_wgs84(bounds.xmin, bounds.ymin, minLon, minLat);
+    epsg3857_to_wgs84(bounds.xmax, bounds.ymax, maxLon, maxLat);
+    nlohmann::json metadata = {
+        {"version", "1.1"},
+        {"name", std::filesystem::path(outFile).filename().string()},
+        {"description", std::filesystem::path(outFile).filename().string()},
+        {"format", "png"},
+        {"type", "overlay"},
+        {"minzoom", minZoom},
+        {"maxzoom", maxZoom}
+    };
+
+    ArchiveOptions options;
+    options.tileType = pmtiles::TILETYPE_PNG;
+    options.tileCompression = pmtiles::COMPRESSION_NONE;
+    options.minZoom = static_cast<uint8_t>(minZoom);
+    options.maxZoom = static_cast<uint8_t>(maxZoom);
+    options.centerZoom = static_cast<uint8_t>(minZoom);
+    options.hasGeographicBounds = true;
+    options.minLonE7 = lonlat_e7(minLon);
+    options.minLatE7 = lonlat_e7(minLat);
+    options.maxLonE7 = lonlat_e7(maxLon);
+    options.maxLatE7 = lonlat_e7(maxLat);
+    options.centerLonE7 = lonlat_e7((minLon + maxLon) * 0.5);
+    options.centerLatE7 = lonlat_e7((minLat + maxLat) * 0.5);
+    options.metadata = std::move(metadata);
+    write_pmtiles_archive_from_blob_file(outFile, tempBlobFile, std::move(tiles), options);
+}
+
 LoadedPmtilesArchive load_pmtiles_archive(const std::string& inFile) {
     auto reader = flexio::FlexReaderFactory::create_reader(inFile);
     if (reader == nullptr || !reader->is_open()) {
@@ -429,12 +529,7 @@ void write_png_raster_pmtiles_archive(const std::string& pngFile,
     const RasterBounds& bounds,
     int32_t minZoom,
     int32_t maxZoom) {
-    if (!bounds.valid()) {
-        error("%s: invalid raster bounds for %s", __func__, pngFile.c_str());
-    }
-    if (minZoom < 0 || maxZoom < minZoom || maxZoom > 30) {
-        error("%s: invalid zoom range %d..%d", __func__, minZoom, maxZoom);
-    }
+    validate_raster_archive_options(bounds, minZoom, maxZoom, __func__);
 
     Image2D<Rgb8> src = load_png_rgb8(pngFile);
     std::filesystem::path blobPath(tempBlobFile);
@@ -479,57 +574,14 @@ void write_png_raster_pmtiles_archive(const std::string& pngFile,
                     continue;
                 }
                 const std::string encoded = encode_png_rgb8(tile);
-                blob.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
-                if (!blob.good()) {
-                    error("%s: failed writing temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
-                }
-
-                StoredTilePayloadRef ref;
-                ref.z = static_cast<uint8_t>(z);
-                ref.x = tx;
-                ref.y = ty;
-                ref.featureCount = 1;
-                ref.tileId = pmtiles::zxy_to_tileid(ref.z, ref.x, ref.y);
-                ref.dataOffset = dataOffset;
-                ref.dataLength = static_cast<uint32_t>(encoded.size());
-                dataOffset += encoded.size();
-                tiles.push_back(ref);
+                append_png_tile_to_blob(blob, tempBlobFile, encoded, dataOffset,
+                    RasterTileKey{static_cast<uint8_t>(z), tx, ty}, tiles);
             }
         }
     }
     blob.close();
-    if (tiles.empty()) {
-        error("%s: no raster tiles generated for %s", __func__, pngFile.c_str());
-    }
-
-    double minLon = 0.0, minLat = 0.0, maxLon = 0.0, maxLat = 0.0;
-    epsg3857_to_wgs84(bounds.xmin, bounds.ymin, minLon, minLat);
-    epsg3857_to_wgs84(bounds.xmax, bounds.ymax, maxLon, maxLat);
-    nlohmann::json metadata = {
-        {"version", "1.1"},
-        {"name", std::filesystem::path(outFile).filename().string()},
-        {"description", std::filesystem::path(outFile).filename().string()},
-        {"format", "png"},
-        {"type", "overlay"},
-        {"minzoom", minZoom},
-        {"maxzoom", maxZoom}
-    };
-
-    ArchiveOptions options;
-    options.tileType = pmtiles::TILETYPE_PNG;
-    options.tileCompression = pmtiles::COMPRESSION_NONE;
-    options.minZoom = static_cast<uint8_t>(minZoom);
-    options.maxZoom = static_cast<uint8_t>(maxZoom);
-    options.centerZoom = static_cast<uint8_t>(minZoom);
-    options.hasGeographicBounds = true;
-    options.minLonE7 = lonlat_e7(minLon);
-    options.minLatE7 = lonlat_e7(minLat);
-    options.maxLonE7 = lonlat_e7(maxLon);
-    options.maxLatE7 = lonlat_e7(maxLat);
-    options.centerLonE7 = lonlat_e7((minLon + maxLon) * 0.5);
-    options.centerLatE7 = lonlat_e7((minLat + maxLat) * 0.5);
-    options.metadata = std::move(metadata);
-    write_pmtiles_archive_from_blob_file(outFile, tempBlobFile, std::move(tiles), options);
+    write_png_raster_pmtiles_archive_from_blob(
+        outFile, tempBlobFile, std::move(tiles), bounds, minZoom, maxZoom);
     std::error_code ec;
     std::filesystem::remove(blobPath, ec);
 }

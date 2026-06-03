@@ -1,35 +1,37 @@
-# Pixel Level Factor Analysis Example
+# Quickstart with the example data
 
-This example demonstrates how to perform pixel level factor analysis with punkst, achieving similar results to FICTURE (2024) with improved efficiency.
+This example runs the full pixel level analysis workflow on the small example data `transcripts.tsv.gz` in `punkst/examples/data` using a template Makefile, then prepares the output for deployment on [CartoScope](https://main.cartoscope.app/summary).
 
-We will explain how to generate a full workflow using a template Makefile, then explains the steps taken inside the workflow.
+See [Basics](basics.md) for details on configuring the workflow for your own data.
 
-## Generic input format and example data
+See [Multisample](multisample.md) for joint analysis of multiple samples.
 
-There is a small example data `transcripts.tsv.gz` in `punkst/examples/data`.
+See [Deployment](deploy_carto.md) for details on CartoScope deployment.
 
-See [Input](../input/index.md) for details on starting from raw data from different platforms.
+### Example data
 
-We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (`punkst/examples/data/transcripts.tsv.gz`)
+There is a small example data `transcripts.tsv.gz` in `punkst/examples/data` with four columns:
+```text
+X       Y       gene    Count
+6711.14 6772    Esam    1
+6727.83 6772    Gck     1
+6732.65 6772    Akr1a1  1
+```
+(The `Count` column is optional)
 
-It can be gzipped or uncompressed.
-It can have other columns (which will be ignored in analysis but can be optionally carried over to the pixel level output), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.
-
-## Use the example Makefile template
+### Use the Makefile template
 
 We provide template Makefile and config files in `punkst/examples` to generate the full workflows.
 
-### Basic workflow
-
-You can copy `punkst/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
+First copy `punkst/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
 
 The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the `-o` option.
 
 ```bash
 # set repopath to the path of the punkst repo
 python ${repopath}/ext/py/generate_workflow.py \
-  -c config.json -o run.sh -m Makefile \
-  -t ${repopath}/examples/basic/Makefile
+    -c config.json -o run.sh -m Makefile \
+    -t ${repopath}/examples/basic/Makefile
 ```
 
 You can check the generated workflow before execution by
@@ -37,220 +39,28 @@ You can check the generated workflow before execution by
 make -f Makefile --dry-run
 ```
 
-Then `make -f Makefile` exectutes the workflow.
+Then `make -f Makefile` to exectute the workflow.
 
-### Parameters in config.json
+### Prepare the results for CartoScope
 
-(The parameters in the example config file works for the example data, where the coordinates are in microns.)
-
-`threads`: number of threads for parallel processing. (If you are submitting the workflow to a cluster, make sure the same number of CPUs is available)
-
-`seed`: random seed for reproducibility. This seed is propagated to all steps in the workflow that involve randomness.
-
-`use_fixed_color_table`: controls how colors are assigned when rendering pixel maps. Default is `true`, which uses the fixed color table at `ext/py/cmap.256.tsv`. Set to `false` to run `ext/py/color_helper.py` and derive colors from model results (may be slow for a large dataset).
-
-`"datadir"`: the path to store all output
-
-`"tmpdir"`: the path to store temporary files (those files will be deleted automatically by the program). This directory must be empty or creatable.
-
-`"transcripts"`: a tsv file with X coordinate, Y coordinate, gene/transcript name, and count columns. There could be other columns but they will be ignored.
-
-Specify the 0-based column indices in "transcripts" for X coordinate, Y coordinate, feature, and count: `"icol_x"`, `"icol_y"`, `"icol_feature"`, and `"icol_count"`. If the input file contains headers, set "skip" to the number of lines to skip.
-
-`"exclude_feature_regex"`: a regular expression to exclude features from the analysis. For example, to exclude negative control probes and/or mitochondrial genes.
-
-`"tilesize"`: we store and process data by square tiles, this parameter specifies the size length of the tiles in the same unit as your coordinates. Tile sizes affect the memory usage and (perhaps less so) run time, we've been using 500$\mu$m for all of our experiments.
-
-`"hexgrids"` (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using $12\sim 18\mu m$ for most dataset, but you might want to use a larger value if your data has very low transcript density.
-
-`"topics"` (list): the number of topics (factors) to learn.
-
-`"pixhex"`: often set to be the same as "hexgrids" or slightly smaller.
-
-`"nmove"`: "pixhex" divided by "nmove" is the distance between adjacent anchor points in the algorithm. We recommend pixhex/nmove to be around $4~6\mu m$ for high resolution results.
-
-`"pixel_decode_mode"`: controls the mode for [pixel-decode](../modules/pixel-decode.md). Valid values are `"pixel"` for fixed-resolution pixel level decoding, `"feature_pixel"` for `pixel-decode --single-feature-pixel`, and `"single_molecule"` for `pixel-decode --single-molecule`. The output has suffixes `.pixel`, `.sf_pixel`, and `.sgl_mol`, respectively.
-
-`"res"`: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using $0.5\mu m$.
-
-`"scale"`: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want $0.5 \mu m$ to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is $2 \mu m$, you probably want to set scale to 2.
-
-Section `"job"`: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".
-
-
-## Step by step
-
-### Basic workflow
-
-1. [pts2tiles](../modules/pts2tiles.md): Group pixels to tiles for faster processing
-2. [tiles2hex](../modules/tiles2hex.md): Group pixels into non-overlapping hexagons
-3. [topic-model](../modules/lda4hex.md): Run factorization on the hexagon/single cell data
-4. [pixel-decode](../modules/pixel-decode.md): Annotate each pixel with the top factors and their probabilities
-5. [Visualization](../modules/visualization.md): Create high resolution visualizations
-
-### Setup
-
-First, set up the environment variables:
+Make a directory to store the CartoScope deployment files, then run
 
 ```bash
-threads=4 # Number of threads for parallel processing
-tmpdir=/path/to/tmp # Directory for temporary files (must be empty or creatable)
-path=/path/to/your_data # Path to your data directory
+punkst deploy-cartoscope \
+    --config config.json \
+    --out-dir /path/for/carto \
+    --id sample-id \
+    --title "Sample title" \
+    --pmtiles-format MVT \
+    --threads 4
 ```
 
-### Step 1: Group pixels to tiles
+The output path `/path/for/carto` should contain a `catalog.yaml` file, the entry point for CartoScope.
 
-Group pixels into non-overlapping square tiles for faster processing:
-
+Serve the deployment directory:
 ```bash
-punkst pts2tiles --in-tsv transcripts.tsv \
-  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 --skip 1 \
-  --tile-size 500 \
-  --temp-dir ${tmpdir} --threads ${threads} \
-  --out-prefix ${path}/transcripts.tiled
+cd /path/for/carto
+npx http-server --cors
 ```
 
-Key parameters:
-
-`--icol-x`, `--icol-y`: Column indices for X and Y coordinates (0-based)
-
-`--skip`: If your input file has a header, use `--skip 1` to skip the first (or more) lines
-
-`--tile-size`: Size (side length) of the square tiles
-
-[Detailed documentation for pts2tiles](../modules/pts2tiles.md)
-
-### Step 2: Create hexagonal units
-
-Group pixels into non-overlapping hexagons:
-
-```bash
-punkst tiles2hex --in-tsv ${path}/transcripts.tiled.tsv \
-  --in-index ${path}/transcripts.tiled.index \
-  --feature-dict ${path}/transcripts.tiled.features.tsv \
-  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-int 3 \
-  --min-count 20 --hex-size 7 \
-  --out ${path}/hex_12.txt --randomize --seed 1 \
-  --temp-dir ${tmpdir} --threads ${threads}
-```
-
-Key parameters:
-
-`--icol-feature`, `--icol-int`: Column indices for feature and count(s)
-
-`--hex-size`: Side length of the hexagons
-
-`--min-count`: Minimum count for a hexagon to be included
-
-`--randomize`: If set, the order of hexagons in the output will be randomized. You should always shuffle hexagons before running `topic-model`.
-
-`--seed`: Seed for reproducible random keys and shuffled ordering in `tiles2hex`.
-
-[Detailed documentation for tiles2hex](../modules/tiles2hex.md)
-
-### Step 3: Run LDA on hexagon data
-
-Perform Latent Dirichlet Allocation on the hexagon data:
-
-```bash
-punkst topic-model --in-data ${path}/hex_12.randomized.txt \
-  --in-meta ${path}/hex_12.json \
-  --n-topics 12 \
-  --n-epochs 2 --min-count-train 50 \
-  --out-prefix ${path}/hex_12 --transform \
-  --threads ${threads} --seed 1
-```
-
-Key parameters:
-
-`--n-topics`: Number of topics (factors) to learn
-
-`--transform`: Generate transform results after model fitting
-
-[Detailed documentation for topic-model](../modules/lda4hex.md)
-
-### Step 4: Decode pixels with the model
-
-Annotate each pixel with top factors and their probabilities:
-
-```bash
-punkst pixel-decode --model ${path}/hex_12.model.tsv \
-  --in-tsv ${path}/transcripts.tiled.tsv \
-  --in-index ${path}/transcripts.tiled.index \
-  --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
-  --hex-grid-dist 12 --n-moves 2 \
-  --pixel-res 0.5 \
-  --out-pref ${path}/pixel.decode --output-binary \
-  --temp-dir ${tmpdir} \
-  --threads ${threads} --seed 1
-```
-
-Key parameters:
-
-`--model`: Model file created by `topic-model`
-
-`--hex-grid-dist`: Center-to-center distance of the hexagonal grid
-
-`--n-moves`: Number of sliding moves to generate anchors
-
-`--pixel-res`: Resolution for the analysis (in the same unit as coordinates). Set to `2` for Visium HD.
-
-The generated basic workflow controls this step with `workflow.pixel_decode_mode`. `pixel` uses the command above, `feature_pixel` adds `--single-feature-pixel`, and `single_molecule` adds `--single-molecule` and omits `--pixel-res`.
-
-`--output-binary`: Write the main pixel-level output as `${path}/pixel.decode.bin` plus `${path}/pixel.decode.index`. This is the preferred output mode for downstream `tile-op`, visualization, and spatial tests.
-
-`--output-original`: Optional text-output mode that writes each transcript/input pixel as a separate line in the output. This is slower, generates a larger file, and cannot be combined with `--output-binary`, so only use it if matching the inference with the original input is useful.
-
-[Detailed documentation for pixel-decode](../modules/pixel-decode.md)
-
-### Step 5: Visualize the results
-
-Visualize the pixel decoding results:
-
-The example Makefiles use a fixed color table (`ext/py/cmap.256.tsv`) by default (`"use_fixed_color_table": true` in `config.json`).
-
-Optional: set `"use_fixed_color_table": false` and generate a color table from model results using `color_helper.py`. (Python dependency: [jinja2](https://pypi.org/project/Jinja2/), pandas, matplotlib. It may be slow for a large dataset.)
-
-```bash
-python punkst/ext/py/color_helper.py --input ${path}/hex_12.results.tsv --output ${path}/color --seed 1
-```
-
-**Generate an image** for the pixel level factor assignment
-```bash
-punkst draw-pixel-factors --in ${path}/pixel.decode --binary \
-  --in-color ${path}/color.rgb.tsv \
-  --out ${path}/pixel.png \
-  --scale 1 \
-  --xmin ${xmin} --xmax ${xmax} --ymin ${ymin} --ymax ${ymax}
-```
-
-Key parameters:
-
-`--in`: Prefix of the pixel decode output files.
-
-`--binary`: Read the binary output written by `pixel-decode --output-binary`.
-
-`--in-color`: TSV file with RGB colors for each factor
-
-`--scale`: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel in the image). If the coordinates are in microns, 1 or 0.5 is suitable for high resolution data (imaging-based, Stereo-seq, Seq-scope, etc.); 2 is suitable for Visium HD.
-
-`--xmin`, `--xmax`, `--ymin`, `--ymax`: Range of coordinates to visualize. If you specified `--icol-feature` and `--icol-int` in `pts2tiles`, you can either find the range in the `transcripts.tiled.coord_range.tsv` file or pass it directly with `--range transcripts.tiled.coord_range.tsv`.
-
-
-Compute **naive differential expression** statistics
-```bash
-python punkst/ext/py/de_bulk.py --input ${path}/pixel.decode.pseudobulk.tsv \
-  --output ${path}/de_bulk.tsv --thread ${threads}
-```
-
-**Generate a html** to display the color and top enriched genes for each factor
-```bash
-python punkst/ext/py/factor_report.py --de ${path}/de_bulk.tsv \
-  --pseudobulk ${path}/pixel.decode.pseudobulk.tsv \
-  --color_table ${path}/color.rgb.tsv \
-  --output_pref ${path}/report
-```
-
-Optional: add `--de_neighbor ${path}/de_bulk.1vsNeighbors.tsv` if you included `--neighbor-k` when running `punkst de-chisq` to display top "highly specific" genes that are enriched even when comparing with k most similar factors.
-
-[Detailed documentation for visualization](../modules/visualization.md)
+Then use the url `http://127.0.0.1:8080/catalog.yaml` (the actual port may differ) on [CartoScope](https://main.cartoscope.app/summary).

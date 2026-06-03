@@ -44,6 +44,7 @@ nav:
     - Install: install.md
   - Workflows:
     - Quickstart: workflows/index.md
+    - Basics: workflows/basics.md
     - Multisample: workflows/multisample.md
     - Deployment: workflows/deploy_carto.md
   - Modules:

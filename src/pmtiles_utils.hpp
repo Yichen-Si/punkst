@@ -5,7 +5,9 @@
 #include "mlt_utils.hpp"
 #include "PMTiles/pmtiles.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <string>
@@ -63,6 +65,31 @@ struct RasterBounds {
     }
 };
 
+struct RasterTileKey {
+    uint8_t z = 0;
+    uint32_t x = 0;
+    uint32_t y = 0;
+
+    bool operator==(const RasterTileKey& other) const {
+        return z == other.z && x == other.x && y == other.y;
+    }
+
+    bool operator<(const RasterTileKey& other) const {
+        return z < other.z ||
+            (z == other.z && (x < other.x || (x == other.x && y < other.y)));
+    }
+};
+
+struct RasterTileKeyHash {
+    size_t operator()(const RasterTileKey& key) const;
+};
+
+struct RasterPixelCoord {
+    RasterTileKey key;
+    int32_t px = 0;
+    int32_t py = 0;
+};
+
 enum class VectorGeometryType {
     Point,
     Polygon,
@@ -115,6 +142,27 @@ void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
 void write_png_raster_pmtiles_archive(const std::string& pngFile,
     const std::string& outFile,
     const std::string& tempBlobFile,
+    const RasterBounds& bounds,
+    int32_t minZoom,
+    int32_t maxZoom);
+
+void validate_raster_archive_options(const RasterBounds& bounds,
+    int32_t minZoom,
+    int32_t maxZoom,
+    const char* context);
+
+RasterPixelCoord epsg3857_to_raster_pixel(double x, double y, int32_t zoom);
+
+void append_png_tile_to_blob(std::ofstream& blob,
+    const std::string& tempBlobFile,
+    const std::string& encoded,
+    uint64_t& dataOffset,
+    const RasterTileKey& key,
+    std::vector<StoredTilePayloadRef>& tiles);
+
+void write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
+    const std::string& tempBlobFile,
+    std::vector<StoredTilePayloadRef> tiles,
     const RasterBounds& bounds,
     int32_t minZoom,
     int32_t maxZoom);
