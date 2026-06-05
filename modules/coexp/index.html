@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#gene-cooccurrence-and-marker-selection" class="md-skip">
+        <a href="#gene-co-occurrence-and-marker-selection" class="md-skip">
           Skip to content
         </a>
       
@@ -485,6 +485,8 @@
       
         
       
+        
+      
     
     
     
@@ -539,6 +541,34 @@
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/basics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Basics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -959,15 +989,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
+  <a href="#co-occurrence" class="md-nav__link">
     <span class="md-ellipsis">
       
-        cooccurrence
+        co-occurrence
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="cooccurrence">
+    <nav class="md-nav" aria-label="co-occurrence">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1325,15 +1355,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#cooccurrence" class="md-nav__link">
+  <a href="#co-occurrence" class="md-nav__link">
     <span class="md-ellipsis">
       
-        cooccurrence
+        co-occurrence
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="cooccurrence">
+    <nav class="md-nav" aria-label="co-occurrence">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1506,9 +1536,9 @@
   
 
 
-<h1 id="gene-cooccurrence-and-marker-selection">Gene cooccurrence and marker selection<a class="headerlink" href="#gene-cooccurrence-and-marker-selection" title="Permanent link">&para;</a></h1>
+<h1 id="gene-co-occurrence-and-marker-selection">Gene co-occurrence and marker selection<a class="headerlink" href="#gene-co-occurrence-and-marker-selection" title="Permanent link">&para;</a></h1>
 <p><strong><code>cooccurrence</code> computes gene co-occurrence within a specified radius and <code>coloc2markers</code> selects markers from the co-occurrence matrix.</strong></p>
-<h2 id="cooccurrence">cooccurrence<a class="headerlink" href="#cooccurrence" title="Permanent link">&para;</a></h2>
+<h2 id="co-occurrence">co-occurrence<a class="headerlink" href="#co-occurrence" title="Permanent link">&para;</a></h2>
 <p>The <code>cooccurrence</code> command computes how frequently each pair of genes appear together within a specified radius, either as a binary relation or weighted by distance with exponential decay. (We also have a <code>merge-mtx</code> command in case you want to add up multiple co-occurrence matrices potentially computed from different datasets.)</p>
 <h3 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>cooccurrence<span class="w"> </span>--in-tsv<span class="w"> </span>tiles.tsv<span class="w"> </span>--in-index<span class="w"> </span>tiles.index<span class="w"> </span><span class="se">\</span>
