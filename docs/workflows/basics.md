@@ -25,7 +25,9 @@ Available parameters for `config.json`:
 
 `seed`: random seed for reproducibility. This seed is propagated to all steps in the workflow that involve randomness.
 
-`gitpath`: the path to the local `punkst` repository. The generated Makefile uses this to find `bin/punkst`, the Python helper scripts, and the default color table.
+`gitpath`: the path to the local `punkst` repository. The generated Makefile uses this to find the Python helper scripts and the default color table.
+
+`punkst`: the path to the `punkst` binary. For source builds this is usually `${gitpath}/bin/punkst`; for prebuilt tarballs, set it to the binary inside the unpacked tarball.
 
 `use_fixed_color_table`: controls how colors are assigned when rendering pixel maps. Default is `true`, which uses the fixed color table at `ext/py/cmap.256.tsv`. Set to `false` to run `ext/py/color_helper.py` and derive colors from model results (may be slow for a large dataset).
 

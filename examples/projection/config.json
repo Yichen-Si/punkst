@@ -3,6 +3,7 @@
       "threads": 4,
       "seed": 1,
       "gitpath": "/path/to/punkst",
+      "punkst": "/path/to/punkst/bin/punkst",
       "datadir": "/path/to/output",
       "tmpdir": "/path/to/store/temporary/files",
       "transcripts": "/path/to/input/transcripts.tsv",

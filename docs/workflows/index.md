@@ -25,6 +25,8 @@ We provide template Makefile and config files in `punkst/examples` to generate t
 
 First copy `punkst/examples/basic/config.json` to your own directory and modify the data path and parameters, then use `punkst/ext/py/generate_workflow.py` to generate a data-specific Makefile for your task.
 
+Set `workflow.punkst` in the config to the `punkst` binary you want to run. For source builds this is usually `${repopath}/bin/punkst`; for prebuilt tarballs, point it at the binary inside the unpacked tarball.
+
 The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the `-o` option.
 
 ```bash

@@ -1,38 +1,56 @@
-## Installation Guide for **punkst**
+# Installation Guide for **punkst**
 
 This guide covers prebuilt Linux tarballs and source builds on Linux and macOS, including systems where you do not have root access.
 
 ## Prebuilt Linux Tarballs
 
 Prebuilt Linux tarballs are intended for linux users who want to run
-`punkst` without compiling from source. They are attached to GitHub Releases:
+`punkst` without compiling from source. They are attached to GitHub Releases: <https://github.com/Yichen-Si/punkst/releases>
 
-<https://github.com/Yichen-Si/punkst/releases>
+(You would still need to clone the repository get example data and workflow templates)
 
-Use the tarball that matches your CPU.
+### Choosing the Right Build
 
-| Asset suffix | Use when |
-| :--- | :--- |
-| `linux-x86_64-v3-glibc*.tar.gz` | Your node supports AVX2/FMA-era x86_64 CPUs. |
-| `linux-x86_64-v4-glibc*.tar.gz` | Your node supports AVX-512 x86_64 CPUs. |
-| `linux-x86_64-glibc*.tar.gz` | Your node supports neither of the above. |
+To get reasonable performance out of `punkst`, choose the tarball that best matches your system's Linux environment (glibc) and CPU capabilities.
 
-After downloading:
+*Note: the tarball includes a built-in `./bin/env-check` script. If you download a version your system doesn't support, the script should safely catch it and tell you which version to download instead*
+
+1. Check your glibc version
+```bash
+ldd --version
+```
+* If your version is **2.28 or higher** (e.g., Ubuntu 20.04+, RHEL 8+): Download a `glibc2.28` tarball.
+* If your version is **2.17 to 2.27** (e.g., CentOS 7, Ubuntu 18.04): Download a `glibc2.17` tarball.
+
+2. Check your CPU (hardware capabilities)
 
 ```bash
-tar -xzf punkst-*-linux-x86_64-v3-glibc*.tar.gz
-cd punkst-*-linux-x86_64-v3-glibc*
-./bin/env-check --help
+grep -q avx512f /proc/cpuinfo && echo "x86_64-v4" || (grep -q avx2 /proc/cpuinfo && echo "x86_64-v3" || echo "x86_64")
 ```
 
-`bin/env-check` is a shell helper that checks the host glibc version and CPU
-features before launching `bin/punkst` with the bundled libraries. It does not
-modify your shell environment.
+* **`x86_64-v4`**: Modern enterprise CPUs (Intel Skylake-X/Xeon or newer, AMD Zen 4 or newer, with AVX-512 support)
+* **`x86_64-v3`**: Most standard CPUs made after 2015 (Intel Haswell+, AMD Zen 1-3)
+* **`x86_64`**: Older CPUs or lightweight VMs
 
-The tarball includes Markdown documentation under `docs/`. The latest
-documentation is available online at <https://yichen-si.github.io/punkst/>.
+The performance difference may be significant, mostly due to optimizations inside Eigen. It is important to choose the matching prebuilt tarball.
 
-## Requirements
+**Note**: on HPC, you may need to check the features of the compute node. For example, with slurm scheduler you can do `srun -p <PARTITION> bash -c 'ldd --version | head -n 1'` and `srun -p <PARTITION> bash -c 'echo -n "$(hostname): " && (grep -q avx512f /proc/cpuinfo && echo "x86_64-v4" || (grep -q avx2 /proc/cpuinfo && echo "x86_64-v3" || echo "x86_64"))'`
+
+### After downloading
+
+```bash
+tar -xzf punkst-*-linux-x86_64*-glibc*.tar.gz
+cd punkst-*-linux-x86_64*-glibc*
+./bin/env-check
+```
+
+`bin/env-check` is a shell helper that checks the host glibc version and CPU features before launching `bin/punkst` with the bundled libraries. If checks pass, it shows the punkst help message, then the binary `./bin/punkst` is ready to use.
+
+The tarball includes Markdown documentation under `docs/`. The latest documentation is available online at <https://yichen-si.github.io/punkst/>.
+
+## Building from Source
+
+### Requirements
 
 Core build requirements:
 
@@ -53,7 +71,7 @@ Optional feature requirements:
 
 Image output commands write PNG files and require output paths ending in `.png`.
 
-## Quick Build
+### Quick Build
 
 ```bash
 git clone --recursive https://github.com/your-org/punkst.git
@@ -88,7 +106,7 @@ Available Commands
 The following commands are available:
 ```
 
-## System Packages
+### System Packages
 
 Install dependencies with your system package manager when possible:
 
@@ -101,7 +119,7 @@ Install dependencies with your system package manager when possible:
 | libpng | `sudo apt-get install libpng-dev` | `sudo yum install libpng-devel` | `brew install libpng` |
 | libcurl | `sudo apt-get install libcurl4-openssl-dev` | `sudo yum install libcurl-devel` | `brew install curl` |
 
-## Rootless Installs
+### Rootless Installs
 
 If dependencies are installed under a user prefix, pass that prefix to CMake:
 
@@ -111,7 +129,7 @@ cmake .. \
   -DCMAKE_PREFIX_PATH="$HOME/.local"
 ```
 
-### TBB
+#### TBB
 For TBB, a local oneTBB install is documented upstream:
 
 - [oneTBB installation guide](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md)
@@ -126,7 +144,7 @@ Then do the following (everytime) before you build punkst
 source oneapi-tbb-2023.0.0/env/vars.sh
 ```
 
-### libpng
+#### libpng
 For libpng without root access, use a user-level package manager when available:
 
 ```bash
@@ -152,7 +170,7 @@ cmake --install /path/to/libpng/build
 cmake .. -DCMAKE_PREFIX_PATH="$HOME/.local"
 ```
 
-## Optional Features
+### Optional Features
 
 Image output is enabled by default:
 
@@ -184,7 +202,7 @@ Disable remote I/O to build without libcurl. Local-file input still works.
 cmake .. -DENABLE_REMOTE_IO=OFF
 ```
 
-## Performance And Portability
+### Performance And Portability
 
 The default build prioritizes local runtime performance:
 

@@ -28,7 +28,7 @@ CELLCOORD    := {CELLCOORD}
 NUCLEIRADIUS := {NUCLEIRADIUS}
 
 NUR          := $(NUCLEIRADIUS)
-PUNKST       := $(GITPATH)/bin/punkst
+PUNKST       := {PUNKST}
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
 FEATURES     := $(DATADIR)/transcripts.tiled.features.tsv

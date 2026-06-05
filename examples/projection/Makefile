@@ -21,7 +21,7 @@ MODEL_TSV    := {MODEL_TSV}
 OUTPREF     := {OUTPREF}
 COLOR_TABLE  := {COLOR_TABLE}
 
-PUNKST       := $(GITPATH)/bin/punkst
+PUNKST       := {PUNKST}
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
 COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv

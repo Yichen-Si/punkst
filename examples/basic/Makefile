@@ -39,7 +39,7 @@ else
 $(error Unsupported PIXEL_DECODE_MODE '$(PIXEL_DECODE_MODE)'; expected pixel, feature_pixel, or single_molecule)
 endif
 
-PUNKST       := $(GITPATH)/bin/punkst
+PUNKST       := {PUNKST}
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
 COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv

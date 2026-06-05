@@ -3,6 +3,7 @@
       "threads": 4,
       "seed": 1,
       "gitpath": "/path/to/punkst",
+      "punkst": "/path/to/punkst/bin/punkst",
       "datadir": "/path/to/output",
       "tmpdir": "/path/to/store/temporary/files",
       "transcripts": "/path/to/input/transcripts.tsv",
@@ -16,7 +17,7 @@
       "hexgrids": [12],
       "topics": [12,24],
       "use_fixed_color_table": true,
-      "nepochs": 1,
+      "nepochs": 3,
       "pixhex": 12,
       "nmove": 2,
       "pixel_decode_mode": "pixel",
@@ -30,6 +31,6 @@
       "job-name": "test",
       "output": "logs/%x.%j.out",
       "error":  "logs/%x.%j.err",
-      "extra_lines" : "# other customized commands, e.g. start python venv, load gcc module in your system etc. \nsource /path/to/venv/bin/activate"
+      "extra_lines" : "# other customized commands, e.g. start python venv, load gcc/tbb module in your system etc. \n# source /path/to/venv/bin/activate"
     }
   }

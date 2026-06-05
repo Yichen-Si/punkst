@@ -96,6 +96,8 @@ def main():
         wf["use_fixed_color_table"] = True
     if "pixel_decode_mode" not in wf:
         wf["pixel_decode_mode"] = "pixel"
+    if "punkst" not in wf and "gitpath" in wf:
+        wf["punkst"] = os.path.join(wf["gitpath"], "bin", "punkst")
     # Render Makefile
     render_makefile(args.template, args.makefile, wf)
     # Emit sbatch wrapper

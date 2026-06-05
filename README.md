@@ -13,13 +13,12 @@ If you have difficulty installing, let us known (by opening an issue). You can a
 
 ### Prebuilt Linux Tarballs
 
-Linux tarballs for HPC clusters are attached to [GitHub Releases](https://github.com/Yichen-Si/punkst/releases) when available. Download the CPU tier that matches your node (`x86_64`, `x86_64-v3`, or `x86_64-v4`), unpack it, and run:
+Linux tarballs for HPC clusters are attached to [GitHub Releases](https://github.com/Yichen-Si/punkst/releases). Download the build with CPU features matching your machine (`x86_64`, `x86_64-v3`, or `x86_64-v4`), unpack it, and run:
 
 ```bash
-./bin/env-check --help
+bin/punkst --help
 ```
-
-The `env-check` helper checks glibc and CPU compatibility before launching the bundled binary. See the [installation documentation](https://yichen-si.github.io/punkst/install/#prebuilt-linux-tarballs) for details.
+See the [installation documentation](https://yichen-si.github.io/punkst/install/#prebuilt-linux-tarballs) for details on choosing the right build and verifying the installation.
 
 ### Building from Source
 
