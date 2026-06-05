@@ -52,6 +52,7 @@ app/
 .vscode
 .vscode/*
 
+dist/
 site/
 
 venv

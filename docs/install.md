@@ -1,6 +1,36 @@
 ## Installation Guide for **punkst**
 
-This guide covers source builds on Linux and macOS, including systems where you do not have root access.
+This guide covers prebuilt Linux tarballs and source builds on Linux and macOS, including systems where you do not have root access.
+
+## Prebuilt Linux Tarballs
+
+Prebuilt Linux tarballs are intended for linux users who want to run
+`punkst` without compiling from source. They are attached to GitHub Releases:
+
+<https://github.com/Yichen-Si/punkst/releases>
+
+Use the tarball that matches your CPU.
+
+| Asset suffix | Use when |
+| :--- | :--- |
+| `linux-x86_64-v3-glibc*.tar.gz` | Your node supports AVX2/FMA-era x86_64 CPUs. |
+| `linux-x86_64-v4-glibc*.tar.gz` | Your node supports AVX-512 x86_64 CPUs. |
+| `linux-x86_64-glibc*.tar.gz` | Your node supports neither of the above. |
+
+After downloading:
+
+```bash
+tar -xzf punkst-*-linux-x86_64-v3-glibc*.tar.gz
+cd punkst-*-linux-x86_64-v3-glibc*
+./bin/env-check --help
+```
+
+`bin/env-check` is a shell helper that checks the host glibc version and CPU
+features before launching `bin/punkst` with the bundled libraries. It does not
+modify your shell environment.
+
+The tarball includes Markdown documentation under `docs/`. The latest
+documentation is available online at <https://yichen-si.github.io/punkst/>.
 
 ## Requirements
 
@@ -169,6 +199,37 @@ Useful CMake options:
 | Default local performance | `cmake ..` | Release build with `-march=native` when supported |
 | Maximum CPU portability | `cmake .. -DENABLE_PORTABLE_BUILD=ON` | Disables architecture-specific tuning flags |
 | Modern x86_64 baseline | `cmake .. -DENABLE_NATIVE_ARCH=OFF -DENABLE_X86_64_V3=ON` | Targets x86-64-v3 on compatible x86_64 systems |
+| AVX-512 x86_64 target | `cmake .. -DENABLE_NATIVE_ARCH=OFF -DENABLE_X86_64_V4=ON` | Targets x86-64-v4 on compatible AVX-512 systems |
 | Disable LTO | `cmake .. -DENABLE_LTO=OFF` | Useful for faster/debug builds or toolchains where LTO is unreliable |
 | No image output | `cmake .. -DENABLE_IMAGE_OUTPUT=OFF` | Builds without libpng |
 | No remote I/O | `cmake .. -DENABLE_REMOTE_IO=OFF` | Builds without libcurl |
+
+<!-- ## Maintainer Release Packaging
+
+Release tarballs are built manually on controlled native Linux hosts, not with
+Docker and not with GitHub Actions. Build on the oldest glibc version that the
+release should support.
+
+Example:
+
+```bash
+script/package_linux_release.sh \
+  --version v0.3.0 \
+  --tier x86_64-v3 \
+  --glibc-min 2.28
+```
+
+Build all standard tiers:
+
+```bash
+for tier in x86_64 x86_64-v3 x86_64-v4; do
+  script/package_linux_release.sh \
+    --version v0.3.0 \
+    --tier "$tier" \
+    --glibc-min 2.28
+done
+```
+
+The script writes tarballs, `SHA256SUMS`, and a JSON-lines manifest under
+`dist/`. Attach those files directly to the GitHub Release for the matching tag.
+Do not commit release tarballs to git. -->

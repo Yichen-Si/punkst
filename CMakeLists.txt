@@ -273,7 +273,7 @@ option(ENABLE_PORTABLE_BUILD "Disable architecture-specific tuning flags for max
 
 option(ENABLE_NATIVE_ARCH "Enable -march=native (not portable across different CPUs)" ON)
 if (ENABLE_PORTABLE_BUILD)
-  message(STATUS "ENABLE_PORTABLE_BUILD=ON: skipping -march=native and -march=x86-64-v3.")
+  message(STATUS "ENABLE_PORTABLE_BUILD=ON: skipping -march=native, -march=x86-64-v3, and -march=x86-64-v4.")
 elseif (ENABLE_NATIVE_ARCH)
   check_cxx_compiler_flag("-march=native" HAS_MARCH_NATIVE)
   if (HAS_MARCH_NATIVE)
@@ -285,6 +285,11 @@ elseif (ENABLE_NATIVE_ARCH)
 endif()
 
 option(ENABLE_X86_64_V3 "Enable -march=x86-64-v3 (requires compatible x86_64 CPU at runtime)" OFF)
+option(ENABLE_X86_64_V4 "Enable -march=x86-64-v4 (requires compatible AVX-512 x86_64 CPU at runtime)" OFF)
+if (ENABLE_X86_64_V3 AND ENABLE_X86_64_V4)
+  message(FATAL_ERROR "ENABLE_X86_64_V3 and ENABLE_X86_64_V4 are mutually exclusive.")
+endif()
+
 if (ENABLE_PORTABLE_BUILD)
   # handled above
 elseif (ENABLE_X86_64_V3)
@@ -299,6 +304,26 @@ elseif (ENABLE_X86_64_V3)
   else()
     message(STATUS "Non-x86 processor (${CMAKE_SYSTEM_PROCESSOR}); not enabling x86-64-v3.")
   endif()
+elseif (ENABLE_X86_64_V4)
+  if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i.86")
+    check_cxx_compiler_flag("-march=x86-64-v4" HAS_X86_64_V4)
+    if (HAS_X86_64_V4)
+      target_compile_options(${APP_EXE} PRIVATE -march=x86-64-v4)
+      message(STATUS "Enabled -march=x86-64-v4 (requires compatible AVX-512 CPU at runtime).")
+    else()
+      message(WARNING "Compiler does not support -march=x86-64-v4; ignoring.")
+    endif()
+  else()
+    message(STATUS "Non-x86 processor (${CMAKE_SYSTEM_PROCESSOR}); not enabling x86-64-v4.")
+  endif()
+endif()
+
+option(PUNKST_USE_ORIGIN_RPATH "Use an executable rpath relative to the punkst binary for bundled release tarballs" OFF)
+if (PUNKST_USE_ORIGIN_RPATH)
+  set_target_properties(${APP_EXE} PROPERTIES
+    BUILD_RPATH "\$ORIGIN/../lib"
+    INSTALL_RPATH "\$ORIGIN/../lib"
+  )
 endif()
 
 target_link_libraries(${APP_EXE} PRIVATE
