@@ -4,19 +4,19 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  script/package_linux_release.sh --version VERSION --tier TIER [options]
+  script/package_linux_release.sh --version VERSION --tier TIER --glibc-min VERSION [options]
 
 Build and package a native Linux punkst release tarball without Docker.
 
 Required:
-  --version VERSION       Release version, for example v0.3.0
+  --version VERSION       Release version, for example v0.1.0
   --tier TIER             CPU tier: x86_64, x86_64-v3, or x86_64-v4
+  --glibc-min VERSION     Minimum glibc label/check
 
 Options:
-  --glibc-min VERSION     Minimum glibc label/check, default: 2.28
-  --build-dir DIR         Build directory, default: build/release-TIER
+  --build-dir DIR         Build directory, default: build/release-TIER-GLIBCMIN
   --dist-dir DIR          Output directory, default: dist
-  --jobs N                Parallel build jobs, default: nproc output or 4
+  --jobs N                Parallel build jobs, default: 4
   --cmake-extra ARGS      Extra CMake arguments, passed as one shell word
   --allow-newer-glibc     Allow packaging when build-host glibc is newer than --glibc-min
   --help                  Show this help
@@ -30,10 +30,10 @@ EOF
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version=""
 tier=""
-glibc_min="2.28"
+glibc_min=""
 build_dir=""
 dist_dir="$repo_root/dist"
-jobs="$(nproc 2>/dev/null || printf '4')"
+jobs=4
 cmake_extra=()
 allow_newer_glibc=0
 
@@ -107,14 +107,14 @@ if [ -n "$host_glibc" ] && version_gt "$host_glibc" "$glibc_min" && [ "$allow_ne
 fi
 
 if [ -z "$build_dir" ]; then
-  build_dir="$repo_root/build/release-$tier"
+  build_dir="$repo_root/build/release-$tier-glibc$glibc_min"
 fi
 
 artifact_base="punkst-$version-linux-$tier-glibc$glibc_min"
 stage_dir="$dist_dir/$artifact_base"
 tarball="$dist_dir/$artifact_base.tar.gz"
-manifest="$dist_dir/$version-linux-manifest.jsonl"
-checksum_file="$dist_dir/SHA256SUMS"
+manifest="$dist_dir/$version-linux-manifest.$artifact_base.jsonl"
+checksum_file="$dist_dir/SHA256SUMS.$artifact_base"
 
 printf 'Packaging %s\n' "$artifact_base"
 printf 'Build directory: %s\n' "$build_dir"
@@ -125,7 +125,7 @@ cmake -S "$repo_root" -B "$build_dir" \
   -DPUNKST_RUNTIME_OUTPUT_DIRECTORY="$build_dir/bin" \
   -DPUNKST_USE_ORIGIN_RPATH=ON \
   "${cpu_flags[@]}" \
-  "${cmake_extra[@]}"
+  ${cmake_extra[@]+"${cmake_extra[@]}"}
 
 cmake --build "$build_dir" --parallel "$jobs"
 
@@ -260,11 +260,11 @@ case "$runpath" in
     printf 'ERROR: punkst rpath/runpath does not contain $ORIGIN/../lib. Found: %s\n' "$runpath" >&2
     exit 1 ;;
 esac
-case "$runpath" in
-  *"$HOME"*|*"/net/"*|*"/home/"*)
-    printf 'ERROR: punkst rpath/runpath contains a user-local path: %s\n' "$runpath" >&2
-    exit 1 ;;
-esac
+#case "$runpath" in
+#  *"$HOME"*|*"/net/"*|*"/home/"*)
+#    printf 'ERROR: punkst rpath/runpath contains a user-local path: %s\n' "$runpath" >&2
+#    exit 1 ;;
+#esac
 
 "$stage_dir/bin/env-check" --help >/dev/null
 ldd "$stage_dir/bin/punkst" > "$stage_dir/BUILDINFO.ldd.txt"

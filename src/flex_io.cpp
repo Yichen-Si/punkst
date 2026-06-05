@@ -259,14 +259,21 @@ bool FlexHttpReader::probe_size_with_head() {
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     curl_off_t length = -1;
+
+#if LIBCURL_VERSION_NUM >= 0x073700
     const CURLcode lengthRc = curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &length);
     if (lengthRc != CURLE_OK || length < 0) {
-        double legacyLength = -1.0;
-        const CURLcode legacyRc = curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &legacyLength);
-        if (legacyRc == CURLE_OK && legacyLength > 0) {
-            length = static_cast<curl_off_t>(legacyLength);
-        }
+        length = -1;
     }
+#else
+    // Fallback compiled strictly on older machines (CentOS 7 / glibc 2.17)
+    double legacyLength = -1.0;
+    const CURLcode legacyRc = curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &legacyLength);
+    if (legacyRc == CURLE_OK && legacyLength > 0) {
+        length = static_cast<curl_off_t>(legacyLength);
+    }
+#endif
+
     curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
     if (rc != CURLE_OK || (code != 200 && code != 204 && code != 206)) {
         return false;

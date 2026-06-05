@@ -214,7 +214,7 @@ Example:
 
 ```bash
 script/package_linux_release.sh \
-  --version v0.3.0 \
+  --version v0.1.0 \
   --tier x86_64-v3 \
   --glibc-min 2.28
 ```
@@ -224,7 +224,7 @@ Build all standard tiers:
 ```bash
 for tier in x86_64 x86_64-v3 x86_64-v4; do
   script/package_linux_release.sh \
-    --version v0.3.0 \
+    --version v0.1.0 \
     --tier "$tier" \
     --glibc-min 2.28
 done
