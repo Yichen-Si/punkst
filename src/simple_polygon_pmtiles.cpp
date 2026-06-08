@@ -23,8 +23,8 @@ using Clipper2Lib::Point64;
 using Clipper2Lib::Rect64;
 using Clipper2Lib::RectClip;
 
-void ensure_tile_columns(mlt_pmtiles::PolygonTileData& tile,
-    const mlt_pmtiles::FeatureTableSchema& schema) {
+void ensure_tile_columns(pm_vector::PolygonTileData& tile,
+    const pm_vector::FeatureTableSchema& schema) {
     if (!tile.columns.empty()) {
         return;
     }
@@ -46,7 +46,7 @@ double from_scaled_world(int64_t value, int64_t clipScale) {
 double tile_buffer_world_units(const SingleZoomPolygonWriterOptions& options) {
     const double localUnitsPerPixel = static_cast<double>(options.extent) / 256.0;
     return options.tileBufferPixels * localUnitsPerPixel *
-        mlt_pmtiles::epsg3857_scale_factor(options.zoom);
+        pm_core::epsg3857_scale_factor(options.zoom);
 }
 
 std::pair<double, double> estimate_assignment_center_world(
@@ -74,7 +74,7 @@ std::pair<uint32_t, uint32_t> assign_tile_from_world_center(
     int64_t tileY = 0;
     double localX = 0.0;
     double localY = 0.0;
-    mlt_pmtiles::epsg3857_to_tilecoord(center.first, center.second, zoom,
+    pm_core::epsg3857_to_tilecoord(center.first, center.second, zoom,
         tileX, tileY, localX, localY);
     const int64_t maxTileIndex = static_cast<int64_t>((uint64_t{1} << zoom) - 1u);
     tileX = std::clamp(tileX, int64_t{0}, maxTileIndex);
@@ -85,8 +85,8 @@ std::pair<uint32_t, uint32_t> assign_tile_from_world_center(
     };
 }
 
-void append_property_row(const mlt_pmtiles::FeatureTableSchema& schema,
-    mlt_pmtiles::PolygonTileData& tile,
+void append_property_row(const pm_vector::FeatureTableSchema& schema,
+    pm_vector::PolygonTileData& tile,
     const PolygonFeatureProperties& properties) {
     size_t intIdx = 0;
     size_t floatIdx = 0;
@@ -95,7 +95,7 @@ void append_property_row(const mlt_pmtiles::FeatureTableSchema& schema,
         const auto& colSchema = schema.columns[colIdx];
         auto& col = tile.columns[colIdx];
         switch (colSchema.type) {
-        case mlt_pmtiles::ScalarType::INT_32: {
+        case pm_vector::ScalarType::INT_32: {
             if (intIdx >= properties.intValues.size()) {
                 error("%s: integer property count mismatch", __func__);
             }
@@ -106,7 +106,7 @@ void append_property_row(const mlt_pmtiles::FeatureTableSchema& schema,
             col.intValues.push_back(value.value_or(0));
             break;
         }
-        case mlt_pmtiles::ScalarType::FLOAT: {
+        case pm_vector::ScalarType::FLOAT: {
             if (floatIdx >= properties.floatValues.size()) {
                 error("%s: float property count mismatch", __func__);
             }
@@ -117,7 +117,7 @@ void append_property_row(const mlt_pmtiles::FeatureTableSchema& schema,
             col.floatValues.push_back(value.value_or(0.0f));
             break;
         }
-        case mlt_pmtiles::ScalarType::STRING: {
+        case pm_vector::ScalarType::STRING: {
             if (stringIdx >= properties.stringValues.size()) {
                 error("%s: string property count mismatch", __func__);
             }
@@ -128,7 +128,7 @@ void append_property_row(const mlt_pmtiles::FeatureTableSchema& schema,
             col.stringValues.push_back(value.value_or(std::string()));
             break;
         }
-        case mlt_pmtiles::ScalarType::BOOLEAN:
+        case pm_vector::ScalarType::BOOLEAN:
         default:
             error("%s: unsupported polygon property scalar type", __func__);
         }
@@ -199,8 +199,8 @@ std::vector<std::pair<int32_t, int32_t>> convert_clipped_ring_to_local(
     double tileMaxY = 0.0;
     double tileMaxX = 0.0;
     double tileMinY = 0.0;
-    mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 0.0, 0.0, options.zoom, tileMinX, tileMaxY);
-    mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 256.0, 256.0, options.zoom, tileMaxX, tileMinY);
+    pm_core::tilecoord_to_epsg3857(tileX, tileY, 0.0, 0.0, options.zoom, tileMinX, tileMaxY);
+    pm_core::tilecoord_to_epsg3857(tileX, tileY, 256.0, 256.0, options.zoom, tileMaxX, tileMinY);
     const double tileWidth = tileMaxX - tileMinX;
     const double tileHeight = tileMaxY - tileMinY;
 
@@ -241,10 +241,10 @@ void update_geo_bounds(const std::vector<std::pair<double, double>>& outerRing,
     }
 }
 
-void append_local_polygon_fragment(mlt_pmtiles::PolygonTileData& tile,
+void append_local_polygon_fragment(pm_vector::PolygonTileData& tile,
     const std::vector<std::pair<int32_t, int32_t>>& localRing,
     uint64_t featureId,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     const PolygonFeatureProperties& properties) {
     if (localRing.size() < 3) {
         return;
@@ -278,24 +278,24 @@ void append_local_polygon_fragment(mlt_pmtiles::PolygonTileData& tile,
     append_property_row(schema, tile, properties);
 }
 
-mlt_pmtiles::EncodedTilePayload encode_polygon_tile_payload(const TileKey& tileKey,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
-    const mlt_pmtiles::GlobalStringDictionary* stringDictionary,
+pm_core::EncodedTilePayload encode_polygon_tile_payload(const TileKey& tileKey,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
+    const pm_vector::GlobalStringDictionary* stringDictionary,
     uint8_t zoom) {
     const std::string raw = mlt_pmtiles::encode_polygon_tile(schema, tile, stringDictionary);
-    mlt_pmtiles::EncodedTilePayload payload;
+    pm_core::EncodedTilePayload payload;
     payload.tileId = pmtiles::zxy_to_tileid(zoom, static_cast<uint32_t>(tileKey.col), static_cast<uint32_t>(tileKey.row));
     payload.z = zoom;
     payload.x = static_cast<uint32_t>(tileKey.col);
     payload.y = static_cast<uint32_t>(tileKey.row);
     payload.featureCount = static_cast<uint32_t>(tile.size());
-    payload.compressedData = mlt_pmtiles::gzip_compress(raw);
+    payload.compressedData = pm_core::gzip_compress(raw);
     return payload;
 }
 
-size_t append_scaled_polygon_source_to_tile(mlt_pmtiles::PolygonTileData& outTile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+size_t append_scaled_polygon_source_to_tile(pm_vector::PolygonTileData& outTile,
+    const pm_vector::FeatureTableSchema& schema,
     const Path64& source,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -311,8 +311,8 @@ size_t append_scaled_polygon_source_to_tile(mlt_pmtiles::PolygonTileData& outTil
     double worldMaxY = 0.0;
     double worldMaxX = 0.0;
     double worldMinY = 0.0;
-    mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 0.0, 0.0, options.zoom, worldMinX, worldMaxY);
-    mlt_pmtiles::tilecoord_to_epsg3857(tileX, tileY, 256.0, 256.0, options.zoom, worldMaxX, worldMinY);
+    pm_core::tilecoord_to_epsg3857(tileX, tileY, 0.0, 0.0, options.zoom, worldMinX, worldMaxY);
+    pm_core::tilecoord_to_epsg3857(tileX, tileY, 256.0, 256.0, options.zoom, worldMaxX, worldMinY);
     const Rect64 clipRect(
         to_scaled_world(worldMinX - bufferWorld, options.clipScale),
         to_scaled_world(worldMinY - bufferWorld, options.clipScale),
@@ -331,8 +331,8 @@ size_t append_scaled_polygon_source_to_tile(mlt_pmtiles::PolygonTileData& outTil
     return outTile.size() - before;
 }
 
-size_t append_unclipped_scaled_polygon_source_to_tile(mlt_pmtiles::PolygonTileData& outTile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+size_t append_unclipped_scaled_polygon_source_to_tile(pm_vector::PolygonTileData& outTile,
+    const pm_vector::FeatureTableSchema& schema,
     const Path64& source,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -350,8 +350,8 @@ size_t append_unclipped_scaled_polygon_source_to_tile(mlt_pmtiles::PolygonTileDa
 
 } // namespace
 
-void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+void append_simple_polygon_feature(std::map<TileKey, pm_vector::PolygonTileData>& tileMap,
+    const pm_vector::FeatureTableSchema& schema,
     const std::vector<std::pair<double, double>>& outerRing,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -404,8 +404,8 @@ void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileDat
 
     int64_t tileX0 = 0, tileY0 = 0, tileX1 = 0, tileY1 = 0;
     double localXDummy = 0.0, localYDummy = 0.0;
-    mlt_pmtiles::epsg3857_to_tilecoord(minXBuffered, maxYBuffered, options.zoom, tileX0, tileY0, localXDummy, localYDummy);
-    mlt_pmtiles::epsg3857_to_tilecoord(maxXBuffered, minYBuffered, options.zoom, tileX1, tileY1, localXDummy, localYDummy);
+    pm_core::epsg3857_to_tilecoord(minXBuffered, maxYBuffered, options.zoom, tileX0, tileY0, localXDummy, localYDummy);
+    pm_core::epsg3857_to_tilecoord(maxXBuffered, minYBuffered, options.zoom, tileX1, tileY1, localXDummy, localYDummy);
     const int64_t maxTileIndex = static_cast<int64_t>((uint64_t{1} << options.zoom) - 1u);
     tileX0 = std::clamp(tileX0, int64_t{0}, maxTileIndex);
     tileX1 = std::clamp(tileX1, int64_t{0}, maxTileIndex);
@@ -426,8 +426,8 @@ void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileDat
     }
 }
 
-size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+size_t append_simple_polygon_feature_to_tile(pm_vector::PolygonTileData& outTile,
+    const pm_vector::FeatureTableSchema& schema,
     const std::vector<std::pair<double, double>>& outerRing,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -455,8 +455,8 @@ size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTi
         tileX, tileY, bufferWorld, options);
 }
 
-size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+size_t append_simple_polygon_global_feature_to_tile(pm_vector::PolygonTileData& outTile,
+    const pm_vector::FeatureTableSchema& schema,
     const std::vector<std::pair<int64_t, int64_t>>& globalRing,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -548,14 +548,14 @@ size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData
     return outTile.size() - before;
 }
 
-std::vector<mlt_pmtiles::EncodedTilePayload> encode_polygon_tile_map(
-    std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::GlobalStringDictionary* stringDictionary,
+std::vector<pm_core::EncodedTilePayload> encode_polygon_tile_map(
+    std::map<TileKey, pm_vector::PolygonTileData>& tileMap,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::GlobalStringDictionary* stringDictionary,
     const SingleZoomPolygonWriterOptions& options) {
     struct OutputTile {
         TileKey key;
-        const mlt_pmtiles::PolygonTileData* data = nullptr;
+        const pm_vector::PolygonTileData* data = nullptr;
     };
     std::vector<OutputTile> outputs;
     outputs.reserve(tileMap.size());
@@ -565,7 +565,7 @@ std::vector<mlt_pmtiles::EncodedTilePayload> encode_polygon_tile_map(
         }
         outputs.push_back(OutputTile{kv.first, &kv.second});
     }
-    std::vector<mlt_pmtiles::EncodedTilePayload> encoded(outputs.size());
+    std::vector<pm_core::EncodedTilePayload> encoded(outputs.size());
     if (options.threads > 1 && outputs.size() > 1) {
         tbb::global_control gc(tbb::global_control::max_allowed_parallelism,
             static_cast<size_t>(options.threads));

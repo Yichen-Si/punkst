@@ -11,13 +11,13 @@
 
 namespace {
 
-using mlt_pmtiles::ColumnSchema;
-using mlt_pmtiles::FeatureTableSchema;
-using mlt_pmtiles::GlobalStringDictionary;
-using mlt_pmtiles::PointTileData;
-using mlt_pmtiles::PolygonTileData;
-using mlt_pmtiles::PropertyColumn;
-using mlt_pmtiles::ScalarType;
+using pm_vector::ColumnSchema;
+using pm_vector::FeatureTableSchema;
+using pm_vector::GlobalStringDictionary;
+using pm_vector::PointTileData;
+using pm_vector::PolygonTileData;
+using pm_vector::PropertyColumn;
+using pm_vector::ScalarType;
 
 enum WireType : uint8_t {
     WT_VARINT = 0,
@@ -360,8 +360,8 @@ std::vector<uint32_t> build_feature_tags(LayerTable& table,
 std::vector<uint32_t> point_geometry(int32_t x, int32_t y) {
     return {
         (1u << 3u) | 1u,
-        mlt_pmtiles::encode_zigzag32(x),
-        mlt_pmtiles::encode_zigzag32(y),
+        pm_vector::encode_zigzag32(x),
+        pm_vector::encode_zigzag32(y),
     };
 }
 
@@ -391,14 +391,14 @@ std::vector<uint32_t> polygon_geometry(std::vector<std::pair<int32_t, int32_t>> 
     geom.push_back((1u << 3u) | 1u);
     int32_t cx = 0;
     int32_t cy = 0;
-    geom.push_back(mlt_pmtiles::encode_zigzag32(ring[0].first - cx));
-    geom.push_back(mlt_pmtiles::encode_zigzag32(ring[0].second - cy));
+    geom.push_back(pm_vector::encode_zigzag32(ring[0].first - cx));
+    geom.push_back(pm_vector::encode_zigzag32(ring[0].second - cy));
     cx = ring[0].first;
     cy = ring[0].second;
     geom.push_back((static_cast<uint32_t>(ring.size() - 1u) << 3u) | 2u);
     for (size_t i = 1; i < ring.size(); ++i) {
-        geom.push_back(mlt_pmtiles::encode_zigzag32(ring[i].first - cx));
-        geom.push_back(mlt_pmtiles::encode_zigzag32(ring[i].second - cy));
+        geom.push_back(pm_vector::encode_zigzag32(ring[i].first - cx));
+        geom.push_back(pm_vector::encode_zigzag32(ring[i].second - cy));
         cx = ring[i].first;
         cy = ring[i].second;
     }

@@ -3,6 +3,7 @@
 **PMTiles utilities in `punkst` currently cover:**
 
 - [Export point-only PMTiles as TSV](#export-pmtiles-as-tsv)
+- [Write mono raster PMTiles from tiled counts](#write-mono-raster-pmtiles)
 - [Write single-level polygon-only PMTiles](#write-single-zoom-polygon-pmtiles)
 - [Build PMTiles pyramids](#build-pmtiles-pyramids)
 
@@ -40,6 +41,28 @@ Region filters are supported in this mode:
 - `--zmin`, `--zmax`
 
 For simple-polygon archives, add `--polygon`. Polygon export writes only `path/prefix.tsv`; `--tile-size` is not required.
+
+## Write mono raster PMTiles
+
+`punkst tiles2mono` writes grayscale PNG raster PMTiles from a tiled transcript/count TSV produced by `pts2tiles`. It is used by `deploy-cartoscope` to generate the SGE mono basemap.
+
+```bash
+punkst tiles2mono \
+  --in path/transcripts.tiled \
+  --min-zoom 0 \
+  --max-zoom 18 \
+  --out path/sge-mono-dark.pmtiles \
+  --threads 4
+```
+
+Options:
+
+- `--in` is shorthand for `--in-tsv path/prefix.tsv --in-index path/prefix.index`; if available, `path/prefix.coord_range.tsv` is used for raster bounds
+- `--icol-x`, `--icol-y`, and `--icol-count` select the 0-based x, y, and count columns (defaults: `0`, `1`, `3`)
+- `--min-zoom` and `--max-zoom` set the raster PMTiles zoom range
+- `--adjust-quantile` controls per-zoom density auto-adjustment (default: `0.99`); use `--no-auto-adjust` to write capped raw count intensities
+- by default, raw data is parsed only for `--max-zoom`; lower zoom levels are derived by summing child pixels into parent pixels with the same 255 saturation cap
+- `--max-zoom-from-raw` parses raw data for zooms greater than or equal to the given value, then derives lower zooms from parent layers; set it to `--min-zoom` to parse every zoom from raw data
 
 ## Write single-zoom polygon PMTiles
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mlt_utils.hpp"
+#include "vector_tile_utils.hpp"
 
 #include <cstddef>
 #include <string>
@@ -8,12 +8,12 @@
 
 namespace mvt_pmtiles {
 
-using mlt_pmtiles::DecodedPointTile;
-using mlt_pmtiles::DecodedPolygonTile;
-using mlt_pmtiles::FeatureTableSchema;
-using mlt_pmtiles::GlobalStringDictionary;
-using mlt_pmtiles::PointTileData;
-using mlt_pmtiles::PolygonTileData;
+using pm_vector::DecodedPointTile;
+using pm_vector::DecodedPolygonTile;
+using pm_vector::FeatureTableSchema;
+using pm_vector::GlobalStringDictionary;
+using pm_vector::PointTileData;
+using pm_vector::PolygonTileData;
 
 std::string encode_point_tile(const FeatureTableSchema& schema,
     const PointTileData& tile,

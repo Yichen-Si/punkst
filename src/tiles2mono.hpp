@@ -18,10 +18,11 @@ struct Options {
     int32_t icolCount = 3;
     int32_t minZoom = 0;
     int32_t maxZoom = 18;
+    int32_t maxZoomFromRaw = -1;
     int32_t threads = 1;
     bool autoAdjust = true;
     double adjustQuantile = 0.99;
-    mlt_pmtiles::RasterBounds bounds;
+    pm_raster::RasterBounds bounds;
 };
 
 void write_tiles2mono_pmtiles(const Options& options);

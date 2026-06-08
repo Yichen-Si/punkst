@@ -45,8 +45,8 @@ struct PolygonWriteSummary {
     double geoMaxY = -std::numeric_limits<double>::infinity();
 };
 
-size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+size_t append_simple_polygon_feature_to_tile(pm_vector::PolygonTileData& outTile,
+    const pm_vector::FeatureTableSchema& schema,
     const std::vector<std::pair<double, double>>& outerRing,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -54,8 +54,8 @@ size_t append_simple_polygon_feature_to_tile(mlt_pmtiles::PolygonTileData& outTi
     uint32_t tileY,
     const SingleZoomPolygonWriterOptions& options);
 
-size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData& outTile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+size_t append_simple_polygon_global_feature_to_tile(pm_vector::PolygonTileData& outTile,
+    const pm_vector::FeatureTableSchema& schema,
     const std::vector<std::pair<int64_t, int64_t>>& globalRing,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -64,8 +64,8 @@ size_t append_simple_polygon_global_feature_to_tile(mlt_pmtiles::PolygonTileData
     uint8_t sourceZoom,
     const SingleZoomPolygonWriterOptions& options);
 
-void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+void append_simple_polygon_feature(std::map<TileKey, pm_vector::PolygonTileData>& tileMap,
+    const pm_vector::FeatureTableSchema& schema,
     const std::vector<std::pair<double, double>>& outerRing,
     uint64_t featureId,
     const PolygonFeatureProperties& properties,
@@ -73,10 +73,10 @@ void append_simple_polygon_feature(std::map<TileKey, mlt_pmtiles::PolygonTileDat
     PolygonWriteSummary& summary,
     const std::optional<std::pair<double, double>>& assignmentCenter = std::nullopt);
 
-std::vector<mlt_pmtiles::EncodedTilePayload> encode_polygon_tile_map(
-    std::map<TileKey, mlt_pmtiles::PolygonTileData>& tileMap,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::GlobalStringDictionary* stringDictionary,
+std::vector<pm_core::EncodedTilePayload> encode_polygon_tile_map(
+    std::map<TileKey, pm_vector::PolygonTileData>& tileMap,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::GlobalStringDictionary* stringDictionary,
     const SingleZoomPolygonWriterOptions& options);
 
 nlohmann::json build_simple_polygon_metadata(const std::string& sourceFamily,

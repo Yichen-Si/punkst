@@ -663,10 +663,10 @@ void gzip_copy_text(const fs::path& src, const fs::path& dst, bool overwrite) {
         return;
     }
     const std::string raw = read_all_text(src);
-    write_binary(dst, mlt_pmtiles::gzip_compress(raw));
+    write_binary(dst, pm_core::gzip_compress(raw));
 }
 
-bool bounds_from_index_header(const fs::path& indexPath, mlt_pmtiles::RasterBounds& bounds) {
+bool bounds_from_index_header(const fs::path& indexPath, pm_raster::RasterBounds& bounds) {
     if (!file_exists(indexPath)) {
         return false;
     }
@@ -689,9 +689,9 @@ bool bounds_from_index_header(const fs::path& indexPath, mlt_pmtiles::RasterBoun
     return false;
 }
 
-mlt_pmtiles::RasterBounds resolve_raster_bounds(const TranscriptInputs& transcripts,
+pm_raster::RasterBounds resolve_raster_bounds(const TranscriptInputs& transcripts,
     const ModelInputs& firstModel) {
-    mlt_pmtiles::RasterBounds bounds;
+    pm_raster::RasterBounds bounds;
     const fs::path coordRangePath = transcripts.tiledPrefix.string() + ".coord_range.tsv";
     if (file_exists(coordRangePath)) {
         readCoordRange(coordRangePath.string(), bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax);
@@ -723,12 +723,12 @@ struct RasterTileAccum {
 void write_raw_pixel_raster_pmtiles_archive(const ModelInputs& model,
     const std::string& outFile,
     const std::string& tempBlobFile,
-    const mlt_pmtiles::RasterBounds& bounds,
+    const pm_raster::RasterBounds& bounds,
     int32_t minZoom,
     int32_t maxZoom) {
     constexpr int32_t tileSize = 256;
     constexpr float minProb = 1e-3f;
-    mlt_pmtiles::validate_raster_archive_options(bounds, minZoom, maxZoom, __func__);
+    pm_raster::validate_raster_archive_options(bounds, minZoom, maxZoom, __func__);
 
     const size_t factorCount = infer_factor_count_from_pseudobulk(model.pseudobulkTsv);
     const std::vector<RgbColorEntry> colors =
@@ -743,10 +743,10 @@ void write_raw_pixel_raster_pmtiles_archive(const ModelInputs& model,
         error("%s: cannot open temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
     }
 
-    std::vector<mlt_pmtiles::StoredTilePayloadRef> tiles;
+    std::vector<pm_core::StoredTilePayloadRef> tiles;
     uint64_t dataOffset = 0;
     for (int32_t z = minZoom; z <= maxZoom; ++z) {
-        std::map<mlt_pmtiles::RasterTileKey, RasterTileAccum> accumByTile;
+        std::map<pm_raster::RasterTileKey, RasterTileAccum> accumByTile;
         TileOperator reader(model.pixelPrefix.string() + ".bin",
             model.pixelPrefix.string() + ".index", "");
         reader.openDataStream();
@@ -782,8 +782,8 @@ void write_raw_pixel_raster_pmtiles_archive(const ModelInputs& model,
             g /= psum;
             b /= psum;
 
-            const mlt_pmtiles::RasterPixelCoord pix =
-                mlt_pmtiles::epsg3857_to_raster_pixel(rec.x, rec.y, z);
+            const pm_raster::RasterPixelCoord pix =
+                pm_raster::epsg3857_to_raster_pixel(rec.x, rec.y, z);
             auto it = accumByTile.find(pix.key);
             if (it == accumByTile.end()) {
                 it = accumByTile.emplace(pix.key, RasterTileAccum(tileSize)).first;
@@ -810,14 +810,14 @@ void write_raw_pixel_raster_pmtiles_archive(const ModelInputs& model,
                 }
             }
             const std::string encoded = encode_png_rgb8(tile);
-            mlt_pmtiles::append_png_tile_to_blob(
+            pm_raster::append_png_tile_to_blob(
                 blob, tempBlobFile, encoded, dataOffset, kv.first, tiles);
         }
         notice("%s: z%d wrote %zu raster tile(s) for model %s",
             __func__, z, accumByTile.size(), model.id.c_str());
     }
     blob.close();
-    mlt_pmtiles::write_png_raster_pmtiles_archive_from_blob(
+    pm_raster::write_png_raster_pmtiles_archive_from_blob(
         outFile, tempBlobFile, std::move(tiles), bounds, minZoom, maxZoom);
     std::error_code ec;
     fs::remove(blobPath, ec);
@@ -1088,6 +1088,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     int32_t maxPolygonTileFeatures = 5000;
     int32_t basemapMinZoom = 0;
     int32_t basemapMaxZoom = -1;
+    int32_t monoMaxZoomFromRaw = -1;
     double compressionScale = 10.0;
     double hexProbThreshold = 0.001;
     double basemapAdjustQuantile = 0.99;
@@ -1116,6 +1117,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
       .add_option("max-polygon-tile-features", "Maximum features per polygon tile", maxPolygonTileFeatures)
       .add_option("basemap-min-zoom", "Minimum zoom for SGE mono basemap PMTiles", basemapMinZoom)
       .add_option("basemap-max-zoom", "Maximum zoom for SGE mono basemap PMTiles (default: point max zoom)", basemapMaxZoom)
+      .add_option("mono-max-zoom-from-raw", "Parse raw data for SGE mono basemap zoom levels >= this value; derive lower zooms from parent layers", monoMaxZoomFromRaw)
       .add_option("basemap-adjust-quantile", "Quantile for SGE mono basemap density auto-adjustment", basemapAdjustQuantile)
       .add_option("scale-factor-compression", "Pyramid compression aggressiveness estimate", compressionScale)
       .add_option("hex-prob-thres", "Minimum hex factor probability retained", hexProbThreshold)
@@ -1242,7 +1244,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
 
     std::string rawPixelPmtilesName = "genes_all.pmtiles";
 
-    mlt_pmtiles::RasterBounds rasterBounds =
+    pm_raster::RasterBounds rasterBounds =
         resolve_raster_bounds(inputs.transcripts, inputs.models.front());
 
     std::string basemapPmtilesName;
@@ -1264,6 +1266,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             monoOptions.icolCount = inputs.transcripts.icolCount;
             monoOptions.minZoom = basemapMinZoom;
             monoOptions.maxZoom = basemapMaxZoom;
+            monoOptions.maxZoomFromRaw = monoMaxZoomFromRaw;
             monoOptions.threads = threads;
             monoOptions.adjustQuantile = basemapAdjustQuantile;
             monoOptions.bounds = rasterBounds;
@@ -1300,7 +1303,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
                 rasterPmtiles.string().c_str());
         } else {
             if (use_png_raster_for_model(model, usePng, configMode)) {
-                mlt_pmtiles::write_png_raster_pmtiles_archive(model.pixelPng.string(),
+                pm_raster::write_png_raster_pmtiles_archive(model.pixelPng.string(),
                     rasterPmtiles.string(), (tmpDir / (model.id + ".raster.blob")).string(),
                     rasterBounds, polygonMinZoom, polygonMaxZoom);
             } else {

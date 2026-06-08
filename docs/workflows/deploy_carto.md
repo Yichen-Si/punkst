@@ -177,6 +177,9 @@ The mono SGE basemap is written as PNG raster PMTiles (disable with `--skip-base
 ```bash
 --basemap-min-zoom 0
 --basemap-max-zoom 18
+--mono-max-zoom-from-raw 18
 --basemap-adjust-quantile 0.99
 ```
 If `--basemap-max-zoom` is omitted, it defaults to `--point-max-zoom`.
+
+By default, the mono basemap parses raw transcript counts only at `--basemap-max-zoom` and derives lower zooms by summing parent layers. Use `--mono-max-zoom-from-raw` to parse raw data for zooms greater than or equal to that value; set it to `--basemap-min-zoom` to parse every basemap zoom from raw data.

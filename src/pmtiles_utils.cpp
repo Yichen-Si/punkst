@@ -1,7 +1,6 @@
 #include "pmtiles_utils.hpp"
 
 #include "image_utils.hpp"
-#include "mlt_utils.hpp"
 #include "PMTiles/pmtiles.hpp"
 #include "utils.h"
 
@@ -9,11 +8,11 @@
 #include <array>
 #include <cinttypes>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <tuple>
-
-namespace mlt_pmtiles {
+#include <zlib.h>
 
 namespace {
 
@@ -24,18 +23,18 @@ std::string maybe_decompress_pmtiles_blob(const std::string& data, uint8_t compr
     case pmtiles::COMPRESSION_NONE:
         return data;
     case pmtiles::COMPRESSION_GZIP:
-        return gzip_decompress(data);
+        return pm_core::gzip_decompress(data);
     default:
         error("%s: unsupported PMTiles compression mode %u", __func__, static_cast<unsigned>(compression));
         return std::string();
     }
 }
 
-const char* geometry_type_name(VectorGeometryType geometryType) {
+const char* geometry_type_name(pm_vector::VectorGeometryType geometryType) {
     switch (geometryType) {
-    case VectorGeometryType::Point:
+    case pm_vector::VectorGeometryType::Point:
         return "Point";
-    case VectorGeometryType::Polygon:
+    case pm_vector::VectorGeometryType::Polygon:
         return "Polygon";
     default:
         error("%s: unsupported vector geometry type", __func__);
@@ -52,7 +51,7 @@ uint32_t clamp_tile_coord(int64_t value, int32_t z) {
     return static_cast<uint32_t>(std::clamp(value, int64_t{0}, limit));
 }
 
-Rgb8 sample_nearest(const Image2D<Rgb8>& src, double x, double y, const RasterBounds& bounds) {
+Rgb8 sample_nearest(const Image2D<Rgb8>& src, double x, double y, const pm_raster::RasterBounds& bounds) {
     const double sx = (x - bounds.xmin) / (bounds.xmax - bounds.xmin) * static_cast<double>(src.width() - 1);
     const double sy = (y - bounds.ymin) / (bounds.ymax - bounds.ymin) * static_cast<double>(src.height() - 1);
     int32_t ix = static_cast<int32_t>(std::llround(sx));
@@ -64,7 +63,103 @@ Rgb8 sample_nearest(const Image2D<Rgb8>& src, double x, double y, const RasterBo
 
 } // namespace
 
-size_t RasterTileKeyHash::operator()(const RasterTileKey& key) const {
+std::string pm_core::gzip_compress(const std::string& data) {
+    z_stream zs;
+    std::memset(&zs, 0, sizeof(zs));
+    if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        error("%s: deflateInit2 failed", __func__);
+    }
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+    zs.avail_in = static_cast<uInt>(data.size());
+
+    int ret = Z_OK;
+    char outbuffer[32768];
+    std::string out;
+    do {
+        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
+        zs.avail_out = sizeof(outbuffer);
+        ret = deflate(&zs, Z_FINISH);
+        if (ret != Z_OK && ret != Z_STREAM_END) {
+            deflateEnd(&zs);
+            error("%s: deflate failed", __func__);
+        }
+        if (out.size() < zs.total_out) {
+            out.append(outbuffer, zs.total_out - out.size());
+        }
+    } while (ret == Z_OK);
+
+    deflateEnd(&zs);
+    return out;
+}
+
+std::string pm_core::gzip_decompress(const std::string& data) {
+    z_stream zs;
+    std::memset(&zs, 0, sizeof(zs));
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+    zs.avail_in = static_cast<uInt>(data.size());
+    if (inflateInit2(&zs, 15 | 32) != Z_OK) {
+        error("%s: inflateInit2 failed", __func__);
+    }
+
+    int ret = Z_OK;
+    char outbuffer[32768];
+    std::string out;
+    while (ret != Z_STREAM_END) {
+        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
+        zs.avail_out = sizeof(outbuffer);
+        ret = inflate(&zs, Z_NO_FLUSH);
+        if (ret != Z_OK && ret != Z_STREAM_END) {
+            inflateEnd(&zs);
+            error("%s: inflate failed", __func__);
+        }
+        out.append(outbuffer, sizeof(outbuffer) - zs.avail_out);
+    }
+
+    inflateEnd(&zs);
+    return out;
+}
+
+void pm_core::epsg3857_to_wgs84(double x, double y, double& lon, double& lat) {
+    constexpr double kEpsg3857Radius = 6378137.0;
+    lon = (x / kEpsg3857Radius) * (180.0 / M_PI);
+    lat = (2.0 * std::atan(std::exp(y / kEpsg3857Radius)) - M_PI / 2.0) * (180.0 / M_PI);
+}
+
+double pm_core::epsg3857_scale_factor(uint8_t zoom) {
+    constexpr double kEpsg3857Bound = 20037508.3428;
+    return 2.0 * kEpsg3857Bound / static_cast<double>(uint64_t{1} << (zoom + 12));
+}
+
+void pm_core::epsg3857_to_tilecoord(double x, double y, uint8_t zoom,
+    int64_t& tileX, int64_t& tileY, double& localX, double& localY) {
+    if (!std::isfinite(x)) x = 40000000.0;
+    if (!std::isfinite(y)) y = 40000000.0;
+
+    constexpr double kEpsg3857Bound = 20037508.3428;
+    constexpr double tileSize = 256.0;
+    const uint64_t numTiles = uint64_t{1} << zoom;
+    tileX = static_cast<int64_t>((x + kEpsg3857Bound) / (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)));
+    tileY = static_cast<int64_t>((kEpsg3857Bound - y) / (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)));
+
+    const double tileOriginX = static_cast<double>(tileX) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)) - kEpsg3857Bound;
+    const double tileOriginY = kEpsg3857Bound - static_cast<double>(tileY) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles));
+    localX = (x - tileOriginX) / (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
+    localY = (tileOriginY - y) / (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
+}
+
+void pm_core::tilecoord_to_epsg3857(int64_t tileX, int64_t tileY,
+    double localX, double localY, uint8_t zoom,
+    double& x, double& y) {
+    constexpr double kEpsg3857Bound = 20037508.3428;
+    constexpr double tileSize = 256.0;
+    const uint64_t numTiles = uint64_t{1} << zoom;
+    const double tileOriginX = static_cast<double>(tileX) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)) - kEpsg3857Bound;
+    const double tileOriginY = kEpsg3857Bound - static_cast<double>(tileY) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles));
+    x = tileOriginX + localX * (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
+    y = tileOriginY - localY * (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
+}
+
+size_t pm_raster::RasterTileKeyHash::operator()(const RasterTileKey& key) const {
     uint64_t v = static_cast<uint64_t>(key.z);
     v = (v << 32u) ^ static_cast<uint64_t>(key.x);
     v = (v << 32u) ^ static_cast<uint64_t>(key.y);
@@ -74,7 +169,7 @@ size_t RasterTileKeyHash::operator()(const RasterTileKey& key) const {
     return static_cast<size_t>(v);
 }
 
-void validate_raster_archive_options(const RasterBounds& bounds,
+void pm_raster::validate_raster_archive_options(const RasterBounds& bounds,
     int32_t minZoom,
     int32_t maxZoom,
     const char* context) {
@@ -86,12 +181,12 @@ void validate_raster_archive_options(const RasterBounds& bounds,
     }
 }
 
-RasterPixelCoord epsg3857_to_raster_pixel(double x, double y, int32_t zoom) {
+pm_raster::RasterPixelCoord pm_raster::epsg3857_to_raster_pixel(double x, double y, int32_t zoom) {
     int64_t tx = 0;
     int64_t ty = 0;
     double localX = 0.0;
     double localY = 0.0;
-    epsg3857_to_tilecoord(x, y, static_cast<uint8_t>(zoom), tx, ty, localX, localY);
+    pm_core::epsg3857_to_tilecoord(x, y, static_cast<uint8_t>(zoom), tx, ty, localX, localY);
     RasterPixelCoord out;
     out.key.z = static_cast<uint8_t>(zoom);
     out.key.x = clamp_tile_coord(tx, zoom);
@@ -101,17 +196,17 @@ RasterPixelCoord epsg3857_to_raster_pixel(double x, double y, int32_t zoom) {
     return out;
 }
 
-void append_png_tile_to_blob(std::ofstream& blob,
+void pm_raster::append_png_tile_to_blob(std::ofstream& blob,
     const std::string& tempBlobFile,
     const std::string& encoded,
     uint64_t& dataOffset,
     const RasterTileKey& key,
-    std::vector<StoredTilePayloadRef>& tiles) {
+    std::vector<pm_core::StoredTilePayloadRef>& tiles) {
     blob.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
     if (!blob.good()) {
         error("%s: failed writing temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
     }
-    StoredTilePayloadRef ref;
+    pm_core::StoredTilePayloadRef ref;
     ref.z = key.z;
     ref.x = key.x;
     ref.y = key.y;
@@ -123,9 +218,9 @@ void append_png_tile_to_blob(std::ofstream& blob,
     tiles.push_back(ref);
 }
 
-void write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
+void pm_raster::write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
     const std::string& tempBlobFile,
-    std::vector<StoredTilePayloadRef> tiles,
+    std::vector<pm_core::StoredTilePayloadRef> tiles,
     const RasterBounds& bounds,
     int32_t minZoom,
     int32_t maxZoom) {
@@ -135,8 +230,8 @@ void write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
     }
 
     double minLon = 0.0, minLat = 0.0, maxLon = 0.0, maxLat = 0.0;
-    epsg3857_to_wgs84(bounds.xmin, bounds.ymin, minLon, minLat);
-    epsg3857_to_wgs84(bounds.xmax, bounds.ymax, maxLon, maxLat);
+    pm_core::epsg3857_to_wgs84(bounds.xmin, bounds.ymin, minLon, minLat);
+    pm_core::epsg3857_to_wgs84(bounds.xmax, bounds.ymax, maxLon, maxLat);
     nlohmann::json metadata = {
         {"version", "1.1"},
         {"name", std::filesystem::path(outFile).filename().string()},
@@ -147,7 +242,7 @@ void write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
         {"maxzoom", maxZoom}
     };
 
-    ArchiveOptions options;
+    pm_core::ArchiveOptions options;
     options.tileType = pmtiles::TILETYPE_PNG;
     options.tileCompression = pmtiles::COMPRESSION_NONE;
     options.minZoom = static_cast<uint8_t>(minZoom);
@@ -161,10 +256,10 @@ void write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
     options.centerLonE7 = lonlat_e7((minLon + maxLon) * 0.5);
     options.centerLatE7 = lonlat_e7((minLat + maxLat) * 0.5);
     options.metadata = std::move(metadata);
-    write_pmtiles_archive_from_blob_file(outFile, tempBlobFile, std::move(tiles), options);
+    pm_core::write_pmtiles_archive_from_blob_file(outFile, tempBlobFile, std::move(tiles), options);
 }
 
-LoadedPmtilesArchive load_pmtiles_archive(const std::string& inFile) {
+pm_core::LoadedPmtilesArchive pm_core::load_pmtiles_archive(const std::string& inFile) {
     auto reader = flexio::FlexReaderFactory::create_reader(inFile);
     if (reader == nullptr || !reader->is_open()) {
         error("%s: cannot open PMTiles source %s", __func__, inFile.c_str());
@@ -195,7 +290,7 @@ LoadedPmtilesArchive load_pmtiles_archive(const std::string& inFile) {
     return out;
 }
 
-std::string read_pmtiles_tile_payload(flexio::FlexReader& reader,
+std::string pm_core::read_pmtiles_tile_payload(flexio::FlexReader& reader,
     const pmtiles::headerv3& header,
     const pmtiles::entry_zxy& entry) {
     std::string compressed(static_cast<size_t>(entry.length), '\0');
@@ -206,7 +301,7 @@ std::string read_pmtiles_tile_payload(flexio::FlexReader& reader,
     return maybe_decompress_pmtiles_blob(compressed, header.tile_compression);
 }
 
-void write_pmtiles_archive(const std::string& outFile,
+void pm_core::write_pmtiles_archive(const std::string& outFile,
     std::vector<EncodedTilePayload> tiles,
     const ArchiveOptions& options) {
     std::sort(tiles.begin(), tiles.end(), [](const EncodedTilePayload& lhs, const EncodedTilePayload& rhs) {
@@ -292,7 +387,7 @@ void write_pmtiles_archive(const std::string& outFile,
     out.close();
 }
 
-void write_pmtiles_archive_from_blob_file(const std::string& outFile,
+void pm_core::write_pmtiles_archive_from_blob_file(const std::string& outFile,
     const std::string& blobFile,
     std::vector<StoredTilePayloadRef> tiles,
     const ArchiveOptions& options) {
@@ -402,7 +497,7 @@ void write_pmtiles_archive_from_blob_file(const std::string& outFile,
     out.close();
 }
 
-nlohmann::json build_schema_fields_json(const FeatureTableSchema& schema) {
+nlohmann::json pm_vector::build_schema_fields_json(const FeatureTableSchema& schema) {
     nlohmann::json fields = nlohmann::json::object();
     for (const auto& col : schema.columns) {
         switch (col.type) {
@@ -420,8 +515,8 @@ nlohmann::json build_schema_fields_json(const FeatureTableSchema& schema) {
     return fields;
 }
 
-void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
-    std::vector<EncodedTilePayload> encodedTiles,
+void pm_vector::write_single_layer_vector_pmtiles_archive(const std::string& outFile,
+    std::vector<pm_core::EncodedTilePayload> encodedTiles,
     const SingleLayerVectorPmtilesOptions& options) {
     nlohmann::json metadata;
     metadata["name"] = options.schema.layerName;
@@ -473,7 +568,7 @@ void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
         }
     }
 
-    ArchiveOptions archiveOptions;
+    pm_core::ArchiveOptions archiveOptions;
     archiveOptions.tileType = options.tileType;
     archiveOptions.minZoom = options.outputZoom;
     archiveOptions.maxZoom = options.outputZoom;
@@ -487,8 +582,8 @@ void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
         double minLat = 0.0;
         double maxLon = 0.0;
         double maxLat = 0.0;
-        epsg3857_to_wgs84(options.geoMinX, options.geoMinY, minLon, minLat);
-        epsg3857_to_wgs84(options.geoMaxX, options.geoMaxY, maxLon, maxLat);
+        pm_core::epsg3857_to_wgs84(options.geoMinX, options.geoMinY, minLon, minLat);
+        pm_core::epsg3857_to_wgs84(options.geoMaxX, options.geoMaxY, maxLon, maxLat);
         archiveOptions.hasGeographicBounds = true;
         archiveOptions.minLonE7 = static_cast<int32_t>(minLon * 10000000.0);
         archiveOptions.minLatE7 = static_cast<int32_t>(minLat * 10000000.0);
@@ -496,16 +591,16 @@ void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
         archiveOptions.maxLatE7 = static_cast<int32_t>(maxLat * 10000000.0);
         if (!encodedTiles.empty()) {
             const auto centerIt = std::max_element(encodedTiles.begin(), encodedTiles.end(),
-                [](const EncodedTilePayload& lhs, const EncodedTilePayload& rhs) {
+                [](const pm_core::EncodedTilePayload& lhs, const pm_core::EncodedTilePayload& rhs) {
                     return lhs.featureCount < rhs.featureCount;
                 });
             double centerX = 0.0;
             double centerY = 0.0;
-            tilecoord_to_epsg3857(centerIt->x, centerIt->y, 128.0, 128.0,
+            pm_core::tilecoord_to_epsg3857(centerIt->x, centerIt->y, 128.0, 128.0,
                 centerIt->z, centerX, centerY);
             double centerLon = 0.0;
             double centerLat = 0.0;
-            epsg3857_to_wgs84(centerX, centerY, centerLon, centerLat);
+            pm_core::epsg3857_to_wgs84(centerX, centerY, centerLon, centerLat);
             archiveOptions.centerLonE7 = static_cast<int32_t>(centerLon * 10000000.0);
             archiveOptions.centerLatE7 = static_cast<int32_t>(centerLat * 10000000.0);
         }
@@ -520,10 +615,10 @@ void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
     }
 
     notice("%s: writing %zu PMTiles tiles to %s", __func__, encodedTiles.size(), outFile.c_str());
-    write_pmtiles_archive(outFile, std::move(encodedTiles), archiveOptions);
+    pm_core::write_pmtiles_archive(outFile, std::move(encodedTiles), archiveOptions);
 }
 
-void write_png_raster_pmtiles_archive(const std::string& pngFile,
+void pm_raster::write_png_raster_pmtiles_archive(const std::string& pngFile,
     const std::string& outFile,
     const std::string& tempBlobFile,
     const RasterBounds& bounds,
@@ -541,13 +636,13 @@ void write_png_raster_pmtiles_archive(const std::string& pngFile,
         error("%s: cannot open temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
     }
 
-    std::vector<StoredTilePayloadRef> tiles;
+    std::vector<pm_core::StoredTilePayloadRef> tiles;
     uint64_t dataOffset = 0;
     for (int32_t z = minZoom; z <= maxZoom; ++z) {
         int64_t txA = 0, tyA = 0, txB = 0, tyB = 0;
         double lx = 0.0, ly = 0.0;
-        epsg3857_to_tilecoord(bounds.xmin, bounds.ymax, static_cast<uint8_t>(z), txA, tyA, lx, ly);
-        epsg3857_to_tilecoord(bounds.xmax, bounds.ymin, static_cast<uint8_t>(z), txB, tyB, lx, ly);
+        pm_core::epsg3857_to_tilecoord(bounds.xmin, bounds.ymax, static_cast<uint8_t>(z), txA, tyA, lx, ly);
+        pm_core::epsg3857_to_tilecoord(bounds.xmax, bounds.ymin, static_cast<uint8_t>(z), txB, tyB, lx, ly);
         uint32_t tx0 = clamp_tile_coord(std::min(txA, txB), z);
         uint32_t tx1 = clamp_tile_coord(std::max(txA, txB), z);
         uint32_t ty0 = clamp_tile_coord(std::min(tyA, tyB), z);
@@ -561,7 +656,7 @@ void write_png_raster_pmtiles_archive(const std::string& pngFile,
                     for (int32_t px = 0; px < kRasterTileSize; ++px) {
                         double mx = 0.0;
                         double my = 0.0;
-                        tilecoord_to_epsg3857(tx, ty, px + 0.5, py + 0.5,
+                        pm_core::tilecoord_to_epsg3857(tx, ty, px + 0.5, py + 0.5,
                             static_cast<uint8_t>(z), mx, my);
                         if (mx < bounds.xmin || mx > bounds.xmax || my < bounds.ymin || my > bounds.ymax) {
                             continue;
@@ -585,5 +680,3 @@ void write_png_raster_pmtiles_archive(const std::string& pngFile,
     std::error_code ec;
     std::filesystem::remove(blobPath, ec);
 }
-
-} // namespace mlt_pmtiles

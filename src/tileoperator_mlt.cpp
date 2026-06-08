@@ -34,7 +34,7 @@ using tileoperator_detail::feature::remap_feature_map_to_canonical;
 struct ExtColumnPlan {
     size_t tokenIndex = 0;
     std::string name;
-    mlt_pmtiles::ScalarType type = mlt_pmtiles::ScalarType::INT_32;
+    pm_vector::ScalarType type = pm_vector::ScalarType::INT_32;
     bool nullable = false;
     std::string nullToken;
 };
@@ -51,12 +51,12 @@ struct AnnotatePackagingConfig {
     GeneBinInfo geneBins;
     std::vector<std::string> packagingFeatureNames;
     std::unordered_map<std::string, uint32_t> packagingFeatureIndex;
-    mlt_pmtiles::GlobalStringDictionary featureDictionary;
+    pm_vector::GlobalStringDictionary featureDictionary;
 };
 
 struct AnnotateQueryPlan {
     std::vector<ExtColumnPlan> extColumns;
-    mlt_pmtiles::FeatureTableSchema schema;
+    pm_vector::FeatureTableSchema schema;
     float resXY = 0.001f;
     float resZ = 0.001f;
     uint32_t ntok = 0;
@@ -72,9 +72,9 @@ struct ParsedQueryCoord {
 
 const std::vector<ExtColumnPlan> kNoExtColumnPlans;
 
-std::vector<mlt_pmtiles::PropertyColumn> make_extra_property_columns(
+std::vector<pm_vector::PropertyColumn> make_extra_property_columns(
     const std::vector<ExtColumnPlan>& extColumns) {
-    std::vector<mlt_pmtiles::PropertyColumn> out;
+    std::vector<pm_vector::PropertyColumn> out;
     out.reserve(extColumns.size());
     for (const auto& ext : extColumns) {
         out.emplace_back(ext.type, ext.nullable);
@@ -94,7 +94,7 @@ struct AccumTileData {
     std::vector<std::vector<bool>> kPresent;
     std::vector<std::vector<float>> pValues;
     std::vector<std::vector<bool>> pPresent;
-    std::vector<mlt_pmtiles::PropertyColumn> extraColumns;
+    std::vector<pm_vector::PropertyColumn> extraColumns;
 
     AccumTileData() = default;
     AccumTileData(size_t kCount, bool withZ,
@@ -191,13 +191,13 @@ struct AccumTileData {
                     col.present.push_back(value.present);
                 }
                 switch (col.type) {
-                case mlt_pmtiles::ScalarType::INT_32:
+                case pm_vector::ScalarType::INT_32:
                     col.intValues.push_back(value.intValue);
                     break;
-                case mlt_pmtiles::ScalarType::FLOAT:
+                case pm_vector::ScalarType::FLOAT:
                     col.floatValues.push_back(value.floatValue);
                     break;
-                case mlt_pmtiles::ScalarType::STRING:
+                case pm_vector::ScalarType::STRING:
                     col.stringValues.push_back(value.stringValue);
                     break;
                 default:
@@ -303,7 +303,7 @@ struct WorkerSpillShard {
 };
 
 struct WorkerScanResult {
-    std::vector<mlt_pmtiles::EncodedTilePayload> completedTiles;
+    std::vector<pm_core::EncodedTilePayload> completedTiles;
     WorkerSpillShard spill;
     double geoMinX = std::numeric_limits<double>::infinity();
     double geoMinY = std::numeric_limits<double>::infinity();
@@ -321,8 +321,8 @@ struct SpillFragmentRef {
 };
 
 struct GeneBinWorkerScanResult {
-    std::vector<mlt_pmtiles::EncodedTilePayload> completedAllTiles;
-    std::map<int32_t, std::vector<mlt_pmtiles::EncodedTilePayload>> completedBinTiles;
+    std::vector<pm_core::EncodedTilePayload> completedAllTiles;
+    std::map<int32_t, std::vector<pm_core::EncodedTilePayload>> completedBinTiles;
     WorkerSpillShard spill;
     double geoMinX = std::numeric_limits<double>::infinity();
     double geoMinY = std::numeric_limits<double>::infinity();
@@ -334,8 +334,8 @@ struct GeneBinWorkerScanResult {
 };
 
 struct GeneBinPipelineResult {
-    std::vector<mlt_pmtiles::EncodedTilePayload> allEncodedTiles;
-    std::map<int32_t, std::vector<mlt_pmtiles::EncodedTilePayload>> binEncodedTiles;
+    std::vector<pm_core::EncodedTilePayload> allEncodedTiles;
+    std::map<int32_t, std::vector<pm_core::EncodedTilePayload>> binEncodedTiles;
     uint64_t totalRecordCount = 0;
     std::map<int32_t, uint64_t> binRecordCounts;
     double geoMinX = std::numeric_limits<double>::infinity();
@@ -346,8 +346,8 @@ struct GeneBinPipelineResult {
 };
 
 struct AnnotatePmtilesWorkerResult {
-    std::vector<mlt_pmtiles::EncodedTilePayload> completedAllTiles;
-    std::map<int32_t, std::vector<mlt_pmtiles::EncodedTilePayload>> completedBinTiles;
+    std::vector<pm_core::EncodedTilePayload> completedAllTiles;
+    std::map<int32_t, std::vector<pm_core::EncodedTilePayload>> completedBinTiles;
     WorkerSpillShard spill;
     double geoMinX = std::numeric_limits<double>::infinity();
     double geoMinY = std::numeric_limits<double>::infinity();
@@ -359,8 +359,8 @@ struct AnnotatePmtilesWorkerResult {
 };
 
 struct AnnotatePmtilesPipelineResult {
-    std::vector<mlt_pmtiles::EncodedTilePayload> allEncodedTiles;
-    std::map<int32_t, std::vector<mlt_pmtiles::EncodedTilePayload>> binEncodedTiles;
+    std::vector<pm_core::EncodedTilePayload> allEncodedTiles;
+    std::map<int32_t, std::vector<pm_core::EncodedTilePayload>> binEncodedTiles;
     uint64_t totalRecordCount = 0;
     std::map<int32_t, uint64_t> binRecordCounts;
     double geoMinX = std::numeric_limits<double>::infinity();
@@ -458,33 +458,33 @@ AccumTileData sort_tile_rows(const AccumTileData& in) {
     return out;
 }
 
-mlt_pmtiles::PointTileData build_point_tile_data(const AccumTileData& in) {
-    mlt_pmtiles::PointTileData out;
+pm_vector::PointTileData build_point_tile_data(const AccumTileData& in) {
+    pm_vector::PointTileData out;
     out.localX = in.localX;
     out.localY = in.localY;
     out.columns.reserve(2 + (in.hasZ ? 1 : 0) + in.kValues.size() * 2 + in.extraColumns.size());
 
-    mlt_pmtiles::PropertyColumn featureCol(mlt_pmtiles::ScalarType::STRING, false);
+    pm_vector::PropertyColumn featureCol(pm_vector::ScalarType::STRING, false);
     featureCol.stringCodes = in.featureCodes;
     out.columns.push_back(std::move(featureCol));
 
-    mlt_pmtiles::PropertyColumn countCol(mlt_pmtiles::ScalarType::INT_32, false);
+    pm_vector::PropertyColumn countCol(pm_vector::ScalarType::INT_32, false);
     countCol.intValues = in.countValues;
     out.columns.push_back(std::move(countCol));
 
     if (in.hasZ) {
-        mlt_pmtiles::PropertyColumn zCol(mlt_pmtiles::ScalarType::FLOAT, false);
+        pm_vector::PropertyColumn zCol(pm_vector::ScalarType::FLOAT, false);
         zCol.floatValues = in.zValues;
         out.columns.push_back(std::move(zCol));
     }
 
     for (size_t i = 0; i < in.kValues.size(); ++i) {
-        mlt_pmtiles::PropertyColumn kCol(mlt_pmtiles::ScalarType::INT_32, true);
+        pm_vector::PropertyColumn kCol(pm_vector::ScalarType::INT_32, true);
         kCol.present = in.kPresent[i];
         kCol.intValues = in.kValues[i];
         out.columns.push_back(std::move(kCol));
 
-        mlt_pmtiles::PropertyColumn pCol(mlt_pmtiles::ScalarType::FLOAT, true);
+        pm_vector::PropertyColumn pCol(pm_vector::ScalarType::FLOAT, true);
         pCol.present = in.pPresent[i];
         pCol.floatValues = in.pValues[i];
         out.columns.push_back(std::move(pCol));
@@ -495,10 +495,10 @@ mlt_pmtiles::PointTileData build_point_tile_data(const AccumTileData& in) {
     return out;
 }
 
-mlt_pmtiles::FeatureTableSchema build_point_schema(const std::string& layerName,
+pm_vector::FeatureTableSchema build_point_schema(const std::string& layerName,
     uint32_t extent, bool hasZ, const std::vector<std::string>& probColumnNames,
     const std::vector<bool>& probPairNullable = {},
-    const std::vector<mlt_pmtiles::ColumnSchema>& extraColumns = {},
+    const std::vector<pm_vector::ColumnSchema>& extraColumns = {},
     const std::string& featureFieldName = "feature") {
     if ((probColumnNames.size() % 2) != 0) {
         error("%s: probability column names must come in K/P pairs", __func__);
@@ -506,18 +506,18 @@ mlt_pmtiles::FeatureTableSchema build_point_schema(const std::string& layerName,
     if (!probPairNullable.empty() && probPairNullable.size() * 2 != probColumnNames.size()) {
         error("%s: probability nullability count mismatch", __func__);
     }
-    mlt_pmtiles::FeatureTableSchema schema;
+    pm_vector::FeatureTableSchema schema;
     schema.layerName = layerName;
     schema.extent = extent;
-    schema.columns.push_back({featureFieldName, mlt_pmtiles::ScalarType::STRING, false});
-    schema.columns.push_back({"ct", mlt_pmtiles::ScalarType::INT_32, false});
+    schema.columns.push_back({featureFieldName, pm_vector::ScalarType::STRING, false});
+    schema.columns.push_back({"ct", pm_vector::ScalarType::INT_32, false});
     if (hasZ) {
-        schema.columns.push_back({"z", mlt_pmtiles::ScalarType::FLOAT, false});
+        schema.columns.push_back({"z", pm_vector::ScalarType::FLOAT, false});
     }
     for (size_t i = 0; i < probColumnNames.size(); i += 2) {
         const bool nullable = probPairNullable.empty() ? true : probPairNullable[i / 2];
-        schema.columns.push_back({probColumnNames[i], mlt_pmtiles::ScalarType::INT_32, nullable});
-        schema.columns.push_back({probColumnNames[i + 1], mlt_pmtiles::ScalarType::FLOAT, nullable});
+        schema.columns.push_back({probColumnNames[i], pm_vector::ScalarType::INT_32, nullable});
+        schema.columns.push_back({probColumnNames[i + 1], pm_vector::ScalarType::FLOAT, nullable});
     }
     for (const auto& col : extraColumns) {
         schema.columns.push_back(col);
@@ -663,8 +663,8 @@ GeoTileRect pmtiles_entry_rect_epsg3857(const pmtiles::entry_zxy& entry) {
     double y0 = 0.0;
     double x1 = 0.0;
     double y1 = 0.0;
-    mlt_pmtiles::tilecoord_to_epsg3857(entry.x, entry.y, 0.0, 0.0, entry.z, x0, y0);
-    mlt_pmtiles::tilecoord_to_epsg3857(entry.x, entry.y, 256.0, 256.0, entry.z, x1, y1);
+    pm_core::tilecoord_to_epsg3857(entry.x, entry.y, 0.0, 0.0, entry.z, x0, y0);
+    pm_core::tilecoord_to_epsg3857(entry.x, entry.y, 256.0, 256.0, entry.z, x1, y1);
     GeoTileRect rect;
     rect.xmin = std::min(x0, x1);
     rect.xmax = std::max(x0, x1);
@@ -703,7 +703,7 @@ bool export_row_matches_spatial_region(float x, float y,
     return true;
 }
 
-size_t find_schema_column_index(const mlt_pmtiles::FeatureTableSchema& schema,
+size_t find_schema_column_index(const pm_vector::FeatureTableSchema& schema,
     const std::string& name) {
     for (size_t i = 0; i < schema.columns.size(); ++i) {
         if (schema.columns[i].name == name) {
@@ -713,17 +713,17 @@ size_t find_schema_column_index(const mlt_pmtiles::FeatureTableSchema& schema,
     return schema.columns.size();
 }
 
-float export_z_value_at_row(const mlt_pmtiles::ColumnSchema& schema,
-    const mlt_pmtiles::PropertyColumn& column,
+float export_z_value_at_row(const pm_vector::ColumnSchema& schema,
+    const pm_vector::PropertyColumn& column,
     size_t row) {
     const bool present = !schema.nullable || column.present.empty() || column.present[row];
     if (!present) {
         error("%s: z column cannot be null in exported PMTiles rows", __func__);
     }
     switch (schema.type) {
-    case mlt_pmtiles::ScalarType::FLOAT:
+    case pm_vector::ScalarType::FLOAT:
         return column.floatValues[row];
-    case mlt_pmtiles::ScalarType::INT_32:
+    case pm_vector::ScalarType::INT_32:
         return static_cast<float>(column.intValues[row]);
     default:
         error("%s: unsupported z column type %d", __func__, static_cast<int>(schema.type));
@@ -745,8 +745,8 @@ double export_coord_scale_from_metadata(const nlohmann::json& metadata) {
     return coordScale;
 }
 
-void validate_export_schema_compatible(const mlt_pmtiles::FeatureTableSchema& ref,
-    const mlt_pmtiles::FeatureTableSchema& cur) {
+void validate_export_schema_compatible(const pm_vector::FeatureTableSchema& ref,
+    const pm_vector::FeatureTableSchema& cur) {
     if (ref.extent != cur.extent || ref.columns.size() != cur.columns.size()) {
         error("%s: inconsistent MLT schemas across PMTiles tiles", __func__);
     }
@@ -760,7 +760,7 @@ void validate_export_schema_compatible(const mlt_pmtiles::FeatureTableSchema& re
 }
 
 std::vector<ExportColumnPlan> build_export_column_plan(
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     std::vector<std::string>& headerColumns) {
     std::vector<ExportColumnPlan> out;
     headerColumns.clear();
@@ -856,27 +856,27 @@ std::string format_prob_value(float value, int32_t digits) {
 }
 
 void relabel_encoded_tile_payloads_layer_name(
-    std::vector<mlt_pmtiles::EncodedTilePayload>& encodedTiles,
+    std::vector<pm_core::EncodedTilePayload>& encodedTiles,
     const std::string& layerName,
     bool useMvt = false) {
     for (auto& tile : encodedTiles) {
-        const std::string raw = mlt_pmtiles::gzip_decompress(tile.compressedData);
+        const std::string raw = pm_core::gzip_decompress(tile.compressedData);
         if (useMvt) {
-            mlt_pmtiles::DecodedPointTile decoded = mvt_pmtiles::decode_point_tile(raw);
+            pm_vector::DecodedPointTile decoded = mvt_pmtiles::decode_point_tile(raw);
             decoded.schema.layerName = layerName;
-            tile.compressedData = mlt_pmtiles::gzip_compress(
+            tile.compressedData = pm_core::gzip_compress(
                 mvt_pmtiles::encode_point_tile(decoded.schema, decoded.tile, nullptr));
         } else {
             const std::string relabeled =
                 mlt_pmtiles::rewrite_point_tile_layer_name(raw, layerName);
-            tile.compressedData = mlt_pmtiles::gzip_compress(relabeled);
+            tile.compressedData = pm_core::gzip_compress(relabeled);
         }
     }
 }
 
-std::string format_export_column_value(const mlt_pmtiles::ColumnSchema& schema,
-    const mlt_pmtiles::PointTileData& tile,
-    const mlt_pmtiles::PropertyColumn& column, size_t row,
+std::string format_export_column_value(const pm_vector::ColumnSchema& schema,
+    const pm_vector::PointTileData& tile,
+    const pm_vector::PropertyColumn& column, size_t row,
     const ExportColumnPlan& plan,
     const TileOperator::ExportPmtilesOptions& options) {
     const bool present = !schema.nullable || column.present.empty() || column.present[row];
@@ -899,16 +899,16 @@ std::string format_export_column_value(const mlt_pmtiles::ColumnSchema& schema,
     }
 
     switch (schema.type) {
-    case mlt_pmtiles::ScalarType::BOOLEAN:
+    case pm_vector::ScalarType::BOOLEAN:
         return column.boolValues[row] ? "1" : "0";
-    case mlt_pmtiles::ScalarType::INT_32:
+    case pm_vector::ScalarType::INT_32:
         return std::to_string(column.intValues[row]);
-    case mlt_pmtiles::ScalarType::FLOAT:
+    case pm_vector::ScalarType::FLOAT:
         if (plan.isZ) {
             return fp_to_string(column.floatValues[row], options.coordDigits);
         }
         return format_prob_value(column.floatValues[row], options.probDigits);
-    case mlt_pmtiles::ScalarType::STRING:
+    case pm_vector::ScalarType::STRING:
         return column.stringValues[row];
     default:
         error("%s: unsupported export column type %d", __func__, static_cast<int>(schema.type));
@@ -916,21 +916,21 @@ std::string format_export_column_value(const mlt_pmtiles::ColumnSchema& schema,
     }
 }
 
-std::string format_polygon_export_column_value(const mlt_pmtiles::ColumnSchema& schema,
-    const mlt_pmtiles::PropertyColumn& column, size_t row,
+std::string format_polygon_export_column_value(const pm_vector::ColumnSchema& schema,
+    const pm_vector::PropertyColumn& column, size_t row,
     const TileOperator::ExportPmtilesOptions& options) {
     const bool present = !schema.nullable || column.present.empty() || column.present[row];
     if (!present) {
         return "NA";
     }
     switch (schema.type) {
-    case mlt_pmtiles::ScalarType::BOOLEAN:
+    case pm_vector::ScalarType::BOOLEAN:
         return column.boolValues[row] ? "1" : "0";
-    case mlt_pmtiles::ScalarType::INT_32:
+    case pm_vector::ScalarType::INT_32:
         return std::to_string(column.intValues[row]);
-    case mlt_pmtiles::ScalarType::FLOAT:
+    case pm_vector::ScalarType::FLOAT:
         return format_prob_value(column.floatValues[row], options.probDigits);
-    case mlt_pmtiles::ScalarType::STRING:
+    case pm_vector::ScalarType::STRING:
         return column.stringValues[row];
     default:
         error("%s: unsupported polygon export column type %d", __func__, static_cast<int>(schema.type));
@@ -952,7 +952,7 @@ void append_ext_column_plans(std::vector<ExtColumnPlan>& out,
     std::unordered_set<size_t>& usedIndices,
     std::unordered_set<std::string>& usedNames,
     const std::vector<std::string>& rawSpecs,
-    mlt_pmtiles::ScalarType type,
+    pm_vector::ScalarType type,
     const std::vector<std::string>& headerColumns,
     const std::unordered_set<size_t>& reservedIndices,
     const char* optName) {
@@ -1003,9 +1003,9 @@ void append_ext_column_plans(std::vector<ExtColumnPlan>& out,
     }
 }
 
-std::vector<mlt_pmtiles::ColumnSchema> build_extra_column_schemas(
+std::vector<pm_vector::ColumnSchema> build_extra_column_schemas(
     const std::vector<ExtColumnPlan>& extColumns) {
-    std::vector<mlt_pmtiles::ColumnSchema> out;
+    std::vector<pm_vector::ColumnSchema> out;
     out.reserve(extColumns.size());
     for (const auto& ext : extColumns) {
         out.push_back({ext.name, ext.type, ext.nullable});
@@ -1038,11 +1038,11 @@ std::vector<ExtColumnPlan> build_ext_column_plans(const TileOperator& queryOp,
     std::unordered_set<std::string> usedNames(reservedNames.begin(), reservedNames.end());
     std::vector<ExtColumnPlan> out;
     append_ext_column_plans(out, usedIndices, usedNames, mltOptions.ext_col_ints,
-        mlt_pmtiles::ScalarType::INT_32, headerColumns, reservedIndices, "--ext-col-ints");
+        pm_vector::ScalarType::INT_32, headerColumns, reservedIndices, "--ext-col-ints");
     append_ext_column_plans(out, usedIndices, usedNames, mltOptions.ext_col_floats,
-        mlt_pmtiles::ScalarType::FLOAT, headerColumns, reservedIndices, "--ext-col-floats");
+        pm_vector::ScalarType::FLOAT, headerColumns, reservedIndices, "--ext-col-floats");
     append_ext_column_plans(out, usedIndices, usedNames, mltOptions.ext_col_strs,
-        mlt_pmtiles::ScalarType::STRING, headerColumns, reservedIndices, "--ext-col-strs");
+        pm_vector::ScalarType::STRING, headerColumns, reservedIndices, "--ext-col-strs");
     return out;
 }
 
@@ -1063,17 +1063,17 @@ bool parse_ext_column_values(const std::vector<std::string>& tokens,
             continue;
         }
         switch (ext.type) {
-        case mlt_pmtiles::ScalarType::INT_32:
+        case pm_vector::ScalarType::INT_32:
             if (!str2num<int32_t>(token, value.intValue) && !allowMissing) {
                 return false;
             }
             break;
-        case mlt_pmtiles::ScalarType::FLOAT:
+        case pm_vector::ScalarType::FLOAT:
             if (!str2num<float>(token, value.floatValue) && !allowMissing) {
                 return false;
             }
             break;
-        case mlt_pmtiles::ScalarType::STRING:
+        case pm_vector::ScalarType::STRING:
             value.stringValue = token;
             break;
         default:
@@ -1110,7 +1110,7 @@ std::vector<std::string> build_reserved_column_names(
 
 // Add one record to one tile
 void append_row_to_epsg3857_tile_map(std::map<TileKey, AccumTileData>& tileMap,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     double coordScale, uint8_t zoom,
     bool hasZ, size_t kCount,
     const std::vector<uint32_t>& probBlockSizes,
@@ -1122,17 +1122,17 @@ void append_row_to_epsg3857_tile_map(std::map<TileKey, AccumTileData>& tileMap,
     double& geoMinX, double& geoMinY, double& geoMaxX, double& geoMaxY,
     uint64_t& totalRecordCount);
 
-std::vector<mlt_pmtiles::EncodedTilePayload> encode_epsg3857_tile_map(
+std::vector<pm_core::EncodedTilePayload> encode_epsg3857_tile_map(
     std::map<TileKey, AccumTileData>& tileMap,
     uint8_t zoom,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::GlobalStringDictionary& featureDictionary,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::GlobalStringDictionary& featureDictionary,
     int32_t threads,
     bool useMvt);
 
 void write_single_layer_pmtiles_archive(const std::string& outFile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    std::vector<mlt_pmtiles::EncodedTilePayload> encodedTiles,
+    const pm_vector::FeatureTableSchema& schema,
+    std::vector<pm_core::EncodedTilePayload> encodedTiles,
     uint64_t totalRecordCount, double coordScale,
     size_t featureDictionarySize, uint8_t outputZoom,
     double geoMinX, double geoMinY, double geoMaxX, double geoMaxY,
@@ -1305,7 +1305,7 @@ struct AnnotatePmtilesState {
 // Add one record to the main and (optional) bin-specific tile
 void append_annotated_row_to_state(AnnotatePmtilesState& state,
     const GeneBinInfo* geneBins,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     const TileOperator::MltPmtilesOptions& mltOptions,
     const std::vector<uint32_t>& probBlockSizes,
     const std::vector<ExtColumnPlan>& extColumnPlans,
@@ -1393,19 +1393,19 @@ std::vector<char> serialize_accum_tile_data(const AccumTileData& tile) {
             }
         }
         switch (col.type) {
-        case mlt_pmtiles::ScalarType::INT_32:
+        case pm_vector::ScalarType::INT_32:
             if (col.intValues.size() != rowCount) {
                 error("%s: int extra column length mismatch", __func__);
             }
             append_array(out, col.intValues);
             break;
-        case mlt_pmtiles::ScalarType::FLOAT:
+        case pm_vector::ScalarType::FLOAT:
             if (col.floatValues.size() != rowCount) {
                 error("%s: float extra column length mismatch", __func__);
             }
             append_array(out, col.floatValues);
             break;
-        case mlt_pmtiles::ScalarType::STRING:
+        case pm_vector::ScalarType::STRING:
             if (col.stringValues.size() != rowCount) {
                 error("%s: string extra column length mismatch", __func__);
             }
@@ -1507,13 +1507,13 @@ AccumTileData deserialize_accum_tile_data(const std::vector<char>& bytes, size_t
             ptr += rowCount;
         }
         switch (col.type) {
-        case mlt_pmtiles::ScalarType::INT_32:
+        case pm_vector::ScalarType::INT_32:
             ptr = read_array_into(ptr, end, col.intValues, rowCount, __func__);
             break;
-        case mlt_pmtiles::ScalarType::FLOAT:
+        case pm_vector::ScalarType::FLOAT:
             ptr = read_array_into(ptr, end, col.floatValues, rowCount, __func__);
             break;
-        case mlt_pmtiles::ScalarType::STRING:
+        case pm_vector::ScalarType::STRING:
             col.stringValues.reserve(rowCount);
             for (uint32_t j = 0; j < rowCount; ++j) {
                 if (static_cast<size_t>(end - ptr) < sizeof(uint32_t)) {
@@ -1539,29 +1539,29 @@ AccumTileData deserialize_accum_tile_data(const std::vector<char>& bytes, size_t
     return out;
 }
 
-mlt_pmtiles::EncodedTilePayload encode_accum_tile_payload(
+pm_core::EncodedTilePayload encode_accum_tile_payload(
     const TileKey& tileKey, uint8_t zoom,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     const AccumTileData& data,
-    const mlt_pmtiles::GlobalStringDictionary& featureDictionary,
+    const pm_vector::GlobalStringDictionary& featureDictionary,
     bool useMvt) {
     const AccumTileData sorted = sort_tile_rows(data);
     const auto tile = build_point_tile_data(sorted);
     const std::string raw = useMvt
         ? mvt_pmtiles::encode_point_tile(schema, tile, &featureDictionary)
         : mlt_pmtiles::encode_point_tile(schema, tile, &featureDictionary);
-    mlt_pmtiles::EncodedTilePayload encoded;
+    pm_core::EncodedTilePayload encoded;
     encoded.tileId = pmtiles::zxy_to_tileid(zoom, static_cast<uint32_t>(tileKey.col), static_cast<uint32_t>(tileKey.row));
     encoded.z = zoom;
     encoded.x = static_cast<uint32_t>(tileKey.col);
     encoded.y = static_cast<uint32_t>(tileKey.row);
     encoded.featureCount = static_cast<uint32_t>(tile.size());
-    encoded.compressedData = mlt_pmtiles::gzip_compress(raw);
+    encoded.compressedData = pm_core::gzip_compress(raw);
     return encoded;
 }
 
 void append_row_to_epsg3857_tile_map(std::map<TileKey, AccumTileData>& tileMap,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     double coordScale, uint8_t zoom,
     bool hasZ, size_t kCount,
     const std::vector<uint32_t>& probBlockSizes,
@@ -1587,7 +1587,7 @@ void append_row_to_epsg3857_tile_map(std::map<TileKey, AccumTileData>& tileMap,
     int64_t ty = 0;
     double tileLocalX = 0.0;
     double tileLocalY = 0.0;
-    mlt_pmtiles::epsg3857_to_tilecoord(scaledX, scaledY, zoom, tx, ty, tileLocalX, tileLocalY);
+    pm_core::epsg3857_to_tilecoord(scaledX, scaledY, zoom, tx, ty, tileLocalX, tileLocalY);
     if (tx < std::numeric_limits<int32_t>::min() || tx > std::numeric_limits<int32_t>::max() ||
         ty < std::numeric_limits<int32_t>::min() || ty > std::numeric_limits<int32_t>::max()) {
         error("%s: output tile coordinate is out of int32 range", __func__);
@@ -1607,10 +1607,10 @@ void append_row_to_epsg3857_tile_map(std::map<TileKey, AccumTileData>& tileMap,
     ++totalRecordCount;
 }
 
-std::vector<mlt_pmtiles::EncodedTilePayload> encode_epsg3857_tile_map(
+std::vector<pm_core::EncodedTilePayload> encode_epsg3857_tile_map(
     std::map<TileKey, AccumTileData>& tileMap, uint8_t zoom,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::GlobalStringDictionary& featureDictionary,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::GlobalStringDictionary& featureDictionary,
     int32_t threads,
     bool useMvt) {
     std::vector<OutputTileInfo> outputTiles;
@@ -1626,7 +1626,7 @@ std::vector<mlt_pmtiles::EncodedTilePayload> encode_epsg3857_tile_map(
         outputTiles.push_back(info);
     }
 
-    std::vector<mlt_pmtiles::EncodedTilePayload> encodedTiles(outputTiles.size());
+    std::vector<pm_core::EncodedTilePayload> encodedTiles(outputTiles.size());
     if (threads > 1 && outputTiles.size() > 1) {
         tbb::global_control gc(tbb::global_control::max_allowed_parallelism,
             static_cast<size_t>(threads));
@@ -1651,15 +1651,15 @@ std::vector<mlt_pmtiles::EncodedTilePayload> encode_epsg3857_tile_map(
 }
 
 void write_single_layer_pmtiles_archive(const std::string& outFile,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    std::vector<mlt_pmtiles::EncodedTilePayload> encodedTiles,
+    const pm_vector::FeatureTableSchema& schema,
+    std::vector<pm_core::EncodedTilePayload> encodedTiles,
     uint64_t totalRecordCount, double coordScale,
     size_t featureDictionarySize, uint8_t outputZoom,
     double geoMinX, double geoMinY, double geoMaxX, double geoMaxY,
     const std::string& generator) {
-    mlt_pmtiles::SingleLayerVectorPmtilesOptions options;
+    pm_vector::SingleLayerVectorPmtilesOptions options;
     options.schema = schema;
-    options.geometryType = mlt_pmtiles::VectorGeometryType::Point;
+    options.geometryType = pm_vector::VectorGeometryType::Point;
     options.tileType = generator.find("--write-mvt-pmtiles") != std::string::npos
         ? pmtiles::TILETYPE_MVT : pmtiles::TILETYPE_MLT;
     options.totalRecordCount = totalRecordCount;
@@ -1674,7 +1674,7 @@ void write_single_layer_pmtiles_archive(const std::string& outFile,
     options.description = options.tileType == pmtiles::TILETYPE_MVT
         ? "Generated PMTiles by punkst for MVT points"
         : "Generated PMTiles by punkst for MLT points";
-    mlt_pmtiles::write_single_layer_vector_pmtiles_archive(outFile, std::move(encodedTiles), options);
+    pm_vector::write_single_layer_vector_pmtiles_archive(outFile, std::move(encodedTiles), options);
 }
 
 GeoTileRect source_tile_rect_epsg3857(const TileKey& sourceKey, int32_t sourceTileSize, double coordScale) {
@@ -1696,8 +1696,8 @@ GeoTileRect destination_tile_rect_epsg3857(const TileKey& tileKey, uint8_t zoom)
     double y0 = 0.0;
     double x1 = 0.0;
     double y1 = 0.0;
-    mlt_pmtiles::tilecoord_to_epsg3857(tileKey.col, tileKey.row, 0.0, 0.0, zoom, x0, y0);
-    mlt_pmtiles::tilecoord_to_epsg3857(tileKey.col, tileKey.row, 256.0, 256.0, zoom, x1, y1);
+    pm_core::tilecoord_to_epsg3857(tileKey.col, tileKey.row, 0.0, 0.0, zoom, x0, y0);
+    pm_core::tilecoord_to_epsg3857(tileKey.col, tileKey.row, 256.0, 256.0, zoom, x1, y1);
     GeoTileRect rect;
     rect.xmin = std::min(x0, x1);
     rect.xmax = std::max(x0, x1);
@@ -1708,7 +1708,7 @@ GeoTileRect destination_tile_rect_epsg3857(const TileKey& tileKey, uint8_t zoom)
 
 bool is_interior_destination_tile(const TileKey& tileKey, const GeoTileRect& sourceRect, uint8_t zoom) {
     const GeoTileRect dst = destination_tile_rect_epsg3857(tileKey, zoom);
-    const double tol = std::max(1e-6, mlt_pmtiles::epsg3857_scale_factor(zoom));
+    const double tol = std::max(1e-6, pm_core::epsg3857_scale_factor(zoom));
     return dst.xmin > sourceRect.xmin + tol &&
            dst.xmax < sourceRect.xmax - tol &&
            dst.ymin > sourceRect.ymin + tol &&
@@ -1738,14 +1738,14 @@ void spill_accum_tile(WorkerSpillShard& shard, const TileKey& tileKey, const Acc
     shard.fragments.push_back(idx);
 }
 
-std::vector<mlt_pmtiles::EncodedTilePayload> run_epsg3857_parallel_pipeline(
+std::vector<pm_core::EncodedTilePayload> run_epsg3857_parallel_pipeline(
     const std::string& dataFile, const std::vector<TileInfo>& blocks,
     const IndexHeader& formatInfo, bool hasZ,
     int32_t kValueCount, int32_t threadCount,
     const std::vector<uint32_t>& probBlockSizes,
     const std::function<void(std::ifstream&, float&, float&, float&, uint32_t&, std::vector<int32_t>&, std::vector<float>&)>& readRecord,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::GlobalStringDictionary& featureDictionary,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::GlobalStringDictionary& featureDictionary,
     const std::vector<std::string>& featureNames,
     double coordScale, double encodeProbMin, double encodeProbEps, uint8_t zoom,
     bool useMvt,
@@ -1831,7 +1831,7 @@ std::vector<mlt_pmtiles::EncodedTilePayload> run_epsg3857_parallel_pipeline(
                     int64_t ty = 0;
                     double tileLocalX = 0.0;
                     double tileLocalY = 0.0;
-                    mlt_pmtiles::epsg3857_to_tilecoord(scaledX, scaledY, zoom, tx, ty, tileLocalX, tileLocalY);
+                    pm_core::epsg3857_to_tilecoord(scaledX, scaledY, zoom, tx, ty, tileLocalX, tileLocalY);
                     if (tx < std::numeric_limits<int32_t>::min() || tx > std::numeric_limits<int32_t>::max() ||
                         ty < std::numeric_limits<int32_t>::min() || ty > std::numeric_limits<int32_t>::max()) {
                         error("%s: output tile coordinate is out of int32 range", __func__);
@@ -1874,7 +1874,7 @@ std::vector<mlt_pmtiles::EncodedTilePayload> run_epsg3857_parallel_pipeline(
     geoMaxX = -std::numeric_limits<double>::infinity();
     geoMaxY = -std::numeric_limits<double>::infinity();
 
-    std::vector<mlt_pmtiles::EncodedTilePayload> encodedTiles;
+    std::vector<pm_core::EncodedTilePayload> encodedTiles;
     for (const auto& worker : workerResults) {
         totalRecordCount += worker.totalRecordCount;
         geoMinX = std::min(geoMinX, worker.geoMinX);
@@ -1901,7 +1901,7 @@ std::vector<mlt_pmtiles::EncodedTilePayload> run_epsg3857_parallel_pipeline(
         mergeTasks.emplace_back(kv.first, std::move(kv.second));
     }
 
-    std::vector<std::vector<mlt_pmtiles::EncodedTilePayload>> mergeOutputs(workerCount);
+    std::vector<std::vector<pm_core::EncodedTilePayload>> mergeOutputs(workerCount);
     std::atomic<size_t> nextTask{0};
     workers.clear();
     workers.reserve(workerCount);
@@ -1960,8 +1960,8 @@ GeneBinPipelineResult run_epsg3857_parallel_gene_bin_pipeline(
     int32_t kValueCount, int32_t threadCount,
     const std::vector<uint32_t>& probBlockSizes,
     const std::function<void(std::ifstream&, float&, float&, float&, uint32_t&, std::vector<int32_t>&, std::vector<float>&)>& readRecord,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::GlobalStringDictionary& featureDictionary,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::GlobalStringDictionary& featureDictionary,
     const std::vector<std::string>& featureNames,
     const GeneBinInfo& geneBins,
     double coordScale, double encodeProbMin, double encodeProbEps, uint8_t zoom,
@@ -2045,7 +2045,7 @@ GeneBinPipelineResult run_epsg3857_parallel_gene_bin_pipeline(
                     int64_t ty = 0;
                     double tileLocalX = 0.0;
                     double tileLocalY = 0.0;
-                    mlt_pmtiles::epsg3857_to_tilecoord(scaledX, scaledY, zoom, tx, ty, tileLocalX, tileLocalY);
+                    pm_core::epsg3857_to_tilecoord(scaledX, scaledY, zoom, tx, ty, tileLocalX, tileLocalY);
                     if (tx < std::numeric_limits<int32_t>::min() || tx > std::numeric_limits<int32_t>::max() ||
                         ty < std::numeric_limits<int32_t>::min() || ty > std::numeric_limits<int32_t>::max()) {
                         error("%s: output tile coordinate is out of int32 range", __func__);
@@ -2212,8 +2212,8 @@ AnnotatePmtilesPipelineResult run_annotate_epsg3857_parallel_pipeline(
     const std::vector<TileKey>& queryTiles,
     int32_t sourceTileSize, int32_t threadCount,
     size_t kCount, bool hasZ,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::GlobalStringDictionary& featureDictionary,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::GlobalStringDictionary& featureDictionary,
     const std::vector<ExtColumnPlan>& extColumnPlans,
     double coordScale, uint8_t zoom,
     bool useMvt,
@@ -2399,8 +2399,8 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
     if (!options.polygon && options.tileSize <= 0) {
         error("%s: PMTiles export requires a positive --tile-size", __func__);
     }
-    const mlt_pmtiles::LoadedPmtilesArchive archive =
-        mlt_pmtiles::load_pmtiles_archive(pmtilesFile);
+    const pm_core::LoadedPmtilesArchive archive =
+        pm_core::load_pmtiles_archive(pmtilesFile);
     const bool isMvt = archive.header.tile_type == pmtiles::TILETYPE_MVT;
     const bool isMlt = archive.header.tile_type == pmtiles::TILETYPE_MLT;
     if (!isMvt && !isMlt) {
@@ -2439,15 +2439,15 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
         }
         bool headerWritten = false;
         size_t rowsWritten = 0;
-        mlt_pmtiles::FeatureTableSchema referenceSchema;
+        pm_vector::FeatureTableSchema referenceSchema;
         bool haveSchema = false;
         for (const auto& entry : archive.entries) {
             if (entry.z != exportZoom) {
                 continue;
             }
             const std::string rawTile =
-                mlt_pmtiles::read_pmtiles_tile_payload(*archive.reader, archive.header, entry);
-            const mlt_pmtiles::DecodedPolygonTile decoded = isMvt
+                pm_core::read_pmtiles_tile_payload(*archive.reader, archive.header, entry);
+            const pm_vector::DecodedPolygonTile decoded = isMvt
                 ? mvt_pmtiles::decode_polygon_tile(rawTile)
                 : mlt_pmtiles::decode_polygon_tile(rawTile);
             if (!haveSchema) {
@@ -2488,7 +2488,7 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
                 for (uint32_t i = begin; i < end; ++i) {
                     double scaledX = 0.0;
                     double scaledY = 0.0;
-                    mlt_pmtiles::tilecoord_to_epsg3857(entry.x, entry.y,
+                    pm_core::tilecoord_to_epsg3857(entry.x, entry.y,
                         static_cast<double>(decoded.tile.localX[i]) * localScale,
                         static_cast<double>(decoded.tile.localY[i]) * localScale,
                         entry.z, scaledX, scaledY);
@@ -2539,7 +2539,7 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
 
     bool haveSchema = false;
     bool wroteAny = false;
-    mlt_pmtiles::FeatureTableSchema referenceSchema;
+    pm_vector::FeatureTableSchema referenceSchema;
     std::vector<ExportColumnPlan> columnPlan;
     std::vector<std::string> headerColumns;
     std::map<TileKey, ExportTextTile> tileBuckets;
@@ -2569,8 +2569,8 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
         }
         ++candidateEntryCount;
         const std::string rawTile =
-            mlt_pmtiles::read_pmtiles_tile_payload(*archive.reader, archive.header, entry);
-        const mlt_pmtiles::DecodedPointTile decoded = isMvt
+            pm_core::read_pmtiles_tile_payload(*archive.reader, archive.header, entry);
+        const pm_vector::DecodedPointTile decoded = isMvt
             ? mvt_pmtiles::decode_point_tile(rawTile)
             : mlt_pmtiles::decode_point_tile(rawTile);
         if (!haveSchema) {
@@ -2604,7 +2604,7 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
         for (size_t row = 0; row < rowCount; ++row) {
             double scaledX = 0.0;
             double scaledY = 0.0;
-            mlt_pmtiles::tilecoord_to_epsg3857(entry.x, entry.y,
+            pm_core::tilecoord_to_epsg3857(entry.x, entry.y,
                 static_cast<double>(decoded.tile.localX[row]) * localScale,
                 static_cast<double>(decoded.tile.localY[row]) * localScale,
                 entry.z, scaledX, scaledY);
@@ -2653,8 +2653,8 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
 
     if (!haveSchema) {
         const std::string rawTile =
-            mlt_pmtiles::read_pmtiles_tile_payload(*archive.reader, archive.header, *firstMaxZoomIt);
-        const mlt_pmtiles::DecodedPointTile decoded = isMvt
+            pm_core::read_pmtiles_tile_payload(*archive.reader, archive.header, *firstMaxZoomIt);
+        const pm_vector::DecodedPointTile decoded = isMvt
             ? mvt_pmtiles::decode_point_tile(rawTile)
             : mlt_pmtiles::decode_point_tile(rawTile);
         referenceSchema = decoded.schema;
@@ -2780,7 +2780,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
     }
 
     const std::vector<std::string> featureNames = loadFeatureNames();
-    mlt_pmtiles::GlobalStringDictionary featureDictionary;
+    pm_vector::GlobalStringDictionary featureDictionary;
     featureDictionary.values = featureNames;
     size_t dictSize = featureDictionary.values.size();
     const std::vector<std::string> probColumnNames = build_merge_column_names(k2keep, mergePrefixes);
@@ -2792,7 +2792,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
     const bool haveGeneBins = has_gene_bin_definition(mltOptions);
     const std::vector<bool> probPairNullable = build_single_prob_nullable_flags(
         kvec_, false, mltOptions.encode_prob_min, mltOptions.encode_prob_eps);
-    const mlt_pmtiles::FeatureTableSchema schema = build_point_schema(
+    const pm_vector::FeatureTableSchema schema = build_point_schema(
         basename(outPrefix), 4096, hasZ, probColumnNames, probPairNullable,
         {}, mltOptions.feature_field_name);
     const auto readRecord = [this, hasZ](std::ifstream& dataStream,
@@ -2884,7 +2884,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
         mltOptions.feature_count_file, mltOptions.n_gene_bins);
     const uint8_t outputZoom = static_cast<uint8_t>(mltOptions.zoom);
     const std::string allOutFile = outPrefix + "_all.pmtiles";
-    mlt_pmtiles::FeatureTableSchema allSchema = schema;
+    pm_vector::FeatureTableSchema allSchema = schema;
     allSchema.layerName = basename(allOutFile, true);
     GeneBinPipelineResult pipeline = run_epsg3857_parallel_gene_bin_pipeline(
         dataFile_, blocks_, formatInfo_, hasZ, k_, threads_, k2keep,
@@ -2903,7 +2903,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
 
     for (auto& kv : pipeline.binEncodedTiles) {
         const std::string outFile = outPrefix + "_bin" + std::to_string(kv.first) + ".pmtiles";
-        mlt_pmtiles::FeatureTableSchema binSchema = schema;
+        pm_vector::FeatureTableSchema binSchema = schema;
         binSchema.layerName = basename(outFile, true);
         const uint64_t binCount = pipeline.binRecordCounts.count(kv.first) > 0
             ? pipeline.binRecordCounts.at(kv.first) : 0;
@@ -3065,7 +3065,7 @@ void TileOperator::annotatePlainToMltPmtiles(
         __func__, pipeline.missingPackagingFeatures.size());
 
     const std::string allOutFile = outPrefix + layer_name_suff0 + ".pmtiles";
-    mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
+    pm_vector::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,
         std::move(pipeline.allEncodedTiles), pipeline.totalRecordCount,
@@ -3078,7 +3078,7 @@ void TileOperator::annotatePlainToMltPmtiles(
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
             const std::string outFile = outPrefix + "_bin" + std::to_string(kv.first) + ".pmtiles";
-            mlt_pmtiles::FeatureTableSchema binSchema = queryPlan.schema;
+            pm_vector::FeatureTableSchema binSchema = queryPlan.schema;
             binSchema.layerName = basename(outFile, true);
             const uint64_t binCount = pipeline.binRecordCounts.count(kv.first) > 0
                 ? pipeline.binRecordCounts.at(kv.first) : 0;
@@ -3266,7 +3266,7 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
         __func__, pipeline.missingPackagingFeatures.size());
 
     const std::string allOutFile = outPrefix + layer_name_suff0 + ".pmtiles";
-    mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
+    pm_vector::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,
         std::move(pipeline.allEncodedTiles), pipeline.totalRecordCount,
@@ -3279,7 +3279,7 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
             const std::string outFile = outPrefix + "_bin" + std::to_string(kv.first) + ".pmtiles";
-            mlt_pmtiles::FeatureTableSchema binSchema = queryPlan.schema;
+            pm_vector::FeatureTableSchema binSchema = queryPlan.schema;
             binSchema.layerName = basename(outFile, true);
             const uint64_t binCount = pipeline.binRecordCounts.count(kv.first) > 0
                 ? pipeline.binRecordCounts.at(kv.first) : 0;
@@ -3438,7 +3438,7 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
     warning("%s: %zu features are not present in the feature dictionary", __func__, pipeline.missingPackagingFeatures.size());
 
     const std::string allOutFile = outPrefix +  layer_name_suff0 + ".pmtiles";
-    mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
+    pm_vector::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,
         std::move(pipeline.allEncodedTiles), pipeline.totalRecordCount,
@@ -3451,7 +3451,7 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
             const std::string outFile = outPrefix + "_bin" + std::to_string(kv.first) + ".pmtiles";
-            mlt_pmtiles::FeatureTableSchema binSchema = queryPlan.schema;
+            pm_vector::FeatureTableSchema binSchema = queryPlan.schema;
             binSchema.layerName = basename(outFile, true);
             const uint64_t binCount = pipeline.binRecordCounts.count(kv.first) > 0 ? pipeline.binRecordCounts.at(kv.first) : 0;
             relabel_encoded_tile_payloads_layer_name(kv.second, binSchema.layerName, mltOptions.write_mvt_pmtiles);
@@ -3644,7 +3644,7 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
     warning("%s: %zu features are not present in the feature dictionary", __func__, pipeline.missingPackagingFeatures.size());
 
     const std::string allOutFile = outPrefix +  layer_name_suff0 + ".pmtiles";
-    mlt_pmtiles::FeatureTableSchema allSchema = queryPlan.schema;
+    pm_vector::FeatureTableSchema allSchema = queryPlan.schema;
     allSchema.layerName = basename(allOutFile, true);
     write_single_layer_pmtiles_archive(allOutFile, allSchema,
         std::move(pipeline.allEncodedTiles), pipeline.totalRecordCount,
@@ -3657,7 +3657,7 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
             const std::string outFile = outPrefix + "_bin" + std::to_string(kv.first) + ".pmtiles";
-            mlt_pmtiles::FeatureTableSchema binSchema = queryPlan.schema;
+            pm_vector::FeatureTableSchema binSchema = queryPlan.schema;
             binSchema.layerName = basename(outFile, true);
             const uint64_t binCount = pipeline.binRecordCounts.count(kv.first) > 0
                 ? pipeline.binRecordCounts.at(kv.first) : 0;

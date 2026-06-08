@@ -198,28 +198,28 @@ std::string choose_original_id_column_name(const std::string& requested) {
     return is_valid_mlt_column_name(requested) ? requested : std::string("ID_org");
 }
 
-mlt_pmtiles::FeatureTableSchema build_polygon_schema(const std::string& layerName,
+pm_vector::FeatureTableSchema build_polygon_schema(const std::string& layerName,
     uint32_t extent,
     const std::vector<std::pair<int32_t, int32_t>>& factorCols,
     bool includeHexCoords,
     bool idIsUint64,
     const std::string& originalIdColumnName = std::string()) {
-    mlt_pmtiles::FeatureTableSchema schema;
+    pm_vector::FeatureTableSchema schema;
     schema.layerName = layerName;
     schema.extent = extent;
     schema.hasIdColumn = true;
     schema.idIsUint64 = idIsUint64;
     if (!originalIdColumnName.empty()) {
-        schema.columns.push_back({originalIdColumnName, mlt_pmtiles::ScalarType::STRING, true});
+        schema.columns.push_back({originalIdColumnName, pm_vector::ScalarType::STRING, true});
     }
     if (includeHexCoords) {
-        schema.columns.push_back({"hex_q", mlt_pmtiles::ScalarType::INT_32, false});
-        schema.columns.push_back({"hex_r", mlt_pmtiles::ScalarType::INT_32, false});
+        schema.columns.push_back({"hex_q", pm_vector::ScalarType::INT_32, false});
+        schema.columns.push_back({"hex_r", pm_vector::ScalarType::INT_32, false});
     }
-    schema.columns.push_back({"topK", mlt_pmtiles::ScalarType::INT_32, false});
-    schema.columns.push_back({"topP", mlt_pmtiles::ScalarType::FLOAT, false});
+    schema.columns.push_back({"topK", pm_vector::ScalarType::INT_32, false});
+    schema.columns.push_back({"topP", pm_vector::ScalarType::FLOAT, false});
     for (const auto& kv : factorCols) {
-        schema.columns.push_back({std::to_string(kv.first), mlt_pmtiles::ScalarType::FLOAT, true});
+        schema.columns.push_back({std::to_string(kv.first), pm_vector::ScalarType::FLOAT, true});
     }
     return schema;
 }
@@ -327,7 +327,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
             error("%s: --hex-grid-dist must be positive in hex mode", __func__);
         }
         const double localCenterDist = (hexGridDist * coordScale * static_cast<double>(extent)) /
-            (mlt_pmtiles::epsg3857_scale_factor(static_cast<uint8_t>(zoom)) * 4096.0);
+            (pm_core::epsg3857_scale_factor(static_cast<uint8_t>(zoom)) * 4096.0);
         const double localHexEdge = localCenterDist / kSqrt3;
         constexpr double kDegenerateCenterDistThreshold = 2.0;
         if (localCenterDist < kDegenerateCenterDistThreshold) {
@@ -364,7 +364,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
     const UnitFactorResultHeader& layout = reader.header();
     const std::string originalIdColumnName =
         (genericPolygonMode && keepOrgId && !idIsU32) ? choose_original_id_column_name(idColName) : std::string();
-    const mlt_pmtiles::FeatureTableSchema schema =
+    const pm_vector::FeatureTableSchema schema =
         build_polygon_schema(layerName, static_cast<uint32_t>(extent), layout.factorCols,
             !genericPolygonMode, !genericPolygonMode, originalIdColumnName);
     simple_polygon_pmtiles::SingleZoomPolygonWriterOptions writerOptions;
@@ -380,7 +380,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
             simple_polygon_pmtiles::PolygonBoundaryMode::NoClippingDuplicate :
             simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate);
 
-    std::map<TileKey, mlt_pmtiles::PolygonTileData> tileMap;
+    std::map<TileKey, pm_vector::PolygonTileData> tileMap;
     simple_polygon_pmtiles::PolygonWriteSummary summary;
     HexGrid inputGrid;
     HexGrid scaledGrid;
@@ -464,18 +464,18 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
         ++nRows;
     }
 
-    std::vector<mlt_pmtiles::EncodedTilePayload> encodedTiles;
+    std::vector<pm_core::EncodedTilePayload> encodedTiles;
     if (format == "MVT") {
         encodedTiles.reserve(tileMap.size());
         for (const auto& kv : tileMap) {
             const std::string raw = mvt_pmtiles::encode_polygon_tile(schema, kv.second, nullptr);
-            mlt_pmtiles::EncodedTilePayload payload;
+            pm_core::EncodedTilePayload payload;
             payload.z = static_cast<uint8_t>(zoom);
             payload.x = static_cast<uint32_t>(kv.first.col);
             payload.y = static_cast<uint32_t>(kv.first.row);
             payload.tileId = pmtiles::zxy_to_tileid(payload.z, payload.x, payload.y);
             payload.featureCount = static_cast<uint32_t>(kv.second.size());
-            payload.compressedData = mlt_pmtiles::gzip_compress(raw);
+            payload.compressedData = pm_core::gzip_compress(raw);
             encodedTiles.push_back(std::move(payload));
         }
     } else {
@@ -518,9 +518,9 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
             "no_clipping_duplicate" : "tippecanoe_default_like");
     extraMetadata["tile_buffer_screen_px"] = tileBufferPixels;
 
-    mlt_pmtiles::SingleLayerVectorPmtilesOptions archiveOptions;
+    pm_vector::SingleLayerVectorPmtilesOptions archiveOptions;
     archiveOptions.schema = schema;
-    archiveOptions.geometryType = mlt_pmtiles::VectorGeometryType::Polygon;
+    archiveOptions.geometryType = pm_vector::VectorGeometryType::Polygon;
     archiveOptions.tileType = format == "MVT" ? pmtiles::TILETYPE_MVT : pmtiles::TILETYPE_MLT;
     archiveOptions.totalRecordCount = summary.featureCount;
     archiveOptions.coordScale = coordScale;
@@ -535,7 +535,7 @@ int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv) {
         ? "Generated PMTiles by punkst for MVT polygons"
         : "Generated PMTiles by punkst for MLT polygons";
     archiveOptions.extraMetadata = extraMetadata;
-    mlt_pmtiles::write_single_layer_vector_pmtiles_archive(outFile, std::move(encodedTiles), archiveOptions);
+    pm_vector::write_single_layer_vector_pmtiles_archive(outFile, std::move(encodedTiles), archiveOptions);
 
     if (genericPolygonMode) {
         notice("%s: wrote %" PRIu64 " source polygons into %s (%zu destination tiles)",

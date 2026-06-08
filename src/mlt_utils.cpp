@@ -12,8 +12,6 @@ namespace mlt_pmtiles {
 
 namespace {
 
-constexpr double kEpsg3857Radius = 6378137.0;
-constexpr double kEpsg3857Bound = 20037508.3428;
 constexpr uint8_t kGeometryColumnTypeCode = 4;
 constexpr uint8_t kGeometryTypePoint = static_cast<uint8_t>(mlt::metadata::tileset::GeometryType::POINT);
 constexpr uint8_t kGeometryTypePolygon = static_cast<uint8_t>(mlt::metadata::tileset::GeometryType::POLYGON);
@@ -668,62 +666,6 @@ void validate_polygon_tile_geometry(const PolygonTileData& tile, size_t totalRow
 
 } // namespace
 
-std::string gzip_compress(const std::string& data) {
-    z_stream zs;
-    std::memset(&zs, 0, sizeof(zs));
-    if (deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 | 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
-        error("%s: deflateInit2 failed", __func__);
-    }
-    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
-    zs.avail_in = static_cast<uInt>(data.size());
-
-    int ret = Z_OK;
-    char outbuffer[32768];
-    std::string out;
-    do {
-        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
-        zs.avail_out = sizeof(outbuffer);
-        ret = deflate(&zs, Z_FINISH);
-        if (ret != Z_OK && ret != Z_STREAM_END) {
-            deflateEnd(&zs);
-            error("%s: deflate failed", __func__);
-        }
-        if (out.size() < zs.total_out) {
-            out.append(outbuffer, zs.total_out - out.size());
-        }
-    } while (ret == Z_OK);
-
-    deflateEnd(&zs);
-    return out;
-}
-
-std::string gzip_decompress(const std::string& data) {
-    z_stream zs;
-    std::memset(&zs, 0, sizeof(zs));
-    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
-    zs.avail_in = static_cast<uInt>(data.size());
-    if (inflateInit2(&zs, 15 | 32) != Z_OK) {
-        error("%s: inflateInit2 failed", __func__);
-    }
-
-    int ret = Z_OK;
-    char outbuffer[32768];
-    std::string out;
-    while (ret != Z_STREAM_END) {
-        zs.next_out = reinterpret_cast<Bytef*>(outbuffer);
-        zs.avail_out = sizeof(outbuffer);
-        ret = inflate(&zs, Z_NO_FLUSH);
-        if (ret != Z_OK && ret != Z_STREAM_END) {
-            inflateEnd(&zs);
-            error("%s: inflate failed", __func__);
-        }
-        out.append(outbuffer, sizeof(outbuffer) - zs.avail_out);
-    }
-
-    inflateEnd(&zs);
-    return out;
-}
-
 std::string encode_bool_rle(const std::vector<bool>& present) {
     const size_t n = present.size();
     const size_t numBytes = (n + 7u) / 8u;
@@ -778,50 +720,6 @@ std::vector<bool> decode_bool_rle(const uint8_t* data, size_t len, size_t count)
         result.resize(count, true);
     }
     return result;
-}
-
-void epsg3857_to_wgs84(double x, double y, double& lon, double& lat) {
-    lon = (x / kEpsg3857Radius) * (180.0 / M_PI);
-    lat = (2.0 * std::atan(std::exp(y / kEpsg3857Radius)) - M_PI / 2.0) * (180.0 / M_PI);
-}
-
-double epsg3857_scale_factor(uint8_t zoom) {
-    return 2.0 * kEpsg3857Bound / static_cast<double>(uint64_t{1} << (zoom + 12));
-}
-
-void epsg3857_to_tilecoord(double x, double y, uint8_t zoom,
-    int64_t& tileX, int64_t& tileY, double& localX, double& localY) {
-    if (!std::isfinite(x)) x = 40000000.0;
-    if (!std::isfinite(y)) y = 40000000.0;
-
-    constexpr double tileSize = 256.0;
-    const uint64_t numTiles = uint64_t{1} << zoom;
-    tileX = static_cast<int64_t>((x + kEpsg3857Bound) / (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)));
-    tileY = static_cast<int64_t>((kEpsg3857Bound - y) / (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)));
-
-    const double tileOriginX = static_cast<double>(tileX) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)) - kEpsg3857Bound;
-    const double tileOriginY = kEpsg3857Bound - static_cast<double>(tileY) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles));
-    localX = (x - tileOriginX) / (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
-    localY = (tileOriginY - y) / (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
-}
-
-void tilecoord_to_epsg3857(int64_t tileX, int64_t tileY,
-    double localX, double localY, uint8_t zoom,
-    double& x, double& y) {
-    constexpr double tileSize = 256.0;
-    const uint64_t numTiles = uint64_t{1} << zoom;
-    const double tileOriginX = static_cast<double>(tileX) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles)) - kEpsg3857Bound;
-    const double tileOriginY = kEpsg3857Bound - static_cast<double>(tileY) * (2.0 * kEpsg3857Bound / static_cast<double>(numTiles));
-    x = tileOriginX + localX * (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
-    y = tileOriginY - localY * (2.0 * kEpsg3857Bound / (static_cast<double>(numTiles) * tileSize));
-}
-
-const std::string& GlobalStringDictionary::lookup(uint32_t code) const {
-    if (code >= values.size()) {
-        error("%s: string dictionary code %u is out of range for dictionary size %zu",
-            __func__, code, values.size());
-    }
-    return values[code];
 }
 
 std::string encode_point_tile_impl(const FeatureTableSchema& schema,
@@ -1107,44 +1005,6 @@ std::string encode_polygon_tile_subset(const FeatureTableSchema& schema,
     size_t rowCount,
     const GlobalStringDictionary* stringDictionary) {
     return encode_polygon_tile_impl(schema, tile, rowCount, &order, stringDictionary);
-}
-
-int32_t remap_child_local_to_parent_local(int32_t childLocal, uint32_t childIndex,
-    uint32_t extent) {
-    const double shifted = static_cast<double>(childLocal) +
-        static_cast<double>(childIndex) * static_cast<double>(extent);
-    const long rounded = std::lround(0.5 * shifted);
-    const long lo = 0;
-    const long hi = static_cast<long>(extent);
-    return static_cast<int32_t>(std::clamp<long>(rounded, lo, hi));
-}
-
-void append_child_row_to_parent_tile(const DecodedPointTile& child,
-    size_t row,
-    uint32_t childX,
-    uint32_t childY,
-    uint32_t parentX,
-    uint32_t parentY,
-    PointTileData& parentOut) {
-    const uint32_t extent = child.schema.extent;
-    const uint32_t dx = childX - 2u * parentX;
-    const uint32_t dy = childY - 2u * parentY;
-    if (dx > 1u || dy > 1u) {
-        error("%s: child tile (%u,%u) does not belong to parent (%u,%u)",
-            __func__, childX, childY, parentX, parentY);
-    }
-
-    parentOut.localX.push_back(
-        remap_child_local_to_parent_local(child.tile.localX[row], dx, extent));
-    parentOut.localY.push_back(
-        remap_child_local_to_parent_local(child.tile.localY[row], dy, extent));
-    if (!child.tile.featureIds.empty()) {
-        parentOut.featureIds.push_back(child.tile.featureIds[row]);
-    }
-    for (size_t colIdx = 0; colIdx < child.schema.columns.size(); ++colIdx) {
-        append_row_value(child.schema.columns[colIdx], child.tile.columns[colIdx], row,
-            parentOut.columns[colIdx]);
-    }
 }
 
 std::string rewrite_point_tile_layer_name(const std::string& rawTile,

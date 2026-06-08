@@ -22,6 +22,7 @@ int32_t cmdTiles2Mono(int32_t argc, char** argv) {
       .add_option("icol-count", "0-based count column", options.icolCount)
       .add_option("min-zoom", "Minimum PMTiles zoom", options.minZoom)
       .add_option("max-zoom", "Maximum PMTiles zoom", options.maxZoom)
+      .add_option("max-zoom-from-raw", "Parse raw data for zoom levels >= this value; derive lower zooms from parent layers", options.maxZoomFromRaw)
       .add_option("adjust-quantile", "Quantile for draw-xy-compatible auto-adjustment", options.adjustQuantile)
       .add_option("no-auto-adjust", "Disable draw-xy-compatible intensity auto-adjustment", noAutoAdjust)
       .add_option("threads", "Number of worker threads", options.threads)

@@ -209,7 +209,7 @@ SimplePolygonTableIndex::SimplePolygonTableIndex(const std::string& path,
             int64_t tileY = 0;
             double localX = 0.0;
             double localY = 0.0;
-            mlt_pmtiles::epsg3857_to_tilecoord(scaledX, scaledY, sourceZoom,
+            pm_core::epsg3857_to_tilecoord(scaledX, scaledY, sourceZoom,
                 tileX, tileY, localX, localY);
             const int64_t globalX = tileX * static_cast<int64_t>(extent) +
                 static_cast<int64_t>(std::llround(localX * static_cast<double>(extent) / 256.0));
@@ -328,7 +328,7 @@ struct ParentBuildInput {
     uint32_t x = 0;
     uint32_t y = 0;
     uint64_t tileId = 0;
-    std::vector<const mlt_pmtiles::StoredTilePayloadRef*> children;
+    std::vector<const pm_core::StoredTilePayloadRef*> children;
 };
 
 struct PointParentTileCandidate {
@@ -336,7 +336,7 @@ struct PointParentTileCandidate {
     uint32_t x = 0;
     uint32_t y = 0;
     uint64_t tileId = 0;
-    mlt_pmtiles::PointTileData data;
+    pm_vector::PointTileData data;
     std::vector<uint64_t> priorities;
     uint32_t rawFeatureCount = 0;
     size_t estimatedBytes = 0;
@@ -347,7 +347,7 @@ struct PolygonParentTileCandidate {
     uint32_t x = 0;
     uint32_t y = 0;
     uint64_t tileId = 0;
-    mlt_pmtiles::PolygonTileData data;
+    pm_vector::PolygonTileData data;
     std::vector<uint64_t> priorities;
     uint32_t rawFeatureCount = 0;
     size_t estimatedBytes = 0;
@@ -356,13 +356,13 @@ struct PolygonParentTileCandidate {
 };
 
 struct EncodedParentTile {
-    mlt_pmtiles::EncodedTilePayload payload;
+    pm_core::EncodedTilePayload payload;
     std::vector<uint64_t> priorities;
 };
 
 struct ResolvedCanonicalField {
     size_t columnIndex = 0;
-    mlt_pmtiles::ScalarType type = mlt_pmtiles::ScalarType::INT_32;
+    pm_vector::ScalarType type = pm_vector::ScalarType::INT_32;
     std::string name;
 };
 
@@ -396,8 +396,8 @@ int32_t resolve_thread_count(int32_t requested) {
     return hw > 0 ? static_cast<int32_t>(hw) : 4;
 }
 
-bool schemas_equal(const mlt_pmtiles::FeatureTableSchema& lhs,
-    const mlt_pmtiles::FeatureTableSchema& rhs) {
+bool schemas_equal(const pm_vector::FeatureTableSchema& lhs,
+    const pm_vector::FeatureTableSchema& rhs) {
     if (lhs.layerName != rhs.layerName ||
         lhs.extent != rhs.extent ||
         lhs.hasIdColumn != rhs.hasIdColumn ||
@@ -415,8 +415,8 @@ bool schemas_equal(const mlt_pmtiles::FeatureTableSchema& lhs,
     return true;
 }
 
-void validate_schema_equal(const mlt_pmtiles::FeatureTableSchema& expected,
-    const mlt_pmtiles::FeatureTableSchema& observed,
+void validate_schema_equal(const pm_vector::FeatureTableSchema& expected,
+    const pm_vector::FeatureTableSchema& observed,
     const char* context) {
     if (!schemas_equal(expected, observed)) {
         error("%s: inconsistent MLT schema encountered while %s", __func__, context);
@@ -433,7 +433,7 @@ std::string read_compressed_tile_blob(flexio::FlexReader& reader,
     return compressed;
 }
 
-std::string read_stored_tile_blob(int fd, const mlt_pmtiles::StoredTilePayloadRef& tile) {
+std::string read_stored_tile_blob(int fd, const pm_core::StoredTilePayloadRef& tile) {
     std::string compressed(static_cast<size_t>(tile.dataLength), '\0');
     size_t offset = 0;
     while (offset < compressed.size()) {
@@ -463,7 +463,7 @@ uint64_t append_blob_to_store(int fd, std::atomic<uint64_t>& storeSize,
     return offset;
 }
 
-std::vector<uint64_t> read_priority_store(int fd, const mlt_pmtiles::StoredTilePayloadRef& tile) {
+std::vector<uint64_t> read_priority_store(int fd, const pm_core::StoredTilePayloadRef& tile) {
     std::vector<uint64_t> priorities(tile.priorityCount, 0);
     size_t offset = 0;
     const size_t nBytes = priorities.size() * sizeof(uint64_t);
@@ -497,9 +497,9 @@ uint64_t append_priorities_to_store(int fd, std::atomic<uint64_t>& storeSize,
     return offset;
 }
 
-mlt_pmtiles::PointTileData make_empty_point_tile_data(
-    const mlt_pmtiles::FeatureTableSchema& schema) {
-    mlt_pmtiles::PointTileData out;
+pm_vector::PointTileData make_empty_point_tile_data(
+    const pm_vector::FeatureTableSchema& schema) {
+    pm_vector::PointTileData out;
     out.columns.reserve(schema.columns.size());
     for (const auto& columnSchema : schema.columns) {
         out.columns.emplace_back(columnSchema.type, columnSchema.nullable);
@@ -507,9 +507,9 @@ mlt_pmtiles::PointTileData make_empty_point_tile_data(
     return out;
 }
 
-mlt_pmtiles::PolygonTileData make_empty_polygon_tile_data(
-    const mlt_pmtiles::FeatureTableSchema& schema) {
-    mlt_pmtiles::PolygonTileData out;
+pm_vector::PolygonTileData make_empty_polygon_tile_data(
+    const pm_vector::FeatureTableSchema& schema) {
+    pm_vector::PolygonTileData out;
     out.ringOffsets.push_back(0u);
     out.columns.reserve(schema.columns.size());
     for (const auto& columnSchema : schema.columns) {
@@ -518,7 +518,7 @@ mlt_pmtiles::PolygonTileData make_empty_polygon_tile_data(
     return out;
 }
 
-bool column_value_present(const mlt_pmtiles::PropertyColumn& column, size_t row) {
+bool column_value_present(const pm_vector::PropertyColumn& column, size_t row) {
     if (column.present.empty()) {
         return true;
     }
@@ -558,8 +558,8 @@ size_t estimate_id_column_bytes(const std::vector<uint64_t>& featureIds,
     return estimate_stream_bytes(rowCount, payloadBytes);
 }
 
-size_t estimate_property_columns_bytes(const mlt_pmtiles::FeatureTableSchema& schema,
-    const std::vector<mlt_pmtiles::PropertyColumn>& columns,
+size_t estimate_property_columns_bytes(const pm_vector::FeatureTableSchema& schema,
+    const std::vector<pm_vector::PropertyColumn>& columns,
     const std::vector<uint32_t>* order,
     size_t rowCount) {
     auto row_at = [&](size_t i) -> uint32_t {
@@ -581,15 +581,15 @@ size_t estimate_property_columns_bytes(const mlt_pmtiles::FeatureTableSchema& sc
             }
             ++nonNullCount;
             switch (columnSchema.type) {
-            case mlt_pmtiles::ScalarType::BOOLEAN:
+            case pm_vector::ScalarType::BOOLEAN:
                 break;
-            case mlt_pmtiles::ScalarType::INT_32:
-                payloadBytes += varint_size(mlt_pmtiles::encode_zigzag32(column.intValues[row]));
+            case pm_vector::ScalarType::INT_32:
+                payloadBytes += varint_size(pm_vector::encode_zigzag32(column.intValues[row]));
                 break;
-            case mlt_pmtiles::ScalarType::FLOAT:
+            case pm_vector::ScalarType::FLOAT:
                 payloadBytes += sizeof(uint32_t);
                 break;
-            case mlt_pmtiles::ScalarType::STRING:
+            case pm_vector::ScalarType::STRING:
                 valueBytes += column.stringValues[row].size();
                 payloadBytes += varint_size(column.stringValues[row].size());
                 break;
@@ -599,7 +599,7 @@ size_t estimate_property_columns_bytes(const mlt_pmtiles::FeatureTableSchema& sc
             }
         }
 
-        if (columnSchema.type == mlt_pmtiles::ScalarType::STRING) {
+        if (columnSchema.type == pm_vector::ScalarType::STRING) {
             layerBytes += varint_size(columnSchema.nullable ? 3u : 2u);
             if (columnSchema.nullable) {
                 layerBytes += estimate_stream_bytes(rowCount, estimate_bool_rle_payload_bytes(rowCount));
@@ -612,7 +612,7 @@ size_t estimate_property_columns_bytes(const mlt_pmtiles::FeatureTableSchema& sc
         if (columnSchema.nullable) {
             layerBytes += estimate_stream_bytes(rowCount, estimate_bool_rle_payload_bytes(rowCount));
         }
-        if (columnSchema.type == mlt_pmtiles::ScalarType::BOOLEAN) {
+        if (columnSchema.type == pm_vector::ScalarType::BOOLEAN) {
             layerBytes += estimate_stream_bytes(nonNullCount, estimate_bool_rle_payload_bytes(nonNullCount));
         } else {
             layerBytes += estimate_stream_bytes(nonNullCount, payloadBytes);
@@ -622,8 +622,8 @@ size_t estimate_property_columns_bytes(const mlt_pmtiles::FeatureTableSchema& sc
     return layerBytes;
 }
 
-size_t estimate_point_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PointTileData& tile,
+size_t estimate_point_tile_bytes_impl(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PointTileData& tile,
     const std::vector<uint32_t>* order,
     size_t rowCount) {
     if (rowCount == 0) {
@@ -643,10 +643,10 @@ size_t estimate_point_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& sch
     }
     for (const auto& columnSchema : schema.columns) {
         switch (columnSchema.type) {
-        case mlt_pmtiles::ScalarType::BOOLEAN:
-        case mlt_pmtiles::ScalarType::INT_32:
-        case mlt_pmtiles::ScalarType::FLOAT:
-        case mlt_pmtiles::ScalarType::STRING:
+        case pm_vector::ScalarType::BOOLEAN:
+        case pm_vector::ScalarType::INT_32:
+        case pm_vector::ScalarType::FLOAT:
+        case pm_vector::ScalarType::STRING:
             break;
         default:
             error("%s: unsupported scalar column type %d", __func__,
@@ -665,8 +665,8 @@ size_t estimate_point_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& sch
         const uint32_t row = row_at(i);
         const int32_t x = tile.localX[row];
         const int32_t y = tile.localY[row];
-        vertexPayload += varint_size(mlt_pmtiles::encode_zigzag32(x - prevX));
-        vertexPayload += varint_size(mlt_pmtiles::encode_zigzag32(y - prevY));
+        vertexPayload += varint_size(pm_vector::encode_zigzag32(x - prevX));
+        vertexPayload += varint_size(pm_vector::encode_zigzag32(y - prevY));
         prevX = x;
         prevY = y;
     }
@@ -678,18 +678,18 @@ size_t estimate_point_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& sch
     return varint_size(1u + layerBytes) + 1u + layerBytes;
 }
 
-size_t estimate_point_tile_bytes_full(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PointTileData& tile) {
+size_t estimate_point_tile_bytes_full(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PointTileData& tile) {
     return estimate_point_tile_bytes_impl(schema, tile, nullptr, tile.size());
 }
 
-size_t estimate_point_tile_bytes_prefix(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PointTileData& tile, size_t rowCount) {
+size_t estimate_point_tile_bytes_prefix(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PointTileData& tile, size_t rowCount) {
     return estimate_point_tile_bytes_impl(schema, tile, nullptr, rowCount);
 }
 
-size_t estimate_polygon_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+size_t estimate_polygon_tile_bytes_impl(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     const std::vector<uint32_t>* order,
     size_t rowCount) {
     if (rowCount == 0) {
@@ -709,10 +709,10 @@ size_t estimate_polygon_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& s
     }
     for (const auto& columnSchema : schema.columns) {
         switch (columnSchema.type) {
-        case mlt_pmtiles::ScalarType::BOOLEAN:
-        case mlt_pmtiles::ScalarType::INT_32:
-        case mlt_pmtiles::ScalarType::FLOAT:
-        case mlt_pmtiles::ScalarType::STRING:
+        case pm_vector::ScalarType::BOOLEAN:
+        case pm_vector::ScalarType::INT_32:
+        case pm_vector::ScalarType::FLOAT:
+        case pm_vector::ScalarType::STRING:
             break;
         default:
             error("%s: unsupported scalar column type %d", __func__,
@@ -741,8 +741,8 @@ size_t estimate_polygon_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& s
         for (uint32_t v = beg; v < end; ++v) {
             const int32_t x = tile.localX[v];
             const int32_t y = tile.localY[v];
-            vertexPayload += varint_size(mlt_pmtiles::encode_zigzag32(x - prevX));
-            vertexPayload += varint_size(mlt_pmtiles::encode_zigzag32(y - prevY));
+            vertexPayload += varint_size(pm_vector::encode_zigzag32(x - prevX));
+            vertexPayload += varint_size(pm_vector::encode_zigzag32(y - prevY));
             prevX = x;
             prevY = y;
         }
@@ -757,13 +757,13 @@ size_t estimate_polygon_tile_bytes_impl(const mlt_pmtiles::FeatureTableSchema& s
     return varint_size(1u + layerBytes) + 1u + layerBytes;
 }
 
-size_t estimate_polygon_tile_bytes_full(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile) {
+size_t estimate_polygon_tile_bytes_full(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile) {
     return estimate_polygon_tile_bytes_impl(schema, tile, nullptr, tile.size());
 }
 
-size_t estimate_polygon_tile_bytes_prefix(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile, size_t rowCount) {
+size_t estimate_polygon_tile_bytes_prefix(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile, size_t rowCount) {
     return estimate_polygon_tile_bytes_impl(schema, tile, nullptr, rowCount);
 }
 
@@ -823,7 +823,7 @@ nlohmann::json build_pyramid_metadata(nlohmann::json metadata,
 }
 
 std::vector<ParentBuildInput> enumerate_parent_tiles(
-    const std::vector<mlt_pmtiles::StoredTilePayloadRef>& currentLevel) {
+    const std::vector<pm_core::StoredTilePayloadRef>& currentLevel) {
     std::vector<ParentBuildInput> parents;
     parents.reserve(currentLevel.size());
     std::unordered_map<uint64_t, size_t> parentIndex;
@@ -874,7 +874,7 @@ void parallel_for_tiles(size_t n, int32_t threads,
 }
 
 PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& input,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     int blobFd,
     int priorityFd,
     bool useMvt) {
@@ -885,7 +885,7 @@ PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& in
     candidate.tileId = input.tileId;
     candidate.data = make_empty_point_tile_data(schema);
     struct ChildSequence {
-        mlt_pmtiles::DecodedPointTile decoded;
+        pm_vector::DecodedPointTile decoded;
         std::vector<uint64_t> priorities;
         std::vector<uint32_t> order;
         bool useIdentityOrder = false;
@@ -896,7 +896,7 @@ PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& in
     size_t totalRows = 0;
     for (const auto* child : input.children) {
         const std::string compressed = read_stored_tile_blob(blobFd, *child);
-        const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
+        const std::string raw = pm_core::gzip_decompress(compressed);
         ChildSequence childSeq;
         childSeq.decoded = useMvt ? mvt_pmtiles::decode_point_tile(raw) : mlt_pmtiles::decode_point_tile(raw);
         validate_schema_equal(schema, childSeq.decoded.schema, "building point pyramid parent tiles");
@@ -927,16 +927,16 @@ PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& in
             column.present.reserve(totalRows);
         }
         switch (column.type) {
-        case mlt_pmtiles::ScalarType::BOOLEAN:
+        case pm_vector::ScalarType::BOOLEAN:
             column.boolValues.reserve(totalRows);
             break;
-        case mlt_pmtiles::ScalarType::INT_32:
+        case pm_vector::ScalarType::INT_32:
             column.intValues.reserve(totalRows);
             break;
-        case mlt_pmtiles::ScalarType::FLOAT:
+        case pm_vector::ScalarType::FLOAT:
             column.floatValues.reserve(totalRows);
             break;
-        case mlt_pmtiles::ScalarType::STRING:
+        case pm_vector::ScalarType::STRING:
             column.stringValues.reserve(totalRows);
             break;
         default:
@@ -978,7 +978,7 @@ PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& in
         const auto* child = input.children[item.childIndex];
         const ChildSequence& childSeq = children[item.childIndex];
         const uint32_t row = child_row_at(childSeq, item.position);
-        mlt_pmtiles::append_child_row_to_parent_tile(
+        pm_vector::append_child_row_to_parent_tile(
             childSeq.decoded, row, child->x, child->y, input.x, input.y, candidate.data);
         candidate.priorities.push_back(item.priority);
         const size_t nextPos = item.position + 1u;
@@ -997,7 +997,7 @@ PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& in
 
 std::optional<EncodedParentTile> encode_point_parent_candidate(
     const PointParentTileCandidate& candidate,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     const BuildOptions& options,
     double levelRatio,
     bool useMvt) {
@@ -1027,7 +1027,7 @@ std::optional<EncodedParentTile> encode_point_parent_candidate(
         const std::string raw = useMvt
             ? mvt_pmtiles::encode_point_tile_prefix(schema, candidate.data, targetCount, nullptr)
             : mlt_pmtiles::encode_point_tile_prefix(schema, candidate.data, targetCount, nullptr);
-        std::string compressed = mlt_pmtiles::gzip_compress(raw);
+        std::string compressed = pm_core::gzip_compress(raw);
         if (compressed.size() <= static_cast<size_t>(options.maxTileBytes) || targetCount == 1u) {
             if (compressed.size() > static_cast<size_t>(options.maxTileBytes) && targetCount == 1u) {
                 warning("%s: tile z=%u x=%u y=%u still exceeds --max-tile-bytes with one row (%zu bytes)",
@@ -1119,7 +1119,7 @@ simple_polygon_pmtiles::PolygonBoundaryMode parse_polygon_boundary_mode(
     return simple_polygon_pmtiles::PolygonBoundaryMode::BufferClipDuplicate;
 }
 
-size_t find_schema_column_by_name(const mlt_pmtiles::FeatureTableSchema& schema,
+size_t find_schema_column_by_name(const pm_vector::FeatureTableSchema& schema,
     const std::string& name) {
     for (size_t i = 0; i < schema.columns.size(); ++i) {
         if (schema.columns[i].name == name) {
@@ -1129,8 +1129,8 @@ size_t find_schema_column_by_name(const mlt_pmtiles::FeatureTableSchema& schema,
     return schema.columns.size();
 }
 
-std::string canonical_key_for_polygon_row(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+std::string canonical_key_for_polygon_row(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     size_t row,
     const PolygonSourceDescriptor& descriptor) {
     if (descriptor.useFeatureId) {
@@ -1159,17 +1159,17 @@ std::string canonical_key_for_polygon_row(const mlt_pmtiles::FeatureTableSchema&
             continue;
         }
         switch (field.type) {
-        case mlt_pmtiles::ScalarType::INT_32: {
+        case pm_vector::ScalarType::INT_32: {
             const int32_t value = column.intValues[row];
             key.append(reinterpret_cast<const char*>(&value), sizeof(value));
             break;
         }
-        case mlt_pmtiles::ScalarType::FLOAT: {
+        case pm_vector::ScalarType::FLOAT: {
             const uint32_t bits = bit_cast_compat<uint32_t>(column.floatValues[row]);
             key.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
             break;
         }
-        case mlt_pmtiles::ScalarType::STRING: {
+        case pm_vector::ScalarType::STRING: {
             const auto& value = column.stringValues[row];
             const uint32_t len = static_cast<uint32_t>(value.size());
             key.append(reinterpret_cast<const char*>(&len), sizeof(len));
@@ -1184,14 +1184,14 @@ std::string canonical_key_for_polygon_row(const mlt_pmtiles::FeatureTableSchema&
     return key;
 }
 
-int32_t require_polygon_row_int(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+int32_t require_polygon_row_int(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     size_t row,
     size_t columnIndex) {
     if (columnIndex >= schema.columns.size()) {
         error("%s: polygon canonical column index out of range", __func__);
     }
-    if (schema.columns[columnIndex].type != mlt_pmtiles::ScalarType::INT_32) {
+    if (schema.columns[columnIndex].type != pm_vector::ScalarType::INT_32) {
         error("%s: polygon canonical column %s must be INT_32", __func__,
             schema.columns[columnIndex].name.c_str());
     }
@@ -1203,14 +1203,14 @@ int32_t require_polygon_row_int(const mlt_pmtiles::FeatureTableSchema& schema,
     return column.intValues[row];
 }
 
-std::string require_polygon_row_string(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+std::string require_polygon_row_string(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     size_t row,
     size_t columnIndex) {
     if (columnIndex >= schema.columns.size()) {
         error("%s: polygon canonical column index out of range", __func__);
     }
-    if (schema.columns[columnIndex].type != mlt_pmtiles::ScalarType::STRING) {
+    if (schema.columns[columnIndex].type != pm_vector::ScalarType::STRING) {
         error("%s: polygon canonical column %s must be STRING", __func__,
             schema.columns[columnIndex].name.c_str());
     }
@@ -1222,7 +1222,7 @@ std::string require_polygon_row_string(const mlt_pmtiles::FeatureTableSchema& sc
     return column.stringValues[row];
 }
 
-uint64_t require_polygon_row_feature_id(const mlt_pmtiles::PolygonTileData& tile,
+uint64_t require_polygon_row_feature_id(const pm_vector::PolygonTileData& tile,
     size_t row) {
     if (row >= tile.featureIds.size()) {
         error("%s: polygon feature ID missing for row %zu", __func__, row);
@@ -1230,8 +1230,8 @@ uint64_t require_polygon_row_feature_id(const mlt_pmtiles::PolygonTileData& tile
     return tile.featureIds[row];
 }
 
-std::string polygon_source_lookup_id(const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+std::string polygon_source_lookup_id(const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     size_t row,
     const PolygonSourceDescriptor& descriptor) {
     if (descriptor.useFeatureId) {
@@ -1241,8 +1241,8 @@ std::string polygon_source_lookup_id(const mlt_pmtiles::FeatureTableSchema& sche
 }
 
 std::vector<std::pair<double, double>> extract_polygon_row_world_ring(
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     size_t row,
     uint8_t z,
     uint32_t x,
@@ -1259,8 +1259,8 @@ std::vector<std::pair<double, double>> extract_polygon_row_world_ring(
     double tileMaxY = 0.0;
     double tileMaxX = 0.0;
     double tileMinY = 0.0;
-    mlt_pmtiles::tilecoord_to_epsg3857(x, y, 0.0, 0.0, z, tileMinX, tileMaxY);
-    mlt_pmtiles::tilecoord_to_epsg3857(x, y, 256.0, 256.0, z, tileMaxX, tileMinY);
+    pm_core::tilecoord_to_epsg3857(x, y, 0.0, 0.0, z, tileMinX, tileMaxY);
+    pm_core::tilecoord_to_epsg3857(x, y, 256.0, 256.0, z, tileMaxX, tileMinY);
     const double tileWidth = tileMaxX - tileMinX;
     const double tileHeight = tileMaxY - tileMinY;
     std::vector<std::pair<double, double>> ring;
@@ -1276,8 +1276,8 @@ std::vector<std::pair<double, double>> extract_polygon_row_world_ring(
 }
 
 simple_polygon_pmtiles::PolygonFeatureProperties extract_polygon_properties(
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     size_t row) {
     simple_polygon_pmtiles::PolygonFeatureProperties props;
     for (size_t colIdx = 0; colIdx < schema.columns.size(); ++colIdx) {
@@ -1285,13 +1285,13 @@ simple_polygon_pmtiles::PolygonFeatureProperties extract_polygon_properties(
         const auto& col = tile.columns[colIdx];
         const bool present = column_value_present(col, row);
         switch (colSchema.type) {
-        case mlt_pmtiles::ScalarType::INT_32:
+        case pm_vector::ScalarType::INT_32:
             props.intValues.push_back(present ? std::optional<int32_t>(col.intValues[row]) : std::nullopt);
             break;
-        case mlt_pmtiles::ScalarType::FLOAT:
+        case pm_vector::ScalarType::FLOAT:
             props.floatValues.push_back(present ? std::optional<float>(col.floatValues[row]) : std::nullopt);
             break;
-        case mlt_pmtiles::ScalarType::STRING:
+        case pm_vector::ScalarType::STRING:
             props.stringValues.push_back(present ? std::optional<std::string>(col.stringValues[row]) : std::nullopt);
             break;
         default:
@@ -1322,7 +1322,7 @@ std::pair<uint32_t, uint32_t> assign_tile_from_world_center(double centerX, doub
     int64_t tileY = 0;
     double localX = 0.0;
     double localY = 0.0;
-    mlt_pmtiles::epsg3857_to_tilecoord(centerX, centerY, zoom, tileX, tileY, localX, localY);
+    pm_core::epsg3857_to_tilecoord(centerX, centerY, zoom, tileX, tileY, localX, localY);
     const int64_t maxTileIndex = static_cast<int64_t>((uint64_t{1} << zoom) - 1u);
     tileX = std::clamp(tileX, int64_t{0}, maxTileIndex);
     tileY = std::clamp(tileY, int64_t{0}, maxTileIndex);
@@ -1366,8 +1366,8 @@ std::pair<uint32_t, uint32_t> assign_tile_from_global_ring(
 
 std::vector<std::pair<double, double>> reconstruct_polygon_ring(
     const PolygonSourceDescriptor& descriptor,
-    const mlt_pmtiles::FeatureTableSchema& schema,
-    const mlt_pmtiles::PolygonTileData& tile,
+    const pm_vector::FeatureTableSchema& schema,
+    const pm_vector::PolygonTileData& tile,
     size_t row) {
     switch (descriptor.backend) {
     case PolygonGeometryBackendKind::Hexgrid: {
@@ -1413,7 +1413,7 @@ std::vector<std::pair<double, double>> reconstruct_polygon_ring(
 
 PolygonSourceDescriptor resolve_polygon_source_descriptor(
     const nlohmann::json& metadata,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     const BuildOptions& options) {
     if (!metadata.is_object()) {
         error("%s: polygon PMTiles metadata must be a JSON object", __func__);
@@ -1512,7 +1512,7 @@ PolygonSourceDescriptor resolve_polygon_source_descriptor(
     } else if (out.backend == PolygonGeometryBackendKind::PolygonTable) {
         if (!out.useFeatureId &&
             (out.canonicalFields.size() != 1u ||
-             out.canonicalFields.front().type != mlt_pmtiles::ScalarType::STRING)) {
+             out.canonicalFields.front().type != pm_vector::ScalarType::STRING)) {
             error("%s: polygon_table backend requires exactly one STRING canonical ID field",
                 __func__);
         }
@@ -1527,7 +1527,7 @@ PolygonSourceDescriptor resolve_polygon_source_descriptor(
 }
 
 std::vector<uint64_t> build_polygon_seed_priorities(
-    const mlt_pmtiles::DecodedPolygonTile& decoded,
+    const pm_vector::DecodedPolygonTile& decoded,
     const PolygonSourceDescriptor& descriptor) {
     std::vector<uint64_t> priorities(decoded.tile.size(), 0);
     for (size_t row = 0; row < decoded.tile.size(); ++row) {
@@ -1559,7 +1559,7 @@ std::vector<uint64_t> build_polygon_seed_priorities(
 }
 
 std::vector<std::pair<int64_t, int64_t>> extract_polygon_row_global_ring(
-    const mlt_pmtiles::DecodedPolygonTile& decoded,
+    const pm_vector::DecodedPolygonTile& decoded,
     size_t row,
     uint8_t z,
     uint32_t x,
@@ -1581,7 +1581,7 @@ std::vector<std::pair<int64_t, int64_t>> extract_polygon_row_global_ring(
 }
 
 PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput& input,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     const PolygonSourceDescriptor& descriptor,
     int blobFd,
     int priorityFd,
@@ -1594,7 +1594,7 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
     candidate.data = make_empty_polygon_tile_data(schema);
 
     struct ChildSequence {
-        mlt_pmtiles::DecodedPolygonTile decoded;
+        pm_vector::DecodedPolygonTile decoded;
         std::vector<uint64_t> priorities;
         std::vector<uint32_t> order;
         bool useIdentityOrder = false;
@@ -1605,7 +1605,7 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
     size_t totalRows = 0;
     for (const auto* child : input.children) {
         const std::string compressed = read_stored_tile_blob(blobFd, *child);
-        const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
+        const std::string raw = pm_core::gzip_decompress(compressed);
         ChildSequence childSeq;
         childSeq.decoded = useMvt ? mvt_pmtiles::decode_polygon_tile(raw) : mlt_pmtiles::decode_polygon_tile(raw);
         validate_schema_equal(schema, childSeq.decoded.schema, "building polygon pyramid parent tiles");
@@ -1752,7 +1752,7 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
 
 std::optional<EncodedParentTile> encode_polygon_parent_candidate(
     const PolygonParentTileCandidate& candidate,
-    const mlt_pmtiles::FeatureTableSchema& schema,
+    const pm_vector::FeatureTableSchema& schema,
     const BuildOptions& options,
     double levelRatio,
     bool useMvt) {
@@ -1782,7 +1782,7 @@ std::optional<EncodedParentTile> encode_polygon_parent_candidate(
         const std::string raw = useMvt
             ? mvt_pmtiles::encode_polygon_tile_prefix(schema, candidate.data, targetCount, nullptr)
             : mlt_pmtiles::encode_polygon_tile_prefix(schema, candidate.data, targetCount, nullptr);
-        std::string compressed = mlt_pmtiles::gzip_compress(raw);
+        std::string compressed = pm_core::gzip_compress(raw);
         if (compressed.size() <= static_cast<size_t>(options.maxTileBytes) || targetCount == 1u) {
             if (compressed.size() > static_cast<size_t>(options.maxTileBytes) && targetCount == 1u) {
                 warning("%s: polygon tile z=%u x=%u y=%u still exceeds --max-tile-bytes with one feature (%zu bytes)",
@@ -1898,14 +1898,14 @@ TempStores open_temp_stores(const std::string& outPmtiles) {
     return stores;
 }
 
-void finalize_pyramid_archive(const mlt_pmtiles::LoadedPmtilesArchive& archive,
+void finalize_pyramid_archive(const pm_core::LoadedPmtilesArchive& archive,
     const std::string& outPmtiles,
     uint8_t minZoom,
     uint8_t maxZoom,
     const std::string& generator,
     TempStores& stores,
-    std::vector<mlt_pmtiles::StoredTilePayloadRef> allTileRefs) {
-    mlt_pmtiles::ArchiveOptions archiveOptions;
+    std::vector<pm_core::StoredTilePayloadRef> allTileRefs) {
+    pm_core::ArchiveOptions archiveOptions;
     archiveOptions.tileType = archive.header.tile_type;
     archiveOptions.minZoom = minZoom;
     archiveOptions.maxZoom = maxZoom;
@@ -1929,7 +1929,7 @@ void finalize_pyramid_archive(const mlt_pmtiles::LoadedPmtilesArchive& archive,
     stores.blobFd = -1;
     close(stores.priorityFd);
     stores.priorityFd = -1;
-    mlt_pmtiles::write_pmtiles_archive_from_blob_file(
+    pm_core::write_pmtiles_archive_from_blob_file(
         outPmtiles, stores.blobFile, std::move(allTileRefs), archiveOptions);
     unlink(stores.blobFile.c_str());
     unlink(stores.priorityFile.c_str());
@@ -1941,8 +1941,8 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
     const std::string& outPmtiles,
     const BuildOptions& options) {
     validate_common_pyramid_inputs(inPmtiles, outPmtiles, options, __func__);
-    const mlt_pmtiles::LoadedPmtilesArchive archive =
-        mlt_pmtiles::load_pmtiles_archive(inPmtiles);
+    const pm_core::LoadedPmtilesArchive archive =
+        pm_core::load_pmtiles_archive(inPmtiles);
     const bool useMvt = archive.header.tile_type == pmtiles::TILETYPE_MVT;
     if (archive.header.tile_type != pmtiles::TILETYPE_MLT && !useMvt) {
         error("%s: expected MLT or MVT PMTiles input, got tile_type=%u", __func__,
@@ -1974,15 +1974,15 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
     notice("%s: building point PMTiles pyramid from existing z%u down to z%u with %d thread(s)",
         __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom), threads);
 
-    mlt_pmtiles::FeatureTableSchema schema;
+    pm_vector::FeatureTableSchema schema;
     bool haveSchema = false;
-    std::vector<mlt_pmtiles::StoredTilePayloadRef> currentLevel;
+    std::vector<pm_core::StoredTilePayloadRef> currentLevel;
     currentLevel.reserve(archive.entries.size());
-    std::vector<mlt_pmtiles::StoredTilePayloadRef> allTileRefs;
+    std::vector<pm_core::StoredTilePayloadRef> allTileRefs;
     allTileRefs.reserve(archive.entries.size() * 2u);
 
     for (const auto& entry : archive.entries) {
-        mlt_pmtiles::StoredTilePayloadRef tile;
+        pm_core::StoredTilePayloadRef tile;
         tile.z = entry.z;
         tile.x = entry.x;
         tile.y = entry.y;
@@ -1991,8 +1991,8 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         tile.dataLength = static_cast<uint32_t>(compressed.size());
         tile.dataOffset = append_blob_to_store(stores.blobFd, stores.blobSize, compressed);
         if (entry.z == existingMinZoom) {
-            const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
-            const mlt_pmtiles::DecodedPointTile decoded = useMvt
+            const std::string raw = pm_core::gzip_decompress(compressed);
+            const pm_vector::DecodedPointTile decoded = useMvt
                 ? mvt_pmtiles::decode_point_tile(raw)
                 : mlt_pmtiles::decode_point_tile(raw);
             if (!haveSchema) {
@@ -2054,14 +2054,14 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         notice("%s: z%d parent pass: %zu tiles, max_raw=%u, max_estimated=%zu, level_ratio=%.6f",
             __func__, z, candidates.size(), maxRawFeatures, maxEstimatedBytes, levelRatio);
 
-        std::vector<std::optional<mlt_pmtiles::StoredTilePayloadRef>> nextLevel(candidates.size());
+        std::vector<std::optional<pm_core::StoredTilePayloadRef>> nextLevel(candidates.size());
         parallel_for_tiles(candidates.size(), threads, [&](size_t i) {
             std::optional<EncodedParentTile> encoded =
                 encode_point_parent_candidate(candidates[i], schema, options, levelRatio, useMvt);
             if (!encoded.has_value()) {
                 return;
             }
-            mlt_pmtiles::StoredTilePayloadRef stored;
+            pm_core::StoredTilePayloadRef stored;
             stored.tileId = encoded->payload.tileId;
             stored.z = encoded->payload.z;
             stored.x = encoded->payload.x;
@@ -2103,8 +2103,8 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     const std::string& outPmtiles,
     const BuildOptions& options) {
     validate_common_pyramid_inputs(inPmtiles, outPmtiles, options, __func__);
-    const mlt_pmtiles::LoadedPmtilesArchive archive =
-        mlt_pmtiles::load_pmtiles_archive(inPmtiles);
+    const pm_core::LoadedPmtilesArchive archive =
+        pm_core::load_pmtiles_archive(inPmtiles);
     const bool useMvt = archive.header.tile_type == pmtiles::TILETYPE_MVT;
     if (archive.header.tile_type != pmtiles::TILETYPE_MLT && !useMvt) {
         error("%s: expected MLT or MVT PMTiles input, got tile_type=%u", __func__,
@@ -2136,16 +2136,16 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     notice("%s: building polygon PMTiles pyramid from existing z%u down to z%u with %d thread(s)",
         __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom), threads);
 
-    mlt_pmtiles::FeatureTableSchema schema;
+    pm_vector::FeatureTableSchema schema;
     PolygonSourceDescriptor sourceDescriptor;
     bool haveSchema = false;
-    std::vector<mlt_pmtiles::StoredTilePayloadRef> currentLevel;
+    std::vector<pm_core::StoredTilePayloadRef> currentLevel;
     currentLevel.reserve(archive.entries.size());
-    std::vector<mlt_pmtiles::StoredTilePayloadRef> allTileRefs;
+    std::vector<pm_core::StoredTilePayloadRef> allTileRefs;
     allTileRefs.reserve(archive.entries.size() * 2u);
 
     for (const auto& entry : archive.entries) {
-        mlt_pmtiles::StoredTilePayloadRef tile;
+        pm_core::StoredTilePayloadRef tile;
         tile.z = entry.z;
         tile.x = entry.x;
         tile.y = entry.y;
@@ -2154,8 +2154,8 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         tile.dataLength = static_cast<uint32_t>(compressed.size());
         tile.dataOffset = append_blob_to_store(stores.blobFd, stores.blobSize, compressed);
         if (entry.z == existingMinZoom || entry.z == maxZoom) {
-            const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
-            const mlt_pmtiles::DecodedPolygonTile decoded = useMvt
+            const std::string raw = pm_core::gzip_decompress(compressed);
+            const pm_vector::DecodedPolygonTile decoded = useMvt
                 ? mvt_pmtiles::decode_polygon_tile(raw)
                 : mlt_pmtiles::decode_polygon_tile(raw);
             if (!haveSchema) {
@@ -2218,8 +2218,8 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     }
     for (auto& tile : currentLevel) {
         const std::string compressed = read_stored_tile_blob(stores.blobFd, tile);
-        const std::string raw = mlt_pmtiles::gzip_decompress(compressed);
-        const mlt_pmtiles::DecodedPolygonTile decoded = useMvt
+        const std::string raw = pm_core::gzip_decompress(compressed);
+        const pm_vector::DecodedPolygonTile decoded = useMvt
             ? mvt_pmtiles::decode_polygon_tile(raw)
             : mlt_pmtiles::decode_polygon_tile(raw);
         validate_schema_equal(schema, decoded.schema, "seeding polygon priorities from existing min zoom");
@@ -2272,14 +2272,14 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         notice("%s: z%d polygon parent pass: %zu tiles, max_raw=%u, max_estimated=%zu, level_ratio=%.6f",
             __func__, z, candidates.size(), maxRawFeatures, maxEstimatedBytes, levelRatio);
 
-        std::vector<std::optional<mlt_pmtiles::StoredTilePayloadRef>> nextLevel(candidates.size());
+        std::vector<std::optional<pm_core::StoredTilePayloadRef>> nextLevel(candidates.size());
         parallel_for_tiles(candidates.size(), threads, [&](size_t i) {
             std::optional<EncodedParentTile> encoded =
                 encode_polygon_parent_candidate(candidates[i], schema, options, levelRatio, useMvt);
             if (!encoded.has_value()) {
                 return;
             }
-            mlt_pmtiles::StoredTilePayloadRef stored;
+            pm_core::StoredTilePayloadRef stored;
             stored.tileId = encoded->payload.tileId;
             stored.z = encoded->payload.z;
             stored.x = encoded->payload.x;

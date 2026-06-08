@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -24,14 +23,14 @@ namespace {
 constexpr int32_t kRasterTileSize = 256;
 
 using TileBuffer = std::vector<uint16_t>;
-using TileMap = std::unordered_map<mlt_pmtiles::RasterTileKey, TileBuffer,
-    mlt_pmtiles::RasterTileKeyHash>;
+using TileMap = std::unordered_map<pm_raster::RasterTileKey, TileBuffer,
+    pm_raster::RasterTileKeyHash>;
 
-mlt_pmtiles::RasterBounds resolve_bounds_from_inputs(const Options& options) {
+pm_raster::RasterBounds resolve_bounds_from_inputs(const Options& options) {
     if (options.bounds.valid()) {
         return options.bounds;
     }
-    mlt_pmtiles::RasterBounds bounds;
+    pm_raster::RasterBounds bounds;
     if (!options.rangeFile.empty() && file_exists(options.rangeFile)) {
         readCoordRange(options.rangeFile, bounds.xmin, bounds.xmax, bounds.ymin, bounds.ymax);
         if (bounds.valid()) {
@@ -68,6 +67,16 @@ void add_count(TileBuffer& buffer, int32_t px, int32_t py, double count) {
     const uint32_t add = static_cast<uint32_t>(std::llround(count));
     const uint32_t next = static_cast<uint32_t>(buffer[idx]) + add;
     buffer[idx] = static_cast<uint16_t>(std::min<uint32_t>(next, 255u));
+}
+
+void add_saturated(TileBuffer& buffer, int32_t px, int32_t py, uint16_t count) {
+    if (count == 0) {
+        return;
+    }
+    const size_t idx = static_cast<size_t>(py) * static_cast<size_t>(kRasterTileSize) +
+        static_cast<size_t>(px);
+    buffer[idx] = static_cast<uint16_t>(
+        std::min<uint32_t>(static_cast<uint32_t>(buffer[idx]) + count, 255u));
 }
 
 void merge_tile_map(TileMap& dst, const TileMap& src) {
@@ -127,7 +136,7 @@ uint8_t adjusted_intensity(uint16_t raw, bool autoAdjust, int32_t threshold) {
 TileMap accumulate_zoom(const TileReader& reader,
     const std::vector<TileInfo>& blocks,
     const Options& options,
-    const mlt_pmtiles::RasterBounds& bounds,
+    const pm_raster::RasterBounds& bounds,
     int32_t zoom) {
     const int32_t nThreads = std::max<int32_t>(1, options.threads);
     std::vector<TileMap> localMaps(static_cast<size_t>(nThreads));
@@ -165,8 +174,8 @@ TileMap accumulate_zoom(const TileReader& reader,
                         y < bounds.ymin || y > bounds.ymax) {
                         continue;
                     }
-                    const mlt_pmtiles::RasterPixelCoord pix =
-                        mlt_pmtiles::epsg3857_to_raster_pixel(x, y, zoom);
+                    const pm_raster::RasterPixelCoord pix =
+                        pm_raster::epsg3857_to_raster_pixel(x, y, zoom);
                     TileBuffer& buffer = localMaps[static_cast<size_t>(tid)][pix.key];
                     if (buffer.empty()) {
                         buffer.assign(static_cast<size_t>(kRasterTileSize) *
@@ -192,6 +201,87 @@ TileMap accumulate_zoom(const TileReader& reader,
     return merged;
 }
 
+TileMap build_parent_zoom(const TileMap& child) {
+    TileMap parent;
+    for (const auto& kv : child) {
+        if (kv.first.z == 0) {
+            continue;
+        }
+        const pm_raster::RasterTileKey parentKey{
+            static_cast<uint8_t>(kv.first.z - 1),
+            kv.first.x / 2,
+            kv.first.y / 2
+        };
+        const int32_t parentXOffset = static_cast<int32_t>(kv.first.x & 1u) *
+            (kRasterTileSize / 2);
+        const int32_t parentYOffset = static_cast<int32_t>(kv.first.y & 1u) *
+            (kRasterTileSize / 2);
+        const TileBuffer& childBuffer = kv.second;
+        for (int32_t y = 0; y < kRasterTileSize; ++y) {
+            for (int32_t x = 0; x < kRasterTileSize; ++x) {
+                const uint16_t raw = childBuffer[static_cast<size_t>(y) *
+                    static_cast<size_t>(kRasterTileSize) + static_cast<size_t>(x)];
+                if (raw == 0) {
+                    continue;
+                }
+                TileBuffer& parentBuffer = parent[parentKey];
+                if (parentBuffer.empty()) {
+                    parentBuffer.assign(static_cast<size_t>(kRasterTileSize) *
+                        static_cast<size_t>(kRasterTileSize), 0);
+                }
+                add_saturated(parentBuffer,
+                    parentXOffset + x / 2,
+                    parentYOffset + y / 2,
+                    raw);
+            }
+        }
+    }
+    return parent;
+}
+
+size_t append_zoom_tiles(const TileMap& accum,
+    const Options& options,
+    std::ofstream& blob,
+    const std::string& tempBlobFile,
+    uint64_t& dataOffset,
+    std::vector<pm_core::StoredTilePayloadRef>& tiles,
+    int32_t& threshold) {
+    std::array<uint64_t, 256> hist{};
+    for (const auto& kv : accum) {
+        for (uint16_t raw : kv.second) {
+            const uint16_t capped = std::min<uint16_t>(raw, 255);
+            hist[static_cast<size_t>(capped)] += 1;
+        }
+    }
+    threshold = options.autoAdjust
+        ? quantile_threshold_from_histogram(hist, options.adjustQuantile)
+        : 255;
+    size_t written = 0;
+    for (const auto& kv : accum) {
+        Image2D<Rgb8> tile(kRasterTileSize, kRasterTileSize, Rgb8{0, 0, 0});
+        bool nonEmpty = false;
+        for (int32_t y = 0; y < kRasterTileSize; ++y) {
+            for (int32_t x = 0; x < kRasterTileSize; ++x) {
+                const uint16_t raw = kv.second[static_cast<size_t>(y) *
+                    static_cast<size_t>(kRasterTileSize) + static_cast<size_t>(x)];
+                const uint8_t gray = adjusted_intensity(raw, options.autoAdjust, threshold);
+                if (gray != 0) {
+                    nonEmpty = true;
+                }
+                tile(y, x) = Rgb8{gray, gray, gray};
+            }
+        }
+        if (!nonEmpty) {
+            continue;
+        }
+        const std::string encoded = encode_png_rgb8(tile);
+        pm_raster::append_png_tile_to_blob(
+            blob, tempBlobFile, encoded, dataOffset, kv.first, tiles);
+        ++written;
+    }
+    return written;
+}
+
 } // namespace
 
 void write_tiles2mono_pmtiles(const Options& options) {
@@ -201,8 +291,15 @@ void write_tiles2mono_pmtiles(const Options& options) {
     if (options.icolX < 0 || options.icolY < 0 || options.icolCount < 0) {
         error("%s: column indices must be non-negative", __func__);
     }
-    const mlt_pmtiles::RasterBounds bounds = resolve_bounds_from_inputs(options);
-    mlt_pmtiles::validate_raster_archive_options(bounds, options.minZoom, options.maxZoom, __func__);
+    const pm_raster::RasterBounds bounds = resolve_bounds_from_inputs(options);
+    pm_raster::validate_raster_archive_options(bounds, options.minZoom, options.maxZoom, __func__);
+    const int32_t maxZoomFromRaw = options.maxZoomFromRaw < 0
+        ? options.maxZoom
+        : options.maxZoomFromRaw;
+    if (maxZoomFromRaw < options.minZoom || maxZoomFromRaw > options.maxZoom) {
+        error("%s: --max-zoom-from-raw must be in the zoom range %d..%d",
+            __func__, options.minZoom, options.maxZoom);
+    }
     TileReader reader(options.dataFile, options.indexFile);
     if (!reader.isValid()) {
         error("%s: failed to initialize TileReader for %s", __func__, options.dataFile.c_str());
@@ -225,51 +322,31 @@ void write_tiles2mono_pmtiles(const Options& options) {
         error("%s: cannot open temporary PMTiles blob %s", __func__, tempBlobFile.c_str());
     }
 
-    std::vector<mlt_pmtiles::StoredTilePayloadRef> tiles;
+    std::vector<pm_core::StoredTilePayloadRef> tiles;
     uint64_t dataOffset = 0;
-    for (int32_t z = options.minZoom; z <= options.maxZoom; ++z) {
-        TileMap accum = accumulate_zoom(reader, blocks, options, bounds, z);
-        std::array<uint64_t, 256> hist{};
-        for (const auto& kv : accum) {
-            for (uint16_t raw : kv.second) {
-                const uint16_t capped = std::min<uint16_t>(raw, 255);
-                hist[static_cast<size_t>(capped)] += 1;
-            }
-        }
-        const int32_t threshold = options.autoAdjust
-            ? quantile_threshold_from_histogram(hist, options.adjustQuantile)
-            : 255;
-        std::map<mlt_pmtiles::RasterTileKey, TileBuffer> sorted(accum.begin(), accum.end());
-        for (const auto& kv : sorted) {
-            Image2D<Rgb8> tile(kRasterTileSize, kRasterTileSize, Rgb8{0, 0, 0});
-            bool nonEmpty = false;
-            for (int32_t y = 0; y < kRasterTileSize; ++y) {
-                for (int32_t x = 0; x < kRasterTileSize; ++x) {
-                    const uint16_t raw = kv.second[static_cast<size_t>(y) *
-                        static_cast<size_t>(kRasterTileSize) + static_cast<size_t>(x)];
-                    const uint8_t gray = adjusted_intensity(raw, options.autoAdjust, threshold);
-                    if (gray != 0) {
-                        nonEmpty = true;
-                    }
-                    tile(y, x) = Rgb8{gray, gray, gray};
-                }
-            }
-            if (!nonEmpty) {
-                continue;
-            }
-            const std::string encoded = encode_png_rgb8(tile);
-            mlt_pmtiles::append_png_tile_to_blob(
-                blob, tempBlobFile, encoded, dataOffset, kv.first, tiles);
-        }
+    TileMap accum;
+    for (int32_t z = options.maxZoom; z >= maxZoomFromRaw; --z) {
+        accum = accumulate_zoom(reader, blocks, options, bounds, z);
+        int32_t threshold = 255;
+        const size_t written = append_zoom_tiles(
+            accum, options, blob, tempBlobFile, dataOffset, tiles, threshold);
         notice("%s: z%d wrote %zu mono raster tile(s); auto_adjust_threshold=%d",
-            __func__, z, accum.size(), threshold);
+            __func__, z, written, threshold);
+    }
+    for (int32_t z = maxZoomFromRaw - 1; z >= options.minZoom; --z) {
+        accum = build_parent_zoom(accum);
+        int32_t threshold = 255;
+        const size_t written = append_zoom_tiles(
+            accum, options, blob, tempBlobFile, dataOffset, tiles, threshold);
+        notice("%s: z%d wrote %zu mono raster tile(s); auto_adjust_threshold=%d",
+            __func__, z, written, threshold);
     }
     blob.close();
     if (tiles.empty()) {
         error("%s: no raster tiles generated from %s", __func__, options.dataFile.c_str());
     }
 
-    mlt_pmtiles::write_png_raster_pmtiles_archive_from_blob(
+    pm_raster::write_png_raster_pmtiles_archive_from_blob(
         options.outFile, tempBlobFile, std::move(tiles), bounds,
         options.minZoom, options.maxZoom);
     std::error_code ec;
