@@ -14,9 +14,11 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fcntl.h>
 #include <functional>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -820,6 +822,331 @@ nlohmann::json build_pyramid_metadata(nlohmann::json metadata,
         }
     }
     return metadata;
+}
+
+uint64_t read_local_varint(const uint8_t*& ptr, const uint8_t* end, const char* funcName) {
+    uint64_t value = 0;
+    uint32_t shift = 0;
+    while (ptr < end) {
+        const uint8_t byte = *ptr++;
+        value |= static_cast<uint64_t>(byte & 0x7fu) << shift;
+        if ((byte & 0x80u) == 0) {
+            return value;
+        }
+        shift += 7u;
+        if (shift >= 64u) {
+            error("%s: varint is too long", funcName);
+        }
+    }
+    error("%s: truncated varint", funcName);
+    return 0;
+}
+
+std::vector<std::string> split_mvt_top_level_layers(const std::string& rawTile) {
+    std::vector<std::string> out;
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(rawTile.data());
+    const uint8_t* end = ptr + rawTile.size();
+    while (ptr < end) {
+        const uint8_t* fieldStart = ptr;
+        const uint64_t key = read_local_varint(ptr, end, __func__);
+        const uint64_t field = key >> 3u;
+        const uint64_t wire = key & 0x7u;
+        if (wire != 2u) {
+            error("%s: expected length-delimited MVT top-level field", __func__);
+        }
+        const uint64_t len = read_local_varint(ptr, end, __func__);
+        if (len > static_cast<uint64_t>(end - ptr)) {
+            error("%s: truncated MVT top-level field", __func__);
+        }
+        ptr += static_cast<size_t>(len);
+        if (field == 3u) {
+            out.emplace_back(reinterpret_cast<const char*>(fieldStart),
+                static_cast<size_t>(ptr - fieldStart));
+        }
+    }
+    return out;
+}
+
+std::vector<std::string> split_mlt_top_level_layers(const std::string& rawTile) {
+    std::vector<std::string> out;
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(rawTile.data());
+    const uint8_t* end = ptr + rawTile.size();
+    while (ptr < end) {
+        const uint8_t* layerStart = ptr;
+        const uint64_t len = read_local_varint(ptr, end, __func__);
+        if (len == 0 || len > static_cast<uint64_t>(end - ptr)) {
+            error("%s: malformed MLT top-level layer", __func__);
+        }
+        ptr += static_cast<size_t>(len);
+        out.emplace_back(reinterpret_cast<const char*>(layerStart),
+            static_cast<size_t>(ptr - layerStart));
+    }
+    return out;
+}
+
+std::vector<std::string> split_vector_top_level_layers(const std::string& rawTile, bool useMvt) {
+    return useMvt ? split_mvt_top_level_layers(rawTile) : split_mlt_top_level_layers(rawTile);
+}
+
+bool decodes_as_point_layer(const std::string& rawLayer, bool useMvt) {
+    try {
+        const pm_vector::DecodedPointTile decoded = useMvt
+            ? mvt_pmtiles::decode_point_tile(rawLayer)
+            : mlt_pmtiles::decode_point_tile(rawLayer);
+        return decoded.tile.size() > 0 || !decoded.schema.layerName.empty();
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool decodes_as_polygon_layer(const std::string& rawLayer, bool useMvt) {
+    try {
+        const pm_vector::DecodedPolygonTile decoded = useMvt
+            ? mvt_pmtiles::decode_polygon_tile(rawLayer)
+            : mlt_pmtiles::decode_polygon_tile(rawLayer);
+        return decoded.tile.size() > 0 || !decoded.schema.layerName.empty();
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+struct SplitMixedSingleLevelResult {
+    std::string pointFile;
+    std::string polygonFile;
+};
+
+std::string make_temp_pmtiles_path(const std::string& outPmtiles, const std::string& label) {
+    return outPmtiles + "." + label + "." + std::to_string(getpid()) + ".pmtiles";
+}
+
+pm_core::ArchiveOptions archive_options_like(const pm_core::LoadedPmtilesArchive& archive,
+    nlohmann::json metadata,
+    uint8_t minZoom,
+    uint8_t maxZoom) {
+    pm_core::ArchiveOptions options;
+    options.tileType = archive.header.tile_type;
+    options.tileCompression = archive.header.tile_compression;
+    options.minZoom = minZoom;
+    options.maxZoom = maxZoom;
+    options.centerZoom = static_cast<uint8_t>(
+        std::clamp<int32_t>(archive.header.center_zoom, minZoom, maxZoom));
+    options.clustered = true;
+    options.hasGeographicBounds = true;
+    options.minLonE7 = archive.header.min_lon_e7;
+    options.minLatE7 = archive.header.min_lat_e7;
+    options.maxLonE7 = archive.header.max_lon_e7;
+    options.maxLatE7 = archive.header.max_lat_e7;
+    options.centerLonE7 = archive.header.center_lon_e7;
+    options.centerLatE7 = archive.header.center_lat_e7;
+    options.metadata = std::move(metadata);
+    return options;
+}
+
+SplitMixedSingleLevelResult split_mixed_single_level_archive(const std::string& inPmtiles,
+    const std::string& outPmtiles) {
+    const pm_core::LoadedPmtilesArchive archive = pm_core::load_pmtiles_archive(inPmtiles);
+    const bool useMvt = archive.header.tile_type == pmtiles::TILETYPE_MVT;
+    if (archive.header.tile_type != pmtiles::TILETYPE_MLT && !useMvt) {
+        error("%s: expected MLT or MVT PMTiles input, got tile_type=%u", __func__,
+            static_cast<unsigned>(archive.header.tile_type));
+    }
+    if (archive.header.tile_compression != pmtiles::COMPRESSION_GZIP) {
+        error("%s: only gzip-compressed PMTiles tiles are currently supported", __func__);
+    }
+    if (archive.entries.empty()) {
+        error("%s: mixed PMTiles input has no tile entries", __func__);
+    }
+    const uint8_t sourceZoom = archive.entries.front().z;
+    for (const auto& entry : archive.entries) {
+        if (entry.z != sourceZoom) {
+            error("%s: --mixed --in currently expects a single-level PMTiles input", __func__);
+        }
+    }
+
+    std::vector<pm_core::EncodedTilePayload> pointTiles;
+    std::vector<pm_core::EncodedTilePayload> polygonTiles;
+    for (const auto& entry : archive.entries) {
+        const std::string raw = pm_core::read_pmtiles_tile_payload(
+            *archive.reader, archive.header, entry);
+        std::string pointLayer;
+        std::string polygonLayer;
+        for (const std::string& layer : split_vector_top_level_layers(raw, useMvt)) {
+            const bool isPoint = decodes_as_point_layer(layer, useMvt);
+            const bool isPolygon = decodes_as_polygon_layer(layer, useMvt);
+            if (isPoint == isPolygon) {
+                error("%s: cannot classify mixed PMTiles layer at z=%u x=%u y=%u",
+                    __func__, static_cast<unsigned>(entry.z), entry.x, entry.y);
+            }
+            if (isPoint) {
+                if (!pointLayer.empty()) {
+                    error("%s: multiple point layers found in mixed PMTiles tile z=%u x=%u y=%u",
+                        __func__, static_cast<unsigned>(entry.z), entry.x, entry.y);
+                }
+                pointLayer = layer;
+            } else {
+                if (!polygonLayer.empty()) {
+                    error("%s: multiple polygon layers found in mixed PMTiles tile z=%u x=%u y=%u",
+                        __func__, static_cast<unsigned>(entry.z), entry.x, entry.y);
+                }
+                polygonLayer = layer;
+            }
+        }
+        auto makePayload = [&](const std::string& layer) {
+            pm_core::EncodedTilePayload payload;
+            payload.z = entry.z;
+            payload.x = entry.x;
+            payload.y = entry.y;
+            payload.tileId = pmtiles::zxy_to_tileid(entry.z, entry.x, entry.y);
+            payload.compressedData = pm_core::gzip_compress(layer);
+            return payload;
+        };
+        if (!pointLayer.empty()) {
+            pointTiles.push_back(makePayload(pointLayer));
+        }
+        if (!polygonLayer.empty()) {
+            polygonTiles.push_back(makePayload(polygonLayer));
+        }
+    }
+    if (pointTiles.empty() || polygonTiles.empty()) {
+        error("%s: mixed input must contain at least one point layer and one polygon layer", __func__);
+    }
+
+    SplitMixedSingleLevelResult out;
+    out.pointFile = make_temp_pmtiles_path(outPmtiles, "point-source");
+    out.polygonFile = make_temp_pmtiles_path(outPmtiles, "polygon-source");
+    pm_core::write_pmtiles_archive(out.pointFile, std::move(pointTiles),
+        archive_options_like(archive, archive.metadata, sourceZoom, sourceZoom));
+    pm_core::write_pmtiles_archive(out.polygonFile, std::move(polygonTiles),
+        archive_options_like(archive, archive.metadata, sourceZoom, sourceZoom));
+    return out;
+}
+
+void append_json_array_unique_by_key(nlohmann::json& dst, const nlohmann::json& src,
+    const std::string& key) {
+    if (!src.is_array()) {
+        return;
+    }
+    if (!dst.is_array()) {
+        dst = nlohmann::json::array();
+    }
+    std::unordered_set<std::string> seen;
+    for (const auto& item : dst) {
+        if (item.is_object() && item.contains(key) && item[key].is_string()) {
+            seen.insert(item[key].get<std::string>());
+        }
+    }
+    for (const auto& item : src) {
+        if (!item.is_object() || !item.contains(key) || !item[key].is_string()) {
+            dst.push_back(item);
+            continue;
+        }
+        if (seen.insert(item[key].get<std::string>()).second) {
+            dst.push_back(item);
+        }
+    }
+}
+
+void merge_mixed_metadata(nlohmann::json& metadata, const nlohmann::json& polygonMetadata) {
+    if (!metadata.is_object()) {
+        metadata = nlohmann::json::object();
+    }
+    if (polygonMetadata.contains("vector_layers")) {
+        append_json_array_unique_by_key(metadata["vector_layers"],
+            polygonMetadata["vector_layers"], "id");
+    }
+    if (polygonMetadata.contains("tilestats") &&
+        polygonMetadata["tilestats"].contains("layers")) {
+        append_json_array_unique_by_key(metadata["tilestats"]["layers"],
+            polygonMetadata["tilestats"]["layers"], "layer");
+        if (metadata["tilestats"].is_object() && metadata["tilestats"]["layers"].is_array()) {
+            metadata["tilestats"]["layerCount"] = metadata["tilestats"]["layers"].size();
+        }
+    }
+    for (const char* key : {"polygon_source", "polygon_pyramid_hint",
+             "tile_buffer_rule", "tile_buffer_screen_px"}) {
+        if (polygonMetadata.contains(key)) {
+            metadata[key] = polygonMetadata[key];
+        }
+    }
+}
+
+void validate_mixed_archive_pair(const pm_core::LoadedPmtilesArchive& pointArchive,
+    const pm_core::LoadedPmtilesArchive& polygonArchive,
+    const char* fn) {
+    if (pointArchive.header.tile_type != polygonArchive.header.tile_type) {
+        error("%s: point and polygon PMTiles inputs must use the same tile type", fn);
+    }
+    if (pointArchive.header.tile_compression != pmtiles::COMPRESSION_GZIP ||
+        polygonArchive.header.tile_compression != pmtiles::COMPRESSION_GZIP) {
+        error("%s: only gzip-compressed PMTiles tiles are currently supported", fn);
+    }
+    if (pointArchive.header.tile_type != pmtiles::TILETYPE_MLT &&
+        pointArchive.header.tile_type != pmtiles::TILETYPE_MVT) {
+        error("%s: expected MLT or MVT PMTiles inputs", fn);
+    }
+    if (pointArchive.header.max_zoom != polygonArchive.header.max_zoom) {
+        error("%s: point and polygon PMTiles inputs must have the same max zoom", fn);
+    }
+    if (pointArchive.header.min_zoom != polygonArchive.header.min_zoom) {
+        error("%s: point and polygon PMTiles inputs must have the same min zoom", fn);
+    }
+}
+
+void merge_point_polygon_pyramid_archives(const std::string& pointPmtiles,
+    const std::string& polygonPmtiles,
+    const std::string& outPmtiles) {
+    const pm_core::LoadedPmtilesArchive pointArchive =
+        pm_core::load_pmtiles_archive(pointPmtiles);
+    const pm_core::LoadedPmtilesArchive polygonArchive =
+        pm_core::load_pmtiles_archive(polygonPmtiles);
+    validate_mixed_archive_pair(pointArchive, polygonArchive, __func__);
+
+    std::map<uint64_t, pm_core::EncodedTilePayload> outTiles;
+    auto appendArchive = [&](const pm_core::LoadedPmtilesArchive& archive, bool polygonLayer) {
+        for (const auto& entry : archive.entries) {
+            const uint64_t tileId = pmtiles::zxy_to_tileid(entry.z, entry.x, entry.y);
+            auto& tile = outTiles[tileId];
+            if (tile.compressedData.empty()) {
+                tile.tileId = tileId;
+                tile.z = entry.z;
+                tile.x = entry.x;
+                tile.y = entry.y;
+            }
+            const std::string raw = pm_core::read_pmtiles_tile_payload(
+                *archive.reader, archive.header, entry);
+            std::string combined = tile.compressedData.empty()
+                ? std::string()
+                : pm_core::gzip_decompress(tile.compressedData);
+            if (polygonLayer) {
+                combined.append(raw);
+            } else {
+                combined = raw + combined;
+            }
+            tile.compressedData = pm_core::gzip_compress(combined);
+        }
+    };
+    appendArchive(pointArchive, false);
+    appendArchive(polygonArchive, true);
+
+    std::vector<pm_core::EncodedTilePayload> encoded;
+    encoded.reserve(outTiles.size());
+    for (auto& kv : outTiles) {
+        encoded.push_back(std::move(kv.second));
+    }
+
+    nlohmann::json metadata = pointArchive.metadata;
+    merge_mixed_metadata(metadata, polygonArchive.metadata);
+    metadata = build_pyramid_metadata(metadata, outPmtiles,
+        pointArchive.header.min_zoom, pointArchive.header.max_zoom,
+        "punkst build-pyramid --mixed");
+
+    pm_core::ArchiveOptions options = archive_options_like(pointArchive, std::move(metadata),
+        pointArchive.header.min_zoom, pointArchive.header.max_zoom);
+    options.minLonE7 = std::min(pointArchive.header.min_lon_e7, polygonArchive.header.min_lon_e7);
+    options.minLatE7 = std::min(pointArchive.header.min_lat_e7, polygonArchive.header.min_lat_e7);
+    options.maxLonE7 = std::max(pointArchive.header.max_lon_e7, polygonArchive.header.max_lon_e7);
+    options.maxLatE7 = std::max(pointArchive.header.max_lat_e7, polygonArchive.header.max_lat_e7);
+    pm_core::write_pmtiles_archive(outPmtiles, std::move(encoded), options);
 }
 
 std::vector<ParentBuildInput> enumerate_parent_tiles(
@@ -2321,6 +2648,68 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
 
     finalize_pyramid_archive(archive, outPmtiles, minZoom, maxZoom,
         "punkst build-pyramid --polygon", stores, std::move(allTileRefs));
+}
+
+void build_mixed_pmtiles_pyramid(const std::string& pointPmtiles,
+    const std::string& polygonPmtiles,
+    const std::string& outPmtiles,
+    const BuildOptions& options) {
+    validate_common_pyramid_inputs(pointPmtiles, outPmtiles, options, __func__);
+    if (polygonPmtiles.empty()) {
+        error("%s: polygon PMTiles input is required for mixed pyramid building", __func__);
+    }
+    if (pointPmtiles == polygonPmtiles) {
+        error("%s: use the single-input --mixed --in form for a two-layer source archive", __func__);
+    }
+    if (polygonPmtiles == outPmtiles) {
+        error("%s: polygon input and output PMTiles paths must differ", __func__);
+    }
+
+    const pm_core::LoadedPmtilesArchive pointArchive =
+        pm_core::load_pmtiles_archive(pointPmtiles);
+    const pm_core::LoadedPmtilesArchive polygonArchive =
+        pm_core::load_pmtiles_archive(polygonPmtiles);
+    validate_mixed_archive_pair(pointArchive, polygonArchive, __func__);
+
+    const std::string pointPyramid = make_temp_pmtiles_path(outPmtiles, "point-pyramid");
+    const std::string polygonPyramid = make_temp_pmtiles_path(outPmtiles, "polygon-pyramid");
+    try {
+        build_point_pmtiles_pyramid(pointPmtiles, pointPyramid, options);
+        build_polygon_pmtiles_pyramid(polygonPmtiles, polygonPyramid, options);
+        merge_point_polygon_pyramid_archives(pointPyramid, polygonPyramid, outPmtiles);
+        std::filesystem::remove(pointPyramid);
+        std::filesystem::remove(polygonPyramid);
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove(pointPyramid, ec);
+        std::filesystem::remove(polygonPyramid, ec);
+        throw;
+    }
+}
+
+void build_mixed_pmtiles_pyramid(const std::string& inPmtiles,
+    const std::string& outPmtiles,
+    const BuildOptions& options) {
+    validate_common_pyramid_inputs(inPmtiles, outPmtiles, options, __func__);
+    SplitMixedSingleLevelResult split = split_mixed_single_level_archive(inPmtiles, outPmtiles);
+    const std::string pointPyramid = make_temp_pmtiles_path(outPmtiles, "point-pyramid");
+    const std::string polygonPyramid = make_temp_pmtiles_path(outPmtiles, "polygon-pyramid");
+    try {
+        build_point_pmtiles_pyramid(split.pointFile, pointPyramid, options);
+        build_polygon_pmtiles_pyramid(split.polygonFile, polygonPyramid, options);
+        merge_point_polygon_pyramid_archives(pointPyramid, polygonPyramid, outPmtiles);
+        std::filesystem::remove(split.pointFile);
+        std::filesystem::remove(split.polygonFile);
+        std::filesystem::remove(pointPyramid);
+        std::filesystem::remove(polygonPyramid);
+    } catch (...) {
+        std::error_code ec;
+        std::filesystem::remove(split.pointFile, ec);
+        std::filesystem::remove(split.polygonFile, ec);
+        std::filesystem::remove(pointPyramid, ec);
+        std::filesystem::remove(polygonPyramid, ec);
+        throw;
+    }
 }
 
 } // namespace pmtiles_pyramid

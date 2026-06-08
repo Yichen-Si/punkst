@@ -6,9 +6,12 @@
 int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
     std::string inPrefix;
     std::string inData;
+    std::string pointIn;
+    std::string polygonIn;
     std::string outPmtiles;
     bool pointMode = false;
     bool polygonMode = false;
+    bool mixedMode = false;
     int32_t threads = 1;
     std::string polygonPriorityMode = "area";
     pmtiles_pyramid::BuildOptions options;
@@ -16,9 +19,12 @@ int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
     ParamList pl;
     pl.add_option("in", "Input PMTiles file", inPrefix)
       .add_option("in-data", "Input PMTiles file", inData)
+      .add_option("point-in", "Point PMTiles input; with --polygon-in builds a mixed pyramid", pointIn)
+      .add_option("polygon-in", "Polygon PMTiles input; with --point-in builds a mixed pyramid", polygonIn)
       .add_option("out", "Output PMTiles file", outPmtiles, true)
       .add_option("point", "Build a multi-zoom PMTiles pyramid for point-only MLT/MVT tiles", pointMode)
       .add_option("polygon", "Build a multi-zoom PMTiles pyramid for simple-polygon MLT/MVT tiles", polygonMode)
+      .add_option("mixed", "Build a mixed point+polygon PMTiles pyramid", mixedMode)
       .add_option("min-zoom", "Minimum zoom level to build", options.minZoom)
       .add_option("max-tile-bytes", "Maximum compressed tile bytes", options.maxTileBytes)
       .add_option("max-tile-features", "Maximum features per tile", options.maxTileFeatures)
@@ -45,17 +51,39 @@ int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
         return 1;
     }
 
-    if (pointMode == polygonMode) {
-        error("%s: specify exactly one of --point or --polygon", __func__);
-    }
     if (!inPrefix.empty()) {
         if (!inData.empty() && inData != inPrefix) {
             error("%s: --in and --in-data refer to different inputs", __func__);
         }
         inData = inPrefix;
     }
-    if (inData.empty()) {
-        error("%s: either --in or --in-data must be specified", __func__);
+    if (!inData.empty() && (!pointIn.empty() || !polygonIn.empty())) {
+        error("%s: --in/--in-data cannot be combined with --point-in or --polygon-in", __func__);
+    }
+    const int32_t explicitModeCount = (pointMode ? 1 : 0) + (polygonMode ? 1 : 0) + (mixedMode ? 1 : 0);
+    if (!inData.empty()) {
+        if (explicitModeCount != 1) {
+            error("%s: specify exactly one of --point, --polygon, or --mixed when using --in", __func__);
+        }
+    } else {
+        if (pointIn.empty() && polygonIn.empty()) {
+            error("%s: specify --point-in, --polygon-in, or --in with an explicit mode", __func__);
+        }
+        if (explicitModeCount > 1) {
+            error("%s: specify at most one explicit mode flag", __func__);
+        }
+        const bool inferredPoint = !pointIn.empty() && polygonIn.empty();
+        const bool inferredPolygon = pointIn.empty() && !polygonIn.empty();
+        const bool inferredMixed = !pointIn.empty() && !polygonIn.empty();
+        if (explicitModeCount == 1 &&
+            ((pointMode && !inferredPoint) ||
+             (polygonMode && !inferredPolygon) ||
+             (mixedMode && !inferredMixed))) {
+            error("%s: explicit mode does not match --point-in/--polygon-in inputs", __func__);
+        }
+        pointMode = inferredPoint;
+        polygonMode = inferredPolygon;
+        mixedMode = inferredMixed;
     }
 
     options.threads = threads;
@@ -78,9 +106,19 @@ int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv) {
         error("%s: --polygon-priority must be one of random or area", __func__);
     }
     if (pointMode) {
-        pmtiles_pyramid::build_point_pmtiles_pyramid(inData, outPmtiles, options);
+        const std::string& input = inData.empty() ? pointIn : inData;
+        pmtiles_pyramid::build_point_pmtiles_pyramid(input, outPmtiles, options);
+    } else if (polygonMode) {
+        const std::string& input = inData.empty() ? polygonIn : inData;
+        pmtiles_pyramid::build_polygon_pmtiles_pyramid(input, outPmtiles, options);
+    } else if (mixedMode) {
+        if (!inData.empty()) {
+            pmtiles_pyramid::build_mixed_pmtiles_pyramid(inData, outPmtiles, options);
+        } else {
+            pmtiles_pyramid::build_mixed_pmtiles_pyramid(pointIn, polygonIn, outPmtiles, options);
+        }
     } else {
-        pmtiles_pyramid::build_polygon_pmtiles_pyramid(inData, outPmtiles, options);
+        error("%s: internal error resolving pyramid mode", __func__);
     }
     return 0;
 }

@@ -165,16 +165,15 @@ Boundary behavior:
 
 ## Build PMTiles pyramids
 
-`punkst build-pyramid` builds an MLT or MVT PMTiles pyramid from an existing PMTiles input.
+`punkst build-pyramid` builds an MLT or MVT PMTiles pyramid from existing max-zoom PMTiles inputs.
 
-Currently it only support point-only and simple-polygon-only PMTiles. (This is the intended next step after writing a max-zoom archive with `punkst tile-op` or `punkst hex2pmtiles`)
-Exactly one of `--point` or `--polygon` must be specified.
+Use `--point-in` for point PMTiles, `--polygon-in` for simple-polygon PMTiles, or both to write one mixed point+polygon pyramid. The older `--point --in ...` and `--polygon --in ...` forms are still accepted for compatibility.
 
 ### Point-only pyramids
 
 ```bash
-punkst build-pyramid --point \
-  --in path/pixel.z18.pmtiles \
+punkst build-pyramid \
+  --point-in path/pixel.z18.pmtiles \
   --min-zoom 10 \
   --max-tile-bytes 5000000 \
   --max-tile-features 50000 \
@@ -195,8 +194,8 @@ Current support is limited to:
 - polygon inputs that carry one unique polygon ID per feature
 
 ```bash
-punkst build-pyramid --polygon \
-  --in path/hex.z18.pmtiles \
+punkst build-pyramid \
+  --polygon-in path/hex.z18.pmtiles \
   --min-zoom 10 \
   --polygon-priority area \
   --max-tile-bytes 5000000 \
@@ -207,6 +206,32 @@ punkst build-pyramid --polygon \
 ```
 
 - `--polygon-priority` chooses how polygons are retained when down-sampling is needed: `random`, `area` (default, in decreasing order)
+
+### Mixed point and polygon pyramids
+
+Provide both input flags to build a single PMTiles archive with a point layer and a polygon layer:
+
+```bash
+punkst build-pyramid \
+  --point-in path/pixel.z18.pmtiles \
+  --polygon-in path/hex.z18.pmtiles \
+  --min-zoom 10 \
+  --max-tile-bytes 5000000 \
+  --max-tile-features 50000 \
+  --threads 4 \
+  --out path/mixed.pyramid.pmtiles
+```
+
+The point and polygon inputs must use the same PMTiles vector format (`MLT` or `MVT`), gzip tile compression, and max zoom. The polygon input follows the same simple-polygon metadata requirements as polygon-only pyramid building.
+
+If a single input PMTiles already contains both point and polygon layers, use the explicit compatibility form:
+
+```bash
+punkst build-pyramid --mixed \
+  --in path/mixed.z18.pmtiles \
+  --min-zoom 10 \
+  --out path/mixed.pyramid.pmtiles
+```
 
 Behavior:
 

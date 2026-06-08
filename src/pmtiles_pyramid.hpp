@@ -88,4 +88,13 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     const std::string& outPmtiles,
     const BuildOptions& options);
 
+void build_mixed_pmtiles_pyramid(const std::string& pointPmtiles,
+    const std::string& polygonPmtiles,
+    const std::string& outPmtiles,
+    const BuildOptions& options);
+
+void build_mixed_pmtiles_pyramid(const std::string& inPmtiles,
+    const std::string& outPmtiles,
+    const BuildOptions& options);
+
 } // namespace pmtiles_pyramid
