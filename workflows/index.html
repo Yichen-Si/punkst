@@ -14,7 +14,7 @@
         <link rel="prev" href="../install/">
       
       
-        <link rel="next" href="multisample/">
+        <link rel="next" href="basics/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#pixel-level-factor-analysis-example" class="md-skip">
+        <a href="#quickstart-with-the-example-data" class="md-skip">
           Skip to content
         </a>
       
@@ -250,7 +250,7 @@
   
     
   
-  Quickstart
+  Workflows
 
         </a>
       </li>
@@ -454,6 +454,10 @@
       
         
       
+        
+      
+        
+      
     
     
       
@@ -478,7 +482,7 @@
               
   
   <span class="md-ellipsis">
-    Quickstart
+    Workflows
   </span>
   
 
@@ -494,10 +498,31 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
-            Quickstart
+            Workflows
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="basics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Basics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -512,6 +537,27 @@
   
   <span class="md-ellipsis">
     Multisample
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="deploy_carto/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment
   </span>
   
 
@@ -938,122 +984,29 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#generic-input-format-and-example-data" class="md-nav__link">
+  <a href="#example-data" class="md-nav__link">
     <span class="md-ellipsis">
-      Generic input format and example data
+      Example data
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#use-the-example-makefile-template" class="md-nav__link">
+  <a href="#use-the-makefile-template" class="md-nav__link">
     <span class="md-ellipsis">
-      Use the example Makefile template
+      Use the Makefile template
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Use the example Makefile template">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#basic-workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      Basic workflow
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#parameters-in-configjson" class="md-nav__link">
-    <span class="md-ellipsis">
-      Parameters in config.json
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#step-by-step" class="md-nav__link">
+  <a href="#prepare-the-results-for-cartoscope" class="md-nav__link">
     <span class="md-ellipsis">
-      Step by step
+      Prepare the results for CartoScope
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Step by step">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#basic-workflow_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      Basic workflow
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      Setup
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-1-group-pixels-to-tiles" class="md-nav__link">
-    <span class="md-ellipsis">
-      Step 1: Group pixels to tiles
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-2-create-hexagonal-units" class="md-nav__link">
-    <span class="md-ellipsis">
-      Step 2: Create hexagonal units
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-3-run-lda-on-hexagon-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      Step 3: Run LDA on hexagon data
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-4-decode-pixels-with-the-model" class="md-nav__link">
-    <span class="md-ellipsis">
-      Step 4: Decode pixels with the model
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#step-5-visualize-the-results" class="md-nav__link">
-    <span class="md-ellipsis">
-      Step 5: Visualize the results
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1075,156 +1028,49 @@
   
 
 
-<h1 id="pixel-level-factor-analysis-example">Pixel Level Factor Analysis Example<a class="headerlink" href="#pixel-level-factor-analysis-example" title="Permanent link">&para;</a></h1>
-<p>This example demonstrates how to perform pixel level factor analysis with punkst, achieving similar results to FICTURE (2024) with improved efficiency.</p>
-<p>We will explain how to generate a full workflow using a template Makefile, then explains the steps taken inside the workflow.</p>
-<h2 id="generic-input-format-and-example-data">Generic input format and example data<a class="headerlink" href="#generic-input-format-and-example-data" title="Permanent link">&para;</a></h2>
-<p>There is a small example data <code>transcripts.tsv.gz</code> in <code>punkst/examples/data</code>.</p>
-<p>See <a href="../input/">Input</a> for details on starting from raw data from different platforms.</p>
-<p>We only need one input file storing the pixel/transcript information: a TSV file with X coordinate, Y coordinate, feature, and count columns. (<code>punkst/examples/data/transcripts.tsv.gz</code>)</p>
-<p>It can be gzipped or uncompressed.
-It can have other columns (which will be ignored in analysis but can be optionally carried over to the pixel level output), and it may or may not have headers (see Step 1). We will only use this file directly in step 1.</p>
-<h2 id="use-the-example-makefile-template">Use the example Makefile template<a class="headerlink" href="#use-the-example-makefile-template" title="Permanent link">&para;</a></h2>
+<h1 id="quickstart-with-the-example-data">Quickstart with the example data<a class="headerlink" href="#quickstart-with-the-example-data" title="Permanent link">&para;</a></h1>
+<p>This example runs the full pixel level analysis workflow on the small example data <code>transcripts.tsv.gz</code> in <code>punkst/examples/data</code> using a template Makefile, then prepares the output for deployment on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
+<p>See <a href="basics/">Basics</a> for details on configuring the workflow for your own data.</p>
+<p>See <a href="multisample/">Multisample</a> for joint analysis of multiple samples.</p>
+<p>See <a href="deploy_carto/">Deployment</a> for details on CartoScope deployment.</p>
+<h3 id="example-data">Example data<a class="headerlink" href="#example-data" title="Permanent link">&para;</a></h3>
+<p>There is a small example data <code>transcripts.tsv.gz</code> in <code>punkst/examples/data</code> with four columns:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>X       Y       gene    Count
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>6711.14 6772    Esam    1
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>6727.83 6772    Gck     1
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>6732.65 6772    Akr1a1  1
+</span></code></pre></div>
+(The <code>Count</code> column is optional)</p>
+<h3 id="use-the-makefile-template">Use the Makefile template<a class="headerlink" href="#use-the-makefile-template" title="Permanent link">&para;</a></h3>
 <p>We provide template Makefile and config files in <code>punkst/examples</code> to generate the full workflows.</p>
-<h3 id="basic-workflow">Basic workflow<a class="headerlink" href="#basic-workflow" title="Permanent link">&para;</a></h3>
-<p>You can copy <code>punkst/examples/basic/config.json</code> to your own directory and modify the data path and parameters, then use <code>punkst/ext/py/generate_workflow.py</code> to generate a data-specific Makefile for your task.</p>
+<p>First copy <code>punkst/examples/basic/config.json</code> to your own directory and modify the data path and parameters, then use <code>punkst/ext/py/generate_workflow.py</code> to generate a data-specific Makefile for your task.</p>
+<p>Set <code>workflow.punkst</code> in the config to the <code>punkst</code> binary you want to run. For source builds this is usually <code>${repopath}/bin/punkst</code>; for prebuilt tarballs, point it at the binary inside the unpacked tarball.</p>
 <p>The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the <code>-o</code> option.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># set repopath to the path of the punkst repo</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>python<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/ext/py/generate_workflow.py<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>-c<span class="w"> </span>config.json<span class="w"> </span>-o<span class="w"> </span>run.sh<span class="w"> </span>-m<span class="w"> </span>Makefile<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>-t<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/examples/basic/Makefile
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># set repopath to the path of the punkst repo</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>python<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/ext/py/generate_workflow.py<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span>-c<span class="w"> </span>config.json<span class="w"> </span>-o<span class="w"> </span>run.sh<span class="w"> </span>-m<span class="w"> </span>Makefile<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span>-t<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/examples/basic/Makefile
 </span></code></pre></div>
 <p>You can check the generated workflow before execution by
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>-f<span class="w"> </span>Makefile<span class="w"> </span>--dry-run
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>-f<span class="w"> </span>Makefile<span class="w"> </span>--dry-run
 </span></code></pre></div></p>
-<p>Then <code>make -f Makefile</code> exectutes the workflow.</p>
-<h3 id="parameters-in-configjson">Parameters in config.json<a class="headerlink" href="#parameters-in-configjson" title="Permanent link">&para;</a></h3>
-<p>(The parameters in the example config file works for the example data, where the coordinates are in microns.)</p>
-<p><code>threads</code>: number of threads for parallel processing. (If you are submitting the workflow to a cluster, make sure the same number of CPUs is available)</p>
-<p><code>seed</code>: random seed for reproducibility. This seed is propagated to all steps in the workflow that involve randomness.</p>
-<p><code>use_fixed_color_table</code>: controls how colors are assigned when rendering pixel maps. Default is <code>true</code>, which uses the fixed color table at <code>ext/py/cmap.256.tsv</code>. Set to <code>false</code> to run <code>ext/py/color_helper.py</code> and derive colors from model results (may be slow for a large dataset).</p>
-<p><code>"datadir"</code>: the path to store all output</p>
-<p><code>"tmpdir"</code>: the path to store temporary files (those files will be deleted automatically by the program). This directory must be empty or creatable.</p>
-<p><code>"transcripts"</code>: a tsv file with X coordinate, Y coordinate, gene/transcript name, and count columns. There could be other columns but they will be ignored.</p>
-<p>Specify the 0-based column indices in "transcripts" for X coordinate, Y coordinate, feature, and count: <code>"icol_x"</code>, <code>"icol_y"</code>, <code>"icol_feature"</code>, and <code>"icol_count"</code>. If the input file contains headers, set "skip" to the number of lines to skip.</p>
-<p><code>"exclude_feature_regex"</code>: a regular expression to exclude features from the analysis. For example, to exclude negative control probes and/or mitochondrial genes.</p>
-<p><code>"tilesize"</code>: we store and process data by square tiles, this parameter specifies the size length of the tiles in the same unit as your coordinates. Tile sizes affect the memory usage and (perhaps less so) run time, we've been using 500<span class="arithmatex">\(\mu\)</span>m for all of our experiments.</p>
-<p><code>"hexgrids"</code> (list): this is center-to-center distance of the hexagonal grid used for training the model. The best value depends on your data density. We've been using <span class="arithmatex">\(12\sim 18\mu m\)</span> for most dataset, but you might want to use a larger value if your data has very low transcript density.</p>
-<p><code>"topics"</code> (list): the number of topics (factors) to learn.</p>
-<p><code>"pixhex"</code>: often set to be the same as "hexgrids" or slightly smaller.</p>
-<p><code>"nmove"</code>: "pixhex" divided by "nmove" is the distance between adjacent anchor points in the algorithm. We recommend pixhex/nmove to be around <span class="arithmatex">\(4~6\mu m\)</span> for high resolution results.</p>
-<p><code>"res"</code>: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using <span class="arithmatex">\(0.5\mu m\)</span>.</p>
-<p><code>"scale"</code>: this only controls the visualization of pixel level results. The coordinate values divided by scale will be the "pixel" indices in the image. If your coordinates are in microns and you want <span class="arithmatex">\(0.5 \mu m\)</span> to be one pixel in the image, set scale to 0.5. For Visium HD where the data resolution is <span class="arithmatex">\(2 \mu m\)</span>, you probably want to set scale to 2.</p>
-<p>Section <code>"job"</code>: only for slurm users. Those are just slurm job parameters to create a job script to wrap aroun the Makefile. You probably don't need this, just for convenience. You can include additional commands by setting "extra_lines".</p>
-<h2 id="step-by-step">Step by step<a class="headerlink" href="#step-by-step" title="Permanent link">&para;</a></h2>
-<h3 id="basic-workflow_1">Basic workflow<a class="headerlink" href="#basic-workflow_1" title="Permanent link">&para;</a></h3>
-<ol>
-<li><a href="../modules/pts2tiles/">pts2tiles</a>: Group pixels to tiles for faster processing</li>
-<li><a href="../modules/tiles2hex/">tiles2hex</a>: Group pixels into non-overlapping hexagons</li>
-<li><a href="../modules/lda4hex/">topic-model</a>: Run factorization on the hexagon/single cell data</li>
-<li><a href="../modules/pixel-decode/">pixel-decode</a>: Annotate each pixel with the top factors and their probabilities</li>
-<li><a href="../modules/visualization/">Visualization</a>: Create high resolution visualizations</li>
-</ol>
-<h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h3>
-<p>First, set up the environment variables:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">threads</span><span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="c1"># Number of threads for parallel processing</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">tmpdir</span><span class="o">=</span>/path/to/tmp<span class="w"> </span><span class="c1"># Directory for temporary files (must be empty or creatable)</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nv">path</span><span class="o">=</span>/path/to/your_data<span class="w"> </span><span class="c1"># Path to your data directory</span>
+<p>Then <code>make -f Makefile</code> to exectute the workflow.</p>
+<h3 id="prepare-the-results-for-cartoscope">Prepare the results for CartoScope<a class="headerlink" href="#prepare-the-results-for-cartoscope" title="Permanent link">&para;</a></h3>
+<p>Make a directory to store the CartoScope deployment files, then run</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>deploy-cartoscope<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--config<span class="w"> </span>config.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--out-dir<span class="w"> </span>/path/for/carto<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--id<span class="w"> </span>sample-id<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--title<span class="w"> </span><span class="s2">&quot;Sample title&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span>--pmtiles-format<span class="w"> </span>MVT<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
-<h3 id="step-1-group-pixels-to-tiles">Step 1: Group pixels to tiles<a class="headerlink" href="#step-1-group-pixels-to-tiles" title="Permanent link">&para;</a></h3>
-<p>Group pixels into non-overlapping square tiles for faster processing:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span>--in-tsv<span class="w"> </span>transcripts.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span>--skip<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled
-</span></code></pre></div>
-<p>Key parameters:</p>
-<p><code>--icol-x</code>, <code>--icol-y</code>: Column indices for X and Y coordinates (0-based)</p>
-<p><code>--skip</code>: If your input file has a header, use <code>--skip 1</code> to skip the first (or more) lines</p>
-<p><code>--tile-size</code>: Size (side length) of the square tiles</p>
-<p><a href="../modules/pts2tiles/">Detailed documentation for pts2tiles</a></p>
-<h3 id="step-2-create-hexagonal-units">Step 2: Create hexagonal units<a class="headerlink" href="#step-2-create-hexagonal-units" title="Permanent link">&para;</a></h3>
-<p>Group pixels into non-overlapping hexagons:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>tiles2hex<span class="w"> </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.features.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-int<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--min-count<span class="w"> </span><span class="m">20</span><span class="w"> </span>--hex-size<span class="w"> </span><span class="m">7</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt<span class="w"> </span>--randomize<span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
-</span></code></pre></div>
-<p>Key parameters:</p>
-<p><code>--icol-feature</code>, <code>--icol-int</code>: Column indices for feature and count(s)</p>
-<p><code>--hex-size</code>: Side length of the hexagons</p>
-<p><code>--min-count</code>: Minimum count for a hexagon to be included</p>
-<p><code>--randomize</code>: If set, the order of hexagons in the output will be randomized. You should always shuffle hexagons before running <code>topic-model</code>.</p>
-<p><code>--seed</code>: Seed for reproducible random keys and shuffled ordering in <code>tiles2hex</code>.</p>
-<p><a href="../modules/tiles2hex/">Detailed documentation for tiles2hex</a></p>
-<h3 id="step-3-run-lda-on-hexagon-data">Step 3: Run LDA on hexagon data<a class="headerlink" href="#step-3-run-lda-on-hexagon-data" title="Permanent link">&para;</a></h3>
-<p>Perform Latent Dirichlet Allocation on the hexagon data:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>topic-model<span class="w"> </span>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.randomized.txt<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--in-meta<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--n-topics<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--n-epochs<span class="w"> </span><span class="m">2</span><span class="w"> </span>--min-count-train<span class="w"> </span><span class="m">50</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12<span class="w"> </span>--transform<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
-</span></code></pre></div>
-<p>Key parameters:</p>
-<p><code>--n-topics</code>: Number of topics (factors) to learn</p>
-<p><code>--transform</code>: Generate transform results after model fitting</p>
-<p><a href="../modules/lda4hex/">Detailed documentation for topic-model</a></p>
-<h3 id="step-4-decode-pixels-with-the-model">Step 4: Decode pixels with the model<a class="headerlink" href="#step-4-decode-pixels-with-the-model" title="Permanent link">&para;</a></h3>
-<p>Annotate each pixel with top factors and their probabilities:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.model.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
-</span></code></pre></div>
-<p>Key parameters:</p>
-<p><code>--model</code>: Model file created by <code>topic-model</code></p>
-<p><code>--hex-grid-dist</code>: Center-to-center distance of the hexagonal grid</p>
-<p><code>--n-moves</code>: Number of sliding moves to generate anchors</p>
-<p><code>--pixel-res</code>: Resolution for the analysis (in the same unit as coordinates). Set to <code>2</code> for Visium HD.</p>
-<p><code>--output-binary</code>: Write the main pixel-level output as <code>${path}/pixel.decode.bin</code> plus <code>${path}/pixel.decode.index</code>. This is the preferred output mode for downstream <code>tile-op</code>, visualization, and spatial tests.</p>
-<p><code>--output-original</code>: Optional text-output mode that writes each transcript/input pixel as a separate line in the output. This is slower, generates a larger file, and cannot be combined with <code>--output-binary</code>, so only use it if matching the inference with the original input is useful.</p>
-<p><a href="../modules/pixel-decode/">Detailed documentation for pixel-decode</a></p>
-<h3 id="step-5-visualize-the-results">Step 5: Visualize the results<a class="headerlink" href="#step-5-visualize-the-results" title="Permanent link">&para;</a></h3>
-<p>Visualize the pixel decoding results:</p>
-<p>The example Makefiles use a fixed color table (<code>ext/py/cmap.256.tsv</code>) by default (<code>"use_fixed_color_table": true</code> in <code>config.json</code>).</p>
-<p>Optional: set <code>"use_fixed_color_table": false</code> and generate a color table from model results using <code>color_helper.py</code>. (Python dependency: <a href="https://pypi.org/project/Jinja2/">jinja2</a>, pandas, matplotlib. It may be slow for a large dataset.)</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>python<span class="w"> </span>punkst/ext/py/color_helper.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.results.tsv<span class="w"> </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color<span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
-</span></code></pre></div>
-<p><strong>Generate an image</strong> for the pixel level factor assignment
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>punkst<span class="w"> </span>draw-pixel-factors<span class="w"> </span>--in<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--in-color<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color.rgb.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--out<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.png<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>--scale<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span>--xmin<span class="w"> </span><span class="si">${</span><span class="nv">xmin</span><span class="si">}</span><span class="w"> </span>--xmax<span class="w"> </span><span class="si">${</span><span class="nv">xmax</span><span class="si">}</span><span class="w"> </span>--ymin<span class="w"> </span><span class="si">${</span><span class="nv">ymin</span><span class="si">}</span><span class="w"> </span>--ymax<span class="w"> </span><span class="si">${</span><span class="nv">ymax</span><span class="si">}</span>
+<p>The output path <code>/path/for/carto</code> should contain a <code>catalog.yaml</code> file, the entry point for CartoScope.</p>
+<p>Serve the deployment directory:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nb">cd</span><span class="w"> </span>/path/for/carto
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>npx<span class="w"> </span>http-server<span class="w"> </span>--cors
 </span></code></pre></div></p>
-<p>Key parameters:</p>
-<p><code>--in</code>: Prefix of the pixel decode output files.</p>
-<p><code>--binary</code>: Read the binary output written by <code>pixel-decode --output-binary</code>.</p>
-<p><code>--in-color</code>: TSV file with RGB colors for each factor</p>
-<p><code>--scale</code>: Scales input coordinates to pixels in the output image (2 means 2 coordinate units = 1 pixel in the image). If the coordinates are in microns, 1 or 0.5 is suitable for high resolution data (imaging-based, Stereo-seq, Seq-scope, etc.); 2 is suitable for Visium HD.</p>
-<p><code>--xmin</code>, <code>--xmax</code>, <code>--ymin</code>, <code>--ymax</code>: Range of coordinates to visualize. If you specified <code>--icol-feature</code> and <code>--icol-int</code> in <code>pts2tiles</code>, you can either find the range in the <code>transcripts.tiled.coord_range.tsv</code> file or pass it directly with <code>--range transcripts.tiled.coord_range.tsv</code>.</p>
-<p>Compute <strong>naive differential expression</strong> statistics
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>python<span class="w"> </span>punkst/ext/py/de_bulk.py<span class="w"> </span>--input<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode.pseudobulk.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span>--output<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/de_bulk.tsv<span class="w"> </span>--thread<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
-</span></code></pre></div></p>
-<p><strong>Generate a html</strong> to display the color and top enriched genes for each factor
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>python<span class="w"> </span>punkst/ext/py/factor_report.py<span class="w"> </span>--de<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/de_bulk.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span>--pseudobulk<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel.decode.pseudobulk.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>--color_table<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/color.rgb.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>--output_pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/report
-</span></code></pre></div></p>
-<p>Optional: add <code>--de_neighbor ${path}/de_bulk.1vsNeighbors.tsv</code> if you included <code>--neighbor-k</code> when running <code>punkst de-chisq</code> to display top "highly specific" genes that are enriched even when comparing with k most similar factors.</p>
-<p><a href="../modules/visualization/">Detailed documentation for visualization</a></p>
+<p>Then use the url <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual port may differ) on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
 
 
 
@@ -1277,13 +1123,13 @@ It can have other columns (which will be ignored in analysis but can be optional
         
         
           
-          <a href="multisample/" class="md-footer__link md-footer__link--next" aria-label="Next: Multisample">
+          <a href="basics/" class="md-footer__link md-footer__link--next" aria-label="Next: Basics">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Multisample
+                Basics
               </div>
             </div>
             <div class="md-footer__button md-icon">

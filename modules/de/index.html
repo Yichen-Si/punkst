@@ -248,7 +248,7 @@
   
     
   
-  Quickstart
+  Workflows
 
         </a>
       </li>
@@ -452,6 +452,10 @@
       
         
       
+        
+      
+        
+      
     
     
       
@@ -475,7 +479,7 @@
               
   
   <span class="md-ellipsis">
-    Quickstart
+    Workflows
   </span>
   
 
@@ -491,10 +495,31 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
-            Quickstart
+            Workflows
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/basics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Basics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -509,6 +534,27 @@
   
   <span class="md-ellipsis">
     Multisample
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/deploy_carto/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment
   </span>
   
 
@@ -1546,14 +1592,14 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 </ul>
 <p>If the two regions overlap, transcripts in the overlap contribute to both groups.</p>
 <h2 id="multi-conditional-de-pois">multi-conditional-de-pois<a class="headerlink" href="#multi-conditional-de-pois" title="Permanent link">&para;</a></h2>
-<p><code>multi-conditional-de-pois</code> performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from <code>tiles2hex</code>, other binned data, single cells, or low resolution data like Visium). It leverages a pre-trained topic model (e.g., LDA from <code>punkst topic-model</code>) to estimate cell type mixture proportions within each unit first, then for each gene and cell type, it fits a Poisson regression model to estimate differential expression between specified groups of datasets.</p>
+<p><code>multi-conditional-de-pois</code> performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from <code>tiles2hex</code>, other binned data, single cells, or low resolution data like Visium). It leverages a pre-trained topic model (e.g., LDA from <code>punkst topic-model</code>) to estimate cell type mixture proportions within each unit, then for each gene fits a Poisson regression model to estimate differential expression between specified groups of datasets.</p>
 <p>For gene <span class="arithmatex">\(m\)</span> and unit <span class="arithmatex">\(i\)</span>, the model is: <span class="arithmatex">\(Y_{im} \sim \text{Pois}(\lambda_{im})\)</span> with rate <span class="arithmatex">\(\lambda_{im}\)</span> defined by a mixture across cell types:
-<span class="arithmatex">\(\lambda_{im} = \sum_k \theta_{ik} g^{-1}( \eta_{mk}^0 + x_i b_{mk} )\)</span>
-where <span class="arithmatex">\(\theta_{ik}\)</span> is the proportion of cell type <span class="arithmatex">\(k\)</span> in unit <span class="arithmatex">\(i\)</span>, <span class="arithmatex">\(x_i \in \set{\pm 1}\)</span> indicates the group that unit <span class="arithmatex">\(i\)</span> belongs to. The null hypothesis is <span class="arithmatex">\(b_{mk}=0\)</span>, and <span class="arithmatex">\(g\)</span> is a link function. The <code>log1p</code> link <span class="arithmatex">\(g^{-1}(\eta)=c_i (\exp(\eta) - 1) \ (c_i=n_i/L)\)</span> is much more efficient than the canonical <code>log</code> link with similar performance in practice.</p>
+<span class="arithmatex">\(<span class="arithmatex">\(\lambda_{im} = \sum_k \theta_{ik} g^{-1}( \eta_{mk}^0 + x_i b_{mk} )\)</span>\)</span>
+where <span class="arithmatex">\(\theta_{ik}\)</span> is the proportion of cell type <span class="arithmatex">\(k\)</span> in unit <span class="arithmatex">\(i\)</span>, <span class="arithmatex">\(x_i \in \{\pm 1\}\)</span> indicates the group that unit <span class="arithmatex">\(i\)</span> belongs to, and the null hypothesis is <span class="arithmatex">\(b_{mk}=0\)</span>. <span class="arithmatex">\(g\)</span> is a link function with non-negative domain. The <code>log1p</code> link <span class="arithmatex">\(g^{-1}(\eta)=c_i (\exp(\eta) - 1)\)</span> (where <span class="arithmatex">\(c_i=n_i/L\)</span>) is much more efficient than the canonical <code>log</code> link.</p>
 <p>Example usage with explicit contrast file:
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>multi-conditional-de-pois<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--contrast<span class="w"> </span>contrast.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--model<span class="w"> </span>my_lda_model.bin<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--model<span class="w"> </span>model.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--link<span class="w"> </span>log1p<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--out<span class="w"> </span>de/unit_de<span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div></p>

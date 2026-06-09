@@ -248,7 +248,7 @@
   
     
   
-  Quickstart
+  Workflows
 
         </a>
       </li>
@@ -452,6 +452,10 @@
       
         
       
+        
+      
+        
+      
     
     
       
@@ -475,7 +479,7 @@
               
   
   <span class="md-ellipsis">
-    Quickstart
+    Workflows
   </span>
   
 
@@ -491,10 +495,31 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
-            Quickstart
+            Workflows
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/basics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Basics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -509,6 +534,27 @@
   
   <span class="md-ellipsis">
     Multisample
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workflows/deploy_carto/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Deployment
   </span>
   
 
@@ -857,6 +903,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#write-mono-raster-pmtiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      Write mono raster PMTiles
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#write-single-zoom-polygon-pmtiles" class="md-nav__link">
     <span class="md-ellipsis">
       Write single-zoom polygon PMTiles
@@ -890,13 +945,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#build-mlt-pmtiles-pyramids" class="md-nav__link">
+  <a href="#build-pmtiles-pyramids" class="md-nav__link">
     <span class="md-ellipsis">
-      Build MLT PMTiles pyramids
+      Build PMTiles pyramids
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Build MLT PMTiles pyramids">
+    <nav class="md-nav" aria-label="Build PMTiles pyramids">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -912,6 +967,15 @@
   <a href="#simple-polygon-pyramids" class="md-nav__link">
     <span class="md-ellipsis">
       Simple-polygon pyramids
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mixed-point-and-polygon-pyramids" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mixed point and polygon pyramids
     </span>
   </a>
   
@@ -1071,6 +1135,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#write-mono-raster-pmtiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      Write mono raster PMTiles
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#write-single-zoom-polygon-pmtiles" class="md-nav__link">
     <span class="md-ellipsis">
       Write single-zoom polygon PMTiles
@@ -1104,13 +1177,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#build-mlt-pmtiles-pyramids" class="md-nav__link">
+  <a href="#build-pmtiles-pyramids" class="md-nav__link">
     <span class="md-ellipsis">
-      Build MLT PMTiles pyramids
+      Build PMTiles pyramids
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Build MLT PMTiles pyramids">
+    <nav class="md-nav" aria-label="Build PMTiles pyramids">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1126,6 +1199,15 @@
   <a href="#simple-polygon-pyramids" class="md-nav__link">
     <span class="md-ellipsis">
       Simple-polygon pyramids
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mixed-point-and-polygon-pyramids" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mixed point and polygon pyramids
     </span>
   </a>
   
@@ -1167,14 +1249,15 @@
 <p><strong>PMTiles utilities in <code>punkst</code> currently cover:</strong></p>
 <ul>
 <li><a href="#export-pmtiles-as-tsv">Export point-only PMTiles as TSV</a></li>
+<li><a href="#write-mono-raster-pmtiles">Write mono raster PMTiles from tiled counts</a></li>
 <li><a href="#write-single-zoom-polygon-pmtiles">Write single-level polygon-only PMTiles</a></li>
-<li><a href="#build-mlt-pmtiles-pyramids">Build PMTiles pyramids</a></li>
+<li><a href="#build-pmtiles-pyramids">Build PMTiles pyramids</a></li>
 </ul>
-<p>We only support PMTiles with the <a href="https://maplibre.org/maplibre-tile-spec/">MLT format</a></p>
-<p>For writing point/pixel-only PMTiles see <a href="../tileop/">tile-op</a></p>
+<p>Point and simple-polygon PMTiles support both <a href="https://maplibre.org/maplibre-tile-spec/">MLT</a> and MVT.</p>
+<p>For writing point/pixel-only PMTiles, see <a href="../tileop/">tile-op</a>.</p>
 <p>Acknowledgement: PMTiles support in <code>punkst</code> depends on <a href="https://github.com/AngusJohnson/Clipper2">Clipper2</a> for polygon operations, borrows from <a href="https://github.com/felt/tippecanoe">tippecanoe</a> (which supports MVT) and <a href="https://github.com/maplibre/maplibre-tile-spec/tree/main/cpp">MLT's cpp implementation</a>.</p>
 <h2 id="export-pmtiles-as-tsv">Export PMTiles as TSV<a class="headerlink" href="#export-pmtiles-as-tsv" title="Permanent link">&para;</a></h2>
-<p><code>punkst export-pmtiles</code> reads an MLT-backed PMTiles archive that contains <strong>only point data</strong> and exports it back to a plain TSV plus <code>.index</code> that <code>tile-op</code> can read again.</p>
+<p><code>punkst export-pmtiles</code> reads an MLT- or MVT-backed PMTiles archive. Point archives export back to a plain TSV plus <code>.index</code> that <code>tile-op</code> can read again. Simple-polygon archives export to a TSV with centroid, vertices, optional feature ID, and properties.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>export-pmtiles<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in<span class="w"> </span>path/prefix.pmtiles<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
@@ -1182,8 +1265,8 @@
 </span></code></pre></div>
 <p>Requirements and behavior:</p>
 <ul>
-<li><code>--in</code> or <code>--in-data</code> must point to the PMTiles archive with <strong>MLT</strong> format</li>
-<li><code>--out</code> specify the output prefix. The output includes <code>path/prefix.tsv</code> and <code>path/prefix.index</code></li>
+<li><code>--in</code> or <code>--in-data</code> must point to a point PMTiles archive with <strong>MLT</strong> or <strong>MVT</strong> format</li>
+<li><code>--out</code> specifies the output prefix. The output includes <code>path/prefix.tsv</code> and <code>path/prefix.index</code></li>
 <li><code>--tile-size</code> is required and defines the tile size for the output file (in the original units)</li>
 <li>the data is read from the archive's max-zoom level</li>
 <li>output columns are <code>x</code>, <code>y</code>, optional <code>z</code>, then the decoded PMTiles schema columns</li>
@@ -1195,8 +1278,27 @@
 <li><code>--extract-region-geojson</code></li>
 <li><code>--zmin</code>, <code>--zmax</code></li>
 </ul>
+<p>For simple-polygon archives, add <code>--polygon</code>. Polygon export writes only <code>path/prefix.tsv</code>; <code>--tile-size</code> is not required.</p>
+<h2 id="write-mono-raster-pmtiles">Write mono raster PMTiles<a class="headerlink" href="#write-mono-raster-pmtiles" title="Permanent link">&para;</a></h2>
+<p><code>punkst tiles2mono</code> writes grayscale PNG raster PMTiles from a tiled transcript/count TSV produced by <code>pts2tiles</code>. It is used by <code>deploy-cartoscope</code> to generate the SGE mono basemap.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>tiles2mono<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in<span class="w"> </span>path/transcripts.tiled<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--max-zoom<span class="w"> </span><span class="m">18</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--out<span class="w"> </span>path/sge-mono-dark.pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span>
+</span></code></pre></div>
+<p>Options:</p>
+<ul>
+<li><code>--in</code> is shorthand for <code>--in-tsv path/prefix.tsv --in-index path/prefix.index</code>; if available, <code>path/prefix.coord_range.tsv</code> is used for raster bounds</li>
+<li><code>--icol-x</code>, <code>--icol-y</code>, and <code>--icol-count</code> select the 0-based x, y, and count columns (defaults: <code>0</code>, <code>1</code>, <code>3</code>)</li>
+<li><code>--min-zoom</code> and <code>--max-zoom</code> set the raster PMTiles zoom range</li>
+<li><code>--adjust-quantile</code> controls per-zoom density auto-adjustment (default: <code>0.99</code>); use <code>--no-auto-adjust</code> to write capped raw count intensities</li>
+<li>by default, raw data is parsed only for <code>--max-zoom</code>; lower zoom levels are derived by summing child pixels into parent pixels with the same 255 saturation cap</li>
+<li><code>--max-zoom-from-raw</code> parses raw data for zooms greater than or equal to the given value, then derives lower zooms from parent layers; set it to <code>--min-zoom</code> to parse every zoom from raw data</li>
+</ul>
 <h2 id="write-single-zoom-polygon-pmtiles">Write single-zoom polygon PMTiles<a class="headerlink" href="#write-single-zoom-polygon-pmtiles" title="Permanent link">&para;</a></h2>
-<p><code>punkst hex2pmtiles</code> writes a <strong>polygon-only MLT PMTiles with a single zoom level</strong> from a factor-probability table (output from <a href="../lda4hex/"><code>punkst topic-model</code></a>).</p>
+<p><code>punkst poly2pmtiles</code> writes a <strong>polygon-only MLT or MVT PMTiles archive with a single zoom level</strong> from a factor-probability table (output from <a href="../lda4hex/"><code>punkst topic-model</code></a> or <code>lda-transform</code>). Use <code>--format MVT</code> for MVT output; the default is <code>MLT</code>.</p>
 <p>It supports two input styles:</p>
 <ul>
 <li>hexagon mode: build polygon geometry from hex centers</li>
@@ -1204,11 +1306,11 @@
 </ul>
 <h3 id="hexagon-mode">Hexagon mode<a class="headerlink" href="#hexagon-mode" title="Permanent link">&para;</a></h3>
 <p>Use this when the input table contains <code>x</code> and <code>y</code> coordinates for hex centers.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>hex2pmtiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span>path/model.results.tsv.gz<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--pmtiles-zoom<span class="w"> </span><span class="m">18</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--out<span class="w"> </span>path/model.hex.z18.pmtiles
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>poly2pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span>path/model.results.tsv.gz<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--pmtiles-zoom<span class="w"> </span><span class="m">18</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--out<span class="w"> </span>path/model.hex.z18.pmtiles
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -1216,34 +1318,40 @@
 <li><code>--pmtiles-zoom</code> (required) sets the output zoom level</li>
 <li><code>--x-col</code>, <code>--y-col</code>, <code>--topk-col</code>, and <code>--topp-col</code> set column names in the input factor table for the hex center coordinates (default: <code>x</code> and <code>y</code>), the top factor ID (default: <code>topK</code>), and the top factor probability (default: <code>topP</code>)</li>
 <li><code>--prob-thres</code> keeps only factor probabilities above the threshold as nullable properties (default: <code>1e-4</code>)</li>
+<li>compact <code>K1/P1</code>, <code>K2/P2</code>, ... columns are recognized automatically; dense numeric factor columns named <code>0..K-1</code> are also supported</li>
+<li><code>--top-k</code> controls how many top factors are retained from dense numeric factor columns (default: <code>3</code>)</li>
 <li><code>--coord-scale</code> scales the input coordinates before Web Mercator tiling (default: <code>1</code>, no scaling)</li>
 </ul>
-<p>Parameters for boundary behavior and is similar to <a href="https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries">tippecanoe's options</a>
+<p>Parameters for boundary behavior are similar to <a href="https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries">tippecanoe's options</a>:
 - <code>--tile-buffer-px</code> sets the screen-pixel buffer used by the default clipped/duplicated mode (default: <code>5</code>) (matching <code>tippecanoe -b</code>)
 - <code>--no-clipping</code> duplicates each polygon into every touched tile without clipping it to tile boundaries (matching <code>tippecanoe -pc</code>)
 - <code>--no-duplication</code> stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching <code>tippecanoe -pD</code>)
 - <code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</p>
 <h3 id="generic-simple-polygon-mode">Generic simple-polygon mode<a class="headerlink" href="#generic-simple-polygon-mode" title="Permanent link">&para;</a></h3>
 <p>Use this when the factor-probability table contains a polygon ID column and polygon geometry is provided in a separate file. For example, if you ran <code>punkst topic-model</code> on segmented cells and you want to create a PMTiles archive with cell boundaries as geometry.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>hex2pmtiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span>path/cells.results.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--id-col<span class="w"> </span>cell_id<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span>--in-geom<span class="w"> </span>path/cell_boundaries.csv.gz<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span>--icol-id-geom<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span>--icol-x-geom<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span>--icol-y-geom<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span>--pmtiles-zoom<span class="w"> </span><span class="m">18</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span>--out<span class="w"> </span>path/cells.z18.pmtiles
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>poly2pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span>path/cells.results.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>--id-col<span class="w"> </span>cell_id<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--in-geom<span class="w"> </span>path/cell_boundaries.csv.gz<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--g-icol-id<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--g-icol-x<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>--g-icol-y<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span>--pmtiles-zoom<span class="w"> </span><span class="m">18</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span>--out<span class="w"> </span>path/cells.z18.pmtiles
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
 <li><code>--in-geom</code> points to the polygon geometry file</li>
 <li><code>--id-col</code> is required in generic polygon mode and names the polygon ID column in the factor-probability table</li>
+<li><code>--geom-format</code> can be <code>auto</code>, <code>table</code>, <code>geojson</code>, or <code>json</code>; <code>auto</code> uses the file extension</li>
+<li><code>--geom-id-prop</code> names the GeoJSON/JSON feature property used as the polygon ID</li>
 <li><code>--id-is-u32</code> tells <code>punkst</code> to parse that input ID directly as a <code>u32</code> MLT feature ID</li>
-<li>if <code>--id-is-u32</code> is not used we assign each polygon an internal <code>u32</code> feature ID in first-encounter order from the geometry file and write a sidecar <code>*.idmap.tsv</code> with the mapping from the input string ID to the assigned integer ID</li>
+<li>if <code>--id-is-u32</code> is not used, <code>punkst</code> assigns each polygon an internal feature ID in first-encounter order from the geometry file</li>
 <li><code>--keep-org-id</code> optionally keeps the original input string ID as a regular string property column in the PMTiles output</li>
-<li><code>--icol-id-geom</code>, <code>--icol-x-geom</code>, and <code>--icol-y-geom</code> set the 0-based geometry-file columns for polygon ID, <code>x</code>, and <code>y</code></li>
-<li><code>--icol-order-geom</code> is optional; if omitted, the geometry rows are assumed to already be in vertex order</li>
+<li><code>--g-icol-id</code>, <code>--g-icol-x</code>, and <code>--g-icol-y</code> set the 0-based table-geometry columns for polygon ID, <code>x</code>, and <code>y</code></li>
+<li><code>--g-icol-order</code> is optional; if omitted, the geometry rows are assumed to already be in vertex order</li>
+<li><code>--out-sidecar-tsv</code> optionally writes <code>polygon_id</code>, <code>part_index</code>, <code>feature_id</code>, <code>center_x</code>, and <code>center_y</code></li>
+<li><code>--cartoscope-boundary</code> writes the CartoScope boundary schema (<code>cell_id</code>, <code>topK</code>, <code>topP</code>, <code>K2/P2</code>, ...); factor IDs in boundary properties are stored as strings for CartoScope compatibility</li>
 </ul>
 <p>Boundary behavior options are the same as in hexagon mode:
 - <code>--tile-buffer-px</code> sets the screen-pixel buffer used by the default clipped/duplicated mode (default: <code>5</code>)
@@ -1252,23 +1360,23 @@
 - <code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</p>
 <p>Geometry file format:</p>
 <ul>
-<li>plain or gzipped TSV/CSV</li>
+<li>plain or gzipped TSV/CSV, or GeoJSON/JSON with Polygon/MultiPolygon features</li>
 <li>one row per vertex</li>
 <li>empty lines and lines starting with <code>#</code> are ignored</li>
 <li>if the first non-comment line does not contain numeric <code>x</code> and <code>y</code> values at the selected geometry columns, it is treated as a header and skipped</li>
 <li>later malformed numeric rows are treated as errors</li>
 </ul>
 <p>Example geometry file:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>cell_id,vertex_x,vertex_y
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>1,1901.875,2526.4126
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>1,1901.45,2537.0376
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>1,1891.12,2537.45
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>cell_id,vertex_x,vertex_y
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>1,1901.875,2526.4126
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>1,1901.45,2537.0376
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>1,1891.12,2537.45
 </span></code></pre></div>
 <p>Output:</p>
 <ul>
 <li>writes one PMTiles archive at the requested zoom level</li>
 <li>stores the polygon ID in the dedicated MLT feature ID column</li>
-<li>stores <code>topK</code>, <code>topP</code>, and retained factor probabilities as feature properties</li>
+<li>stores <code>topK</code>, <code>topP</code>, and retained dense factor probabilities as feature properties; in <code>--cartoscope-boundary</code> mode it stores nullable <code>K2/P2...Kn/Pn</code> instead</li>
 <li>if <code>--keep-org-id</code> is used, also stores the original string ID as a regular string property column</li>
 <li>output from this step can be passed to <code>punkst build-pyramid --polygon</code></li>
 </ul>
@@ -1279,48 +1387,66 @@
 <li>with <code>--no-duplication</code>, each polygon is assigned to a single tile and stored there intact</li>
 <li><code>--no-duplication</code> is mainly useful when polygons are much smaller than the tile size</li>
 </ul>
-<h2 id="build-mlt-pmtiles-pyramids">Build MLT PMTiles pyramids<a class="headerlink" href="#build-mlt-pmtiles-pyramids" title="Permanent link">&para;</a></h2>
-<p><code>punkst build-pyramid</code> builds a MLT PMTiles pyramid from an existing MLT PMTiles input.</p>
-<p>Currently it only support point-only and simple-polygon-only PMTiles. (This is the intended next step after writing a max-zoom archive with <code>punkst tile-op</code> or <code>punkst hex2pmtiles</code>)
-Exactly one of <code>--point</code> or <code>--polygon</code> must be specified.</p>
+<p>For CartoScope cell-level PMTiles and deployment packaging, see <a href="../../workflows/deploy_carto/#write-cell-level-pmtiles-for-cartoscope">Deploy punkst results to CartoScope</a>.</p>
+<h2 id="build-pmtiles-pyramids">Build PMTiles pyramids<a class="headerlink" href="#build-pmtiles-pyramids" title="Permanent link">&para;</a></h2>
+<p><code>punkst build-pyramid</code> builds an MLT or MVT PMTiles pyramid from existing max-zoom PMTiles inputs.</p>
+<p>Use <code>--point-in</code> for point PMTiles, <code>--polygon-in</code> for simple-polygon PMTiles, or both to write one mixed point+polygon pyramid. The older <code>--point --in ...</code> and <code>--polygon --in ...</code> forms are still accepted for compatibility.</p>
 <h3 id="point-only-pyramids">Point-only pyramids<a class="headerlink" href="#point-only-pyramids" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>build-pyramid<span class="w"> </span>--point<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--in<span class="w"> </span>path/pixel.z18.pmtiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--max-tile-bytes<span class="w"> </span><span class="m">5000000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--max-tile-features<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--scale-factor-compression<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span>--out<span class="w"> </span>path/pixel.pyramid.pmtiles
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>build-pyramid<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--point-in<span class="w"> </span>path/pixel.z18.pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--max-tile-bytes<span class="w"> </span><span class="m">5000000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--max-tile-features<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--scale-factor-compression<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--out<span class="w"> </span>path/pixel.pyramid.pmtiles
 </span></code></pre></div>
 <h3 id="simple-polygon-pyramids">Simple-polygon pyramids<a class="headerlink" href="#simple-polygon-pyramids" title="Permanent link">&para;</a></h3>
-<p><code>punkst build-pyramid --polygon</code> builds lower zoom levels for simple-polygon MLT PMTiles.</p>
+<p><code>punkst build-pyramid --polygon</code> builds lower zoom levels for simple-polygon MLT or MVT PMTiles.</p>
 <p>Current support is limited to:</p>
 <ul>
 <li>simple polygons only</li>
 <li>no holes</li>
-<li>no multipolygon</li>
+<li>no multipolygon in the internal pyramid representation</li>
 <li>polygon inputs that carry one unique polygon ID per feature</li>
 </ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>build-pyramid<span class="w"> </span>--polygon<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--in<span class="w"> </span>path/hex.z18.pmtiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--polygon-priority<span class="w"> </span>area<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--max-tile-bytes<span class="w"> </span><span class="m">5000000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--max-tile-features<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--scale-factor-compression<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>--out<span class="w"> </span>path/hex.pyramid.pmtiles
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>punkst<span class="w"> </span>build-pyramid<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span>--polygon-in<span class="w"> </span>path/hex.z18.pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--polygon-priority<span class="w"> </span>area<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--max-tile-bytes<span class="w"> </span><span class="m">5000000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>--max-tile-features<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>--scale-factor-compression<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span>--out<span class="w"> </span>path/hex.pyramid.pmtiles
 </span></code></pre></div>
 <ul>
 <li><code>--polygon-priority</code> chooses how polygons are retained when down-sampling is needed: <code>random</code>, <code>area</code> (default, in decreasing order)</li>
 </ul>
+<h3 id="mixed-point-and-polygon-pyramids">Mixed point and polygon pyramids<a class="headerlink" href="#mixed-point-and-polygon-pyramids" title="Permanent link">&para;</a></h3>
+<p>Provide both input flags to build a single PMTiles archive with a point layer and a polygon layer:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>punkst<span class="w"> </span>build-pyramid<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span>--point-in<span class="w"> </span>path/pixel.z18.pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span>--polygon-in<span class="w"> </span>path/hex.z18.pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span>--max-tile-bytes<span class="w"> </span><span class="m">5000000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>--max-tile-features<span class="w"> </span><span class="m">50000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span>--out<span class="w"> </span>path/mixed.pyramid.pmtiles
+</span></code></pre></div>
+<p>The point and polygon inputs must use the same PMTiles vector format (<code>MLT</code> or <code>MVT</code>), gzip tile compression, and max zoom. The polygon input follows the same simple-polygon metadata requirements as polygon-only pyramid building.</p>
+<p>If a single input PMTiles already contains both point and polygon layers, use the explicit compatibility form:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>punkst<span class="w"> </span>build-pyramid<span class="w"> </span>--mixed<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--in<span class="w"> </span>path/mixed.z18.pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span>--out<span class="w"> </span>path/mixed.pyramid.pmtiles
+</span></code></pre></div>
 <p>Behavior:</p>
 <ul>
 <li>by default, if the input PMTiles has an MLT feature ID column, that is used as the polygon ID</li>
 <li><code>--polygon-id-col</code> is optional and acts as a hard override when you want to use a regular property column instead of the MLT feature ID column</li>
 <li>if neither an MLT feature ID column nor <code>--polygon-id-col</code> is available, the command reports an error</li>
-<li>for PMTiles written by <code>punkst hex2pmtiles</code>, which contains only hexagons, a shortcut is taken by using the stored hexagonal grid coordinates to build the geometry instead of recovering it from the encoded geometry</li>
+<li>for PMTiles written by <code>punkst poly2pmtiles</code> in hex mode, which contains only hexagons, a shortcut is taken by using the stored hexagonal grid coordinates to build the geometry instead of recovering it from the encoded geometry</li>
 <li>for generic polygon inputs, uses the finest input zoom level to recover one canonical polygon per ID before building parent levels</li>
 <li>if <code>--polygon-source</code> is provided, that file is used as the geometry source override</li>
 <li>by default, parent tiles use clipped polygons that may appear in more than one tile, with clipping buffered by <code>--tile-buffer-px</code> screen pixels</li>
@@ -1345,18 +1471,18 @@ Exactly one of <code>--point</code> or <code>--polygon</code> must be specified.
 - <code>--polygon-source-coord-scale</code> optionally overrides the scale applied to <code>--polygon-source</code> coordinates before EPSG:3857 tiling</p>
 <p>(Empty lines and lines starting with <code>#</code> are ignored; if the first non-comment line does not have numeric <code>x</code> and <code>y</code> values at <code>--icol-x</code> and <code>--icol-y</code>, it is treated as a header line and skipped; after that first line, malformed numeric values are treated as errors)</p>
 <p>Example:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>ID,x,y
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>cell_1,10.0,20.0
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>cell_1,12.0,20.0
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>cell_1,12.0,22.0
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>cell_1,10.0,22.0
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>ID,x,y
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>cell_1,10.0,20.0
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>cell_1,12.0,20.0
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>cell_1,12.0,22.0
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>cell_1,10.0,22.0
 </span></code></pre></div>
 <h3 id="shared-requirements-and-options">Shared requirements and options<a class="headerlink" href="#shared-requirements-and-options" title="Permanent link">&para;</a></h3>
 <p>Requirements:</p>
 <ul>
 <li><code>--in</code> (or <code>--in-data</code>, used equivalently) must point to the input PMTiles archive</li>
 <li><code>--out</code> must be a concrete PMTiles file path</li>
-<li>exactly one of <code>--point</code> or <code>--polygon</code> must be specified</li>
+<li>choose point, polygon, or mixed mode. Use <code>--point-in</code>, <code>--polygon-in</code>, or both for the explicit form; the older compatibility form uses <code>--point</code>, <code>--polygon</code>, or <code>--mixed</code> with <code>--in</code></li>
 </ul>
 <p>Main options:</p>
 <ul>
