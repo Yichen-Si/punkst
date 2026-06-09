@@ -2,13 +2,19 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cinttypes>
 #include <fstream>
 #include <limits>
+#include <map>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 
 #include "json.hpp"
 #include "error.hpp"
+#include "utils.h"
+#include "utils_sys.hpp"
 
 namespace {
 
@@ -616,6 +622,316 @@ std::vector<PreparedGeoJSONFeature2D> loadPreparedGeoJSONFeatures(
         }
     }
     return out;
+}
+
+namespace {
+
+std::optional<std::string> simple_json_scalar_to_string(const json& value) {
+    if (value.is_string()) {
+        return value.get<std::string>();
+    }
+    if (value.is_number_integer()) {
+        return std::to_string(value.get<int64_t>());
+    }
+    if (value.is_number_unsigned()) {
+        return std::to_string(value.get<uint64_t>());
+    }
+    return std::nullopt;
+}
+
+std::vector<std::pair<double, double>> parse_simple_json_ring(const json& ring) {
+    if (!ring.is_array()) {
+        error("%s: GeoJSON ring must be an array", __func__);
+    }
+    std::vector<std::pair<double, double>> out;
+    out.reserve(ring.size());
+    for (const auto& coord : ring) {
+        if (!coord.is_array() || coord.size() < 2 ||
+            !coord[0].is_number() || !coord[1].is_number()) {
+            error("%s: GeoJSON coordinate must have numeric x/y", __func__);
+        }
+        out.emplace_back(coord[0].get<double>(), coord[1].get<double>());
+    }
+    if (out.size() >= 2 && out.front() == out.back()) {
+        out.pop_back();
+    }
+    if (out.size() < 3) {
+        error("%s: polygon ring has fewer than 3 vertices", __func__);
+    }
+    return out;
+}
+
+std::vector<const json*> collect_simple_features(const json& root) {
+    std::vector<const json*> out;
+    if (!root.is_object()) {
+        error("%s: GeoJSON root must be an object", __func__);
+    }
+    const std::string type = root.value("type", std::string());
+    if (type == "FeatureCollection") {
+        const auto& features = root.at("features");
+        if (!features.is_array()) {
+            error("%s: FeatureCollection.features must be an array", __func__);
+        }
+        for (const auto& feature : features) {
+            out.push_back(&feature);
+        }
+    } else if (type == "Feature" || root.contains("geometry")) {
+        out.push_back(&root);
+    } else if (root.contains("features") && root["features"].is_array()) {
+        for (const auto& feature : root["features"]) {
+            out.push_back(&feature);
+        }
+    } else {
+        error("%s: expected FeatureCollection, Feature, or object with features/geometry", __func__);
+    }
+    return out;
+}
+
+uint64_t simple_part_feature_id(uint32_t assignedId, size_t partIndex, size_t nParts) {
+    if (nParts <= 1) {
+        return static_cast<uint64_t>(assignedId);
+    }
+    return (static_cast<uint64_t>(assignedId) << 20u) | static_cast<uint64_t>(partIndex);
+}
+
+void assign_simple_record_ids(SimplePolygonRingRecord& rec, const std::string& context,
+    bool idIsU32, uint32_t nextId, std::set<uint32_t>& seenNumericIds) {
+    rec.assignedId = nextId;
+    if (idIsU32) {
+        if (!str2uint32(rec.polygonId, rec.assignedId)) {
+            error("%s: failed parsing polygon ID %s as u32", context.c_str(), rec.polygonId.c_str());
+        }
+        if (!seenNumericIds.insert(rec.assignedId).second) {
+            error("%s: duplicate numeric polygon ID %u", context.c_str(), rec.assignedId);
+        }
+    }
+}
+
+} // namespace
+
+std::pair<double, double> centroidForSimpleRing(
+    const std::vector<std::pair<double, double>>& ring) {
+    double twiceArea = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < ring.size(); ++i) {
+        const auto& a = ring[i];
+        const auto& b = ring[(i + 1) % ring.size()];
+        const double cross = a.first * b.second - b.first * a.second;
+        twiceArea += cross;
+        cx += (a.first + b.first) * cross;
+        cy += (a.second + b.second) * cross;
+        minX = std::min(minX, a.first);
+        minY = std::min(minY, a.second);
+        maxX = std::max(maxX, a.first);
+        maxY = std::max(maxY, a.second);
+    }
+    if (std::abs(twiceArea) > 1e-12) {
+        return {cx / (3.0 * twiceArea), cy / (3.0 * twiceArea)};
+    }
+    return {0.5 * (minX + maxX), 0.5 * (minY + maxY)};
+}
+
+std::pair<double, double> centroidForSimpleRings(
+    const std::vector<std::vector<std::pair<double, double>>>& rings) {
+    double totalArea = 0.0;
+    double sx = 0.0;
+    double sy = 0.0;
+    for (const auto& ring : rings) {
+        double twiceArea = 0.0;
+        for (size_t i = 0; i < ring.size(); ++i) {
+            const auto& a = ring[i];
+            const auto& b = ring[(i + 1) % ring.size()];
+            twiceArea += a.first * b.second - b.first * a.second;
+        }
+        const double area = std::abs(0.5 * twiceArea);
+        const auto c = centroidForSimpleRing(ring);
+        sx += c.first * area;
+        sy += c.second * area;
+        totalArea += area;
+    }
+    if (totalArea > 0.0) {
+        return {sx / totalArea, sy / totalArea};
+    }
+    return rings.empty() ? std::pair<double, double>{0.0, 0.0} : centroidForSimpleRing(rings.front());
+}
+
+std::vector<SimplePolygonRingRecord> readSimplePolygonGeoJSON(
+    const std::string& geojsonFile,
+    const std::string& idProperty,
+    bool idIsU32) {
+    std::ifstream in(geojsonFile);
+    if (!in.is_open()) {
+        error("%s: cannot open %s", __func__, geojsonFile.c_str());
+    }
+    json root;
+    in >> root;
+    std::vector<SimplePolygonRingRecord> out;
+    uint32_t nextId = 0;
+    std::set<uint32_t> seenNumericIds;
+    for (const json* fptr : collect_simple_features(root)) {
+        const json& feature = *fptr;
+        const json* props = feature.contains("properties") && feature["properties"].is_object()
+            ? &feature["properties"] : nullptr;
+        if (props == nullptr || !props->contains(idProperty)) {
+            error("%s: GeoJSON feature missing property '%s'", __func__, idProperty.c_str());
+        }
+        auto id = simple_json_scalar_to_string((*props)[idProperty]);
+        if (!id || id->empty()) {
+            error("%s: invalid GeoJSON polygon ID", __func__);
+        }
+        const json& geom = feature.contains("geometry") ? feature["geometry"] : feature;
+        const std::string type = geom.value("type", std::string());
+        std::vector<std::vector<std::pair<double, double>>> rings;
+        if (type == "Polygon") {
+            rings.push_back(parse_simple_json_ring(geom.at("coordinates").at(0)));
+        } else if (type == "MultiPolygon") {
+            for (const auto& poly : geom.at("coordinates")) {
+                if (poly.is_array() && !poly.empty()) {
+                    rings.push_back(parse_simple_json_ring(poly.at(0)));
+                }
+            }
+        } else {
+            error("%s: expected Polygon or MultiPolygon geometry", __func__);
+        }
+        for (size_t i = 0; i < rings.size(); ++i) {
+            SimplePolygonRingRecord rec;
+            rec.polygonId = *id;
+            rec.partIndex = i;
+            rec.ring = std::move(rings[i]);
+            rec.center = centroidForSimpleRing(rec.ring);
+            assign_simple_record_ids(rec, __func__, idIsU32, nextId, seenNumericIds);
+            rec.featureId = simple_part_feature_id(rec.assignedId, i, rings.size());
+            out.push_back(std::move(rec));
+        }
+        ++nextId;
+    }
+    if (out.empty()) {
+        error("%s: no geometry records found in %s", __func__, geojsonFile.c_str());
+    }
+    return out;
+}
+
+std::vector<SimplePolygonRingRecord> readSimplePolygonTable(
+    const std::string& tableFile,
+    const SimplePolygonTableReadOptions& options) {
+    const int32_t maxCol = std::max({options.idCol, options.xCol, options.yCol, options.orderCol});
+    if (options.idCol < 0 || options.xCol < 0 || options.yCol < 0) {
+        error("%s: geometry column indexes must be non-negative", __func__);
+    }
+    TextLineReader reader(tableFile);
+    std::string line;
+    uint64_t rowNo = 0;
+    if (!read_next_data_line(reader, line, rowNo)) {
+        error("%s: empty geometry input %s", __func__, tableFile.c_str());
+    }
+    const char delim = infer_table_delimiter(line);
+    std::map<std::string, std::vector<std::tuple<int64_t, double, double>>> staged;
+    std::vector<std::string> idOrder;
+    std::set<std::string> closedIds;
+    std::string currentId;
+    bool haveCurrent = false;
+
+    auto parse_row = [&](const std::string& rowLine, uint64_t row, bool allowHeader) {
+        std::vector<std::string> fields = split_delimited(rowLine, delim);
+        require_fields(fields, maxCol, __func__, row);
+        double x = 0.0;
+        double y = 0.0;
+        if (!str2double(fields[static_cast<size_t>(options.xCol)], x) ||
+            !str2double(fields[static_cast<size_t>(options.yCol)], y)) {
+            if (allowHeader) {
+                return false;
+            }
+            error("%s: invalid x/y in geometry row %" PRIu64, __func__, row);
+        }
+        const std::string id = fields[static_cast<size_t>(options.idCol)];
+        if (options.requireConsecutiveIds) {
+            if (haveCurrent && currentId != id) {
+                closedIds.insert(currentId);
+            }
+            if (closedIds.find(id) != closedIds.end()) {
+                error("%s: polygon ID '%s' appears in more than one block", __func__, id.c_str());
+            }
+            currentId = id;
+            haveCurrent = true;
+        }
+        if (staged.find(id) == staged.end()) {
+            idOrder.push_back(id);
+        }
+        int64_t order = static_cast<int64_t>(staged[id].size());
+        if (options.orderCol >= 0 &&
+            !str2int64(fields[static_cast<size_t>(options.orderCol)], order)) {
+            error("%s: invalid vertex order in geometry row %" PRIu64, __func__, row);
+        }
+        staged[id].emplace_back(order, x, y);
+        return true;
+    };
+
+    parse_row(line, rowNo, true);
+    while (reader.getline(line)) {
+        ++rowNo;
+        if (line.empty() || is_comment_line(line)) {
+            continue;
+        }
+        parse_row(line, rowNo, false);
+    }
+    if (staged.empty()) {
+        error("%s: no geometry records found in %s", __func__, tableFile.c_str());
+    }
+
+    std::vector<SimplePolygonRingRecord> out;
+    uint32_t nextId = 0;
+    std::set<uint32_t> seenNumericIds;
+    for (const std::string& id : idOrder) {
+        auto& rows = staged[id];
+        std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+            return std::get<0>(a) < std::get<0>(b);
+        });
+        SimplePolygonRingRecord rec;
+        rec.polygonId = id;
+        rec.partIndex = 0;
+        rec.ring.reserve(rows.size());
+        for (const auto& row : rows) {
+            rec.ring.emplace_back(std::get<1>(row), std::get<2>(row));
+        }
+        if (rec.ring.size() < 3) {
+            error("%s: polygon %s has fewer than 3 vertices", __func__, id.c_str());
+        }
+        rec.center = centroidForSimpleRing(rec.ring);
+        assign_simple_record_ids(rec, __func__, options.idIsU32, nextId, seenNumericIds);
+        rec.featureId = rec.assignedId;
+        out.push_back(std::move(rec));
+        ++nextId;
+    }
+    if (options.idIsU32) {
+        std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+            return a.assignedId < b.assignedId;
+        });
+    }
+    return out;
+}
+
+std::vector<SimplePolygonRingRecord> readSimplePolygonsAuto(
+    const std::string& path,
+    const std::string& format,
+    const std::string& idProperty,
+    const SimplePolygonTableReadOptions& tableOptions) {
+    const std::string fmt = to_lower(format);
+    const std::string effectiveFmt = fmt == "auto"
+        ? infer_table_or_json_format_from_extension(path, "geom-format")
+        : fmt;
+    if (effectiveFmt == "geojson" || effectiveFmt == "json") {
+        return readSimplePolygonGeoJSON(path, idProperty, tableOptions.idIsU32);
+    }
+    if (effectiveFmt == "table" || effectiveFmt == "tsv" || effectiveFmt == "csv") {
+        return readSimplePolygonTable(path, tableOptions);
+    }
+    error("%s: format must be auto, geojson, json, table, tsv, or csv", __func__);
+    return {};
 }
 
 bool PreparedRegionMask2D::containsPoint(float x, float y, const TileKey* tile_hint) const {

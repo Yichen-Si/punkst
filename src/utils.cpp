@@ -1,5 +1,7 @@
 #include "utils.h"
 
+#include <cinttypes>
+
 // void hprintf(htsFile* fp, const char * msg, ...) {
 //     va_list ap;
 //     va_start(ap, msg);
@@ -77,6 +79,44 @@ std::vector<std::string> split_tab(const std::string& line) {
     return out;
 }
 
+char infer_table_delimiter(const std::string& line) {
+    if (line.find('\t') != std::string::npos) {
+        return '\t';
+    }
+    if (line.find(',') != std::string::npos) {
+        return ',';
+    }
+    return '\t';
+}
+
+std::vector<std::string> split_delimited(const std::string& line, char delim) {
+    std::vector<std::string> out;
+    split(out, std::string_view(&delim, 1), line, UINT_MAX, true, false, false, false);
+    return out;
+}
+
+bool is_comment_line(const std::string& line) {
+    return !line.empty() && line.front() == '#';
+}
+
+std::string strip_leading_hash(std::string line) {
+    if (!line.empty() && line.front() == '#') {
+        line.erase(line.begin());
+    }
+    return line;
+}
+
+bool read_next_data_line(TextLineReader& reader, std::string& line, uint64_t& rowNo) {
+    while (reader.getline(line)) {
+        ++rowNo;
+        if (line.empty() || is_comment_line(line)) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
 bool header_has(const std::vector<std::string>& header, const std::string& name) {
     return std::find(header.begin(), header.end(), name) != header.end();
 }
@@ -89,6 +129,56 @@ int32_t find_header_column(const std::vector<std::string>& header, const std::ve
         }
     }
     return -1;
+}
+
+int32_t find_header_column_exact(const std::vector<std::string>& header, const std::string& name) {
+    if (name.empty()) {
+        return -1;
+    }
+    auto it = std::find(header.begin(), header.end(), name);
+    return it == header.end() ? -1 : static_cast<int32_t>(std::distance(header.begin(), it));
+}
+
+int32_t find_header_column_ci(const std::vector<std::string>& header, const std::vector<std::string>& names) {
+    for (const std::string& name : names) {
+        const std::string lname = to_lower(name);
+        for (size_t i = 0; i < header.size(); ++i) {
+            if (to_lower(header[i]) == lname) {
+                return static_cast<int32_t>(i);
+            }
+        }
+    }
+    return -1;
+}
+
+void require_fields(const std::vector<std::string>& fields, int32_t maxCol,
+                    const char* context, uint64_t rowNo) {
+    if (maxCol < 0 || fields.size() <= static_cast<size_t>(maxCol)) {
+        error("%s: malformed row %" PRIu64 " with fewer than %d columns",
+            context, rowNo, maxCol + 1);
+    }
+}
+
+std::vector<TopFactorValue> top_factors_from_dense(const std::vector<float>& vals, int32_t topK) {
+    std::vector<std::pair<float, int32_t>> ranked;
+    ranked.reserve(vals.size());
+    for (size_t i = 0; i < vals.size(); ++i) {
+        ranked.emplace_back(vals[i], static_cast<int32_t>(i));
+    }
+    const size_t take = std::min<size_t>(std::max(topK, 0), ranked.size());
+    std::partial_sort(ranked.begin(), ranked.begin() + take, ranked.end(),
+        [](const auto& a, const auto& b) {
+            if (a.first != b.first) {
+                return a.first > b.first;
+            }
+            return a.second < b.second;
+        });
+    std::vector<TopFactorValue> out;
+    out.reserve(take);
+    for (size_t i = 0; i < take; ++i) {
+        out.push_back({ranked[i].second, ranked[i].first});
+    }
+    return out;
 }
 
 // Splits a line into a vector - one or more single character delimiters

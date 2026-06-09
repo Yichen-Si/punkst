@@ -10,6 +10,8 @@ UnitFactorResultHeader parse_unit_factor_result_header(
     const UnitFactorResultReadOptions& options) {
     UnitFactorResultHeader out;
     out.columns = header;
+    out.denseTopK = options.denseTopK;
+    out.requireFactorValues = options.requireFactorValues;
     const bool expectCoords = !options.xColName.empty() || !options.yColName.empty();
     const bool expectTop = !options.topKColName.empty() || !options.topPColName.empty();
     if (expectCoords && (options.xColName.empty() || options.yColName.empty())) {
@@ -37,6 +39,29 @@ UnitFactorResultHeader parse_unit_factor_result_header(
         if (useFactorRange) {
             continue;
         }
+        if (options.allowKpColumns) {
+            for (int32_t j = 1;; ++j) {
+                const std::string kName = "K" + std::to_string(j);
+                const std::string pName = "P" + std::to_string(j);
+                if (header[i] == kName) {
+                    while (static_cast<int32_t>(out.topPairCols.size()) < j) {
+                        out.topPairCols.emplace_back(-1, -1);
+                    }
+                    out.topPairCols[static_cast<size_t>(j - 1)].first = static_cast<int32_t>(i);
+                    break;
+                }
+                if (header[i] == pName) {
+                    while (static_cast<int32_t>(out.topPairCols.size()) < j) {
+                        out.topPairCols.emplace_back(-1, -1);
+                    }
+                    out.topPairCols[static_cast<size_t>(j - 1)].second = static_cast<int32_t>(i);
+                    break;
+                }
+                if (j > static_cast<int32_t>(header.size())) {
+                    break;
+                }
+            }
+        }
         int32_t factorIdx = -1;
         if (str2int32(header[i], factorIdx) && factorIdx >= 0) {
             out.factorCols.emplace_back(factorIdx, static_cast<int32_t>(i));
@@ -50,7 +75,7 @@ UnitFactorResultHeader parse_unit_factor_result_header(
         error("%s: input header must contain %s and %s",
             __func__, options.xColName.c_str(), options.yColName.c_str());
     }
-    if (expectTop && !out.hasTopFactor()) {
+    if (expectTop && !out.hasTopFactor() && out.topPairCols.empty() && out.factorCols.empty()) {
         error("%s: input header must contain %s and %s",
             __func__, options.topKColName.c_str(), options.topPColName.c_str());
     }
@@ -68,20 +93,27 @@ UnitFactorResultHeader parse_unit_factor_result_header(
             out.factorNames.emplace_back(header[static_cast<size_t>(col)]);
         }
     }
-    if (out.factorCols.empty()) {
-        error("%s: no numeric factor-probability columns were found in the input header", __func__);
-    }
-    std::sort(out.factorCols.begin(), out.factorCols.end());
-    for (size_t i = 0; i < out.factorCols.size(); ++i) {
-        if (out.factorCols[i].first != static_cast<int32_t>(i)) {
-            error("%s: factor columns must be contiguous 0..K-1; found gap around %d",
-                __func__, out.factorCols[i].first);
+    for (size_t i = 0; i < out.topPairCols.size(); ++i) {
+        if (out.topPairCols[i].first < 0 || out.topPairCols[i].second < 0) {
+            error("%s: incomplete K/P factor-probability pair at index %zu", __func__, i + 1);
         }
     }
-    out.factorNames.clear();
-    out.factorNames.reserve(out.factorCols.size());
-    for (const auto& factorCol : out.factorCols) {
-        out.factorNames.emplace_back(header[static_cast<size_t>(factorCol.second)]);
+    if (options.requireFactorValues && out.factorCols.empty()) {
+        error("%s: no numeric factor-probability columns were found in the input header", __func__);
+    }
+    if (!out.factorCols.empty()) {
+        std::sort(out.factorCols.begin(), out.factorCols.end());
+        for (size_t i = 0; i < out.factorCols.size(); ++i) {
+            if (out.factorCols[i].first != static_cast<int32_t>(i)) {
+                error("%s: factor columns must be contiguous 0..K-1; found gap around %d",
+                    __func__, out.factorCols[i].first);
+            }
+        }
+        out.factorNames.clear();
+        out.factorNames.reserve(out.factorCols.size());
+        for (const auto& factorCol : out.factorCols) {
+            out.factorNames.emplace_back(header[static_cast<size_t>(factorCol.second)]);
+        }
     }
     return out;
 }
@@ -103,6 +135,7 @@ void parse_unit_factor_result_row(UnitFactorResultRow& row,
     row.y = 0.0;
     row.topK = -1;
     row.topP = 0.0f;
+    row.topFactors.clear();
     if (header.hasCoordinates()) {
         if (!str2double(fields[header.xCol], row.x) ||
             !str2double(fields[header.yCol], row.y)) {
@@ -118,6 +151,25 @@ void parse_unit_factor_result_row(UnitFactorResultRow& row,
                 __func__, inputRowNumber);
         }
         row.hasTopFactor = true;
+        row.topFactors.push_back({row.topK, row.topP});
+    }
+    if (header.hasTopPairs()) {
+        row.topFactors.clear();
+        row.topFactors.reserve(header.topPairCols.size());
+        for (const auto& kp : header.topPairCols) {
+            UnitTopFactor tf;
+            if (!str2int32(fields[kp.first], tf.k) ||
+                !str2float(fields[kp.second], tf.p)) {
+                error("%s: failed parsing K/P columns at input row %" PRIu64,
+                    __func__, inputRowNumber);
+            }
+            row.topFactors.push_back(tf);
+        }
+        if (!row.topFactors.empty()) {
+            row.topK = row.topFactors.front().k;
+            row.topP = row.topFactors.front().p;
+            row.hasTopFactor = true;
+        }
     }
     row.factorValues.resize(header.factorCols.size());
     for (size_t i = 0; i < header.factorCols.size(); ++i) {
@@ -127,10 +179,21 @@ void parse_unit_factor_result_row(UnitFactorResultRow& row,
                 __func__, header.columns[colIdx].c_str(), inputRowNumber);
         }
     }
+    if (!row.factorValues.empty() && !header.hasTopPairs()) {
+        row.topFactors.clear();
+        for (const TopFactorValue& tf : top_factors_from_dense(row.factorValues, header.denseTopK)) {
+            row.topFactors.push_back({tf.k, tf.p});
+        }
+        if (!row.topFactors.empty()) {
+            row.topK = row.topFactors.front().k;
+            row.topP = row.topFactors.front().p;
+            row.hasTopFactor = true;
+        }
+    }
 }
 
 UnitFactorResultReader::UnitFactorResultReader(const std::string& path,
-    const UnitFactorResultReadOptions& options) : reader_(path) {
+    const UnitFactorResultReadOptions& options) : reader_(path), options_(options) {
     std::string line;
     while (reader_.getline(line)) {
         if (!line.empty()) {
@@ -140,22 +203,23 @@ UnitFactorResultReader::UnitFactorResultReader(const std::string& path,
     if (line.empty()) {
         error("%s: input file %s is empty", __func__, path.c_str());
     }
-    if (!line.empty() && line.front() == '#') {
-        line.erase(line.begin());
-    }
+    line = strip_leading_hash(line);
     std::vector<std::string> header;
-    split(header, "\t", line);
+    if (options_.autoDetectDelimiter) {
+        options_.delimiter = infer_table_delimiter(line);
+    }
+    header = split_delimited(line, options_.delimiter);
     header_ = parse_unit_factor_result_header(header, options);
 }
 
 bool UnitFactorResultReader::next(UnitFactorResultRow& row) {
     std::string line;
     while (reader_.getline(line)) {
-        if (line.empty()) {
+        if (line.empty() || (options_.skipCommentRows && is_comment_line(line))) {
             continue;
         }
         std::vector<std::string> fields;
-        split(fields, "\t", line);
+        fields = split_delimited(line, options_.delimiter);
         parse_unit_factor_result_row(row, fields, header_, rowIndex_);
         ++rowIndex_;
         return true;

@@ -246,6 +246,17 @@ struct UnitFactorResultReadOptions {
     std::string unitIdColName;
     int32_t factorColBegin = -1;
     int32_t factorColEnd = -1;
+    int32_t denseTopK = 3;
+    bool requireFactorValues = true;
+    bool allowKpColumns = true;
+    bool skipCommentRows = true;
+    char delimiter = '\t';
+    bool autoDetectDelimiter = false;
+};
+
+struct UnitTopFactor {
+    int32_t k = -1;
+    float p = 0.0f;
 };
 
 struct UnitFactorResultHeader {
@@ -257,6 +268,9 @@ struct UnitFactorResultHeader {
     int32_t topPCol = -1;
     std::vector<std::pair<int32_t, int32_t>> factorCols;
     std::vector<std::string> factorNames;
+    std::vector<std::pair<int32_t, int32_t>> topPairCols;
+    int32_t denseTopK = 3;
+    bool requireFactorValues = true;
 
     bool hasUnitId() const {
         return unitIdCol >= 0;
@@ -266,6 +280,15 @@ struct UnitFactorResultHeader {
     }
     bool hasTopFactor() const {
         return topKCol >= 0 && topPCol >= 0;
+    }
+    bool hasTopPairs() const {
+        return !topPairCols.empty();
+    }
+    size_t nTopFactors() const {
+        if (!topPairCols.empty()) {
+            return topPairCols.size();
+        }
+        return denseTopK > 0 ? static_cast<size_t>(denseTopK) : 0;
     }
 };
 
@@ -277,6 +300,7 @@ struct UnitFactorResultRow {
     int32_t topK = -1;
     float topP = 0.0f;
     std::vector<float> factorValues;
+    std::vector<UnitTopFactor> topFactors;
     bool hasCoordinates = false;
     bool hasTopFactor = false;
 };
@@ -297,7 +321,8 @@ public:
     UnitFactorResultReader(const std::string& path,
         const std::string& xColName, const std::string& yColName,
         const std::string& topKColName, const std::string& topPColName)
-        : UnitFactorResultReader(path, UnitFactorResultReadOptions{xColName, yColName, topKColName, topPColName, "", -1, -1}) {}
+        : UnitFactorResultReader(path, UnitFactorResultReadOptions{
+            xColName, yColName, topKColName, topPColName, "", -1, -1}) {}
 
     const UnitFactorResultHeader& header() const {
         return header_;
@@ -308,6 +333,7 @@ public:
 private:
     TextLineReader reader_;
     UnitFactorResultHeader header_;
+    UnitFactorResultReadOptions options_;
     uint64_t rowIndex_ = 0;
 };
 

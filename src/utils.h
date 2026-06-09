@@ -61,8 +61,22 @@ std::string to_lower(const std::string& str);
 std::string to_upper(const std::string& str);
 std::string join(const std::vector<std::string>& tokens, const std::string& delim);
 std::vector<std::string> split_tab(const std::string& line);
+char infer_table_delimiter(const std::string& line);
+std::vector<std::string> split_delimited(const std::string& line, char delim);
+bool is_comment_line(const std::string& line);
+std::string strip_leading_hash(std::string line);
+bool read_next_data_line(TextLineReader& reader, std::string& line, uint64_t& rowNo);
 bool header_has(const std::vector<std::string>& header, const std::string& name);
 int32_t find_header_column(const std::vector<std::string>& header, const std::vector<std::string>& names);
+int32_t find_header_column_exact(const std::vector<std::string>& header, const std::string& name);
+int32_t find_header_column_ci(const std::vector<std::string>& header, const std::vector<std::string>& names);
+void require_fields(const std::vector<std::string>& fields, int32_t maxCol,
+                    const char* context, uint64_t rowNo);
+struct TopFactorValue {
+    int32_t k = -1;
+    float p = 0.0f;
+};
+std::vector<TopFactorValue> top_factors_from_dense(const std::vector<float>& vals, int32_t topK);
 std::string basename(const std::string& path, bool stripExtension = false);
 static bool ends_with(const std::string &s, const std::string &suffix) {
     return s.size() >= suffix.size()

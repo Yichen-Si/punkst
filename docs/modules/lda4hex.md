@@ -2,11 +2,8 @@
 
 This document describes the current behavior of:
 
-- `punkst lda4hex`
 - `punkst topic-model`
 - `punkst lda-transform`
-
-`lda4hex` and `topic-model` are aliases for the same command. They currently expose only the SVI-based LDA workflow. This document does not cover HDP or SCVB0.
 
 ## Input formats
 

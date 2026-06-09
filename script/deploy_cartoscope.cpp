@@ -25,7 +25,9 @@
 #include <tuple>
 
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
-int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv);
+int32_t cmdPoly2Pmtiles(int32_t argc, char** argv);
+int32_t cmdCells2Pmtiles(int32_t argc, char** argv);
+int32_t cmdDeChisq(int32_t argc, char** argv);
 
 namespace {
 
@@ -47,9 +49,39 @@ struct TranscriptInputs {
     int32_t icolCount = 3;
 };
 
+struct CellInputs {
+    std::string id;
+    fs::path resultsTsv;
+    fs::path boundaries;
+    fs::path centersTsv;
+    fs::path cellsPmtiles;
+    fs::path boundariesPmtiles;
+    fs::path deTsv;
+    fs::path pseudobulkTsv;
+    fs::path rgbTsv;
+    std::string boundaryFormat = "auto";
+    std::string boundaryIdProp = "cell_id";
+    int32_t tIcolId = 0;
+    int32_t bIcolId = 0;
+    int32_t bIcolX = 1;
+    int32_t bIcolY = 2;
+    int32_t cIcolId = 0;
+    int32_t cIcolX = 1;
+    int32_t cIcolY = 2;
+    int32_t factorColBegin = -1;
+    int32_t factorColEnd = -1;
+    std::string resultIdCol = "cell_id";
+};
+
+enum class ModelType {
+    Default,
+    CellOnly
+};
+
 struct ModelInputs {
     std::string sourcePrefix;
     std::string id;
+    ModelType type = ModelType::Default;
     PixelDecodeMode pixelMode = PixelDecodeMode::Pixel;
     double hexGridDist = 0.0;
     fs::path resultsTsv;
@@ -59,6 +91,7 @@ struct ModelInputs {
     fs::path pixelPng;
     fs::path pseudobulkTsv;
     fs::path deTsv;
+    CellInputs cell;
     bool pixelPngExplicit = false;
 };
 
@@ -71,6 +104,13 @@ struct RgbColorEntry {
     std::string name;
     std::string colorIndex;
     std::array<int32_t, 3> rgb{0, 0, 0};
+};
+
+struct DeGeneRow {
+    std::string gene;
+    std::string factor;
+    double foldChange = 0.0;
+    double log10pval = 0.0;
 };
 
 std::string normalize_id(std::string s) {
@@ -107,6 +147,35 @@ PixelDecodeMode parse_pixel_mode(const std::string& raw, const char* context) {
     }
     error("%s: unsupported pixel_decode_mode '%s' in %s", __func__, raw.c_str(), context);
     return PixelDecodeMode::Pixel;
+}
+
+ModelType parse_model_type(const std::string& raw, const char* context) {
+    const std::string type = to_lower(raw);
+    if (type == "default") {
+        return ModelType::Default;
+    }
+    if (type == "cell_only") {
+        return ModelType::CellOnly;
+    }
+    error("%s: unsupported model type '%s' in %s", __func__, raw.c_str(), context);
+    return ModelType::Default;
+}
+
+bool is_default_model(const ModelInputs& model) {
+    return model.type == ModelType::Default;
+}
+
+bool is_cell_only_model(const ModelInputs& model) {
+    return model.type == ModelType::CellOnly;
+}
+
+bool has_cell_pmtiles_or_sources(const CellInputs& cell) {
+    return !cell.cellsPmtiles.empty() || !cell.boundariesPmtiles.empty() ||
+        !cell.resultsTsv.empty() || !cell.boundaries.empty();
+}
+
+bool has_cell_sidecars(const CellInputs& cell) {
+    return !cell.deTsv.empty() || !cell.pseudobulkTsv.empty() || !cell.rgbTsv.empty();
 }
 
 std::string pixel_mode_suffix(PixelDecodeMode mode) {
@@ -181,6 +250,18 @@ int call_command(const std::vector<std::string>& args,
         argv.push_back(arg.data());
     }
     return fn(static_cast<int32_t>(argv.size()), argv.data());
+}
+
+std::string normalize_factor_id(std::string s) {
+    try {
+        size_t pos = 0;
+        const double v = std::stod(s, &pos);
+        if (pos == s.size() && std::isfinite(v) && std::floor(v) == v) {
+            return std::to_string(static_cast<int64_t>(v));
+        }
+    } catch (...) {
+    }
+    return s;
 }
 
 std::vector<std::string> read_pmtiles_paths_from_index(const fs::path& indexPath, const fs::path& outDir) {
@@ -514,6 +595,24 @@ std::vector<RgbColorEntry> load_normalized_colors(const fs::path& src, size_t k)
     return out;
 }
 
+size_t count_rgb_color_rows(const fs::path& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        error("%s: cannot open %s", __func__, path.string().c_str());
+    }
+    std::string line;
+    if (!std::getline(in, line)) {
+        return 0;
+    }
+    size_t rows = 0;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            ++rows;
+        }
+    }
+    return rows;
+}
+
 size_t infer_factor_count_from_pseudobulk(const fs::path& src) {
     std::ifstream in(src);
     if (!in.is_open()) {
@@ -541,8 +640,14 @@ size_t infer_factor_count_from_pseudobulk(const fs::path& src) {
 void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, size_t factorCount,
     bool overwrite) {
     if (!overwrite && file_exists(dst)) {
-        notice("%s: %s already exists; skipping RGB sidecar", __func__, dst.string().c_str());
-        return;
+        const size_t existingRows = count_rgb_color_rows(dst);
+        if (existingRows == factorCount) {
+            notice("%s: %s already has %zu RGB rows; skipping RGB sidecar",
+                __func__, dst.string().c_str(), existingRows);
+            return;
+        }
+        notice("%s: %s has %zu RGB rows but expected %zu; rewriting RGB sidecar",
+            __func__, dst.string().c_str(), existingRows, factorCount);
     }
     const std::vector<RgbColorEntry> colors = load_normalized_colors(src, factorCount);
     fs::create_directories(dst.parent_path());
@@ -619,10 +724,110 @@ void write_cartoscope_de(const fs::path& src, const fs::path& dst, bool overwrit
     }
 }
 
-void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& dst, bool overwrite) {
+std::vector<DeGeneRow> read_cartoscope_de_rows(const fs::path& src) {
+    TextLineReader reader(src.string());
+    std::string line;
+    if (!reader.getline(line)) {
+        error("%s: empty DE table %s", __func__, src.string().c_str());
+    }
+    std::vector<std::string> header = split_tab(strip_leading_hash(line));
+    std::map<std::string, int32_t> col;
+    for (size_t i = 0; i < header.size(); ++i) {
+        col[header[i]] = static_cast<int32_t>(i);
+    }
+    const int32_t cGene = find_header_column_ci(header, {"gene", "Feature", "feature", "Gene"});
+    const int32_t cFactor = find_header_column_ci(header, {"factor", "Factor", "Topic", "topic"});
+    const int32_t cFc = find_header_column_ci(header, {"FoldChange", "ApproxFC", "approxFC", "FC", "fc"});
+    const int32_t cLog10 = find_header_column_ci(header, {"log10pval", "logPval", "LogPval", "-log10pval", "neglog10pval", "neglog10p"});
+    if (cGene < 0 || cFactor < 0) {
+        error("%s: DE table must contain gene and factor columns: %s",
+            __func__, src.string().c_str());
+    }
+    std::vector<DeGeneRow> rows;
+    while (reader.getline(line)) {
+        if (line.empty()) {
+            continue;
+        }
+        std::vector<std::string> fields = split_tab(line);
+        const int32_t maxCol = std::max({cGene, cFactor, cFc, cLog10});
+        if (fields.size() <= static_cast<size_t>(maxCol)) {
+            continue;
+        }
+        DeGeneRow row;
+        row.gene = fields[static_cast<size_t>(cGene)];
+        row.factor = normalize_factor_id(fields[static_cast<size_t>(cFactor)]);
+        if (cFc >= 0) {
+            str2double(fields[static_cast<size_t>(cFc)], row.foldChange);
+        }
+        if (cLog10 >= 0) {
+            str2double(fields[static_cast<size_t>(cLog10)], row.log10pval);
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+std::string join_top_genes(std::vector<std::pair<double, std::string>> ranked, size_t nTop) {
+    if (ranked.empty()) {
+        return ".";
+    }
+    std::stable_sort(ranked.begin(), ranked.end(),
+        [](const auto& a, const auto& b) {
+            return a.first > b.first;
+        });
+    std::ostringstream out;
+    const size_t n = std::min(nTop, ranked.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (i > 0) {
+            out << ",";
+        }
+        out << ranked[i].second;
+    }
+    return out.str();
+}
+
+std::string rgb_string(const RgbColorEntry& color) {
+    return std::to_string(color.rgb[0]) + "," + std::to_string(color.rgb[1]) + "," +
+        std::to_string(color.rgb[2]);
+}
+
+bool existing_info_is_compatible(const fs::path& path, size_t factorCount) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return false;
+    }
+    std::string line;
+    if (!std::getline(in, line)) {
+        return false;
+    }
+    std::vector<std::string> header = split_tab(strip_leading_hash(line));
+    const bool hasRequired = find_header_column_ci(header, {"Factor"}) >= 0 &&
+        find_header_column_ci(header, {"RGB"}) >= 0 &&
+        find_header_column_ci(header, {"Weight"}) >= 0 &&
+        find_header_column_ci(header, {"PostUMI"}) >= 0;
+    if (!hasRequired) {
+        return false;
+    }
+    size_t rows = 0;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            ++rows;
+        }
+    }
+    return rows == factorCount;
+}
+
+void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& deSrc,
+    const fs::path& rgbSrc, const fs::path& dst, bool overwrite) {
     if (!overwrite && file_exists(dst)) {
-        notice("%s: %s already exists; skipping info sidecar", __func__, dst.string().c_str());
-        return;
+        const size_t factorCount = infer_factor_count_from_pseudobulk(src);
+        if (existing_info_is_compatible(dst, factorCount)) {
+            notice("%s: %s already has CartoScope factor info; skipping info sidecar",
+                __func__, dst.string().c_str());
+            return;
+        }
+        notice("%s: %s is stale or incomplete; rewriting info sidecar",
+            __func__, dst.string().c_str());
     }
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> pseudobulk;
     std::vector<std::string> featureNames;
@@ -635,22 +840,62 @@ void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& 
     if (pseudobulk.cols() == 0) {
         error("%s: pseudobulk table has no factor columns: %s", __func__, src.string().c_str());
     }
+    const size_t factorCount = static_cast<size_t>(pseudobulk.cols());
+    const std::vector<RgbColorEntry> colors = load_normalized_colors(rgbSrc, factorCount);
+    const std::vector<DeGeneRow> deRows = read_cartoscope_de_rows(deSrc);
 
     fs::create_directories(dst.parent_path());
     std::ofstream out(dst);
     if (!out.is_open()) {
         error("%s: cannot open %s", __func__, dst.string().c_str());
     }
-    out << "Factor\tWeight\n";
+    out << "Factor\tRGB\tWeight\tPostUMI\tTopGene_pval\tTopGene_fc\tTopGene_weight\n";
     const Eigen::Matrix<double, 1, Eigen::Dynamic> weights = pseudobulk.colwise().sum();
     const double totalWeight = weights.sum();
     if (!(totalWeight > 0.0)) {
         error("%s: pseudobulk table has non-positive total factor weight: %s",
             __func__, src.string().c_str());
     }
-    for (Eigen::Index j = 0; j < pseudobulk.cols(); ++j) {
-        out << factorNames[static_cast<size_t>(j)] << "\t"
-            << fp_to_string(weights(j) / totalWeight, 6) << "\n";
+    struct InfoRow {
+        size_t idx = 0;
+        double weight = 0.0;
+    };
+    std::vector<InfoRow> order;
+    order.reserve(factorCount);
+    for (size_t j = 0; j < factorCount; ++j) {
+        order.push_back({j, weights(static_cast<Eigen::Index>(j)) / totalWeight});
+    }
+    std::stable_sort(order.begin(), order.end(),
+        [](const InfoRow& a, const InfoRow& b) {
+            return a.weight > b.weight;
+        });
+
+    const size_t nTop = 20;
+    for (const InfoRow& row : order) {
+        const size_t j = row.idx;
+        const std::string factor = normalize_factor_id(factorNames[j]);
+        std::vector<std::pair<double, std::string>> byPval;
+        std::vector<std::pair<double, std::string>> byFc;
+        for (const DeGeneRow& de : deRows) {
+            if (de.factor != factor) {
+                continue;
+            }
+            byPval.emplace_back(de.log10pval, de.gene);
+            byFc.emplace_back(de.foldChange, de.gene);
+        }
+        std::vector<std::pair<double, std::string>> byWeight;
+        byWeight.reserve(featureNames.size());
+        for (size_t i = 0; i < featureNames.size(); ++i) {
+            byWeight.emplace_back(pseudobulk(static_cast<Eigen::Index>(i),
+                static_cast<Eigen::Index>(j)), featureNames[i]);
+        }
+        out << factor << "\t"
+            << rgb_string(colors[j]) << "\t"
+            << fp_to_string(row.weight, 5) << "\t"
+            << static_cast<int64_t>(std::llround(weights(static_cast<Eigen::Index>(j)))) << "\t"
+            << join_top_genes(std::move(byPval), nTop) << "\t"
+            << join_top_genes(std::move(byFc), nTop) << "\t"
+            << join_top_genes(std::move(byWeight), nTop) << "\n";
     }
     if (!out.good()) {
         error("%s: failed writing %s", __func__, dst.string().c_str());
@@ -885,36 +1130,139 @@ DeployInputs load_from_input_json(const fs::path& inputJson) {
     out.transcripts.icolFeature = tr.value("icol_feature", 2);
     out.transcripts.icolCount = tr.value("icol_count", 3);
 
+    auto parse_cell_fields = [&](const json& m, CellInputs& cell, bool prefixedOnly, bool sidecarsAllowed) {
+        auto path_key = [&](const char* prefixed, const char* plain, fs::path& dst) {
+            if (m.contains(prefixed) && !m.at(prefixed).is_null()) {
+                dst = resolve_path(base, m.at(prefixed).get<std::string>());
+            } else if (!prefixedOnly && plain != nullptr &&
+                m.contains(plain) && !m.at(plain).is_null()) {
+                dst = resolve_path(base, m.at(plain).get<std::string>());
+            }
+        };
+        path_key("cell_results_tsv", "results_tsv", cell.resultsTsv);
+        path_key("cell_boundaries", "boundaries", cell.boundaries);
+        if (cell.boundaries.empty()) {
+            path_key("cell_boundaries_json", "boundaries_json", cell.boundaries);
+        }
+        path_key("cell_centers_tsv", "centers_tsv", cell.centersTsv);
+
+        if (m.contains("cell_pmtiles") && m.at("cell_pmtiles").is_object()) {
+            const json& pm = m.at("cell_pmtiles");
+            if (pm.contains("cells") && !pm.at("cells").is_null()) {
+                cell.cellsPmtiles = resolve_path(base, pm.at("cells").get<std::string>());
+            }
+            if (pm.contains("boundaries") && !pm.at("boundaries").is_null()) {
+                cell.boundariesPmtiles = resolve_path(base, pm.at("boundaries").get<std::string>());
+            }
+        }
+        if (!prefixedOnly && m.contains("pmtiles") && m.at("pmtiles").is_object()) {
+            const json& pm = m.at("pmtiles");
+            if (pm.contains("cells") && !pm.at("cells").is_null()) {
+                cell.cellsPmtiles = resolve_path(base, pm.at("cells").get<std::string>());
+            }
+            if (pm.contains("boundaries") && !pm.at("boundaries").is_null()) {
+                cell.boundariesPmtiles = resolve_path(base, pm.at("boundaries").get<std::string>());
+            }
+        }
+        path_key("cell_pmtiles_cells", nullptr, cell.cellsPmtiles);
+        path_key("cell_pmtiles_boundaries", nullptr, cell.boundariesPmtiles);
+
+        cell.boundaryFormat = m.value("cell_boundary_format",
+            prefixedOnly ? cell.boundaryFormat : m.value("boundary_format", cell.boundaryFormat));
+        cell.boundaryIdProp = m.value("cell_boundary_id_prop",
+            prefixedOnly ? cell.boundaryIdProp : m.value("boundary_id_prop", cell.boundaryIdProp));
+        cell.resultIdCol = m.value("cell_result_id_col",
+            prefixedOnly ? cell.resultIdCol : m.value("result_id_col", m.value("id_col", cell.resultIdCol)));
+        cell.bIcolId = m.value("cell_b_icol_id",
+            prefixedOnly ? cell.bIcolId : m.value("b_icol_id", cell.bIcolId));
+        cell.bIcolX = m.value("cell_b_icol_x",
+            prefixedOnly ? cell.bIcolX : m.value("b_icol_x", cell.bIcolX));
+        cell.bIcolY = m.value("cell_b_icol_y",
+            prefixedOnly ? cell.bIcolY : m.value("b_icol_y", cell.bIcolY));
+        cell.cIcolId = m.value("cell_c_icol_id",
+            prefixedOnly ? cell.cIcolId : m.value("c_icol_id", cell.cIcolId));
+        cell.cIcolX = m.value("cell_c_icol_x",
+            prefixedOnly ? cell.cIcolX : m.value("c_icol_x", cell.cIcolX));
+        cell.cIcolY = m.value("cell_c_icol_y",
+            prefixedOnly ? cell.cIcolY : m.value("c_icol_y", cell.cIcolY));
+
+        if ((m.contains("cell_info_tsv") && !m.at("cell_info_tsv").is_null()) ||
+            (!prefixedOnly && ((m.contains("info_tsv") && !m.at("info_tsv").is_null()) ||
+                (m.contains("info") && !m.at("info").is_null())))) {
+            error("%s: model %s no longer accepts cell info/info_tsv; "
+                "deploy-cartoscope derives info from pseudobulk_tsv for cell_only models",
+                __func__, cell.id.c_str());
+        }
+        if ((m.contains("cell_n_factors") && !m.at("cell_n_factors").is_null()) ||
+            (!prefixedOnly && m.contains("n_factors") && !m.at("n_factors").is_null())) {
+            error("%s: model %s no longer accepts n_factors; factor count is inferred from pseudobulk_tsv",
+                __func__, cell.id.c_str());
+        }
+        if (!sidecarsAllowed) {
+            if ((m.contains("cell_de_tsv") && !m.at("cell_de_tsv").is_null()) ||
+                (m.contains("cell_pseudobulk_tsv") && !m.at("cell_pseudobulk_tsv").is_null()) ||
+                (m.contains("cell_rgb_tsv") && !m.at("cell_rgb_tsv").is_null())) {
+                error("%s: default model %s must use the model sidecars for attached cells; "
+                    "cell_de_tsv/cell_pseudobulk_tsv/cell_rgb_tsv are not accepted",
+                    __func__, cell.id.c_str());
+            }
+            return;
+        }
+        path_key("cell_de_tsv", "de_tsv", cell.deTsv);
+        if (cell.deTsv.empty() && !prefixedOnly && m.contains("de") && !m.at("de").is_null()) {
+            cell.deTsv = resolve_path(base, m.at("de").get<std::string>());
+        }
+        path_key("cell_pseudobulk_tsv", "pseudobulk_tsv", cell.pseudobulkTsv);
+        if (cell.pseudobulkTsv.empty() && !prefixedOnly && m.contains("post") && !m.at("post").is_null()) {
+            cell.pseudobulkTsv = resolve_path(base, m.at("post").get<std::string>());
+        }
+        path_key("cell_rgb_tsv", "rgb_tsv", cell.rgbTsv);
+        if (cell.rgbTsv.empty() && !prefixedOnly && m.contains("rgb") && !m.at("rgb").is_null()) {
+            cell.rgbTsv = resolve_path(base, m.at("rgb").get<std::string>());
+        }
+        if (cell.rgbTsv.empty() && !prefixedOnly &&
+            m.contains("color_rgb_tsv") && !m.at("color_rgb_tsv").is_null()) {
+            cell.rgbTsv = resolve_path(base, m.at("color_rgb_tsv").get<std::string>());
+        }
+    };
+
     for (const auto& m : root.at("models")) {
         ModelInputs model;
         model.id = normalize_id(m.at("id").get<std::string>());
+        model.type = parse_model_type(m.value("type", std::string("default")), inputJson.string().c_str());
         model.sourcePrefix = model.id;
-        model.hexGridDist = m.at("hex_grid_dist").get<double>();
-        model.resultsTsv = resolve_path(base, m.at("results_tsv").get<std::string>());
-        model.modelTsv = resolve_path(base, m.at("model_tsv").get<std::string>());
-        model.colorRgbTsv = resolve_path(base, m.at("color_rgb_tsv").get<std::string>());
-        model.pixelPrefix = resolve_path(base, m.at("pixel_prefix").get<std::string>());
-        const PixelDecodeMode inferredMode = infer_pixel_mode_from_index(model.pixelPrefix);
-        if (m.contains("pixel_decode_mode") && !m.at("pixel_decode_mode").is_null()) {
-            model.pixelMode = parse_pixel_mode(m.at("pixel_decode_mode").get<std::string>(), inputJson.string().c_str());
-            if (model.pixelMode != inferredMode) {
-                error("%s: pixel_decode_mode '%s' does not match %s.index inferred mode '%s'",
-                    __func__, pixel_mode_name(model.pixelMode).c_str(),
-                    model.pixelPrefix.string().c_str(), pixel_mode_name(inferredMode).c_str());
+        model.cell.id = model.id;
+        if (is_cell_only_model(model)) {
+            parse_cell_fields(m, model.cell, false, true);
+        } else {
+            model.hexGridDist = m.at("hex_grid_dist").get<double>();
+            model.resultsTsv = resolve_path(base, m.at("results_tsv").get<std::string>());
+            model.modelTsv = resolve_path(base, m.at("model_tsv").get<std::string>());
+            model.colorRgbTsv = resolve_path(base, m.at("color_rgb_tsv").get<std::string>());
+            model.pixelPrefix = resolve_path(base, m.at("pixel_prefix").get<std::string>());
+            const PixelDecodeMode inferredMode = infer_pixel_mode_from_index(model.pixelPrefix);
+            if (m.contains("pixel_decode_mode") && !m.at("pixel_decode_mode").is_null()) {
+                model.pixelMode = parse_pixel_mode(m.at("pixel_decode_mode").get<std::string>(), inputJson.string().c_str());
+                if (model.pixelMode != inferredMode) {
+                    error("%s: pixel_decode_mode '%s' does not match %s.index inferred mode '%s'",
+                        __func__, pixel_mode_name(model.pixelMode).c_str(),
+                        model.pixelPrefix.string().c_str(), pixel_mode_name(inferredMode).c_str());
+                }
+            } else {
+                model.pixelMode = inferredMode;
             }
-        } else {
-            model.pixelMode = inferredMode;
+            if (m.contains("pixel_png") && !m.at("pixel_png").is_null()) {
+                model.pixelPng = resolve_path(base, m.at("pixel_png").get<std::string>());
+                model.pixelPngExplicit = true;
+            }
+            if (m.contains("pseudobulk_tsv") && !m.at("pseudobulk_tsv").is_null()) {
+                model.pseudobulkTsv = resolve_path(base, m.at("pseudobulk_tsv").get<std::string>());
+            } else {
+                model.pseudobulkTsv = model.pixelPrefix.string() + ".pseudobulk.tsv";
+            }
+            model.deTsv = resolve_path(base, m.at("de_tsv").get<std::string>());
+            parse_cell_fields(m, model.cell, true, false);
         }
-        if (m.contains("pixel_png") && !m.at("pixel_png").is_null()) {
-            model.pixelPng = resolve_path(base, m.at("pixel_png").get<std::string>());
-            model.pixelPngExplicit = true;
-        }
-        if (m.contains("pseudobulk_tsv") && !m.at("pseudobulk_tsv").is_null()) {
-            model.pseudobulkTsv = resolve_path(base, m.at("pseudobulk_tsv").get<std::string>());
-        } else {
-            model.pseudobulkTsv = model.pixelPrefix.string() + ".pseudobulk.tsv";
-        }
-        model.deTsv = resolve_path(base, m.at("de_tsv").get<std::string>());
         out.models.push_back(std::move(model));
     }
     return out;
@@ -927,11 +1275,53 @@ void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMod
     if (inputs.models.empty()) {
         error("%s: no models were discovered or provided", __func__);
     }
+    bool hasDefaultModel = false;
     std::set<std::string> ids;
     for (const ModelInputs& model : inputs.models) {
         if (!ids.insert(model.id).second) {
             error("%s: duplicate model id %s", __func__, model.id.c_str());
         }
+        const CellInputs& cell = model.cell;
+        const bool hasCell = has_cell_pmtiles_or_sources(cell);
+        if (is_cell_only_model(model)) {
+            if (cell.id.empty()) {
+                error("%s: cell_only model id must not be empty", __func__);
+            }
+            const bool hasPrebuilt = !cell.cellsPmtiles.empty() || !cell.boundariesPmtiles.empty();
+            const bool hasSources = !cell.resultsTsv.empty() || !cell.boundaries.empty();
+            if (hasPrebuilt && hasSources) {
+                error("%s: cell_only model %s must use either prebuilt pmtiles or source inputs, not both",
+                    __func__, cell.id.c_str());
+            }
+            if (hasPrebuilt) {
+                require_file(cell.cellsPmtiles, "cell PMTiles");
+                require_file(cell.boundariesPmtiles, "cell boundary PMTiles");
+            } else if (hasSources) {
+                require_file(cell.resultsTsv, "cell projection results TSV");
+                require_file(cell.boundaries, "cell boundary input");
+                if (!cell.centersTsv.empty()) {
+                    require_file(cell.centersTsv, "cell centers TSV");
+                }
+            } else {
+                error("%s: cell_only model %s needs pmtiles cells/boundaries or results_tsv/boundaries",
+                    __func__, cell.id.c_str());
+            }
+            if (!cell.deTsv.empty()) {
+                require_file(cell.deTsv, "cell DE TSV");
+            }
+            if (cell.pseudobulkTsv.empty()) {
+                error("%s: cell_only model %s requires pseudobulk_tsv for CartoScope packaging",
+                    __func__, cell.id.c_str());
+            }
+            require_file(cell.pseudobulkTsv, "cell pseudobulk TSV");
+            if (cell.rgbTsv.empty()) {
+                error("%s: cell_only model %s requires rgb_tsv or color_rgb_tsv for CartoScope factor info",
+                    __func__, cell.id.c_str());
+            }
+            require_file(cell.rgbTsv, "cell RGB TSV");
+            continue;
+        }
+        hasDefaultModel = true;
         require_file(model.resultsTsv, "model results TSV");
         require_file(model.modelTsv, "model TSV");
         require_file(model.colorRgbTsv, "color RGB TSV");
@@ -951,6 +1341,31 @@ void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMod
         if (model.hexGridDist <= 0.0) {
             error("%s: model %s has non-positive hex_grid_dist", __func__, model.id.c_str());
         }
+        if (hasCell) {
+            if (has_cell_sidecars(cell)) {
+                error("%s: default model %s must use standard model sidecars for attached cells",
+                    __func__, model.id.c_str());
+            }
+            const bool hasPrebuilt = !cell.cellsPmtiles.empty() || !cell.boundariesPmtiles.empty();
+            const bool hasSources = !cell.resultsTsv.empty() || !cell.boundaries.empty();
+            if (hasPrebuilt && hasSources) {
+                error("%s: model %s attached cells must use either prebuilt pmtiles or source inputs, not both",
+                    __func__, model.id.c_str());
+            }
+            if (hasPrebuilt) {
+                require_file(cell.cellsPmtiles, "cell PMTiles");
+                require_file(cell.boundariesPmtiles, "cell boundary PMTiles");
+            } else {
+                require_file(cell.resultsTsv, "cell projection results TSV");
+                require_file(cell.boundaries, "cell boundary input");
+                if (!cell.centersTsv.empty()) {
+                    require_file(cell.centersTsv, "cell centers TSV");
+                }
+            }
+        }
+    }
+    if (!hasDefaultModel) {
+        error("%s: at least one default model is required for transcript and raw-pixel deployment", __func__);
     }
 }
 
@@ -975,15 +1390,28 @@ DeployInputs filter_models(DeployInputs inputs, const std::vector<std::string>& 
 }
 
 std::vector<size_t> raw_pixel_packaging_order(const std::vector<ModelInputs>& models) {
-    std::vector<size_t> order(models.size());
+    std::vector<size_t> order;
+    order.reserve(models.size());
     for (size_t i = 0; i < models.size(); ++i) {
-        order[i] = i;
+        if (is_default_model(models[i])) {
+            order.push_back(i);
+        }
     }
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
         return pixel_mode_specificity(models[a].pixelMode) >
             pixel_mode_specificity(models[b].pixelMode);
     });
     return order;
+}
+
+const ModelInputs& first_default_model(const std::vector<ModelInputs>& models) {
+    for (const ModelInputs& model : models) {
+        if (is_default_model(model)) {
+            return model;
+        }
+    }
+    error("%s: no default model available", __func__);
+    return models.front();
 }
 
 void build_pyramid_inplace(const fs::path& pmtilesPath, const fs::path& tmpDir,
@@ -1018,9 +1446,20 @@ void build_pyramid_inplace(const fs::path& pmtilesPath, const fs::path& tmpDir,
 
 void write_catalog_yaml(const fs::path& outPath, const std::string& id, const std::string& title,
     const std::string& desc, const std::vector<std::string>& binPmtiles,
-    const std::vector<ModelInputs>& models, const std::string& rawPixelPmtilesName,
-    const std::string& basemapPmtilesName) {
+    const std::string& basemapPmtilesName, const json& factorAssets) {
     auto q = [](const std::string& s) { return json(s).dump(); };
+    auto write_asset_scalar = [&](std::ostringstream& out, const json& asset,
+        const char* key, const char* yamlKey = nullptr) {
+        if (!asset.contains(key)) {
+            return;
+        }
+        const char* outKey = yamlKey == nullptr ? key : yamlKey;
+        if (asset.at(key).is_boolean()) {
+            out << "    " << outKey << ": " << (asset.at(key).get<bool>() ? "true" : "false") << "\n";
+        } else if (asset.at(key).is_string()) {
+            out << "    " << outKey << ": " << q(asset.at(key).get<std::string>()) << "\n";
+        }
+    };
     std::ostringstream y;
     y << "id: " << q(id) << "\n";
     y << "title: " << q(title.empty() ? id : title) << "\n";
@@ -1045,24 +1484,169 @@ void write_catalog_yaml(const fs::path& outPath, const std::string& id, const st
         y << "    - " << bin << "\n";
     }
     y << "  factors:\n";
-    for (const ModelInputs& model : models) {
-        const std::string decodeId = pixel_decode_id(model);
-        y << "  - id: " << q(model.id) << "\n";
-        y << "    name: " << q(model.id) << "\n";
-        y << "    model_id: " << q(model.id) << "\n";
-        y << "    decode_id: " << q(decodeId) << "\n";
-        y << "    raw_pixel_col: " << q(decodeId) << "\n";
-        y << "    de: " << q(model.id + "-bulk-de.tsv") << "\n";
-        y << "    info: " << q(model.id + "-info.tsv") << "\n";
-        y << "    model: " << q(model.id + "-model.tsv") << "\n";
-        y << "    post: " << q(model.id + "-pseudobulk.tsv.gz") << "\n";
-        y << "    rgb: " << q(model.id + "-rgb.tsv") << "\n";
+    const std::vector<std::string> pmtilesOrder = {
+        "hex", "raster", "raw_pixel", "cells", "boundaries"
+    };
+    for (const auto& asset : factorAssets) {
+        y << "  - id: " << q(asset.value("id", std::string())) << "\n";
+        y << "    name: " << q(asset.value("name", asset.value("id", std::string()))) << "\n";
+        write_asset_scalar(y, asset, "model_id");
+        write_asset_scalar(y, asset, "decode_id");
+        write_asset_scalar(y, asset, "cells_id");
+        write_asset_scalar(y, asset, "raw_pixel_col");
+        write_asset_scalar(y, asset, "de");
+        write_asset_scalar(y, asset, "info");
+        write_asset_scalar(y, asset, "model");
+        write_asset_scalar(y, asset, "post");
+        write_asset_scalar(y, asset, "rgb");
         y << "    pmtiles:\n";
-        y << "      hex: " << q(model.id + ".pmtiles") << "\n";
-        y << "      raster: " << q(model.id + "-pixel-raster.pmtiles") << "\n";
-        y << "      raw_pixel: " << q(rawPixelPmtilesName) << "\n";
+        const json& pm = asset.at("pmtiles");
+        std::set<std::string> written;
+        for (const std::string& key : pmtilesOrder) {
+            if (pm.contains(key)) {
+                y << "      " << key << ": " << q(pm.at(key).get<std::string>()) << "\n";
+                written.insert(key);
+            }
+        }
+        for (auto it = pm.begin(); it != pm.end(); ++it) {
+            if (!written.count(it.key())) {
+                y << "      " << it.key() << ": " << q(it.value().get<std::string>()) << "\n";
+            }
+        }
     }
     write_text(outPath, y.str());
+}
+
+json make_cell_asset(const CellInputs& cell) {
+    json asset;
+    asset["id"] = cell.id;
+    asset["name"] = cell.id;
+    asset["model_id"] = cell.id;
+    asset["decode_id"] = cell.id;
+    asset["cells_id"] = cell.id;
+    asset["raw_pixel_col"] = false;
+    asset["pmtiles"] = {
+        {"cells", cell.id + "-cells.pmtiles"},
+        {"boundaries", cell.id + "-boundaries.pmtiles"}
+    };
+    asset["de"] = cell.id + "-bulk-de.tsv";
+    asset["info"] = cell.id + "-info.tsv";
+    asset["post"] = cell.id + "-pseudobulk.tsv.gz";
+    if (!cell.rgbTsv.empty()) {
+        asset["rgb"] = cell.id + "-rgb.tsv";
+    }
+    return asset;
+}
+
+void copy_prebuilt_pmtiles_or_keep_in_place(const fs::path& src, const fs::path& dst,
+    bool overwrite, const char* label) {
+    std::error_code ec;
+    if (fs::exists(src, ec) && fs::exists(dst, ec) && fs::equivalent(src, dst, ec)) {
+        notice("%s: %s already in deployment directory; leaving in place",
+            __func__, src.string().c_str());
+        return;
+    }
+    copy_file_checked(src, dst, overwrite, label);
+}
+
+void write_or_compute_cell_de(const CellInputs& cell, const fs::path& dst,
+    int32_t threads, bool overwrite) {
+    if (!cell.deTsv.empty()) {
+        write_cartoscope_de(cell.deTsv, dst, overwrite);
+        return;
+    }
+    if (!overwrite && file_exists(dst)) {
+        notice("%s: %s already exists; skipping cell DE", __func__, dst.string().c_str());
+        return;
+    }
+    std::vector<std::string> args = {
+        "de-chisq",
+        "--input", cell.pseudobulkTsv.string(),
+        "--out", dst.string(),
+        "--threads", std::to_string(threads)
+    };
+    if (call_command(args, cmdDeChisq) != 0) {
+        error("%s: de-chisq failed for cell factor %s", __func__, cell.id.c_str());
+    }
+}
+
+json deploy_cell_pmtiles(const CellInputs& cell, const fs::path& outRoot,
+    const std::string& pmtilesFormat, int32_t polygonMinZoom, int32_t polygonMaxZoom,
+    int32_t maxPointTileBytes, int32_t maxPointTileFeatures,
+    int32_t maxPolygonTileBytes, int32_t maxPolygonTileFeatures,
+    double compressionScale, int32_t threads, bool overwrite) {
+    const fs::path outPrefix = outRoot / cell.id;
+    const fs::path outCells = outRoot / (cell.id + "-cells.pmtiles");
+    const fs::path outBoundaries = outRoot / (cell.id + "-boundaries.pmtiles");
+    const bool hasPrebuilt = !cell.cellsPmtiles.empty() || !cell.boundariesPmtiles.empty();
+    if (hasPrebuilt) {
+        copy_prebuilt_pmtiles_or_keep_in_place(cell.cellsPmtiles, outCells, overwrite, "cell PMTiles");
+        copy_prebuilt_pmtiles_or_keep_in_place(cell.boundariesPmtiles, outBoundaries, overwrite, "cell boundary PMTiles");
+    } else if (!overwrite && file_exists(outCells) && file_exists(outBoundaries)) {
+        notice("%s: cell PMTiles already exist for %s; skipping generation",
+            __func__, cell.id.c_str());
+    } else {
+        std::vector<std::string> args = {
+            "cells2pmtiles",
+            "--in-results", cell.resultsTsv.string(),
+            "--in-boundaries", cell.boundaries.string(),
+            "--out-prefix", outPrefix.string(),
+            "--format", pmtilesFormat,
+            "--boundary-format", cell.boundaryFormat,
+            "--id-col", cell.resultIdCol,
+            "--b-icol-id", std::to_string(cell.bIcolId),
+            "--b-icol-x", std::to_string(cell.bIcolX),
+            "--b-icol-y", std::to_string(cell.bIcolY),
+            "--c-icol-id", std::to_string(cell.cIcolId),
+            "--c-icol-x", std::to_string(cell.cIcolX),
+            "--c-icol-y", std::to_string(cell.cIcolY),
+            "--boundary-id-prop", cell.boundaryIdProp,
+            "--min-zoom", std::to_string(polygonMinZoom),
+            "--max-zoom", std::to_string(polygonMaxZoom),
+            "--max-point-tile-bytes", std::to_string(maxPointTileBytes),
+            "--max-point-tile-features", std::to_string(maxPointTileFeatures),
+            "--max-polygon-tile-bytes", std::to_string(maxPolygonTileBytes),
+            "--max-polygon-tile-features", std::to_string(maxPolygonTileFeatures),
+            "--scale-factor-compression", fp_to_string(compressionScale, 6),
+            "--threads", std::to_string(threads)
+        };
+        if (!cell.centersTsv.empty()) {
+            args.push_back("--in-centers");
+            args.push_back(cell.centersTsv.string());
+        }
+        if (overwrite) {
+            args.push_back("--overwrite");
+        }
+        if (call_command(args, cmdCells2Pmtiles) != 0) {
+            error("%s: cells2pmtiles failed for cell factor %s", __func__, cell.id.c_str());
+        }
+    }
+    json pmtiles;
+    pmtiles["cells"] = cell.id + "-cells.pmtiles";
+    pmtiles["boundaries"] = cell.id + "-boundaries.pmtiles";
+    return pmtiles;
+}
+
+json deploy_cell_factor(const CellInputs& cell, const fs::path& outRoot,
+    const std::string& pmtilesFormat, int32_t polygonMinZoom, int32_t polygonMaxZoom,
+    int32_t maxPointTileBytes, int32_t maxPointTileFeatures,
+    int32_t maxPolygonTileBytes, int32_t maxPolygonTileFeatures,
+    double compressionScale, int32_t threads, bool overwrite) {
+    deploy_cell_pmtiles(cell, outRoot, pmtilesFormat,
+        polygonMinZoom, polygonMaxZoom,
+        maxPointTileBytes, maxPointTileFeatures,
+        maxPolygonTileBytes, maxPolygonTileFeatures,
+        compressionScale, threads, overwrite);
+    write_or_compute_cell_de(cell, outRoot / (cell.id + "-bulk-de.tsv"), threads, overwrite);
+    write_cartoscope_info_from_pseudobulk(cell.pseudobulkTsv,
+        outRoot / (cell.id + "-bulk-de.tsv"), cell.rgbTsv,
+        outRoot / (cell.id + "-info.tsv"), overwrite);
+    gzip_copy_text(cell.pseudobulkTsv, outRoot / (cell.id + "-pseudobulk.tsv.gz"), overwrite);
+    if (!cell.rgbTsv.empty()) {
+        const size_t factorCount = infer_factor_count_from_pseudobulk(cell.pseudobulkTsv);
+        write_cartoscope_rgb(cell.rgbTsv, outRoot / (cell.id + "-rgb.tsv"), factorCount, overwrite);
+    }
+    return make_cell_asset(cell);
 }
 
 } // namespace
@@ -1245,7 +1829,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     std::string rawPixelPmtilesName = "genes_all.pmtiles";
 
     pm_raster::RasterBounds rasterBounds =
-        resolve_raster_bounds(inputs.transcripts, inputs.models.front());
+        resolve_raster_bounds(inputs.transcripts, first_default_model(inputs.models));
 
     std::string basemapPmtilesName;
     if (!skipBasemap) {
@@ -1275,13 +1859,16 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     }
 
     for (const ModelInputs& model : inputs.models) {
+        if (!is_default_model(model)) {
+            continue;
+        }
         fs::path hexPmtiles = outRoot / (model.id + ".pmtiles");
         if (!overwrite && file_exists(hexPmtiles)) {
             notice("%s: %s already exists; skipping hex PMTiles packaging", __func__, hexPmtiles.string().c_str());
         } else {
             fs::path resultsForPmtiles = prepare_hex_results_with_topk(model, tmpDir);
             std::vector<std::string> hexArgs = {
-                "hex2pmtiles",
+                "poly2pmtiles",
                 "--in-tsv", resultsForPmtiles.string(),
                 "--out", hexPmtiles.string(),
                 "--format", pmtilesFormat,
@@ -1290,8 +1877,8 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
                 "--prob-thres", fp_to_string(hexProbThreshold, 8),
                 "--threads", std::to_string(threads)
             };
-            if (call_command(hexArgs, cmdHex2PmtilesMlt) != 0) {
-                error("%s: hex2pmtiles failed for model %s", __func__, model.id.c_str());
+            if (call_command(hexArgs, cmdPoly2Pmtiles) != 0) {
+                error("%s: poly2pmtiles failed for model %s", __func__, model.id.c_str());
             }
             build_pyramid_inplace(hexPmtiles, tmpDir, false, polygonMinZoom,
                 maxPolygonTileBytes, maxPolygonTileFeatures, compressionScale, threads);
@@ -1318,7 +1905,9 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         write_cartoscope_rgb(model.colorRgbTsv, outRoot / (model.id + "-rgb.tsv"),
             factorCount, overwrite);
         write_cartoscope_de(model.deTsv, outRoot / (model.id + "-bulk-de.tsv"), overwrite);
-        write_cartoscope_info_from_pseudobulk(model.pseudobulkTsv, outRoot / (model.id + "-info.tsv"), overwrite);
+        write_cartoscope_info_from_pseudobulk(model.pseudobulkTsv,
+            outRoot / (model.id + "-bulk-de.tsv"), model.colorRgbTsv,
+            outRoot / (model.id + "-info.tsv"), overwrite);
         gzip_copy_text(model.pseudobulkTsv, outRoot / (model.id + "-pseudobulk.tsv.gz"), overwrite);
 
         json asset;
@@ -1338,6 +1927,30 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             {"raster", model.id + "-pixel-raster.pmtiles"},
             {"raw_pixel", rawPixelPmtilesName}
         };
+        if (has_cell_pmtiles_or_sources(model.cell)) {
+            json cellPmtiles = deploy_cell_pmtiles(model.cell, outRoot, pmtilesFormat,
+                polygonMinZoom, polygonMaxZoom,
+                maxPointTileBytes, maxPointTileFeatures,
+                maxPolygonTileBytes, maxPolygonTileFeatures,
+                compressionScale, threads, overwrite);
+            asset["cells_id"] = model.id;
+            asset["pmtiles"]["cells"] = cellPmtiles.at("cells");
+            if (cellPmtiles.contains("boundaries")) {
+                asset["pmtiles"]["boundaries"] = cellPmtiles.at("boundaries");
+            }
+        }
+        factorAssets.push_back(asset);
+    }
+
+    for (const ModelInputs& model : inputs.models) {
+        if (!is_cell_only_model(model)) {
+            continue;
+        }
+        json asset = deploy_cell_factor(model.cell, outRoot, pmtilesFormat,
+            polygonMinZoom, polygonMaxZoom,
+            maxPointTileBytes, maxPointTileFeatures,
+            maxPolygonTileBytes, maxPolygonTileFeatures,
+            compressionScale, threads, overwrite);
         factorAssets.push_back(asset);
     }
 
@@ -1345,7 +1958,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         overwrite, "ficture assets");
 
     write_catalog_yaml(outRoot / "catalog.yaml", datasetId, title, desc, binPmtiles,
-        inputs.models, rawPixelPmtilesName, basemapPmtilesName);
+        basemapPmtilesName, factorAssets);
     fs::remove_all(tmpDir);
     notice("%s: wrote minimal CartoScope deployment to %s", __func__, outRoot.string().c_str());
     return 0;

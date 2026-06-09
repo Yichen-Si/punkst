@@ -69,6 +69,28 @@ std::vector<std::filesystem::path> existing_files(const std::vector<std::filesys
     return out;
 }
 
+bool path_has_suffix_ci(const std::string& path, const std::string& suffix) {
+    const std::string p = to_lower(path);
+    const std::string s = to_lower(suffix);
+    return p.size() >= s.size() && p.compare(p.size() - s.size(), s.size(), s) == 0;
+}
+
+std::string infer_table_or_json_format_from_extension(const std::string& path,
+    const std::string& formatOptionName) {
+    if (path_has_suffix_ci(path, ".geojson") || path_has_suffix_ci(path, ".geojson.gz") ||
+        path_has_suffix_ci(path, ".json") || path_has_suffix_ci(path, ".json.gz")) {
+        return "json";
+    }
+    if (path_has_suffix_ci(path, ".tsv") || path_has_suffix_ci(path, ".tsv.gz") ||
+        path_has_suffix_ci(path, ".csv") || path_has_suffix_ci(path, ".csv.gz") ||
+        path_has_suffix_ci(path, ".txt") || path_has_suffix_ci(path, ".txt.gz")) {
+        return "table";
+    }
+    error("%s: cannot infer input format for %s; use --%s",
+        __func__, path.c_str(), formatOptionName.c_str());
+    return {};
+}
+
 void require_file(const std::filesystem::path& path, const std::string& label) {
     if (!file_exists(path)) {
         error("%s: missing %s: %s", __func__, label.c_str(), path.string().c_str());

@@ -9,7 +9,7 @@
 
 Point and simple-polygon PMTiles support both [MLT](https://maplibre.org/maplibre-tile-spec/) and MVT.
 
-For writing point/pixel-only PMTiles see [tile-op](tileop.md)
+For writing point/pixel-only PMTiles, see [tile-op](tileop.md).
 
 Acknowledgement: PMTiles support in `punkst` depends on [Clipper2](https://github.com/AngusJohnson/Clipper2) for polygon operations, borrows from [tippecanoe](https://github.com/felt/tippecanoe) (which supports MVT) and [MLT's cpp implementation](https://github.com/maplibre/maplibre-tile-spec/tree/main/cpp).
 
@@ -27,7 +27,7 @@ punkst export-pmtiles \
 Requirements and behavior:
 
 - `--in` or `--in-data` must point to a point PMTiles archive with **MLT** or **MVT** format
-- `--out` specify the output prefix. The output includes `path/prefix.tsv` and `path/prefix.index`
+- `--out` specifies the output prefix. The output includes `path/prefix.tsv` and `path/prefix.index`
 - `--tile-size` is required and defines the tile size for the output file (in the original units)
 - the data is read from the archive's max-zoom level
 - output columns are `x`, `y`, optional `z`, then the decoded PMTiles schema columns
@@ -66,7 +66,7 @@ Options:
 
 ## Write single-zoom polygon PMTiles
 
-`punkst hex2pmtiles` writes a **polygon-only MLT or MVT PMTiles with a single zoom level** from a factor-probability table (output from [`punkst topic-model`](lda4hex.md)). Use `--format MVT` for MVT output; the default is `MLT`.
+`punkst poly2pmtiles` writes a **polygon-only MLT or MVT PMTiles archive with a single zoom level** from a factor-probability table (output from [`punkst topic-model`](lda4hex.md) or `lda-transform`). Use `--format MVT` for MVT output; the default is `MLT`.
 
 It supports two input styles:
 
@@ -78,7 +78,7 @@ It supports two input styles:
 Use this when the input table contains `x` and `y` coordinates for hex centers.
 
 ```bash
-punkst hex2pmtiles \
+punkst poly2pmtiles \
   --in-tsv path/model.results.tsv.gz \
   --hex-grid-dist 12 \
   --pmtiles-zoom 18 \
@@ -91,9 +91,11 @@ Options:
 - `--pmtiles-zoom` (required) sets the output zoom level
 - `--x-col`, `--y-col`, `--topk-col`, and `--topp-col` set column names in the input factor table for the hex center coordinates (default: `x` and `y`), the top factor ID (default: `topK`), and the top factor probability (default: `topP`)
 - `--prob-thres` keeps only factor probabilities above the threshold as nullable properties (default: `1e-4`)
+- compact `K1/P1`, `K2/P2`, ... columns are recognized automatically; dense numeric factor columns named `0..K-1` are also supported
+- `--top-k` controls how many top factors are retained from dense numeric factor columns (default: `3`)
 - `--coord-scale` scales the input coordinates before Web Mercator tiling (default: `1`, no scaling)
 
-Parameters for boundary behavior and is similar to [tippecanoe's options](https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries)
+Parameters for boundary behavior are similar to [tippecanoe's options](https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries):
 - `--tile-buffer-px` sets the screen-pixel buffer used by the default clipped/duplicated mode (default: `5`) (matching `tippecanoe -b`)
 - `--no-clipping` duplicates each polygon into every touched tile without clipping it to tile boundaries (matching `tippecanoe -pc`)
 - `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching `tippecanoe -pD`)
@@ -104,13 +106,13 @@ Parameters for boundary behavior and is similar to [tippecanoe's options](https:
 Use this when the factor-probability table contains a polygon ID column and polygon geometry is provided in a separate file. For example, if you ran `punkst topic-model` on segmented cells and you want to create a PMTiles archive with cell boundaries as geometry.
 
 ```bash
-punkst hex2pmtiles \
+punkst poly2pmtiles \
   --in-tsv path/cells.results.tsv \
   --id-col cell_id \
   --in-geom path/cell_boundaries.csv.gz \
-  --icol-id-geom 0 \
-  --icol-x-geom 1 \
-  --icol-y-geom 2 \
+  --g-icol-id 0 \
+  --g-icol-x 1 \
+  --g-icol-y 2 \
   --pmtiles-zoom 18 \
   --out path/cells.z18.pmtiles
 ```
@@ -119,11 +121,15 @@ Options:
 
 - `--in-geom` points to the polygon geometry file
 - `--id-col` is required in generic polygon mode and names the polygon ID column in the factor-probability table
+- `--geom-format` can be `auto`, `table`, `geojson`, or `json`; `auto` uses the file extension
+- `--geom-id-prop` names the GeoJSON/JSON feature property used as the polygon ID
 - `--id-is-u32` tells `punkst` to parse that input ID directly as a `u32` MLT feature ID
-- if `--id-is-u32` is not used we assign each polygon an internal `u32` feature ID in first-encounter order from the geometry file and write a sidecar `*.idmap.tsv` with the mapping from the input string ID to the assigned integer ID
+- if `--id-is-u32` is not used, `punkst` assigns each polygon an internal feature ID in first-encounter order from the geometry file
 - `--keep-org-id` optionally keeps the original input string ID as a regular string property column in the PMTiles output
-- `--icol-id-geom`, `--icol-x-geom`, and `--icol-y-geom` set the 0-based geometry-file columns for polygon ID, `x`, and `y`
-- `--icol-order-geom` is optional; if omitted, the geometry rows are assumed to already be in vertex order
+- `--g-icol-id`, `--g-icol-x`, and `--g-icol-y` set the 0-based table-geometry columns for polygon ID, `x`, and `y`
+- `--g-icol-order` is optional; if omitted, the geometry rows are assumed to already be in vertex order
+- `--out-sidecar-tsv` optionally writes `polygon_id`, `part_index`, `feature_id`, `center_x`, and `center_y`
+- `--cartoscope-boundary` writes the CartoScope boundary schema (`cell_id`, `topK`, `topP`, `K2/P2`, ...); factor IDs in boundary properties are stored as strings for CartoScope compatibility
 
 Boundary behavior options are the same as in hexagon mode:
 - `--tile-buffer-px` sets the screen-pixel buffer used by the default clipped/duplicated mode (default: `5`)
@@ -133,7 +139,7 @@ Boundary behavior options are the same as in hexagon mode:
 
 Geometry file format:
 
-- plain or gzipped TSV/CSV
+- plain or gzipped TSV/CSV, or GeoJSON/JSON with Polygon/MultiPolygon features
 - one row per vertex
 - empty lines and lines starting with `#` are ignored
 - if the first non-comment line does not contain numeric `x` and `y` values at the selected geometry columns, it is treated as a header and skipped
@@ -152,7 +158,7 @@ Output:
 
 - writes one PMTiles archive at the requested zoom level
 - stores the polygon ID in the dedicated MLT feature ID column
-- stores `topK`, `topP`, and retained factor probabilities as feature properties
+- stores `topK`, `topP`, and retained dense factor probabilities as feature properties; in `--cartoscope-boundary` mode it stores nullable `K2/P2...Kn/Pn` instead
 - if `--keep-org-id` is used, also stores the original string ID as a regular string property column
 - output from this step can be passed to `punkst build-pyramid --polygon`
 
@@ -162,6 +168,8 @@ Boundary behavior:
 - with `--no-clipping`, polygons are duplicated across touched tiles but kept intact in each copy
 - with `--no-duplication`, each polygon is assigned to a single tile and stored there intact
 - `--no-duplication` is mainly useful when polygons are much smaller than the tile size
+
+For CartoScope cell-level PMTiles and deployment packaging, see [Deploy punkst results to CartoScope](../workflows/deploy_carto.md#write-cell-level-pmtiles-for-cartoscope).
 
 ## Build PMTiles pyramids
 
@@ -184,13 +192,13 @@ punkst build-pyramid \
 
 ### Simple-polygon pyramids
 
-`punkst build-pyramid --polygon` builds lower zoom levels for simple-polygon MLT PMTiles.
+`punkst build-pyramid --polygon` builds lower zoom levels for simple-polygon MLT or MVT PMTiles.
 
 Current support is limited to:
 
 - simple polygons only
 - no holes
-- no multipolygon
+- no multipolygon in the internal pyramid representation
 - polygon inputs that carry one unique polygon ID per feature
 
 ```bash
@@ -238,7 +246,7 @@ Behavior:
 - by default, if the input PMTiles has an MLT feature ID column, that is used as the polygon ID
 - `--polygon-id-col` is optional and acts as a hard override when you want to use a regular property column instead of the MLT feature ID column
 - if neither an MLT feature ID column nor `--polygon-id-col` is available, the command reports an error
-- for PMTiles written by `punkst hex2pmtiles`, which contains only hexagons, a shortcut is taken by using the stored hexagonal grid coordinates to build the geometry instead of recovering it from the encoded geometry
+- for PMTiles written by `punkst poly2pmtiles` in hex mode, which contains only hexagons, a shortcut is taken by using the stored hexagonal grid coordinates to build the geometry instead of recovering it from the encoded geometry
 - for generic polygon inputs, uses the finest input zoom level to recover one canonical polygon per ID before building parent levels
 - if `--polygon-source` is provided, that file is used as the geometry source override
 - by default, parent tiles use clipped polygons that may appear in more than one tile, with clipping buffered by `--tile-buffer-px` screen pixels
@@ -285,7 +293,7 @@ Requirements:
 
 - `--in` (or `--in-data`, used equivalently) must point to the input PMTiles archive
 - `--out` must be a concrete PMTiles file path
-- exactly one of `--point` or `--polygon` must be specified
+- choose point, polygon, or mixed mode. Use `--point-in`, `--polygon-in`, or both for the explicit form; the older compatibility form uses `--point`, `--polygon`, or `--mixed` with `--in`
 
 Main options:
 

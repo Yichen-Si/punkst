@@ -56,6 +56,24 @@ struct PreparedGeoJSONFeature2D {
     float y = 0.0f;
 };
 
+struct SimplePolygonRingRecord {
+    std::string polygonId;
+    size_t partIndex = 0;
+    uint32_t assignedId = 0;
+    uint64_t featureId = 0;
+    std::vector<std::pair<double, double>> ring;
+    std::pair<double, double> center{0.0, 0.0};
+};
+
+struct SimplePolygonTableReadOptions {
+    int32_t idCol = 0;
+    int32_t xCol = 1;
+    int32_t yCol = 2;
+    int32_t orderCol = -1;
+    bool requireConsecutiveIds = false;
+    bool idIsU32 = false;
+};
+
 PreparedRegionMask2D prepareRegionFromPaths(const Clipper2Lib::Paths64& paths,
                                         int32_t tileSize,
                                         int64_t scale = 10);
@@ -75,6 +93,24 @@ std::vector<PreparedGeoJSONFeature2D> loadPreparedGeoJSONFeatures(
     int32_t tileSize,
     int64_t scale = 10,
     const std::string& idProperty = "title");
+
+std::pair<double, double> centroidForSimpleRing(
+    const std::vector<std::pair<double, double>>& ring);
+std::pair<double, double> centroidForSimpleRings(
+    const std::vector<std::vector<std::pair<double, double>>>& rings);
+
+std::vector<SimplePolygonRingRecord> readSimplePolygonGeoJSON(
+    const std::string& geojsonFile,
+    const std::string& idProperty = "cell_id",
+    bool idIsU32 = false);
+std::vector<SimplePolygonRingRecord> readSimplePolygonTable(
+    const std::string& tableFile,
+    const SimplePolygonTableReadOptions& options = {});
+std::vector<SimplePolygonRingRecord> readSimplePolygonsAuto(
+    const std::string& path,
+    const std::string& format,
+    const std::string& idProperty,
+    const SimplePolygonTableReadOptions& tableOptions = {});
 
 PreparedRegionRasterMask2D prepareRegionRasterMask2D(const PreparedRegionMask2D& region,
                                                      float pixelResolution,

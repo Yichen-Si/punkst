@@ -31,7 +31,8 @@ int32_t cmdDeChisq(int argc, char** argv);
 int32_t cmdDeconvPseudobulk(int argc, char** argv);
 int32_t cmdPseudoBulk(int argc, char** argv);
 int32_t cmdManipulateTiles(int32_t argc, char** argv);
-int32_t cmdHex2PmtilesMlt(int32_t argc, char** argv);
+int32_t cmdPoly2Pmtiles(int32_t argc, char** argv);
+int32_t cmdCells2Pmtiles(int32_t argc, char** argv);
 int32_t cmdTiles2Mono(int32_t argc, char** argv);
 int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv);
 int32_t cmdExportPmtiles(int32_t argc, char** argv);
@@ -75,7 +76,8 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("de-chisq", "Differential expression using Chi-squared test", cmdDeChisq)
         .add_command("deconv-pseudobulk", "Deconvolve pseudobulk matrix using a confusion matrix", cmdDeconvPseudobulk)
         .add_command("pseudo-bulk", "Generate pseudo-bulk matrix", cmdPseudoBulk)
-        .add_command("hex2pmtiles", "Write single-zoom polygon MLT/MVT PMTiles from factor TSV (hex or generic simple polygons)", cmdHex2PmtilesMlt)
+        .add_command("poly2pmtiles", "Write single-zoom polygon MLT/MVT PMTiles from factor TSV and polygon geometry", cmdPoly2Pmtiles)
+        .add_command("cells2pmtiles", "Write CartoScope cell centroid and boundary PMTiles from cell factor assignments", cmdCells2Pmtiles)
         .add_command("tiles2mono", "Write monochrome raster PMTiles from pts2tiles output", cmdTiles2Mono)
         .add_command("build-pyramid", "Build multi-zoom MLT/MVT PMTiles pyramids", cmdBuildPmtilesPyramid)
         .add_command("export-pmtiles", "Export MLT/MVT PMTiles to TSV", cmdExportPmtiles)

@@ -32,6 +32,9 @@ std::filesystem::path resolve_path(const std::filesystem::path& base, const std:
 bool file_exists(const std::filesystem::path& path);
 bool all_files_exist(const std::vector<std::filesystem::path>& paths);
 std::vector<std::filesystem::path> existing_files(const std::vector<std::filesystem::path>& paths);
+bool path_has_suffix_ci(const std::string& path, const std::string& suffix);
+std::string infer_table_or_json_format_from_extension(const std::string& path,
+    const std::string& formatOptionName = "format");
 void require_file(const std::filesystem::path& path, const std::string& label);
 void copy_file_checked(const std::filesystem::path& src, const std::filesystem::path& dst);
 void copy_file_checked(const std::filesystem::path& src, const std::filesystem::path& dst,
