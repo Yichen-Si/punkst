@@ -607,7 +607,7 @@ inline uint32_t TileOperator::annotateTile2DPlainShared(
             continue;
         }
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }
@@ -659,7 +659,7 @@ inline uint32_t TileOperator::annotateTile3DPlainShared(
             continue;
         }
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }
@@ -740,7 +740,7 @@ inline TileOperator::MergedAnnotate2DCounts TileOperator::annotateMergedTile2DPl
             continue;
         }
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }
@@ -852,7 +852,7 @@ inline TileOperator::MergedAnnotate2DCounts TileOperator::annotateMergedTile3DPl
             continue;
         }
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }
@@ -921,7 +921,7 @@ inline uint32_t TileOperator::annotateSingleTile2DShared(
     while (it->next(s)) { // For each line in the query
         if (s.empty() || s[0] == '#') {continue;}
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }
@@ -981,7 +981,7 @@ inline uint32_t TileOperator::annotateSingleTile3DShared(
             continue;
         }
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }
@@ -1068,7 +1068,7 @@ inline TileOperator::MergedAnnotate2DCounts TileOperator::annotateMergedTile2DSh
             continue;
         }
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }
@@ -1202,7 +1202,7 @@ inline TileOperator::MergedAnnotate2DCounts TileOperator::annotateMergedTile3DSh
             continue;
         }
         std::vector<std::string> tokens;
-        split(tokens, "\t", s, ntok + 1, true, true, true);
+        split(tokens, "\t", s, ntok + 1, true, false, true);
         if (tokens.size() < ntok) {
             error("%s: Invalid line: %s", funcName, s.c_str());
         }

@@ -1048,7 +1048,9 @@ std::vector<ExtColumnPlan> build_ext_column_plans(const TileOperator& queryOp,
 
 bool parse_ext_column_values(const std::vector<std::string>& tokens,
     const std::vector<ExtColumnPlan>& extColumns,
-    std::vector<ExtColumnValue>& out, bool allowMissing = true) {
+    std::vector<ExtColumnValue>& out,
+    const std::string& nullOther,
+    bool allowMissing = true) {
     out.clear();
     out.reserve(extColumns.size());
     for (const auto& ext : extColumns) {
@@ -1074,7 +1076,8 @@ bool parse_ext_column_values(const std::vector<std::string>& tokens,
             }
             break;
         case pm_vector::ScalarType::STRING:
-            value.stringValue = token;
+            value.stringValue = token.empty() && !nullOther.empty()
+                ? nullOther : token;
             break;
         default:
             error("%s: unsupported extended-column type", __func__);
@@ -2431,7 +2434,20 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
     }
 
     if (options.polygon) {
-        const uint8_t exportZoom = archive.header.max_zoom;
+        if (options.zoom > 31) {
+            error("%s: --zoom must be in [0, 31]", __func__);
+        }
+        const uint8_t exportZoom = (options.zoom >= 0)
+            ? static_cast<uint8_t>(options.zoom)
+            : archive.header.max_zoom;
+        const auto firstExportZoomIt = std::find_if(archive.entries.begin(), archive.entries.end(),
+            [&](const pmtiles::entry_zxy& entry) {
+                return entry.z == exportZoom;
+            });
+        if (firstExportZoomIt == archive.entries.end()) {
+            error("%s: PMTiles archive %s has no entries at export zoom %u",
+                __func__, pmtilesFile.c_str(), static_cast<unsigned>(exportZoom));
+        }
         const std::string tsvFile = outPrefix + ".tsv";
         FILE* fp = std::fopen(tsvFile.c_str(), "w");
         if (!fp) {
@@ -2547,13 +2563,18 @@ void TileOperator::exportPMTiles(const std::string& pmtilesFile,
     size_t zSchemaIndex = 0;
     bool hasZColumn = false;
     size_t candidateEntryCount = 0;
-    const uint8_t exportZoom = archive.header.max_zoom;
+    if (options.zoom > 31) {
+        error("%s: --zoom must be in [0, 31]", __func__);
+    }
+    const uint8_t exportZoom = (options.zoom >= 0)
+        ? static_cast<uint8_t>(options.zoom)
+        : archive.header.max_zoom;
     const auto firstMaxZoomIt = std::find_if(archive.entries.begin(), archive.entries.end(),
         [&](const pmtiles::entry_zxy& entry) {
             return entry.z == exportZoom;
         });
     if (firstMaxZoomIt == archive.entries.end()) {
-        error("%s: PMTiles archive %s has no entries at max zoom %u",
+        error("%s: PMTiles archive %s has no entries at export zoom %u",
             __func__, pmtilesFile.c_str(), static_cast<unsigned>(exportZoom));
     }
 
@@ -3002,7 +3023,8 @@ void TileOperator::annotatePlainToMltPmtiles(
                             packagingFeatureIdx)) {
                         return false;
                     }
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) {
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) {
                         return false;
                     }
                     const std::vector<ExtColumnValue>* extValuesPtr =
@@ -3035,7 +3057,8 @@ void TileOperator::annotatePlainToMltPmtiles(
                             packagingFeatureIdx)) {
                         return false;
                     }
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) {
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) {
                         return false;
                     }
                     const std::vector<ExtColumnValue>* extValuesPtr =
@@ -3203,7 +3226,8 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
                             packagingFeatureIdx)) {
                         return false;
                     }
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) {
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) {
                         return false;
                     }
                     const std::vector<ExtColumnValue>* extValuesPtr =
@@ -3236,7 +3260,8 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
                             packagingFeatureIdx)) {
                         return false;
                     }
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) {
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) {
                         return false;
                     }
                     const std::vector<ExtColumnValue>* extValuesPtr =
@@ -3379,7 +3404,8 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
                             packaging.packagingFeatureIndex,
                             missingPackagingFeatures,
                             packagingFeatureIdx)) { return false; }
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) { return false; }
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) { return false; }
                     const std::vector<ExtColumnValue>* extValuesPtr =
                         queryPlan.extColumns.empty() ? nullptr : &extValues;
                     append_annotated_row_to_state(state, geneBinsPtr,
@@ -3412,7 +3438,8 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
                             packaging.packagingFeatureIndex,
                             missingPackagingFeatures,
                             packagingFeatureIdx)) { return false; }
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) { return false; }
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) { return false; }
                     const std::vector<ExtColumnValue>* extValuesPtr =
                         queryPlan.extColumns.empty() ? nullptr : &extValues;
                     append_annotated_row_to_state(state, geneBinsPtr,
@@ -3584,7 +3611,8 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
                     } else if (!lookup_packaging_feature_index(featureName,
                             packaging.packagingFeatureIndex,
                             missingPackagingFeatures, packagingFeatureIdx)) {return false;}
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) {return false;}
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) {return false;}
                     const std::vector<ExtColumnValue>* extValuesPtr =
                         queryPlan.extColumns.empty() ? nullptr : &extValues;
                     append_annotated_row_to_state(state, geneBinsPtr,
@@ -3617,7 +3645,8 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
                     } else if (!lookup_packaging_feature_index(featureName,
                             packaging.packagingFeatureIndex,
                             missingPackagingFeatures, packagingFeatureIdx)) {return false;}
-                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues)) {return false;}
+                    if (!parse_ext_column_values(tokens, queryPlan.extColumns, extValues,
+                            mltOptions.null_other)) {return false;}
                     const std::vector<ExtColumnValue>* extValuesPtr =
                         queryPlan.extColumns.empty() ? nullptr : &extValues;
                     append_annotated_row_to_state(state, geneBinsPtr,

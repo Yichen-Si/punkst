@@ -160,6 +160,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("icol-z", "Z coordinate column index, 0-based", icol_z)
       .add_option("icol-feature", "Feature-name column index, 0-based (required for single-molecule annotate/pix2cell and annotate PMTiles packaging)", icol_f)
       .add_option("icol-count", "Count/value column index, 0-based (required for annotate PMTiles packaging)", mltOptions.icol_count)
+      .add_option("null-other", "Replace empty string query properties with this placeholder in PMTiles packaging", mltOptions.null_other)
       .add_option("ext-col-ints", "Additional integer query columns for PMTiles packaging, in the form of \"idx[:name[:nullval]]\"", mltOptions.ext_col_ints)
       .add_option("ext-col-floats", "Additional float query columns for PMTiles packaging, in the form of \"idx[:name[:nullval]]\"", mltOptions.ext_col_floats)
       .add_option("ext-col-strs", "Additional string query columns for PMTiles packaging, in the form of \"idx[:name[:nullval]]\"", mltOptions.ext_col_strs)

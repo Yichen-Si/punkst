@@ -95,6 +95,8 @@ enum class VectorGeometryType {
     Polygon,
 };
 
+inline constexpr const char* PUNKST_VECTOR_SCHEMA_METADATA_KEY = "punkst_vector_schema";
+
 struct SingleLayerVectorPmtilesOptions {
     FeatureTableSchema schema;
     VectorGeometryType geometryType = VectorGeometryType::Point;
@@ -113,6 +115,12 @@ struct SingleLayerVectorPmtilesOptions {
 };
 
 nlohmann::json build_schema_fields_json(const FeatureTableSchema& schema);
+nlohmann::json build_exact_schema_json(const FeatureTableSchema& schema,
+    VectorGeometryType geometryType);
+bool parse_exact_schema_json(const nlohmann::json& metadata,
+    const std::string& layerName,
+    FeatureTableSchema& schema,
+    VectorGeometryType* geometryType = nullptr);
 
 void write_single_layer_vector_pmtiles_archive(const std::string& outFile,
     std::vector<pm_core::EncodedTilePayload> encodedTiles,

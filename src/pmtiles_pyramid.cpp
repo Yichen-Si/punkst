@@ -425,6 +425,184 @@ void validate_schema_equal(const pm_vector::FeatureTableSchema& expected,
     }
 }
 
+bool is_numeric_scalar_type(pm_vector::ScalarType type) {
+    return type == pm_vector::ScalarType::INT_32 || type == pm_vector::ScalarType::FLOAT;
+}
+
+bool property_column_has_present_values(const pm_vector::PropertyColumn& column) {
+    if (column.present.empty()) {
+        return true;
+    }
+    return std::any_of(column.present.begin(), column.present.end(), [](bool v) { return v; });
+}
+
+pm_vector::PropertyColumn make_null_property_column(pm_vector::ScalarType type, size_t rowCount) {
+    pm_vector::PropertyColumn out(type, true);
+    out.present.assign(rowCount, false);
+    switch (type) {
+    case pm_vector::ScalarType::BOOLEAN:
+        out.boolValues.assign(rowCount, false);
+        break;
+    case pm_vector::ScalarType::INT_32:
+        out.intValues.assign(rowCount, 0);
+        break;
+    case pm_vector::ScalarType::FLOAT:
+        out.floatValues.assign(rowCount, 0.0f);
+        break;
+    case pm_vector::ScalarType::STRING:
+        out.stringValues.assign(rowCount, std::string());
+        break;
+    default:
+        error("%s: unsupported scalar column type %d", __func__, static_cast<int>(type));
+    }
+    return out;
+}
+
+pm_vector::PropertyColumn coerce_property_column(pm_vector::PropertyColumn&& src,
+    pm_vector::ScalarType srcType,
+    const pm_vector::ColumnSchema& targetCol,
+    size_t rowCount) {
+    if (srcType == targetCol.type) {
+        src.type = targetCol.type;
+        src.nullable = targetCol.nullable;
+        return std::move(src);
+    }
+    if (!property_column_has_present_values(src)) {
+        pm_vector::PropertyColumn out = make_null_property_column(targetCol.type, rowCount);
+        out.nullable = targetCol.nullable;
+        return out;
+    }
+
+    pm_vector::PropertyColumn out(targetCol.type, targetCol.nullable);
+    out.present = src.present;
+    if (out.present.empty()) {
+        out.present.assign(rowCount, true);
+    }
+
+    if (srcType == pm_vector::ScalarType::INT_32 &&
+        targetCol.type == pm_vector::ScalarType::FLOAT) {
+        out.floatValues.reserve(rowCount);
+        for (size_t i = 0; i < rowCount; ++i) {
+            out.floatValues.push_back(static_cast<float>(src.intValues[i]));
+        }
+        return out;
+    }
+
+    if (targetCol.type == pm_vector::ScalarType::STRING) {
+        out.stringValues.reserve(rowCount);
+        for (size_t i = 0; i < rowCount; ++i) {
+            if (!out.present[i]) {
+                out.stringValues.emplace_back();
+                continue;
+            }
+            switch (srcType) {
+            case pm_vector::ScalarType::STRING:
+                out.stringValues.push_back(src.stringValues[i]);
+                break;
+            case pm_vector::ScalarType::INT_32:
+                out.stringValues.push_back(std::to_string(src.intValues[i]));
+                break;
+            case pm_vector::ScalarType::FLOAT:
+                out.stringValues.push_back(std::to_string(src.floatValues[i]));
+                break;
+            case pm_vector::ScalarType::BOOLEAN:
+                out.stringValues.push_back(src.boolValues[i] ? "true" : "false");
+                break;
+            default:
+                error("%s: unsupported scalar column type %d",
+                    __func__, static_cast<int>(srcType));
+            }
+        }
+        return out;
+    }
+
+    error("%s: MVT column %s has type inconsistent with PMTiles metadata",
+        __func__, targetCol.name.c_str());
+    return out;
+}
+
+void apply_mvt_metadata_schema(pm_vector::FeatureTableSchema& schema,
+    const nlohmann::json& metadata) {
+    pm_vector::FeatureTableSchema exactSchema;
+    if (pm_vector::parse_exact_schema_json(metadata, schema.layerName, exactSchema, nullptr)) {
+        schema = std::move(exactSchema);
+        return;
+    }
+    if (!metadata.is_object() || !metadata.contains("vector_layers") ||
+        !metadata["vector_layers"].is_array()) {
+        return;
+    }
+    const nlohmann::json* fields = nullptr;
+    for (const auto& layer : metadata["vector_layers"]) {
+        if (!layer.is_object() || !layer.contains("fields") || !layer["fields"].is_object()) {
+            continue;
+        }
+        const std::string layerId = layer.value("id", std::string());
+        if (fields == nullptr || layerId == schema.layerName) {
+            fields = &layer["fields"];
+            if (layerId == schema.layerName) {
+                break;
+            }
+        }
+    }
+    if (fields == nullptr) {
+        return;
+    }
+    for (auto& col : schema.columns) {
+        auto it = fields->find(col.name);
+        if (it == fields->end() || !it->is_string()) {
+            continue;
+        }
+        const std::string type = it->get<std::string>();
+        if (type == "String") {
+            col.type = pm_vector::ScalarType::STRING;
+        } else if (type == "Boolean") {
+            col.type = pm_vector::ScalarType::BOOLEAN;
+        } else if (type == "Number") {
+            if (!is_numeric_scalar_type(col.type)) {
+                col.type = pm_vector::ScalarType::FLOAT;
+            }
+        }
+    }
+}
+
+template<class DecodedTile>
+void align_mvt_tile_to_schema(DecodedTile& decoded,
+    const pm_vector::FeatureTableSchema& schema) {
+    const size_t rowCount = decoded.tile.size();
+    std::vector<pm_vector::PropertyColumn> columns;
+    columns.reserve(schema.columns.size());
+    for (const auto& targetCol : schema.columns) {
+        size_t srcIdx = decoded.schema.columns.size();
+        for (size_t i = 0; i < decoded.schema.columns.size(); ++i) {
+            if (decoded.schema.columns[i].name == targetCol.name) {
+                srcIdx = i;
+                break;
+            }
+        }
+        if (srcIdx == decoded.schema.columns.size()) {
+            pm_vector::PropertyColumn col = make_null_property_column(targetCol.type, rowCount);
+            col.nullable = targetCol.nullable;
+            columns.push_back(std::move(col));
+            continue;
+        }
+        columns.push_back(coerce_property_column(std::move(decoded.tile.columns[srcIdx]),
+            decoded.schema.columns[srcIdx].type, targetCol, rowCount));
+    }
+    decoded.schema = schema;
+    decoded.tile.columns = std::move(columns);
+}
+
+void align_mvt_point_tile_to_schema(pm_vector::DecodedPointTile& decoded,
+    const pm_vector::FeatureTableSchema& schema) {
+    align_mvt_tile_to_schema(decoded, schema);
+}
+
+void align_mvt_polygon_tile_to_schema(pm_vector::DecodedPolygonTile& decoded,
+    const pm_vector::FeatureTableSchema& schema) {
+    align_mvt_tile_to_schema(decoded, schema);
+}
+
 std::string read_compressed_tile_blob(flexio::FlexReader& reader,
     const pmtiles::entry_zxy& entry) {
     std::string compressed(static_cast<size_t>(entry.length), '\0');
@@ -1046,6 +1224,44 @@ void append_json_array_unique_by_key(nlohmann::json& dst, const nlohmann::json& 
     }
 }
 
+void append_schema_metadata_unique_by_layer(nlohmann::json& metadata,
+    const nlohmann::json& schemaMetadata) {
+    if (schemaMetadata.is_null()) {
+        return;
+    }
+    nlohmann::json& dst = metadata[pm_vector::PUNKST_VECTOR_SCHEMA_METADATA_KEY];
+    if (!dst.is_array()) {
+        if (dst.is_object()) {
+            nlohmann::json existing = dst;
+            dst = nlohmann::json::array({existing});
+        } else {
+            dst = nlohmann::json::array();
+        }
+    }
+    std::unordered_set<std::string> seen;
+    for (const auto& item : dst) {
+        if (item.is_object() && item.contains("layer") && item["layer"].is_string()) {
+            seen.insert(item["layer"].get<std::string>());
+        }
+    }
+    auto append_one = [&](const nlohmann::json& item) {
+        if (!item.is_object() || !item.contains("layer") || !item["layer"].is_string()) {
+            dst.push_back(item);
+            return;
+        }
+        if (seen.insert(item["layer"].get<std::string>()).second) {
+            dst.push_back(item);
+        }
+    };
+    if (schemaMetadata.is_array()) {
+        for (const auto& item : schemaMetadata) {
+            append_one(item);
+        }
+    } else {
+        append_one(schemaMetadata);
+    }
+}
+
 void merge_mixed_metadata(nlohmann::json& metadata, const nlohmann::json& polygonMetadata) {
     if (!metadata.is_object()) {
         metadata = nlohmann::json::object();
@@ -1061,6 +1277,10 @@ void merge_mixed_metadata(nlohmann::json& metadata, const nlohmann::json& polygo
         if (metadata["tilestats"].is_object() && metadata["tilestats"]["layers"].is_array()) {
             metadata["tilestats"]["layerCount"] = metadata["tilestats"]["layers"].size();
         }
+    }
+    if (polygonMetadata.contains(pm_vector::PUNKST_VECTOR_SCHEMA_METADATA_KEY)) {
+        append_schema_metadata_unique_by_layer(metadata,
+            polygonMetadata[pm_vector::PUNKST_VECTOR_SCHEMA_METADATA_KEY]);
     }
     for (const char* key : {"polygon_source", "polygon_pyramid_hint",
              "tile_buffer_rule", "tile_buffer_screen_px"}) {
@@ -1226,6 +1446,9 @@ PointParentTileCandidate build_point_parent_candidate(const ParentBuildInput& in
         const std::string raw = pm_core::gzip_decompress(compressed);
         ChildSequence childSeq;
         childSeq.decoded = useMvt ? mvt_pmtiles::decode_point_tile(raw) : mlt_pmtiles::decode_point_tile(raw);
+        if (useMvt) {
+            align_mvt_point_tile_to_schema(childSeq.decoded, schema);
+        }
         validate_schema_equal(schema, childSeq.decoded.schema, "building point pyramid parent tiles");
         childSeq.priorities = read_priority_store(priorityFd, *child);
         childSeq.totalRows = childSeq.decoded.tile.size();
@@ -1935,6 +2158,9 @@ PolygonParentTileCandidate build_polygon_parent_candidate(const ParentBuildInput
         const std::string raw = pm_core::gzip_decompress(compressed);
         ChildSequence childSeq;
         childSeq.decoded = useMvt ? mvt_pmtiles::decode_polygon_tile(raw) : mlt_pmtiles::decode_polygon_tile(raw);
+        if (useMvt) {
+            align_mvt_polygon_tile_to_schema(childSeq.decoded, schema);
+        }
         validate_schema_equal(schema, childSeq.decoded.schema, "building polygon pyramid parent tiles");
         childSeq.priorities = read_priority_store(priorityFd, *child);
         childSeq.totalRows = childSeq.decoded.tile.size();
@@ -2319,13 +2545,20 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         tile.dataOffset = append_blob_to_store(stores.blobFd, stores.blobSize, compressed);
         if (entry.z == existingMinZoom) {
             const std::string raw = pm_core::gzip_decompress(compressed);
-            const pm_vector::DecodedPointTile decoded = useMvt
+            pm_vector::DecodedPointTile decoded = useMvt
                 ? mvt_pmtiles::decode_point_tile(raw)
                 : mlt_pmtiles::decode_point_tile(raw);
             if (!haveSchema) {
                 schema = decoded.schema;
+                if (useMvt) {
+                    apply_mvt_metadata_schema(schema, archive.metadata);
+                    align_mvt_point_tile_to_schema(decoded, schema);
+                }
                 haveSchema = true;
             } else {
+                if (useMvt) {
+                    align_mvt_point_tile_to_schema(decoded, schema);
+                }
                 validate_schema_equal(schema, decoded.schema, "seeding point pyramid from existing min zoom");
             }
             tile.featureCount = static_cast<uint32_t>(decoded.tile.size());
@@ -2482,11 +2715,15 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         tile.dataOffset = append_blob_to_store(stores.blobFd, stores.blobSize, compressed);
         if (entry.z == existingMinZoom || entry.z == maxZoom) {
             const std::string raw = pm_core::gzip_decompress(compressed);
-            const pm_vector::DecodedPolygonTile decoded = useMvt
+            pm_vector::DecodedPolygonTile decoded = useMvt
                 ? mvt_pmtiles::decode_polygon_tile(raw)
                 : mlt_pmtiles::decode_polygon_tile(raw);
             if (!haveSchema) {
                 schema = decoded.schema;
+                if (useMvt) {
+                    apply_mvt_metadata_schema(schema, archive.metadata);
+                    align_mvt_polygon_tile_to_schema(decoded, schema);
+                }
                 sourceDescriptor = resolve_polygon_source_descriptor(archive.metadata, schema, options);
                 sourceDescriptor.sourceZoom = maxZoom;
                 sourceDescriptor.sourceExtent = schema.extent;
@@ -2511,6 +2748,9 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
                 }
                 haveSchema = true;
             } else {
+                if (useMvt) {
+                    align_mvt_polygon_tile_to_schema(decoded, schema);
+                }
                 validate_schema_equal(schema, decoded.schema, "seeding polygon pyramid from existing min zoom");
             }
             if (sourceDescriptor.backend == PolygonGeometryBackendKind::PolygonTable &&
@@ -2546,9 +2786,12 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     for (auto& tile : currentLevel) {
         const std::string compressed = read_stored_tile_blob(stores.blobFd, tile);
         const std::string raw = pm_core::gzip_decompress(compressed);
-        const pm_vector::DecodedPolygonTile decoded = useMvt
+        pm_vector::DecodedPolygonTile decoded = useMvt
             ? mvt_pmtiles::decode_polygon_tile(raw)
             : mlt_pmtiles::decode_polygon_tile(raw);
+        if (useMvt) {
+            align_mvt_polygon_tile_to_schema(decoded, schema);
+        }
         validate_schema_equal(schema, decoded.schema, "seeding polygon priorities from existing min zoom");
         const std::vector<uint64_t> priorities =
             build_polygon_seed_priorities(decoded, sourceDescriptor);

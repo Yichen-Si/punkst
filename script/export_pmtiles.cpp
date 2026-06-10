@@ -19,6 +19,7 @@ int32_t cmdExportPmtiles(int32_t argc, char** argv) {
     float ymax = -1.0f;
     float zmin = std::numeric_limits<float>::quiet_NaN();
     float zmax = std::numeric_limits<float>::quiet_NaN();
+    int32_t zoom = -1;
 
     TileOperator::ExportPmtilesOptions options;
     ParamList pl;
@@ -36,7 +37,8 @@ int32_t cmdExportPmtiles(int32_t argc, char** argv) {
       .add_option("ymin", "Minimum y coordinate for export filtering", ymin)
       .add_option("ymax", "Maximum y coordinate for export filtering", ymax)
       .add_option("zmin", "Minimum z coordinate for 3D export filtering ([zmin, zmax))", zmin)
-      .add_option("zmax", "Maximum z coordinate for 3D export filtering ([zmin, zmax))", zmax);
+      .add_option("zmax", "Maximum z coordinate for 3D export filtering ([zmin, zmax))", zmax)
+      .add_option("zoom", "PMTiles zoom level to export (default: archive max zoom)", zoom);
 
     try {
         pl.readArgs(argc, argv);
@@ -69,6 +71,7 @@ int32_t cmdExportPmtiles(int32_t argc, char** argv) {
     options.ymax = ymax;
     options.zmin = zmin;
     options.zmax = zmax;
+    options.zoom = zoom;
     TileOperator::exportPMTiles(inData, outPrefix, options);
     return 0;
 }

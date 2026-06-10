@@ -334,12 +334,15 @@ You can also carry selected extra query TSV columns into the packaged PMTiles sc
 - `--ext-col-ints`
 - `--ext-col-floats`
 - `--ext-col-strs`
+- `--null-other`
 
 Each extra-column spec has the form `idx[:name[:nullval]]`:
 
 - `idx` is the 0-based query TSV column index
 - if `name` is omitted, the query TSV header supplies the property name
 - if `nullval` is provided, that exact token is encoded as null and the property becomes nullable
+
+Empty tab-delimited fields are preserved when parsing query TSV rows, so later columns do not shift. By default, empty string properties are written as empty strings. Use `--null-other NA` to replace empty string query properties with a fixed value in PMTiles output.
 
 #### Merge, annotate, and package in one pass
 

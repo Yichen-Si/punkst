@@ -22,7 +22,7 @@ punkst deploy-cartoscope --pmtiles-format MVT \
 
 `--pmtiles-format` is required and must be either `MLT` or `MVT`. Currently CartoScope prefers MVT.
 
-Existing output files are reused by default. Add `--overwrite` to regenerate and overwrite files that are already present. If `--overwrite` is not set, files with the intended output names that exist in the output directory are reused, even if they might be stale.
+Existing output files are reused by default. Add `--overwrite` to regenerate and overwrite files that are already present. If `--overwrite` is not set, files with the intended output names that exist in the output directory are reused, except for sidecars that deployment can identify as incompatible.
 
 ### Serve the data from a local machine
 
@@ -86,7 +86,8 @@ punkst deploy-cartoscope --pmtiles-format MVT \
     "icol_x": 0,
     "icol_y": 1,
     "icol_feature": 2,
-    "icol_count": 3
+    "icol_count": 3,
+    "null_str": "NA"
   },
   "models": [
     {
@@ -268,6 +269,7 @@ You can also replace `"boundaries"` with prebuilt PMTiles directly through
 | `--basemap-adjust-quantile` | `0.99` | Quantile for SGE mono basemap density auto-adjustment. |
 | `--scale-factor-compression` | `10.0` | Pyramid compression aggressiveness estimate. |
 | `--hex-prob-thres` | `0.001` | Minimum hex factor probability retained. |
+| `--null-str` | none | Replace empty string query properties with this placeholder in transcript PMTiles packaging. If omitted, empty strings are preserved. |
 | `--use-png` | false | Use pre-rendered pixel PNGs for raster PMTiles in `--config` mode. |
 | `--skip-basemap` | false | Skip SGE mono basemap PMTiles generation. |
 | `--overwrite` | false | Overwrite existing deployment output files. |
@@ -306,11 +308,15 @@ assets:
       dark: sge-mono-dark.pmtiles
 ```
 
+For models with non-numeric factor names, the factor entry also includes `alias: <model-id>-alias.tsv`.
+
 ## PMTiles and Zooms
 
 (See more about PMTiles utilities in [Modules](../modules/pmtiles.md))
 
 Transcript PMTiles are written at `--point-max-zoom`, then pyramid levels are built down to `--point-min-zoom`.
+
+When existing transcript PMTiles are reused, they must already cover the requested `--point-max-zoom`. Deployment can add missing lower zoom pyramid levels in place, but it cannot synthesize higher zoom tiles from an existing lower-max-zoom archive; rerun with `--overwrite` after increasing `--point-max-zoom`.
 
 Hexagon PMTiles are written at `--polygon-max-zoom`, then pyramid levels are built down to `--polygon-min-zoom`.
 

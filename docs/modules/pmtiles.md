@@ -29,7 +29,8 @@ Requirements and behavior:
 - `--in` or `--in-data` must point to a point PMTiles archive with **MLT** or **MVT** format
 - `--out` specifies the output prefix. The output includes `path/prefix.tsv` and `path/prefix.index`
 - `--tile-size` is required and defines the tile size for the output file (in the original units)
-- the data is read from the archive's max-zoom level
+- by default, data is read from the archive's max-zoom level
+- use `--zoom <z>` to export a specific PMTiles zoom level; the command errors if the archive has no tiles at that zoom
 - output columns are `x`, `y`, optional `z`, then the decoded PMTiles schema columns
 - missing `K` and `P` values are rendered as `-1` and `0`; other nullable fields are rendered as `NA`
 
@@ -40,7 +41,7 @@ Region filters are supported in this mode:
 - `--extract-region-geojson`
 - `--zmin`, `--zmax`
 
-For simple-polygon archives, add `--polygon`. Polygon export writes only `path/prefix.tsv`; `--tile-size` is not required.
+For simple-polygon archives, add `--polygon`. Polygon export writes only `path/prefix.tsv`; `--tile-size` is not required. `--zoom` is also supported for polygon export.
 
 ## Write mono raster PMTiles
 

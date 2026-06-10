@@ -515,6 +515,139 @@ nlohmann::json pm_vector::build_schema_fields_json(const FeatureTableSchema& sch
     return fields;
 }
 
+nlohmann::json pm_vector::build_exact_schema_json(const FeatureTableSchema& schema,
+    VectorGeometryType geometryType) {
+    auto scalar_type_name = [](ScalarType type) {
+        switch (type) {
+        case ScalarType::STRING:
+            return "string";
+        case ScalarType::BOOLEAN:
+            return "boolean";
+        case ScalarType::INT_32:
+            return "int32";
+        case ScalarType::FLOAT:
+            return "float";
+        default:
+            error("%s: unsupported scalar column type %d", __func__, static_cast<int>(type));
+            return "";
+        }
+    };
+
+    nlohmann::json columns = nlohmann::json::array();
+    for (const auto& col : schema.columns) {
+        columns.push_back({
+            {"name", col.name},
+            {"type", scalar_type_name(col.type)},
+            {"nullable", col.nullable},
+        });
+    }
+
+    return {
+        {"version", 1},
+        {"layer", schema.layerName},
+        {"geometry", geometry_type_name(geometryType)},
+        {"extent", schema.extent},
+        {"has_id_column", schema.hasIdColumn},
+        {"id_is_uint64", schema.idIsUint64},
+        {"columns", columns},
+    };
+}
+
+bool pm_vector::parse_exact_schema_json(const nlohmann::json& metadata,
+    const std::string& layerName,
+    FeatureTableSchema& schema,
+    VectorGeometryType* geometryType) {
+    auto parse_scalar_type = [](const std::string& name, ScalarType& out) {
+        if (name == "string") {
+            out = ScalarType::STRING;
+            return true;
+        }
+        if (name == "boolean") {
+            out = ScalarType::BOOLEAN;
+            return true;
+        }
+        if (name == "int32") {
+            out = ScalarType::INT_32;
+            return true;
+        }
+        if (name == "float") {
+            out = ScalarType::FLOAT;
+            return true;
+        }
+        return false;
+    };
+    auto parse_geometry_type = [](const std::string& name, VectorGeometryType& out) {
+        if (name == "Point") {
+            out = VectorGeometryType::Point;
+            return true;
+        }
+        if (name == "Polygon") {
+            out = VectorGeometryType::Polygon;
+            return true;
+        }
+        return false;
+    };
+
+    if (!metadata.is_object() || !metadata.contains(PUNKST_VECTOR_SCHEMA_METADATA_KEY)) {
+        return false;
+    }
+    const nlohmann::json& root = metadata[PUNKST_VECTOR_SCHEMA_METADATA_KEY];
+    const nlohmann::json* item = nullptr;
+    if (root.is_object()) {
+        item = &root;
+    } else if (root.is_array()) {
+        for (const auto& candidate : root) {
+            if (!candidate.is_object()) {
+                continue;
+            }
+            if (layerName.empty() || candidate.value("layer", std::string()) == layerName) {
+                item = &candidate;
+                break;
+            }
+        }
+    }
+    if (item == nullptr || !item->is_object()) {
+        return false;
+    }
+    if (!layerName.empty() && item->value("layer", std::string()) != layerName) {
+        return false;
+    }
+    if (!item->contains("columns") || !(*item)["columns"].is_array()) {
+        return false;
+    }
+
+    FeatureTableSchema parsed;
+    parsed.layerName = item->value("layer", layerName);
+    parsed.extent = item->value("extent", 4096u);
+    parsed.hasIdColumn = item->value("has_id_column", false);
+    parsed.idIsUint64 = item->value("id_is_uint64", false);
+    parsed.columns.reserve((*item)["columns"].size());
+    for (const auto& colJson : (*item)["columns"]) {
+        if (!colJson.is_object() || !colJson.contains("name") || !colJson["name"].is_string() ||
+            !colJson.contains("type") || !colJson["type"].is_string()) {
+            return false;
+        }
+        ScalarType type = ScalarType::STRING;
+        if (!parse_scalar_type(colJson["type"].get<std::string>(), type)) {
+            return false;
+        }
+        parsed.columns.push_back({
+            colJson["name"].get<std::string>(),
+            type,
+            colJson.value("nullable", false),
+        });
+    }
+
+    if (geometryType != nullptr && item->contains("geometry") && (*item)["geometry"].is_string()) {
+        VectorGeometryType parsedGeometry = VectorGeometryType::Point;
+        if (parse_geometry_type((*item)["geometry"].get<std::string>(), parsedGeometry)) {
+            *geometryType = parsedGeometry;
+        }
+    }
+    schema = std::move(parsed);
+    return true;
+}
+
 void pm_vector::write_single_layer_vector_pmtiles_archive(const std::string& outFile,
     std::vector<pm_core::EncodedTilePayload> encodedTiles,
     const SingleLayerVectorPmtilesOptions& options) {
@@ -543,6 +676,8 @@ void pm_vector::write_single_layer_vector_pmtiles_archive(const std::string& out
     vectorLayer["minzoom"] = options.outputZoom;
     vectorLayer["maxzoom"] = options.outputZoom;
     metadata["vector_layers"] = nlohmann::json::array({vectorLayer});
+    metadata[PUNKST_VECTOR_SCHEMA_METADATA_KEY] =
+        build_exact_schema_json(options.schema, options.geometryType);
 
     nlohmann::json tilestatsLayer;
     tilestatsLayer["layer"] = options.schema.layerName;

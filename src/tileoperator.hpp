@@ -53,6 +53,7 @@ public:
         std::vector<std::string> ext_col_ints;
         std::vector<std::string> ext_col_floats;
         std::vector<std::string> ext_col_strs;
+        std::string null_other;
         std::string feature_field_name = "feature";
         double coordScale = -1.0;
         double encode_prob_min = 1e-4;
@@ -74,6 +75,7 @@ public:
         float ymax = -1.0f;
         float zmin = std::numeric_limits<float>::quiet_NaN();
         float zmax = std::numeric_limits<float>::quiet_NaN();
+        int32_t zoom = -1;
     };
 
     TileOperator(const std::string& dataFile, std::string indexFile = "", std::string headerFile = "", int32_t threads = 1) : dataFile_(dataFile), indexFile_(indexFile), threads_(std::max(0, threads)) {

@@ -13,6 +13,7 @@
 #include "json.hpp"
 
 #include <algorithm>
+#include <cinttypes>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -43,6 +44,7 @@ enum class PixelDecodeMode {
 struct TranscriptInputs {
     fs::path tiledPrefix;
     fs::path featureCountTsv;
+    std::string nullStr;
     int32_t icolX = 0;
     int32_t icolY = 1;
     int32_t icolFeature = 2;
@@ -105,6 +107,8 @@ struct RgbColorEntry {
     std::string colorIndex;
     std::array<int32_t, 3> rgb{0, 0, 0};
 };
+
+std::vector<std::string> factor_names_from_pseudobulk_header(const fs::path& src);
 
 struct DeGeneRow {
     std::string gene;
@@ -443,14 +447,32 @@ fs::path prepare_hex_results_with_topk(const ModelInputs& model, const fs::path&
     }
 
     std::vector<int32_t> factorCols;
+    std::vector<int32_t> factorIds;
     for (size_t i = 0; i < header.size(); ++i) {
         int32_t k = -1;
         if (str2int32(header[i], k) && k >= 0) {
             factorCols.push_back(static_cast<int32_t>(i));
+            factorIds.push_back(k);
         }
     }
     if (factorCols.empty()) {
-        error("%s: cannot infer factor columns from %s", __func__, model.resultsTsv.string().c_str());
+        const std::vector<std::string> factorNames =
+            factor_names_from_pseudobulk_header(model.pseudobulkTsv);
+        std::map<std::string, int32_t> colByName;
+        for (size_t i = 0; i < header.size(); ++i) {
+            colByName[header[i]] = static_cast<int32_t>(i);
+        }
+        for (size_t k = 0; k < factorNames.size(); ++k) {
+            auto it = colByName.find(factorNames[k]);
+            if (it == colByName.end()) {
+                error("%s: results table %s is missing model factor column '%s' from pseudobulk header",
+                    __func__, model.resultsTsv.string().c_str(), factorNames[k].c_str());
+            }
+            factorCols.push_back(it->second);
+            factorIds.push_back(static_cast<int32_t>(k));
+        }
+        notice("%s: mapped named factor columns in %s to numeric factor ids using %s",
+            __func__, model.resultsTsv.string().c_str(), model.pseudobulkTsv.string().c_str());
     }
 
     fs::create_directories(tmpDir);
@@ -487,16 +509,15 @@ fs::path prepare_hex_results_with_topk(const ModelInputs& model, const fs::path&
         }
         int32_t bestK = -1;
         float bestP = -1.0f;
-        for (int32_t col : factorCols) {
+        for (size_t j = 0; j < factorCols.size(); ++j) {
+            const int32_t col = factorCols[j];
             float value = 0.0f;
             if (!str2float(fields[static_cast<size_t>(col)], value)) {
                 error("%s: failed parsing factor probability in %s", __func__, model.resultsTsv.string().c_str());
             }
             if (value > bestP) {
                 bestP = value;
-                if (!str2int32(header[static_cast<size_t>(col)], bestK)) {
-                    bestK = -1;
-                }
+                bestK = factorIds[j];
             }
         }
         for (size_t i = 0; i < fields.size(); ++i) {
@@ -613,6 +634,43 @@ size_t count_rgb_color_rows(const fs::path& path) {
     return rows;
 }
 
+bool existing_rgb_uses_numeric_ids(const fs::path& path, size_t factorCount) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return false;
+    }
+    std::string line;
+    if (!std::getline(in, line)) {
+        return false;
+    }
+    std::vector<std::string> header = split_tab(strip_leading_hash(line));
+    const int32_t cName = find_header_column_ci(header, {"Name"});
+    if (cName < 0) {
+        return false;
+    }
+    std::vector<bool> seen(factorCount, false);
+    size_t rows = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        std::vector<std::string> fields = split_tab(line);
+        if (fields.size() <= static_cast<size_t>(cName)) {
+            return false;
+        }
+        int32_t id = -1;
+        if (!str2int32(fields[static_cast<size_t>(cName)], id) ||
+            id < 0 || static_cast<size_t>(id) >= factorCount ||
+            seen[static_cast<size_t>(id)]) {
+            return false;
+        }
+        seen[static_cast<size_t>(id)] = true;
+        ++rows;
+    }
+    return rows == factorCount && std::all_of(seen.begin(), seen.end(),
+        [](bool value) { return value; });
+}
+
 size_t infer_factor_count_from_pseudobulk(const fs::path& src) {
     std::ifstream in(src);
     if (!in.is_open()) {
@@ -637,16 +695,154 @@ size_t infer_factor_count_from_pseudobulk(const fs::path& src) {
     return header.size() - 1u;
 }
 
+std::vector<std::string> factor_names_from_pseudobulk_header(const fs::path& src) {
+    std::ifstream in(src);
+    if (!in.is_open()) {
+        error("%s: cannot open %s", __func__, src.string().c_str());
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty()) {
+            break;
+        }
+    }
+    if (line.empty()) {
+        error("%s: empty pseudobulk table %s", __func__, src.string().c_str());
+    }
+    if (!line.empty() && line[0] == '#') {
+        line.erase(line.begin());
+    }
+    const std::vector<std::string> header = split_tab(line);
+    if (header.size() <= 1u) {
+        error("%s: pseudobulk table has no factor columns: %s", __func__, src.string().c_str());
+    }
+    return std::vector<std::string>(header.begin() + 1, header.end());
+}
+
+bool is_nonnegative_integer_name(const std::string& value) {
+    if (value.empty()) {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](unsigned char c) {
+        return std::isdigit(c);
+    });
+}
+
+bool factor_names_are_numeric(const std::vector<std::string>& factorNames) {
+    return std::all_of(factorNames.begin(), factorNames.end(), is_nonnegative_integer_name);
+}
+
+fs::path normalize_cell_results_for_pmtiles(const CellInputs& cell,
+    const std::vector<std::string>& factorNames,
+    const fs::path& tmpDir) {
+    if (factorNames.empty()) {
+        return cell.resultsTsv;
+    }
+    std::ifstream in(cell.resultsTsv);
+    if (!in.is_open()) {
+        error("%s: cannot open %s", __func__, cell.resultsTsv.string().c_str());
+    }
+    std::string headerLine;
+    while (std::getline(in, headerLine)) {
+        if (!headerLine.empty()) {
+            break;
+        }
+    }
+    if (headerLine.empty()) {
+        error("%s: empty cell results table %s", __func__, cell.resultsTsv.string().c_str());
+    }
+    std::string headerNoHash = headerLine;
+    if (!headerNoHash.empty() && headerNoHash[0] == '#') {
+        headerNoHash.erase(headerNoHash.begin());
+    }
+    const std::vector<std::string> header = split_tab(headerNoHash);
+    if (header_has(header, "topK") && header_has(header, "topP")) {
+        return cell.resultsTsv;
+    }
+    if (header_has(header, "K1") && header_has(header, "P1")) {
+        return cell.resultsTsv;
+    }
+
+    std::map<std::string, int32_t> colByName;
+    for (size_t i = 0; i < header.size(); ++i) {
+        colByName[header[i]] = static_cast<int32_t>(i);
+    }
+    auto idIt = colByName.find(cell.resultIdCol);
+    if (idIt == colByName.end()) {
+        error("%s: cell results table must contain id column %s: %s",
+            __func__, cell.resultIdCol.c_str(), cell.resultsTsv.string().c_str());
+    }
+
+    std::vector<int32_t> factorCols;
+    factorCols.reserve(factorNames.size());
+    const bool allFactorNamesAreNumeric =
+        std::all_of(factorNames.begin(), factorNames.end(), is_nonnegative_integer_name);
+    for (const std::string& factorName : factorNames) {
+        auto it = colByName.find(factorName);
+        if (it == colByName.end()) {
+            if (!allFactorNamesAreNumeric) {
+                error("%s: cell results table %s is missing model factor column '%s' from %s",
+                    __func__, cell.resultsTsv.string().c_str(), factorName.c_str(),
+                    "pseudobulk header");
+            }
+            return cell.resultsTsv;
+        }
+        factorCols.push_back(it->second);
+    }
+    if (allFactorNamesAreNumeric) {
+        return cell.resultsTsv;
+    }
+
+    fs::create_directories(tmpDir);
+    fs::path outPath = tmpDir / (cell.id + ".cell_results.numeric_factors.tsv");
+    std::ofstream out(outPath);
+    if (!out.is_open()) {
+        error("%s: cannot open %s", __func__, outPath.string().c_str());
+    }
+    out << cell.resultIdCol;
+    for (size_t i = 0; i < factorNames.size(); ++i) {
+        out << "\t" << i;
+    }
+    out << "\n";
+
+    std::string line;
+    uint64_t row = 1;
+    const int32_t maxCol = std::max(idIt->second,
+        *std::max_element(factorCols.begin(), factorCols.end()));
+    while (std::getline(in, line)) {
+        ++row;
+        if (line.empty()) {
+            continue;
+        }
+        const std::vector<std::string> fields = split_tab(line);
+        if (fields.size() <= static_cast<size_t>(maxCol)) {
+            error("%s: malformed row %" PRIu64 " in %s",
+                __func__, row, cell.resultsTsv.string().c_str());
+        }
+        out << fields[static_cast<size_t>(idIt->second)];
+        for (int32_t col : factorCols) {
+            out << "\t" << fields[static_cast<size_t>(col)];
+        }
+        out << "\n";
+    }
+    if (!out.good()) {
+        error("%s: failed writing %s", __func__, outPath.string().c_str());
+    }
+    notice("%s: normalized named factor columns in %s to numeric factor ids using %s",
+        __func__, cell.resultsTsv.string().c_str(), outPath.string().c_str());
+    return outPath;
+}
+
 void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, size_t factorCount,
     bool overwrite) {
     if (!overwrite && file_exists(dst)) {
         const size_t existingRows = count_rgb_color_rows(dst);
-        if (existingRows == factorCount) {
+        if (existingRows == factorCount && existing_rgb_uses_numeric_ids(dst, factorCount)) {
             notice("%s: %s already has %zu RGB rows; skipping RGB sidecar",
                 __func__, dst.string().c_str(), existingRows);
             return;
         }
-        notice("%s: %s has %zu RGB rows but expected %zu; rewriting RGB sidecar",
+        notice("%s: %s has stale RGB ids or %zu rows but expected %zu; rewriting RGB sidecar",
             __func__, dst.string().c_str(), existingRows, factorCount);
     }
     const std::vector<RgbColorEntry> colors = load_normalized_colors(src, factorCount);
@@ -656,8 +852,9 @@ void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, size_t facto
         error("%s: cannot open %s", __func__, dst.string().c_str());
     }
     out << "Name\tColor_index\tR\tG\tB\n";
-    for (const RgbColorEntry& color : colors) {
-        out << color.name << "\t" << color.colorIndex << "\t"
+    for (size_t i = 0; i < colors.size(); ++i) {
+        const RgbColorEntry& color = colors[i];
+        out << i << "\t" << i << "\t"
             << fp_to_string(static_cast<double>(color.rgb[0]) / 255.0, 6) << "\t"
             << fp_to_string(static_cast<double>(color.rgb[1]) / 255.0, 6) << "\t"
             << fp_to_string(static_cast<double>(color.rgb[2]) / 255.0, 6) << "\n";
@@ -667,10 +864,49 @@ void write_cartoscope_rgb(const fs::path& src, const fs::path& dst, size_t facto
     }
 }
 
-void write_cartoscope_de(const fs::path& src, const fs::path& dst, bool overwrite) {
+bool existing_de_uses_numeric_factors(const fs::path& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return false;
+    }
+    std::string line;
+    if (!std::getline(in, line)) {
+        return false;
+    }
+    const std::vector<std::string> header = split_tab(strip_leading_hash(line));
+    const int32_t cFactor = find_header_column_ci(header, {"factor", "Factor"});
+    if (cFactor < 0) {
+        return false;
+    }
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const std::vector<std::string> fields = split_tab(line);
+        if (static_cast<size_t>(cFactor) >= fields.size()) {
+            continue;
+        }
+        return is_nonnegative_integer_name(fields[static_cast<size_t>(cFactor)]);
+    }
+    return true;
+}
+
+void write_cartoscope_de(const fs::path& src, const fs::path& dst, bool overwrite,
+    const std::vector<std::string>& factorNames = {}) {
+    const bool namedFactors = !factorNames.empty() && !factor_names_are_numeric(factorNames);
     if (!overwrite && file_exists(dst)) {
-        notice("%s: %s already exists; skipping bulk DE sidecar", __func__, dst.string().c_str());
-        return;
+        if (!namedFactors || existing_de_uses_numeric_factors(dst)) {
+            notice("%s: %s already exists; skipping bulk DE sidecar", __func__, dst.string().c_str());
+            return;
+        }
+        notice("%s: %s has named factors but numeric factor ids are required; rewriting bulk DE sidecar",
+            __func__, dst.string().c_str());
+    }
+    std::map<std::string, std::string> factorIdByName;
+    if (namedFactors) {
+        for (size_t i = 0; i < factorNames.size(); ++i) {
+            factorIdByName[normalize_factor_id(factorNames[i])] = std::to_string(i);
+        }
     }
     std::ifstream in(src);
     if (!in.is_open()) {
@@ -711,8 +947,22 @@ void write_cartoscope_de(const fs::path& src, const fs::path& dst, bool overwrit
             }
             return fields[static_cast<size_t>(idx)];
         };
+        std::string factor = get(cFactor);
+        if (namedFactors) {
+            const auto it = factorIdByName.find(normalize_factor_id(factor));
+            if (it != factorIdByName.end()) {
+                factor = it->second;
+            } else {
+                int32_t numericFactor = -1;
+                if (!str2int32(factor, numericFactor) || numericFactor < 0 ||
+                    static_cast<size_t>(numericFactor) >= factorNames.size()) {
+                    error("%s: DE factor '%s' in %s is neither a pseudobulk factor name nor a numeric factor id in [0, %zu)",
+                        __func__, factor.c_str(), src.string().c_str(), factorNames.size());
+                }
+            }
+        }
         out << get(cGene) << "\t"
-            << get(cFactor) << "\t"
+            << factor << "\t"
             << get(cChi2) << "\t"
             << get(cPval) << "\t"
             << get(cFoldChange) << "\t"
@@ -820,8 +1070,8 @@ bool existing_info_is_compatible(const fs::path& path, size_t factorCount) {
 void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& deSrc,
     const fs::path& rgbSrc, const fs::path& dst, bool overwrite) {
     if (!overwrite && file_exists(dst)) {
-        const size_t factorCount = infer_factor_count_from_pseudobulk(src);
-        if (existing_info_is_compatible(dst, factorCount)) {
+        const std::vector<std::string> factorNames = factor_names_from_pseudobulk_header(src);
+        if (existing_info_is_compatible(dst, factorNames.size())) {
             notice("%s: %s already has CartoScope factor info; skipping info sidecar",
                 __func__, dst.string().c_str());
             return;
@@ -849,6 +1099,7 @@ void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& 
     if (!out.is_open()) {
         error("%s: cannot open %s", __func__, dst.string().c_str());
     }
+    const bool namedFactors = !factor_names_are_numeric(factorNames);
     out << "Factor\tRGB\tWeight\tPostUMI\tTopGene_pval\tTopGene_fc\tTopGene_weight\n";
     const Eigen::Matrix<double, 1, Eigen::Dynamic> weights = pseudobulk.colwise().sum();
     const double totalWeight = weights.sum();
@@ -873,11 +1124,14 @@ void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& 
     const size_t nTop = 20;
     for (const InfoRow& row : order) {
         const size_t j = row.idx;
-        const std::string factor = normalize_factor_id(factorNames[j]);
+        const std::string factorForDe = namedFactors
+            ? std::to_string(j)
+            : normalize_factor_id(factorNames[j]);
+        const std::string factorId = namedFactors ? std::to_string(j) : factorForDe;
         std::vector<std::pair<double, std::string>> byPval;
         std::vector<std::pair<double, std::string>> byFc;
         for (const DeGeneRow& de : deRows) {
-            if (de.factor != factor) {
+            if (de.factor != factorForDe) {
                 continue;
             }
             byPval.emplace_back(de.log10pval, de.gene);
@@ -889,7 +1143,7 @@ void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& 
             byWeight.emplace_back(pseudobulk(static_cast<Eigen::Index>(i),
                 static_cast<Eigen::Index>(j)), featureNames[i]);
         }
-        out << factor << "\t"
+        out << factorId << "\t"
             << rgb_string(colors[j]) << "\t"
             << fp_to_string(row.weight, 5) << "\t"
             << static_cast<int64_t>(std::llround(weights(static_cast<Eigen::Index>(j)))) << "\t"
@@ -900,6 +1154,84 @@ void write_cartoscope_info_from_pseudobulk(const fs::path& src, const fs::path& 
     if (!out.good()) {
         error("%s: failed writing %s", __func__, dst.string().c_str());
     }
+}
+
+bool existing_alias_matches_pseudobulk(const fs::path& path,
+    const std::vector<std::string>& factorNames) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return false;
+    }
+    std::string line;
+    if (!std::getline(in, line)) {
+        return false;
+    }
+    const std::vector<std::string> header = split_tab(strip_leading_hash(line));
+    const int32_t cIndex = find_header_column_ci(header, {"index"});
+    const int32_t cAlias = find_header_column_ci(header, {"alias"});
+    if (cIndex < 0 || cAlias < 0) {
+        return false;
+    }
+    std::vector<std::string> seen(factorNames.size());
+    size_t rows = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const std::vector<std::string> fields = split_tab(line);
+        if (fields.size() <= static_cast<size_t>(std::max(cIndex, cAlias))) {
+            return false;
+        }
+        int32_t idx = -1;
+        if (!str2int32(fields[static_cast<size_t>(cIndex)], idx) ||
+            idx < 0 || static_cast<size_t>(idx) >= factorNames.size()) {
+            return false;
+        }
+        if (!seen[static_cast<size_t>(idx)].empty()) {
+            return false;
+        }
+        seen[static_cast<size_t>(idx)] = fields[static_cast<size_t>(cAlias)];
+        ++rows;
+    }
+    if (rows != factorNames.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < factorNames.size(); ++i) {
+        if (seen[i] != factorNames[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool write_factor_alias_from_pseudobulk(const fs::path& src, const fs::path& dst,
+    bool overwrite) {
+    const std::vector<std::string> factorNames = factor_names_from_pseudobulk_header(src);
+    if (factor_names_are_numeric(factorNames)) {
+        return false;
+    }
+    if (!overwrite && file_exists(dst)) {
+        if (existing_alias_matches_pseudobulk(dst, factorNames)) {
+            notice("%s: %s already matches pseudobulk factor aliases; skipping factor alias sidecar",
+                __func__, dst.string().c_str());
+            return true;
+        }
+        notice("%s: %s is stale or incomplete; rewriting factor alias sidecar",
+            __func__, dst.string().c_str());
+    }
+    fs::create_directories(dst.parent_path());
+    std::ofstream out(dst);
+    if (!out.is_open()) {
+        error("%s: cannot open %s", __func__, dst.string().c_str());
+    }
+    out << "index\talias\n";
+    for (size_t i = 0; i < factorNames.size(); ++i) {
+        out << i << "\t" << factorNames[i] << "\n";
+    }
+    if (!out.good()) {
+        error("%s: failed writing %s", __func__, dst.string().c_str());
+    }
+    return true;
 }
 
 void gzip_copy_text(const fs::path& src, const fs::path& dst, bool overwrite) {
@@ -1093,6 +1425,7 @@ DeployInputs load_from_config(const fs::path& configPath) {
     out.transcripts.icolY = wf.value("icol_y", 1);
     out.transcripts.icolFeature = wf.value("icol_feature", 2);
     out.transcripts.icolCount = wf.value("icol_count", 3);
+    out.transcripts.nullStr = wf.value("null_str", std::string());
 
     for (const auto& h : wf.at("hexgrids")) {
         for (const auto& k : wf.at("topics")) {
@@ -1129,6 +1462,7 @@ DeployInputs load_from_input_json(const fs::path& inputJson) {
     out.transcripts.icolY = tr.value("icol_y", 1);
     out.transcripts.icolFeature = tr.value("icol_feature", 2);
     out.transcripts.icolCount = tr.value("icol_count", 3);
+    out.transcripts.nullStr = tr.value("null_str", std::string());
 
     auto parse_cell_fields = [&](const json& m, CellInputs& cell, bool prefixedOnly, bool sidecarsAllowed) {
         auto path_key = [&](const char* prefixed, const char* plain, fs::path& dst) {
@@ -1444,6 +1778,29 @@ void build_pyramid_inplace(const fs::path& pmtilesPath, const fs::path& tmpDir,
     }
 }
 
+void ensure_point_pyramids(const std::vector<std::string>& pointPmtiles,
+    const fs::path& tmpDir, int32_t minZoom, int32_t maxZoom,
+    int32_t maxTileBytes, int32_t maxTileFeatures,
+    double compressionScale, int32_t threads) {
+    for (const std::string& pmtilesPathString : pointPmtiles) {
+        const fs::path pmtilesPath(pmtilesPathString);
+        pm_core::LoadedPmtilesArchive archive =
+            pm_core::load_pmtiles_archive(pmtilesPath.string());
+        if (static_cast<int32_t>(archive.header.max_zoom) < maxZoom) {
+            error("%s: existing %s has max zoom %u but deployment requested point max zoom %d; use --overwrite to regenerate point PMTiles",
+                __func__, pmtilesPath.string().c_str(),
+                static_cast<unsigned>(archive.header.max_zoom), maxZoom);
+        }
+        if (static_cast<int32_t>(archive.header.min_zoom) <= minZoom) {
+            continue;
+        }
+        notice("%s: %s does not cover zoom range %d..%d; building point pyramid in place",
+            __func__, pmtilesPath.string().c_str(), minZoom, maxZoom);
+        build_pyramid_inplace(pmtilesPath, tmpDir, true, minZoom,
+            maxTileBytes, maxTileFeatures, compressionScale, threads);
+    }
+}
+
 void write_catalog_yaml(const fs::path& outPath, const std::string& id, const std::string& title,
     const std::string& desc, const std::vector<std::string>& binPmtiles,
     const std::string& basemapPmtilesName, const json& factorAssets) {
@@ -1499,6 +1856,7 @@ void write_catalog_yaml(const fs::path& outPath, const std::string& id, const st
         write_asset_scalar(y, asset, "model");
         write_asset_scalar(y, asset, "post");
         write_asset_scalar(y, asset, "rgb");
+        write_asset_scalar(y, asset, "alias");
         y << "    pmtiles:\n";
         const json& pm = asset.at("pmtiles");
         std::set<std::string> written;
@@ -1550,23 +1908,36 @@ void copy_prebuilt_pmtiles_or_keep_in_place(const fs::path& src, const fs::path&
 }
 
 void write_or_compute_cell_de(const CellInputs& cell, const fs::path& dst,
-    int32_t threads, bool overwrite) {
+    int32_t threads, bool overwrite, const std::vector<std::string>& factorNames,
+    const fs::path& tmpDir) {
+    const bool namedFactors = !factorNames.empty() && !factor_names_are_numeric(factorNames);
     if (!cell.deTsv.empty()) {
-        write_cartoscope_de(cell.deTsv, dst, overwrite);
+        write_cartoscope_de(cell.deTsv, dst, overwrite, factorNames);
         return;
     }
     if (!overwrite && file_exists(dst)) {
-        notice("%s: %s already exists; skipping cell DE", __func__, dst.string().c_str());
-        return;
+        if (!namedFactors || existing_de_uses_numeric_factors(dst)) {
+            notice("%s: %s already exists; skipping cell DE", __func__, dst.string().c_str());
+            return;
+        }
+        notice("%s: %s has named factors but numeric factor ids are required; recomputing cell DE",
+            __func__, dst.string().c_str());
     }
+    fs::create_directories(tmpDir);
+    const fs::path deOut = namedFactors
+        ? tmpDir / (cell.id + ".cell_de.raw.tsv")
+        : dst;
     std::vector<std::string> args = {
         "de-chisq",
         "--input", cell.pseudobulkTsv.string(),
-        "--out", dst.string(),
+        "--out", deOut.string(),
         "--threads", std::to_string(threads)
     };
     if (call_command(args, cmdDeChisq) != 0) {
         error("%s: de-chisq failed for cell factor %s", __func__, cell.id.c_str());
+    }
+    if (namedFactors) {
+        write_cartoscope_de(deOut, dst, true, factorNames);
     }
 }
 
@@ -1574,7 +1945,8 @@ json deploy_cell_pmtiles(const CellInputs& cell, const fs::path& outRoot,
     const std::string& pmtilesFormat, int32_t polygonMinZoom, int32_t polygonMaxZoom,
     int32_t maxPointTileBytes, int32_t maxPointTileFeatures,
     int32_t maxPolygonTileBytes, int32_t maxPolygonTileFeatures,
-    double compressionScale, int32_t threads, bool overwrite) {
+    double compressionScale, int32_t threads, bool overwrite,
+    const std::vector<std::string>& factorNames, const fs::path& tmpDir) {
     const fs::path outPrefix = outRoot / cell.id;
     const fs::path outCells = outRoot / (cell.id + "-cells.pmtiles");
     const fs::path outBoundaries = outRoot / (cell.id + "-boundaries.pmtiles");
@@ -1586,9 +1958,11 @@ json deploy_cell_pmtiles(const CellInputs& cell, const fs::path& outRoot,
         notice("%s: cell PMTiles already exist for %s; skipping generation",
             __func__, cell.id.c_str());
     } else {
+        const fs::path resultsForPmtiles =
+            normalize_cell_results_for_pmtiles(cell, factorNames, tmpDir);
         std::vector<std::string> args = {
             "cells2pmtiles",
-            "--in-results", cell.resultsTsv.string(),
+            "--in-results", resultsForPmtiles.string(),
             "--in-boundaries", cell.boundaries.string(),
             "--out-prefix", outPrefix.string(),
             "--format", pmtilesFormat,
@@ -1631,22 +2005,32 @@ json deploy_cell_factor(const CellInputs& cell, const fs::path& outRoot,
     const std::string& pmtilesFormat, int32_t polygonMinZoom, int32_t polygonMaxZoom,
     int32_t maxPointTileBytes, int32_t maxPointTileFeatures,
     int32_t maxPolygonTileBytes, int32_t maxPolygonTileFeatures,
-    double compressionScale, int32_t threads, bool overwrite) {
+    double compressionScale, int32_t threads, bool overwrite,
+    const fs::path& tmpDir) {
+    const std::vector<std::string> factorNames =
+        factor_names_from_pseudobulk_header(cell.pseudobulkTsv);
     deploy_cell_pmtiles(cell, outRoot, pmtilesFormat,
         polygonMinZoom, polygonMaxZoom,
         maxPointTileBytes, maxPointTileFeatures,
         maxPolygonTileBytes, maxPolygonTileFeatures,
-        compressionScale, threads, overwrite);
-    write_or_compute_cell_de(cell, outRoot / (cell.id + "-bulk-de.tsv"), threads, overwrite);
+        compressionScale, threads, overwrite, factorNames, tmpDir);
+    write_or_compute_cell_de(cell, outRoot / (cell.id + "-bulk-de.tsv"),
+        threads, overwrite, factorNames, tmpDir);
     write_cartoscope_info_from_pseudobulk(cell.pseudobulkTsv,
         outRoot / (cell.id + "-bulk-de.tsv"), cell.rgbTsv,
         outRoot / (cell.id + "-info.tsv"), overwrite);
     gzip_copy_text(cell.pseudobulkTsv, outRoot / (cell.id + "-pseudobulk.tsv.gz"), overwrite);
     if (!cell.rgbTsv.empty()) {
-        const size_t factorCount = infer_factor_count_from_pseudobulk(cell.pseudobulkTsv);
+        const size_t factorCount = factorNames.size();
         write_cartoscope_rgb(cell.rgbTsv, outRoot / (cell.id + "-rgb.tsv"), factorCount, overwrite);
     }
-    return make_cell_asset(cell);
+    const bool hasAliasSidecar = write_factor_alias_from_pseudobulk(cell.pseudobulkTsv,
+        outRoot / (cell.id + "-alias.tsv"), overwrite);
+    json asset = make_cell_asset(cell);
+    if (hasAliasSidecar) {
+        asset["alias"] = cell.id + "-alias.tsv";
+    }
+    return asset;
 }
 
 } // namespace
@@ -1679,6 +2063,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     bool overwrite = false;
     bool usePng = false;
     bool skipBasemap = false;
+    std::string nullStr;
 
     ParamList pl;
     pl.add_option("config", "Standard workflow config JSON", configPath)
@@ -1705,6 +2090,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
       .add_option("basemap-adjust-quantile", "Quantile for SGE mono basemap density auto-adjustment", basemapAdjustQuantile)
       .add_option("scale-factor-compression", "Pyramid compression aggressiveness estimate", compressionScale)
       .add_option("hex-prob-thres", "Minimum hex factor probability retained", hexProbThreshold)
+      .add_option("null-str", "Replace empty string query properties with this placeholder in transcript PMTiles packaging", nullStr)
       .add_option("use-png", "Use pre-rendered pixel PNGs for raster PMTiles in --config mode", usePng)
       .add_option("skip-basemap", "Skip SGE mono basemap PMTiles generation", skipBasemap)
       .add_option("overwrite", "Overwrite existing deployment output files", overwrite);
@@ -1747,6 +2133,9 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     } else {
         inputs = load_from_config(configPath);
     }
+    if (!nullStr.empty()) {
+        inputs.transcripts.nullStr = nullStr;
+    }
     inputs = filter_models(std::move(inputs), modelPrefixes);
     validate_inputs(inputs, usePng, configMode);
     const fs::path annotateTiledPrefix = prepare_headered_transcripts(inputs.transcripts, tmpDir);
@@ -1761,6 +2150,8 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         if (pointPmtiles.empty()) {
             pointPmtiles = read_pmtiles_paths_from_index(deployIndex, outRoot);
         }
+        ensure_point_pyramids(pointPmtiles, tmpDir, pointMinZoom, pointMaxZoom,
+            maxPointTileBytes, maxPointTileFeatures, compressionScale, threads);
     } else {
         std::vector<fs::path> presentPointOutputs = existing_files(planned_point_outputs(outRoot, nGeneBins));
         if (!overwrite && !presentPointOutputs.empty()) {
@@ -1791,6 +2182,10 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             tileArgs.push_back("--feature-field-name");
             tileArgs.push_back("gene");
         }
+        if (!inputs.transcripts.nullStr.empty()) {
+            tileArgs.push_back("--null-other");
+            tileArgs.push_back(inputs.transcripts.nullStr);
+        }
         tileArgs.push_back("--emb-prefix");
         for (size_t modelIdx : rawPixelOrder) {
             tileArgs.push_back(pixel_decode_id(inputs.models[modelIdx]));
@@ -1811,10 +2206,8 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         fs::remove(dotIndex);
         fs::remove(dotCounts);
         pointPmtiles = read_pmtiles_paths_from_index(deployIndex, outRoot);
-        for (const std::string& pmtilesPath : pointPmtiles) {
-            build_pyramid_inplace(pmtilesPath, tmpDir, true, pointMinZoom,
-                maxPointTileBytes, maxPointTileFeatures, compressionScale, threads);
-        }
+        ensure_point_pyramids(pointPmtiles, tmpDir, pointMinZoom, pointMaxZoom,
+            maxPointTileBytes, maxPointTileFeatures, compressionScale, threads);
     }
 
     json factorAssets = json::array();
@@ -1901,13 +2294,18 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         }
 
         copy_file_checked(model.modelTsv, outRoot / (model.id + "-model.tsv"), overwrite, "model sidecar");
-        const size_t factorCount = infer_factor_count_from_pseudobulk(model.pseudobulkTsv);
+        const std::vector<std::string> factorNames =
+            factor_names_from_pseudobulk_header(model.pseudobulkTsv);
+        const size_t factorCount = factorNames.size();
         write_cartoscope_rgb(model.colorRgbTsv, outRoot / (model.id + "-rgb.tsv"),
             factorCount, overwrite);
-        write_cartoscope_de(model.deTsv, outRoot / (model.id + "-bulk-de.tsv"), overwrite);
+        write_cartoscope_de(model.deTsv, outRoot / (model.id + "-bulk-de.tsv"),
+            overwrite, factorNames);
         write_cartoscope_info_from_pseudobulk(model.pseudobulkTsv,
             outRoot / (model.id + "-bulk-de.tsv"), model.colorRgbTsv,
             outRoot / (model.id + "-info.tsv"), overwrite);
+        const bool hasAliasSidecar = write_factor_alias_from_pseudobulk(model.pseudobulkTsv,
+            outRoot / (model.id + "-alias.tsv"), overwrite);
         gzip_copy_text(model.pseudobulkTsv, outRoot / (model.id + "-pseudobulk.tsv.gz"), overwrite);
 
         json asset;
@@ -1922,6 +2320,9 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         asset["model"] = model.id + "-model.tsv";
         asset["post"] = model.id + "-pseudobulk.tsv.gz";
         asset["rgb"] = model.id + "-rgb.tsv";
+        if (hasAliasSidecar) {
+            asset["alias"] = model.id + "-alias.tsv";
+        }
         asset["pmtiles"] = {
             {"hex", model.id + ".pmtiles"},
             {"raster", model.id + "-pixel-raster.pmtiles"},
@@ -1932,7 +2333,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
                 polygonMinZoom, polygonMaxZoom,
                 maxPointTileBytes, maxPointTileFeatures,
                 maxPolygonTileBytes, maxPolygonTileFeatures,
-                compressionScale, threads, overwrite);
+                compressionScale, threads, overwrite, factorNames, tmpDir);
             asset["cells_id"] = model.id;
             asset["pmtiles"]["cells"] = cellPmtiles.at("cells");
             if (cellPmtiles.contains("boundaries")) {
@@ -1950,7 +2351,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             polygonMinZoom, polygonMaxZoom,
             maxPointTileBytes, maxPointTileFeatures,
             maxPolygonTileBytes, maxPolygonTileFeatures,
-            compressionScale, threads, overwrite);
+            compressionScale, threads, overwrite, tmpDir);
         factorAssets.push_back(asset);
     }
 
