@@ -657,6 +657,48 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Explicit Input JSON">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-with-the-standard-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example with the standard pipeline
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#add-cell-level-results-and-cell-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      Add cell-level results and cell boundaries
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cell-only-model-entry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cell-only model entry
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-cartoscope-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      deploy-cartoscope Options
+    </span>
+  </a>
+  
 </li>
         
       </ul>
@@ -688,6 +730,21 @@
       Write cell-level PMTiles separately
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Write cell-level PMTiles separately">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cells2pmtiles-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      cells2pmtiles Options
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1175,6 +1232,48 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Explicit Input JSON">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#example-with-the-standard-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example with the standard pipeline
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#add-cell-level-results-and-cell-boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      Add cell-level results and cell boundaries
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cell-only-model-entry" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cell-only model entry
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deploy-cartoscope-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      deploy-cartoscope Options
+    </span>
+  </a>
+  
 </li>
         
       </ul>
@@ -1206,6 +1305,21 @@
       Write cell-level PMTiles separately
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Write cell-level PMTiles separately">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cells2pmtiles-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      cells2pmtiles Options
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1247,7 +1361,7 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>/path/for/carto
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>npx<span class="w"> </span>http-server<span class="w"> </span>--cors
 </span></code></pre></div>
-Then use the url <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual port may differ) on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
+Then use the URL <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual port may differ) on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
 <h2 id="input-modes">Input Modes<a class="headerlink" href="#input-modes" title="Permanent link">&para;</a></h2>
 <h3 id="standard-workflow-config">Standard Workflow Config<a class="headerlink" href="#standard-workflow-config" title="Permanent link">&para;</a></h3>
 <p>Use <code>--config</code> for output produced by the standard workflow template (see <a href="../">Quickstart</a> and <code>punkst/examples/basic/</code>).</p>
@@ -1260,15 +1374,14 @@ Then use the url <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual por
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>&lt;model-prefix&gt;.pixel.pseudobulk.tsv
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>&lt;model-prefix&gt;.pixel.de_bulk.tsv
 </span></code></pre></div>
+<p>The standard template writes model prefixes as <code>h&lt;H&gt;.k&lt;K&gt;</code>, for example <code>h12.k24</code> for hexagon grid size 12 and K=24 factors.</p>
 <p>If <code>workflow.pixel_decode_mode</code> is set, deployment uses the matching pixel-output suffix:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pixel             -&gt; &lt;model-prefix&gt;.pixel.*
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>feature_pixel     -&gt; &lt;model-prefix&gt;.sf_pixel.*
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>single_molecule   -&gt; &lt;model-prefix&gt;.sgl_mol.*
 </span></code></pre></div>
-<p>Default deployment model IDs use names such as <code>h12-k12</code>, <code>h12-k12-sf-pixel</code>, and <code>h12-k12-sgl-mol</code>.</p>
-<!-- By default, raster PMTiles are rendered directly from the pixel decode files. Add `--use-png` to use the legacy PNG-to-PMTiles path from `<model-prefix>.<pixel-suffix>.png`. -->
-
-<p>Deploy only selected models with <code>--model-prefix</code>, e.g. <code>--model-prefix &lt;model-prefix&gt; hex_12.k24</code></p>
+<p>Default deployment model IDs use names such as <code>h12-k24</code>, <code>h12-k24-sf-pixel</code>, and <code>h12-k24-sgl-mol</code>.</p>
+<p>Deploy only selected models with <code>--model-prefix &lt;model-prefix&gt;</code>, e.g. <code>--model-prefix h12.k24</code>. The normalized model ID is also accepted; normalization replaces <code>_</code>, <code>.</code>, <code>/</code>, and <code>\</code> with <code>-</code>, so <code>h12.k24</code> becomes <code>h12-k24</code>.</p>
 <h3 id="explicit-input-json">Explicit Input JSON<a class="headerlink" href="#explicit-input-json" title="Permanent link">&para;</a></h3>
 <p>Use <code>--input-json</code> when your data was not produced by (a single run of) the standard workflow template.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>deploy-cartoscope<span class="w"> </span>--pmtiles-format<span class="w"> </span>MVT<span class="w"> </span><span class="se">\</span>
@@ -1276,7 +1389,7 @@ Then use the url <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual por
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--id<span class="w"> </span>sample-id<span class="w"> </span>--title<span class="w"> </span><span class="s2">&quot;Sample title&quot;</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--out-dir<span class="w"> </span>/path/for/carto<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
-<p>Example:</p>
+<h4 id="example-with-the-standard-pipeline">Example with the standard pipeline<a class="headerlink" href="#example-with-the-standard-pipeline" title="Permanent link">&para;</a></h4>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;transcripts&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">&quot;tiled_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/transcripts.tiled&quot;</span><span class="p">,</span>
@@ -1288,183 +1401,499 @@ Then use the url <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual por
 </span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="p">},</span>
 </span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;models&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hex-12-k12&quot;</span><span class="p">,</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;model-id&gt;&quot;</span><span class="p">,</span>
 </span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">      </span><span class="nt">&quot;hex_grid_dist&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
-</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">      </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.results.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">      </span><span class="nt">&quot;model_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.model.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">      </span><span class="nt">&quot;color_rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.color.rgb.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">      </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.results.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="w">      </span><span class="nt">&quot;model_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.model.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="w">      </span><span class="nt">&quot;color_rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.color.rgb.tsv&quot;</span><span class="p">,</span>
 </span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="w">      </span><span class="nt">&quot;pixel_decode_mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pixel&quot;</span><span class="p">,</span>
-</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">      </span><span class="nt">&quot;pixel_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel&quot;</span><span class="p">,</span>
-</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">      </span><span class="nt">&quot;de_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel.de_bulk.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">      </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel.pseudobulk.tsv&quot;</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="w">      </span><span class="nt">&quot;pixel_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel&quot;</span><span class="p">,</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="w">      </span><span class="nt">&quot;de_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel.de_bulk.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a><span class="w">      </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel.pseudobulk.tsv&quot;</span>
 </span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">  </span><span class="p">]</span>
 </span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Each model entry has an optional <code>"type"</code> field. Omit it, or set it to <code>"default"</code>, for standard hex/pixel models. Cell-level PMTiles from the same model can be added directly to that default model entry. Use either existing PMTiles:</p>
+<p>You can add more than one model entry, each with a different <code>id</code>.</p>
+<p><code>pixel_decode_mode</code> is optional; when omitted, deployment infers the mode based on files provided through <code>pixel_prefix</code>. Depending on the decoding mode, your <code>pixel_prefix</code> (if you used the template workflow) may have a different suffix such as <code>.sf_pixel</code> or <code>.sgl_mol</code> instead of <code>.pixel</code>.</p>
+<p>When <code>pseudobulk_tsv</code> is omitted, it is assumed to be <code>&lt;pixel_prefix&gt;.pseudobulk.tsv</code>.</p>
+<p>If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different <code>id</code> values. The entries can reuse the same <code>results_tsv</code>, <code>model_tsv</code>, and <code>color_rgb_tsv</code> while pointing to different pixel prefixes, pseudobulk tables, and DE tables.</p>
+<h4 id="add-cell-level-results-and-cell-boundaries">Add cell-level results and cell boundaries<a class="headerlink" href="#add-cell-level-results-and-cell-boundaries" title="Permanent link">&para;</a></h4>
+<p>Cell-level PMTiles from <strong>the same</strong> model as the pixel level results can be added to that model entry.
+There are two ways to provide cell-level data (the data up to <code>"pseudobulk_tsv"</code> are the same as the above standard pixel-only example):</p>
+<ol>
+<li>Use existing PMTiles, which can be generated by <a href="#write-cell-level-pmtiles-separately"><code>cells2pmtiles</code></a>, under <code>cell_pmtiles</code>:</li>
+</ol>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hex-12-k12&quot;</span><span class="p">,</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;model-id&gt;&quot;</span><span class="p">,</span>
 </span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;hex_grid_dist&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.results.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;model_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.model.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;color_rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.color.rgb.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">&quot;pixel_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel&quot;</span><span class="p">,</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="nt">&quot;de_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel.de_bulk.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel.pseudobulk.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.results.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;model_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.model.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;color_rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.color.rgb.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">&quot;pixel_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel&quot;</span><span class="p">,</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="nt">&quot;de_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel.de_bulk.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">  </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel.pseudobulk.tsv&quot;</span><span class="p">,</span>
 </span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="nt">&quot;cell_pmtiles&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="nt">&quot;cells&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex-12-k12-cells.pmtiles&quot;</span><span class="p">,</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="nt">&quot;boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex-12-k12-boundaries.pmtiles&quot;</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="nt">&quot;cells&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-id&gt;-cells.pmtiles&quot;</span><span class="p">,</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="nt">&quot;boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-id&gt;-boundaries.pmtiles&quot;</span>
 </span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">  </span><span class="p">}</span>
 </span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>or source files that deployment will pass through <code>cells2pmtiles</code>:</p>
+<ol>
+<li>Provide source files that deployment will pass through <code>cells2pmtiles</code>:</li>
+</ol>
 <div class="language-json highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="p">{</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hex-12-k12&quot;</span><span class="p">,</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;model-id&gt;&quot;</span><span class="p">,</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;hex_grid_dist&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">12</span><span class="p">,</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.results.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;model_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.model.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">&quot;color_rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.color.rgb.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">&quot;pixel_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel&quot;</span><span class="p">,</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">&quot;de_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel.de_bulk.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/hex_12.k12.pixel.pseudobulk.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.results.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;model_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.model.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">&quot;color_rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.color.rgb.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="nt">&quot;pixel_prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel&quot;</span><span class="p">,</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">&quot;de_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel.de_bulk.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">  </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-prefix&gt;.pixel.pseudobulk.tsv&quot;</span><span class="p">,</span>
 </span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">  </span><span class="nt">&quot;cell_results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cells.results.tsv&quot;</span><span class="p">,</span>
 </span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="nt">&quot;cell_result_id_col&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cell_id&quot;</span><span class="p">,</span>
 </span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">  </span><span class="nt">&quot;cell_boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cell_boundaries.tsv&quot;</span><span class="p">,</span>
 </span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="w">  </span><span class="nt">&quot;cell_boundary_format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;table&quot;</span><span class="p">,</span>
 </span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span><span class="nt">&quot;cell_b_icol_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
 </span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">  </span><span class="nt">&quot;cell_b_icol_x&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">  </span><span class="nt">&quot;cell_b_icol_y&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">  </span><span class="nt">&quot;cell_centers_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cell_meta.csv&quot;</span><span class="p">,</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">  </span><span class="nt">&quot;cell_c_icol_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="w">  </span><span class="nt">&quot;cell_c_icol_x&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="w">  </span><span class="nt">&quot;cell_c_icol_y&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="p">}</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">  </span><span class="nt">&quot;cell_b_icol_y&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>File paths can be absolute or relative to the directory of the input JSON file. For prebuilt PMTiles, if the source path is already the target file inside the deployment directory, deployment leaves it in place instead of copying over itself.</p>
+<p>File paths can be absolute or relative to the directory of the input JSON file. For prebuilt PMTiles, if the source path is already the target file inside the deployment directory, deployment leaves it in place.</p>
 <p>For source cell boundaries, <code>cell_boundary_format</code> can be omitted in the common case. <code>cells2pmtiles</code> infers <code>.json</code>/<code>.geojson</code> as GeoJSON and <code>.tsv</code>/<code>.csv</code>/<code>.txt</code> as flat tables, including <code>.gz</code> variants. Boundary and center tables can be comma- or tab-delimited, may include <code>#</code> comment lines, and may be either headered or headerless when the relevant ID/X/Y columns are provided as 0-based indexes. The cell projection/result TSV uses a named ID column via <code>cell_result_id_col</code>.</p>
-<p>For attached cell inputs on a default model, deployment only generates or copies <code>&lt;model-id&gt;-cells.pmtiles</code> and <code>&lt;model-id&gt;-boundaries.pmtiles</code>. CartoScope sidecars remain the standard model sidecars from the pixel pipeline: <code>&lt;model-id&gt;-pseudobulk.tsv.gz</code>, <code>&lt;model-id&gt;-info.tsv</code>, <code>&lt;model-id&gt;-bulk-de.tsv</code>, and <code>&lt;model-id&gt;-rgb.tsv</code>.</p>
-<p>To deploy cell-only factor results, add a model entry with <code>"type": "cell_only"</code> alongside at least one default model. This is the standalone cell workflow and requires <code>pseudobulk_tsv</code> plus <code>rgb_tsv</code> or <code>color_rgb_tsv</code>; if <code>de_tsv</code> is omitted, deployment runs <code>de-chisq</code> on the pseudobulk matrix. Cell-only models can also use prebuilt PMTiles through a <code>pmtiles</code> object with <code>cells</code> and <code>boundaries</code>.</p>
-<div class="language-json highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cells-ref&quot;</span><span class="p">,</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cell_only&quot;</span><span class="p">,</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cells.results.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;result_id_col&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cell_id&quot;</span><span class="p">,</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">  </span><span class="nt">&quot;boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cell_boundaries.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="nt">&quot;boundary_format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;table&quot;</span><span class="p">,</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">&quot;b_icol_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">  </span><span class="nt">&quot;b_icol_x&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">  </span><span class="nt">&quot;b_icol_y&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">  </span><span class="nt">&quot;centers_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cell_meta.csv&quot;</span><span class="p">,</span>
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">  </span><span class="nt">&quot;c_icol_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">  </span><span class="nt">&quot;c_icol_x&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
-</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">  </span><span class="nt">&quot;c_icol_y&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
-</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">  </span><span class="nt">&quot;rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cells-rgb.tsv&quot;</span><span class="p">,</span>
-</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">  </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cells.pseudobulk.tsv&quot;</span>
-</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="p">}</span>
+<p>The cell center table is optional. If <code>cell_centers_tsv</code> is omitted, <code>cells2pmtiles</code> computes centers from the boundary polygons. If a center table is provided, use <code>cell_c_icol_id</code>, <code>cell_c_icol_x</code>, and <code>cell_c_icol_y</code> to specify its 0-based cell ID and coordinate columns.</p>
+<p>Boundaries provided as flat tables should contain one vertex per row. All rows for a cell must be consecutive, but the cell order can be arbitrary. In the file <code>cell_boundaries.tsv</code> from the unpacked example dataset, the cell ID, x coordinate, and y coordinate are in columns 0, 1, and 2, respectively, so the matching JSON fields are <code>cell_b_icol_id: 0</code>, <code>cell_b_icol_x: 1</code>, and <code>cell_b_icol_y: 2</code>.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>#cell_index vertex_x    vertex_y
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>0   7266.073738 6771.112935
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>0   7267.797005 6774.856543
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>0   7269.785159 6777.095995
 </span></code></pre></div>
-<p>For cell-only models, deployment derives factor count and <code>info.tsv</code> from <code>pseudobulk_tsv</code>. Do not provide <code>info_tsv</code>, <code>cell_info_tsv</code>, <code>n_factors</code>, or <code>cell_n_factors</code>.</p>
+<p>The equivalent GeoJSON example in the unpacked dataset is <code>cell_boundaries.geojson</code>. It is a standard <code>FeatureCollection</code>; each feature has a <code>Polygon</code> or <code>MultiPolygon</code> geometry, and the cell ID is stored in <code>properties.cell_id</code>.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="p">{</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;FeatureCollection&quot;</span><span class="p">,</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">&quot;features&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Feature&quot;</span><span class="p">,</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0&quot;</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">      </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;cell_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;0&quot;</span><span class="p">},</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="nt">&quot;geometry&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">        </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Polygon&quot;</span><span class="p">,</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">        </span><span class="nt">&quot;coordinates&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">          </span><span class="p">[</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">            </span><span class="p">[</span><span class="mf">7266.073738</span><span class="p">,</span><span class="w"> </span><span class="mf">6771.112935</span><span class="p">],</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">            </span><span class="p">[</span><span class="mf">7267.797005</span><span class="p">,</span><span class="w"> </span><span class="mf">6774.856543</span><span class="p">],</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">            </span><span class="p">[</span><span class="mf">7269.785159</span><span class="p">,</span><span class="w"> </span><span class="mf">6777.095995</span><span class="p">],</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">            </span><span class="p">[</span><span class="mf">7266.073738</span><span class="p">,</span><span class="w"> </span><span class="mf">6771.112935</span><span class="p">]</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">          </span><span class="p">]</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">        </span><span class="p">]</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>To use such a GeoJSON file for cell boundaries, replace the table-boundary fields in the previous JSON example with:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;cell_boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cell_boundaries.geojson&quot;</span><span class="p">,</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;cell_boundary_id_prop&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cell_id&quot;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>cell_boundary_id_prop</code> is only necessary if the cell ID property has a name other than <code>cell_id</code>.</p>
+<h4 id="cell-only-model-entry">Cell-only model entry<a class="headerlink" href="#cell-only-model-entry" title="Permanent link">&para;</a></h4>
+<p>To deploy a separate set of cell-only factor results, add a model entry with <code>"type": "cell_only"</code> alongside at least one default model with pixel-level data.</p>
+<p>This mode assumes the cell-level data has its own model, thus requiring <code>pseudobulk_tsv</code>, <code>rgb_tsv</code> or <code>color_rgb_tsv</code>. <code>de_tsv</code> is optional, and if it is not provided <code>de-chisq</code> is run using the pseudobulk matrix.</p>
+<p><div class="language-json highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;cell-model-id&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cell_only&quot;</span><span class="p">,</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;results_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cells.results.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">&quot;result_id_col&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cell_id&quot;</span><span class="p">,</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">  </span><span class="nt">&quot;rgb_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cells-rgb.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">  </span><span class="nt">&quot;pseudobulk_tsv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cells.pseudobulk.tsv&quot;</span><span class="p">,</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">  </span><span class="nt">&quot;boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/cell_boundaries.geojson&quot;</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="p">}</span>
+</span></code></pre></div>
+(The available fields for providing cell boundaries are the same as in the previous example; here we show the GeoJSON option for variety.)</p>
+<p>You can also replace <code>"boundaries"</code> with prebuilt PMTiles directly through</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="w">  </span><span class="nt">&quot;cell_pmtiles&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="nt">&quot;cells&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-id&gt;-cells.pmtiles&quot;</span><span class="p">,</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">&quot;boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-id&gt;-boundaries.pmtiles&quot;</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="p">}</span>
+</span></code></pre></div>
+<h3 id="deploy-cartoscope-options">deploy-cartoscope Options<a class="headerlink" href="#deploy-cartoscope-options" title="Permanent link">&para;</a></h3>
+<p><code>punkst deploy-cartoscope</code> accepts the following command-line options:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--config</code></td>
+<td>none</td>
+<td>Standard workflow config JSON. Provide exactly one of <code>--config</code> or <code>--input-json</code>.</td>
+</tr>
+<tr>
+<td><code>--input-json</code></td>
+<td>none</td>
+<td>Explicit deployment input JSON. Provide exactly one of <code>--config</code> or <code>--input-json</code>.</td>
+</tr>
+<tr>
+<td><code>--out-dir</code></td>
+<td>required</td>
+<td>Output deployment directory.</td>
+</tr>
+<tr>
+<td><code>--id</code></td>
+<td>required</td>
+<td>Dataset ID written to the deployment metadata.</td>
+</tr>
+<tr>
+<td><code>--title</code></td>
+<td>empty</td>
+<td>Dataset title.</td>
+</tr>
+<tr>
+<td><code>--desc</code></td>
+<td>empty</td>
+<td>Dataset description.</td>
+</tr>
+<tr>
+<td><code>--pmtiles-format</code></td>
+<td>required</td>
+<td>Tile encoding format: <code>MLT</code> or <code>MVT</code>.</td>
+</tr>
+<tr>
+<td><code>--model-prefix</code></td>
+<td>all models</td>
+<td>Optional model prefixes or normalized model IDs to deploy. Can be repeated or given multiple values, depending on shell usage.</td>
+</tr>
+<tr>
+<td><code>--point-min-zoom</code></td>
+<td><code>10</code></td>
+<td>Minimum zoom for transcript PMTiles pyramids.</td>
+</tr>
+<tr>
+<td><code>--point-max-zoom</code></td>
+<td><code>18</code></td>
+<td>Maximum zoom for transcript PMTiles export.</td>
+</tr>
+<tr>
+<td><code>--polygon-min-zoom</code></td>
+<td><code>10</code></td>
+<td>Minimum zoom for hex and cell PMTiles pyramids.</td>
+</tr>
+<tr>
+<td><code>--polygon-max-zoom</code></td>
+<td><code>18</code></td>
+<td>Maximum zoom for hex and cell PMTiles export.</td>
+</tr>
+<tr>
+<td><code>--n-gene-bins</code></td>
+<td><code>50</code></td>
+<td>Number of gene bins for transcript PMTiles.</td>
+</tr>
+<tr>
+<td><code>--threads</code></td>
+<td><code>4</code></td>
+<td>Number of threads.</td>
+</tr>
+<tr>
+<td><code>--max-point-tile-bytes</code></td>
+<td><code>500000</code></td>
+<td>Maximum compressed bytes per point tile.</td>
+</tr>
+<tr>
+<td><code>--max-point-tile-features</code></td>
+<td><code>50000</code></td>
+<td>Maximum features per point tile.</td>
+</tr>
+<tr>
+<td><code>--max-polygon-tile-bytes</code></td>
+<td><code>500000</code></td>
+<td>Maximum compressed bytes per polygon tile.</td>
+</tr>
+<tr>
+<td><code>--max-polygon-tile-features</code></td>
+<td><code>5000</code></td>
+<td>Maximum features per polygon tile.</td>
+</tr>
+<tr>
+<td><code>--basemap-min-zoom</code></td>
+<td><code>0</code></td>
+<td>Minimum zoom for SGE mono basemap PMTiles.</td>
+</tr>
+<tr>
+<td><code>--basemap-max-zoom</code></td>
+<td><code>--point-max-zoom</code></td>
+<td>Maximum zoom for SGE mono basemap PMTiles.</td>
+</tr>
+<tr>
+<td><code>--mono-max-zoom-from-raw</code></td>
+<td><code>--basemap-max-zoom</code></td>
+<td>Parse raw data for SGE mono basemap zoom levels greater than or equal to this value; derive lower zooms from parent layers.</td>
+</tr>
+<tr>
+<td><code>--basemap-adjust-quantile</code></td>
+<td><code>0.99</code></td>
+<td>Quantile for SGE mono basemap density auto-adjustment.</td>
+</tr>
+<tr>
+<td><code>--scale-factor-compression</code></td>
+<td><code>10.0</code></td>
+<td>Pyramid compression aggressiveness estimate.</td>
+</tr>
+<tr>
+<td><code>--hex-prob-thres</code></td>
+<td><code>0.001</code></td>
+<td>Minimum hex factor probability retained.</td>
+</tr>
+<tr>
+<td><code>--use-png</code></td>
+<td>false</td>
+<td>Use pre-rendered pixel PNGs for raster PMTiles in <code>--config</code> mode.</td>
+</tr>
+<tr>
+<td><code>--skip-basemap</code></td>
+<td>false</td>
+<td>Skip SGE mono basemap PMTiles generation.</td>
+</tr>
+<tr>
+<td><code>--overwrite</code></td>
+<td>false</td>
+<td>Overwrite existing deployment output files.</td>
+</tr>
+</tbody>
+</table>
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h2>
-<p>The output directory contains:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>catalog.yaml
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>ficture_assets.json
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>genes_all.pmtiles
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>genes_bin*.pmtiles
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>genes_bin_counts.json
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>genes_pmtiles_index.tsv
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>sge-mono-dark.pmtiles
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>&lt;model-id&gt;.pmtiles
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>&lt;model-id&gt;-pixel-raster.pmtiles
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>&lt;model-id&gt;-bulk-de.tsv
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a>&lt;model-id&gt;-info.tsv
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>&lt;model-id&gt;-model.tsv
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>&lt;model-id&gt;-pseudobulk.tsv.gz
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>&lt;model-id&gt;-rgb.tsv
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>&lt;model-id&gt;-cells.pmtiles
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a>&lt;model-id&gt;-boundaries.pmtiles
+<p><code>catalog.yaml</code> in the deployment directory registers each factor with the available PMTiles. Serve that file to CartoScope to visualize the data.</p>
+<p>A typical <code>catalog.yaml</code> looks like this:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">assets</span><span class="p">:</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">sge</span><span class="p">:</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="nt">all</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nt">bins</span><span class="p">:</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin1.pmtiles</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="nt">counts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin_counts.json</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span><span class="nt">overview</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">  </span><span class="nt">factors</span><span class="p">:</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">    </span><span class="nt">model_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">    </span><span class="nt">decode_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="w">    </span><span class="nt">raw_pixel_col</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel</span>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="w">    </span><span class="nt">de</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-bulk-de.tsv</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="w">    </span><span class="nt">info</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-info.tsv</span>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="w">    </span><span class="nt">rgb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-rgb.tsv</span>
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a><span class="w">    </span><span class="nt">pmtiles</span><span class="p">:</span>
+</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a><span class="w">      </span><span class="nt">hex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24.pmtiles</span>
+</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a><span class="w">      </span><span class="nt">raster</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel-raster.pmtiles</span>
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a><span class="w">      </span><span class="nt">raw_pixel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a><span class="w">      </span><span class="nt">cells</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-cells.pmtiles</span>
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a><span class="w">      </span><span class="nt">boundaries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-boundaries.pmtiles</span>
+</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a><span class="w">  </span><span class="nt">basemap</span><span class="p">:</span>
+</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23" href="#__codelineno-13-23"></a><span class="w">    </span><span class="nt">sge</span><span class="p">:</span>
+</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24" href="#__codelineno-13-24"></a><span class="w">      </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dark</span>
+</span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25" href="#__codelineno-13-25"></a><span class="w">      </span><span class="nt">dark</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
 </span></code></pre></div>
-<p>Cell PMTiles are present only for models with attached or cell-only cell inputs. <code>&lt;model-id&gt;-pixel-raster.pmtiles</code> is written for each default model. Raster bounds are read from the transcript coordinate range file produced by <code>pts2tiles</code>; if that file is absent, deployment falls back to bounds stored in the transcript or pixel index headers.</p>
-<p>The catalog registers each factor with the available PMTiles:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">assets</span><span class="p">:</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">sge</span><span class="p">:</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span><span class="nt">all</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span><span class="nt">bins</span><span class="p">:</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin1.pmtiles</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span><span class="nt">counts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin_counts.json</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span><span class="nt">overview</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="nt">factors</span><span class="p">:</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">    </span><span class="nt">model_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">    </span><span class="nt">decode_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-pixel</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">    </span><span class="nt">raw_pixel_col</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-pixel</span>
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">    </span><span class="nt">de</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-bulk-de.tsv</span>
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">    </span><span class="nt">info</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-info.tsv</span>
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="w">    </span><span class="nt">rgb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-rgb.tsv</span>
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="w">    </span><span class="nt">pmtiles</span><span class="p">:</span>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="w">      </span><span class="nt">hex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12.pmtiles</span>
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="w">      </span><span class="nt">raster</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-pixel-raster.pmtiles</span>
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="w">      </span><span class="nt">raw_pixel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
-</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="w">      </span><span class="nt">cells</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-cells.pmtiles</span>
-</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="w">      </span><span class="nt">boundaries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k12-boundaries.pmtiles</span>
-</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="w">  </span><span class="nt">basemap</span><span class="p">:</span>
-</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a><span class="w">    </span><span class="nt">sge</span><span class="p">:</span>
-</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a><span class="w">      </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dark</span>
-</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25" href="#__codelineno-10-25"></a><span class="w">      </span><span class="nt">dark</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
-</span></code></pre></div>
-<p><code>pmtiles.raw_pixel</code> points to <code>genes_all.pmtiles</code>, which contains transcript points annotated with per-model pixel factor columns such as <code>h12-k12-pixel_K1</code> and <code>h12-k12-pixel_P1</code>.</p>
-<p>Explicit JSON model IDs in output filenames and catalog entries are normalized by replacing <code>_</code> and <code>.</code> with <code>-</code>.</p>
-<p>Sidecar tables are normalized during deployment:</p>
-<ul>
-<li>RGB tables are written with exactly K rows, where K is inferred from the pseudobulk table. Extra colors are truncated; too few colors are repeated cyclically.</li>
-<li><code>info.tsv</code> is generated from pseudobulk factor column sums and normalized to weights that sum to 1.</li>
-<li>pseudobulk tables are gzip-compressed into <code>&lt;model-id&gt;-pseudobulk.tsv.gz</code>.</li>
-<li>DE tables are normalized to the CartoScope columns. For cell-only models without <code>de_tsv</code>, deployment runs <code>de-chisq</code>.</li>
-</ul>
 <h2 id="pmtiles-and-zooms">PMTiles and Zooms<a class="headerlink" href="#pmtiles-and-zooms" title="Permanent link">&para;</a></h2>
 <p>(See more about PMTiles utilities in <a href="../../modules/pmtiles/">Modules</a>)</p>
 <p>Transcript PMTiles are written at <code>--point-max-zoom</code>, then pyramid levels are built down to <code>--point-min-zoom</code>.</p>
 <p>Hexagon PMTiles are written at <code>--polygon-max-zoom</code>, then pyramid levels are built down to <code>--polygon-min-zoom</code>.</p>
 <p>Cell PMTiles generated from source inputs are also written at <code>--polygon-max-zoom</code>, then pyramids are built down to <code>--polygon-min-zoom</code>. This applies to both cell-center points and cell-boundary polygons.</p>
 <p>The mono SGE basemap is written as PNG raster PMTiles (disable with <code>--skip-basemap</code>). Its zoom range and density scaling are controlled separately from vector PMTiles:</p>
-<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>--basemap-min-zoom<span class="w"> </span><span class="m">0</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>--basemap-max-zoom<span class="w"> </span><span class="m">18</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>--mono-max-zoom-from-raw<span class="w"> </span><span class="m">18</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>--basemap-adjust-quantile<span class="w"> </span><span class="m">0</span>.99
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>--basemap-min-zoom<span class="w"> </span><span class="m">0</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>--basemap-max-zoom<span class="w"> </span><span class="m">18</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>--mono-max-zoom-from-raw<span class="w"> </span><span class="m">18</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>--basemap-adjust-quantile<span class="w"> </span><span class="m">0</span>.99
 </span></code></pre></div>
 If <code>--basemap-max-zoom</code> is omitted, it defaults to <code>--point-max-zoom</code>.</p>
-<p>By default, the mono basemap parses raw transcript counts only at <code>--basemap-max-zoom</code> and derives lower zooms by summing parent layers. Use <code>--mono-max-zoom-from-raw</code> to parse raw data for zooms greater than or equal to that value; set it to <code>--basemap-min-zoom</code> to parse every basemap zoom from raw data.</p>
+<p>By default, the basemap (transcript density) parses raw transcript counts only at <code>--basemap-max-zoom</code> and derives lower zooms by summing parent layers. Use <code>--mono-max-zoom-from-raw</code> to parse raw data for zooms greater than or equal to that value.</p>
 <h2 id="write-cell-level-pmtiles-separately">Write cell-level PMTiles separately<a class="headerlink" href="#write-cell-level-pmtiles-separately" title="Permanent link">&para;</a></h2>
 <p><code>punkst cells2pmtiles</code> packages cell-level factor assignments, cell centers, and cell boundary geometry into CartoScope-ready PMTiles. It writes geometry PMTiles only; CartoScope sidecars such as DE, pseudobulk, factor info, RGB tables, <code>ficture_assets.json</code>, and <code>catalog.yaml</code> are produced by <code>punkst deploy-cartoscope</code>.</p>
 <p>Typical use:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>lda-transform<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span>--in-model<span class="w"> </span>model.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>--in-dge-dir<span class="w"> </span>cell_feature_matrix<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span>--out-prefix<span class="w"> </span>cells<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span>--topk-only<span class="w"> </span><span class="m">3</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>punkst<span class="w"> </span>cells2pmtiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">  </span>--in-results<span class="w"> </span>cells.results.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">  </span>--id-col<span class="w"> </span>cell_id<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">  </span>--in-boundaries<span class="w"> </span>cell_boundaries.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">  </span>--boundary-format<span class="w"> </span>table<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">  </span>--b-icol-id<span class="w"> </span><span class="m">0</span><span class="w"> </span>--b-icol-x<span class="w"> </span><span class="m">1</span><span class="w"> </span>--b-icol-y<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">  </span>--out-prefix<span class="w"> </span>carto/cells<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">  </span>--format<span class="w"> </span>MVT<span class="w"> </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span>--max-zoom<span class="w"> </span><span class="m">18</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>punkst<span class="w"> </span>lda-transform<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>--in-model<span class="w"> </span>model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>--in-dge-dir<span class="w"> </span>cell_feature_matrix/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span>--out-prefix<span class="w"> </span>cells<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">  </span>--topk-only<span class="w"> </span><span class="m">3</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>punkst<span class="w"> </span>cells2pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">  </span>--in-results<span class="w"> </span>cells.results.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">  </span>--id-col<span class="w"> </span>cell_id<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="w">  </span>--in-boundaries<span class="w"> </span>cell_boundaries.geojson<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="w">  </span>--out-prefix<span class="w"> </span>carto/cells<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="w">  </span>--format<span class="w"> </span>MVT<span class="w"> </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span>--max-zoom<span class="w"> </span><span class="m">18</span>
 </span></code></pre></div>
+<p><strong>Input</strong></p>
 <p>The result table can contain dense factor columns named <code>0..K-1</code>, compact top-k columns from <code>lda-transform --topk-only</code>, or <code>topK/topP</code> columns:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>cell_id K1  K2  K3  P1  P2  P3
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>cell_id K1  K2  K3  P1  P2  P3
 </span></code></pre></div>
 <p>Use <code>--id-col</code> to select the cell ID column in the result table by name. For dense factor columns, <code>--top-k</code> controls how many top factors are retained (default: <code>3</code>).</p>
-<p>Boundary input may be GeoJSON <code>Feature</code> records with <code>Polygon</code> or <code>MultiPolygon</code> geometry, or a flat TSV/CSV table with consecutive vertices per cell. For table boundaries, use <code>--b-icol-id</code>, <code>--b-icol-x</code>, and <code>--b-icol-y</code>. <code>--in-centers</code> is optional; with a center table, use <code>--c-icol-id</code>, <code>--c-icol-x</code>, and <code>--c-icol-y</code>. Without centers, point positions are computed from polygon geometry.</p>
+<p>Boundary input may be GeoJSON <code>Feature</code> records with <code>Polygon</code> or <code>MultiPolygon</code> geometry, or a flat TSV/CSV table with consecutive vertices per cell. For table boundaries, use <code>--b-icol-id</code>, <code>--b-icol-x</code>, and <code>--b-icol-y</code> to specify the 0-based column indexes for cell ID and coordinates.</p>
 <p>When <code>--boundary-format</code> is left as <code>auto</code>, <code>cells2pmtiles</code> infers JSON/GeoJSON vs table input from the file extension (<code>.json</code>, <code>.geojson</code>, <code>.tsv</code>, <code>.csv</code>, <code>.txt</code>, including <code>.gz</code> variants). Flat boundary and center tables may be comma- or tab-delimited. Lines beginning with <code>#</code> are skipped, and the first non-comment line is treated as a header only when the configured coordinate columns do not parse as numeric values.</p>
-<p>Outputs:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>&lt;prefix&gt;-boundaries.pmtiles
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>&lt;prefix&gt;-cells.pmtiles
+<p><strong>Output</strong></p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>&lt;prefix&gt;-boundaries.pmtiles
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>&lt;prefix&gt;-cells.pmtiles
 </span></code></pre></div>
-<p>The point PMTiles (<code>&lt;prefix&gt;-cells.pmtiles</code>) stores factor IDs as integers. The boundary PMTiles (<code>&lt;prefix&gt;-boundaries.pmtiles</code>) stores factor IDs as strings because that is the CartoScope boundary contract. Both outputs include <code>cell_id</code>, <code>topK</code>, <code>topP</code>, and nullable secondary top-factor fields such as <code>K2/P2</code> and <code>K3/P3</code>.</p>
-<p><code>deploy-cartoscope</code> can either copy prebuilt outputs from <code>cells2pmtiles</code>, or run <code>cells2pmtiles</code> internally from the source fields in the input JSON examples above.</p>
-<p><code>pixel_decode_mode</code> is optional; when omitted, deployment infers the mode from <code>&lt;pixel_prefix&gt;.index</code>.
-When <code>pseudobulk_tsv</code> is omitted, it is assumed to be <code>&lt;pixel_prefix&gt;.pseudobulk.tsv</code>.</p>
-<p>If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different <code>id</code> values. The entries can reuse the same <code>results_tsv</code>, <code>model_tsv</code>, and <code>color_rgb_tsv</code> while pointing to different pixel prefixes, pseudobulk tables, and DE tables.</p>
+<h3 id="cells2pmtiles-options">cells2pmtiles Options<a class="headerlink" href="#cells2pmtiles-options" title="Permanent link">&para;</a></h3>
+<p><code>punkst cells2pmtiles</code> accepts the following command-line options:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--in-results</code></td>
+<td>required</td>
+<td>Cell projection result TSV.</td>
+</tr>
+<tr>
+<td><code>--in-boundaries</code></td>
+<td>required</td>
+<td>Cell boundary GeoJSON/JSON or flat TSV/CSV table.</td>
+</tr>
+<tr>
+<td><code>--in-centers</code></td>
+<td>none</td>
+<td>Optional cell center TSV/CSV. If omitted, centers are computed from boundary geometry.</td>
+</tr>
+<tr>
+<td><code>--out-prefix</code></td>
+<td>required</td>
+<td>Output prefix. Writes <code>&lt;prefix&gt;-cells.pmtiles</code> and <code>&lt;prefix&gt;-boundaries.pmtiles</code>.</td>
+</tr>
+<tr>
+<td><code>--format</code></td>
+<td><code>MVT</code></td>
+<td>Tile encoding format: <code>MLT</code> or <code>MVT</code>.</td>
+</tr>
+<tr>
+<td><code>--boundary-format</code></td>
+<td><code>auto</code></td>
+<td>Boundary input format: <code>auto</code>, <code>geojson</code>, <code>json</code>, <code>table</code>, <code>tsv</code>, or <code>csv</code>.</td>
+</tr>
+<tr>
+<td><code>--id-col</code></td>
+<td><code>cell_id</code></td>
+<td>Cell ID column name in projection results.</td>
+</tr>
+<tr>
+<td><code>--top-k</code></td>
+<td><code>3</code></td>
+<td>Number of top factors to keep from dense factor columns.</td>
+</tr>
+<tr>
+<td><code>--b-icol-id</code></td>
+<td><code>0</code></td>
+<td>0-based cell ID column in table boundaries.</td>
+</tr>
+<tr>
+<td><code>--b-icol-x</code></td>
+<td><code>1</code></td>
+<td>0-based x column in table boundaries.</td>
+</tr>
+<tr>
+<td><code>--b-icol-y</code></td>
+<td><code>2</code></td>
+<td>0-based y column in table boundaries.</td>
+</tr>
+<tr>
+<td><code>--c-icol-id</code></td>
+<td><code>0</code></td>
+<td>0-based cell ID column in <code>--in-centers</code>.</td>
+</tr>
+<tr>
+<td><code>--c-icol-x</code></td>
+<td><code>1</code></td>
+<td>0-based center x column in <code>--in-centers</code>.</td>
+</tr>
+<tr>
+<td><code>--c-icol-y</code></td>
+<td><code>2</code></td>
+<td>0-based center y column in <code>--in-centers</code>.</td>
+</tr>
+<tr>
+<td><code>--boundary-id-prop</code></td>
+<td><code>cell_id</code></td>
+<td>Cell ID property in boundary GeoJSON features.</td>
+</tr>
+<tr>
+<td><code>--min-zoom</code></td>
+<td><code>10</code></td>
+<td>Minimum zoom for pyramids.</td>
+</tr>
+<tr>
+<td><code>--max-zoom</code></td>
+<td><code>18</code></td>
+<td>Maximum zoom for initial export.</td>
+</tr>
+<tr>
+<td><code>--max-point-tile-bytes</code></td>
+<td><code>500000</code></td>
+<td>Maximum compressed bytes per point tile.</td>
+</tr>
+<tr>
+<td><code>--max-point-tile-features</code></td>
+<td><code>50000</code></td>
+<td>Maximum point features per tile.</td>
+</tr>
+<tr>
+<td><code>--max-polygon-tile-bytes</code></td>
+<td><code>500000</code></td>
+<td>Maximum compressed bytes per polygon tile.</td>
+</tr>
+<tr>
+<td><code>--max-polygon-tile-features</code></td>
+<td><code>5000</code></td>
+<td>Maximum polygon features per tile.</td>
+</tr>
+<tr>
+<td><code>--coord-scale</code></td>
+<td><code>1.0</code></td>
+<td>Scale applied to input coordinates before tiling.</td>
+</tr>
+<tr>
+<td><code>--prob-thres</code></td>
+<td><code>0.0001</code></td>
+<td>Minimum probability retained for nullable K/P fields.</td>
+</tr>
+<tr>
+<td><code>--scale-factor-compression</code></td>
+<td><code>10.0</code></td>
+<td>Pyramid compression aggressiveness estimate.</td>
+</tr>
+<tr>
+<td><code>--tile-buffer-px</code></td>
+<td><code>5.0</code></td>
+<td>Polygon tile buffer in screen pixels.</td>
+</tr>
+<tr>
+<td><code>--clip-scale</code></td>
+<td><code>1024</code></td>
+<td>Integer scale used for polygon clipping.</td>
+</tr>
+<tr>
+<td><code>--extent</code></td>
+<td><code>4096</code></td>
+<td>Vector tile extent.</td>
+</tr>
+<tr>
+<td><code>--threads</code></td>
+<td><code>1</code></td>
+<td>Number of threads.</td>
+</tr>
+<tr>
+<td><code>--overwrite</code></td>
+<td>false</td>
+<td>Overwrite PMTiles outputs.</td>
+</tr>
+</tbody>
+</table>
 
 
 
