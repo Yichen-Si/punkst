@@ -1946,6 +1946,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--ext-col-ints</code></li>
 <li><code>--ext-col-floats</code></li>
 <li><code>--ext-col-strs</code></li>
+<li><code>--null-other</code></li>
 </ul>
 <p>Each extra-column spec has the form <code>idx[:name[:nullval]]</code>:</p>
 <ul>
@@ -1953,6 +1954,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li>if <code>name</code> is omitted, the query TSV header supplies the property name</li>
 <li>if <code>nullval</code> is provided, that exact token is encoded as null and the property becomes nullable</li>
 </ul>
+<p>Empty tab-delimited fields are preserved when parsing query TSV rows, so later columns do not shift. By default, empty string properties are written as empty strings. Use <code>--null-other NA</code> to replace empty string query properties with a fixed value in PMTiles output.</p>
 <h4 id="merge-annotate-and-package-in-one-pass">Merge, annotate, and package in one pass<a class="headerlink" href="#merge-annotate-and-package-in-one-pass" title="Permanent link">&para;</a></h4>
 <p><code>--merge-emb</code> can be combined with <code>--annotate-pts</code> and PMTiles packaging:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/pixel.smol<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>

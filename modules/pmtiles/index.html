@@ -1268,7 +1268,8 @@
 <li><code>--in</code> or <code>--in-data</code> must point to a point PMTiles archive with <strong>MLT</strong> or <strong>MVT</strong> format</li>
 <li><code>--out</code> specifies the output prefix. The output includes <code>path/prefix.tsv</code> and <code>path/prefix.index</code></li>
 <li><code>--tile-size</code> is required and defines the tile size for the output file (in the original units)</li>
-<li>the data is read from the archive's max-zoom level</li>
+<li>by default, data is read from the archive's max-zoom level</li>
+<li>use <code>--zoom &lt;z&gt;</code> to export a specific PMTiles zoom level; the command errors if the archive has no tiles at that zoom</li>
 <li>output columns are <code>x</code>, <code>y</code>, optional <code>z</code>, then the decoded PMTiles schema columns</li>
 <li>missing <code>K</code> and <code>P</code> values are rendered as <code>-1</code> and <code>0</code>; other nullable fields are rendered as <code>NA</code></li>
 </ul>
@@ -1278,7 +1279,7 @@
 <li><code>--extract-region-geojson</code></li>
 <li><code>--zmin</code>, <code>--zmax</code></li>
 </ul>
-<p>For simple-polygon archives, add <code>--polygon</code>. Polygon export writes only <code>path/prefix.tsv</code>; <code>--tile-size</code> is not required.</p>
+<p>For simple-polygon archives, add <code>--polygon</code>. Polygon export writes only <code>path/prefix.tsv</code>; <code>--tile-size</code> is not required. <code>--zoom</code> is also supported for polygon export.</p>
 <h2 id="write-mono-raster-pmtiles">Write mono raster PMTiles<a class="headerlink" href="#write-mono-raster-pmtiles" title="Permanent link">&para;</a></h2>
 <p><code>punkst tiles2mono</code> writes grayscale PNG raster PMTiles from a tiled transcript/count TSV produced by <code>pts2tiles</code>. It is used by <code>deploy-cartoscope</code> to generate the SGE mono basemap.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>tiles2mono<span class="w"> </span><span class="se">\</span>
