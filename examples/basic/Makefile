@@ -42,7 +42,6 @@ endif
 PUNKST       := {PUNKST}
 TILETSV      := $(DATADIR)/transcripts.tiled.tsv
 TILEINDEX    := $(DATADIR)/transcripts.tiled.index
-COORD_RANGE  := $(DATADIR)/transcripts.tiled.coord_range.tsv
 FEATURES     := $(DATADIR)/transcripts.tiled.features.tsv
 DEFAULT_COLOR_TABLE := $(GITPATH)/ext/py/cmap.256.tsv
 
@@ -50,8 +49,8 @@ DEFAULT_COLOR_TABLE := $(GITPATH)/ext/py/cmap.256.tsv
 REPORTS := \
   $(foreach H,$(HEXGRIDS),\
     $(foreach K,$(TOPICS),\
-      $(DATADIR)/hex_$(H).k$(K).$(PIXEL_SUFFIX).info.html\
-	  $(DATADIR)/hex_$(H).k$(K).$(PIXEL_SUFFIX).png\
+      $(DATADIR)/h$(H).k$(K).$(PIXEL_SUFFIX).info.html\
+	  $(DATADIR)/h$(H).k$(K).$(PIXEL_SUFFIX).png\
     )\
   )
 
@@ -91,19 +90,19 @@ $(foreach H,$(HEXGRIDS),$(eval $(call HEX_RULE,$H)))
 
 # ─── Step 3: for each (K,H) → model.tsv + color.rgb.tsv ──────────────
 define LDA_MODEL_RULE
-$(DATADIR)/hex_$(1).k$(2).model.stamp: \
+$(DATADIR)/h$(1).k$(2).model.stamp: \
     $(DATADIR)/hex_$(1).txt
-	@echo "[3/6] lda4hex (K=$(2), hex=$(1)) → $(DATADIR)/hex_$(1).k$(2).model.tsv"
+	@echo "[3/6] lda4hex (K=$(2), hex=$(1)) → $(DATADIR)/h$(1).k$(2).model.tsv"
 	 $(PUNKST) lda4hex \
 	  --in-data $(DATADIR)/hex_$(1).txt \
 	  --in-meta $(DATADIR)/hex_$(1).json \
 	  --features $(FEATURES) \
 	  --n-topics $(2) --n-epochs $(NEPOCHS) --sort-topics \
-	  --out-prefix $(DATADIR)/hex_$(1).k$(2) --transform \
+	  --out-prefix $(DATADIR)/h$(1).k$(2) --transform \
 	  --min-count-per-feature 100 --min-count-train 50 \
 	  --exclude-feature-regex $(EXCLUDE_FEATURE_REGEX) \
 	  --threads $(THREADS) --seed $(SEED) --n-epochs $(NEPOCHS)
-	touch $(DATADIR)/hex_$(1).k$(2).model.stamp
+	touch $(DATADIR)/h$(1).k$(2).model.stamp
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\
@@ -112,16 +111,16 @@ $(foreach H,$(HEXGRIDS),\
 )
 
 define COLOR_RULE
-$(DATADIR)/hex_$(1).k$(2).color.rgb.tsv: \
-    $(DATADIR)/hex_$(1).k$(2).model.stamp
+$(DATADIR)/h$(1).k$(2).color.rgb.tsv: \
+    $(DATADIR)/h$(1).k$(2).model.stamp
 ifneq ($(filter True true 1 yes YES,$(USE_FIXED_COLOR_TABLE)),)
 	@echo "[3/6] fixed color table (K=$(2), hex=$(1)) → $$@"
 	cp $(DEFAULT_COLOR_TABLE) $$@
 else
 	@echo "[3/6] color_helper (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/color_helper.py \
-	  --input $(DATADIR)/hex_$(1).k$(2).results.tsv \
-	  --output $(DATADIR)/hex_$(1).k$(2).color \
+	  --input $(DATADIR)/h$(1).k$(2).results.tsv \
+	  --output $(DATADIR)/h$(1).k$(2).color \
 	  --cmap-name nipy_spectral \
 	  --seed $(SEED)
 endif
@@ -134,21 +133,21 @@ $(foreach H,$(HEXGRIDS),\
 
 # ─── Step 4: pixel-decode → .tsv + .pseudobulk.tsv ────────────────────
 define PIXEL_RULE
-$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp: \
+$(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp: \
 	$(DATADIR)/prepare.stamp \
-    $(DATADIR)/hex_$(1).k$(2).model.stamp
+    $(DATADIR)/h$(1).k$(2).model.stamp
 	@echo "[4/6] pixel-decode (K=$(2), hex=$(1)) → $$*.tsv"
 	$(PUNKST) pixel-decode \
-	  --model $(DATADIR)/hex_$(1).k$(2).model.tsv \
+	  --model $(DATADIR)/h$(1).k$(2).model.tsv \
 	  --in-tsv $(TILETSV) --in-index $(TILEINDEX) \
 	  --icol-x $(ICOL_X) --icol-y $(ICOL_Y) \
 	  --icol-feature $(ICOL_FEATURE) --icol-val $(ICOL_COUNT) \
 	  --hex-grid-dist $(PIXHEX) --n-moves $(NMOVE) $(PIXEL_RES_ARG) \
 	  $(PIXEL_DECODE_MODE_FLAG) \
 	  --min-init-count 20 \
-	  --out-pref $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX) --output-binary \
+	  --out-pref $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX) --output-binary \
 	  --temp-dir $(TMPDIR) --threads $(THREADS) --seed $(SEED)
-	touch $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp
+	touch $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\
@@ -158,15 +157,15 @@ $(foreach H,$(HEXGRIDS),\
 
 # ─── Step 5: draw-pixel-factors → png ───────────────────────────
 define DRAW_RULE
-$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).png: \
-    $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp \
-    $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv
+$(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).png: \
+    $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp \
+    $(DATADIR)/h$(1).k$(2).color.rgb.tsv
 	@echo "[5/6] draw-pixel-factors (K=$(2), hex=$(1)) → $$@"
 	 $(PUNKST) draw-pixel-factors \
-	  --in $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX) --binary \
-	  --in-color $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv \
+	  --in $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX) --binary \
+	  --in-color $(DATADIR)/h$(1).k$(2).color.rgb.tsv \
 	  --out $$@ \
-	  --range $(COORD_RANGE) --scale $(SCALE)
+	  --scale $(SCALE)
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\
@@ -176,12 +175,12 @@ $(foreach H,$(HEXGRIDS),\
 
 # ─── Step 6: de_bulk + factor_report → final .report ───────────────
 define DE_RULE
-$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv: \
-    $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp
+$(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv: \
+    $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp
 	@echo "[6/6] de_bulk (K=$(2), hex=$(1)) → $$@"
 	$(PUNKST) de-chisq \
-	  --input $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).pseudobulk.tsv \
-	  --out $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
+	  --input $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).pseudobulk.tsv \
+	  --out $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
 	  --threads $(THREADS)
 endef
 $(foreach H,$(HEXGRIDS),\
@@ -191,18 +190,18 @@ $(foreach H,$(HEXGRIDS),\
 )
 
 define REPORT_RULE
-$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).info.html: \
-    $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp \
-	$(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
-    $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv
+$(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).info.html: \
+    $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).decode.stamp \
+	$(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
+    $(DATADIR)/h$(1).k$(2).color.rgb.tsv
 	@echo "[6/6] factor_report (K=$(2), hex=$(1)) → $$@"
 	python $(GITPATH)/ext/py/factor_report.py \
-	  --de $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
-	  --de_neighbor $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.1vsNeighbors.tsv \
-	  --pseudobulk $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX).pseudobulk.tsv \
+	  --de $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.tsv \
+	  --de_neighbor $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).de_bulk.1vsNeighbors.tsv \
+	  --pseudobulk $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX).pseudobulk.tsv \
 	  --feature_label Feature \
-	  --color_table $(DATADIR)/hex_$(1).k$(2).color.rgb.tsv \
-	  --output_pref $(DATADIR)/hex_$(1).k$(2).$(PIXEL_SUFFIX)
+	  --color_table $(DATADIR)/h$(1).k$(2).color.rgb.tsv \
+	  --output_pref $(DATADIR)/h$(1).k$(2).$(PIXEL_SUFFIX)
 endef
 $(foreach H,$(HEXGRIDS),\
   $(foreach K,$(TOPICS),\
@@ -214,9 +213,11 @@ $(foreach H,$(HEXGRIDS),\
 clean:
 	rm -rf $(TMPDIR) \
 	       $(DATADIR)/hex_* \
+	       $(DATADIR)/h*.k* \
 	       $(DATADIR)/k*_hex_*
 clean_all:
 	rm -rf $(TMPDIR) \
 		   $(DATADIR)/transcripts.tiled.* \
 	       $(DATADIR)/hex_* \
+	       $(DATADIR)/h*.k* \
 	       $(DATADIR)/k*_hex_*

@@ -1099,7 +1099,7 @@ DeployInputs load_from_config(const fs::path& configPath) {
             const int32_t hex = h.get<int32_t>();
             const int32_t topics = k.get<int32_t>();
             ModelInputs model;
-            model.sourcePrefix = "hex_" + std::to_string(hex) + ".k" + std::to_string(topics);
+            model.sourcePrefix = "h" + std::to_string(hex) + ".k" + std::to_string(topics);
             model.id = default_model_id(hex, topics, pixelMode);
             model.pixelMode = pixelMode;
             model.hexGridDist = static_cast<double>(hex);
