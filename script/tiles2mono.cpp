@@ -8,6 +8,7 @@
 
 int32_t cmdTiles2Mono(int32_t argc, char** argv) {
     std::string inPrefix;
+    std::string displayTransform = "linear";
     bool noAutoAdjust = false;
     tiles2mono::Options options;
 
@@ -24,6 +25,7 @@ int32_t cmdTiles2Mono(int32_t argc, char** argv) {
       .add_option("max-zoom", "Maximum PMTiles zoom", options.maxZoom)
       .add_option("max-zoom-from-raw", "Parse raw data for zoom levels >= this value; derive lower zooms from parent layers", options.maxZoomFromRaw)
       .add_option("adjust-quantile", "Quantile for draw-xy-compatible auto-adjustment", options.adjustQuantile)
+      .add_option("display-transform", "Display transform for mono raster intensity: linear or log1p", displayTransform)
       .add_option("no-auto-adjust", "Disable draw-xy-compatible intensity auto-adjustment", noAutoAdjust)
       .add_option("threads", "Number of worker threads", options.threads)
       .add_option("out", "Output mono raster PMTiles", options.outFile, true);
@@ -50,6 +52,7 @@ int32_t cmdTiles2Mono(int32_t argc, char** argv) {
     if (noAutoAdjust) {
         options.autoAdjust = false;
     }
+    options.displayTransform = tiles2mono::parse_display_transform(displayTransform);
     if (options.rangeFile.empty()) {
         std::string prefix = options.dataFile;
         constexpr const char* suffix = ".tsv";

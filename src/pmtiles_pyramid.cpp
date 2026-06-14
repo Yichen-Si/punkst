@@ -488,6 +488,42 @@ pm_vector::PropertyColumn coerce_property_column(pm_vector::PropertyColumn&& src
         return out;
     }
 
+    if (srcType == pm_vector::ScalarType::STRING &&
+        targetCol.type == pm_vector::ScalarType::FLOAT) {
+        out.floatValues.reserve(rowCount);
+        for (size_t i = 0; i < rowCount; ++i) {
+            if (!out.present[i]) {
+                out.floatValues.push_back(0.0f);
+                continue;
+            }
+            float value = 0.0f;
+            if (!str2float(src.stringValues[i], value)) {
+                error("%s: cannot coerce MVT column %s string value '%s' to FLOAT",
+                    __func__, targetCol.name.c_str(), src.stringValues[i].c_str());
+            }
+            out.floatValues.push_back(value);
+        }
+        return out;
+    }
+
+    if (srcType == pm_vector::ScalarType::STRING &&
+        targetCol.type == pm_vector::ScalarType::INT_32) {
+        out.intValues.reserve(rowCount);
+        for (size_t i = 0; i < rowCount; ++i) {
+            if (!out.present[i]) {
+                out.intValues.push_back(0);
+                continue;
+            }
+            int32_t value = 0;
+            if (!str2int32(src.stringValues[i], value)) {
+                error("%s: cannot coerce MVT column %s string value '%s' to INT_32",
+                    __func__, targetCol.name.c_str(), src.stringValues[i].c_str());
+            }
+            out.intValues.push_back(value);
+        }
+        return out;
+    }
+
     if (targetCol.type == pm_vector::ScalarType::STRING) {
         out.stringValues.reserve(rowCount);
         for (size_t i = 0; i < rowCount; ++i) {
@@ -2457,7 +2493,8 @@ void finalize_pyramid_archive(const pm_core::LoadedPmtilesArchive& archive,
     uint8_t maxZoom,
     const std::string& generator,
     TempStores& stores,
-    std::vector<pm_core::StoredTilePayloadRef> allTileRefs) {
+    std::vector<pm_core::StoredTilePayloadRef> allTileRefs,
+    bool quiet) {
     pm_core::ArchiveOptions archiveOptions;
     archiveOptions.tileType = archive.header.tile_type;
     archiveOptions.minZoom = minZoom;
@@ -2476,8 +2513,10 @@ void finalize_pyramid_archive(const pm_core::LoadedPmtilesArchive& archive,
     archiveOptions.metadata = build_pyramid_metadata(
         archive.metadata, outPmtiles, minZoom, maxZoom, generator);
 
-    notice("%s: writing %zu total tiles to %s",
-        __func__, allTileRefs.size(), outPmtiles.c_str());
+    if (!quiet) {
+        notice("%s: writing %zu total tiles to %s",
+            __func__, allTileRefs.size(), outPmtiles.c_str());
+    }
     close(stores.blobFd);
     stores.blobFd = -1;
     close(stores.priorityFd);
@@ -2514,18 +2553,22 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         existingMinZoom = std::min(existingMinZoom, entry.z);
     }
     if (existingMinZoom <= minZoom) {
-        warning("%s: input already contains zoom levels down to z%u, which is <= requested min zoom z%u; nothing to do",
-            __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom));
+        if (!options.quiet) {
+            warning("%s: input already contains zoom levels down to z%u, which is <= requested min zoom z%u; nothing to do",
+                __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom));
+        }
         return;
     }
     TempStores stores = open_temp_stores(outPmtiles);
-    if (minZoom != options.minZoom) {
+    if (!options.quiet && minZoom != options.minZoom) {
         notice("%s: clamped requested min zoom %d to %u",
             __func__, options.minZoom, static_cast<unsigned>(minZoom));
     }
 
-    notice("%s: building point PMTiles pyramid from existing z%u down to z%u with %d thread(s)",
-        __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom), threads);
+    if (!options.quiet) {
+        notice("%s: building point PMTiles pyramid from existing z%u down to z%u with %d thread(s)",
+            __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom), threads);
+    }
 
     pm_vector::FeatureTableSchema schema;
     bool haveSchema = false;
@@ -2581,7 +2624,9 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         z >= static_cast<int32_t>(minZoom); --z) {
         const std::vector<ParentBuildInput> parents = enumerate_parent_tiles(currentLevel);
         if (parents.empty()) {
-            notice("%s: no parent tiles found at z%d; stopping early", __func__, z);
+            if (!options.quiet) {
+                notice("%s: no parent tiles found at z%d; stopping early", __func__, z);
+            }
             break;
         }
 
@@ -2611,8 +2656,10 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         }
         const double levelRatio = std::min(ratioFeatures, ratioBytes);
 
-        notice("%s: z%d parent pass: %zu tiles, max_raw=%u, max_estimated=%zu, level_ratio=%.6f",
-            __func__, z, candidates.size(), maxRawFeatures, maxEstimatedBytes, levelRatio);
+        if (!options.quiet) {
+            notice("%s: z%d parent pass: %zu tiles, max_raw=%u, max_estimated=%zu, level_ratio=%.6f",
+                __func__, z, candidates.size(), maxRawFeatures, maxEstimatedBytes, levelRatio);
+        }
 
         std::vector<std::optional<pm_core::StoredTilePayloadRef>> nextLevel(candidates.size());
         parallel_for_tiles(candidates.size(), threads, [&](size_t i) {
@@ -2650,13 +2697,15 @@ void build_point_pmtiles_pyramid(const std::string& inPmtiles,
         for (const auto& tile : currentLevel) {
             levelFeatureCount += tile.featureCount;
         }
-        notice("%s: z%d wrote %zu tiles with %llu retained features",
-            __func__, z, currentLevel.size(),
-            static_cast<unsigned long long>(levelFeatureCount));
+        if (!options.quiet) {
+            notice("%s: z%d wrote %zu tiles with %llu retained features",
+                __func__, z, currentLevel.size(),
+                static_cast<unsigned long long>(levelFeatureCount));
+        }
     }
 
     finalize_pyramid_archive(archive, outPmtiles, minZoom, maxZoom,
-        "punkst build-pyramid --point", stores, std::move(allTileRefs));
+        "punkst build-pyramid --point", stores, std::move(allTileRefs), options.quiet);
 }
 
 void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
@@ -2683,18 +2732,22 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         existingMinZoom = std::min(existingMinZoom, entry.z);
     }
     if (existingMinZoom <= minZoom) {
-        warning("%s: input already contains zoom levels down to z%u, which is <= requested min zoom z%u; nothing to do",
-            __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom));
+        if (!options.quiet) {
+            warning("%s: input already contains zoom levels down to z%u, which is <= requested min zoom z%u; nothing to do",
+                __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom));
+        }
         return;
     }
     TempStores stores = open_temp_stores(outPmtiles);
-    if (minZoom != options.minZoom) {
+    if (!options.quiet && minZoom != options.minZoom) {
         notice("%s: clamped requested min zoom %d to %u",
             __func__, options.minZoom, static_cast<unsigned>(minZoom));
     }
 
-    notice("%s: building polygon PMTiles pyramid from existing z%u down to z%u with %d thread(s)",
-        __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom), threads);
+    if (!options.quiet) {
+        notice("%s: building polygon PMTiles pyramid from existing z%u down to z%u with %d thread(s)",
+            __func__, static_cast<unsigned>(existingMinZoom), static_cast<unsigned>(minZoom), threads);
+    }
 
     pm_vector::FeatureTableSchema schema;
     PolygonSourceDescriptor sourceDescriptor;
@@ -2805,7 +2858,9 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         z >= static_cast<int32_t>(minZoom); --z) {
         const std::vector<ParentBuildInput> parents = enumerate_parent_tiles(currentLevel);
         if (parents.empty()) {
-            notice("%s: no parent tiles found at z%d; stopping early", __func__, z);
+            if (!options.quiet) {
+                notice("%s: no parent tiles found at z%d; stopping early", __func__, z);
+            }
             break;
         }
 
@@ -2839,8 +2894,10 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         }
         const double levelRatio = std::min(ratioFeatures, ratioBytes);
 
-        notice("%s: z%d polygon parent pass: %zu tiles, max_raw=%u, max_estimated=%zu, level_ratio=%.6f",
-            __func__, z, candidates.size(), maxRawFeatures, maxEstimatedBytes, levelRatio);
+        if (!options.quiet) {
+            notice("%s: z%d polygon parent pass: %zu tiles, max_raw=%u, max_estimated=%zu, level_ratio=%.6f",
+                __func__, z, candidates.size(), maxRawFeatures, maxEstimatedBytes, levelRatio);
+        }
 
         std::vector<std::optional<pm_core::StoredTilePayloadRef>> nextLevel(candidates.size());
         parallel_for_tiles(candidates.size(), threads, [&](size_t i) {
@@ -2878,9 +2935,11 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
         for (const auto& tile : currentLevel) {
             levelFeatureCount += tile.featureCount;
         }
-        notice("%s: z%d wrote %zu polygon tiles with %llu retained features",
-            __func__, z, currentLevel.size(),
-            static_cast<unsigned long long>(levelFeatureCount));
+        if (!options.quiet) {
+            notice("%s: z%d wrote %zu polygon tiles with %llu retained features",
+                __func__, z, currentLevel.size(),
+                static_cast<unsigned long long>(levelFeatureCount));
+        }
         if (droppedDegenerate > 0 || repairedMultipolygon > 0) {
             warning("%s: z%d encountered problematic polygons (dropped_degenerate=%llu, repaired_multipolygon=%llu)",
                 __func__, z,
@@ -2890,7 +2949,7 @@ void build_polygon_pmtiles_pyramid(const std::string& inPmtiles,
     }
 
     finalize_pyramid_archive(archive, outPmtiles, minZoom, maxZoom,
-        "punkst build-pyramid --polygon", stores, std::move(allTileRefs));
+        "punkst build-pyramid --polygon", stores, std::move(allTileRefs), options.quiet);
 }
 
 void build_mixed_pmtiles_pyramid(const std::string& pointPmtiles,

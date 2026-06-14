@@ -22,6 +22,7 @@
 #include <set>
 #include <sstream>
 #include <cstring>
+#include <future>
 #include <functional>
 #include <tuple>
 
@@ -95,6 +96,7 @@ struct ModelInputs {
     fs::path deTsv;
     CellInputs cell;
     bool pixelPngExplicit = false;
+    bool skipHexPmtiles = false;
 };
 
 struct DeployInputs {
@@ -1569,8 +1571,18 @@ DeployInputs load_from_input_json(const fs::path& inputJson) {
         if (is_cell_only_model(model)) {
             parse_cell_fields(m, model.cell, false, true);
         } else {
-            model.hexGridDist = m.at("hex_grid_dist").get<double>();
-            model.resultsTsv = resolve_path(base, m.at("results_tsv").get<std::string>());
+            model.skipHexPmtiles = m.value("skip_hex_pmtiles", m.value("skip_hex", false));
+            if (!model.skipHexPmtiles) {
+                model.hexGridDist = m.at("hex_grid_dist").get<double>();
+                model.resultsTsv = resolve_path(base, m.at("results_tsv").get<std::string>());
+            } else {
+                if (m.contains("hex_grid_dist") && !m.at("hex_grid_dist").is_null()) {
+                    model.hexGridDist = m.at("hex_grid_dist").get<double>();
+                }
+                if (m.contains("results_tsv") && !m.at("results_tsv").is_null()) {
+                    model.resultsTsv = resolve_path(base, m.at("results_tsv").get<std::string>());
+                }
+            }
             model.modelTsv = resolve_path(base, m.at("model_tsv").get<std::string>());
             model.colorRgbTsv = resolve_path(base, m.at("color_rgb_tsv").get<std::string>());
             model.pixelPrefix = resolve_path(base, m.at("pixel_prefix").get<std::string>());
@@ -1656,7 +1668,9 @@ void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMod
             continue;
         }
         hasDefaultModel = true;
-        require_file(model.resultsTsv, "model results TSV");
+        if (!model.skipHexPmtiles) {
+            require_file(model.resultsTsv, "model results TSV");
+        }
         require_file(model.modelTsv, "model TSV");
         require_file(model.colorRgbTsv, "color RGB TSV");
         require_file(model.pixelPrefix.string() + ".bin", "pixel decode binary");
@@ -1672,7 +1686,7 @@ void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMod
         }
         require_file(model.pseudobulkTsv, "pseudobulk TSV");
         require_file(model.deTsv, "bulk DE TSV");
-        if (model.hexGridDist <= 0.0) {
+        if (!model.skipHexPmtiles && model.hexGridDist <= 0.0) {
             error("%s: model %s has non-positive hex_grid_dist", __func__, model.id.c_str());
         }
         if (hasCell) {
@@ -1750,7 +1764,7 @@ const ModelInputs& first_default_model(const std::vector<ModelInputs>& models) {
 
 void build_pyramid_inplace(const fs::path& pmtilesPath, const fs::path& tmpDir,
     bool pointMode, int32_t minZoom, int32_t maxTileBytes, int32_t maxTileFeatures,
-    double compressionScale, int32_t threads) {
+    double compressionScale, int32_t threads, bool quiet = false) {
     fs::path tmpOut = tmpDir / (pmtilesPath.filename().string() + ".pyramid.pmtiles");
     pmtiles_pyramid::BuildOptions options;
     options.minZoom = minZoom;
@@ -1758,6 +1772,7 @@ void build_pyramid_inplace(const fs::path& pmtilesPath, const fs::path& tmpDir,
     options.maxTileFeatures = maxTileFeatures;
     options.scaleFactorCompression = compressionScale;
     options.threads = threads;
+    options.quiet = quiet;
     if (pointMode) {
         pmtiles_pyramid::build_point_pmtiles_pyramid(pmtilesPath.string(), tmpOut.string(), options);
     } else {
@@ -1778,26 +1793,67 @@ void build_pyramid_inplace(const fs::path& pmtilesPath, const fs::path& tmpDir,
     }
 }
 
+bool point_pyramid_needed(const fs::path& pmtilesPath, int32_t minZoom, int32_t maxZoom) {
+    pm_core::LoadedPmtilesArchive archive =
+        pm_core::load_pmtiles_archive(pmtilesPath.string());
+    if (static_cast<int32_t>(archive.header.max_zoom) < maxZoom) {
+        error("%s: existing %s has max zoom %u but deployment requested point max zoom %d; use --overwrite to regenerate point PMTiles",
+            __func__, pmtilesPath.string().c_str(),
+            static_cast<unsigned>(archive.header.max_zoom), maxZoom);
+    }
+    return static_cast<int32_t>(archive.header.min_zoom) > minZoom;
+}
+
+bool is_genes_all_pmtiles(const fs::path& pmtilesPath) {
+    return pmtilesPath.filename().string() == "genes_all.pmtiles";
+}
+
 void ensure_point_pyramids(const std::vector<std::string>& pointPmtiles,
     const fs::path& tmpDir, int32_t minZoom, int32_t maxZoom,
     int32_t maxTileBytes, int32_t maxTileFeatures,
     double compressionScale, int32_t threads) {
+    std::vector<fs::path> geneBinPmtiles;
     for (const std::string& pmtilesPathString : pointPmtiles) {
         const fs::path pmtilesPath(pmtilesPathString);
-        pm_core::LoadedPmtilesArchive archive =
-            pm_core::load_pmtiles_archive(pmtilesPath.string());
-        if (static_cast<int32_t>(archive.header.max_zoom) < maxZoom) {
-            error("%s: existing %s has max zoom %u but deployment requested point max zoom %d; use --overwrite to regenerate point PMTiles",
-                __func__, pmtilesPath.string().c_str(),
-                static_cast<unsigned>(archive.header.max_zoom), maxZoom);
-        }
-        if (static_cast<int32_t>(archive.header.min_zoom) <= minZoom) {
+        if (!point_pyramid_needed(pmtilesPath, minZoom, maxZoom)) {
             continue;
         }
-        notice("%s: %s does not cover zoom range %d..%d; building point pyramid in place",
-            __func__, pmtilesPath.string().c_str(), minZoom, maxZoom);
-        build_pyramid_inplace(pmtilesPath, tmpDir, true, minZoom,
-            maxTileBytes, maxTileFeatures, compressionScale, threads);
+        if (is_genes_all_pmtiles(pmtilesPath)) {
+            notice("%s: building point pyramid for %s with %d thread(s)",
+                __func__, pmtilesPath.filename().string().c_str(), threads);
+            build_pyramid_inplace(pmtilesPath, tmpDir, true, minZoom,
+                maxTileBytes, maxTileFeatures, compressionScale, threads, true);
+            notice("%s: finished point pyramid for %s",
+                __func__, pmtilesPath.filename().string().c_str());
+        } else {
+            geneBinPmtiles.push_back(pmtilesPath);
+        }
+    }
+
+    if (geneBinPmtiles.empty()) {
+        return;
+    }
+    const size_t maxConcurrent = static_cast<size_t>(
+        std::max<int32_t>(1, std::min<int32_t>(threads, static_cast<int32_t>(geneBinPmtiles.size()))));
+    notice("%s: building %zu gene-bin point pyramids with up to %zu concurrent single-thread job(s)",
+        __func__, geneBinPmtiles.size(), maxConcurrent);
+    for (size_t begin = 0; begin < geneBinPmtiles.size(); begin += maxConcurrent) {
+        const size_t end = std::min(geneBinPmtiles.size(), begin + maxConcurrent);
+        std::vector<std::future<fs::path>> futures;
+        futures.reserve(end - begin);
+        for (size_t i = begin; i < end; ++i) {
+            const fs::path pmtilesPath = geneBinPmtiles[i];
+            futures.push_back(std::async(std::launch::async, [=]() {
+                build_pyramid_inplace(pmtilesPath, tmpDir, true, minZoom,
+                    maxTileBytes, maxTileFeatures, compressionScale, 1, true);
+                return pmtilesPath;
+            }));
+        }
+        for (auto& future : futures) {
+            const fs::path finished = future.get();
+            notice("%s: finished gene-bin point pyramid for %s",
+                __func__, finished.filename().string().c_str());
+        }
     }
 }
 
@@ -2049,20 +2105,24 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     int32_t polygonMinZoom = 10;
     int32_t polygonMaxZoom = 18;
     int32_t nGeneBins = 50;
+    uint64_t geneBinTargetMolecules = 1000000;
     int32_t threads = 4;
-    int32_t maxPointTileBytes = 500000;
-    int32_t maxPointTileFeatures = 50000;
-    int32_t maxPolygonTileBytes = 500000;
-    int32_t maxPolygonTileFeatures = 5000;
-    int32_t basemapMinZoom = 0;
+    int32_t maxPointTileBytes = pmtiles_pyramid::DEFAULT_POINT_MAX_TILE_BYTES;
+    int32_t maxPointTileFeatures = pmtiles_pyramid::DEFAULT_POINT_MAX_TILE_FEATURES;
+    int32_t maxPolygonTileBytes = pmtiles_pyramid::DEFAULT_POLYGON_MAX_TILE_BYTES;
+    int32_t maxPolygonTileFeatures = pmtiles_pyramid::DEFAULT_POLYGON_MAX_TILE_FEATURES;
+    int32_t basemapMinZoom = 7;
     int32_t basemapMaxZoom = -1;
     int32_t monoMaxZoomFromRaw = -1;
     double compressionScale = 10.0;
+    double geneBinSingletonRatio = 1.0;
     double hexProbThreshold = 0.001;
     double basemapAdjustQuantile = 0.99;
     bool overwrite = false;
     bool usePng = false;
     bool skipBasemap = false;
+    std::string geneBinMode = "adaptive";
+    std::string basemapDisplayTransform = "linear";
     std::string nullStr;
 
     ParamList pl;
@@ -2078,7 +2138,10 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
       .add_option("point-max-zoom", "Maximum zoom for transcript PMTiles export", pointMaxZoom)
       .add_option("polygon-min-zoom", "Minimum zoom for hex PMTiles pyramids", polygonMinZoom)
       .add_option("polygon-max-zoom", "Maximum zoom for hex PMTiles export", polygonMaxZoom)
-      .add_option("n-gene-bins", "Number of gene bins for transcript PMTiles", nGeneBins)
+      .add_option("n-gene-bins", "Maximum number of gene bins for transcript PMTiles in adaptive mode", nGeneBins)
+      .add_option("gene-bin-mode", "Gene-bin packing mode: adaptive or fixed", geneBinMode)
+      .add_option("gene-bin-target-molecules", "Target molecules per adaptive gene bin", geneBinTargetMolecules)
+      .add_option("gene-bin-singleton-ratio", "Adaptive singleton threshold as a multiple of target molecules", geneBinSingletonRatio)
       .add_option("threads", "Number of threads", threads)
       .add_option("max-point-tile-bytes", "Maximum compressed bytes per point tile", maxPointTileBytes)
       .add_option("max-point-tile-features", "Maximum features per point tile", maxPointTileFeatures)
@@ -2088,6 +2151,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
       .add_option("basemap-max-zoom", "Maximum zoom for SGE mono basemap PMTiles (default: point max zoom)", basemapMaxZoom)
       .add_option("mono-max-zoom-from-raw", "Parse raw data for SGE mono basemap zoom levels >= this value; derive lower zooms from parent layers", monoMaxZoomFromRaw)
       .add_option("basemap-adjust-quantile", "Quantile for SGE mono basemap density auto-adjustment", basemapAdjustQuantile)
+      .add_option("basemap-display-transform", "Display transform for SGE mono basemap intensity: linear or log1p", basemapDisplayTransform)
       .add_option("scale-factor-compression", "Pyramid compression aggressiveness estimate", compressionScale)
       .add_option("hex-prob-thres", "Minimum hex factor probability retained", hexProbThreshold)
       .add_option("null-str", "Replace empty string query properties with this placeholder in transcript PMTiles packaging", nullStr)
@@ -2114,12 +2178,15 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     if (nGeneBins <= 0) {
         error("%s: --n-gene-bins must be positive", __func__);
     }
+    parse_gene_bin_mode(geneBinMode);
     if (basemapMaxZoom < 0) {
         basemapMaxZoom = pointMaxZoom;
     }
     if (basemapMinZoom < 0 || basemapMaxZoom < basemapMinZoom || basemapMaxZoom > 30) {
         error("%s: invalid basemap zoom range %d..%d", __func__, basemapMinZoom, basemapMaxZoom);
     }
+    const tiles2mono::DisplayTransform monoDisplayTransform =
+        tiles2mono::parse_display_transform(basemapDisplayTransform);
 
     fs::path outRoot(outDir);
     fs::path tmpDir = outRoot / "tmp";
@@ -2175,6 +2242,9 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             "--pmtiles-zoom", std::to_string(pointMaxZoom),
             "--feature-count-file", inputs.transcripts.featureCountTsv.string(),
             "--n-gene-bins", std::to_string(nGeneBins),
+            "--gene-bin-mode", geneBinMode,
+            "--gene-bin-target-molecules", std::to_string(geneBinTargetMolecules),
+            "--gene-bin-singleton-ratio", fp_to_string(geneBinSingletonRatio, 6),
             "--out", genesPrefix.string(),
             "--threads", std::to_string(threads)
         };
@@ -2246,6 +2316,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             monoOptions.maxZoomFromRaw = monoMaxZoomFromRaw;
             monoOptions.threads = threads;
             monoOptions.adjustQuantile = basemapAdjustQuantile;
+            monoOptions.displayTransform = monoDisplayTransform;
             monoOptions.bounds = rasterBounds;
             tiles2mono::write_tiles2mono_pmtiles(monoOptions);
         }
@@ -2256,25 +2327,33 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             continue;
         }
         fs::path hexPmtiles = outRoot / (model.id + ".pmtiles");
-        if (!overwrite && file_exists(hexPmtiles)) {
-            notice("%s: %s already exists; skipping hex PMTiles packaging", __func__, hexPmtiles.string().c_str());
+        if (model.skipHexPmtiles) {
+            notice("%s: skipping hex PMTiles packaging for model %s", __func__, model.id.c_str());
         } else {
-            fs::path resultsForPmtiles = prepare_hex_results_with_topk(model, tmpDir);
-            std::vector<std::string> hexArgs = {
-                "poly2pmtiles",
-                "--in-tsv", resultsForPmtiles.string(),
-                "--out", hexPmtiles.string(),
-                "--format", pmtilesFormat,
-                "--hex-grid-dist", fp_to_string(model.hexGridDist, 6),
-                "--pmtiles-zoom", std::to_string(polygonMaxZoom),
-                "--prob-thres", fp_to_string(hexProbThreshold, 8),
-                "--threads", std::to_string(threads)
-            };
-            if (call_command(hexArgs, cmdPoly2Pmtiles) != 0) {
-                error("%s: poly2pmtiles failed for model %s", __func__, model.id.c_str());
+            if (!overwrite && file_exists(hexPmtiles)) {
+                notice("%s: %s already exists; skipping hex PMTiles packaging", __func__, hexPmtiles.string().c_str());
+            } else {
+                fs::path resultsForPmtiles = prepare_hex_results_with_topk(model, tmpDir);
+                std::vector<std::string> hexArgs = {
+                    "poly2pmtiles",
+                    "--in-tsv", resultsForPmtiles.string(),
+                    "--out", hexPmtiles.string(),
+                    "--format", pmtilesFormat,
+                    "--hex-grid-dist", fp_to_string(model.hexGridDist, 6),
+                    "--pmtiles-zoom", std::to_string(polygonMaxZoom),
+                    "--prob-thres", fp_to_string(hexProbThreshold, 8),
+                    "--threads", std::to_string(threads)
+                };
+                if (call_command(hexArgs, cmdPoly2Pmtiles) != 0) {
+                    error("%s: poly2pmtiles failed for model %s", __func__, model.id.c_str());
+                }
+                notice("%s: building polygon pyramid for %s with %d thread(s)",
+                    __func__, hexPmtiles.filename().string().c_str(), threads);
+                build_pyramid_inplace(hexPmtiles, tmpDir, false, polygonMinZoom,
+                    maxPolygonTileBytes, maxPolygonTileFeatures, compressionScale, threads, true);
+                notice("%s: finished polygon pyramid for %s",
+                    __func__, hexPmtiles.filename().string().c_str());
             }
-            build_pyramid_inplace(hexPmtiles, tmpDir, false, polygonMinZoom,
-                maxPolygonTileBytes, maxPolygonTileFeatures, compressionScale, threads);
         }
 
         fs::path rasterPmtiles = outRoot / (model.id + "-pixel-raster.pmtiles");
@@ -2324,10 +2403,12 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
             asset["alias"] = model.id + "-alias.tsv";
         }
         asset["pmtiles"] = {
-            {"hex", model.id + ".pmtiles"},
             {"raster", model.id + "-pixel-raster.pmtiles"},
             {"raw_pixel", rawPixelPmtilesName}
         };
+        if (!model.skipHexPmtiles) {
+            asset["pmtiles"]["hex"] = model.id + ".pmtiles";
+        }
         if (has_cell_pmtiles_or_sources(model.cell)) {
             json cellPmtiles = deploy_cell_pmtiles(model.cell, outRoot, pmtilesFormat,
                 polygonMinZoom, polygonMaxZoom,

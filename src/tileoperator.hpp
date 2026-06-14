@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <unordered_map>
@@ -59,6 +60,9 @@ public:
         double encode_prob_min = 1e-4;
         double encode_prob_eps = 1e-6;
         int32_t n_gene_bins = 0;
+        uint64_t gene_bin_target_molecules = 1000000;
+        double gene_bin_singleton_ratio = 1.0;
+        std::string gene_bin_mode = "adaptive";
         int32_t zoom = -1;
     };
 

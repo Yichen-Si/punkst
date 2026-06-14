@@ -5,6 +5,7 @@
 - [Export point-only PMTiles as TSV](#export-pmtiles-as-tsv)
 - [Write mono raster PMTiles from tiled counts](#write-mono-raster-pmtiles)
 - [Write single-level polygon-only PMTiles](#write-single-zoom-polygon-pmtiles)
+- [Write generic polygon PMTiles from arbitrary properties](#write-generic-polygon-pmtiles-from-arbitrary-properties)
 - [Build PMTiles pyramids](#build-pmtiles-pyramids)
 
 Point and simple-polygon PMTiles support both [MLT](https://maplibre.org/maplibre-tile-spec/) and MVT.
@@ -50,8 +51,9 @@ For simple-polygon archives, add `--polygon`. Polygon export writes only `path/p
 ```bash
 punkst tiles2mono \
   --in path/transcripts.tiled \
-  --min-zoom 0 \
+  --min-zoom 7 \
   --max-zoom 18 \
+  --display-transform linear \
   --out path/sge-mono-dark.pmtiles \
   --threads 4
 ```
@@ -62,7 +64,8 @@ Options:
 - `--icol-x`, `--icol-y`, and `--icol-count` select the 0-based x, y, and count columns (defaults: `0`, `1`, `3`)
 - `--min-zoom` and `--max-zoom` set the raster PMTiles zoom range
 - `--adjust-quantile` controls per-zoom density auto-adjustment (default: `0.99`); use `--no-auto-adjust` to write capped raw count intensities
-- by default, raw data is parsed only for `--max-zoom`; lower zoom levels are derived by summing child pixels into parent pixels with the same 255 saturation cap
+- `--display-transform` controls the final grayscale mapping after auto-adjustment: `linear` (default) or `log1p`
+- by default, raw data is parsed only for `--max-zoom`; lower zoom levels are derived by summing child pixels into parent pixels while preserving full count dynamic range until final PNG encoding
 - `--max-zoom-from-raw` parses raw data for zooms greater than or equal to the given value, then derives lower zooms from parent layers; set it to `--min-zoom` to parse every zoom from raw data
 
 ## Write single-zoom polygon PMTiles
@@ -171,6 +174,51 @@ Boundary behavior:
 - `--no-duplication` is mainly useful when polygons are much smaller than the tile size
 
 For CartoScope cell-level PMTiles and deployment packaging, see [Deploy punkst results to CartoScope](../workflows/deploy_carto.md#write-cell-level-pmtiles-for-cartoscope).
+
+## Write generic polygon PMTiles from arbitrary properties
+
+`punkst poly2pmtiles-generic` writes a single-zoom polygon PMTiles archive from
+an arbitrary property TSV plus polygon geometry. It reuses the same simple
+polygon geometry reader and clipping behavior as `poly2pmtiles`, but does not
+interpret the input as factor probabilities.
+
+```bash
+punkst poly2pmtiles-generic \
+  --in-tsv cell_stats.tsv \
+  --id-col cell_id \
+  --in-geom cell_boundaries.tsv \
+  --g-icol-id 0 --g-icol-x 1 --g-icol-y 2 --g-icol-order 3 \
+  --string-cols cell_name,cell_type \
+  --int-cols cluster \
+  --float-cols residual,cosine_sim,entropy \
+  --format MVT \
+  --pmtiles-zoom 18 \
+  --layer-name cell_boundaries \
+  --out cell_stats.z18.pmtiles
+```
+
+The input TSV must have a header. `--id-col` names the column used to join rows
+to geometry records. The same ID is also written as a string property so that
+`build-pyramid --polygon-id-col <id-col>` can reconstruct lower zoom levels from
+the original geometry source.
+
+Property columns are explicit:
+
+- `--string-cols`, `--int-cols`, and `--float-cols` accept repeated values or comma-separated names.
+- Missing values (`""`, `NA`, `NaN`, `nan`, `NULL`, `null`) are written as nullable properties.
+- The output supports both `--format MVT` and `--format MLT`; MVT is the browser-oriented choice.
+
+After writing the single-zoom archive, build a pyramid with:
+
+```bash
+punkst build-pyramid \
+  --polygon-in cell_stats.z18.pmtiles \
+  --polygon-source cell_boundaries.tsv \
+  --polygon-id-col cell_id \
+  --icol-id 0 --icol-x 1 --icol-y 2 --icol-order 3 \
+  --min-zoom 10 \
+  --out cell_stats.pmtiles
+```
 
 ## Build PMTiles pyramids
 

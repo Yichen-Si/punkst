@@ -111,6 +111,8 @@ You can add more than one model entry, each with a different `id`.
 
 When `pseudobulk_tsv` is omitted, it is assumed to be `<pixel_prefix>.pseudobulk.tsv`.
 
+Set `skip_hex_pmtiles: true` on a default model to package only pixel raster and raw-pixel assets for that model. In this mode `results_tsv` and `hex_grid_dist` may be omitted, and the generated catalog will not include a `pmtiles.hex` entry for the model.
+
 If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different `id` values. The entries can reuse the same `results_tsv`, `model_tsv`, and `color_rgb_tsv` while pointing to different pixel prefixes, pseudobulk tables, and DE tables.
 
 #### Add cell-level results and cell boundaries
@@ -257,16 +259,20 @@ You can also replace `"boundaries"` with prebuilt PMTiles directly through
 | `--point-max-zoom` | `18` | Maximum zoom for transcript PMTiles export. |
 | `--polygon-min-zoom` | `10` | Minimum zoom for hex and cell PMTiles pyramids. |
 | `--polygon-max-zoom` | `18` | Maximum zoom for hex and cell PMTiles export. |
-| `--n-gene-bins` | `50` | Number of gene bins for transcript PMTiles. |
+| `--n-gene-bins` | `50` | Maximum number of gene bins for transcript PMTiles in adaptive mode. |
+| `--gene-bin-mode` | `adaptive` | Gene-bin packing mode: `adaptive` or `fixed`. Use `fixed` for legacy contiguous count buckets. |
+| `--gene-bin-target-molecules` | `1000000` | Target molecules per adaptive gene bin. |
+| `--gene-bin-singleton-ratio` | `1.0` | Put genes with counts at least this multiple of the target into singleton bins when capacity allows. |
 | `--threads` | `4` | Number of threads. |
-| `--max-point-tile-bytes` | `500000` | Maximum compressed bytes per point tile. |
+| `--max-point-tile-bytes` | `5000000` | Maximum compressed bytes per point tile. |
 | `--max-point-tile-features` | `50000` | Maximum features per point tile. |
 | `--max-polygon-tile-bytes` | `500000` | Maximum compressed bytes per polygon tile. |
 | `--max-polygon-tile-features` | `5000` | Maximum features per polygon tile. |
-| `--basemap-min-zoom` | `0` | Minimum zoom for SGE mono basemap PMTiles. |
+| `--basemap-min-zoom` | `7` | Minimum zoom for SGE mono basemap PMTiles. |
 | `--basemap-max-zoom` | `--point-max-zoom` | Maximum zoom for SGE mono basemap PMTiles. |
 | `--mono-max-zoom-from-raw` | `--basemap-max-zoom` | Parse raw data for SGE mono basemap zoom levels greater than or equal to this value; derive lower zooms from parent layers. |
 | `--basemap-adjust-quantile` | `0.99` | Quantile for SGE mono basemap density auto-adjustment. |
+| `--basemap-display-transform` | `linear` | Display transform for SGE mono basemap intensity: `linear` or `log1p`. |
 | `--scale-factor-compression` | `10.0` | Pyramid compression aggressiveness estimate. |
 | `--hex-prob-thres` | `0.001` | Minimum hex factor probability retained. |
 | `--null-str` | none | Replace empty string query properties with this placeholder in transcript PMTiles packaging. If omitted, empty strings are preserved. |
@@ -325,14 +331,15 @@ Cell PMTiles generated from source inputs are also written at `--polygon-max-zoo
 The mono SGE basemap is written as PNG raster PMTiles (disable with `--skip-basemap`). Its zoom range and density scaling are controlled separately from vector PMTiles:
 
 ```bash
---basemap-min-zoom 0
+--basemap-min-zoom 7
 --basemap-max-zoom 18
 --mono-max-zoom-from-raw 18
 --basemap-adjust-quantile 0.99
+--basemap-display-transform linear
 ```
 If `--basemap-max-zoom` is omitted, it defaults to `--point-max-zoom`.
 
-By default, the basemap (transcript density) parses raw transcript counts only at `--basemap-max-zoom` and derives lower zooms by summing parent layers. Use `--mono-max-zoom-from-raw` to parse raw data for zooms greater than or equal to that value.
+By default, the basemap (transcript density) parses raw transcript counts only at `--basemap-max-zoom` and derives lower zooms by summing parent layers. The lazy lower-zoom path preserves full accumulated counts until final PNG encoding. Use `--mono-max-zoom-from-raw` to parse raw data for zooms greater than or equal to that value, and use `--basemap-display-transform log1p` to compress high-density regions while preserving visible heterogeneity.
 
 ## Write cell-level PMTiles separately
 
@@ -399,7 +406,7 @@ When `--boundary-format` is left as `auto`, `cells2pmtiles` infers JSON/GeoJSON 
 | `--boundary-id-prop` | `cell_id` | Cell ID property in boundary GeoJSON features. |
 | `--min-zoom` | `10` | Minimum zoom for pyramids. |
 | `--max-zoom` | `18` | Maximum zoom for initial export. |
-| `--max-point-tile-bytes` | `500000` | Maximum compressed bytes per point tile. |
+| `--max-point-tile-bytes` | `5000000` | Maximum compressed bytes per point tile. |
 | `--max-point-tile-features` | `50000` | Maximum point features per tile. |
 | `--max-polygon-tile-bytes` | `500000` | Maximum compressed bytes per polygon tile. |
 | `--max-polygon-tile-features` | `5000` | Maximum polygon features per tile. |

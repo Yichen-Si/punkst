@@ -9,6 +9,11 @@
 
 namespace pmtiles_pyramid {
 
+constexpr int32_t DEFAULT_POINT_MAX_TILE_BYTES = 5000000;
+constexpr int32_t DEFAULT_POINT_MAX_TILE_FEATURES = 50000;
+constexpr int32_t DEFAULT_POLYGON_MAX_TILE_BYTES = 500000;
+constexpr int32_t DEFAULT_POLYGON_MAX_TILE_FEATURES = 5000;
+
 enum class PolygonPriorityMode {
     Random,
     Area,
@@ -63,8 +68,8 @@ private:
 
 struct BuildOptions {
     int32_t minZoom = 0;
-    int32_t maxTileBytes = 500000;
-    int32_t maxTileFeatures = 50000;
+    int32_t maxTileBytes = DEFAULT_POINT_MAX_TILE_BYTES;
+    int32_t maxTileFeatures = DEFAULT_POINT_MAX_TILE_FEATURES;
     double scaleFactorCompression = 10.0;
     int32_t threads = 1;
     PolygonPriorityMode polygonPriorityMode = PolygonPriorityMode::Random;
@@ -78,6 +83,7 @@ struct BuildOptions {
     double tileBufferPixels = std::numeric_limits<double>::quiet_NaN();
     bool polygonNoClipping = false;
     bool polygonNoDuplication = false;
+    bool quiet = false;
 };
 
 void build_point_pmtiles_pyramid(const std::string& inPmtiles,

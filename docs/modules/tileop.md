@@ -313,6 +313,8 @@ Gene-bin packaging is activated by either:
 
 If both are provided, `--gene-bin-info` takes precedence. The JSON can be generated ahead of time with `punkst gene-bins`.
 
+When bins are derived from a feature-count TSV, the default mode is adaptive. `--n-gene-bins` is a cap, `--gene-bin-target-molecules` sets the target molecule budget per bin, and `--gene-bin-singleton-ratio` controls when high-count genes are assigned singleton bins. Use `--gene-bin-mode fixed` to reproduce the legacy fixed-bin assignment.
+
 #### Annotate and package to PMTiles
 
 `--annotate-pts` can package the annotated rows directly as PMTiles for both standard pixel decode input and feature-bearing single-molecule input:

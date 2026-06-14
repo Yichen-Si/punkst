@@ -7,11 +7,11 @@
 #include "utils_sys.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -22,7 +22,7 @@ namespace {
 
 constexpr int32_t kRasterTileSize = 256;
 
-using TileBuffer = std::vector<uint16_t>;
+using TileBuffer = std::vector<uint32_t>;
 using TileMap = std::unordered_map<pm_raster::RasterTileKey, TileBuffer,
     pm_raster::RasterTileKeyHash>;
 
@@ -65,18 +65,20 @@ void add_count(TileBuffer& buffer, int32_t px, int32_t py, double count) {
     const size_t idx = static_cast<size_t>(py) * static_cast<size_t>(kRasterTileSize) +
         static_cast<size_t>(px);
     const uint32_t add = static_cast<uint32_t>(std::llround(count));
-    const uint32_t next = static_cast<uint32_t>(buffer[idx]) + add;
-    buffer[idx] = static_cast<uint16_t>(std::min<uint32_t>(next, 255u));
+    const uint64_t next = static_cast<uint64_t>(buffer[idx]) + add;
+    buffer[idx] = static_cast<uint32_t>(
+        std::min<uint64_t>(next, std::numeric_limits<uint32_t>::max()));
 }
 
-void add_saturated(TileBuffer& buffer, int32_t px, int32_t py, uint16_t count) {
+void add_count_to_parent(TileBuffer& buffer, int32_t px, int32_t py, uint32_t count) {
     if (count == 0) {
         return;
     }
     const size_t idx = static_cast<size_t>(py) * static_cast<size_t>(kRasterTileSize) +
         static_cast<size_t>(px);
-    buffer[idx] = static_cast<uint16_t>(
-        std::min<uint32_t>(static_cast<uint32_t>(buffer[idx]) + count, 255u));
+    const uint64_t next = static_cast<uint64_t>(buffer[idx]) + count;
+    buffer[idx] = static_cast<uint32_t>(
+        std::min<uint64_t>(next, std::numeric_limits<uint32_t>::max()));
 }
 
 void merge_tile_map(TileMap& dst, const TileMap& src) {
@@ -89,48 +91,53 @@ void merge_tile_map(TileMap& dst, const TileMap& src) {
         TileBuffer& out = it->second;
         const TileBuffer& in = kv.second;
         for (size_t i = 0; i < out.size(); ++i) {
-            out[i] = static_cast<uint16_t>(
-                std::min<uint32_t>(static_cast<uint32_t>(out[i]) + in[i], 255u));
+            const uint64_t next = static_cast<uint64_t>(out[i]) + in[i];
+            out[i] = static_cast<uint32_t>(
+                std::min<uint64_t>(next, std::numeric_limits<uint32_t>::max()));
         }
     }
 }
 
-int32_t quantile_threshold_from_histogram(const std::array<uint64_t, 256>& hist,
-    double quantile) {
-    uint64_t total = 0;
-    for (int32_t i = 1; i <= 255; ++i) {
-        total += hist[static_cast<size_t>(i)];
-    }
-    if (total == 0) {
+uint32_t quantile_threshold_from_values(std::vector<uint32_t>& values, double quantile) {
+    if (values.empty()) {
         return 255;
     }
     const double q = std::clamp(quantile, 0.0, 1.0);
-    const long double target = static_cast<long double>(q) * static_cast<long double>(total);
-    uint64_t cumulative = 0;
-    int32_t threshold = 255;
-    for (int32_t i = 1; i <= 255; ++i) {
-        cumulative += hist[static_cast<size_t>(i)];
-        if (static_cast<long double>(cumulative) > target) {
-            threshold = i;
-            break;
-        }
+    size_t nth = 0;
+    if (q >= 1.0) {
+        nth = values.size() - 1;
+    } else {
+        nth = static_cast<size_t>(
+            std::floor(q * static_cast<double>(values.size())));
+        nth = std::min(nth, values.size() - 1);
     }
-    return std::max(1, threshold);
+    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(nth),
+        values.end());
+    return std::max<uint32_t>(1, values[nth]);
 }
 
-uint8_t adjusted_intensity(uint16_t raw, bool autoAdjust, int32_t threshold) {
+uint8_t adjusted_intensity(uint32_t raw, bool autoAdjust, uint32_t threshold,
+    DisplayTransform transform) {
     if (raw == 0) {
         return 0;
     }
-    const uint16_t capped = std::min<uint16_t>(raw, 255);
+    const uint32_t capped = std::min<uint32_t>(raw, 255);
     if (!autoAdjust) {
         return static_cast<uint8_t>(capped);
     }
-    if (capped > threshold) {
+    const uint32_t safeThreshold = std::max<uint32_t>(1, threshold);
+    if (transform == DisplayTransform::Log1p) {
+        const double numerator = std::log1p(static_cast<double>(raw));
+        const double denominator = std::log1p(static_cast<double>(safeThreshold));
+        const double scaled = denominator > 0.0 ? numerator * 255.0 / denominator : 255.0;
+        return static_cast<uint8_t>(
+            std::clamp<int32_t>(static_cast<int32_t>(std::llround(scaled)), 1, 255));
+    }
+    if (raw > safeThreshold) {
         return 255;
     }
-    return static_cast<uint8_t>(
-        std::min<int32_t>(255, static_cast<int32_t>(capped) * 255 / threshold));
+    const uint64_t scaled = static_cast<uint64_t>(raw) * 255u / safeThreshold;
+    return static_cast<uint8_t>(std::min<uint64_t>(255u, scaled));
 }
 
 TileMap accumulate_zoom(const TileReader& reader,
@@ -219,7 +226,7 @@ TileMap build_parent_zoom(const TileMap& child) {
         const TileBuffer& childBuffer = kv.second;
         for (int32_t y = 0; y < kRasterTileSize; ++y) {
             for (int32_t x = 0; x < kRasterTileSize; ++x) {
-                const uint16_t raw = childBuffer[static_cast<size_t>(y) *
+                const uint32_t raw = childBuffer[static_cast<size_t>(y) *
                     static_cast<size_t>(kRasterTileSize) + static_cast<size_t>(x)];
                 if (raw == 0) {
                     continue;
@@ -229,7 +236,7 @@ TileMap build_parent_zoom(const TileMap& child) {
                     parentBuffer.assign(static_cast<size_t>(kRasterTileSize) *
                         static_cast<size_t>(kRasterTileSize), 0);
                 }
-                add_saturated(parentBuffer,
+                add_count_to_parent(parentBuffer,
                     parentXOffset + x / 2,
                     parentYOffset + y / 2,
                     raw);
@@ -245,16 +252,17 @@ size_t append_zoom_tiles(const TileMap& accum,
     const std::string& tempBlobFile,
     uint64_t& dataOffset,
     std::vector<pm_core::StoredTilePayloadRef>& tiles,
-    int32_t& threshold) {
-    std::array<uint64_t, 256> hist{};
+    uint32_t& threshold) {
+    std::vector<uint32_t> nonzeroValues;
     for (const auto& kv : accum) {
-        for (uint16_t raw : kv.second) {
-            const uint16_t capped = std::min<uint16_t>(raw, 255);
-            hist[static_cast<size_t>(capped)] += 1;
+        for (uint32_t raw : kv.second) {
+            if (raw != 0) {
+                nonzeroValues.push_back(raw);
+            }
         }
     }
     threshold = options.autoAdjust
-        ? quantile_threshold_from_histogram(hist, options.adjustQuantile)
+        ? quantile_threshold_from_values(nonzeroValues, options.adjustQuantile)
         : 255;
     size_t written = 0;
     for (const auto& kv : accum) {
@@ -262,9 +270,10 @@ size_t append_zoom_tiles(const TileMap& accum,
         bool nonEmpty = false;
         for (int32_t y = 0; y < kRasterTileSize; ++y) {
             for (int32_t x = 0; x < kRasterTileSize; ++x) {
-                const uint16_t raw = kv.second[static_cast<size_t>(y) *
+                const uint32_t raw = kv.second[static_cast<size_t>(y) *
                     static_cast<size_t>(kRasterTileSize) + static_cast<size_t>(x)];
-                const uint8_t gray = adjusted_intensity(raw, options.autoAdjust, threshold);
+                const uint8_t gray = adjusted_intensity(
+                    raw, options.autoAdjust, threshold, options.displayTransform);
                 if (gray != 0) {
                     nonEmpty = true;
                 }
@@ -283,6 +292,29 @@ size_t append_zoom_tiles(const TileMap& accum,
 }
 
 } // namespace
+
+DisplayTransform parse_display_transform(const std::string& value) {
+    const std::string mode = to_lower(value);
+    if (mode == "linear") {
+        return DisplayTransform::Linear;
+    }
+    if (mode == "log1p") {
+        return DisplayTransform::Log1p;
+    }
+    error("%s: invalid mono display transform '%s' (expected linear or log1p)",
+        __func__, value.c_str());
+    return DisplayTransform::Linear;
+}
+
+const char* display_transform_name(DisplayTransform transform) {
+    switch (transform) {
+    case DisplayTransform::Linear:
+        return "linear";
+    case DisplayTransform::Log1p:
+        return "log1p";
+    }
+    return "linear";
+}
 
 void write_tiles2mono_pmtiles(const Options& options) {
     if (options.dataFile.empty() || options.indexFile.empty() || options.outFile.empty()) {
@@ -327,19 +359,19 @@ void write_tiles2mono_pmtiles(const Options& options) {
     TileMap accum;
     for (int32_t z = options.maxZoom; z >= maxZoomFromRaw; --z) {
         accum = accumulate_zoom(reader, blocks, options, bounds, z);
-        int32_t threshold = 255;
+        uint32_t threshold = 255;
         const size_t written = append_zoom_tiles(
             accum, options, blob, tempBlobFile, dataOffset, tiles, threshold);
-        notice("%s: z%d wrote %zu mono raster tile(s); auto_adjust_threshold=%d",
-            __func__, z, written, threshold);
+        notice("%s: z%d wrote %zu mono raster tile(s); auto_adjust_threshold=%u; transform=%s",
+            __func__, z, written, threshold, display_transform_name(options.displayTransform));
     }
     for (int32_t z = maxZoomFromRaw - 1; z >= options.minZoom; --z) {
         accum = build_parent_zoom(accum);
-        int32_t threshold = 255;
+        uint32_t threshold = 255;
         const size_t written = append_zoom_tiles(
             accum, options, blob, tempBlobFile, dataOffset, tiles, threshold);
-        notice("%s: z%d wrote %zu mono raster tile(s); auto_adjust_threshold=%d",
-            __func__, z, written, threshold);
+        notice("%s: z%d wrote %zu mono raster tile(s); auto_adjust_threshold=%u; transform=%s",
+            __func__, z, written, threshold, display_transform_name(options.displayTransform));
     }
     blob.close();
     if (tiles.empty()) {

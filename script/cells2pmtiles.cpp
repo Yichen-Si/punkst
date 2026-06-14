@@ -356,10 +356,10 @@ int32_t cmdCells2Pmtiles(int32_t argc, char** argv) {
     std::string resultIdCol = "cell_id";
     int32_t minZoom = 10;
     int32_t maxZoom = 18;
-    int32_t maxPointTileBytes = 500000;
-    int32_t maxPointTileFeatures = 50000;
-    int32_t maxPolygonTileBytes = 500000;
-    int32_t maxPolygonTileFeatures = 5000;
+    int32_t maxPointTileBytes = pmtiles_pyramid::DEFAULT_POINT_MAX_TILE_BYTES;
+    int32_t maxPointTileFeatures = pmtiles_pyramid::DEFAULT_POINT_MAX_TILE_FEATURES;
+    int32_t maxPolygonTileBytes = pmtiles_pyramid::DEFAULT_POLYGON_MAX_TILE_BYTES;
+    int32_t maxPolygonTileFeatures = pmtiles_pyramid::DEFAULT_POLYGON_MAX_TILE_FEATURES;
     int32_t topK = 3;
     int32_t bIcolId = 0;
     int32_t bIcolX = 1;
@@ -445,13 +445,13 @@ int32_t cmdCells2Pmtiles(int32_t argc, char** argv) {
     double pointMaxX = -std::numeric_limits<double>::infinity();
     double pointMaxY = -std::numeric_limits<double>::infinity();
     uint64_t pointCount = 0;
+    size_t skippedGeometryCount = 0;
 
     for (size_t i = 0; i < geoms.size(); ++i) {
         const CellGeometry& geom = geoms[i];
         auto fit = factors.find(geom.cellId);
         if (fit == factors.end()) {
-            warning("%s: skipping geometry for cell %s because it is absent from projection results",
-                __func__, geom.cellId.c_str());
+            ++skippedGeometryCount;
             continue;
         }
         const TopFactors& top = fit->second.top;
@@ -464,6 +464,10 @@ int32_t cmdCells2Pmtiles(int32_t argc, char** argv) {
             geom.cellId, top, nTop, probThreshold, coordScale, static_cast<uint8_t>(maxZoom),
             pointMinX, pointMinY, pointMaxX, pointMaxY);
         ++pointCount;
+    }
+    if (skippedGeometryCount > 0) {
+        warning("%s: skipped %zu of %zu geometries because they are absent from projection results",
+            __func__, skippedGeometryCount, geoms.size());
     }
 
     const fs::path boundariesPmtiles = outPrefix + "-boundaries.pmtiles";

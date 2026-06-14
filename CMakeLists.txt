@@ -187,6 +187,7 @@ set(SOURCE_FILES
     script/build_pyramid.cpp
     script/export_pmtiles.cpp
     script/poly2pmtiles.cpp
+    script/poly2pmtiles_generic.cpp
     script/cells2pmtiles.cpp
     script/tiles2mono.cpp
     script/deploy_cartoscope.cpp

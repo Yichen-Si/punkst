@@ -1148,17 +1148,21 @@ bool has_gene_bin_definition(const TileOperator::MltPmtilesOptions& mltOptions) 
     return !mltOptions.feature_count_file.empty() && mltOptions.n_gene_bins > 0;
 }
 
-GeneBinInfo build_gene_bin_info(const std::string& geneBinInfoFile,
-    const std::string& featureCountFile, int32_t nGeneBins) {
-    if (!geneBinInfoFile.empty()) {
-        if (!featureCountFile.empty()) {
+GeneBinInfo build_gene_bin_info(const TileOperator::MltPmtilesOptions& mltOptions) {
+    if (!mltOptions.gene_bin_info_file.empty()) {
+        if (!mltOptions.feature_count_file.empty()) {
             warning("%s: both gene-bin JSON and feature-count TSV were provided; using %s",
-                __func__, geneBinInfoFile.c_str());
+                __func__, mltOptions.gene_bin_info_file.c_str());
         }
-        return GeneBinInfo(geneBinInfoFile);
+        return GeneBinInfo(mltOptions.gene_bin_info_file);
     }
-    if (!featureCountFile.empty()) {
-        return GeneBinInfo(featureCountFile, nGeneBins, 0, 1, 0);
+    if (!mltOptions.feature_count_file.empty()) {
+        GeneBinBuildOptions options;
+        options.nGeneBins = mltOptions.n_gene_bins;
+        options.targetMolecules = mltOptions.gene_bin_target_molecules;
+        options.singletonRatio = mltOptions.gene_bin_singleton_ratio;
+        options.mode = parse_gene_bin_mode(mltOptions.gene_bin_mode);
+        return GeneBinInfo(mltOptions.feature_count_file, options);
     }
     error("%s: either gene-bin JSON or feature-count TSV is required", __func__);
     return GeneBinInfo();
@@ -1207,8 +1211,7 @@ AnnotatePackagingConfig build_annotate_packaging_config(
     AnnotatePackagingConfig out;
     out.haveGeneBins = has_gene_bin_definition(mltOptions);
     if (out.haveGeneBins) {
-        out.geneBins = build_gene_bin_info(mltOptions.gene_bin_info_file,
-            mltOptions.feature_count_file, mltOptions.n_gene_bins);
+        out.geneBins = build_gene_bin_info(mltOptions);
         out.packagingFeatureNames.reserve(out.geneBins.entries.size());
         for (const auto& entry : out.geneBins.entries) {
             out.packagingFeatureNames.push_back(entry.feature);
@@ -2901,8 +2904,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
         return;
     }
 
-    GeneBinInfo geneBins = build_gene_bin_info(mltOptions.gene_bin_info_file,
-        mltOptions.feature_count_file, mltOptions.n_gene_bins);
+    GeneBinInfo geneBins = build_gene_bin_info(mltOptions);
     const uint8_t outputZoom = static_cast<uint8_t>(mltOptions.zoom);
     const std::string allOutFile = outPrefix + "_all.pmtiles";
     pm_vector::FeatureTableSchema allSchema = schema;
