@@ -11,27 +11,32 @@ if (NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   message(STATUS "No build type selected; defaulting to Release for runtime performance.")
 endif()
 
+# Add this at the very top of your TBB section (or top of the file)
+include(CheckCXXSourceCompiles)
+
 # TBB
-option(FETCH_TBB
-  "If ON, download & build oneTBB via FetchContent when no system TBB is found"
-  OFF
-)
-find_package(TBB QUIET)
-if (NOT TBB_FOUND)
-  if (NOT FETCH_TBB)
-    message(FATAL_ERROR
-      "TBB was not found on your system.\n"
-      "Please install TBB (e.g. libtbb-dev / brew install tbb) and/or provide the path using -DTBB_DIR or -DCMAKE_PREFIX_PATH (see README.md or docs/install.md).\n"
-      "Not recommended slow option: re-run CMake with -DFETCH_TBB=ON to download and build oneTBB from source."
-    )
-  endif()
-  # Only reached when FETCH_TBB=ON
+# Manually check for the crucial development header BEFORE running find_package
+find_path(TBB_TEST_INCLUDE_DIR NAMES tbb/parallel_pipeline.h)
+
+if (TBB_TEST_INCLUDE_DIR)
+  message(STATUS "Found system TBB headers (${TBB_TEST_INCLUDE_DIR}). Using system TBB.")
+  # It's safe to run find_package because we know the headers actually exist
+  find_package(TBB REQUIRED)
+else()
+  message(STATUS "Valid system TBB headers not found. Downloading and building oneTBB from source...")
+  
+  # Disable TBB tests and examples to drastically speed up local compilation
+  set(TBB_TEST OFF CACHE BOOL "Disable TBB testing" FORCE)
+  set(TBB_STRICT OFF CACHE BOOL "Disable strict warnings" FORCE)
+  set(TBB_EXAMPLES OFF CACHE BOOL "Disable TBB examples" FORCE)
+  
   include(FetchContent)
   FetchContent_Declare(
     oneTBB
     GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
     GIT_TAG        v2022.1.0
   )
+  # This will now successfully create the TBB::tbb target itself without conflicts
   FetchContent_MakeAvailable(oneTBB)
 endif()
 
