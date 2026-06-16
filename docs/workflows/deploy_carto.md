@@ -5,9 +5,9 @@
 Run it after the standard punkst [workflow](./index.md) has finished and one or more factor models have been fitted.
 
 ## Scope
-The command does not run fitting, `lda-transform`, pixel decoding, cell segmentation, or UMAP generation. It starts from existing tiled transcripts, model outputs, pixel decode files, and optional cell projection/boundary inputs, then writes the PMTiles and metadata files CartoScope needs.
+`deploy-cartoscope` starts from the output of a completed punkst analysis workflow. It takes tiled transcripts, fitted models, pixel decode results, and optional cell projection/boundary data, then writes the PMTiles and metadata files CartoScope needs.
 
-The deployment contains transcript PMTiles, gene-bin PMTiles, merged raw-pixel factor annotations, hexagon factor PMTiles, pixel-raster factor PMTiles, the SGE mono basemap density map, sidecar tables, `ficture_assets.json`, and `catalog.yaml`. Cell-level CartoScope assets can also be included from prebuilt `cells2pmtiles` outputs or generated from cell projection results plus boundary GeoJSON or flat boundary tables in explicit input JSON mode.
+Deployment currently covers transcript density as the default basemap; pixel/molecule, hexagon, and cell level factor inferences results; and limited support for including morphology images. It is meant to be a lightweight alternative to [cartloader](https://github.com/seqscope/cartloader) for fast exploration.
 
 ## Quickstart
 
@@ -241,13 +241,13 @@ You can also replace `"boundaries"` with prebuilt PMTiles directly through
   }
 ```
 
-#### Add background image PMTiles
+### Add background image PMTiles
 
 Background images can be added as CartoScope basemaps in explicit input JSON mode. Images are **not** aligned or registered by punkst. Provide the alignment through pixel size plus offset, or a full 3x3 transform that maps image pixel coordinates to the same micron coordinate system used by the transcript data.
 
-Supported image inputs are PNG and standard TIFF: tiled TIFF with uncompressed or Deflate/zlib-compressed tiles, using 8-bit RGB/RGBA, 8-bit grayscale, or 16-bit grayscale pixels. Unsupported OME-TIFF, JPEG/JPEG-2000/LZW-compressed TIFF, stripped TIFF, palette TIFF, planar-separated TIFF, or non-unsigned TIFF sample formats should be converted first.
+Supported image inputs are PNG and narrowly defined TIFF: tiled TIFF with uncompressed or Deflate/zlib-compressed tiles, using 8-bit RGB/RGBA, 8-bit grayscale, or 16-bit grayscale pixels. Unsupported OME-TIFF, JPEG/JPEG-2000/LZW-compressed TIFF, and other fancier formats should be converted first.
 
-##### convert OME-TIFF
+#### convert OME-TIFF
 
 Use `ext/py/convert_tiff_for_image2pmtiles.py` to convert OME-TIFF or generic TIFF files into the supported tiled TIFF subset. The helper writes uint8 output by default, using percentile scaling for non-uint8 inputs (`--uint8-percentiles 1 99` by default); use `--preserve-depth` only when you intentionally want to keep supported 16-bit grayscale TIFF data for native punkst scaling. The script uses Python `numpy` and `tifffile`. For TIFF compression codecs that `tifffile` delegates to optional decoders, install the matching Python package as well; in practice, JPEG/JPEG2000-compressed OME-TIFFs commonly require `imagecodecs`.
 
@@ -269,11 +269,11 @@ When OME physical pixel metadata is available, the JSON records a pixel-to-micro
 
 For generic TIFFs **without OME metadata**, pass either `--microns-per-pixel` with optional offsets `--offset-x-um` `--offset-y-um`, or a full 3x3 matrix with `--transform` (row-wise flatten to 9 comma/space-separated values); otherwise the JSON is marked `requires_transform`.
 
-##### Supply (converted) TIFF to `deploy-cartoscope`
+#### Supply (converted) TIFF to `deploy-cartoscope`
 
-If your image files are converted by with above python helper `ext/py/convert_tiff_for_image2pmtiles.py`, pass its output `<output>.image2pmtiles.json` to `deploy-cartoscope` with `--image-json`.
+If your image files are converted by with above python helper `ext/py/convert_tiff_for_image2pmtiles.py`, pass its output `<output>.image2pmtiles.json` to `deploy-cartoscope` directly with `--image-json`.
 
-Otherwise, include source image information as an additional sections in the input JSON file for `deploy-cartoscope`:
+Otherwise, include **supported** source image information as additional sections in the input JSON file for `deploy-cartoscope`:
 
 Example with two images:
 ```json
@@ -300,40 +300,7 @@ Example with two images:
 ```
 (Note: you can provide alignment in either of the two ways shown above; if one of the images is converted by the python helper you can copy over the JSON section under `"deploy_cartoscope"` from `image2pmtiles.json`)
 
-##### image2pmtiles
-
-If your image files do not need conversion, you can also run `punkst image2pmtiles` separately then pass its output to `deploy-cartoscope`.
-
-```bash
-punkst image2pmtiles \
-  --in-image tissue_hires_image.tif \
-  --out-prefix carto/HnE \
-  --id HnE \
-  --microns-per-pixel 0.5 \
-  --offset-x-um 0 \
-  --offset-y-um 0 \
-  --min-zoom 10 \
-  --max-zoom 18
-```
-
-This writes:
-
-```text
-carto/HnE.pmtiles
-carto/HnE_assets.json
-```
-
-Include the asset JSON in deployment input:
-
-```json
-{
-  "image_assets": [
-    "carto/HnE_assets.json"
-  ]
-}
-```
-
-### deploy-cartoscope Options
+## deploy-cartoscope Options
 
 `punkst deploy-cartoscope` accepts the following command-line options:
 
@@ -511,3 +478,60 @@ When `--boundary-format` is left as `auto`, `cells2pmtiles` infers JSON/GeoJSON 
 | `--extent` | `4096` | Vector tile extent. |
 | `--threads` | `1` | Number of threads. |
 | `--overwrite` | false | Overwrite PMTiles outputs. |
+
+## Convert PNG/TIFF to PMTiles
+
+You can also run `punkst image2pmtiles` separately for supported/converted images to produce PMTiles, then pass its output to `deploy-cartoscope`.
+
+```bash
+punkst image2pmtiles \
+  --in-image tissue_hires_image.tif \
+  --out-prefix carto/HnE \
+  --id HnE \
+  --microns-per-pixel 0.5 \
+  --offset-x-um 0 \
+  --offset-y-um 0 \
+  --min-zoom 10 \
+  --max-zoom 18
+```
+
+This writes:
+
+```text
+carto/HnE.pmtiles
+carto/HnE_assets.json
+```
+
+Include the asset JSON in deployment input:
+
+```json
+{
+  "image_assets": [
+    "carto/HnE_assets.json"
+  ]
+}
+```
+
+### image2pmtiles Options
+
+`punkst image2pmtiles` accepts the following command-line options:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--in-image` | required | Input PNG or supported tiled TIFF. |
+| `--out-prefix` | required | Output prefix. Writes `<prefix>.pmtiles` and `<prefix>_assets.json` unless `--asset-json` overrides the asset JSON path. |
+| `--asset-json` | `<out-prefix>_assets.json` | Output asset JSON path for later use through `deploy-cartoscope` `image_assets`. |
+| `--id` | required | Image/basemap ID written to the asset JSON and CartoScope catalog. |
+| `--min-zoom` | `7` | Minimum PMTiles zoom. |
+| `--max-zoom` | `18` | Maximum PMTiles zoom. |
+| `--microns-per-pixel` | none | Pixel size in punkst coordinate units for scale-only alignment. Required unless `--transform` is provided. |
+| `--offset-x-um` | `0` | X offset used with `--microns-per-pixel`. |
+| `--offset-y-um` | `0` | Y offset used with `--microns-per-pixel`. |
+| `--transform` | none | Full 3x3 pixel-to-micron transform as 9 comma/space-separated values (row-major). Required unless `--microns-per-pixel` is provided. |
+| `--gray-percentiles` | `1 99` | Low/high percentile bounds for mapping 16-bit grayscale TIFF data to 8-bit PNG tiles. |
+| `--gray-sample-fraction` | `0.05` | Fraction of TIFF tiles sampled for 16-bit grayscale percentile estimation. |
+| `--gray-sample-tiles` | `10` | Minimum number of TIFF tiles sampled for percentile estimation; use `0` to scan all tiles. |
+| `--gray-sample-seed` | `1` | Random seed for TIFF tile sampling. |
+| `--tile-cache-mb` | `0` | Optional decoded TIFF tile cache guard in MB; `0` disables the absolute memory guard. |
+| `--tiff-source-level` | `auto` | TIFF source level to read: `auto`, `base`, or a numeric IFD/SubIFD level. |
+| `--overwrite` | false | Overwrite existing PMTiles and asset JSON outputs. |

@@ -20,6 +20,8 @@ It can have other columns (which will be ignored in analysis, but can later be j
 
 Available parameters for `config.json`:
 
+**Important** - `pixel_decode_mode` controls the mode for [pixel-decode](../modules/pixel-decode.md). Valid values are `pixel` for fixed-resolution pixel level decoding, `feature_pixel` for `pixel-decode --single-feature-pixel`, and `single_molecule` for `pixel-decode --single-molecule`. The output has suffixes `.pixel`, `.sf_pixel`, and `.sgl_mol`, respectively.
+We recommend `feature_pixel` for Visium HD data (with $2\mu m$ resolution) and `single_molecule` for imaging-based data (with single molecule resolution). `pixel` is a general safe choice and recommended for cell type decoding.
 
 `threads`: number of threads for parallel processing. (If you are submitting the workflow to a cluster, make sure the same number of CPUs is available)
 
@@ -52,8 +54,6 @@ Specify the 0-based column indices in `transcripts` for X coordinate, Y coordina
 `pixhex`: often set to be the same as `hexgrids` or slightly smaller.
 
 `nmove`: `pixhex` divided by `nmove` is the distance between adjacent anchor points in the algorithm. We recommend `pixhex / nmove` to be around $4~6\mu m$ for high resolution results.
-
-`pixel_decode_mode`: controls the mode for [pixel-decode](../modules/pixel-decode.md). Valid values are `pixel` for fixed-resolution pixel level decoding, `feature_pixel` for `pixel-decode --single-feature-pixel`, and `single_molecule` for `pixel-decode --single-molecule`. The output has suffixes `.pixel`, `.sf_pixel`, and `.sgl_mol`, respectively.
 
 `res`: the resolution for pixel level inference (pixels within this distance will be grouped together in inference). We've been using $0.5\mu m$.
 

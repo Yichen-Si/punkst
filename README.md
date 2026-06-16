@@ -1,8 +1,10 @@
 # punkst
 
-punkst is an ongoing effort to implement scalable tools for analyzing high resolution spatial transcriptomics data.
+`punkst` is an ongoing effort to implement scalable tools for analyzing high resolution spatial transcriptomics data.
 
-It includes a new implementation of [FICTURE](https://doi.org/10.1038/s41592-024-02415-2) to replace the [python package](https://github.com/seqscope/ficture)
+`punkst` includes a pipeline for efficient pixel level factor analysis ([FICTURE](https://doi.org/10.1038/s41592-024-02415-2)) with improved efficiency and flexibility. ([Previous python package](https://github.com/seqscope/ficture) is still available but is no longer maintained)
+
+You can use `punkst` to [prepare your data for visualization](https://yichen-si.github.io/punkst/workflows/deploy_carto/) on [CartoScope](https://main.cartoscope.app/summary/), including raw transcript data, segmented cells, morphology images, and `punkst` analysis results.
 
 Documentation: [https://Yichen-Si.github.io/punkst](https://Yichen-Si.github.io/punkst)
 
@@ -78,7 +80,7 @@ The following commands are available:
 
 ### Using Docker
 
-**Prerequisite:** [Docker](https://docs.docker.com/get-docker/)
+The docker image is not often up to date, we recommend using the prebuilt binaries or building from source.
 
 ```bash
 docker pull philo1984/punkst:latest

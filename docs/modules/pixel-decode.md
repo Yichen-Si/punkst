@@ -5,19 +5,53 @@
 `pixel-decode` projects a trained factor model onto the space and annotates each pixel/voxel/molecule with the top factors and their probabilities. In standard mode, the inference is done at pixel or voxel level. In the feature-specific modes, the inference is feature-specific even at the same location.
 
 In all cases, the input is the x-y tiled data created by `pts2tiles`.
-<!-- The default decoder is `slda`; `--algo nmf` enables the EM-NMF decoder. -->
 
-Basic usage:
+Basic usage in pixel mode:
 ```bash
 punkst pixel-decode --model ${path}/model.tsv \
 --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
---temp-dir ${tmpdir} --out-pref ${path}/pixel --output-binary \
+--temp-dir ${tmpdir} --out-pref ${out_prefix} --output-binary \
 --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
 --hex-grid-dist 12 --n-moves 2 \
 --pixel-res 0.5 --threads ${threads} --seed 1
 ```
 
-The main inference result in this example is written to `${path}/pixel.bin` together with `${path}/pixel.index`. The output are organized in regular square tiles for efficient downstream analysis (see [tile-op](tileop.md)).
+Basic usage in single-molecule mode:
+```bash
+punkst pixel-decode --model ${path}/model.tsv --single-molecule \
+--in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
+--temp-dir ${tmpdir} --out-pref ${out_prefix} --output-binary \
+--icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
+--hex-grid-dist 12 --n-moves 2 \
+--threads ${threads} --seed 1
+```
+
+The main inference result in this example is written to `${out_prefix}.bin` together with `${out_prefix}.index`. The output are organized in regular square tiles for efficient downstream analysis (see [tile-op](tileop.md)).
+
+## Inference Modes
+
+There are three inference modes:
+
+- pixel mode jointly considers all observations in the same pixel or voxel and compute one probability distribution over factors per pixel/voxel.
+- `--single-feature-pixel` still collapses the raw data by analysis resolution, but may assign different factor probabilities to features within the same pixel or voxel
+- `--single-molecule` does not collapse the data before inference; each accepted input record is treated on its own
+
+In both feature-specific modes, different features are considered separately even if they have the same location. Use the feature-specific modes if your factors are closer to **transcriptional programs** than (categorical) cell types or clusters.
+
+Caution: for Visium HD, where the resolution is 2μm, only `--single-feature-pixel` is valid.
+
+
+Output differences:
+
+- `--single-feature-pixel` writes integer pixel or voxel coordinates plus one extra `uint32_t featureIdx`
+- `--single-molecule` writes raw float coordinates plus one extra `uint32_t featureIdx`
+
+Current restrictions for both `--single-feature-pixel` and `--single-molecule`:
+
+- requires `--output-binary`
+- does not support `--output-original`
+- does not support `--output-bg-prob-expand`, `--ext-col-ints`, `--ext-col-floats`, or `--ext-col-strs`
+- does not support extended or weighted parser modes
 
 ## Required Parameters
 
@@ -168,33 +202,7 @@ generate between `zmin` and `zmax`.
 
 `--ext-col-strs` - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings. Example: `--ext-col-strs 7:sample_id:20 8:batch:10`.
 
-### Feature-Specific Modes
-
-The two feature-specific modes share the same inference path, where different features are considered separately even if they have the same location. Consider the feature-specific modes only if your factors are closer to "transcriptional modules" than "cell types".
-
-Caution: for Visium HD, where the resolution is 2μm, only `--single-feature-pixel` is valid.
-
-Compared with the standard pixel mode:
-
-- standard mode jointly considers all observations in the same pixel or voxel and makes one inference result per pixel/voxel
-- `--single-feature-pixel` still collapses the raw data by analysis resolution, but can assign different factor probabilities to features within the same pixel or voxel
-- `--single-molecule` does not collapse the data before inference; each accepted input record is treated on its own
-
-
-Output differences:
-
-- `--single-feature-pixel` writes integer pixel or voxel coordinates plus one extra `uint32_t featureIdx`
-- `--single-molecule` writes raw float coordinates plus one extra `uint32_t featureIdx`
-
-Current restrictions for both `--single-feature-pixel` and `--single-molecule`:
-
-- requires `--output-binary`
-- does not support `--output-original`
-- does not support `--output-bg-prob-expand`
-- does not support `--ext-col-ints`, `--ext-col-floats`, or `--ext-col-strs`
-- does not support extended or weighted parser modes
-
-## 3D Modes
+## 3D data
 
 3D mode needs to be configured explicitly
 
@@ -232,7 +240,7 @@ Example:
 ```bash
 punkst pixel-decode --model ${path}/bcc.model.tsv \
 --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
---temp-dir ${tmpdir} --out-pref ${path}/pixel_3d --output-binary \
+--temp-dir ${tmpdir} --out-pref ${out_prefix} --output-binary \
 --icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
 --standard-3D --anchor-dist 12 \
 --pixel-res 0.5 --pixel-res-z 0.5 \
@@ -266,7 +274,7 @@ Example:
 ```bash
 punkst pixel-decode --model ${path}/thin3d.model.tsv \
 --in-tsv ${path}/transcripts.tiled.tsv --in-index ${path}/transcripts.tiled.index \
---temp-dir ${tmpdir} --out-pref ${path}/pixel_thin3d --output-binary \
+--temp-dir ${tmpdir} --out-pref ${out_prefix} --output-binary \
 --icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
 --thin-3D --hex-grid-dist 18 --n-moves 3 \
 --thin-3d-z-levels 0 1.5 3 4.5 6 7.5 9 \
