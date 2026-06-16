@@ -13,6 +13,8 @@
 #include <locale>
 #include <memory>
 #include <stdexcept>
+#include <vector>
+#include <limits>
 #include "zlib.h"
 #include <Eigen/Dense>
 #include "error.hpp"
@@ -108,6 +110,70 @@ inline bool copy_stream_range(std::istream& in, std::ostream& out, uint64_t st, 
         remaining -= chunk64;
     }
     return true;
+}
+
+inline uint16_t read_u16_buf(const uint8_t* data, bool le) {
+    if (le) {
+        return static_cast<uint16_t>(data[0]) |
+            static_cast<uint16_t>(static_cast<uint16_t>(data[1]) << 8u);
+    }
+    return static_cast<uint16_t>(static_cast<uint16_t>(data[0]) << 8u) |
+        static_cast<uint16_t>(data[1]);
+}
+
+inline uint32_t read_u32_buf(const uint8_t* data, bool le) {
+    if (le) {
+        return static_cast<uint32_t>(data[0]) |
+            (static_cast<uint32_t>(data[1]) << 8u) |
+            (static_cast<uint32_t>(data[2]) << 16u) |
+            (static_cast<uint32_t>(data[3]) << 24u);
+    }
+    return (static_cast<uint32_t>(data[0]) << 24u) |
+        (static_cast<uint32_t>(data[1]) << 16u) |
+        (static_cast<uint32_t>(data[2]) << 8u) |
+        static_cast<uint32_t>(data[3]);
+}
+
+inline uint64_t read_u64_buf(const uint8_t* data, bool le) {
+    uint64_t v = 0;
+    if (le) {
+        for (int i = 7; i >= 0; --i) {
+            v = (v << 8u) | data[i];
+        }
+    } else {
+        for (int i = 0; i < 8; ++i) {
+            v = (v << 8u) | data[i];
+        }
+    }
+    return v;
+}
+
+inline uint16_t read_u16(const std::vector<uint8_t>& data, size_t off, bool le) {
+    if (off + 2 > data.size()) {
+        error("%s: truncated byte buffer while reading uint16", __func__);
+    }
+    return read_u16_buf(data.data() + off, le);
+}
+
+inline uint32_t read_u32(const std::vector<uint8_t>& data, size_t off, bool le) {
+    if (off + 4 > data.size()) {
+        error("%s: truncated byte buffer while reading uint32", __func__);
+    }
+    return read_u32_buf(data.data() + off, le);
+}
+
+inline uint64_t read_u64(const std::vector<uint8_t>& data, size_t off, bool le) {
+    if (off + 8 > data.size()) {
+        error("%s: truncated byte buffer while reading uint64", __func__);
+    }
+    return read_u64_buf(data.data() + off, le);
+}
+
+inline size_t checked_mul(size_t a, size_t b, const char* context) {
+    if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
+        error("%s: size overflow", context);
+    }
+    return a * b;
 }
 
 // String to number conversion functions

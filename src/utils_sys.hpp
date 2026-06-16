@@ -45,6 +45,24 @@ void write_text_checked(const std::filesystem::path& path, const std::string& te
     bool overwrite, const std::string& label);
 void write_binary(const std::filesystem::path& path, const std::string& data);
 
+class RandomAccessFile {
+public:
+    explicit RandomAccessFile(std::filesystem::path path);
+
+    const std::filesystem::path& path() const { return path_; }
+    uint64_t size() const { return size_; }
+
+    std::vector<uint8_t> read(uint64_t off, size_t n);
+    uint16_t read_u16_at(uint64_t off, bool le);
+    uint32_t read_u32_at(uint64_t off, bool le);
+    uint64_t read_u64_at(uint64_t off, bool le);
+
+private:
+    std::filesystem::path path_;
+    std::ifstream in_;
+    uint64_t size_ = 0;
+};
+
 struct ScopedTempDir {
     std::filesystem::path path;
     bool enabled;

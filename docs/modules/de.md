@@ -170,20 +170,20 @@ Given `--out PREFIX`, the tool generates one main output file per contrast, plus
 
 - For each contrast, `PREFIX.CONTRAST.tsv` is generated, where `CONTRAST` is from the `--contrast` file header or `labelA_vs_labelB` for auto-pairwise.
 - Main output columns:
-  - `Slice`: Cell type index (0-based).
-  - `Feature`: Feature name.
-  - `Beta`: Observed log odds ratio, i.e. `logit(Pi1) - logit(Pi0)`.
-  - `log10p`: `-log10(p-value)` for `Beta`.
-  - `Pi0`, `Pi1`: Observed feature proportions in group 0 and group 1.
-  - `TotalCount`: Total feature count in this cell type and contrast.
-  - `Beta_deconv`: Deconvolved log odds ratio adjusted for cell type mixing. This is experimental and is only non-zero when deconvolution is triggered and succeeds.
-  - `FC_deconv`: Deconvolved fold change computed from the deconvolved latent proportions.
-  - `log10p_deconv`: `-log10(p-value)` for `Beta_deconv`.
-  - `p_perm`: Included only when `--perm > 0`.
+    - `Slice`: Cell type index (0-based).
+    - `Feature`: Feature name.
+    - `Beta`: Observed log odds ratio, i.e. `logit(Pi1) - logit(Pi0)`.
+    - `log10p`: `-log10(p-value)` for `Beta`.
+    - `Pi0`, `Pi1`: Observed feature proportions in group 0 and group 1.
+    - `TotalCount`: Total feature count in this cell type and contrast.
+    - `Beta_deconv`: Deconvolved log odds ratio adjusted for cell type mixing. This is experimental and is only non-zero when deconvolution is triggered and succeeds.
+    - `FC_deconv`: Deconvolved fold change computed from the deconvolved latent proportions.
+    - `log10p_deconv`: `-log10(p-value)` for `Beta_deconv`.
+    - `p_perm`: Included only when `--perm > 0`.
 
 - Auxiliary files:
-  - `PREFIX.nobs.tsv`: The number of units and total pixel counts per cell type and dataset.
-  - `PREFIX.sums.tsv`: Total feature counts per cell type and dataset for units passing filters.
+    - `PREFIX.nobs.tsv`: The number of units and total pixel counts per cell type and dataset.
+    - `PREFIX.sums.tsv`: Total feature counts per cell type and dataset for units passing filters.
 
 ## conditional-de-region-pixel
 
@@ -351,8 +351,8 @@ Provide either `--in-data` and `--in-meta` (for automatic pairwise contrasts) or
 
 Given `--out PREFIX`, the tool generates one main output file per contrast, plus an auxiliary file.
 
-- For each contrast, `PREFIX.CONTRAST.tsv` is generated, where `CONTRAST` is from the `--contrast` file header or `labelA_vs_labelB` for auto-pairwise.
-  - **Columns**:
+1. For each contrast, `PREFIX.CONTRAST.tsv` is generated, where `CONTRAST` is from the `--contrast` file header or `labelA_vs_labelB` for auto-pairwise.
+    **Columns**:
     - `Feature`: Feature name.
     - `Factor`: Cell type name.
     - `Beta`: log fold change for the feature in this cell type.
@@ -362,4 +362,4 @@ Given `--out PREFIX`, the tool generates one main output file per contrast, plus
     - `n`: Number of units included in the test for this feature.
     - `Count1`, `Count2`: Total counts of the feature in group 1 and group 2.
 
-- An auxiliary file `PREFIX.CONTRAST.eta0.tsv` is also generated, containing the fitted baseline (log) expression rates for each gene and cell type.
+1. An auxiliary file `PREFIX.CONTRAST.eta0.tsv` is also generated, containing the fitted baseline (log) expression rates for each gene and cell type.

@@ -11,6 +11,8 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <set>
 #include <tuple>
 #include <zlib.h>
 
@@ -257,6 +259,103 @@ void pm_raster::write_png_raster_pmtiles_archive_from_blob(const std::string& ou
     options.centerLatE7 = lonlat_e7((minLat + maxLat) * 0.5);
     options.metadata = std::move(metadata);
     pm_core::write_pmtiles_archive_from_blob_file(outFile, tempBlobFile, std::move(tiles), options);
+}
+
+namespace {
+
+Image2D<Rgba8> build_rgba_parent_tile(uint32_t parentX, uint32_t parentY,
+    const pm_raster::EncodedRasterTileMap& children,
+    uint8_t childZoom) {
+    std::map<pm_raster::RasterTileKey, Image2D<Rgba8>> decodedChildren;
+    for (uint32_t cy = 0; cy < 2; ++cy) {
+        for (uint32_t cx = 0; cx < 2; ++cx) {
+            const pm_raster::RasterTileKey childKey{
+                childZoom,
+                parentX * 2u + cx,
+                parentY * 2u + cy};
+            auto it = children.find(childKey);
+            if (it != children.end()) {
+                decodedChildren.emplace(childKey, decode_png_rgba8(it->second));
+            }
+        }
+    }
+    Image2D<Rgba8> parent(kRasterTileSize, kRasterTileSize, Rgba8{0, 0, 0, 0});
+    for (int32_t py = 0; py < kRasterTileSize; ++py) {
+        for (int32_t px = 0; px < kRasterTileSize; ++px) {
+            uint32_t sumA = 0;
+            uint32_t sumPremulR = 0;
+            uint32_t sumPremulG = 0;
+            uint32_t sumPremulB = 0;
+            for (uint32_t dy = 0; dy < 2; ++dy) {
+                for (uint32_t dx = 0; dx < 2; ++dx) {
+                    const uint64_t globalX = static_cast<uint64_t>(parentX) * 512u +
+                        static_cast<uint64_t>(px) * 2u + dx;
+                    const uint64_t globalY = static_cast<uint64_t>(parentY) * 512u +
+                        static_cast<uint64_t>(py) * 2u + dy;
+                    const pm_raster::RasterTileKey childKey{
+                        childZoom,
+                        static_cast<uint32_t>(globalX / kRasterTileSize),
+                        static_cast<uint32_t>(globalY / kRasterTileSize)};
+                    auto it = decodedChildren.find(childKey);
+                    if (it == decodedChildren.end()) {
+                        continue;
+                    }
+                    const Rgba8 c = it->second(static_cast<int>(globalY % kRasterTileSize),
+                        static_cast<int>(globalX % kRasterTileSize));
+                    sumA += c.a;
+                    sumPremulR += static_cast<uint32_t>(c.r) * c.a;
+                    sumPremulG += static_cast<uint32_t>(c.g) * c.a;
+                    sumPremulB += static_cast<uint32_t>(c.b) * c.a;
+                }
+            }
+            if (sumA == 0) {
+                continue;
+            }
+            const uint8_t a = static_cast<uint8_t>((sumA + 2u) / 4u);
+            parent(py, px) = Rgba8{
+                static_cast<uint8_t>((sumPremulR + sumA / 2u) / sumA),
+                static_cast<uint8_t>((sumPremulG + sumA / 2u) / sumA),
+                static_cast<uint8_t>((sumPremulB + sumA / 2u) / sumA),
+                a};
+        }
+    }
+    return parent;
+}
+
+bool tile_has_alpha(const Image2D<Rgba8>& tile) {
+    for (const Rgba8& p : tile.data()) {
+        if (p.a != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+pm_raster::EncodedRasterTileMap pm_raster::write_rgba_png_parent_zoom(uint8_t parentZoom,
+    const EncodedRasterTileMap& children,
+    std::ofstream& blob,
+    const std::string& tempBlobFile,
+    uint64_t& dataOffset,
+    std::vector<pm_core::StoredTilePayloadRef>& tiles) {
+    std::set<std::pair<uint32_t, uint32_t>> parents;
+    for (const auto& kv : children) {
+        parents.insert({kv.first.x / 2u, kv.first.y / 2u});
+    }
+    EncodedRasterTileMap out;
+    for (const auto& parentKey : parents) {
+        Image2D<Rgba8> tile = build_rgba_parent_tile(parentKey.first, parentKey.second, children,
+            static_cast<uint8_t>(parentZoom + 1u));
+        if (!tile_has_alpha(tile)) {
+            continue;
+        }
+        RasterTileKey key{parentZoom, parentKey.first, parentKey.second};
+        std::string encoded = encode_png_rgba8(tile);
+        append_png_tile_to_blob(blob, tempBlobFile, encoded, dataOffset, key, tiles);
+        out.emplace(key, std::move(encoded));
+    }
+    return out;
 }
 
 pm_core::LoadedPmtilesArchive pm_core::load_pmtiles_archive(const std::string& inFile) {

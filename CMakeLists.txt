@@ -29,9 +29,10 @@ if (NOT TBB_FOUND)
   include(FetchContent)
   FetchContent_Declare(
     oneTBB
-    GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-    GIT_TAG        v2022.1.0
+    GIT_REPOSITORY https://github.com/uxlfoundation/oneTBB.git
+    GIT_TAG        v2023.0.0
   )
+  set(TBB_TEST OFF CACHE BOOL "Build oneTBB tests" FORCE)
   FetchContent_MakeAvailable(oneTBB)
 endif()
 
@@ -202,9 +203,12 @@ if (ENABLE_IMAGE_OUTPUT)
   list(APPEND SOURCE_FILES
     src/image_utils.hpp
     src/image_utils.cpp
+    src/image_pmtiles.hpp
+    src/image_pmtiles.cpp
     script/draw_pixel_factors.cpp
     script/draw_lowres_factors.cpp
     script/draw_pixel_genes.cpp
+    script/image2pmtiles.cpp
   )
 else()
   list(APPEND SOURCE_FILES

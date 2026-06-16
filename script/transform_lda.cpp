@@ -346,6 +346,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     int32_t topk_only = -1;
     bool computeResiduals = false;
     bool sorted_by_barcode = false;
+    bool keep_barcodes = false;
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
@@ -364,7 +365,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("in-features", "Input features.tsv.gz", in_ft)
       .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
       .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids)
-      .add_option("sorted-by-barcode", "Input matrix is sorted by barcode, use streaming mode", sorted_by_barcode);
+      .add_option("sorted-by-barcode", "Input matrix is sorted by barcode, use streaming mode", sorted_by_barcode)
+      .add_option("keep-barcodes", "For 10X input, write IDs from barcodes.tsv.gz instead of 0-based barcode indices", keep_barcodes);
 
     pl.add_option("features", "Feature names and total counts file", featureFile)
       .add_option("min-count-per-feature", "Min count for features to be included (requires --features)", minCountFeature)
@@ -412,9 +414,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
     std::unique_ptr<DGEReader10X> dge_ptr;
     if (use_10x) {
         if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
-            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
+            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids, keep_barcodes);
         } else {
-            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
+            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids, keep_barcodes);
         }
         reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
     } else {

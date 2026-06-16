@@ -18,6 +18,7 @@ Options:
   --dist-dir DIR          Output directory, default: dist
   --jobs N                Parallel build jobs, default: 4
   --cmake-extra ARGS      Extra CMake arguments, passed as one shell word
+  --keep-build            Keep the existing build directory for partial rebuilds
   --allow-newer-glibc     Allow packaging when build-host glibc is newer than --glibc-min
   --help                  Show this help
 
@@ -36,6 +37,7 @@ dist_dir="$repo_root/dist"
 jobs=4
 cmake_extra=()
 allow_newer_glibc=0
+keep_build=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -53,6 +55,8 @@ while [ "$#" -gt 0 ]; do
       jobs="${2:-}"; shift 2 ;;
     --cmake-extra)
       cmake_extra+=("${2:-}"); shift 2 ;;
+    --keep-build)
+      keep_build=1; shift ;;
     --allow-newer-glibc)
       allow_newer_glibc=1; shift ;;
     --help)
@@ -130,7 +134,10 @@ cmake -S "$repo_root" -B "$build_dir" \
 cmake --build "$build_dir" --parallel "$jobs"
 
 mkdir -p "$dist_dir"
-rm -rf "$stage_dir" "$tarball"
+if [ "$keep_build" -ne 1 ]; then
+  rm -rf "$stage_dir"
+fi
+rm -f "$tarball"
 mkdir -p "$stage_dir/bin" "$stage_dir/lib" "$stage_dir/docs"
 
 cp "$build_dir/bin/punkst" "$stage_dir/bin/punkst"

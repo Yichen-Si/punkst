@@ -1,5 +1,6 @@
 #include "punkst.h"
 #include "dataunits.hpp"
+#include "image_pmtiles.hpp"
 #include "image_utils.hpp"
 #include "mlt_utils.hpp"
 #include "pmtiles_utils.hpp"
@@ -102,6 +103,8 @@ struct ModelInputs {
 struct DeployInputs {
     TranscriptInputs transcripts;
     std::vector<ModelInputs> models;
+    std::vector<fs::path> imageAssetJsons;
+    std::vector<image_pmtiles::Options> images;
 };
 
 struct RgbColorEntry {
@@ -1410,6 +1413,165 @@ json read_json_file(const fs::path& path) {
     return json::parse(in);
 }
 
+std::array<double, 9> parse_transform_json(const json& value, const char* context) {
+    std::array<double, 9> out{};
+    if (value.is_array() && value.size() == 3 &&
+        value[0].is_array() && value[1].is_array() && value[2].is_array()) {
+        for (size_t r = 0; r < 3; ++r) {
+            if (value[r].size() != 3) {
+                error("%s: transform rows must each contain 3 values in %s", __func__, context);
+            }
+            for (size_t c = 0; c < 3; ++c) {
+                out[r * 3 + c] = value[r][c].get<double>();
+            }
+        }
+        return out;
+    }
+    if (value.is_array() && value.size() == 9) {
+        for (size_t i = 0; i < 9; ++i) {
+            out[i] = value[i].get<double>();
+        }
+        return out;
+    }
+    error("%s: transform must be a 3x3 array or 9-value array in %s", __func__, context);
+    return out;
+}
+
+void parse_image_entries(const json& root, const fs::path& base, DeployInputs& out,
+    const fs::path& contextPath) {
+    if (root.contains("image_assets") && !root.at("image_assets").is_null()) {
+        const json& assets = root.at("image_assets");
+        if (!assets.is_array()) {
+            error("%s: image_assets must be an array in %s", __func__, contextPath.string().c_str());
+        }
+        for (const auto& entry : assets) {
+            out.imageAssetJsons.push_back(resolve_path(base, entry.get<std::string>()));
+        }
+    }
+    if (!root.contains("images") || root.at("images").is_null()) {
+        return;
+    }
+    const json& images = root.at("images");
+    if (!images.is_array()) {
+        error("%s: images must be an array in %s", __func__, contextPath.string().c_str());
+    }
+    for (const auto& image : images) {
+        image_pmtiles::Options opts;
+        opts.id = normalize_id(image.at("id").get<std::string>());
+        opts.inImage = resolve_path(base, image.at("src").get<std::string>());
+        opts.minZoom = image.value("min_zoom", opts.minZoom);
+        opts.maxZoom = image.value("max_zoom", opts.maxZoom);
+        opts.grayLowPercentile = image.value("gray_low_percentile", opts.grayLowPercentile);
+        opts.grayHighPercentile = image.value("gray_high_percentile", opts.grayHighPercentile);
+        opts.graySampleFraction = image.value("gray_sample_fraction", opts.graySampleFraction);
+        opts.graySampleTiles = image.value("gray_sample_tiles", opts.graySampleTiles);
+        opts.graySampleSeed = image.value("gray_sample_seed", opts.graySampleSeed);
+        opts.tileCacheMb = image.value("tile_cache_mb", opts.tileCacheMb);
+        opts.tiffSourceLevel = image.value("tiff_source_level", opts.tiffSourceLevel);
+        if (image.contains("transform") && !image.at("transform").is_null()) {
+            opts.hasTransform = true;
+            opts.transform = parse_transform_json(image.at("transform"), contextPath.string().c_str());
+        } else if (image.contains("microns_per_pixel") && !image.at("microns_per_pixel").is_null()) {
+            opts.micronsPerPixel = image.at("microns_per_pixel").get<double>();
+            opts.offsetXUm = image.value("offset_x_um", 0.0);
+            opts.offsetYUm = image.value("offset_y_um", 0.0);
+        } else {
+            error("%s: image %s requires transform or microns_per_pixel",
+                __func__, opts.id.c_str());
+        }
+        out.images.push_back(std::move(opts));
+    }
+}
+
+fs::path resolve_image_json_fragment_path(const fs::path& imageJsonPath,
+    const fs::path& inputJsonBase, const std::string& value) {
+    fs::path p(value);
+    if (p.is_absolute()) {
+        return p;
+    }
+    const fs::path sidecarBase = imageJsonPath.parent_path();
+    std::vector<fs::path> candidates;
+    if (!sidecarBase.empty()) {
+        candidates.push_back(sidecarBase / p);
+    }
+    if (!inputJsonBase.empty()) {
+        candidates.push_back(inputJsonBase / p);
+    }
+    candidates.push_back(fs::current_path() / p);
+    for (const fs::path& candidate : candidates) {
+        if (file_exists(candidate)) {
+            return candidate;
+        }
+    }
+    return sidecarBase.empty() ? p : sidecarBase / p;
+}
+
+json normalize_image_json_fragment_paths(json fragment, const fs::path& imageJsonPath,
+    const fs::path& inputJsonBase) {
+    if (fragment.contains("image_assets") && !fragment.at("image_assets").is_null()) {
+        json& assets = fragment.at("image_assets");
+        if (!assets.is_array()) {
+            error("%s: image_assets must be an array in %s",
+                __func__, imageJsonPath.string().c_str());
+        }
+        for (auto& entry : assets) {
+            if (!entry.is_string()) {
+                error("%s: image_assets entries must be path strings in %s",
+                    __func__, imageJsonPath.string().c_str());
+            }
+            entry = resolve_image_json_fragment_path(imageJsonPath, inputJsonBase,
+                entry.get<std::string>()).string();
+        }
+    }
+    if (fragment.contains("images") && !fragment.at("images").is_null()) {
+        json& images = fragment.at("images");
+        if (!images.is_array()) {
+            error("%s: images must be an array in %s",
+                __func__, imageJsonPath.string().c_str());
+        }
+        for (auto& image : images) {
+            if (!image.is_object() || !image.contains("src") || !image.at("src").is_string()) {
+                error("%s: each image entry must contain src path string in %s",
+                    __func__, imageJsonPath.string().c_str());
+            }
+            image["src"] = resolve_image_json_fragment_path(imageJsonPath, inputJsonBase,
+                image.at("src").get<std::string>()).string();
+        }
+    }
+    return fragment;
+}
+
+void append_image_json_fragments(DeployInputs& out, const std::vector<std::string>& imageJsons,
+    const fs::path& inputJsonBase) {
+    for (const std::string& pathStr : imageJsons) {
+        fs::path imageJsonPath(pathStr);
+        if (!imageJsonPath.is_absolute() && !file_exists(imageJsonPath) && !inputJsonBase.empty()) {
+            imageJsonPath = inputJsonBase / imageJsonPath;
+        }
+        require_file(imageJsonPath, "image JSON");
+        json root = read_json_file(imageJsonPath);
+        if (!root.is_object()) {
+            error("%s: image JSON must be an object: %s",
+                __func__, imageJsonPath.string().c_str());
+        }
+        json fragment;
+        if (root.contains("deploy_cartoscope") && !root.at("deploy_cartoscope").is_null()) {
+            fragment = root.at("deploy_cartoscope");
+        } else if (root.contains("images") || root.contains("image_assets")) {
+            fragment = root;
+        } else {
+            error("%s: image JSON must contain deploy_cartoscope.images, images, or image_assets: %s",
+                __func__, imageJsonPath.string().c_str());
+        }
+        if (!fragment.is_object()) {
+            error("%s: deploy_cartoscope fragment must be an object in %s",
+                __func__, imageJsonPath.string().c_str());
+        }
+        fragment = normalize_image_json_fragment_paths(std::move(fragment), imageJsonPath, inputJsonBase);
+        parse_image_entries(fragment, fs::path(), out, imageJsonPath);
+    }
+}
+
 DeployInputs load_from_config(const fs::path& configPath) {
     json root = read_json_file(configPath);
     const json& wf = root.at("workflow");
@@ -1453,10 +1615,13 @@ DeployInputs load_from_config(const fs::path& configPath) {
     return out;
 }
 
-DeployInputs load_from_input_json(const fs::path& inputJson) {
+DeployInputs load_from_input_json(const fs::path& inputJson,
+    const std::vector<std::string>& imageJsons = {}) {
     json root = read_json_file(inputJson);
     fs::path base = inputJson.parent_path();
     DeployInputs out;
+    parse_image_entries(root, base, out, inputJson);
+    append_image_json_fragments(out, imageJsons, base);
     const json& tr = root.at("transcripts");
     out.transcripts.tiledPrefix = resolve_path(base, tr.at("tiled_prefix").get<std::string>());
     out.transcripts.featureCountTsv = resolve_path(base, tr.at("feature_count_tsv").get<std::string>());
@@ -1715,6 +1880,42 @@ void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMod
     if (!hasDefaultModel) {
         error("%s: at least one default model is required for transcript and raw-pixel deployment", __func__);
     }
+    std::set<std::string> imageIds;
+    for (const fs::path& assetJson : inputs.imageAssetJsons) {
+        require_file(assetJson, "image asset JSON");
+        json asset = read_json_file(assetJson);
+        if (!asset.is_object()) {
+            error("%s: image asset JSON must be an object: %s", __func__, assetJson.string().c_str());
+        }
+        for (auto it = asset.begin(); it != asset.end(); ++it) {
+            if (!it.value().is_string()) {
+                error("%s: image asset JSON value must be a PMTiles path string: %s",
+                    __func__, assetJson.string().c_str());
+            }
+            if (!imageIds.insert(it.key()).second) {
+                error("%s: duplicate image id %s", __func__, it.key().c_str());
+            }
+            require_file(resolve_path(assetJson.parent_path(), it.value().get<std::string>()),
+                "image PMTiles");
+        }
+    }
+    for (const image_pmtiles::Options& image : inputs.images) {
+        if (!imageIds.insert(image.id).second) {
+            error("%s: duplicate image id %s", __func__, image.id.c_str());
+        }
+        if (image.id.empty()) {
+            error("%s: image id must not be empty", __func__);
+        }
+        require_file(image.inImage, "image input");
+        if (!image.hasTransform && !(image.micronsPerPixel > 0.0)) {
+            error("%s: image %s requires transform or positive microns_per_pixel",
+                __func__, image.id.c_str());
+        }
+        if (image.minZoom < 0 || image.maxZoom < image.minZoom || image.maxZoom > 30) {
+            error("%s: image %s has invalid zoom range %d..%d",
+                __func__, image.id.c_str(), image.minZoom, image.maxZoom);
+        }
+    }
 }
 
 DeployInputs filter_models(DeployInputs inputs, const std::vector<std::string>& requested) {
@@ -1857,9 +2058,13 @@ void ensure_point_pyramids(const std::vector<std::string>& pointPmtiles,
     }
 }
 
+void copy_prebuilt_pmtiles_or_keep_in_place(const fs::path& src, const fs::path& dst,
+    bool overwrite, const char* label);
+
 void write_catalog_yaml(const fs::path& outPath, const std::string& id, const std::string& title,
     const std::string& desc, const std::vector<std::string>& binPmtiles,
-    const std::string& basemapPmtilesName, const json& factorAssets) {
+    const std::string& basemapPmtilesName, const json& factorAssets,
+    const json& imageBasemaps) {
     auto q = [](const std::string& s) { return json(s).dump(); };
     auto write_asset_scalar = [&](std::ostringstream& out, const json& asset,
         const char* key, const char* yamlKey = nullptr) {
@@ -1883,11 +2088,18 @@ void write_catalog_yaml(const fs::path& outPath, const std::string& id, const st
     if (!basemapPmtilesName.empty()) {
         y << "  overview: " << q(basemapPmtilesName) << "\n";
     }
-    if (!basemapPmtilesName.empty()) {
+    if (!basemapPmtilesName.empty() || !imageBasemaps.empty()) {
         y << "  basemap:\n";
+    }
+    if (!basemapPmtilesName.empty()) {
         y << "    sge:\n";
         y << "      default: dark\n";
         y << "      dark: " << q(basemapPmtilesName) << "\n";
+    }
+    if (imageBasemaps.is_object()) {
+        for (auto it = imageBasemaps.begin(); it != imageBasemaps.end(); ++it) {
+            y << "    " << it.key() << ": " << q(it.value().get<std::string>()) << "\n";
+        }
     }
     y << "  sge:\n";
     y << "    all: genes_all.pmtiles\n";
@@ -1950,6 +2162,49 @@ json make_cell_asset(const CellInputs& cell) {
         asset["rgb"] = cell.id + "-rgb.tsv";
     }
     return asset;
+}
+
+json copy_image_asset_jsons(const std::vector<fs::path>& assetJsons,
+    const fs::path& outRoot, bool overwrite) {
+    json basemaps = json::object();
+    for (const fs::path& assetJsonPath : assetJsons) {
+        json asset = read_json_file(assetJsonPath);
+        for (auto it = asset.begin(); it != asset.end(); ++it) {
+            const std::string imageId = it.key();
+            const fs::path src = resolve_path(assetJsonPath.parent_path(),
+                it.value().get<std::string>());
+            const fs::path dst = outRoot / src.filename();
+            copy_prebuilt_pmtiles_or_keep_in_place(src, dst, overwrite, "image PMTiles");
+            basemaps[imageId] = dst.filename().string();
+        }
+    }
+    return basemaps;
+}
+
+json deploy_source_images(const std::vector<image_pmtiles::Options>& images,
+    const fs::path& outRoot, bool overwrite) {
+    json basemaps = json::object();
+    for (image_pmtiles::Options options : images) {
+        options.outPrefix = outRoot / options.id;
+        options.assetJson = outRoot / (options.id + "_assets.json");
+        options.overwrite = overwrite;
+        image_pmtiles::Asset asset = image_pmtiles::write_image_pmtiles(options);
+        basemaps[asset.id] = asset.pmtilesPath.filename().string();
+    }
+    return basemaps;
+}
+
+json merge_image_basemaps(json lhs, const json& rhs) {
+    if (!lhs.is_object()) {
+        lhs = json::object();
+    }
+    for (auto it = rhs.begin(); it != rhs.end(); ++it) {
+        if (lhs.contains(it.key())) {
+            error("%s: duplicate image basemap id %s", __func__, it.key().c_str());
+        }
+        lhs[it.key()] = it.value();
+    }
+    return lhs;
 }
 
 void copy_prebuilt_pmtiles_or_keep_in_place(const fs::path& src, const fs::path& dst,
@@ -2093,6 +2348,7 @@ json deploy_cell_factor(const CellInputs& cell, const fs::path& outRoot,
 
 int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     std::string inputJson;
+    std::vector<std::string> imageJsons;
     std::string configPath;
     std::string outDir;
     std::string datasetId;
@@ -2128,6 +2384,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     ParamList pl;
     pl.add_option("config", "Standard workflow config JSON", configPath)
       .add_option("input-json", "Explicit deployment input JSON", inputJson)
+      .add_option("image-json", "image2pmtiles metadata JSON from convert_tiff_for_image2pmtiles.py; may be repeated", imageJsons)
       .add_option("out-dir", "Output deployment directory", outDir, true)
       .add_option("id", "Dataset ID", datasetId, true)
       .add_option("title", "Dataset title", title)
@@ -2175,6 +2432,9 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     if (configPath.empty() == inputJson.empty()) {
         error("%s: provide exactly one of --config or --input-json", __func__);
     }
+    if (!imageJsons.empty() && inputJson.empty()) {
+        error("%s: --image-json requires --input-json", __func__);
+    }
     if (nGeneBins <= 0) {
         error("%s: --n-gene-bins must be positive", __func__);
     }
@@ -2196,7 +2456,7 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
     const bool configMode = inputJson.empty();
     DeployInputs inputs;
     if (!inputJson.empty()) {
-        inputs = load_from_input_json(inputJson);
+        inputs = load_from_input_json(inputJson, imageJsons);
     } else {
         inputs = load_from_config(configPath);
     }
@@ -2436,11 +2696,15 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
         factorAssets.push_back(asset);
     }
 
+    json imageBasemaps = copy_image_asset_jsons(inputs.imageAssetJsons, outRoot, overwrite);
+    imageBasemaps = merge_image_basemaps(imageBasemaps,
+        deploy_source_images(inputs.images, outRoot, overwrite));
+
     write_text_checked(outRoot / "ficture_assets.json", factorAssets.dump(4) + "\n",
         overwrite, "ficture assets");
 
     write_catalog_yaml(outRoot / "catalog.yaml", datasetId, title, desc, binPmtiles,
-        basemapPmtilesName, factorAssets);
+        basemapPmtilesName, factorAssets, imageBasemaps);
     fs::remove_all(tmpDir);
     notice("%s: wrote minimal CartoScope deployment to %s", __func__, outRoot.string().c_str());
     return 0;

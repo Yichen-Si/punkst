@@ -241,6 +241,98 @@ You can also replace `"boundaries"` with prebuilt PMTiles directly through
   }
 ```
 
+#### Add background image PMTiles
+
+Background images can be added as CartoScope basemaps in explicit input JSON mode. Images are **not** aligned or registered by punkst. Provide the alignment through pixel size plus offset, or a full 3x3 transform that maps image pixel coordinates to the same micron coordinate system used by the transcript data.
+
+Supported image inputs are PNG and standard TIFF: tiled TIFF with uncompressed or Deflate/zlib-compressed tiles, using 8-bit RGB/RGBA, 8-bit grayscale, or 16-bit grayscale pixels. Unsupported OME-TIFF, JPEG/JPEG-2000/LZW-compressed TIFF, stripped TIFF, palette TIFF, planar-separated TIFF, or non-unsigned TIFF sample formats should be converted first.
+
+##### convert OME-TIFF
+
+Use `ext/py/convert_tiff_for_image2pmtiles.py` to convert OME-TIFF or generic TIFF files into the supported tiled TIFF subset. The helper writes uint8 output by default, using percentile scaling for non-uint8 inputs (`--uint8-percentiles 1 99` by default); use `--preserve-depth` only when you intentionally want to keep supported 16-bit grayscale TIFF data for native punkst scaling. The script uses Python `numpy` and `tifffile`. For TIFF compression codecs that `tifffile` delegates to optional decoders, install the matching Python package as well; in practice, JPEG/JPEG2000-compressed OME-TIFFs commonly require `imagecodecs`.
+
+```bash
+python -m pip install numpy tifffile imagecodecs
+```
+
+Example OME/generic compressed TIFF conversion:
+
+```bash
+python ext/py/convert_tiff_for_image2pmtiles.py \
+  --input spatial/tissue_hires_image.ome.tif \
+  --output carto/HnE.supported.tif \
+  --id HnE
+```
+
+The conversion helper writes `<output>.image2pmtiles.json` that can be passed on to `deploy-cartoscope` with `--image-json` directly, which runs `image2pmtiles` internally to produce CartoScope-compatible PMTiles.
+When OME physical pixel metadata is available, the JSON records a pixel-to-micron transform for the selected `--series`, `--level`, and `--page` based on the metadata, which is then used during PMTiles construction.
+
+For generic TIFFs **without OME metadata**, pass either `--microns-per-pixel` with optional offsets `--offset-x-um` `--offset-y-um`, or a full 3x3 matrix with `--transform` (row-wise flatten to 9 comma/space-separated values); otherwise the JSON is marked `requires_transform`.
+
+##### Supply (converted) TIFF to `deploy-cartoscope`
+
+If your image files are converted by with above python helper `ext/py/convert_tiff_for_image2pmtiles.py`, pass its output `<output>.image2pmtiles.json` to `deploy-cartoscope` with `--image-json`.
+
+Otherwise, include source image information as an additional sections in the input JSON file for `deploy-cartoscope`:
+
+Example with two images:
+```json
+{
+  "images": [
+    {
+      "id": "HnE",
+      "src": "spatial/tissue_hires_image.tif",
+      "microns_per_pixel": 0.5,
+      "offset_x_um": 0,
+      "offset_y_um": 0
+    },
+    {
+      "id": "DAPI",
+      "src": "dapi.supported.tif",
+      "transform": [
+        [0.5, 0.0, 10.0],
+        [0.0, 0.5, 20.0],
+        [0.0, 0.0, 1.0]
+      ]
+    }
+  ]
+}
+```
+(Note: you can provide alignment in either of the two ways shown above; if one of the images is converted by the python helper you can copy over the JSON section under `"deploy_cartoscope"` from `image2pmtiles.json`)
+
+##### image2pmtiles
+
+If your image files do not need conversion, you can also run `punkst image2pmtiles` separately then pass its output to `deploy-cartoscope`.
+
+```bash
+punkst image2pmtiles \
+  --in-image tissue_hires_image.tif \
+  --out-prefix carto/HnE \
+  --id HnE \
+  --microns-per-pixel 0.5 \
+  --offset-x-um 0 \
+  --offset-y-um 0 \
+  --min-zoom 10 \
+  --max-zoom 18
+```
+
+This writes:
+
+```text
+carto/HnE.pmtiles
+carto/HnE_assets.json
+```
+
+Include the asset JSON in deployment input:
+
+```json
+{
+  "image_assets": [
+    "carto/HnE_assets.json"
+  ]
+}
+```
+
 ### deploy-cartoscope Options
 
 `punkst deploy-cartoscope` accepts the following command-line options:
@@ -249,6 +341,7 @@ You can also replace `"boundaries"` with prebuilt PMTiles directly through
 | --- | --- | --- |
 | `--config` | none | Standard workflow config JSON. Provide exactly one of `--config` or `--input-json`. |
 | `--input-json` | none | Explicit deployment input JSON. Provide exactly one of `--config` or `--input-json`. |
+| `--image-json` | none | Additional image fragment JSON, typically `<output>.image2pmtiles.json` from `convert_tiff_for_image2pmtiles.py`. May be repeated; requires `--input-json`. |
 | `--out-dir` | required | Output deployment directory. |
 | `--id` | required | Dataset ID written to the deployment metadata. |
 | `--title` | empty | Dataset title. |

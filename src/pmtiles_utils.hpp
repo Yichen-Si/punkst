@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace pm_core {
@@ -166,6 +167,8 @@ struct RasterPixelCoord {
     int32_t py = 0;
 };
 
+using EncodedRasterTileMap = std::unordered_map<RasterTileKey, std::string, RasterTileKeyHash>;
+
 void write_png_raster_pmtiles_archive(const std::string& pngFile,
     const std::string& outFile,
     const std::string& tempBlobFile,
@@ -193,5 +196,12 @@ void write_png_raster_pmtiles_archive_from_blob(const std::string& outFile,
     const RasterBounds& bounds,
     int32_t minZoom,
     int32_t maxZoom);
+
+EncodedRasterTileMap write_rgba_png_parent_zoom(uint8_t parentZoom,
+    const EncodedRasterTileMap& children,
+    std::ofstream& blob,
+    const std::string& tempBlobFile,
+    uint64_t& dataOffset,
+    std::vector<pm_core::StoredTilePayloadRef>& tiles);
 
 } // namespace pm_raster

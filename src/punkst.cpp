@@ -35,6 +35,7 @@ int32_t cmdPoly2Pmtiles(int32_t argc, char** argv);
 int32_t cmdPoly2PmtilesGeneric(int32_t argc, char** argv);
 int32_t cmdCells2Pmtiles(int32_t argc, char** argv);
 int32_t cmdTiles2Mono(int32_t argc, char** argv);
+int32_t cmdImage2Pmtiles(int32_t argc, char** argv);
 int32_t cmdBuildPmtilesPyramid(int32_t argc, char** argv);
 int32_t cmdExportPmtiles(int32_t argc, char** argv);
 int32_t cmdDeployCartoscope(int32_t argc, char** argv);
@@ -81,6 +82,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("poly2pmtiles-generic", "Write single-zoom polygon MLT/MVT PMTiles from arbitrary TSV properties and polygon geometry", cmdPoly2PmtilesGeneric)
         .add_command("cells2pmtiles", "Write CartoScope cell centroid and boundary PMTiles from cell factor assignments", cmdCells2Pmtiles)
         .add_command("tiles2mono", "Write monochrome raster PMTiles from pts2tiles output", cmdTiles2Mono)
+        .add_command("image2pmtiles", "Write CartoScope image raster PMTiles and basemap asset JSON", cmdImage2Pmtiles)
         .add_command("build-pyramid", "Build multi-zoom MLT/MVT PMTiles pyramids", cmdBuildPmtilesPyramid)
         .add_command("export-pmtiles", "Export MLT/MVT PMTiles to TSV", cmdExportPmtiles)
         .add_command("deploy-cartoscope", "Package punkst workflow outputs into a minimal CartoScope deployment", cmdDeployCartoscope)

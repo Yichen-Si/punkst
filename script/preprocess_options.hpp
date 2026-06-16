@@ -20,6 +20,7 @@ struct Pts2TilesOptions {
     int32_t nskip = 0;
     bool skip_last_is_header = false;
     bool csv_input = false;
+    std::vector<int32_t> keep_quotes;
     bool tile_op_factor_tsv = false;
     double scale = 1.0;
     double scale_x = std::numeric_limits<double>::quiet_NaN();
@@ -52,7 +53,8 @@ struct Pts2TilesOptions {
         if (allowTileOpFactorTsv) {
             pl.add_option("tile-op-factor-tsv", "Input is a TileOperator factor-probability TSV with x/y[/z] and K1/P1 columns; write a tile-op compatible index", tile_op_factor_tsv);
         }
-        pl.add_option("csv", "Treat the input as comma-delimited CSV instead of tab-delimited text", csv_input)
+        pl.add_option("csv", "Treat the input as comma-delimited CSV instead of tab-delimited text; otherwise inferred from input extension when possible", csv_input)
+          .add_option("keep-quotes", "Columns to keep quoted in CSV output (0-based)", keep_quotes)
           .add_option("skip", "Number of lines to skip in the input file (default: 0)", nskip)
           .add_option("skip-last-is-header", "Treat the last skipped line as the header line", skip_last_is_header);
         if (includeTempDir) {
@@ -96,11 +98,19 @@ struct Pts2TilesOptions {
         if (skip_last_is_header && nskip <= 0) {
             error("--skip-last-is-header requires --skip to be greater than 0");
         }
+        for (int32_t col : keep_quotes) {
+            if (col < 0) {
+                error("--keep-quotes requires non-negative 0-based column indices");
+            }
+        }
         if (!include_cols.empty() && !exclude_cols.empty()) {
             error("--include-cols and --exclude-cols are mutually exclusive");
         }
         if (tile_op_factor_tsv && (!include_cols.empty() || !exclude_cols.empty())) {
             error("--include-cols/--exclude-cols cannot be combined with --tile-op-factor-tsv");
+        }
+        if (inputDelimiter() != ',' && !keep_quotes.empty()) {
+            error("--keep-quotes can only be used with CSV input");
         }
         normalizeScales();
     }
@@ -129,8 +139,75 @@ struct Pts2TilesOptions {
         return inTsv == "-" || (inTsv.size() > 3 && inTsv.compare(inTsv.size() - 3, 3, ".gz") == 0);
     }
 
+    static size_t countDelimiterOutsideQuotes(const std::string& line, char delim) {
+        size_t count = 0;
+        bool inQuotes = false;
+        for (size_t i = 0; i < line.size(); ++i) {
+            const char c = line[i];
+            if (c == '"') {
+                if (inQuotes && i + 1 < line.size() && line[i + 1] == '"') {
+                    ++i;
+                    continue;
+                }
+                inQuotes = !inQuotes;
+                continue;
+            }
+            if (!inQuotes && c == delim) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    bool readDelimiterProbeLine(std::string& line) const {
+        if (inTsv.empty() || inTsv == "-") {
+            return false;
+        }
+        TextLineReader reader(inTsv);
+        int32_t skipped = 0;
+        while (reader.getline(line)) {
+            if (skipped < nskip) {
+                ++skipped;
+                continue;
+            }
+            if (line.empty() || line[0] == '#') {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
     char inputDelimiter() const {
-        return csv_input ? ',' : '\t';
+        if (csv_input) {
+            return ',';
+        }
+        char delim = '\t';
+        bool inferred = false;
+        if (path_has_suffix_ci(inTsv, ".csv") || path_has_suffix_ci(inTsv, ".csv.gz")) {
+            delim = ',';
+            inferred = true;
+        } else if (path_has_suffix_ci(inTsv, ".tsv") || path_has_suffix_ci(inTsv, ".tsv.gz")) {
+            delim = '\t';
+            inferred = true;
+        }
+        std::string line;
+        if (readDelimiterProbeLine(line)) {
+            const size_t commas = countDelimiterOutsideQuotes(line, ',');
+            const size_t tabs = countDelimiterOutsideQuotes(line, '\t');
+            if (!inferred) {
+                return commas > tabs ? ',' : '\t';
+            }
+            const size_t expected = delim == ',' ? commas : tabs;
+            const size_t other = delim == ',' ? tabs : commas;
+            if (expected == 0 && other > 0) {
+                error("Input delimiter inferred from extension as %s, but first data line looks %s-delimited: %s",
+                    delim == ',' ? "CSV" : "TSV",
+                    delim == ',' ? "tab" : "comma",
+                    inTsv.c_str());
+            }
+        }
+        return delim;
     }
 
     Pts2Tiles makeRunner(unsigned int nThreads) {
@@ -138,7 +215,7 @@ struct Pts2TilesOptions {
             icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip,
             skip_last_is_header, streamingInput(), tileBuffer, batchSize,
             scale_x, scale_y, scale_z, digits, inputDelimiter(), tile_op_factor_tsv,
-            include_cols, exclude_cols);
+            include_cols, exclude_cols, keep_quotes);
     }
 
     int32_t remapColumn(int32_t col, bool includeImplicitCount = false) const {

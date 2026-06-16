@@ -11,8 +11,8 @@ namespace pmtiles_pyramid {
 
 constexpr int32_t DEFAULT_POINT_MAX_TILE_BYTES = 5000000;
 constexpr int32_t DEFAULT_POINT_MAX_TILE_FEATURES = 50000;
-constexpr int32_t DEFAULT_POLYGON_MAX_TILE_BYTES = 500000;
-constexpr int32_t DEFAULT_POLYGON_MAX_TILE_FEATURES = 5000;
+constexpr int32_t DEFAULT_POLYGON_MAX_TILE_BYTES = 5000000;
+constexpr int32_t DEFAULT_POLYGON_MAX_TILE_FEATURES = 5000000;
 
 enum class PolygonPriorityMode {
     Random,

@@ -166,6 +166,52 @@ void write_binary(const std::filesystem::path& path, const std::string& data) {
     }
 }
 
+RandomAccessFile::RandomAccessFile(std::filesystem::path path)
+    : path_(std::move(path)), in_(path_, std::ios::binary) {
+    if (!in_.is_open()) {
+        error("%s: cannot open %s", __func__, path_.string().c_str());
+    }
+    in_.seekg(0, std::ios::end);
+    const std::streamoff n = in_.tellg();
+    if (n < 0) {
+        error("%s: failed sizing %s", __func__, path_.string().c_str());
+    }
+    size_ = static_cast<uint64_t>(n);
+    in_.seekg(0, std::ios::beg);
+}
+
+std::vector<uint8_t> RandomAccessFile::read(uint64_t off, size_t n) {
+    if (off > size_ || static_cast<uint64_t>(n) > size_ - off) {
+        error("%s: read outside file %s", __func__, path_.string().c_str());
+    }
+    std::vector<uint8_t> out(n);
+    if (n == 0) {
+        return out;
+    }
+    in_.clear();
+    in_.seekg(static_cast<std::streamoff>(off), std::ios::beg);
+    in_.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(n));
+    if (!in_.good()) {
+        error("%s: failed reading %s", __func__, path_.string().c_str());
+    }
+    return out;
+}
+
+uint16_t RandomAccessFile::read_u16_at(uint64_t off, bool le) {
+    const std::vector<uint8_t> data = read(off, 2);
+    return read_u16(data, 0, le);
+}
+
+uint32_t RandomAccessFile::read_u32_at(uint64_t off, bool le) {
+    const std::vector<uint8_t> data = read(off, 4);
+    return read_u32(data, 0, le);
+}
+
+uint64_t RandomAccessFile::read_u64_at(uint64_t off, bool le) {
+    const std::vector<uint8_t> data = read(off, 8);
+    return read_u64(data, 0, le);
+}
+
 bool write_all(int fd, const void* buf, size_t len) {
     const uint8_t* p = static_cast<const uint8_t*>(buf);
     size_t left = len;

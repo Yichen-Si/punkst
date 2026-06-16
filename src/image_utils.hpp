@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+class RandomAccessFile;
 
 struct Color3f {
     float r = 0.f;
@@ -47,6 +50,13 @@ struct Rgb8 {
     uint8_t r = 0;
     uint8_t g = 0;
     uint8_t b = 0;
+};
+
+struct Rgba8 {
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    uint8_t a = 255;
 };
 
 inline uint8_t clamp_u8(float value) {
@@ -108,4 +118,54 @@ inline IntRect intersect_rect(const IntRect& lhs, const IntRect& rhs) {
 
 void save_png_rgb8(const std::string& filename, const Image2D<Rgb8>& image);
 Image2D<Rgb8> load_png_rgb8(const std::string& filename);
+Image2D<Rgba8> load_png_rgba8(const std::string& filename);
 std::string encode_png_rgb8(const Image2D<Rgb8>& image);
+std::string encode_png_rgba8(const Image2D<Rgba8>& image);
+Image2D<Rgba8> decode_png_rgba8(const std::string& png);
+
+namespace image_tiff {
+
+struct TiffLevel {
+    uint64_t ifdOffset = 0;
+    uint64_t width = 0;
+    uint64_t height = 0;
+    uint64_t tileWidth = 0;
+    uint64_t tileHeight = 0;
+    uint16_t compression = 1;
+    uint16_t photometric = 0;
+    uint16_t planarConfig = 1;
+    uint16_t samplesPerPixel = 1;
+    std::vector<uint16_t> bitsPerSample;
+    std::vector<uint16_t> sampleFormat;
+    std::vector<uint16_t> extraSamples;
+    std::vector<uint64_t> tileOffsets;
+    std::vector<uint64_t> tileByteCounts;
+};
+
+struct TiffInfo {
+    bool littleEndian = true;
+    bool bigTiff = false;
+    std::vector<TiffLevel> levels;
+};
+
+struct Gray16Bounds {
+    uint16_t low = 0;
+    uint16_t high = 1;
+};
+
+TiffInfo parse_tiff_info(RandomAccessFile& file);
+std::vector<uint8_t> decode_tiff_tile(RandomAccessFile& file,
+    const TiffLevel& level,
+    size_t tileIdx,
+    size_t tileBytes);
+Gray16Bounds estimate_gray16_bounds(RandomAccessFile& file,
+    const TiffLevel& level,
+    size_t tileBytes,
+    bool littleEndian,
+    double lowPercentile,
+    double highPercentile,
+    double sampleFraction,
+    int32_t sampleTiles,
+    uint32_t seed);
+
+} // namespace image_tiff

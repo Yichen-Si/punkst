@@ -271,6 +271,37 @@ struct Rectangle {
     }
 };
 
+namespace geometry_detail {
+
+inline void hilbert_rotate(uint64_t n, uint64_t& x, uint64_t& y, uint64_t rx, uint64_t ry) {
+    if (ry != 0) {
+        return;
+    }
+    if (rx != 0) {
+        x = n - 1u - x;
+        y = n - 1u - y;
+    }
+    std::swap(x, y);
+}
+
+} // namespace geometry_detail
+
+inline uint64_t hilbert_index_2d(uint32_t xIn, uint32_t yIn, int32_t bits) {
+    if (bits <= 0) {
+        return 0;
+    }
+    uint64_t x = xIn;
+    uint64_t y = yIn;
+    uint64_t d = 0;
+    for (uint64_t s = uint64_t{1} << (bits - 1); s > 0; s >>= 1u) {
+        const uint64_t rx = (x & s) ? 1u : 0u;
+        const uint64_t ry = (y & s) ? 1u : 0u;
+        d += s * s * ((3u * rx) ^ ry);
+        geometry_detail::hilbert_rotate(s, x, y, rx, ry);
+    }
+    return d;
+}
+
 template <typename T>
 int32_t parseCoordsToRects(std::vector<Rectangle<T>>& rects, const std::vector<T>& coords) {
     if (coords.size() % 4 != 0) {

@@ -130,9 +130,7 @@ cmake .. \
 ```
 
 #### TBB
-For TBB, a local oneTBB install is documented upstream:
-
-- [oneTBB installation guide](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md)
+For TBB, see [oneTBB installation guide](https://github.com/uxlfoundation/oneTBB/blob/master/INSTALL.md)
 
 Install from released packages:
 ```bash

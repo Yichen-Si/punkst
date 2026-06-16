@@ -61,21 +61,21 @@ In both cases, each binary record carries an additional feature index in additio
 Current `tile-op` support for these inputs is:
 
 - supported:
-  - `--dump-tsv`
-  - `--merge-emb`
-  - `--annotate-pts`
-  - `--annotate-cell`
-  - `--prob-dot`
-  - `--confusion`
-  - direct `--write-mlt-pmtiles`
+    - `--dump-tsv`
+    - `--merge-emb`
+    - `--annotate-pts`
+    - `--annotate-cell`
+    - `--prob-dot`
+    - `--confusion`
+    - direct `--write-mlt-pmtiles`
 - raster image processing style operations are not supported:
-  - `--smooth-top-labels`
-  - `--spatial-metrics`
-  - `--shell-surface`
-  - `--profile-one-factor-mask`
-  - `--soft-factor-mask`
-  - `--soft-mask-composition`
-  - `--hard-factor-mask`
+    - `--smooth-top-labels`
+    - `--spatial-metrics`
+    - `--shell-surface`
+    - `--profile-one-factor-mask`
+    - `--soft-factor-mask`
+    - `--soft-mask-composition`
+    - `--hard-factor-mask`
 
 Additional flags used with supported single-molecule workflows:
 
@@ -634,19 +634,19 @@ punkst tile-op --spatial-metrics --in path/result [--binary] \
 The output includes two files:
 
 - `path/prefix.stats.single.tsv` for per-channel (factor or cell type) metrics. Columns are:
-  - channel index (`#k`)
-  - total number of pixels (`area`)
-  - total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel `K` (`perim`)
+    - channel index (`#k`)
+    - total number of pixels (`area`)
+    - total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel `K` (`perim`)
 
 The single-channel table includes one extra row with `#k = K`, representing empty/background area.
 
 - `path/prefix.stats.pairwise.tsv` for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be $A_k, P_k, A_l, P_l$, the columns are
-  - channel indices for the pair (`#k`, `l`)
-  - length of shared boundary $L_{kl}$ (`contact`)
-  - $L_{kl} / (P_k + P_l - L_{kl})$ (`frac0`)
-  - $L_{kl} / P_k$ (`frac1`)
-  - $L_{kl} / P_l$ (`frac2`)
-  - $L_{kl} / (A_k + A_l)$ (`density`)
+    - channel indices for the pair (`#k`, `l`)
+    - length of shared boundary $L_{kl}$ (`contact`)
+    - $L_{kl} / (P_k + P_l - L_{kl})$ (`frac0`)
+    - $L_{kl} / P_k$ (`frac1`)
+    - $L_{kl} / P_l$ (`frac2`)
+    - $L_{kl} / (A_k + A_l)$ (`density`)
 
 ### Shell and Surface Profiles
 
@@ -682,17 +682,17 @@ punkst tile-op --shell-surface --in path/result [--binary] \
 Output:
 
 - `path/out_prefix.shell.tsv`: shell occupancy summary with columns
-  - focal label (`#K_focal`)
-  - other label (`K2`)
-  - radius (`r`)
-  - number of `K2` pixels within distance `r` from boundary of focal label (`n_within`)
-  - total number of `K2` pixels (`n_K2_total`)
+    - focal label (`#K_focal`)
+    - other label (`K2`)
+    - radius (`r`)
+    - number of `K2` pixels within distance `r` from boundary of focal label (`n_within`)
+    - total number of `K2` pixels (`n_K2_total`)
 
 - `path/out_prefix.surface.tsv`: directional surface-distance histogram with columns
-  - source label (`#from_K1`)
-  - target label (`to_K2`)
-  - distance bin (`d`)
-  - number of `K1` boundary pixels that find the neraest boundary of `K2` at distance `d` (`count`)
+    - source label (`#from_K1`)
+    - target label (`to_K2`)
+    - distance bin (`d`)
+    - number of `K1` boundary pixels that find the neraest boundary of `K2` at distance `d` (`count`)
 
 ### Profile the area covered by one focal factor
 
@@ -720,20 +720,20 @@ Main parameters:
 Output:
 
 - `path/out_prefix.factor_hist.tsv`: factor histogram for both the focal mask and the full processed region with columns
-  - factor index (`k`)
-  - total mass inside the focal mask (`mass_in_mask`)
-  - fraction of the total focal-mask mass (`frac_in_mask`)
-  - total mass in the full processed region (`mass_global`)
-  - fraction of the total global mass (`frac_global`)
+    - factor index (`k`)
+    - total mass inside the focal mask (`mass_in_mask`)
+    - fraction of the total focal-mask mass (`frac_in_mask`)
+    - total mass in the full processed region (`mass_global`)
+    - fraction of the total global mass (`frac_global`)
 
 - `path/out_prefix.pairwise.tsv`: pairwise overlap summary for the selected factor set `{focal_k} U {significant secondary factors}` with columns
-  - factor indices (`k1`, `k2`)
-  - mask areas (`area1_pix`, `area2_pix`)
-  - area intersection (`area_ovlp_pix`)
-  - directional area overlap fractions (`area_ovlp_f1`, `area_ovlp_f2`)
-  - area Jaccard (`area_jaccard`)
-  - factor-specific mass in the intersection (`mass1_in_ovlp`, `mass2_in_ovlp`)
-  - directional mass overlap fractions relative to each factor's total global mass (`mass_ovlp_f1`, `mass_ovlp_f2`)
+    - factor indices (`k1`, `k2`)
+    - mask areas (`area1_pix`, `area2_pix`)
+    - area intersection (`area_ovlp_pix`)
+    - directional area overlap fractions (`area_ovlp_f1`, `area_ovlp_f2`)
+    - area Jaccard (`area_jaccard`)
+    - factor-specific mass in the intersection (`mass1_in_ovlp`, `mass2_in_ovlp`)
+    - directional mass overlap fractions relative to each factor's total global mass (`mass_ovlp_f1`, `mass_ovlp_f2`)
 
 ### Soft factor mask
 
@@ -765,21 +765,21 @@ Main parameters:
 Output:
 
 - `path/out_prefix.factor_summary.tsv`: per-factor summary with columns
-  - factor index (`k`)
-  - number of tiles where the factor passed `--mask-min-tile-mass` (`n_tiles`)
-  - total kept soft-mask area in pixels (`mask_area_pix`)
-  - number of final connected components after seam merge (`n_components`)
+    - factor index (`k`)
+    - number of tiles where the factor passed `--mask-min-tile-mass` (`n_tiles`)
+    - total kept soft-mask area in pixels (`mask_area_pix`)
+    - number of final connected components after seam merge (`n_components`)
 
 - `path/out_prefix.component_hist.tsv`: final component-size histogram with columns
-  - factor index (`k`)
-  - component size (`size`)
-  - number of components with that size (`n_components`)
+    - factor index (`k`)
+    - component size (`size`)
+    - number of components with that size (`n_components`)
 
 - `path/out_prefix.geojson`: optional `FeatureCollection` containing one `MultiPolygon` feature per factor with properties
-  - factor index (`Factor`)
-  - number of contributing tiles (`n_tiles`)
-  - total kept mask area in pixels (`mask_area_pix`)
-  - number of final connected components (`n_components`)
+    - factor index (`Factor`)
+    - number of contributing tiles (`n_tiles`)
+    - total kept mask area in pixels (`mask_area_pix`)
+    - number of final connected components (`n_components`)
 
 - `path/out_prefix.k<factor>.geojson`: optional per-factor GeoJSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file preserves the template's top-level metadata, sets `title` to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.
 
@@ -804,10 +804,10 @@ Main parameters:
 Output:
 
 - `path/out_prefix.mask_composition.tsv`: mask factor histograms and, unless skipped, the global factor histogram, with columns
-  - focal factor index (`k_focal`)
-  - factor index (`k`)
-  - total probability mass (`mass`)
-  - fraction of the total mass for that focal mask (`frac`)
+    - focal factor index (`k_focal`)
+    - factor index (`k`)
+    - total probability mass (`mass`)
+    - fraction of the total mass for that focal mask (`frac`)
 
 For the global histogram block, `k_focal` is written as `-1`. If `--soft-mask-composition-skip-global` is set, this global block is omitted.
 
@@ -831,20 +831,20 @@ Main parameters:
 Output:
 
 - `path/out_prefix.factor_summary.tsv`: per-factor summary with columns
-  - factor index (`k`)
-  - number of tiles containing the factor (`n_tiles`)
-  - total retained mask area in pixels (`mask_area_pix`)
-  - number of retained final connected components (`n_components`)
+    - factor index (`k`)
+    - number of tiles containing the factor (`n_tiles`)
+    - total retained mask area in pixels (`mask_area_pix`)
+    - number of retained final connected components (`n_components`)
 
 - `path/out_prefix.component_hist.tsv`: retained component-size histogram with columns
-  - factor index (`k`)
-  - component size (`size`)
-  - number of components with that size (`n_components`)
+    - factor index (`k`)
+    - component size (`size`)
+    - number of components with that size (`n_components`)
 
 - `path/out_prefix.geojson`: optional `FeatureCollection` containing one `MultiPolygon` feature per factor with properties
-  - factor index (`Factor`)
-  - number of contributing tiles (`n_tiles`)
-  - total retained mask area in pixels (`mask_area_pix`)
-  - number of retained final connected components (`n_components`)
+    - factor index (`Factor`)
+    - number of contributing tiles (`n_tiles`)
+    - total retained mask area in pixels (`mask_area_pix`)
+    - number of retained final connected components (`n_components`)
 
 - `path/out_prefix.k<factor>.geojson`: optional per-factor GeoJSON files written only when `--template-geojson` is provided. If `--template-out-prefix` is set, that prefix is used instead of `out_prefix`. Each file preserves the template's top-level metadata, sets `title` to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.

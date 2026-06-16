@@ -34,7 +34,8 @@ public:
         int digits=2, char inputDelimiter = '\t',
         bool tileOpFactorTsv = false,
         std::vector<int32_t> includeCols = {},
-        std::vector<int32_t> excludeCols = {}) :
+        std::vector<int32_t> excludeCols = {},
+        std::vector<int32_t> keepQuotes = {}) :
         nThreads_(nthreads),
         inFile_(inFile), tmpDir_(tmpDir),
         outPref_(outPref), tileSize_(tileSize),
@@ -45,13 +46,24 @@ public:
         scale_x_(scale_x), scale_y_(scale_y), scale_z_(scale_z),
         digits_(digits), inputDelimiter_(1, inputDelimiter),
         tileOpFactorTsv_(tileOpFactorTsv),
-        includeCols_(std::move(includeCols)), excludeCols_(std::move(excludeCols))
+        includeCols_(std::move(includeCols)), excludeCols_(std::move(excludeCols)),
+        keepQuotes_(std::move(keepQuotes))
     {
         if (!includeCols_.empty() && !excludeCols_.empty()) {
             error("--include-cols and --exclude-cols are mutually exclusive");
         }
         if (tileOpFactorTsv_ && (!includeCols_.empty() || !excludeCols_.empty())) {
             error("--include-cols/--exclude-cols cannot be combined with --tile-op-factor-tsv");
+        }
+        if (!keepQuotes_.empty() && inputDelimiter_ != ",") {
+            error("--keep-quotes can only be used together with CSV input");
+        }
+        std::sort(keepQuotes_.begin(), keepQuotes_.end());
+        keepQuotes_.erase(std::unique(keepQuotes_.begin(), keepQuotes_.end()), keepQuotes_.end());
+        for (int32_t col : keepQuotes_) {
+            if (col < 0) {
+                error("--keep-quotes requires non-negative 0-based column indices");
+            }
         }
         filterColumns_ = !includeCols_.empty() || !excludeCols_.empty();
         ntokens_ = std::max(icol_x_, icol_y_);
@@ -137,6 +149,7 @@ protected:
     int32_t digits_;
     std::string inputDelimiter_;
     std::vector<int32_t> includeCols_, excludeCols_;
+    std::vector<int32_t> keepQuotes_;
     Rectangle<float> globalBox_;
     bool hasGlobalZRange_ = false;
     float globalZMin_ = 0, globalZMax_ = 0;
@@ -162,6 +175,12 @@ protected:
         float z = 0;
         std::string feature;
         std::vector<int32_t> vals = {1};
+    };
+
+    struct CsvToken {
+        std::string value;
+        std::string raw;
+        bool quoted = false;
     };
 
     static std::string normalizeHeaderKey(std::string key) {
@@ -353,20 +372,6 @@ protected:
         return keep;
     }
 
-    std::string filterLineTokens(const std::vector<std::string>& tokens) const {
-        if (!filterColumns_) {
-            return join(tokens, "\t");
-        }
-        std::vector<std::string> out;
-        out.reserve(tokens.size());
-        for (size_t i = 0; i < tokens.size(); ++i) {
-            if (shouldKeepColumn(i, tokens.size())) {
-                out.push_back(tokens[i]);
-            }
-        }
-        return join(out, "\t");
-    }
-
     void normalizeExplicitHeaderColumns(std::vector<std::string>& tokens) const {
         if (icol_x_ >= 0 && static_cast<size_t>(icol_x_) < tokens.size()) {
             tokens[icol_x_] = "X";
@@ -390,15 +395,19 @@ protected:
         if (isHeader) {
             std::string header = std::string(strip_str(line.substr(nhash)));
             std::vector<std::string> tokens;
-            tokenizeLine(header, tokens);
+            std::vector<std::string> rawTokens;
+            std::vector<bool> quotedFlags;
+            tokenizeLine(header, tokens, rawTokens, &quotedFlags);
             if (tileOpFactorTsv_) {
                 parseTileOpFactorHeader(tokens);
             }
             normalizeExplicitHeaderColumns(tokens);
             if (appendDummyCount_) {
                 tokens.push_back("count");
+                rawTokens.push_back("count");
+                quotedFlags.push_back(false);
             }
-            header = filterLineTokens(tokens);
+            header = filterLineTokens(tokens, rawTokens, quotedFlags);
             return "#" + header;
         }
         return line;
@@ -602,13 +611,157 @@ protected:
         requireTileOpFactorHeaderFromStream();
     }
 
-    void tokenizeLine(const std::string& line, std::vector<std::string>& tokens) const {
-        split(tokens, inputDelimiter_, line);
+    bool isCsvInput() const {
+        return inputDelimiter_ == ",";
     }
 
-    void rewriteCoordinates(std::vector<std::string>& tokens, std::string& line, float& x, float& y, float* z = nullptr) const {
+    bool isKeptQuoteColumn(size_t idx) const {
+        return std::binary_search(keepQuotes_.begin(), keepQuotes_.end(), static_cast<int32_t>(idx));
+    }
+
+    void tokenizeCsvLine(const std::string& line, std::vector<CsvToken>& tokens) const {
+        tokens.clear();
+        const size_t n = line.size();
+        if (n == 0) {
+            tokens.emplace_back();
+            return;
+        }
+        size_t i = 0;
+        while (i < n) {
+            CsvToken tok;
+            const size_t fieldStart = i;
+            if (line[i] == '"') {
+                tok.quoted = true;
+                tok.raw.push_back('"');
+                ++i;
+                while (i < n) {
+                    const char c = line[i];
+                    tok.raw.push_back(c);
+                    if (c == '"') {
+                        if (i + 1 < n && line[i + 1] == '"') {
+                            tok.value.push_back('"');
+                            tok.raw.push_back('"');
+                            i += 2;
+                            continue;
+                        }
+                        ++i;
+                        break;
+                    }
+                    tok.value.push_back(c);
+                    ++i;
+                }
+                while (i < n && line[i] != ',') {
+                    tok.raw.push_back(line[i]);
+                    ++i;
+                }
+            } else {
+                while (i < n && line[i] != ',') {
+                    ++i;
+                }
+                tok.raw = line.substr(fieldStart, i - fieldStart);
+                tok.value = tok.raw;
+            }
+            tokens.push_back(std::move(tok));
+            if (i < n && line[i] == ',') {
+                ++i;
+                if (i == n) {
+                    tokens.emplace_back();
+                    break;
+                }
+            }
+        }
+    }
+
+    void tokenizeLine(const std::string& line, std::vector<std::string>& tokens) const {
+        if (!isCsvInput()) {
+            split(tokens, inputDelimiter_, line);
+            return;
+        }
+        std::vector<CsvToken> csvTokens;
+        tokenizeCsvLine(line, csvTokens);
+        tokens.clear();
+        tokens.reserve(csvTokens.size());
+        for (const auto& tok : csvTokens) {
+            tokens.push_back(tok.value);
+        }
+    }
+
+    void tokenizeLine(const std::string& line, std::vector<std::string>& tokens,
+            std::vector<std::string>& rawTokens, std::vector<bool>* quotedFlags = nullptr) const {
+        if (!isCsvInput()) {
+            split(tokens, inputDelimiter_, line);
+            rawTokens = tokens;
+            if (quotedFlags != nullptr) {
+                quotedFlags->assign(tokens.size(), false);
+            }
+            return;
+        }
+        std::vector<CsvToken> csvTokens;
+        tokenizeCsvLine(line, csvTokens);
+        tokens.clear();
+        rawTokens.clear();
+        tokens.reserve(csvTokens.size());
+        rawTokens.reserve(csvTokens.size());
+        if (quotedFlags != nullptr) {
+            quotedFlags->clear();
+            quotedFlags->reserve(csvTokens.size());
+        }
+        for (const auto& tok : csvTokens) {
+            tokens.push_back(tok.value);
+            rawTokens.push_back(tok.raw.empty() ? tok.value : tok.raw);
+            if (quotedFlags != nullptr) {
+                quotedFlags->push_back(tok.quoted);
+            }
+        }
+    }
+
+    std::string tokenForOutput(size_t idx, const std::string& value, const std::string& raw,
+            bool quoted) const {
+        if (isCsvInput() && quoted && isKeptQuoteColumn(idx)) {
+            return raw;
+        }
+        return value;
+    }
+
+    std::string filterLineTokens(const std::vector<std::string>& tokens) const {
+        if (!filterColumns_ && !(isCsvInput() && !keepQuotes_.empty())) {
+            return join(tokens, "\t");
+        }
+        std::vector<std::string> out;
+        out.reserve(tokens.size());
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            if (shouldKeepColumn(i, tokens.size())) {
+                out.push_back(tokens[i]);
+            }
+        }
+        return join(out, "\t");
+    }
+
+    std::string filterLineTokens(const std::vector<std::string>& tokens,
+            const std::vector<std::string>& rawTokens, const std::vector<bool>& quotedFlags) const {
+        if (!filterColumns_ && !isCsvInput()) {
+            return join(tokens, "\t");
+        }
+        std::vector<std::string> out;
+        out.reserve(tokens.size());
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            if (shouldKeepColumn(i, tokens.size())) {
+                const std::string& raw = i < rawTokens.size() ? rawTokens[i] : tokens[i];
+                const bool quoted = i < quotedFlags.size() ? quotedFlags[i] : false;
+                out.push_back(tokenForOutput(i, tokens[i], raw, quoted));
+            }
+        }
+        return join(out, "\t");
+    }
+
+    void rewriteCoordinates(std::vector<std::string>& tokens,
+            std::vector<std::string>& rawTokens,
+            std::vector<bool>& quotedFlags,
+            std::string& line, float& x, float& y, float* z = nullptr) const {
         if (appendDummyCount_) {
             tokens.push_back("1");
+            rawTokens.push_back("1");
+            quotedFlags.push_back(false);
         }
         if (scaling_) {
             x *= scale_x_;
@@ -621,7 +774,7 @@ protected:
             }
         }
         if (rewriteLine_) {
-            line = filterLineTokens(tokens);
+            line = filterLineTokens(tokens, rawTokens, quotedFlags);
         }
     }
 
@@ -633,7 +786,9 @@ protected:
     // Parse a line, extract coordinates and return the tile key
     virtual TileKey parse(std::string& line, PtRecord& pt) {
         std::vector<std::string> tokens;
-        tokenizeLine(line, tokens);
+        std::vector<std::string> rawTokens;
+        std::vector<bool> quotedFlags;
+        tokenizeLine(line, tokens, rawTokens, &quotedFlags);
         if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
@@ -642,7 +797,7 @@ protected:
         if (icol_z_ >= 0) {
             pt.z = std::stof(tokens[icol_z_]);
         }
-        rewriteCoordinates(tokens, line, pt.x, pt.y, icol_z_ >= 0 ? &pt.z : nullptr);
+        rewriteCoordinates(tokens, rawTokens, quotedFlags, line, pt.x, pt.y, icol_z_ >= 0 ? &pt.z : nullptr);
         if (icol_feature_ >= 0) {
             pt.feature = tokens[icol_feature_];
             if (icol_ints_.size() > 0) {
@@ -661,13 +816,15 @@ protected:
     }
     virtual TileKey parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
-        tokenizeLine(line, tokens);
+        std::vector<std::string> rawTokens;
+        std::vector<bool> quotedFlags;
+        tokenizeLine(line, tokens, rawTokens, &quotedFlags);
         if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
         x = std::stof(tokens[icol_x_]);
         y = std::stof(tokens[icol_y_]);
-        rewriteCoordinates(tokens, line, x, y);
+        rewriteCoordinates(tokens, rawTokens, quotedFlags, line, x, y);
         TileKey tile;
         tile.row = static_cast<int32_t>(std::floor(y / tileSize_));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize_));
@@ -1076,13 +1233,15 @@ public:
 protected:
     TileKey parse(std::string& line, float& x, float& y) {
         std::vector<std::string> tokens;
-        tokenizeLine(line, tokens);
+        std::vector<std::string> rawTokens;
+        std::vector<bool> quotedFlags;
+        tokenizeLine(line, tokens, rawTokens, &quotedFlags);
         if (tokens.size() < ntokens_) {
             error("Error parsing line: %s", line.c_str());
         }
         x = std::stof(tokens[icol_x_]);
         y = std::stof(tokens[icol_y_]);
-        rewriteCoordinates(tokens, line, x, y);
+        rewriteCoordinates(tokens, rawTokens, quotedFlags, line, x, y);
         TileKey tile;
         tile.row = static_cast<int32_t>(std::floor(y / tileSize_));
         tile.col = static_cast<int32_t>(std::floor(x / tileSize_));
