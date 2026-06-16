@@ -1739,7 +1739,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p>In both cases, each binary record carries an additional feature index in addition to coordinates and factor probabilities, so <code>tile-op</code> uses feature-aware loaders / matching logic where supported.</p>
 <p>Current <code>tile-op</code> support for these inputs is:</p>
 <ul>
-<li>supported:</li>
+<li>supported:<ul>
 <li><code>--dump-tsv</code></li>
 <li><code>--merge-emb</code></li>
 <li><code>--annotate-pts</code></li>
@@ -1747,7 +1747,9 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--prob-dot</code></li>
 <li><code>--confusion</code></li>
 <li>direct <code>--write-mlt-pmtiles</code></li>
-<li>raster image processing style operations are not supported:</li>
+</ul>
+</li>
+<li>raster image processing style operations are not supported:<ul>
 <li><code>--smooth-top-labels</code></li>
 <li><code>--spatial-metrics</code></li>
 <li><code>--shell-surface</code></li>
@@ -1755,6 +1757,8 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--soft-factor-mask</code></li>
 <li><code>--soft-mask-composition</code></li>
 <li><code>--hard-factor-mask</code></li>
+</ul>
+</li>
 </ul>
 <p>Additional flags used with supported single-molecule workflows:</p>
 <ul>
@@ -1931,6 +1935,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--feature-count-file path/features.tsv --n-gene-bins N</code></li>
 </ul>
 <p>If both are provided, <code>--gene-bin-info</code> takes precedence. The JSON can be generated ahead of time with <code>punkst gene-bins</code>.</p>
+<p>When bins are derived from a feature-count TSV, the default mode is adaptive. <code>--n-gene-bins</code> is a cap, <code>--gene-bin-target-molecules</code> sets the target molecule budget per bin, and <code>--gene-bin-singleton-ratio</code> controls when high-count genes are assigned singleton bins. Use <code>--gene-bin-mode fixed</code> to reproduce the legacy fixed-bin assignment.</p>
 <h4 id="annotate-and-package-to-pmtiles">Annotate and package to PMTiles<a class="headerlink" href="#annotate-and-package-to-pmtiles" title="Permanent link">&para;</a></h4>
 <p><code>--annotate-pts</code> can package the annotated rows directly as PMTiles for both standard pixel decode input and feature-bearing single-molecule input:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/pixel.ann2d<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
@@ -2151,20 +2156,24 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </span></code></pre></div>
 <p>The output includes two files:</p>
 <ul>
-<li><code>path/prefix.stats.single.tsv</code> for per-channel (factor or cell type) metrics. Columns are:</li>
+<li><code>path/prefix.stats.single.tsv</code> for per-channel (factor or cell type) metrics. Columns are:<ul>
 <li>channel index (<code>#k</code>)</li>
 <li>total number of pixels (<code>area</code>)</li>
 <li>total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel <code>K</code> (<code>perim</code>)</li>
 </ul>
+</li>
+</ul>
 <p>The single-channel table includes one extra row with <code>#k = K</code>, representing empty/background area.</p>
 <ul>
-<li><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are</li>
+<li><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are<ul>
 <li>channel indices for the pair (<code>#k</code>, <code>l</code>)</li>
 <li>length of shared boundary <span class="arithmatex">\(L_{kl}\)</span> (<code>contact</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / (P_k + P_l - L_{kl})\)</span> (<code>frac0</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / P_k\)</span> (<code>frac1</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / P_l\)</span> (<code>frac2</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / (A_k + A_l)\)</span> (<code>density</code>)</li>
+</ul>
+</li>
 </ul>
 <h3 id="shell-and-surface-profiles">Shell and Surface Profiles<a class="headerlink" href="#shell-and-surface-profiles" title="Permanent link">&para;</a></h3>
 <p>Profile the factor composition in the immediate neighborhood of a factor, and pairwise spatial proximity between factors.</p>
@@ -2185,21 +2194,25 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <p><code>--raster-pixel-res</code> - (Optional) run shell and surface profiling on a coarser raster grid.</p>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.shell.tsv</code>: shell occupancy summary with columns</li>
+<li>
+<p><code>path/out_prefix.shell.tsv</code>: shell occupancy summary with columns</p>
+<ul>
 <li>focal label (<code>#K_focal</code>)</li>
 <li>other label (<code>K2</code>)</li>
 <li>radius (<code>r</code>)</li>
 <li>number of <code>K2</code> pixels within distance <code>r</code> from boundary of focal label (<code>n_within</code>)</li>
-<li>
-<p>total number of <code>K2</code> pixels (<code>n_K2_total</code>)</p>
+<li>total number of <code>K2</code> pixels (<code>n_K2_total</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.surface.tsv</code>: directional surface-distance histogram with columns</p>
-</li>
+<ul>
 <li>source label (<code>#from_K1</code>)</li>
 <li>target label (<code>to_K2</code>)</li>
 <li>distance bin (<code>d</code>)</li>
 <li>number of <code>K1</code> boundary pixels that find the neraest boundary of <code>K2</code> at distance <code>d</code> (<code>count</code>)</li>
+</ul>
+</li>
 </ul>
 <h3 id="profile-the-area-covered-by-one-focal-factor">Profile the area covered by one focal factor<a class="headerlink" href="#profile-the-area-covered-by-one-focal-factor" title="Permanent link">&para;</a></h3>
 <p>Build a raster mask for one focal factor using local neighborhood probability mass, optionally remove isolated small spots/patches, then report the factor composition inside the mask. Optionally, it then creates a soft mask for each of the factors with a high total probability mass inside the focal mask and calculate pairwise overlaps among the focal and selected factor masks.
@@ -2222,17 +2235,19 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.factor_hist.tsv</code>: factor histogram for both the focal mask and the full processed region with columns</li>
+<li>
+<p><code>path/out_prefix.factor_hist.tsv</code>: factor histogram for both the focal mask and the full processed region with columns</p>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>total mass inside the focal mask (<code>mass_in_mask</code>)</li>
 <li>fraction of the total focal-mask mass (<code>frac_in_mask</code>)</li>
 <li>total mass in the full processed region (<code>mass_global</code>)</li>
-<li>
-<p>fraction of the total global mass (<code>frac_global</code>)</p>
+<li>fraction of the total global mass (<code>frac_global</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.pairwise.tsv</code>: pairwise overlap summary for the selected factor set <code>{focal_k} U {significant secondary factors}</code> with columns</p>
-</li>
+<ul>
 <li>factor indices (<code>k1</code>, <code>k2</code>)</li>
 <li>mask areas (<code>area1_pix</code>, <code>area2_pix</code>)</li>
 <li>area intersection (<code>area_ovlp_pix</code>)</li>
@@ -2240,6 +2255,8 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <li>area Jaccard (<code>area_jaccard</code>)</li>
 <li>factor-specific mass in the intersection (<code>mass1_in_ovlp</code>, <code>mass2_in_ovlp</code>)</li>
 <li>directional mass overlap fractions relative to each factor's total global mass (<code>mass_ovlp_f1</code>, <code>mass_ovlp_f2</code>)</li>
+</ul>
+</li>
 </ul>
 <h3 id="soft-factor-mask">Soft factor mask<a class="headerlink" href="#soft-factor-mask" title="Permanent link">&para;</a></h3>
 <p>Build a soft binary mask for every factor, optionally remove small connected components, and write global summaries. By default this also polygonizes the kept mask and exports one GeoJSON <code>MultiPolygon</code> feature per factor; use <code>--skip-boundaries</code> to disable geometry export.</p>
@@ -2266,29 +2283,31 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</li>
+<li>
+<p><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</p>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>number of tiles where the factor passed <code>--mask-min-tile-mass</code> (<code>n_tiles</code>)</li>
 <li>total kept soft-mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of final connected components after seam merge (<code>n_components</code>)</p>
+<li>number of final connected components after seam merge (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.component_hist.tsv</code>: final component-size histogram with columns</p>
-</li>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>component size (<code>size</code>)</li>
-<li>
-<p>number of components with that size (<code>n_components</code>)</p>
+<li>number of components with that size (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.geojson</code>: optional <code>FeatureCollection</code> containing one <code>MultiPolygon</code> feature per factor with properties</p>
-</li>
+<ul>
 <li>factor index (<code>Factor</code>)</li>
 <li>number of contributing tiles (<code>n_tiles</code>)</li>
 <li>total kept mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of final connected components (<code>n_components</code>)</p>
+<li>number of final connected components (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.k&lt;factor&gt;.geojson</code>: optional per-factor GeoJSON files written only when <code>--template-geojson</code> is provided. If <code>--template-out-prefix</code> is set, that prefix is used instead of <code>out_prefix</code>. Each file preserves the template's top-level metadata, sets <code>title</code> to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.</p>
@@ -2310,11 +2329,13 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.mask_composition.tsv</code>: mask factor histograms and, unless skipped, the global factor histogram, with columns</li>
+<li><code>path/out_prefix.mask_composition.tsv</code>: mask factor histograms and, unless skipped, the global factor histogram, with columns<ul>
 <li>focal factor index (<code>k_focal</code>)</li>
 <li>factor index (<code>k</code>)</li>
 <li>total probability mass (<code>mass</code>)</li>
 <li>fraction of the total mass for that focal mask (<code>frac</code>)</li>
+</ul>
+</li>
 </ul>
 <p>For the global histogram block, <code>k_focal</code> is written as <code>-1</code>. If <code>--soft-mask-composition-skip-global</code> is set, this global block is omitted.</p>
 <h3 id="hard-factor-mask">Hard factor mask<a class="headerlink" href="#hard-factor-mask" title="Permanent link">&para;</a></h3>
@@ -2332,29 +2353,31 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</li>
+<li>
+<p><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</p>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>number of tiles containing the factor (<code>n_tiles</code>)</li>
 <li>total retained mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of retained final connected components (<code>n_components</code>)</p>
+<li>number of retained final connected components (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.component_hist.tsv</code>: retained component-size histogram with columns</p>
-</li>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>component size (<code>size</code>)</li>
-<li>
-<p>number of components with that size (<code>n_components</code>)</p>
+<li>number of components with that size (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.geojson</code>: optional <code>FeatureCollection</code> containing one <code>MultiPolygon</code> feature per factor with properties</p>
-</li>
+<ul>
 <li>factor index (<code>Factor</code>)</li>
 <li>number of contributing tiles (<code>n_tiles</code>)</li>
 <li>total retained mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of retained final connected components (<code>n_components</code>)</p>
+<li>number of retained final connected components (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.k&lt;factor&gt;.geojson</code>: optional per-factor GeoJSON files written only when <code>--template-geojson</code> is provided. If <code>--template-out-prefix</code> is set, that prefix is used instead of <code>out_prefix</code>. Each file preserves the template's top-level metadata, sets <code>title</code> to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.</p>

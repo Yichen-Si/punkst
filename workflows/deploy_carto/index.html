@@ -693,9 +693,28 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deploy-cartoscope-options" class="md-nav__link">
+  <a href="#add-background-image-pmtiles" class="md-nav__link">
     <span class="md-ellipsis">
-      deploy-cartoscope Options
+      Add background image PMTiles
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Add background image PMTiles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#convert-ome-tiff" class="md-nav__link">
+    <span class="md-ellipsis">
+      convert OME-TIFF
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supply-converted-tiff-to-deploy-cartoscope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Supply (converted) TIFF to deploy-cartoscope
     </span>
   </a>
   
@@ -703,6 +722,20 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deploy-cartoscope-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      deploy-cartoscope Options
+    </span>
+  </a>
   
 </li>
       
@@ -738,6 +771,30 @@
   <a href="#cells2pmtiles-options" class="md-nav__link">
     <span class="md-ellipsis">
       cells2pmtiles Options
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-pngtiff-to-pmtiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      Convert PNG/TIFF to PMTiles
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Convert PNG/TIFF to PMTiles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#image2pmtiles-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      image2pmtiles Options
     </span>
   </a>
   
@@ -1268,9 +1325,28 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deploy-cartoscope-options" class="md-nav__link">
+  <a href="#add-background-image-pmtiles" class="md-nav__link">
     <span class="md-ellipsis">
-      deploy-cartoscope Options
+      Add background image PMTiles
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Add background image PMTiles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#convert-ome-tiff" class="md-nav__link">
+    <span class="md-ellipsis">
+      convert OME-TIFF
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supply-converted-tiff-to-deploy-cartoscope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Supply (converted) TIFF to deploy-cartoscope
     </span>
   </a>
   
@@ -1278,6 +1354,20 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deploy-cartoscope-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      deploy-cartoscope Options
+    </span>
+  </a>
   
 </li>
       
@@ -1313,6 +1403,30 @@
   <a href="#cells2pmtiles-options" class="md-nav__link">
     <span class="md-ellipsis">
       cells2pmtiles Options
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#convert-pngtiff-to-pmtiles" class="md-nav__link">
+    <span class="md-ellipsis">
+      Convert PNG/TIFF to PMTiles
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Convert PNG/TIFF to PMTiles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#image2pmtiles-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      image2pmtiles Options
     </span>
   </a>
   
@@ -1418,6 +1532,7 @@ Then use the URL <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual por
 <p>You can add more than one model entry, each with a different <code>id</code>.</p>
 <p><code>pixel_decode_mode</code> is optional; when omitted, deployment infers the mode based on files provided through <code>pixel_prefix</code>. Depending on the decoding mode, your <code>pixel_prefix</code> (if you used the template workflow) may have a different suffix such as <code>.sf_pixel</code> or <code>.sgl_mol</code> instead of <code>.pixel</code>.</p>
 <p>When <code>pseudobulk_tsv</code> is omitted, it is assumed to be <code>&lt;pixel_prefix&gt;.pseudobulk.tsv</code>.</p>
+<p>Set <code>skip_hex_pmtiles: true</code> on a default model to package only pixel raster and raw-pixel assets for that model. In this mode <code>results_tsv</code> and <code>hex_grid_dist</code> may be omitted, and the generated catalog will not include a <code>pmtiles.hex</code> entry for the model.</p>
 <p>If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different <code>id</code> values. The entries can reuse the same <code>results_tsv</code>, <code>model_tsv</code>, and <code>color_rgb_tsv</code> while pointing to different pixel prefixes, pseudobulk tables, and DE tables.</p>
 <h4 id="add-cell-level-results-and-cell-boundaries">Add cell-level results and cell boundaries<a class="headerlink" href="#add-cell-level-results-and-cell-boundaries" title="Permanent link">&para;</a></h4>
 <p>Cell-level PMTiles from <strong>the same</strong> model as the pixel level results can be added to that model entry.
@@ -1520,7 +1635,49 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">    </span><span class="nt">&quot;boundaries&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/path/to/&lt;model-id&gt;-boundaries.pmtiles&quot;</span>
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="p">}</span>
 </span></code></pre></div>
-<h3 id="deploy-cartoscope-options">deploy-cartoscope Options<a class="headerlink" href="#deploy-cartoscope-options" title="Permanent link">&para;</a></h3>
+<h3 id="add-background-image-pmtiles">Add background image PMTiles<a class="headerlink" href="#add-background-image-pmtiles" title="Permanent link">&para;</a></h3>
+<p>Background images can be added as CartoScope basemaps in explicit input JSON mode. Images are <strong>not</strong> aligned or registered by punkst. Provide the alignment through pixel size plus offset, or a full 3x3 transform that maps image pixel coordinates to the same micron coordinate system used by the transcript data.</p>
+<p>Supported image inputs are PNG and narrowly defined TIFF: tiled TIFF with uncompressed or Deflate/zlib-compressed tiles, using 8-bit RGB/RGBA, 8-bit grayscale, or 16-bit grayscale pixels. Unsupported OME-TIFF, JPEG/JPEG-2000/LZW-compressed TIFF, and other fancier formats should be converted first.</p>
+<h4 id="convert-ome-tiff">convert OME-TIFF<a class="headerlink" href="#convert-ome-tiff" title="Permanent link">&para;</a></h4>
+<p>Use <code>ext/py/convert_tiff_for_image2pmtiles.py</code> to convert OME-TIFF or generic TIFF files into the supported tiled TIFF subset. The helper writes uint8 output by default, using percentile scaling for non-uint8 inputs (<code>--uint8-percentiles 1 99</code> by default); use <code>--preserve-depth</code> only when you intentionally want to keep supported 16-bit grayscale TIFF data for native punkst scaling. The script uses Python <code>numpy</code> and <code>tifffile</code>. For TIFF compression codecs that <code>tifffile</code> delegates to optional decoders, install the matching Python package as well; in practice, JPEG/JPEG2000-compressed OME-TIFFs commonly require <code>imagecodecs</code>.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>numpy<span class="w"> </span>tifffile<span class="w"> </span>imagecodecs
+</span></code></pre></div>
+<p>Example OME/generic compressed TIFF conversion:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>python<span class="w"> </span>ext/py/convert_tiff_for_image2pmtiles.py<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>--input<span class="w"> </span>spatial/tissue_hires_image.ome.tif<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--output<span class="w"> </span>carto/HnE.supported.tif<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span>--id<span class="w"> </span>HnE
+</span></code></pre></div>
+<p>The conversion helper writes <code>&lt;output&gt;.image2pmtiles.json</code> that can be passed on to <code>deploy-cartoscope</code> with <code>--image-json</code> directly, which runs <code>image2pmtiles</code> internally to produce CartoScope-compatible PMTiles.
+When OME physical pixel metadata is available, the JSON records a pixel-to-micron transform for the selected <code>--series</code>, <code>--level</code>, and <code>--page</code> based on the metadata, which is then used during PMTiles construction.</p>
+<p>For generic TIFFs <strong>without OME metadata</strong>, pass either <code>--microns-per-pixel</code> with optional offsets <code>--offset-x-um</code> <code>--offset-y-um</code>, or a full 3x3 matrix with <code>--transform</code> (row-wise flatten to 9 comma/space-separated values); otherwise the JSON is marked <code>requires_transform</code>.</p>
+<h4 id="supply-converted-tiff-to-deploy-cartoscope">Supply (converted) TIFF to <code>deploy-cartoscope</code><a class="headerlink" href="#supply-converted-tiff-to-deploy-cartoscope" title="Permanent link">&para;</a></h4>
+<p>If your image files are converted by with above python helper <code>ext/py/convert_tiff_for_image2pmtiles.py</code>, pass its output <code>&lt;output&gt;.image2pmtiles.json</code> to <code>deploy-cartoscope</code> directly with <code>--image-json</code>.</p>
+<p>Otherwise, include <strong>supported</strong> source image information as additional sections in the input JSON file for <code>deploy-cartoscope</code>:</p>
+<p>Example with two images:
+<div class="language-json highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="p">{</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span><span class="nt">&quot;images&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;HnE&quot;</span><span class="p">,</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">      </span><span class="nt">&quot;src&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;spatial/tissue_hires_image.tif&quot;</span><span class="p">,</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">      </span><span class="nt">&quot;microns_per_pixel&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.5</span><span class="p">,</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="w">      </span><span class="nt">&quot;offset_x_um&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">      </span><span class="nt">&quot;offset_y_um&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;DAPI&quot;</span><span class="p">,</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="w">      </span><span class="nt">&quot;src&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dapi.supported.tif&quot;</span><span class="p">,</span>
+</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a><span class="w">      </span><span class="nt">&quot;transform&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a><span class="w">        </span><span class="p">[</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="mf">10.0</span><span class="p">],</span>
+</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="w">        </span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="mf">20.0</span><span class="p">],</span>
+</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a><span class="w">        </span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0</span><span class="p">]</span>
+</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a><span class="w">      </span><span class="p">]</span>
+</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="p">}</span>
+</span></code></pre></div>
+(Note: you can provide alignment in either of the two ways shown above; if one of the images is converted by the python helper you can copy over the JSON section under <code>"deploy_cartoscope"</code> from <code>image2pmtiles.json</code>)</p>
+<h2 id="deploy-cartoscope-options">deploy-cartoscope Options<a class="headerlink" href="#deploy-cartoscope-options" title="Permanent link">&para;</a></h2>
 <p><code>punkst deploy-cartoscope</code> accepts the following command-line options:</p>
 <table>
 <thead>
@@ -1540,6 +1697,11 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 <td><code>--input-json</code></td>
 <td>none</td>
 <td>Explicit deployment input JSON. Provide exactly one of <code>--config</code> or <code>--input-json</code>.</td>
+</tr>
+<tr>
+<td><code>--image-json</code></td>
+<td>none</td>
+<td>Additional image fragment JSON, typically <code>&lt;output&gt;.image2pmtiles.json</code> from <code>convert_tiff_for_image2pmtiles.py</code>. May be repeated; requires <code>--input-json</code>.</td>
 </tr>
 <tr>
 <td><code>--out-dir</code></td>
@@ -1594,7 +1756,22 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 <tr>
 <td><code>--n-gene-bins</code></td>
 <td><code>50</code></td>
-<td>Number of gene bins for transcript PMTiles.</td>
+<td>Maximum number of gene bins for transcript PMTiles in adaptive mode.</td>
+</tr>
+<tr>
+<td><code>--gene-bin-mode</code></td>
+<td><code>adaptive</code></td>
+<td>Gene-bin packing mode: <code>adaptive</code> or <code>fixed</code>. Use <code>fixed</code> for legacy contiguous count buckets.</td>
+</tr>
+<tr>
+<td><code>--gene-bin-target-molecules</code></td>
+<td><code>1000000</code></td>
+<td>Target molecules per adaptive gene bin.</td>
+</tr>
+<tr>
+<td><code>--gene-bin-singleton-ratio</code></td>
+<td><code>1.0</code></td>
+<td>Put genes with counts at least this multiple of the target into singleton bins when capacity allows.</td>
 </tr>
 <tr>
 <td><code>--threads</code></td>
@@ -1603,7 +1780,7 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 </tr>
 <tr>
 <td><code>--max-point-tile-bytes</code></td>
-<td><code>500000</code></td>
+<td><code>5000000</code></td>
 <td>Maximum compressed bytes per point tile.</td>
 </tr>
 <tr>
@@ -1623,7 +1800,7 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 </tr>
 <tr>
 <td><code>--basemap-min-zoom</code></td>
-<td><code>0</code></td>
+<td><code>7</code></td>
 <td>Minimum zoom for SGE mono basemap PMTiles.</td>
 </tr>
 <tr>
@@ -1640,6 +1817,11 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 <td><code>--basemap-adjust-quantile</code></td>
 <td><code>0.99</code></td>
 <td>Quantile for SGE mono basemap density auto-adjustment.</td>
+</tr>
+<tr>
+<td><code>--basemap-display-transform</code></td>
+<td><code>linear</code></td>
+<td>Display transform for SGE mono basemap intensity: <code>linear</code> or <code>log1p</code>.</td>
 </tr>
 <tr>
 <td><code>--scale-factor-compression</code></td>
@@ -1676,31 +1858,31 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 <h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h2>
 <p><code>catalog.yaml</code> in the deployment directory registers each factor with the available PMTiles. Serve that file to CartoScope to visualize the data.</p>
 <p>A typical <code>catalog.yaml</code> looks like this:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">assets</span><span class="p">:</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">sge</span><span class="p">:</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="nt">all</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="nt">bins</span><span class="p">:</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin1.pmtiles</span>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="nt">counts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin_counts.json</span>
-</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span><span class="nt">overview</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
-</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">  </span><span class="nt">factors</span><span class="p">:</span>
-</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24</span>
-</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">    </span><span class="nt">model_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24</span>
-</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">    </span><span class="nt">decode_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel</span>
-</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="w">    </span><span class="nt">raw_pixel_col</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel</span>
-</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="w">    </span><span class="nt">de</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-bulk-de.tsv</span>
-</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="w">    </span><span class="nt">info</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-info.tsv</span>
-</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="w">    </span><span class="nt">rgb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-rgb.tsv</span>
-</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a><span class="w">    </span><span class="nt">pmtiles</span><span class="p">:</span>
-</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a><span class="w">      </span><span class="nt">hex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24.pmtiles</span>
-</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a><span class="w">      </span><span class="nt">raster</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel-raster.pmtiles</span>
-</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a><span class="w">      </span><span class="nt">raw_pixel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
-</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a><span class="w">      </span><span class="nt">cells</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-cells.pmtiles</span>
-</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a><span class="w">      </span><span class="nt">boundaries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-boundaries.pmtiles</span>
-</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a><span class="w">  </span><span class="nt">basemap</span><span class="p">:</span>
-</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23" href="#__codelineno-13-23"></a><span class="w">    </span><span class="nt">sge</span><span class="p">:</span>
-</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24" href="#__codelineno-13-24"></a><span class="w">      </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dark</span>
-</span><span id="__span-13-25"><a id="__codelineno-13-25" name="__codelineno-13-25" href="#__codelineno-13-25"></a><span class="w">      </span><span class="nt">dark</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nt">assets</span><span class="p">:</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span><span class="nt">sge</span><span class="p">:</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">    </span><span class="nt">all</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="w">    </span><span class="nt">bins</span><span class="p">:</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin1.pmtiles</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="w">    </span><span class="nt">counts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_bin_counts.json</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">  </span><span class="nt">overview</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">  </span><span class="nt">factors</span><span class="p">:</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24</span>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="w">    </span><span class="nt">model_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24</span>
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="w">    </span><span class="nt">decode_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel</span>
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="w">    </span><span class="nt">raw_pixel_col</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel</span>
+</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="w">    </span><span class="nt">de</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-bulk-de.tsv</span>
+</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a><span class="w">    </span><span class="nt">info</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-info.tsv</span>
+</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15" href="#__codelineno-16-15"></a><span class="w">    </span><span class="nt">rgb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-rgb.tsv</span>
+</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16" href="#__codelineno-16-16"></a><span class="w">    </span><span class="nt">pmtiles</span><span class="p">:</span>
+</span><span id="__span-16-17"><a id="__codelineno-16-17" name="__codelineno-16-17" href="#__codelineno-16-17"></a><span class="w">      </span><span class="nt">hex</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24.pmtiles</span>
+</span><span id="__span-16-18"><a id="__codelineno-16-18" name="__codelineno-16-18" href="#__codelineno-16-18"></a><span class="w">      </span><span class="nt">raster</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-pixel-raster.pmtiles</span>
+</span><span id="__span-16-19"><a id="__codelineno-16-19" name="__codelineno-16-19" href="#__codelineno-16-19"></a><span class="w">      </span><span class="nt">raw_pixel</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">genes_all.pmtiles</span>
+</span><span id="__span-16-20"><a id="__codelineno-16-20" name="__codelineno-16-20" href="#__codelineno-16-20"></a><span class="w">      </span><span class="nt">cells</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-cells.pmtiles</span>
+</span><span id="__span-16-21"><a id="__codelineno-16-21" name="__codelineno-16-21" href="#__codelineno-16-21"></a><span class="w">      </span><span class="nt">boundaries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">h12-k24-boundaries.pmtiles</span>
+</span><span id="__span-16-22"><a id="__codelineno-16-22" name="__codelineno-16-22" href="#__codelineno-16-22"></a><span class="w">  </span><span class="nt">basemap</span><span class="p">:</span>
+</span><span id="__span-16-23"><a id="__codelineno-16-23" name="__codelineno-16-23" href="#__codelineno-16-23"></a><span class="w">    </span><span class="nt">sge</span><span class="p">:</span>
+</span><span id="__span-16-24"><a id="__codelineno-16-24" name="__codelineno-16-24" href="#__codelineno-16-24"></a><span class="w">      </span><span class="nt">default</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">dark</span>
+</span><span id="__span-16-25"><a id="__codelineno-16-25" name="__codelineno-16-25" href="#__codelineno-16-25"></a><span class="w">      </span><span class="nt">dark</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sge-mono-dark.pmtiles</span>
 </span></code></pre></div>
 <p>For models with non-numeric factor names, the factor entry also includes <code>alias: &lt;model-id&gt;-alias.tsv</code>.</p>
 <h2 id="pmtiles-and-zooms">PMTiles and Zooms<a class="headerlink" href="#pmtiles-and-zooms" title="Permanent link">&para;</a></h2>
@@ -1710,39 +1892,40 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 <p>Hexagon PMTiles are written at <code>--polygon-max-zoom</code>, then pyramid levels are built down to <code>--polygon-min-zoom</code>.</p>
 <p>Cell PMTiles generated from source inputs are also written at <code>--polygon-max-zoom</code>, then pyramids are built down to <code>--polygon-min-zoom</code>. This applies to both cell-center points and cell-boundary polygons.</p>
 <p>The mono SGE basemap is written as PNG raster PMTiles (disable with <code>--skip-basemap</code>). Its zoom range and density scaling are controlled separately from vector PMTiles:</p>
-<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>--basemap-min-zoom<span class="w"> </span><span class="m">0</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>--basemap-max-zoom<span class="w"> </span><span class="m">18</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>--mono-max-zoom-from-raw<span class="w"> </span><span class="m">18</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>--basemap-adjust-quantile<span class="w"> </span><span class="m">0</span>.99
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>--basemap-min-zoom<span class="w"> </span><span class="m">7</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>--basemap-max-zoom<span class="w"> </span><span class="m">18</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>--mono-max-zoom-from-raw<span class="w"> </span><span class="m">18</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>--basemap-adjust-quantile<span class="w"> </span><span class="m">0</span>.99
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>--basemap-display-transform<span class="w"> </span>linear
 </span></code></pre></div>
 If <code>--basemap-max-zoom</code> is omitted, it defaults to <code>--point-max-zoom</code>.</p>
-<p>By default, the basemap (transcript density) parses raw transcript counts only at <code>--basemap-max-zoom</code> and derives lower zooms by summing parent layers. Use <code>--mono-max-zoom-from-raw</code> to parse raw data for zooms greater than or equal to that value.</p>
+<p>By default, the basemap (transcript density) parses raw transcript counts only at <code>--basemap-max-zoom</code> and derives lower zooms by summing parent layers. The lazy lower-zoom path preserves full accumulated counts until final PNG encoding. Use <code>--mono-max-zoom-from-raw</code> to parse raw data for zooms greater than or equal to that value, and use <code>--basemap-display-transform log1p</code> to compress high-density regions while preserving visible heterogeneity.</p>
 <h2 id="write-cell-level-pmtiles-separately">Write cell-level PMTiles separately<a class="headerlink" href="#write-cell-level-pmtiles-separately" title="Permanent link">&para;</a></h2>
 <p><code>punkst cells2pmtiles</code> packages cell-level factor assignments, cell centers, and cell boundary geometry into CartoScope-ready PMTiles. It writes geometry PMTiles only; CartoScope sidecars such as DE, pseudobulk, factor info, RGB tables, <code>ficture_assets.json</code>, and <code>catalog.yaml</code> are produced by <code>punkst deploy-cartoscope</code>.</p>
 <p>Typical use:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>punkst<span class="w"> </span>lda-transform<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>--in-model<span class="w"> </span>model.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>--in-dge-dir<span class="w"> </span>cell_feature_matrix/<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span>--out-prefix<span class="w"> </span>cells<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">  </span>--topk-only<span class="w"> </span><span class="m">3</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>punkst<span class="w"> </span>cells2pmtiles<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="w">  </span>--in-results<span class="w"> </span>cells.results.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a><span class="w">  </span>--id-col<span class="w"> </span>cell_id<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a><span class="w">  </span>--in-boundaries<span class="w"> </span>cell_boundaries.geojson<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="w">  </span>--out-prefix<span class="w"> </span>carto/cells<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a><span class="w">  </span>--format<span class="w"> </span>MVT<span class="w"> </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span>--max-zoom<span class="w"> </span><span class="m">18</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>punkst<span class="w"> </span>lda-transform<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="w">  </span>--in-model<span class="w"> </span>model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="w">  </span>--in-dge-dir<span class="w"> </span>cell_feature_matrix/<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">  </span>--out-prefix<span class="w"> </span>cells<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">  </span>--topk-only<span class="w"> </span><span class="m">3</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>punkst<span class="w"> </span>cells2pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">  </span>--in-results<span class="w"> </span>cells.results.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">  </span>--id-col<span class="w"> </span>cell_id<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="w">  </span>--in-boundaries<span class="w"> </span>cell_boundaries.geojson<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="w">  </span>--out-prefix<span class="w"> </span>carto/cells<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-18-12"><a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a><span class="w">  </span>--format<span class="w"> </span>MVT<span class="w"> </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span>--max-zoom<span class="w"> </span><span class="m">18</span>
 </span></code></pre></div>
 <p><strong>Input</strong></p>
 <p>The result table can contain dense factor columns named <code>0..K-1</code>, compact top-k columns from <code>lda-transform --topk-only</code>, or <code>topK/topP</code> columns:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>cell_id K1  K2  K3  P1  P2  P3
+<div class="language-text highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>cell_id K1  K2  K3  P1  P2  P3
 </span></code></pre></div>
 <p>Use <code>--id-col</code> to select the cell ID column in the result table by name. For dense factor columns, <code>--top-k</code> controls how many top factors are retained (default: <code>3</code>).</p>
 <p>Boundary input may be GeoJSON <code>Feature</code> records with <code>Polygon</code> or <code>MultiPolygon</code> geometry, or a flat TSV/CSV table with consecutive vertices per cell. For table boundaries, use <code>--b-icol-id</code>, <code>--b-icol-x</code>, and <code>--b-icol-y</code> to specify the 0-based column indexes for cell ID and coordinates.</p>
 <p>When <code>--boundary-format</code> is left as <code>auto</code>, <code>cells2pmtiles</code> infers JSON/GeoJSON vs table input from the file extension (<code>.json</code>, <code>.geojson</code>, <code>.tsv</code>, <code>.csv</code>, <code>.txt</code>, including <code>.gz</code> variants). Flat boundary and center tables may be comma- or tab-delimited. Lines beginning with <code>#</code> are skipped, and the first non-comment line is treated as a header only when the configured coordinate columns do not parse as numeric values.</p>
 <p><strong>Output</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>&lt;prefix&gt;-boundaries.pmtiles
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>&lt;prefix&gt;-cells.pmtiles
+<div class="language-text highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>&lt;prefix&gt;-boundaries.pmtiles
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>&lt;prefix&gt;-cells.pmtiles
 </span></code></pre></div>
 <h3 id="cells2pmtiles-options">cells2pmtiles Options<a class="headerlink" href="#cells2pmtiles-options" title="Permanent link">&para;</a></h3>
 <p><code>punkst cells2pmtiles</code> accepts the following command-line options:</p>
@@ -1842,7 +2025,7 @@ If <code>--basemap-max-zoom</code> is omitted, it defaults to <code>--point-max-
 </tr>
 <tr>
 <td><code>--max-point-tile-bytes</code></td>
-<td><code>500000</code></td>
+<td><code>5000000</code></td>
 <td>Maximum compressed bytes per point tile.</td>
 </tr>
 <tr>
@@ -1899,6 +2082,127 @@ If <code>--basemap-max-zoom</code> is omitted, it defaults to <code>--point-max-
 <td><code>--overwrite</code></td>
 <td>false</td>
 <td>Overwrite PMTiles outputs.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="convert-pngtiff-to-pmtiles">Convert PNG/TIFF to PMTiles<a class="headerlink" href="#convert-pngtiff-to-pmtiles" title="Permanent link">&para;</a></h2>
+<p>You can also run <code>punkst image2pmtiles</code> separately for supported/converted images to produce PMTiles, then pass its output to <code>deploy-cartoscope</code>.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>punkst<span class="w"> </span>image2pmtiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="w">  </span>--in-image<span class="w"> </span>tissue_hires_image.tif<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a><span class="w">  </span>--out-prefix<span class="w"> </span>carto/HnE<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="w">  </span>--id<span class="w"> </span>HnE<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="w">  </span>--microns-per-pixel<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="w">  </span>--offset-x-um<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="w">  </span>--offset-y-um<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="w">  </span>--min-zoom<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a><span class="w">  </span>--max-zoom<span class="w"> </span><span class="m">18</span>
+</span></code></pre></div>
+<p>This writes:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>carto/HnE.pmtiles
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>carto/HnE_assets.json
+</span></code></pre></div>
+<p>Include the asset JSON in deployment input:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="p">{</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span><span class="nt">&quot;image_assets&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">    </span><span class="s2">&quot;carto/HnE_assets.json&quot;</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<h3 id="image2pmtiles-options">image2pmtiles Options<a class="headerlink" href="#image2pmtiles-options" title="Permanent link">&para;</a></h3>
+<p><code>punkst image2pmtiles</code> accepts the following command-line options:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--in-image</code></td>
+<td>required</td>
+<td>Input PNG or supported tiled TIFF.</td>
+</tr>
+<tr>
+<td><code>--out-prefix</code></td>
+<td>required</td>
+<td>Output prefix. Writes <code>&lt;prefix&gt;.pmtiles</code> and <code>&lt;prefix&gt;_assets.json</code> unless <code>--asset-json</code> overrides the asset JSON path.</td>
+</tr>
+<tr>
+<td><code>--asset-json</code></td>
+<td><code>&lt;out-prefix&gt;_assets.json</code></td>
+<td>Output asset JSON path for later use through <code>deploy-cartoscope</code> <code>image_assets</code>.</td>
+</tr>
+<tr>
+<td><code>--id</code></td>
+<td>required</td>
+<td>Image/basemap ID written to the asset JSON and CartoScope catalog.</td>
+</tr>
+<tr>
+<td><code>--min-zoom</code></td>
+<td><code>7</code></td>
+<td>Minimum PMTiles zoom.</td>
+</tr>
+<tr>
+<td><code>--max-zoom</code></td>
+<td><code>18</code></td>
+<td>Maximum PMTiles zoom.</td>
+</tr>
+<tr>
+<td><code>--microns-per-pixel</code></td>
+<td>none</td>
+<td>Pixel size in punkst coordinate units for scale-only alignment. Required unless <code>--transform</code> is provided.</td>
+</tr>
+<tr>
+<td><code>--offset-x-um</code></td>
+<td><code>0</code></td>
+<td>X offset used with <code>--microns-per-pixel</code>.</td>
+</tr>
+<tr>
+<td><code>--offset-y-um</code></td>
+<td><code>0</code></td>
+<td>Y offset used with <code>--microns-per-pixel</code>.</td>
+</tr>
+<tr>
+<td><code>--transform</code></td>
+<td>none</td>
+<td>Full 3x3 pixel-to-micron transform as 9 comma/space-separated values (row-major). Required unless <code>--microns-per-pixel</code> is provided.</td>
+</tr>
+<tr>
+<td><code>--gray-percentiles</code></td>
+<td><code>1 99</code></td>
+<td>Low/high percentile bounds for mapping 16-bit grayscale TIFF data to 8-bit PNG tiles.</td>
+</tr>
+<tr>
+<td><code>--gray-sample-fraction</code></td>
+<td><code>0.05</code></td>
+<td>Fraction of TIFF tiles sampled for 16-bit grayscale percentile estimation.</td>
+</tr>
+<tr>
+<td><code>--gray-sample-tiles</code></td>
+<td><code>10</code></td>
+<td>Minimum number of TIFF tiles sampled for percentile estimation; use <code>0</code> to scan all tiles.</td>
+</tr>
+<tr>
+<td><code>--gray-sample-seed</code></td>
+<td><code>1</code></td>
+<td>Random seed for TIFF tile sampling.</td>
+</tr>
+<tr>
+<td><code>--tile-cache-mb</code></td>
+<td><code>0</code></td>
+<td>Optional decoded TIFF tile cache guard in MB; <code>0</code> disables the absolute memory guard.</td>
+</tr>
+<tr>
+<td><code>--tiff-source-level</code></td>
+<td><code>auto</code></td>
+<td>TIFF source level to read: <code>auto</code>, <code>base</code>, or a numeric IFD/SubIFD level.</td>
+</tr>
+<tr>
+<td><code>--overwrite</code></td>
+<td>false</td>
+<td>Overwrite existing PMTiles and asset JSON outputs.</td>
 </tr>
 </tbody>
 </table>

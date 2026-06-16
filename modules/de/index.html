@@ -1505,7 +1505,9 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <p>Given <code>--out PREFIX</code>, the tool generates one main output file per contrast, plus auxiliary files.</p>
 <ul>
 <li>For each contrast, <code>PREFIX.CONTRAST.tsv</code> is generated, where <code>CONTRAST</code> is from the <code>--contrast</code> file header or <code>labelA_vs_labelB</code> for auto-pairwise.</li>
-<li>Main output columns:</li>
+<li>
+<p>Main output columns:</p>
+<ul>
 <li><code>Slice</code>: Cell type index (0-based).</li>
 <li><code>Feature</code>: Feature name.</li>
 <li><code>Beta</code>: Observed log odds ratio, i.e. <code>logit(Pi1) - logit(Pi0)</code>.</li>
@@ -1515,14 +1517,16 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <li><code>Beta_deconv</code>: Deconvolved log odds ratio adjusted for cell type mixing. This is experimental and is only non-zero when deconvolution is triggered and succeeds.</li>
 <li><code>FC_deconv</code>: Deconvolved fold change computed from the deconvolved latent proportions.</li>
 <li><code>log10p_deconv</code>: <code>-log10(p-value)</code> for <code>Beta_deconv</code>.</li>
-<li>
-<p><code>p_perm</code>: Included only when <code>--perm &gt; 0</code>.</p>
+<li><code>p_perm</code>: Included only when <code>--perm &gt; 0</code>.</li>
+</ul>
 </li>
 <li>
 <p>Auxiliary files:</p>
-</li>
+<ul>
 <li><code>PREFIX.nobs.tsv</code>: The number of units and total pixel counts per cell type and dataset.</li>
 <li><code>PREFIX.sums.tsv</code>: Total feature counts per cell type and dataset for units passing filters.</li>
+</ul>
+</li>
 </ul>
 <h2 id="conditional-de-region-pixel">conditional-de-region-pixel<a class="headerlink" href="#conditional-de-region-pixel" title="Permanent link">&para;</a></h2>
 <p><code>conditional-de-region-pixel</code> runs the same pixel-based conditional DE test, but for a single annotation dataset and a single transcript dataset split into two groups by two polygon-defined regions. The two groups are defined by <code>--region-neg</code> and <code>--region-pos</code>, and the command computes one confusion matrix from each region on the fly from the annotation probabilities that are actually used during aggregation.</p>
@@ -1628,10 +1632,10 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <p><code>--threads</code> - Number of threads. Default: 1.</p>
 <h3 id="output-files_2">Output Files<a class="headerlink" href="#output-files_2" title="Permanent link">&para;</a></h3>
 <p>Given <code>--out PREFIX</code>, the tool generates one main output file per contrast, plus an auxiliary file.</p>
-<ul>
-<li>For each contrast, <code>PREFIX.CONTRAST.tsv</code> is generated, where <code>CONTRAST</code> is from the <code>--contrast</code> file header or <code>labelA_vs_labelB</code> for auto-pairwise.</li>
+<ol>
 <li>
-<p><strong>Columns</strong>:</p>
+<p>For each contrast, <code>PREFIX.CONTRAST.tsv</code> is generated, where <code>CONTRAST</code> is from the <code>--contrast</code> file header or <code>labelA_vs_labelB</code> for auto-pairwise.
+    <strong>Columns</strong>:</p>
 <ul>
 <li><code>Feature</code>: Feature name.</li>
 <li><code>Factor</code>: Cell type name.</li>
@@ -1646,7 +1650,7 @@ Each contrast column uses <code>-1</code> (group 0), <code>1</code> (group 1), o
 <li>
 <p>An auxiliary file <code>PREFIX.CONTRAST.eta0.tsv</code> is also generated, containing the fitted baseline (log) expression rates for each gene and cell type.</p>
 </li>
-</ul>
+</ol>
 
 
 
