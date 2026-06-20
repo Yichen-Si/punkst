@@ -115,6 +115,15 @@ Set `skip_hex_pmtiles: true` on a default model to package only pixel raster and
 
 If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different `id` values. The entries can reuse the same `results_tsv`, `model_tsv`, and `color_rgb_tsv` while pointing to different pixel prefixes, pseudobulk tables, and DE tables.
 
+Default model entries may also set these optional fields for nonstandard external result tables:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `factor_col_begin` | none | 0-based first dense hex result probability column. |
+| `factor_col_end` | none | 0-based last dense hex result probability column, inclusive. |
+
+Outputs produced by punkst normally use numeric dense columns, compact `K/P` columns, or `topK/topP` and do not need these fields. When provided, the selected columns must be ordered the same way as the model pseudobulk factors.
+
 #### Add cell-level results and cell boundaries
 
 Cell-level PMTiles from **the same** model as the pixel level results can be added to that model entry.
@@ -243,7 +252,7 @@ You can also replace `"boundaries"` with prebuilt PMTiles directly through
 
 ### Add background image PMTiles
 
-Background images can be added as CartoScope basemaps in explicit input JSON mode. Images are **not** aligned or registered by punkst. Provide the alignment through pixel size plus offset, or a full 3x3 transform that maps image pixel coordinates to the same micron coordinate system used by the transcript data.
+Background images can be added as CartoScope basemaps in explicit input JSON mode. Images are **not** aligned or registered by punkst. Provide the alignment through pixel size plus offset, a full 3x3 transform, or two image grid reference points that map to the same micron coordinate system used by the transcript data.
 
 Supported image inputs are PNG and narrowly defined TIFF: tiled TIFF with uncompressed or Deflate/zlib-compressed tiles, using 8-bit RGB/RGBA, 8-bit grayscale, or 16-bit grayscale pixels. Unsupported OME-TIFF, JPEG/JPEG-2000/LZW-compressed TIFF, and other fancier formats should be converted first.
 
@@ -267,7 +276,7 @@ python ext/py/convert_tiff_for_image2pmtiles.py \
 The conversion helper writes `<output>.image2pmtiles.json` that can be passed on to `deploy-cartoscope` with `--image-json` directly, which runs `image2pmtiles` internally to produce CartoScope-compatible PMTiles.
 When OME physical pixel metadata is available, the JSON records a pixel-to-micron transform for the selected `--series`, `--level`, and `--page` based on the metadata, which is then used during PMTiles construction.
 
-For generic TIFFs **without OME metadata**, pass either `--microns-per-pixel` with optional offsets `--offset-x-um` `--offset-y-um`, or a full 3x3 matrix with `--transform` (row-wise flatten to 9 comma/space-separated values); otherwise the JSON is marked `requires_transform`.
+For generic TIFFs **without OME metadata**, pass either `--microns-per-pixel` with optional offsets `--offset-x-um` `--offset-y-um`, a full 3x3 matrix with `--transform` (row-wise flatten to 9 comma/space-separated values), or `--pix-zero x1 y1 --pix-max x2 y2`; otherwise the JSON is marked `requires_transform`.
 
 #### Supply (converted) TIFF to `deploy-cartoscope`
 
@@ -294,11 +303,17 @@ Example with two images:
         [0.0, 0.5, 20.0],
         [0.0, 0.0, 1.0]
       ]
+    },
+    {
+      "id": "IF",
+      "src": "if.supported.tif",
+      "pix_zero": [10.0, 20.0],
+      "pix_max": [510.0, 420.0]
     }
   ]
 }
 ```
-(Note: you can provide alignment in either of the two ways shown above; if one of the images is converted by the python helper you can copy over the JSON section under `"deploy_cartoscope"` from `image2pmtiles.json`)
+(Note: provide exactly one alignment mode for each image; if one of the images is converted by the python helper you can copy over the JSON section under `"deploy_cartoscope"` from `image2pmtiles.json`)
 
 ## deploy-cartoscope Options
 
@@ -524,10 +539,12 @@ Include the asset JSON in deployment input:
 | `--id` | required | Image/basemap ID written to the asset JSON and CartoScope catalog. |
 | `--min-zoom` | `7` | Minimum PMTiles zoom. |
 | `--max-zoom` | `18` | Maximum PMTiles zoom. |
-| `--microns-per-pixel` | none | Pixel size in punkst coordinate units for scale-only alignment. Required unless `--transform` is provided. |
+| `--microns-per-pixel` | none | Pixel size in punkst coordinate units for scale-only alignment. Mutually exclusive with other alignment modes. |
 | `--offset-x-um` | `0` | X offset used with `--microns-per-pixel`. |
 | `--offset-y-um` | `0` | Y offset used with `--microns-per-pixel`. |
-| `--transform` | none | Full 3x3 pixel-to-micron transform as 9 comma/space-separated values (row-major). Required unless `--microns-per-pixel` is provided. |
+| `--transform` | none | Full 3x3 pixel-to-micron transform as 9 comma/space-separated values (row-major). Mutually exclusive with other alignment modes. |
+| `--pix-zero` | none | Two micron coordinates for image grid point `(0,0)`. Must be used with `--pix-max`; mutually exclusive with `--transform`, `--microns-per-pixel`, and offsets. |
+| `--pix-max` | none | Two micron coordinates for image grid point `(W,H)` for image width `W` and height `H`. Must be used with `--pix-zero`. |
 | `--gray-percentiles` | `1 99` | Low/high percentile bounds for mapping 16-bit grayscale TIFF data to 8-bit PNG tiles. |
 | `--gray-sample-fraction` | `0.05` | Fraction of TIFF tiles sampled for 16-bit grayscale percentile estimation. |
 | `--gray-sample-tiles` | `10` | Minimum number of TIFF tiles sampled for percentile estimation; use `0` to scan all tiles. |

@@ -27,6 +27,8 @@ int32_t cmdPoly2Pmtiles(int32_t argc, char** argv) {
       .add_option("topk-col", "Optional input column name for top factor", opts.topKColName)
       .add_option("topp-col", "Optional input column name for top factor probability", opts.topPColName)
       .add_option("id-col", "Polygon ID column name in the statistics TSV (generic polygon mode)", opts.idColName)
+      .add_option("factor-col-begin", "0-based first dense factor probability column", opts.factorColBegin)
+      .add_option("factor-col-end", "0-based last dense factor probability column, inclusive", opts.factorColEnd)
       .add_option("top-k", "Number of top factors to keep from dense factor columns", opts.topK)
       .add_option("geom-format", "Geometry format: auto, table, geojson, or json", opts.geomFormat)
       .add_option("geom-id-prop", "Polygon ID property in GeoJSON/JSON features", opts.geomIdProp)

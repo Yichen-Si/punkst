@@ -194,6 +194,13 @@ int write(const Options& options) {
     if (options.noClipping && options.noDuplication) {
         error("%s: --no-clipping and --no-duplication are mutually exclusive", __func__);
     }
+    const bool useFactorRange = options.factorColBegin >= 0 || options.factorColEnd >= 0;
+    if (useFactorRange && (options.factorColBegin < 0 || options.factorColEnd < 0)) {
+        error("%s: --factor-col-begin and --factor-col-end must be provided together", __func__);
+    }
+    if (useFactorRange && options.factorColEnd < options.factorColBegin) {
+        error("%s: --factor-col-end must be >= --factor-col-begin", __func__);
+    }
     const bool genericMode = !options.inGeom.empty();
     if (genericMode && options.idColName.empty()) error("%s: --id-col is required with --in-geom", __func__);
     if (!genericMode && options.hexGridDist <= 0.0) error("%s: --hex-grid-dist must be positive in hex mode", __func__);
@@ -206,6 +213,10 @@ int write(const Options& options) {
     factorOpts.yColName = genericMode ? std::string() : options.yColName;
     factorOpts.topKColName = options.topKColName;
     factorOpts.topPColName = options.topPColName;
+    if (useFactorRange) {
+        factorOpts.factorColBegin = options.factorColBegin;
+        factorOpts.factorColEnd = options.factorColEnd + 1;
+    }
     factorOpts.denseTopK = options.topK;
     factorOpts.requireFactorValues = false;
     factorOpts.allowKpColumns = true;

@@ -6,6 +6,7 @@
 #include <array>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <sstream>
 #include <vector>
 
@@ -38,6 +39,8 @@ int32_t cmdImage2Pmtiles(int32_t argc, char** argv) {
     image_pmtiles::Options options;
     std::string transform;
     std::vector<double> grayPercentiles;
+    std::vector<double> pixZero;
+    std::vector<double> pixMax;
 
     ParamList pl;
     pl.add_option("in-image", "Input PNG or supported tiled TIFF", options.inImage, true)
@@ -46,10 +49,66 @@ int32_t cmdImage2Pmtiles(int32_t argc, char** argv) {
       .add_option("id", "Image/basemap ID", options.id, true)
       .add_option("min-zoom", "Minimum PMTiles zoom", options.minZoom)
       .add_option("max-zoom", "Maximum PMTiles zoom", options.maxZoom)
-      .add_option("microns-per-pixel", "Pixel size in punkst coordinate units", options.micronsPerPixel)
-      .add_option("offset-x-um", "X offset for scale-only transform", options.offsetXUm)
-      .add_option("offset-y-um", "Y offset for scale-only transform", options.offsetYUm)
+      .add_option("microns-per-pixel", "Pixel size in punkst coordinate units",
+          [&options](int i, int argc, char** argv) -> int {
+              if (i + 1 >= argc || std::string(argv[i + 1]).rfind("--", 0) == 0) {
+                  return -1;
+              }
+              std::istringstream iss(argv[i + 1]);
+              iss >> options.micronsPerPixel;
+              if (iss.fail()) {
+                  throw std::runtime_error(std::string("Invalid value for option --microns-per-pixel: ") +
+                      argv[i + 1]);
+              }
+              options.hasMicronsPerPixel = true;
+              return 1;
+          },
+          [&options]() -> std::string {
+              std::ostringstream oss;
+              oss << options.micronsPerPixel;
+              return oss.str();
+          })
+      .add_option("offset-x-um", "X offset for scale-only transform",
+          [&options](int i, int argc, char** argv) -> int {
+              if (i + 1 >= argc || std::string(argv[i + 1]).rfind("--", 0) == 0) {
+                  return -1;
+              }
+              std::istringstream iss(argv[i + 1]);
+              iss >> options.offsetXUm;
+              if (iss.fail()) {
+                  throw std::runtime_error(std::string("Invalid value for option --offset-x-um: ") +
+                      argv[i + 1]);
+              }
+              options.hasOffsetXUm = true;
+              return 1;
+          },
+          [&options]() -> std::string {
+              std::ostringstream oss;
+              oss << options.offsetXUm;
+              return oss.str();
+          })
+      .add_option("offset-y-um", "Y offset for scale-only transform",
+          [&options](int i, int argc, char** argv) -> int {
+              if (i + 1 >= argc || std::string(argv[i + 1]).rfind("--", 0) == 0) {
+                  return -1;
+              }
+              std::istringstream iss(argv[i + 1]);
+              iss >> options.offsetYUm;
+              if (iss.fail()) {
+                  throw std::runtime_error(std::string("Invalid value for option --offset-y-um: ") +
+                      argv[i + 1]);
+              }
+              options.hasOffsetYUm = true;
+              return 1;
+          },
+          [&options]() -> std::string {
+              std::ostringstream oss;
+              oss << options.offsetYUm;
+              return oss.str();
+          })
       .add_option("transform", "3x3 pixel-to-micron transform as 9 comma/space-separated values", transform)
+      .add_option("pix-zero", "X Y micron coordinates for image grid point (0,0)", pixZero)
+      .add_option("pix-max", "X Y micron coordinates for image grid point (W,H)", pixMax)
       .add_option("gray-percentiles", "LOW HIGH percentile bounds for 16-bit grayscale TIFF scaling", grayPercentiles)
       .add_option("gray-sample-fraction", "Fraction of TIFF tiles sampled for 16-bit grayscale scaling", options.graySampleFraction)
       .add_option("gray-sample-tiles", "Minimum number of TIFF tiles sampled for 16-bit grayscale scaling; 0 scans all tiles", options.graySampleTiles)
@@ -70,6 +129,20 @@ int32_t cmdImage2Pmtiles(int32_t argc, char** argv) {
     if (!transform.empty()) {
         options.hasTransform = true;
         options.transform = parse_transform_string(transform);
+    }
+    if (!pixZero.empty()) {
+        if (pixZero.size() != 2) {
+            error("%s: --pix-zero requires exactly two values", __func__);
+        }
+        options.hasPixZero = true;
+        options.pixZero = {pixZero[0], pixZero[1]};
+    }
+    if (!pixMax.empty()) {
+        if (pixMax.size() != 2) {
+            error("%s: --pix-max requires exactly two values", __func__);
+        }
+        options.hasPixMax = true;
+        options.pixMax = {pixMax[0], pixMax[1]};
     }
     if (!grayPercentiles.empty()) {
         if (grayPercentiles.size() != 2) {

@@ -23,6 +23,8 @@ struct Options {
     int32_t geomXCol = 1;
     int32_t geomYCol = 2;
     int32_t geomOrderCol = -1;
+    int32_t factorColBegin = -1;
+    int32_t factorColEnd = -1;
     int32_t topK = 3;
     int32_t zoom = -1;
     int32_t extent = 4096;

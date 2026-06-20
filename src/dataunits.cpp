@@ -36,9 +36,6 @@ UnitFactorResultHeader parse_unit_factor_result_header(
         } else if (!options.topPColName.empty() && header[i] == options.topPColName) {
             out.topPCol = static_cast<int32_t>(i);
         }
-        if (useFactorRange) {
-            continue;
-        }
         if (options.allowKpColumns) {
             for (int32_t j = 1;; ++j) {
                 const std::string kName = "K" + std::to_string(j);
@@ -63,7 +60,7 @@ UnitFactorResultHeader parse_unit_factor_result_header(
             }
         }
         int32_t factorIdx = -1;
-        if (str2int32(header[i], factorIdx) && factorIdx >= 0) {
+        if (!useFactorRange && str2int32(header[i], factorIdx) && factorIdx >= 0) {
             out.factorCols.emplace_back(factorIdx, static_cast<int32_t>(i));
             out.factorNames.emplace_back(header[i]);
         }
@@ -74,10 +71,6 @@ UnitFactorResultHeader parse_unit_factor_result_header(
     if (expectCoords && !out.hasCoordinates()) {
         error("%s: input header must contain %s and %s",
             __func__, options.xColName.c_str(), options.yColName.c_str());
-    }
-    if (expectTop && !out.hasTopFactor() && out.topPairCols.empty() && out.factorCols.empty()) {
-        error("%s: input header must contain %s and %s",
-            __func__, options.topKColName.c_str(), options.topPColName.c_str());
     }
     if (useFactorRange) {
         if (options.factorColBegin < 0 || options.factorColEnd <= options.factorColBegin ||
@@ -92,6 +85,10 @@ UnitFactorResultHeader parse_unit_factor_result_header(
             out.factorCols.emplace_back(col - options.factorColBegin, col);
             out.factorNames.emplace_back(header[static_cast<size_t>(col)]);
         }
+    }
+    if (expectTop && !out.hasTopFactor() && out.topPairCols.empty() && out.factorCols.empty()) {
+        error("%s: input header must contain %s and %s",
+            __func__, options.topKColName.c_str(), options.topPColName.c_str());
     }
     for (size_t i = 0; i < out.topPairCols.size(); ++i) {
         if (out.topPairCols[i].first < 0 || out.topPairCols[i].second < 0) {

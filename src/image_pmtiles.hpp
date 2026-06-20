@@ -17,7 +17,14 @@ struct Options {
     double micronsPerPixel = 0.0;
     double offsetXUm = 0.0;
     double offsetYUm = 0.0;
+    bool hasMicronsPerPixel = false;
+    bool hasOffsetXUm = false;
+    bool hasOffsetYUm = false;
     bool hasTransform = false;
+    bool hasPixZero = false;
+    bool hasPixMax = false;
+    std::array<double, 2> pixZero{0.0, 0.0};
+    std::array<double, 2> pixMax{0.0, 0.0};
     double grayLowPercentile = 1.0;
     double grayHighPercentile = 99.0;
     double graySampleFraction = 0.05;

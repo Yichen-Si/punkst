@@ -96,6 +96,8 @@ struct ModelInputs {
     fs::path pseudobulkTsv;
     fs::path deTsv;
     CellInputs cell;
+    int32_t factorColBegin = -1;
+    int32_t factorColEnd = -1;
     bool pixelPngExplicit = false;
     bool skipHexPmtiles = false;
 };
@@ -185,6 +187,30 @@ bool has_cell_pmtiles_or_sources(const CellInputs& cell) {
 
 bool has_cell_sidecars(const CellInputs& cell) {
     return !cell.deTsv.empty() || !cell.pseudobulkTsv.empty() || !cell.rgbTsv.empty();
+}
+
+bool has_factor_column_range(int32_t begin, int32_t end) {
+    return begin >= 0 || end >= 0;
+}
+
+void validate_factor_column_range(int32_t begin, int32_t end,
+    size_t expectedFactorCount, const std::string& context) {
+    if (!has_factor_column_range(begin, end)) {
+        return;
+    }
+    if (begin < 0 || end < 0) {
+        error("%s: factor_col_begin and factor_col_end must be provided together for %s",
+            __func__, context.c_str());
+    }
+    if (end < begin) {
+        error("%s: factor_col_end must be >= factor_col_begin for %s",
+            __func__, context.c_str());
+    }
+    const size_t width = static_cast<size_t>(end - begin + 1);
+    if (width != expectedFactorCount) {
+        error("%s: factor column range for %s has %zu columns, but pseudobulk has %zu factors",
+            __func__, context.c_str(), width, expectedFactorCount);
+    }
 }
 
 std::string pixel_mode_suffix(PixelDecodeMode mode) {
@@ -429,6 +455,9 @@ fs::path prepare_headered_transcripts(const TranscriptInputs& tr, const fs::path
 }
 
 fs::path prepare_hex_results_with_topk(const ModelInputs& model, const fs::path& tmpDir) {
+    if (has_factor_column_range(model.factorColBegin, model.factorColEnd)) {
+        return model.resultsTsv;
+    }
     std::ifstream in(model.resultsTsv);
     if (!in.is_open()) {
         error("%s: cannot open %s", __func__, model.resultsTsv.string().c_str());
@@ -1437,6 +1466,13 @@ std::array<double, 9> parse_transform_json(const json& value, const char* contex
     return out;
 }
 
+std::array<double, 2> parse_point2_json(const json& value, const char* name, const char* context) {
+    if (!value.is_array() || value.size() != 2) {
+        error("%s: %s must be a 2-value array in %s", __func__, name, context);
+    }
+    return {value[0].get<double>(), value[1].get<double>()};
+}
+
 void parse_image_entries(const json& root, const fs::path& base, DeployInputs& out,
     const fs::path& contextPath) {
     if (root.contains("image_assets") && !root.at("image_assets").is_null()) {
@@ -1468,15 +1504,40 @@ void parse_image_entries(const json& root, const fs::path& base, DeployInputs& o
         opts.graySampleSeed = image.value("gray_sample_seed", opts.graySampleSeed);
         opts.tileCacheMb = image.value("tile_cache_mb", opts.tileCacheMb);
         opts.tiffSourceLevel = image.value("tiff_source_level", opts.tiffSourceLevel);
-        if (image.contains("transform") && !image.at("transform").is_null()) {
+        const bool hasTransformField = image.contains("transform") && !image.at("transform").is_null();
+        const bool hasPixZeroField = image.contains("pix_zero") && !image.at("pix_zero").is_null();
+        const bool hasPixMaxField = image.contains("pix_max") && !image.at("pix_max").is_null();
+        const bool hasMppField = image.contains("microns_per_pixel") && !image.at("microns_per_pixel").is_null();
+        const bool hasOffsetXField = image.contains("offset_x_um") && !image.at("offset_x_um").is_null();
+        const bool hasOffsetYField = image.contains("offset_y_um") && !image.at("offset_y_um").is_null();
+        if (hasTransformField) {
             opts.hasTransform = true;
             opts.transform = parse_transform_json(image.at("transform"), contextPath.string().c_str());
-        } else if (image.contains("microns_per_pixel") && !image.at("microns_per_pixel").is_null()) {
+        }
+        if (hasPixZeroField) {
+            opts.hasPixZero = true;
+            opts.pixZero = parse_point2_json(image.at("pix_zero"), "pix_zero",
+                contextPath.string().c_str());
+        }
+        if (hasPixMaxField) {
+            opts.hasPixMax = true;
+            opts.pixMax = parse_point2_json(image.at("pix_max"), "pix_max",
+                contextPath.string().c_str());
+        }
+        if (hasMppField) {
+            opts.hasMicronsPerPixel = true;
             opts.micronsPerPixel = image.at("microns_per_pixel").get<double>();
-            opts.offsetXUm = image.value("offset_x_um", 0.0);
-            opts.offsetYUm = image.value("offset_y_um", 0.0);
-        } else {
-            error("%s: image %s requires transform or microns_per_pixel",
+        }
+        if (hasOffsetXField) {
+            opts.hasOffsetXUm = true;
+            opts.offsetXUm = image.at("offset_x_um").get<double>();
+        }
+        if (hasOffsetYField) {
+            opts.hasOffsetYUm = true;
+            opts.offsetYUm = image.at("offset_y_um").get<double>();
+        }
+        if (!hasTransformField && !hasPixZeroField && !hasPixMaxField && !hasMppField) {
+            error("%s: image %s requires transform, microns_per_pixel, or pix_zero plus pix_max",
                 __func__, opts.id.c_str());
         }
         out.images.push_back(std::move(opts));
@@ -1771,6 +1832,8 @@ DeployInputs load_from_input_json(const fs::path& inputJson,
             } else {
                 model.pseudobulkTsv = model.pixelPrefix.string() + ".pseudobulk.tsv";
             }
+            model.factorColBegin = m.value("factor_col_begin", model.factorColBegin);
+            model.factorColEnd = m.value("factor_col_end", model.factorColEnd);
             model.deTsv = resolve_path(base, m.at("de_tsv").get<std::string>());
             parse_cell_fields(m, model.cell, true, false);
         }
@@ -1850,6 +1913,10 @@ void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMod
             require_file(model.pixelPng, "pixel PNG");
         }
         require_file(model.pseudobulkTsv, "pseudobulk TSV");
+        if (has_factor_column_range(model.factorColBegin, model.factorColEnd)) {
+            validate_factor_column_range(model.factorColBegin, model.factorColEnd,
+                infer_factor_count_from_pseudobulk(model.pseudobulkTsv), model.id);
+        }
         require_file(model.deTsv, "bulk DE TSV");
         if (!model.skipHexPmtiles && model.hexGridDist <= 0.0) {
             error("%s: model %s has non-positive hex_grid_dist", __func__, model.id.c_str());
@@ -1907,13 +1974,28 @@ void validate_inputs(const DeployInputs& inputs, bool usePngFlag, bool configMod
             error("%s: image id must not be empty", __func__);
         }
         require_file(image.inImage, "image input");
-        if (!image.hasTransform && !(image.micronsPerPixel > 0.0)) {
-            error("%s: image %s requires transform or positive microns_per_pixel",
-                __func__, image.id.c_str());
-        }
         if (image.minZoom < 0 || image.maxZoom < image.minZoom || image.maxZoom > 30) {
             error("%s: image %s has invalid zoom range %d..%d",
                 __func__, image.id.c_str(), image.minZoom, image.maxZoom);
+        }
+        if (image.hasPixZero != image.hasPixMax) {
+            error("%s: image %s requires both pix_zero and pix_max",
+                __func__, image.id.c_str());
+        }
+        const bool hasPixReference = image.hasPixZero && image.hasPixMax;
+        const int transformSources = (image.hasTransform ? 1 : 0) +
+            (image.hasMicronsPerPixel ? 1 : 0) + (hasPixReference ? 1 : 0);
+        if (transformSources != 1) {
+            error("%s: image %s requires exactly one alignment source: transform, microns_per_pixel, or pix_zero plus pix_max",
+                __func__, image.id.c_str());
+        }
+        if ((image.hasOffsetXUm || image.hasOffsetYUm) && !image.hasMicronsPerPixel) {
+            error("%s: image %s offsets require microns_per_pixel",
+                __func__, image.id.c_str());
+        }
+        if (image.hasMicronsPerPixel && !(image.micronsPerPixel > 0.0)) {
+            error("%s: image %s has non-positive microns_per_pixel",
+                __func__, image.id.c_str());
         }
     }
 }
@@ -2604,6 +2686,12 @@ int32_t cmdDeployCartoscope(int32_t argc, char** argv) {
                     "--prob-thres", fp_to_string(hexProbThreshold, 8),
                     "--threads", std::to_string(threads)
                 };
+                if (has_factor_column_range(model.factorColBegin, model.factorColEnd)) {
+                    hexArgs.push_back("--factor-col-begin");
+                    hexArgs.push_back(std::to_string(model.factorColBegin));
+                    hexArgs.push_back("--factor-col-end");
+                    hexArgs.push_back(std::to_string(model.factorColEnd));
+                }
                 if (call_command(hexArgs, cmdPoly2Pmtiles) != 0) {
                     error("%s: poly2pmtiles failed for model %s", __func__, model.id.c_str());
                 }

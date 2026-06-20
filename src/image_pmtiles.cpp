@@ -672,18 +672,64 @@ std::array<double, 9> resolve_base_transform(const image_pmtiles::Options& optio
     };
 }
 
-std::unique_ptr<RasterSource> make_raster_source(const image_pmtiles::Options& options,
-    const std::array<double, 9>& baseTransform,
+std::array<double, 9> resolve_pix_reference_transform(
+    const image_pmtiles::Options& options, double width, double height) {
+    if (!(width > 0.0 && height > 0.0)) {
+        error("%s: image dimensions must be positive for pix reference alignment", __func__);
+    }
+    const double x1 = options.pixZero[0];
+    const double y1 = options.pixZero[1];
+    const double x2 = options.pixMax[0];
+    const double y2 = options.pixMax[1];
+    if (!std::isfinite(x1) || !std::isfinite(y1) ||
+        !std::isfinite(x2) || !std::isfinite(y2)) {
+        error("%s: --pix-zero and --pix-max values must be finite", __func__);
+    }
+    const double dx = x2 - x1;
+    const double dy = y2 - y1;
+    if (!(dx != 0.0 || dy != 0.0)) {
+        error("%s: --pix-zero and --pix-max must specify distinct micron coordinates", __func__);
+    }
+    const double denom = width * width + height * height;
+    const double a = (width * dx + height * dy) / denom;
+    const double b = (-height * dx + width * dy) / denom;
+    const double scale = std::hypot(a, b);
+    if (!(scale > 0.0) || !std::isfinite(scale)) {
+        error("%s: invalid pix reference alignment scale", __func__);
+    }
+    return {
+        a, -b, x1,
+        b, a, y1,
+        0.0, 0.0, 1.0
+    };
+}
+
+std::array<double, 9> resolve_dimension_dependent_base_transform(
+    const image_pmtiles::Options& options, double width, double height) {
+    if (options.hasPixZero || options.hasPixMax) {
+        return resolve_pix_reference_transform(options, width, height);
+    }
+    return resolve_base_transform(options);
+}
+
+std::unique_ptr<RasterSource> make_raster_source(
+    const image_pmtiles::Options& options,
     std::array<double, 9>& sourceTransform) {
     if (has_extension(options.inImage, {".png"})) {
-        sourceTransform = baseTransform;
-        return std::unique_ptr<RasterSource>(new PngRasterSource(options.inImage));
+        std::unique_ptr<RasterSource> source(new PngRasterSource(options.inImage));
+        sourceTransform = resolve_dimension_dependent_base_transform(options,
+            static_cast<double>(source->width()),
+            static_cast<double>(source->height()));
+        return source;
     }
     if (has_extension(options.inImage, {".tif", ".tiff", ".btf"})) {
         RandomAccessFile probe(options.inImage);
         TiffInfo info = parse_tiff_info(probe);
-        const int levelIndex = choose_tiff_level(info, options, baseTransform);
         const TiffLevel& base = info.levels.front();
+        const std::array<double, 9> baseTransform = resolve_dimension_dependent_base_transform(options,
+            static_cast<double>(base.width),
+            static_cast<double>(base.height));
+        const int levelIndex = choose_tiff_level(info, options, baseTransform);
         const TiffLevel& level = info.levels[static_cast<size_t>(levelIndex)];
         const double sx = static_cast<double>(base.width) / static_cast<double>(level.width);
         const double sy = static_cast<double>(base.height) / static_cast<double>(level.height);
@@ -727,8 +773,26 @@ void image_pmtiles::validate_options(const Options& options) {
     if (options.tileCacheMb < 0) {
         error("%s: --tile-cache-mb must be non-negative", __func__);
     }
-    if (!options.hasTransform && !(options.micronsPerPixel > 0.0)) {
-        error("%s: provide --microns-per-pixel or --transform", __func__);
+    if (options.hasPixZero != options.hasPixMax) {
+        error("%s: --pix-zero and --pix-max must be specified together", __func__);
+    }
+    const bool hasPixReference = options.hasPixZero && options.hasPixMax;
+    const bool hasScaleOnly = options.hasMicronsPerPixel;
+    const int transformSources = (options.hasTransform ? 1 : 0) +
+        (hasScaleOnly ? 1 : 0) + (hasPixReference ? 1 : 0);
+    if (transformSources != 1) {
+        error("%s: provide exactly one image alignment source: --microns-per-pixel, --transform, or --pix-zero with --pix-max",
+            __func__);
+    }
+    if ((options.hasOffsetXUm || options.hasOffsetYUm) && !hasScaleOnly) {
+        error("%s: --offset-x-um and --offset-y-um require --microns-per-pixel", __func__);
+    }
+    if (hasPixReference && (options.hasOffsetXUm || options.hasOffsetYUm)) {
+        error("%s: --pix-zero/--pix-max cannot be combined with --offset-x-um or --offset-y-um",
+            __func__);
+    }
+    if (hasScaleOnly && !(options.micronsPerPixel > 0.0)) {
+        error("%s: --microns-per-pixel must be positive", __func__);
     }
 }
 
@@ -739,9 +803,11 @@ image_pmtiles::Asset image_pmtiles::write_image_pmtiles(const Options& options) 
     if (!options.overwrite && file_exists(outFile)) {
         notice("%s: %s already exists; skipping image PMTiles", __func__, outFile.string().c_str());
     } else {
-        const std::array<double, 9> baseTransform = resolve_base_transform(options);
-        std::array<double, 9> sourceTransform = baseTransform;
-        std::unique_ptr<RasterSource> source = make_raster_source(options, baseTransform, sourceTransform);
+        std::array<double, 9> sourceTransform{
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0};
+        std::unique_ptr<RasterSource> source = make_raster_source(options, sourceTransform);
         const fs::path blobFile = options.outPrefix.string() + ".blob.tmp";
         write_transformed_image_pmtiles(*source, outFile, blobFile, sourceTransform,
             options.minZoom, options.maxZoom);

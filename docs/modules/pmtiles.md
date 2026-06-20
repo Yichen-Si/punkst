@@ -96,7 +96,8 @@ Options:
 - `--x-col`, `--y-col`, `--topk-col`, and `--topp-col` set column names in the input factor table for the hex center coordinates (default: `x` and `y`), the top factor ID (default: `topK`), and the top factor probability (default: `topP`)
 - `--prob-thres` keeps only factor probabilities above the threshold as nullable properties (default: `1e-4`)
 - compact `K1/P1`, `K2/P2`, ... columns are recognized automatically; dense numeric factor columns named `0..K-1` are also supported
-- `--top-k` controls how many top factors are retained from dense numeric factor columns (default: `3`)
+- `--factor-col-begin` and `--factor-col-end` explicitly select dense factor probability columns by a 0-based inclusive column range; selected columns are mapped to factor IDs `0..K-1` in column order
+- `--top-k` controls how many top factors are retained from dense factor columns (default: `3`)
 - `--coord-scale` scales the input coordinates before Web Mercator tiling (default: `1`, no scaling)
 
 Parameters for boundary behavior are similar to [tippecanoe's options](https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries):

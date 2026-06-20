@@ -1,4 +1,5 @@
 #include "punkst.h"
+#include "dataunits.hpp"
 #include "eb_topic_activity.hpp"
 #include "numerical_utils.hpp"
 
@@ -195,6 +196,46 @@ void test_fit_eta_em() {
     check_true("fit_eta_em responsibility rows sum to one", max_sum_error < 1e-14);
 }
 
+void test_unit_factor_result_header_ranges() {
+    {
+        const std::vector<std::string> header = {"x", "y", "0", "1", "2"};
+        UnitFactorResultReadOptions opts;
+        UnitFactorResultHeader parsed = parse_unit_factor_result_header(header, opts);
+        check_true("unit-factor header detects numeric dense columns",
+            parsed.factorCols.size() == 3 &&
+            parsed.factorCols[0] == std::make_pair(0, 2) &&
+            parsed.factorCols[1] == std::make_pair(1, 3) &&
+            parsed.factorCols[2] == std::make_pair(2, 4));
+    }
+    {
+        const std::vector<std::string> header = {"x", "y", "B_cell", "Fibroblast", "T_cell"};
+        UnitFactorResultReadOptions opts;
+        opts.factorColBegin = 2;
+        opts.factorColEnd = 5;
+        UnitFactorResultHeader parsed = parse_unit_factor_result_header(header, opts);
+        check_true("unit-factor header maps explicit dense range to contiguous factors",
+            parsed.factorCols.size() == 3 &&
+            parsed.factorCols[0] == std::make_pair(0, 2) &&
+            parsed.factorCols[1] == std::make_pair(1, 3) &&
+            parsed.factorCols[2] == std::make_pair(2, 4) &&
+            parsed.factorNames[0] == "B_cell" &&
+            parsed.factorNames[2] == "T_cell");
+    }
+    {
+        const std::vector<std::string> header = {"x", "y", "K1", "P1", "alpha", "beta"};
+        UnitFactorResultReadOptions opts;
+        opts.factorColBegin = 4;
+        opts.factorColEnd = 6;
+        UnitFactorResultHeader parsed = parse_unit_factor_result_header(header, opts);
+        check_true("unit-factor header keeps K/P columns with explicit dense range",
+            parsed.topPairCols.size() == 1 &&
+            parsed.topPairCols[0] == std::make_pair(2, 3) &&
+            parsed.factorCols.size() == 2 &&
+            parsed.factorCols[0] == std::make_pair(0, 4) &&
+            parsed.factorCols[1] == std::make_pair(1, 5));
+    }
+}
+
 } // namespace
 
 int32_t test(int32_t, char**) {
@@ -203,6 +244,7 @@ int32_t test(int32_t, char**) {
         test_beta_helpers_and_evidence();
         test_multinomial_evidence();
         test_fit_eta_em();
+        test_unit_factor_result_header_ranges();
     } catch (const std::exception& ex) {
         std::cerr << "Unhandled exception in test command: " << ex.what() << "\n";
         return 1;
