@@ -115,14 +115,9 @@ Set `skip_hex_pmtiles: true` on a default model to package only pixel raster and
 
 If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different `id` values. The entries can reuse the same `results_tsv`, `model_tsv`, and `color_rgb_tsv` while pointing to different pixel prefixes, pseudobulk tables, and DE tables.
 
-Default model entries may also set these optional fields for nonstandard external result tables:
+For `results_tsv` with nonstandard header:
 
-| Field | Default | Description |
-| --- | --- | --- |
-| `factor_col_begin` | none | 0-based first dense hex result probability column. |
-| `factor_col_end` | none | 0-based last dense hex result probability column, inclusive. |
-
-Outputs produced by punkst normally use numeric dense columns, compact `K/P` columns, or `topK/topP` and do not need these fields. When provided, the selected columns must be ordered the same way as the model pseudobulk factors.
+Outputs produced by punkst normally use numeric column names `0,...,K-1` for factor probabilities, or use columns names matching that in the pseudobulk matrix (`pseudobulk_tsv`). If your `results_tsv` has a different header pattern, you can specify the 0-based inclusive column index range by adding `factor_col_begin` and `factor_col_end` to the model entry. The columns in the specified range should be ordered in the same way as those in the pseudobulk matrix.
 
 #### Add cell-level results and cell boundaries
 

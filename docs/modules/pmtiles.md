@@ -70,16 +70,47 @@ Options:
 
 ## Write single-zoom polygon PMTiles
 
-`punkst poly2pmtiles` writes a **polygon-only MLT or MVT PMTiles archive with a single zoom level** from a factor-probability table (output from [`punkst topic-model`](lda4hex.md) or `lda-transform`). Use `--format MVT` for MVT output; the default is `MLT`.
+`punkst poly2pmtiles` writes a **polygon-only** MLT or MVT PMTiles archive with **a single zoom level** from a factor-probability table (output from [`punkst topic-model`](lda4hex.md) or `lda-transform`). Use `--format MVT` for MVT output; the default is `MLT`.
 
 It supports two input styles:
 
 - hexagon mode: build polygon geometry from hex centers
 - generic polygon mode: link factor-probability rows to polygon geometry by polygon ID
 
-### Hexagon mode
+### Shared settings
 
-Use this when the input table contains `x` and `y` coordinates for hex centers.
+These options apply to both hexagon mode and generic simple-polygon mode.
+
+#### Shared factor table settings
+
+- `--in-tsv` points to the factor-probability table
+- `--out` sets the output PMTiles archive
+- `--format` can be `MLT` or `MVT` (default: `MLT`)
+- `--pmtiles-zoom` (required) sets the output zoom level
+- `--topk-col` and `--topp-col` set column names for the top factor ID and probability (default: `topK` and `topP`)
+- compact `K1/P1`, `K2/P2`, ... columns are recognized automatically
+- dense numeric factor columns named `0..K-1` are recognized automatically
+- `--factor-col-begin` and `--factor-col-end` explicitly select dense factor probability columns by a 0-based inclusive column range; selected columns are mapped to factor IDs `0..K-1` in column order
+- `--top-k` controls how many top factors are retained from dense factor columns (default: `3`)
+- `--prob-thres` keeps only factor probabilities above the threshold as nullable properties (default: `1e-4`)
+- `--coord-scale` scales input coordinates before Web Mercator tiling (default: `1`, no scaling)
+- `--layer-name` optionally sets the PMTiles layer name (default: basename of `--out`)
+- `--threads` sets the number of encode threads
+
+#### Polygon tiling behavior
+
+These options are similar to [tippecanoe's clipping options](https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries):
+
+- `--tile-buffer-px` sets the screen-pixel buffer used by the default clipped/duplicated mode (default: `5`) (matching `tippecanoe -b`)
+- `--no-clipping` duplicates each polygon into every touched tile without clipping it to tile boundaries (matching `tippecanoe -pc`)
+- `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching `tippecanoe -pD`)
+- `--no-clipping` and `--no-duplication` are mutually exclusive
+- `--clip-scale` sets the integer scale used internally for polygon clipping
+- `--extent` sets the vector tile extent
+
+### Hexagon mode specific settings
+
+Use this when the input table contains `x` and `y` coordinates as hexagon centers.
 
 ```bash
 punkst poly2pmtiles \
@@ -92,21 +123,9 @@ punkst poly2pmtiles \
 Options:
 
 - `--hex-grid-dist` (required) specifies the distance between adjacent grid points on the hexagonal grid
-- `--pmtiles-zoom` (required) sets the output zoom level
-- `--x-col`, `--y-col`, `--topk-col`, and `--topp-col` set column names in the input factor table for the hex center coordinates (default: `x` and `y`), the top factor ID (default: `topK`), and the top factor probability (default: `topP`)
-- `--prob-thres` keeps only factor probabilities above the threshold as nullable properties (default: `1e-4`)
-- compact `K1/P1`, `K2/P2`, ... columns are recognized automatically; dense numeric factor columns named `0..K-1` are also supported
-- `--factor-col-begin` and `--factor-col-end` explicitly select dense factor probability columns by a 0-based inclusive column range; selected columns are mapped to factor IDs `0..K-1` in column order
-- `--top-k` controls how many top factors are retained from dense factor columns (default: `3`)
-- `--coord-scale` scales the input coordinates before Web Mercator tiling (default: `1`, no scaling)
+- `--x-col` and `--y-col` set column names for the hex center coordinates (default: `x` and `y`)
 
-Parameters for boundary behavior are similar to [tippecanoe's options](https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries):
-- `--tile-buffer-px` sets the screen-pixel buffer used by the default clipped/duplicated mode (default: `5`) (matching `tippecanoe -b`)
-- `--no-clipping` duplicates each polygon into every touched tile without clipping it to tile boundaries (matching `tippecanoe -pc`)
-- `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching `tippecanoe -pD`)
-- `--no-clipping` and `--no-duplication` are mutually exclusive
-
-### Generic simple-polygon mode
+### Generic simple-polygon mode with geometry file
 
 Use this when the factor-probability table contains a polygon ID column and polygon geometry is provided in a separate file. For example, if you ran `punkst topic-model` on segmented cells and you want to create a PMTiles archive with cell boundaries as geometry.
 
@@ -135,12 +154,6 @@ Options:
 - `--g-icol-order` is optional; if omitted, the geometry rows are assumed to already be in vertex order
 - `--out-sidecar-tsv` optionally writes `polygon_id`, `part_index`, `feature_id`, `center_x`, and `center_y`
 - `--cartoscope-boundary` writes the CartoScope boundary schema (`cell_id`, `topK`, `topP`, `K2/P2`, ...); factor IDs in boundary properties are stored as strings for CartoScope compatibility
-
-Boundary behavior options are the same as in hexagon mode:
-- `--tile-buffer-px` sets the screen-pixel buffer used by the default clipped/duplicated mode (default: `5`)
-- `--no-clipping` duplicates each polygon into every touched tile without clipping it to tile boundaries
-- `--no-duplication` stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries
-- `--no-clipping` and `--no-duplication` are mutually exclusive
 
 Geometry file format:
 
