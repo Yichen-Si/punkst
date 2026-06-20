@@ -922,18 +922,51 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#hexagon-mode" class="md-nav__link">
+  <a href="#shared-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Hexagon mode
+      Shared settings
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Shared settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shared-factor-table-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Shared factor table settings
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#generic-simple-polygon-mode" class="md-nav__link">
+  <a href="#polygon-tiling-behavior" class="md-nav__link">
     <span class="md-ellipsis">
-      Generic simple-polygon mode
+      Polygon tiling behavior
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hexagon-mode-specific-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hexagon mode specific settings
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generic-simple-polygon-mode-with-geometry-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generic simple-polygon mode with geometry file
     </span>
   </a>
   
@@ -1163,18 +1196,51 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#hexagon-mode" class="md-nav__link">
+  <a href="#shared-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Hexagon mode
+      Shared settings
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Shared settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shared-factor-table-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Shared factor table settings
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#generic-simple-polygon-mode" class="md-nav__link">
+  <a href="#polygon-tiling-behavior" class="md-nav__link">
     <span class="md-ellipsis">
-      Generic simple-polygon mode
+      Polygon tiling behavior
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hexagon-mode-specific-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hexagon mode specific settings
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#generic-simple-polygon-mode-with-geometry-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      Generic simple-polygon mode with geometry file
     </span>
   </a>
   
@@ -1320,14 +1386,42 @@
 <li><code>--max-zoom-from-raw</code> parses raw data for zooms greater than or equal to the given value, then derives lower zooms from parent layers; set it to <code>--min-zoom</code> to parse every zoom from raw data</li>
 </ul>
 <h2 id="write-single-zoom-polygon-pmtiles">Write single-zoom polygon PMTiles<a class="headerlink" href="#write-single-zoom-polygon-pmtiles" title="Permanent link">&para;</a></h2>
-<p><code>punkst poly2pmtiles</code> writes a <strong>polygon-only MLT or MVT PMTiles archive with a single zoom level</strong> from a factor-probability table (output from <a href="../lda4hex/"><code>punkst topic-model</code></a> or <code>lda-transform</code>). Use <code>--format MVT</code> for MVT output; the default is <code>MLT</code>.</p>
+<p><code>punkst poly2pmtiles</code> writes a <strong>polygon-only</strong> MLT or MVT PMTiles archive with <strong>a single zoom level</strong> from a factor-probability table (output from <a href="../lda4hex/"><code>punkst topic-model</code></a> or <code>lda-transform</code>). Use <code>--format MVT</code> for MVT output; the default is <code>MLT</code>.</p>
 <p>It supports two input styles:</p>
 <ul>
 <li>hexagon mode: build polygon geometry from hex centers</li>
 <li>generic polygon mode: link factor-probability rows to polygon geometry by polygon ID</li>
 </ul>
-<h3 id="hexagon-mode">Hexagon mode<a class="headerlink" href="#hexagon-mode" title="Permanent link">&para;</a></h3>
-<p>Use this when the input table contains <code>x</code> and <code>y</code> coordinates for hex centers.</p>
+<h3 id="shared-settings">Shared settings<a class="headerlink" href="#shared-settings" title="Permanent link">&para;</a></h3>
+<p>These options apply to both hexagon mode and generic simple-polygon mode.</p>
+<h4 id="shared-factor-table-settings">Shared factor table settings<a class="headerlink" href="#shared-factor-table-settings" title="Permanent link">&para;</a></h4>
+<ul>
+<li><code>--in-tsv</code> points to the factor-probability table</li>
+<li><code>--out</code> sets the output PMTiles archive</li>
+<li><code>--format</code> can be <code>MLT</code> or <code>MVT</code> (default: <code>MLT</code>)</li>
+<li><code>--pmtiles-zoom</code> (required) sets the output zoom level</li>
+<li><code>--topk-col</code> and <code>--topp-col</code> set column names for the top factor ID and probability (default: <code>topK</code> and <code>topP</code>)</li>
+<li>compact <code>K1/P1</code>, <code>K2/P2</code>, ... columns are recognized automatically</li>
+<li>dense numeric factor columns named <code>0..K-1</code> are recognized automatically</li>
+<li><code>--factor-col-begin</code> and <code>--factor-col-end</code> explicitly select dense factor probability columns by a 0-based inclusive column range; selected columns are mapped to factor IDs <code>0..K-1</code> in column order</li>
+<li><code>--top-k</code> controls how many top factors are retained from dense factor columns (default: <code>3</code>)</li>
+<li><code>--prob-thres</code> keeps only factor probabilities above the threshold as nullable properties (default: <code>1e-4</code>)</li>
+<li><code>--coord-scale</code> scales input coordinates before Web Mercator tiling (default: <code>1</code>, no scaling)</li>
+<li><code>--layer-name</code> optionally sets the PMTiles layer name (default: basename of <code>--out</code>)</li>
+<li><code>--threads</code> sets the number of encode threads</li>
+</ul>
+<h4 id="polygon-tiling-behavior">Polygon tiling behavior<a class="headerlink" href="#polygon-tiling-behavior" title="Permanent link">&para;</a></h4>
+<p>These options are similar to <a href="https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries">tippecanoe's clipping options</a>:</p>
+<ul>
+<li><code>--tile-buffer-px</code> sets the screen-pixel buffer used by the default clipped/duplicated mode (default: <code>5</code>) (matching <code>tippecanoe -b</code>)</li>
+<li><code>--no-clipping</code> duplicates each polygon into every touched tile without clipping it to tile boundaries (matching <code>tippecanoe -pc</code>)</li>
+<li><code>--no-duplication</code> stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching <code>tippecanoe -pD</code>)</li>
+<li><code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</li>
+<li><code>--clip-scale</code> sets the integer scale used internally for polygon clipping</li>
+<li><code>--extent</code> sets the vector tile extent</li>
+</ul>
+<h3 id="hexagon-mode-specific-settings">Hexagon mode specific settings<a class="headerlink" href="#hexagon-mode-specific-settings" title="Permanent link">&para;</a></h3>
+<p>Use this when the input table contains <code>x</code> and <code>y</code> coordinates as hexagon centers.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>poly2pmtiles<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span>path/model.results.tsv.gz<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
@@ -1337,19 +1431,9 @@
 <p>Options:</p>
 <ul>
 <li><code>--hex-grid-dist</code> (required) specifies the distance between adjacent grid points on the hexagonal grid</li>
-<li><code>--pmtiles-zoom</code> (required) sets the output zoom level</li>
-<li><code>--x-col</code>, <code>--y-col</code>, <code>--topk-col</code>, and <code>--topp-col</code> set column names in the input factor table for the hex center coordinates (default: <code>x</code> and <code>y</code>), the top factor ID (default: <code>topK</code>), and the top factor probability (default: <code>topP</code>)</li>
-<li><code>--prob-thres</code> keeps only factor probabilities above the threshold as nullable properties (default: <code>1e-4</code>)</li>
-<li>compact <code>K1/P1</code>, <code>K2/P2</code>, ... columns are recognized automatically; dense numeric factor columns named <code>0..K-1</code> are also supported</li>
-<li><code>--top-k</code> controls how many top factors are retained from dense numeric factor columns (default: <code>3</code>)</li>
-<li><code>--coord-scale</code> scales the input coordinates before Web Mercator tiling (default: <code>1</code>, no scaling)</li>
+<li><code>--x-col</code> and <code>--y-col</code> set column names for the hex center coordinates (default: <code>x</code> and <code>y</code>)</li>
 </ul>
-<p>Parameters for boundary behavior are similar to <a href="https://github.com/felt/tippecanoe?tab=readme-ov-file#controlling-clipping-to-tile-boundaries">tippecanoe's options</a>:
-- <code>--tile-buffer-px</code> sets the screen-pixel buffer used by the default clipped/duplicated mode (default: <code>5</code>) (matching <code>tippecanoe -b</code>)
-- <code>--no-clipping</code> duplicates each polygon into every touched tile without clipping it to tile boundaries (matching <code>tippecanoe -pc</code>)
-- <code>--no-duplication</code> stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries (matching <code>tippecanoe -pD</code>)
-- <code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</p>
-<h3 id="generic-simple-polygon-mode">Generic simple-polygon mode<a class="headerlink" href="#generic-simple-polygon-mode" title="Permanent link">&para;</a></h3>
+<h3 id="generic-simple-polygon-mode-with-geometry-file">Generic simple-polygon mode with geometry file<a class="headerlink" href="#generic-simple-polygon-mode-with-geometry-file" title="Permanent link">&para;</a></h3>
 <p>Use this when the factor-probability table contains a polygon ID column and polygon geometry is provided in a separate file. For example, if you ran <code>punkst topic-model</code> on segmented cells and you want to create a PMTiles archive with cell boundaries as geometry.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>poly2pmtiles<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span>path/cells.results.tsv<span class="w"> </span><span class="se">\</span>
@@ -1375,11 +1459,6 @@
 <li><code>--out-sidecar-tsv</code> optionally writes <code>polygon_id</code>, <code>part_index</code>, <code>feature_id</code>, <code>center_x</code>, and <code>center_y</code></li>
 <li><code>--cartoscope-boundary</code> writes the CartoScope boundary schema (<code>cell_id</code>, <code>topK</code>, <code>topP</code>, <code>K2/P2</code>, ...); factor IDs in boundary properties are stored as strings for CartoScope compatibility</li>
 </ul>
-<p>Boundary behavior options are the same as in hexagon mode:
-- <code>--tile-buffer-px</code> sets the screen-pixel buffer used by the default clipped/duplicated mode (default: <code>5</code>)
-- <code>--no-clipping</code> duplicates each polygon into every touched tile without clipping it to tile boundaries
-- <code>--no-duplication</code> stores each polygon intact in exactly one tile at the requested zoom instead of clipping and duplicating it across tile boundaries
-- <code>--no-clipping</code> and <code>--no-duplication</code> are mutually exclusive</p>
 <p>Geometry file format:</p>
 <ul>
 <li>plain or gzipped TSV/CSV, or GeoJSON/JSON with Polygon/MultiPolygon features</li>

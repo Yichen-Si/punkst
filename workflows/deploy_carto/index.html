@@ -1534,6 +1534,8 @@ Then use the URL <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual por
 <p>When <code>pseudobulk_tsv</code> is omitted, it is assumed to be <code>&lt;pixel_prefix&gt;.pseudobulk.tsv</code>.</p>
 <p>Set <code>skip_hex_pmtiles: true</code> on a default model to package only pixel raster and raw-pixel assets for that model. In this mode <code>results_tsv</code> and <code>hex_grid_dist</code> may be omitted, and the generated catalog will not include a <code>pmtiles.hex</code> entry for the model.</p>
 <p>If the same fitted model is decoded in multiple pixel modes, list those outputs as separate model entries with different <code>id</code> values. The entries can reuse the same <code>results_tsv</code>, <code>model_tsv</code>, and <code>color_rgb_tsv</code> while pointing to different pixel prefixes, pseudobulk tables, and DE tables.</p>
+<p>For <code>results_tsv</code> with nonstandard header:</p>
+<p>Outputs produced by punkst normally use numeric column names <code>0,...,K-1</code> for factor probabilities, or use columns names matching that in the pseudobulk matrix (<code>pseudobulk_tsv</code>). If your <code>results_tsv</code> has a different header pattern, you can specify the 0-based inclusive column index range by adding <code>factor_col_begin</code> and <code>factor_col_end</code> to the model entry. The columns in the specified range should be ordered in the same way as those in the pseudobulk matrix.</p>
 <h4 id="add-cell-level-results-and-cell-boundaries">Add cell-level results and cell boundaries<a class="headerlink" href="#add-cell-level-results-and-cell-boundaries" title="Permanent link">&para;</a></h4>
 <p>Cell-level PMTiles from <strong>the same</strong> model as the pixel level results can be added to that model entry.
 There are two ways to provide cell-level data (the data up to <code>"pseudobulk_tsv"</code> are the same as the above standard pixel-only example):</p>
@@ -1636,7 +1638,7 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 </span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="p">}</span>
 </span></code></pre></div>
 <h3 id="add-background-image-pmtiles">Add background image PMTiles<a class="headerlink" href="#add-background-image-pmtiles" title="Permanent link">&para;</a></h3>
-<p>Background images can be added as CartoScope basemaps in explicit input JSON mode. Images are <strong>not</strong> aligned or registered by punkst. Provide the alignment through pixel size plus offset, or a full 3x3 transform that maps image pixel coordinates to the same micron coordinate system used by the transcript data.</p>
+<p>Background images can be added as CartoScope basemaps in explicit input JSON mode. Images are <strong>not</strong> aligned or registered by punkst. Provide the alignment through pixel size plus offset, a full 3x3 transform, or two image grid reference points that map to the same micron coordinate system used by the transcript data.</p>
 <p>Supported image inputs are PNG and narrowly defined TIFF: tiled TIFF with uncompressed or Deflate/zlib-compressed tiles, using 8-bit RGB/RGBA, 8-bit grayscale, or 16-bit grayscale pixels. Unsupported OME-TIFF, JPEG/JPEG-2000/LZW-compressed TIFF, and other fancier formats should be converted first.</p>
 <h4 id="convert-ome-tiff">convert OME-TIFF<a class="headerlink" href="#convert-ome-tiff" title="Permanent link">&para;</a></h4>
 <p>Use <code>ext/py/convert_tiff_for_image2pmtiles.py</code> to convert OME-TIFF or generic TIFF files into the supported tiled TIFF subset. The helper writes uint8 output by default, using percentile scaling for non-uint8 inputs (<code>--uint8-percentiles 1 99</code> by default); use <code>--preserve-depth</code> only when you intentionally want to keep supported 16-bit grayscale TIFF data for native punkst scaling. The script uses Python <code>numpy</code> and <code>tifffile</code>. For TIFF compression codecs that <code>tifffile</code> delegates to optional decoders, install the matching Python package as well; in practice, JPEG/JPEG2000-compressed OME-TIFFs commonly require <code>imagecodecs</code>.</p>
@@ -1650,7 +1652,7 @@ There are two ways to provide cell-level data (the data up to <code>"pseudobulk_
 </span></code></pre></div>
 <p>The conversion helper writes <code>&lt;output&gt;.image2pmtiles.json</code> that can be passed on to <code>deploy-cartoscope</code> with <code>--image-json</code> directly, which runs <code>image2pmtiles</code> internally to produce CartoScope-compatible PMTiles.
 When OME physical pixel metadata is available, the JSON records a pixel-to-micron transform for the selected <code>--series</code>, <code>--level</code>, and <code>--page</code> based on the metadata, which is then used during PMTiles construction.</p>
-<p>For generic TIFFs <strong>without OME metadata</strong>, pass either <code>--microns-per-pixel</code> with optional offsets <code>--offset-x-um</code> <code>--offset-y-um</code>, or a full 3x3 matrix with <code>--transform</code> (row-wise flatten to 9 comma/space-separated values); otherwise the JSON is marked <code>requires_transform</code>.</p>
+<p>For generic TIFFs <strong>without OME metadata</strong>, pass either <code>--microns-per-pixel</code> with optional offsets <code>--offset-x-um</code> <code>--offset-y-um</code>, a full 3x3 matrix with <code>--transform</code> (row-wise flatten to 9 comma/space-separated values), or <code>--pix-zero x1 y1 --pix-max x2 y2</code>; otherwise the JSON is marked <code>requires_transform</code>.</p>
 <h4 id="supply-converted-tiff-to-deploy-cartoscope">Supply (converted) TIFF to <code>deploy-cartoscope</code><a class="headerlink" href="#supply-converted-tiff-to-deploy-cartoscope" title="Permanent link">&para;</a></h4>
 <p>If your image files are converted by with above python helper <code>ext/py/convert_tiff_for_image2pmtiles.py</code>, pass its output <code>&lt;output&gt;.image2pmtiles.json</code> to <code>deploy-cartoscope</code> directly with <code>--image-json</code>.</p>
 <p>Otherwise, include <strong>supported</strong> source image information as additional sections in the input JSON file for <code>deploy-cartoscope</code>:</p>
@@ -1672,11 +1674,17 @@ When OME physical pixel metadata is available, the JSON records a pixel-to-micro
 </span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a><span class="w">        </span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="mf">20.0</span><span class="p">],</span>
 </span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a><span class="w">        </span><span class="p">[</span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0</span><span class="p">]</span>
 </span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a><span class="w">      </span><span class="p">]</span>
-</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="p">}</span>
+</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;IF&quot;</span><span class="p">,</span>
+</span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21" href="#__codelineno-15-21"></a><span class="w">      </span><span class="nt">&quot;src&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;if.supported.tif&quot;</span><span class="p">,</span>
+</span><span id="__span-15-22"><a id="__codelineno-15-22" name="__codelineno-15-22" href="#__codelineno-15-22"></a><span class="w">      </span><span class="nt">&quot;pix_zero&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">10.0</span><span class="p">,</span><span class="w"> </span><span class="mf">20.0</span><span class="p">],</span>
+</span><span id="__span-15-23"><a id="__codelineno-15-23" name="__codelineno-15-23" href="#__codelineno-15-23"></a><span class="w">      </span><span class="nt">&quot;pix_max&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="mf">510.0</span><span class="p">,</span><span class="w"> </span><span class="mf">420.0</span><span class="p">]</span>
+</span><span id="__span-15-24"><a id="__codelineno-15-24" name="__codelineno-15-24" href="#__codelineno-15-24"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-15-25"><a id="__codelineno-15-25" name="__codelineno-15-25" href="#__codelineno-15-25"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-15-26"><a id="__codelineno-15-26" name="__codelineno-15-26" href="#__codelineno-15-26"></a><span class="p">}</span>
 </span></code></pre></div>
-(Note: you can provide alignment in either of the two ways shown above; if one of the images is converted by the python helper you can copy over the JSON section under <code>"deploy_cartoscope"</code> from <code>image2pmtiles.json</code>)</p>
+(Note: provide exactly one alignment mode for each image; if one of the images is converted by the python helper you can copy over the JSON section under <code>"deploy_cartoscope"</code> from <code>image2pmtiles.json</code>)</p>
 <h2 id="deploy-cartoscope-options">deploy-cartoscope Options<a class="headerlink" href="#deploy-cartoscope-options" title="Permanent link">&para;</a></h2>
 <p><code>punkst deploy-cartoscope</code> accepts the following command-line options:</p>
 <table>
@@ -2152,7 +2160,7 @@ If <code>--basemap-max-zoom</code> is omitted, it defaults to <code>--point-max-
 <tr>
 <td><code>--microns-per-pixel</code></td>
 <td>none</td>
-<td>Pixel size in punkst coordinate units for scale-only alignment. Required unless <code>--transform</code> is provided.</td>
+<td>Pixel size in punkst coordinate units for scale-only alignment. Mutually exclusive with other alignment modes.</td>
 </tr>
 <tr>
 <td><code>--offset-x-um</code></td>
@@ -2167,7 +2175,17 @@ If <code>--basemap-max-zoom</code> is omitted, it defaults to <code>--point-max-
 <tr>
 <td><code>--transform</code></td>
 <td>none</td>
-<td>Full 3x3 pixel-to-micron transform as 9 comma/space-separated values (row-major). Required unless <code>--microns-per-pixel</code> is provided.</td>
+<td>Full 3x3 pixel-to-micron transform as 9 comma/space-separated values (row-major). Mutually exclusive with other alignment modes.</td>
+</tr>
+<tr>
+<td><code>--pix-zero</code></td>
+<td>none</td>
+<td>Two micron coordinates for image grid point <code>(0,0)</code>. Must be used with <code>--pix-max</code>; mutually exclusive with <code>--transform</code>, <code>--microns-per-pixel</code>, and offsets.</td>
+</tr>
+<tr>
+<td><code>--pix-max</code></td>
+<td>none</td>
+<td>Two micron coordinates for image grid point <code>(W,H)</code> for image width <code>W</code> and height <code>H</code>. Must be used with <code>--pix-zero</code>.</td>
 </tr>
 <tr>
 <td><code>--gray-percentiles</code></td>
