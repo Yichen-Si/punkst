@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -39,6 +40,7 @@ struct RegionTileAggLocal {
 
 int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
     std::string annoPrefix, annoData, annoIndex;
+    std::string pmtilesFile;
     std::string ptsPrefix;
     std::string dictFile, outPrefix;
     std::string regionNegFile, regionPosFile;
@@ -55,11 +57,13 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
     int32_t debug_ = 0;
     int32_t nThreads = 1;
     int64_t regionScale = 10;
+    PmtilesCdeOptions pmtilesOptions;
 
     ParamList pl;
     pl.add_option("anno-data", "Input pixel file", annoData)
       .add_option("anno-index", "Input pixel index file", annoIndex)
       .add_option("anno", "Prefix of the input pixel data file", annoPrefix)
+      .add_option("pmtiles", "Input annotated point PMTiles file (local, http(s), or s3://)", pmtilesFile)
       .add_option("pts", "Prefix of the transcript data file; required for pixel-mode annotation input", ptsPrefix)
       .add_option("region-neg", "GeoJSON file for the negative/reference region", regionNegFile, true)
       .add_option("region-pos", "GeoJSON file for the positive/comparison region", regionPosFile, true)
@@ -75,6 +79,10 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
       .add_option("icol-y", "Column index for y coordinate for files in --pts (0-based)", icol_y)
       .add_option("icol-feature", "Column index for feature for files in --pts (0-based)", icol_feature)
       .add_option("icol-val", "Column index for count/value for files in --pts (0-based)", icol_val)
+      .add_option("pmtiles-zoom", "PMTiles zoom level to read (default: archive max zoom)", pmtilesOptions.zoom)
+      .add_option("pmtiles-feature-field", "PMTiles point property containing feature names", pmtilesOptions.featureField)
+      .add_option("pmtiles-count-field", "PMTiles point property containing count values", pmtilesOptions.countField)
+      .add_option("pmtiles-factor-prefix", "PMTiles K/P column prefix selecting one factor annotation group", pmtilesOptions.factorPrefix)
       .add_option("threads", "Number of threads to use", nThreads)
       .add_option("out", "Output prefix", outPrefix, true)
       .add_option("aux-suff", "Suffix for auxiliary output files", auxiSuff)
@@ -97,30 +105,46 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
         pl.print_help_noexit();
         return 1;
     }
-
     if (debug_ > 0) {
         logger::Logger::getInstance().setLevel(logger::LogLevel::DEBUG);
     }
     if (nThreads < 1) {
         nThreads = 1;
     }
+    pmtilesOptions.threads = nThreads;
     tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, nThreads);
 
-    if (!annoPrefix.empty()) {
+    const bool usePmtiles = !pmtilesFile.empty();
+    if (usePmtiles && (!annoPrefix.empty() || !annoData.empty() || !annoIndex.empty() || !ptsPrefix.empty())) {
+        error("--pmtiles cannot be combined with --anno/--anno-data/--anno-index/--pts");
+    }
+    if (!usePmtiles && !annoPrefix.empty()) {
         if (!annoData.empty() || !annoIndex.empty()) {
             error("--anno cannot be combined with --anno-data/--anno-index");
         }
         annoData = annoPrefix + (isBinary ? ".bin" : ".tsv");
         annoIndex = annoPrefix + ".index";
-    } else if (annoData.empty() || annoIndex.empty()) {
+    } else if (!usePmtiles && (annoData.empty() || annoIndex.empty())) {
         error("Either --anno or both --anno-data and --anno-index must be specified");
     }
     if (gridSize <= 0) {
         error("--grid-size must be positive");
     }
-    TileOperator tileOp(annoData, annoIndex, "", nThreads);
-    const bool isFeatureInput = tileOp.hasFeatureIndex();
-    const int32_t headerK = tileOp.getFactorCount();
+    std::unique_ptr<TileOperator> tileOpPtr;
+    bool isFeatureInput = false;
+    int32_t headerK = 0;
+    if (usePmtiles) {
+        const int32_t pmtilesK = inferPmtilesCdeFactorCount(pmtilesFile, pmtilesOptions);
+        if (K <= 0) {
+            K = pmtilesK;
+        } else if (pmtilesK > 0 && K != pmtilesK) {
+            warning("PMTiles input has K=%d in metadata, using explicit --K=%d", pmtilesK, K);
+        }
+    } else {
+        tileOpPtr = std::make_unique<TileOperator>(annoData, annoIndex, "", nThreads);
+        isFeatureInput = tileOpPtr->hasFeatureIndex();
+        headerK = tileOpPtr->getFactorCount();
+    }
     if (K <= 0 && headerK > 0) {
         K = headerK;
     }
@@ -128,27 +152,30 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
         error("Annotation input has K=%d in the index header, expected %d", headerK, K);
     }
     if (K <= 0) {
-        error("--K must be specified when it cannot be read from the annotation index header");
+        error("--K must be specified when it cannot be read from the annotation index header or PMTiles metadata");
     }
 
     std::unique_ptr<TileReader> reader;
-    if (!isFeatureInput) {
+    if (!usePmtiles && !isFeatureInput) {
         if (ptsPrefix.empty()) {
             error("--pts is required for pixel-mode annotation input");
         }
         reader = std::make_unique<TileReader>(ptsPrefix + ".tsv", ptsPrefix + ".index");
-        if (reader->getTileSize() != tileOp.getTileSize()) {
+        if (reader->getTileSize() != tileOpPtr->getTileSize()) {
             error("Currently we require the tile size to be the same for the annotation and transcript data (%d vs %d)",
-                  tileOp.getTileSize(), reader->getTileSize());
+                  tileOpPtr->getTileSize(), reader->getTileSize());
         }
     }
 
     std::vector<std::string> featureList;
+    std::unordered_map<std::string, int32_t> featureIndex;
     if (!dictFile.empty()) {
         lineParserUnival featureParser(icol_x, icol_y, icol_feature, icol_val, dictFile);
         featureParser.getFeatureList(featureList);
+    } else if (usePmtiles) {
+        featureList = loadPmtilesCdeFeatures(pmtilesFile, pmtilesOptions);
     } else if (isFeatureInput) {
-        featureList = tileOp.getFeatureNames();
+        featureList = tileOpPtr->getFeatureNames();
     } else {
         error("--features is required for pixel-mode annotation input");
     }
@@ -157,13 +184,12 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
         error("No features found");
     }
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    for (int32_t m = 0; m < M; ++m) {
+        featureIndex[featureList[m]] = m;
+    }
     std::vector<int32_t> featureRemap;
     if (isFeatureInput) {
-        std::unordered_map<std::string, int32_t> featureIndex;
-        for (int32_t m = 0; m < M; ++m) {
-            featureIndex[featureList[m]] = m;
-        }
-        const auto& annoFeatures = tileOp.getFeatureNames();
+        const auto& annoFeatures = tileOpPtr->getFeatureNames();
         featureRemap.assign(annoFeatures.size(), -1);
         int32_t nMapped = 0;
         for (size_t f = 0; f < annoFeatures.size(); ++f) {
@@ -180,8 +206,11 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
         notice("Mapped %d / %zu embedded features", nMapped, annoFeatures.size());
     }
 
-    PreparedRegionMask2D regionNeg = loadPreparedRegionGeoJSON(regionNegFile, tileOp.getTileSize(), regionScale);
-    PreparedRegionMask2D regionPos = loadPreparedRegionGeoJSON(regionPosFile, tileOp.getTileSize(), regionScale);
+    const int32_t regionTileSize = usePmtiles
+        ? std::max<int32_t>(1, static_cast<int32_t>(std::ceil(gridSize)))
+        : tileOpPtr->getTileSize();
+    PreparedRegionMask2D regionNeg = loadPreparedRegionGeoJSON(regionNegFile, regionTileSize, regionScale);
+    PreparedRegionMask2D regionPos = loadPreparedRegionGeoJSON(regionPosFile, regionTileSize, regionScale);
     if (regionNeg.empty()) {
         error("Negative region is empty after preprocessing: %s", regionNegFile.c_str());
     }
@@ -192,8 +221,10 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
     std::vector<TileKey> tileList;
     std::unordered_map<TileKey, RegionTileState, TileKeyHash> featureTileStatesNeg;
     std::unordered_map<TileKey, RegionTileState, TileKeyHash> featureTileStatesPos;
-    if (isFeatureInput) {
-        for (const auto& tileInfo : tileOp.getTileInfo()) {
+    if (usePmtiles) {
+        tileList.push_back(TileKey{0, 0});
+    } else if (isFeatureInput) {
+        for (const auto& tileInfo : tileOpPtr->getTileInfo()) {
             TileKey tile{tileInfo.row, tileInfo.col};
             const RegionTileState stateNeg = regionNeg.classifyTile(tile);
             const RegionTileState statePos = regionPos.classifyTile(tile);
@@ -218,10 +249,10 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
         error("No input tiles intersect the two region bounding boxes");
     }
 
-    const float pixelResolution = tileOp.getPixelResolution() > 0.0f ? tileOp.getPixelResolution() : 1.0f;
-    const PreparedRegionRasterMask2D maskNeg = isFeatureInput ?
+    const float pixelResolution = (!usePmtiles && tileOpPtr->getPixelResolution() > 0.0f) ? tileOpPtr->getPixelResolution() : 1.0f;
+    const PreparedRegionRasterMask2D maskNeg = (usePmtiles || isFeatureInput) ?
         PreparedRegionRasterMask2D{} : prepareRegionRasterMask2D(regionNeg, pixelResolution);
-    const PreparedRegionRasterMask2D maskPos = isFeatureInput ?
+    const PreparedRegionRasterMask2D maskPos = (usePmtiles || isFeatureInput) ?
         PreparedRegionRasterMask2D{} : prepareRegionRasterMask2D(regionPos, pixelResolution);
     const std::vector<Rectangle<float>> pixelRects = {regionNeg.bbox_f, regionPos.bbox_f};
     MultiSlicePairwiseBinom statOp(K, 2, M, minCount);
@@ -238,41 +269,93 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
         ntasks = std::min<size_t>(ntasks, static_cast<size_t>(debug_ * nThreads));
     }
 
-    tbb::enumerable_thread_specific<RegionTileAggLocal> tls([&] {
-        return RegionTileAggLocal(K, M, minCount);
-    });
+    if (usePmtiles) {
+        RegionTileAggLocal local(K, M, minCount);
+        auto tileAggs = aggOnePmtilesCdeMultiRegion(
+            pmtilesFile, pmtilesOptions, featureIndex, gridSize, minProb, K,
+            std::vector<const PreparedRegionMask2D*>{&regionNeg, &regionPos},
+            std::vector<Eigen::MatrixXd*>{&local.confusion_neg, &local.confusion_pos},
+            std::vector<double*>{&local.residual_neg, &local.residual_pos});
+        mergeTileAggGeneric(tileAggs[0], 0, K, testOpts.nPerm, local);
+        mergeTileAggGeneric(tileAggs[1], 1, K, testOpts.nPerm, local);
+        statOp.merge_from(local.stat);
+        unitCache.merge_from(local.cache);
+        statUnion.merge_from(local.statu);
+        confusionNeg += local.confusion_neg;
+        confusionPos += local.confusion_pos;
+        residualNeg += local.residual_neg;
+        residualPos += local.residual_pos;
+    } else {
+        tbb::enumerable_thread_specific<RegionTileAggLocal> tls([&] {
+            return RegionTileAggLocal(K, M, minCount);
+        });
 
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, ntasks),
-        [&](const tbb::blocked_range<size_t>& range) {
-            auto& local = tls.local();
-            std::ifstream tileStream;
-            for (size_t ti = range.begin(); ti != range.end(); ++ti) {
-                const TileKey tile = tileList[ti];
-                if (isFeatureInput) {
-                    std::vector<PixTopProbsFeature<float>> records;
-                    tileOp.loadTileFeatureRecords(tile, records, &tileStream);
-                    if (records.empty()) {
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, ntasks),
+            [&](const tbb::blocked_range<size_t>& range) {
+                auto& local = tls.local();
+                std::ifstream tileStream;
+                for (size_t ti = range.begin(); ti != range.end(); ++ti) {
+                    const TileKey tile = tileList[ti];
+                    if (isFeatureInput) {
+                        std::vector<PixTopProbsFeature<float>> records;
+                        tileOpPtr->loadTileFeatureRecords(tile, records, &tileStream);
+                        if (records.empty()) {
+                            const int32_t done = processed.fetch_add(1) + 1;
+                            if (done % 10 == 0) {
+                                notice("... processed %d / %zu region tiles", done, ntasks);
+                            }
+                            continue;
+                        }
+                        RegionTileState tileStateNeg = RegionTileState::Partial;
+                        RegionTileState tileStatePos = RegionTileState::Partial;
+                        auto stateItNeg = featureTileStatesNeg.find(tile);
+                        if (stateItNeg != featureTileStatesNeg.end()) {
+                            tileStateNeg = stateItNeg->second;
+                        }
+                        auto stateItPos = featureTileStatesPos.find(tile);
+                        if (stateItPos != featureTileStatesPos.end()) {
+                            tileStatePos = stateItPos->second;
+                        }
+                        auto tileAggNeg = aggOneFeatureTileRegion(
+                            records, regionNeg, tile, tileStateNeg, featureRemap,
+                            gridSize, minProb, K, &local.confusion_neg, &local.residual_neg);
+                        auto tileAggPos = aggOneFeatureTileRegion(
+                            records, regionPos, tile, tileStatePos, featureRemap,
+                            gridSize, minProb, K, &local.confusion_pos, &local.residual_pos);
+
+                        mergeTileAggGeneric(tileAggNeg, 0, K, testOpts.nPerm, local);
+                        mergeTileAggGeneric(tileAggPos, 1, K, testOpts.nPerm, local);
+
                         const int32_t done = processed.fetch_add(1) + 1;
                         if (done % 10 == 0) {
                             notice("... processed %d / %zu region tiles", done, ntasks);
                         }
                         continue;
                     }
-                    RegionTileState tileStateNeg = RegionTileState::Partial;
-                    RegionTileState tileStatePos = RegionTileState::Partial;
-                    auto stateItNeg = featureTileStatesNeg.find(tile);
-                    if (stateItNeg != featureTileStatesNeg.end()) {
-                        tileStateNeg = stateItNeg->second;
+                    std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
+                    tileOpPtr->loadTileToMap(tile, pixelMap, &pixelRects, &tileStream);
+                    if (pixelMap.empty()) {
+                        const int32_t done = processed.fetch_add(1) + 1;
+                        if (done % 10 == 0) {
+                            notice("... processed %d / %zu region tiles", done, ntasks);
+                        }
+                        continue;
                     }
-                    auto stateItPos = featureTileStatesPos.find(tile);
-                    if (stateItPos != featureTileStatesPos.end()) {
-                        tileStatePos = stateItPos->second;
+
+                    std::unordered_map<std::pair<int32_t, int32_t>, RegionPixelState, PairHash> stateNeg;
+                    std::unordered_map<std::pair<int32_t, int32_t>, RegionPixelState, PairHash> statePos;
+                    stateNeg.reserve(pixelMap.size());
+                    statePos.reserve(pixelMap.size());
+                    for (const auto& kv : pixelMap) {
+                        stateNeg.emplace(kv.first, maskNeg.classifyPixel(kv.first.first, kv.first.second, &tile));
+                        statePos.emplace(kv.first, maskPos.classifyPixel(kv.first.first, kv.first.second, &tile));
                     }
-                    auto tileAggNeg = aggOneFeatureTileRegion(
-                        records, regionNeg, tile, tileStateNeg, featureRemap,
+
+                    auto tileAggNeg = tileOpPtr->aggOneTileRegion(
+                        pixelMap, stateNeg, *reader, parser, tile, regionNeg,
                         gridSize, minProb, K, &local.confusion_neg, &local.residual_neg);
-                    auto tileAggPos = aggOneFeatureTileRegion(
-                        records, regionPos, tile, tileStatePos, featureRemap,
+                    auto tileAggPos = tileOpPtr->aggOneTileRegion(
+                        pixelMap, statePos, *reader, parser, tile, regionPos,
                         gridSize, minProb, K, &local.confusion_pos, &local.residual_pos);
 
                     mergeTileAggGeneric(tileAggNeg, 0, K, testOpts.nPerm, local);
@@ -282,52 +365,18 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
                     if (done % 10 == 0) {
                         notice("... processed %d / %zu region tiles", done, ntasks);
                     }
-                    continue;
                 }
-                std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
-                tileOp.loadTileToMap(tile, pixelMap, &pixelRects, &tileStream);
-                if (pixelMap.empty()) {
-                    const int32_t done = processed.fetch_add(1) + 1;
-                    if (done % 10 == 0) {
-                        notice("... processed %d / %zu region tiles", done, ntasks);
-                    }
-                    continue;
-                }
+            });
 
-                std::unordered_map<std::pair<int32_t, int32_t>, RegionPixelState, PairHash> stateNeg;
-                std::unordered_map<std::pair<int32_t, int32_t>, RegionPixelState, PairHash> statePos;
-                stateNeg.reserve(pixelMap.size());
-                statePos.reserve(pixelMap.size());
-                for (const auto& kv : pixelMap) {
-                    stateNeg.emplace(kv.first, maskNeg.classifyPixel(kv.first.first, kv.first.second, &tile));
-                    statePos.emplace(kv.first, maskPos.classifyPixel(kv.first.first, kv.first.second, &tile));
-                }
-
-                auto tileAggNeg = tileOp.aggOneTileRegion(
-                    pixelMap, stateNeg, *reader, parser, tile, regionNeg,
-                    gridSize, minProb, K, &local.confusion_neg, &local.residual_neg);
-                auto tileAggPos = tileOp.aggOneTileRegion(
-                    pixelMap, statePos, *reader, parser, tile, regionPos,
-                    gridSize, minProb, K, &local.confusion_pos, &local.residual_pos);
-
-                mergeTileAggGeneric(tileAggNeg, 0, K, testOpts.nPerm, local);
-                mergeTileAggGeneric(tileAggPos, 1, K, testOpts.nPerm, local);
-
-                const int32_t done = processed.fetch_add(1) + 1;
-                if (done % 10 == 0) {
-                    notice("... processed %d / %zu region tiles", done, ntasks);
-                }
-            }
-        });
-
-    for (auto& local : tls) {
-        statOp.merge_from(local.stat);
-        unitCache.merge_from(local.cache);
-        statUnion.merge_from(local.statu);
-        confusionNeg += local.confusion_neg;
-        confusionPos += local.confusion_pos;
-        residualNeg += local.residual_neg;
-        residualPos += local.residual_pos;
+        for (auto& local : tls) {
+            statOp.merge_from(local.stat);
+            unitCache.merge_from(local.cache);
+            statUnion.merge_from(local.statu);
+            confusionNeg += local.confusion_neg;
+            confusionPos += local.confusion_pos;
+            residualNeg += local.residual_neg;
+            residualPos += local.residual_pos;
+        }
     }
     finalizeConfusionMatrix(confusionNeg, residualNeg, K);
     finalizeConfusionMatrix(confusionPos, residualPos, K);

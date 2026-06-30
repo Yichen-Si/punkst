@@ -21,6 +21,7 @@ namespace {
 struct PixelContrastDesign {
     std::vector<std::string> annoPrefixes;
     std::vector<std::string> ptsPrefixes;
+    std::vector<std::string> pmtilesFiles;
     std::vector<std::string> regionFiles;
     std::vector<std::string> labels;
     std::vector<std::string> confusionFiles;
@@ -140,8 +141,8 @@ PixelContrastDesign readContrastDesignFile(const std::string& contrastFile) {
         error("Contrast file is empty: %s", contrastFile.c_str());
     }
     splitContrastLine(tokens, line, false);
-    if (tokens.size() < 3) {
-        error("Contrast file must have >= 3 columns (anno, pts, [region], [label], [confusion], contrast...): %s", contrastFile.c_str());
+    if (tokens.size() < 2) {
+        error("Contrast file must include input columns and at least one contrast column: %s", contrastFile.c_str());
     }
     bool has_empty_header_token = false;
     bool has_region_header = false;
@@ -159,15 +160,25 @@ PixelContrastDesign readContrastDesignFile(const std::string& contrastFile) {
     const size_t n_header_cols = tokens.size();
     const int32_t anno_col = findHeaderColumn(tokens, {"anno", "anno_prefix"});
     const int32_t pts_col = findHeaderColumn(tokens, {"pts", "pts_prefix"});
+    const int32_t pmtiles_col = findHeaderColumn(tokens, {"pmtiles"});
     const int32_t region_col = findHeaderColumn(tokens, {"region"});
     const int32_t label_col = findHeaderColumn(tokens, {"label"});
     const int32_t confusion_col = findHeaderColumn(tokens, {"confusion"});
-    if (anno_col < 0 || pts_col < 0) {
-        error("Contrast file must include anno and pts columns: %s", contrastFile.c_str());
+    if (pmtiles_col < 0 && (anno_col < 0 || pts_col < 0)) {
+        error("Contrast file must include either pmtiles or anno and pts columns: %s", contrastFile.c_str());
     }
     design.hasRegion = (region_col >= 0);
 
-    std::unordered_set<int32_t> meta_cols = {anno_col, pts_col};
+    std::unordered_set<int32_t> meta_cols;
+    if (anno_col >= 0) {
+        meta_cols.insert(anno_col);
+    }
+    if (pts_col >= 0) {
+        meta_cols.insert(pts_col);
+    }
+    if (pmtiles_col >= 0) {
+        meta_cols.insert(pmtiles_col);
+    }
     if (region_col >= 0) {
         meta_cols.insert(region_col);
     }
@@ -213,11 +224,13 @@ PixelContrastDesign readContrastDesignFile(const std::string& contrastFile) {
             error("Contrast file row has %zu columns, expected %zu: %s",
                   tokens.size(), n_header_cols, line.c_str());
         }
-        if (tokens[anno_col].empty()) {
-            error("Contrast file row must have a non-empty anno column: %s", line.c_str());
+        const bool hasPmtiles = pmtiles_col >= 0 && !tokens[pmtiles_col].empty();
+        if (!hasPmtiles && (anno_col < 0 || pts_col < 0 || tokens[anno_col].empty())) {
+            error("Contrast file row must have a non-empty pmtiles or anno column: %s", line.c_str());
         }
-        design.annoPrefixes.push_back(tokens[anno_col]);
-        design.ptsPrefixes.push_back(tokens[pts_col]);
+        design.pmtilesFiles.push_back(hasPmtiles ? tokens[pmtiles_col] : "");
+        design.annoPrefixes.push_back(!hasPmtiles && anno_col >= 0 ? tokens[anno_col] : "");
+        design.ptsPrefixes.push_back(!hasPmtiles && pts_col >= 0 ? tokens[pts_col] : "");
         if (design.hasRegion) {
             if (tokens[region_col].empty()) {
                 error("Contrast file row must have a non-empty region column in region-aware mode: %s", line.c_str());
@@ -260,6 +273,7 @@ PixelContrastDesign readContrastDesignFile(const std::string& contrastFile) {
  */
 int32_t cmdConditionalTest(int32_t argc, char** argv) {
     std::vector<std::string> inPrefix, inData, inIndex, inPtsPrefix, inConfusion;
+    std::vector<std::string> inPmtiles;
     std::vector<std::string> dataLabels;
     std::string dictFile, outPrefix, outFile, contrastFile;
     std::string auxiSuff;
@@ -273,6 +287,7 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     double minProb = 0.01;
     int32_t debug_ = 0;
     int32_t nThreads = 1;
+    PmtilesCdeOptions pmtilesOptions;
     std::vector<ContrastDef> contrasts;
     bool hasRegionDesign = false;
     std::vector<std::string> regionFiles;
@@ -285,7 +300,8 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
       .add_option("binary", "Data file is in binary format", isBinary)
       .add_option("K", "Number of factors in the annotation files; optional for indexed binary inputs with K in the header", K)
       .add_option("pts", "Prefixes of the transcript data files", inPtsPrefix)
-      .add_option("contrast", "Contrast design TSV (anno, pts, [region], [label], [confusion], contrasts)", contrastFile)
+      .add_option("pmtiles", "Input annotated point PMTiles files (local, http(s), or s3://)", inPmtiles)
+      .add_option("contrast", "Contrast design TSV (anno/pts or pmtiles, [region], [label], [confusion], contrasts)", contrastFile)
       .add_option("confusion", "Per-dataset confusion matrices (TSV with K+1 rows/cols)", inConfusion)
       .add_option("features", "List of features to test; optional for single-molecule annotation inputs with embedded feature names", dictFile)
       .add_option("grid-size", "Grid size", gridSize, true)
@@ -295,6 +311,10 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
       .add_option("icol-feature", "Column index for feature for files in --pts (0-based)", icol_feature)
       .add_option("icol-val", "Column index for count/value for files in --pts (0-based)", icol_val)
       .add_option("region-scale", "Integer coordinate scale for GeoJSON preprocessing", regionScale)
+      .add_option("pmtiles-zoom", "PMTiles zoom level to read (default: archive max zoom)", pmtilesOptions.zoom)
+      .add_option("pmtiles-feature-field", "PMTiles point property containing feature names", pmtilesOptions.featureField)
+      .add_option("pmtiles-count-field", "PMTiles point property containing count values", pmtilesOptions.countField)
+      .add_option("pmtiles-factor-prefix", "PMTiles K/P column prefix selecting one factor annotation group", pmtilesOptions.factorPrefix)
       .add_option("threads", "Number of threads to use", nThreads)
       .add_option("out", "Output prefix", outPrefix, true)
       .add_option("aux-suff", "Suffix for auxiliary output files", auxiSuff)
@@ -317,41 +337,58 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
         pl.print_help_noexit();
         return 1;
     }
+    const bool explicitK = K > 0;
     if (debug_ > 0) {
         logger::Logger::getInstance().setLevel(logger::LogLevel::DEBUG);
     }
     if (nThreads < 1) {
         nThreads = 1;
     }
+    pmtilesOptions.threads = nThreads;
     tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, nThreads);
 
     // Collect input files and contrasts
     if (!contrastFile.empty()) {
         if (!inPrefix.empty() || !inData.empty() || !inIndex.empty()
-                || !inPtsPrefix.empty() || !inConfusion.empty()) {
-            error("--contrast cannot be combined with --anno/--anno-data/--anno-index/--pts/--confusion");
+                || !inPtsPrefix.empty() || !inConfusion.empty() || !inPmtiles.empty()) {
+            error("--contrast cannot be combined with --anno/--anno-data/--anno-index/--pts/--confusion/--pmtiles");
         }
         PixelContrastDesign design = readContrastDesignFile(contrastFile);
         inPrefix = std::move(design.annoPrefixes);
         inPtsPrefix = std::move(design.ptsPrefixes);
+        inPmtiles = std::move(design.pmtilesFiles);
         inConfusion = std::move(design.confusionFiles);
         dataLabels = std::move(design.labels);
         regionFiles = std::move(design.regionFiles);
         contrasts = std::move(design.contrasts);
         hasRegionDesign = design.hasRegion;
     }
+    if (!inPmtiles.empty() && (!inPrefix.empty() || !inData.empty() || !inIndex.empty())) {
+        if (contrastFile.empty()) {
+            error("--pmtiles cannot be combined with --anno/--anno-data/--anno-index outside --contrast");
+        }
+    }
     if (!inPrefix.empty()) {
         inData.resize(inPrefix.size());
         inIndex.resize(inPrefix.size());
         for (size_t i = 0; i < inPrefix.size(); ++i) {
+            if (!inPmtiles.empty() && i < inPmtiles.size() && !inPmtiles[i].empty()) {
+                continue;
+            }
             ResolvedAnnoInput resolved = resolveAnnoInput(inPrefix[i], isBinary);
             inData[i] = std::move(resolved.data);
             inIndex[i] = std::move(resolved.index);
         }
-    } else if (inData.empty() || inIndex.empty() || inData.size() != inIndex.size()) {
+    } else if (inPmtiles.empty() && (inData.empty() || inIndex.empty() || inData.size() != inIndex.size())) {
         error("Either --anno or both --anno-data and --anno-index must be specified");
     }
-    uint32_t n_data = static_cast<uint32_t>(inData.size());
+    uint32_t n_data = static_cast<uint32_t>(std::max({inData.size(), inIndex.size(), inPmtiles.size()}));
+    if (n_data == 0) {
+        error("No input datasets specified");
+    }
+    inData.resize(n_data);
+    inIndex.resize(n_data);
+    inPmtiles.resize(n_data);
     if (hasRegionDesign && regionFiles.size() != n_data) {
         error("Region-aware contrast design must have one region per input row");
     }
@@ -378,27 +415,67 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     if (gridSize <= 0) {error("--grid-size must be positive");}
 
     std::vector<std::unique_ptr<TileOperator>> tileOps;
+    tileOps.resize(n_data);
+    bool hasPmtilesInput = false;
     for (uint32_t i = 0; i < n_data; ++i) {
-        tileOps.emplace_back(std::make_unique<TileOperator>(inData[i], inIndex[i], "", nThreads));
+        if (!inPmtiles[i].empty()) {
+            hasPmtilesInput = true;
+            if (!inData[i].empty() || !inIndex[i].empty() || !inPtsPrefix[i].empty()) {
+                error("Input row %u cannot combine pmtiles with anno/index/pts", i);
+            }
+            continue;
+        }
+        if (inData[i].empty() || inIndex[i].empty()) {
+            error("Input row %u must provide either pmtiles or anno/index", i);
+        }
+        tileOps[i] = std::make_unique<TileOperator>(inData[i], inIndex[i], "", nThreads);
+    }
+    if (hasPmtilesInput) {
+        for (uint32_t i = 0; i < n_data; ++i) {
+            if (inPmtiles[i].empty()) {
+                continue;
+            }
+            const int32_t pmtilesK = inferPmtilesCdeFactorCount(inPmtiles[i], pmtilesOptions);
+            if (pmtilesK <= 0) {
+                continue;
+            }
+            if (K <= 0) {
+                K = pmtilesK;
+            } else if (!explicitK && K != pmtilesK) {
+                error("PMTiles input %u has K=%d in metadata, but previous inputs imply K=%d",
+                      i, pmtilesK, K);
+            } else if (K != pmtilesK) {
+                warning("PMTiles input %u has K=%d in metadata, using explicit --K=%d",
+                        i, pmtilesK, K);
+            }
+        }
     }
     std::vector<uint8_t> isFeatureInput(n_data, 0);
     for (uint32_t i = 0; i < n_data; ++i) {
-        isFeatureInput[i] = tileOps[i]->hasFeatureIndex() ? 1 : 0;
-        const int32_t headerK = tileOps[i]->getFactorCount();
+        int32_t headerK = 0;
+        if (!inPmtiles[i].empty()) {
+            continue;
+        } else {
+            isFeatureInput[i] = tileOps[i]->hasFeatureIndex() ? 1 : 0;
+            headerK = tileOps[i]->getFactorCount();
+        }
         if (K <= 0 && headerK > 0) {
             K = headerK;
         }
         if (K > 0 && headerK > 0 && headerK != K) {
-            error("Annotation input %u has K=%d in the index header, expected %d",
+            error("Annotation input %u has K=%d in the input metadata, expected %d",
                   i, headerK, K);
         }
     }
     if (K <= 0) {
-        error("--K must be specified when it cannot be read from annotation index headers");
+        error("--K must be specified when it cannot be read from annotation index headers or PMTiles metadata");
     }
 
     std::vector<std::unique_ptr<TileReader>> readers(n_data);
     for (uint32_t i = 0; i < n_data; ++i) {
+        if (!inPmtiles[i].empty()) {
+            continue;
+        }
         if (isFeatureInput[i]) {
             continue;
         }
@@ -412,29 +489,49 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     }
 
     std::vector<std::string> featureList;
+    std::unordered_map<std::string, int32_t> featureIndex;
     if (!dictFile.empty()) {
         lineParserUnival featureParser(icol_x, icol_y, icol_feature, icol_val, dictFile);
         featureParser.getFeatureList(featureList);
     } else {
         for (uint32_t i = 0; i < n_data; ++i) {
+            if (!inPmtiles[i].empty()) {
+                const std::vector<std::string> pmtilesFeatures =
+                    loadPmtilesCdeFeatures(inPmtiles[i], pmtilesOptions);
+                for (const auto& feature : pmtilesFeatures) {
+                    if (featureIndex.count(feature) == 0) {
+                        featureIndex[feature] = static_cast<int32_t>(featureList.size());
+                        featureList.push_back(feature);
+                    }
+                }
+                continue;
+            }
             if (!isFeatureInput[i]) {
                 error("--features is required for pixel-mode annotation input %u", i);
             }
             if (!tileOps[i]->getFeatureNames().empty()) {
-                featureList = tileOps[i]->getFeatureNames();
-                break;
+                for (const auto& feature : tileOps[i]->getFeatureNames()) {
+                    if (featureIndex.count(feature) == 0) {
+                        featureIndex[feature] = static_cast<int32_t>(featureList.size());
+                        featureList.push_back(feature);
+                    }
+                }
             }
         }
     }
     int32_t M = static_cast<int32_t>(featureList.size());
     if (M == 0) {error("No features found");}
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
-    std::unordered_map<std::string, int32_t> featureIndex;
-    for (int32_t m = 0; m < M; ++m) {
-        featureIndex[featureList[m]] = m;
+    if (featureIndex.empty()) {
+        for (int32_t m = 0; m < M; ++m) {
+            featureIndex[featureList[m]] = m;
+        }
     }
     std::vector<std::vector<int32_t>> featureRemaps(n_data);
     for (uint32_t i = 0; i < n_data; ++i) {
+        if (!inPmtiles[i].empty()) {
+            continue;
+        }
         if (!isFeatureInput[i]) {
             continue;
         }
@@ -477,6 +574,28 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     if (hasRegionDesign) {
         for (uint32_t i = 0; i < n_data; ++i) {
             const bool use_confusion = (has_confusion[i] != 0);
+            if (!inPmtiles[i].empty()) {
+                const int32_t regionTileSize = std::max<int32_t>(1, static_cast<int32_t>(std::ceil(gridSize)));
+                PreparedRegionMask2D region = loadPreparedRegionGeoJSON(regionFiles[i], regionTileSize, regionScale);
+                if (region.empty()) {
+                    error("Region is empty after preprocessing for input row %u: %s", i, regionFiles[i].c_str());
+                }
+                RegionLocalAgg local(K, (int)n_data, M, minCount);
+                auto tileAgg = aggOnePmtilesCde(
+                    inPmtiles[i], pmtilesOptions, featureIndex,
+                    gridSize, minProb, K, &region,
+                    use_confusion ? nullptr : &local.confusion,
+                    use_confusion ? nullptr : &local.residual);
+                mergeTileAggGeneric(tileAgg, static_cast<int>(i), K, testOpts.nPerm, local);
+                statOp.merge_from(local.stat);
+                unitCache.merge_from(local.cache);
+                statUnion.merge_from(local.statu);
+                if (!use_confusion) {
+                    finalizeConfusionMatrix(local.confusion, local.residual, K);
+                    statOp.add_to_confusion(static_cast<int>(i), local.confusion);
+                }
+                continue;
+            }
             auto& tileOp = *tileOps[i];
             PreparedRegionMask2D region = loadPreparedRegionGeoJSON(regionFiles[i], tileOp.getTileSize(), regionScale);
             if (region.empty()) {
@@ -605,6 +724,28 @@ int32_t cmdConditionalTest(int32_t argc, char** argv) {
     // Process each dataset and collect sufficient statistics
     for (uint32_t i = 0; i < n_data; ++i) {
         const bool use_confusion = (has_confusion[i] != 0);
+        if (!inPmtiles[i].empty()) {
+            LocalAgg local(K, (int)n_data, M, minCount);
+            Eigen::MatrixXd confusion;
+            double residual = 0.0;
+            if (!use_confusion) {
+                confusion = Eigen::MatrixXd::Zero(K, K);
+            }
+            auto tileAgg = aggOnePmtilesCde(
+                inPmtiles[i], pmtilesOptions, featureIndex,
+                gridSize, minProb, K, nullptr,
+                use_confusion ? nullptr : &confusion,
+                use_confusion ? nullptr : &residual);
+            mergeTileAggGeneric(tileAgg, static_cast<int>(i), K, testOpts.nPerm, local);
+            if (!use_confusion) {
+                finalizeConfusionMatrix(confusion, residual, K);
+                local.stat.add_to_confusion(i, confusion);
+            }
+            statOp.merge_from(local.stat);
+            unitCache.merge_from(local.cache);
+            statUnion.merge_from(local.statu);
+            continue;
+        }
         auto& tileOp = *tileOps[i];
         const auto& tileList = tileOp.getTileInfo();
         int32_t nTiles = static_cast<int32_t>(tileList.size());

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -856,6 +857,74 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
         out.tile.localX.push_back(points[0].first);
         out.tile.localY.push_back(points[0].second);
         append_decoded_properties(layer, feature_value_indices(layer, feature), out.tile.columns);
+    }
+    return out;
+}
+
+DecodedPointTile decode_point_tile_select(
+    const std::string& rawTile,
+    const std::vector<std::string>& includeColumns) {
+    const std::unordered_set<std::string> include(includeColumns.begin(), includeColumns.end());
+    const std::vector<DecodedLayer> layers = decode_layers(rawTile);
+    const DecodedLayer& layer = require_single_layer(layers);
+    FeatureTableSchema fullSchema;
+    std::vector<PropertyColumn> unusedColumns;
+    initialize_decoded_schema(layer, fullSchema, unusedColumns);
+
+    DecodedPointTile out;
+    out.schema.layerName = fullSchema.layerName;
+    out.schema.extent = fullSchema.extent;
+    out.schema.hasIdColumn = fullSchema.hasIdColumn;
+    out.schema.idIsUint64 = fullSchema.idIsUint64;
+    std::vector<size_t> selectedSourceColumns;
+    for (size_t c = 0; c < fullSchema.columns.size(); ++c) {
+        if (include.count(fullSchema.columns[c].name) == 0) {
+            continue;
+        }
+        selectedSourceColumns.push_back(c);
+        out.schema.columns.push_back(fullSchema.columns[c]);
+        out.tile.columns.emplace_back(fullSchema.columns[c].type, fullSchema.columns[c].nullable);
+    }
+
+    for (const auto& feature : layer.features) {
+        if (feature.type != GEOM_POINT) {
+            error("%s: expected point MVT feature, got type=%u", __func__, feature.type);
+        }
+        const auto points = decode_point_geometry(feature.geometry);
+        if (points.size() != 1u) {
+            error("%s: only one point per MVT feature is supported", __func__);
+        }
+        if (feature.hasId) {
+            out.tile.featureIds.push_back(feature.id);
+        }
+        out.tile.localX.push_back(points[0].first);
+        out.tile.localY.push_back(points[0].second);
+        const std::vector<int32_t> valueIdx = feature_value_indices(layer, feature);
+        for (size_t outIdx = 0; outIdx < selectedSourceColumns.size(); ++outIdx) {
+            const size_t srcIdx = selectedSourceColumns[outIdx];
+            PropertyColumn& column = out.tile.columns[outIdx];
+            const bool present = valueIdx[srcIdx] >= 0;
+            column.present.push_back(present);
+            MvtValue value;
+            if (present) {
+                value = layer.values[static_cast<size_t>(valueIdx[srcIdx])];
+            }
+            switch (column.type) {
+            case ScalarType::INT_32:
+                column.intValues.push_back(present ? value.intValue : 0);
+                break;
+            case ScalarType::FLOAT:
+                column.floatValues.push_back(present ? value.floatValue : 0.0f);
+                break;
+            case ScalarType::BOOLEAN:
+                column.boolValues.push_back(present ? value.boolValue : false);
+                break;
+            case ScalarType::STRING:
+            default:
+                column.stringValues.push_back(present ? value.stringValue : std::string());
+                break;
+            }
+        }
     }
     return out;
 }

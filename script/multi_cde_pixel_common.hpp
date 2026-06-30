@@ -28,6 +28,20 @@ struct PixelDETestOptions {
     uint64_t seed = 1;
 };
 
+struct PmtilesCdeOptions {
+    int32_t zoom = -1;
+    std::string featureField = "feature";
+    std::string countField = "ct";
+    std::string factorPrefix;
+    int32_t threads = 1;
+};
+
+struct PmtilesCdeMetadata {
+    int32_t K = 0;
+    std::vector<std::string> features;
+    size_t nRecords = 0;
+};
+
 void buildPairwiseContrasts(const std::vector<std::string>& dataLabels,
                             std::vector<ContrastDef>& contrasts);
 
@@ -89,6 +103,38 @@ std::unordered_map<int32_t, TileOperator::Slice> aggOneFeatureTileRegion(
     int32_t union_key,
     Eigen::MatrixXd* confusion,
     double* residualAccum);
+
+PmtilesCdeMetadata scanPmtilesCdeMetadata(const std::string& pmtilesPath,
+                                          const PmtilesCdeOptions& options);
+
+int32_t inferPmtilesCdeFactorCount(const std::string& pmtilesPath,
+                                   const PmtilesCdeOptions& options);
+
+std::vector<std::string> loadPmtilesCdeFeatures(
+    const std::string& pmtilesPath,
+    const PmtilesCdeOptions& options);
+
+std::unordered_map<int32_t, TileOperator::Slice> aggOnePmtilesCde(
+    const std::string& pmtilesPath,
+    const PmtilesCdeOptions& options,
+    const std::unordered_map<std::string, int32_t>& featureIndex,
+    double gridSize,
+    double minProb,
+    int32_t union_key,
+    const PreparedRegionMask2D* region,
+    Eigen::MatrixXd* confusion,
+    double* residualAccum);
+
+std::vector<std::unordered_map<int32_t, TileOperator::Slice>> aggOnePmtilesCdeMultiRegion(
+    const std::string& pmtilesPath,
+    const PmtilesCdeOptions& options,
+    const std::unordered_map<std::string, int32_t>& featureIndex,
+    double gridSize,
+    double minProb,
+    int32_t union_key,
+    const std::vector<const PreparedRegionMask2D*>& regions,
+    std::vector<Eigen::MatrixXd*> confusions,
+    std::vector<double*> residualAccums);
 
 int32_t runConditionalPixelTests(const std::string& outPrefix,
                                  const std::string& auxSuffix,

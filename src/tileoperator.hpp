@@ -64,6 +64,7 @@ public:
         double gene_bin_singleton_ratio = 1.0;
         std::string gene_bin_mode = "adaptive";
         int32_t zoom = -1;
+        std::vector<uint32_t> factorCounts;
     };
 
     struct ExportPmtilesOptions {

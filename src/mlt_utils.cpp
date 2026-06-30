@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <mlt/metadata/type_map.hpp>
+#include <unordered_set>
 #include <zlib.h>
 
 namespace mlt_pmtiles {
@@ -630,6 +631,19 @@ void decode_string_column(PropertyColumn& column, const uint8_t*& ptr, const uin
     }
 }
 
+void skip_property_column(const uint8_t*& ptr, const uint8_t* end, const char* funcName) {
+    const uint64_t numStreams = read_varint(ptr, end, funcName);
+    for (uint64_t streamIdx = 0; streamIdx < numStreams; ++streamIdx) {
+        if (ptr + 2 > end) {
+            error("%s: truncated property stream header", funcName);
+        }
+        ptr += 2;
+        (void)read_varint(ptr, end, funcName);
+        const uint64_t byteLen = read_varint(ptr, end, funcName);
+        ptr = checked_advance(ptr, end, byteLen, funcName);
+    }
+}
+
 void validate_polygon_tile_geometry(const PolygonTileData& tile, size_t totalRowCount, const char* funcName) {
     if (tile.ringOffsets.empty()) {
         if (!tile.localX.empty() || !tile.localY.empty()) {
@@ -1174,6 +1188,147 @@ DecodedPointTile decode_point_tile(const std::string& rawTile) {
         default:
             error("%s: unsupported scalar column type %d", __func__,
                 static_cast<int>(out.schema.columns[colIdx].type));
+        }
+    }
+
+    if (ptr != layerEnd || layerEnd != end) {
+        error("%s: unexpected trailing MLT data", __func__);
+    }
+    return out;
+}
+
+DecodedPointTile decode_point_tile_select(
+    const std::string& rawTile,
+    const std::vector<std::string>& includeColumns) {
+    const std::unordered_set<std::string> include(includeColumns.begin(), includeColumns.end());
+    DecodedPointTile out;
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(rawTile.data());
+    const uint8_t* end = ptr + rawTile.size();
+    if (ptr == end) {
+        return out;
+    }
+
+    const uint64_t layerLen = read_varint(ptr, end, __func__);
+    if (layerLen == 0 || ptr >= end) {
+        error("%s: malformed tile layer header", __func__);
+    }
+    if (layerLen > static_cast<uint64_t>(end - ptr)) {
+        error("%s: truncated tile layer", __func__);
+    }
+    const uint8_t* layerEnd = ptr + static_cast<size_t>(layerLen);
+    const uint8_t tag = *ptr++;
+    if (tag != 1) {
+        error("%s: expected point layer tag 1, found %u", __func__, static_cast<unsigned>(tag));
+    }
+
+    const uint64_t layerNameLen = read_varint(ptr, layerEnd, __func__);
+    if (layerNameLen > static_cast<uint64_t>(layerEnd - ptr)) {
+        error("%s: truncated layer name", __func__);
+    }
+    out.schema.layerName.assign(reinterpret_cast<const char*>(ptr), static_cast<size_t>(layerNameLen));
+    ptr += static_cast<size_t>(layerNameLen);
+    out.schema.extent = static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__));
+    const uint64_t numColumns = read_varint(ptr, layerEnd, __func__);
+    if (numColumns == 0) {
+        error("%s: MLT layer has no geometry column", __func__);
+    }
+
+    const uint64_t geomTypeCode = read_varint(ptr, layerEnd, __func__);
+    if (geomTypeCode != kGeometryColumnTypeCode) {
+        error("%s: unsupported geometry column type %llu", __func__,
+            static_cast<unsigned long long>(geomTypeCode));
+    }
+
+    struct SourceColumn {
+        ColumnSchema schema;
+        size_t selectedIndex = static_cast<size_t>(-1);
+    };
+    std::vector<SourceColumn> sourceColumns;
+    sourceColumns.reserve(static_cast<size_t>(numColumns - 1));
+    for (uint64_t col = 1; col < numColumns; ++col) {
+        const uint32_t typeCode = static_cast<uint32_t>(read_varint(ptr, layerEnd, __func__));
+        const auto decodedColumn = SpecTypeMap::decodeColumnType(typeCode);
+        if (!decodedColumn.has_value()) {
+            error("%s: unsupported MLT type code %u", __func__, typeCode);
+        }
+        if (decodedColumn->isID()) {
+            if (out.schema.hasIdColumn) {
+                error("%s: duplicate ID column", __func__);
+            }
+            out.schema.hasIdColumn = true;
+            out.schema.idIsUint64 = decodedColumn->getScalarType().hasLongID;
+            continue;
+        }
+        SourceColumn src;
+        src.schema = decode_column_type(typeCode);
+        const uint64_t colNameLen = read_varint(ptr, layerEnd, __func__);
+        if (colNameLen > static_cast<uint64_t>(layerEnd - ptr)) {
+            error("%s: truncated column name", __func__);
+        }
+        src.schema.name.assign(reinterpret_cast<const char*>(ptr), static_cast<size_t>(colNameLen));
+        ptr += static_cast<size_t>(colNameLen);
+        if (include.count(src.schema.name) != 0) {
+            src.selectedIndex = out.schema.columns.size();
+            out.schema.columns.push_back(src.schema);
+            out.tile.columns.emplace_back(src.schema.type, src.schema.nullable);
+        }
+        sourceColumns.push_back(std::move(src));
+    }
+
+    const uint64_t geomNumStreams = read_varint(ptr, layerEnd, __func__);
+    size_t rowCount = 0;
+    for (uint64_t streamIdx = 0; streamIdx < geomNumStreams; ++streamIdx) {
+        if (ptr + 2 > layerEnd) {
+            error("%s: truncated geometry stream header", __func__);
+        }
+        const uint8_t h0 = *ptr++;
+        const uint8_t h1 = *ptr++;
+        const uint64_t numValues = read_varint(ptr, layerEnd, __func__);
+        const uint64_t byteLen = read_varint(ptr, layerEnd, __func__);
+        const uint8_t* streamData = ptr;
+        ptr = checked_advance(ptr, layerEnd, byteLen, __func__);
+        const uint8_t physicalType = (h0 >> 4u) & 0x0Fu;
+        const uint8_t dictionaryType = h0 & 0x0Fu;
+        if (physicalType == 1 && dictionaryType == 0) {
+            rowCount = static_cast<size_t>(numValues);
+        } else if (physicalType == 1 && dictionaryType == 3) {
+            if ((numValues % 2u) != 0u) {
+                error("%s: vertex stream length must be even", __func__);
+            }
+            rowCount = static_cast<size_t>(numValues / 2u);
+            decode_vertex_stream(out.tile.localX, out.tile.localY, streamData, byteLen, rowCount, h1, __func__);
+        }
+    }
+    if (out.tile.localX.size() != rowCount || out.tile.localY.size() != rowCount) {
+        error("%s: geometry row count mismatch", __func__);
+    }
+
+    if (out.schema.hasIdColumn) {
+        decode_id_column(out.tile.featureIds, ptr, layerEnd, rowCount);
+    }
+
+    for (const auto& src : sourceColumns) {
+        if (src.selectedIndex == static_cast<size_t>(-1)) {
+            skip_property_column(ptr, layerEnd, __func__);
+            continue;
+        }
+        auto& column = out.tile.columns[src.selectedIndex];
+        switch (src.schema.type) {
+        case ScalarType::BOOLEAN:
+            decode_boolean_column(column, ptr, layerEnd, rowCount);
+            break;
+        case ScalarType::INT_32:
+            decode_int32_column(column, ptr, layerEnd, rowCount);
+            break;
+        case ScalarType::FLOAT:
+            decode_float_column(column, ptr, layerEnd, rowCount);
+            break;
+        case ScalarType::STRING:
+            decode_string_column(column, ptr, layerEnd, rowCount);
+            break;
+        default:
+            error("%s: unsupported scalar column type %d", __func__,
+                static_cast<int>(src.schema.type));
         }
     }
 

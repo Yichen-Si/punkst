@@ -1,11 +1,19 @@
 # Differential expression tests
 
-- `punkst multi-conditional-de-pixel`: Multi-sample cell type-specific DE using pixel-level annotations (allowing GeoJSON region selection in each sample).
-- `punkst conditional-de-region-pixel`: Cell type-specific DE between two GeoJSON-defined regions using one annotation file.
-- `punkst multi-conditional-de-pois`: Multi-sample (pairwise), cell type-specific DE using Poisson regression on spot-level data.
-- `punkst de-chisq`: Chi-squared DE on pseudobulk matrices.
+- [Chi-squared tests from pseudobulk](#naive-chi-squared-tests-from-pseudobulk)
+    `de-chisq`: quick and dirty $\chi^2$ tests on pseudobulk matrices for
+    - within-dataset between-factor gene enrichment
+    - between-dataset within-factor gene enrichment
 
-## de-chisq
+- [Conditional DE after pixel/molecule level inference](#conditional-de-after-pixel-level-inference)
+    - `multi-conditional-de-pixel`: Multi-sample cell type-specific DE using pixel-level annotations (allowing GeoJSON region selection in each sample).
+    - `conditional-de-region-pixel`: Cell type-specific DE between two GeoJSON-defined regions using one annotation file.
+
+- [Conditional DE for spot/cell level data](#conditional-de-for-spotcell-level-data)
+
+    `multi-conditional-de-pois`: Multi-sample (pairwise), cell type-specific DE using Poisson regression on spot-level data.
+
+## Naive chi-squared tests from pseudobulk
 
 `de-chisq` runs $\chi^2$ tests on a pseudobulk matrix for a quick and dirty check on gene enrichment at factor level.
 Provide one input for a 1-vs-rest test per factor, or two inputs for a pairwise comparison of each factor between datasets.
@@ -68,19 +76,91 @@ Two-input output columns:
 
 Rows are sorted by factor (ascending) and Chi2 (descending) within each factor.
 
-## multi-conditional-de-pixel
+## Conditional DE after pixel level inference
 
-`multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between dataset groups. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests for each cell type using a Binomial model. By default it builds all pairwise contrasts from `--labels` (or numeric indices); for more general comparisons, use a contrast design file. A contrast file can also define each input row as a `(dataset, region)` pair by including a `region` column that contains one GeoJSON file for each dataset.
+The pixel-level conditional DE commands test feature enrichment after pixels/molecules have been assigned to factors by `pixel-decode` or packaged into annotated PMTiles. (we use "pixel-level" to refer to both pixel-mode and single-molecule output from `pixel-decode`)
 
-The main p-values are computed from robust sandwich estimators of the standard errors of the estimated effect sizes. Optional permutation p-values can also be added with `--perm`.
+- `multi-conditional-de-pixel` compares groups of datasets or dataset-region pairs.
+- `conditional-de-region-pixel` compares two GeoJSON-defined regions in one dataset.
+
+Pixel-mode annotation input is joined with transcript tiles. Single-molecule annotation input and annotated point PMTiles already contain feature, count, factor, and probability information, so transcript tiles are not needed.
+
+### The test
+Records are aggregated into grid units of size `--grid-size`, stratified by factor assignment, and tested with a Binomial model:
 
 $X^{(k)}_{im} \sim$ Binom $(N^{(k)}_{im}, \pi^{(k)}_{im})$ for cell type $k$, bin $i$ and gene $m$, where both $X$ and $N$ are soft-aggregated counts from pixel level cell type assignments.
 
 logit $(\pi^{(k)}_{im}) = a^{(k)}_m + y_i b^{(k)}_m$, where $y_i$ is a binary indicator for the dataset (0/1). The null hypothesis is $b^{(k)}_m = 0$.
 
-Note: the intended use is when the cell type model is from external sources (e.g. apply `pixel-decode` with a reference-based cell type pseudobulk matrix). The interpretation is tricky if the cell types are learned from the same datasets. Either way, this is only a data exploration tool and we do not claim that it is statistically rigorous.
+The main p-values are computed from robust sandwich estimators of the standard errors of the estimated effect sizes. Optional permutation p-values can also be added with `--perm`.
 
-Example usage (pairwise contrasts between input datasets):
+Note: the intended use is when the cell type model is from external sources (e.g. apply `pixel-decode` with a reference-based cell type pseudobulk matrix). The interpretation is tricky if the cell types are learned from the same datasets. Either way, this is only a data exploration tool and we do not claim that it is a rigorous statistical test.
+
+### Shared Inputs And Options
+
+**Input choices:**
+
+- Pixel-mode annotation: provide annotation files with `--anno` or `--anno-data/--anno-index`, plus transcript tiles with `--pts`.
+- Single-molecule annotation: provide annotation files with `--anno` or `--anno-data/--anno-index`; `--pts` is not needed.
+- PMTiles: provide annotated point PMTiles with `--pmtiles`; `--pts` is not used.
+
+PMTiles input may be local files, `http(s)://` URLs, or unsigned/public `s3://bucket/key` paths when remote I/O is enabled. MLT and MVT point tiles are supported; non-point layers are ignored. For pyramid PMTiles, the default is the archive max zoom; use `--pmtiles-zoom` to select a specific level.
+
+**Common parameters:**
+
+`--K` - Number of factors in the selected annotation model. Optional for indexed annotation files whose headers store `K`, and optional for PMTiles that carry factor metadata. Required for older or external PMTiles without usable factor metadata. When provided, it overrides PMTiles metadata.
+
+`--features` - Feature list to test. The first whitespace-delimited field on each non-comment line is used. This is preferred for PMTiles input because it avoids scanning the archive to discover features. If omitted for local `deploy-cartoscope` transcript PMTiles with `--pmtiles-feature-field gene`, the command falls back to sibling `genes_bin_counts.json`; otherwise it scans PMTiles rows. Optional for single-molecule annotation input with embedded feature names.
+
+`--grid-size` - Grid size used to aggregate records into units.
+
+`--out` - Output prefix.
+
+**Common PMTiles options:**
+
+`--pmtiles-feature-field`, `--pmtiles-count-field` - PMTiles point property names for feature and count. Defaults: `feature`, `ct`. For `deploy-cartoscope` transcript PMTiles, use `--pmtiles-feature-field gene`.
+
+`--pmtiles-factor-prefix` - PMTiles K/P column prefix selecting one factor annotation group, for example `celltype-pixel` for columns `celltype-pixel_K1`, `celltype-pixel_P1`, etc. Optional only when the PMTiles schema contains exactly one K/P group.
+
+**Other common options:**
+
+`--binary` - Indicates annotation data files are binary (`.bin`).
+
+`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in transcript files (0-based). Defaults are `0`, `1`, `2`, and `3`; ignored for single-molecule annotation and PMTiles input.
+
+`--region-scale` - Integer coordinate scale used during GeoJSON preprocessing. Default: 10.
+
+`--pseudo-rel` - Relative pseudo count fraction used in the Binomial model. Default: 0.05.
+
+`--min-count-per-feature` - Minimum total count for a feature to be considered. Default: 100.
+
+`--min-count` - Minimum observed factor-specific count for a unit to be included. Default: 10.
+
+`--min-prob` - Minimum annotation probability for a record to contribute to a factor. Default: 0.01.
+
+`--max-pval` - Max p-value for output. Default: 1.
+
+`--max-pval-deconv` - If at least two factors reach this p-value threshold, run deconvolution. Default: 0.05.
+
+`--min-or` - Minimum odds ratio for output. Default: 1.
+
+`--perm` - Number of permutations for beta calibration. Default: 0.
+
+`--min-or-perm` - Minimum odds ratio for permutation testing. Default: 1.2.
+
+`--seed` - Random seed for permutation.
+
+`--threads` - Number of threads. Default: 1.
+
+`--aux-suff` - Optional suffix inserted before `.nobs.tsv` and `.sums.tsv`.
+
+`--debug` - Enable debug logging.
+
+### multi-conditional-de-pixel
+
+`multi-conditional-de-pixel` compares groups of datasets. Use a contrast design file for custom comparisons or dataset-region pairs; otherwise the command builds pairwise contrasts from `--labels`.
+
+Example usage with pixel-mode annotation:
 ```bash
 punkst multi-conditional-de-pixel \
   --anno sampleA/pixel sampleB/pixel --binary \
@@ -102,6 +182,18 @@ punkst multi-conditional-de-pixel \
   --out de/pixel_de --threads 8 --seed 1
 ```
 
+Example usage with annotated PMTiles:
+```bash
+punkst multi-conditional-de-pixel \
+  --pmtiles sampleA/genes_all.pmtiles sampleB/genes_all.pmtiles \
+  --labels sampleA sampleB \
+  --pmtiles-feature-field gene \
+  --pmtiles-factor-prefix celltype-pixel \
+  --K 25 --features features.tsv \
+  --grid-size 20 --min-count 10 \
+  --out de/pmtiles_de --threads 8
+```
+
 `contrast.tsv` format (tab-delimited):
 ```tsv
 anno_prefix	pts_prefix	B_vs_A	C_vs_A
@@ -120,9 +212,11 @@ sampleC/pixel	sampleC/transcripts.tiled	regions/C.geojson	C_region		0
 ```
 When `region` is present, each row is treated as one pseudo-sample defined by the annotation dataset, transcript dataset, and GeoJSON region. The `anno` column may contain either an annotation prefix or an explicit `.bin`/`.tsv` annotation file. Single-molecule annotation rows can leave `pts` empty because the annotation file already contains feature and factor information; pixel-mode rows still require `pts`. The same annotation factor index must refer to the same factor across all rows. The optional `label` column names rows in auxiliary outputs, and the optional `confusion` column supplies a per-row `K x K` matrix. Empty `confusion` cells are allowed and trigger on-the-fly estimation from the region-filtered pixels.
 
-### Required Parameters
+PMTiles contrast rows use a `pmtiles` column instead of `anno`/`pts`.
 
-Provide either `--anno`, `--pts` (or `--anno-data`/`--anno-index`, `--pts`) or a `--contrast` design file.
+#### Required Parameters
+
+Provide either `--anno`, `--pts` (or `--anno-data`/`--anno-index`, `--pts`), `--pmtiles`, or a `--contrast` design file.
 
 `--anno` - Prefixes of pixel annotation files (from `punkst pixel-decode`). For each prefix, the tool expects `<prefix>.tsv` (or `<prefix>.bin` if `--binary`) and `<prefix>.index`. Cannot be combined with `--contrast`.
 
@@ -130,51 +224,19 @@ Provide either `--anno`, `--pts` (or `--anno-data`/`--anno-index`, `--pts`) or a
 
 `--pts` - Prefixes of transcript data files (from `punkst pts2tiles`). For each prefix, the tool expects `<prefix>.tsv` and `<prefix>.index`. Cannot be combined with `--contrast`.
 
-`--contrast` - Contrast design TSV with columns: `anno`/`anno_prefix`, `pts`/`pts_prefix`, optional `region`, optional `label`, optional `confusion`, and one or more contrast columns (values -1/0/1). When provided, it replaces `--anno/--anno-data/--anno-index/--pts`, `--confusion`, and `--labels`.
+`--pmtiles` - Annotated point PMTiles files. Cannot be combined with `--anno/--anno-data/--anno-index` outside a contrast file.
 
-`--K` - Number of factors in the annotation files. Optional for indexed annotation files whose headers store the total factor count.
-
-`--features` - A list of features to test, one feature name per line (lines starting with `#` are ignored). Optional only when every annotation input is single-molecule mode with embedded feature names.
-
-`--grid-size` - Grid size used to aggregate transcripts into units.
-
-`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in the transcript files (0-based). Defaults are `0`, `1`, `2`, and `3`; ignored for single-molecule annotation rows that do not use transcript files.
-
-`--out` - Output prefix.
+`--contrast` - Contrast design TSV with columns: either `anno`/`anno_prefix` plus `pts`/`pts_prefix`, or `pmtiles`; optional `region`, optional `label`, optional `confusion`; and one or more contrast columns (values -1/0/1). When provided, it replaces `--anno/--anno-data/--anno-index/--pts/--pmtiles`, `--confusion`, and `--labels`.
 
 For pixel-mode annotation rows, annotation and transcript tiles must use the same tile size for each dataset pair (this is guaranteed if the pixel level decoding results are generated from the corresponding transcript tiles by `punkst pixel-decode`).
 
-### Optional Parameters
+#### Optional Parameters
 
 `--labels` - Labels for datasets used in pairwise output; defaults to `0..N-1`. Ignored when `--contrast` is supplied.
 
-`--binary` - Indicates the annotation data files are binary (`.bin`).
-
 `--confusion` - Optional per-dataset confusion matrices (`K x K` TSV). When omitted, the command estimates one confusion matrix from each annotation dataset on the fly.
 
-`--region-scale` - Integer coordinate scale used during GeoJSON preprocessing for region-aware contrast files. Default: 10.
-
-`--min-count-per-feature` - Minimum total count (in each pairwise comparison) for a feature to be considered. Default: 100.
-
-`--max-pval` - Max p-value for output. Default: 1 (output all).
-
-`--max-pval-deconv` - If at least two cell types (slices) have a p-value less than this threshold, the tool runs a deconvolution to estimate effects adjusted for other cell types. Default: 0.05.
-
-`--min-or` - Minimum odds ratio for output (bidirectional, so OR$>x$ and OR$<1/x$ are kept). Default: 1 (output all).
-
-`--min-count` - Minimum observed cell-type-specific count for a unit to be included. Default: 10.
-
-`--perm` - Number of permutations for beta calibration (two-group contrasts). Default: 0 (model-based p-values only).
-
-`--min-or-perm` - Minimum odds ratio for permutation testing (bidirectional). Default: 1.2.
-
-`--seed` - Random seed for permutation.
-
-`--threads` - Number of threads. Default: 1. Almost the entire runtime is spent in data loading, so multi-threading is very useful for large datasets since tiles of data are loaded simultaneously.
-
-`--debug` - Enable debug logging.
-
-### Output Files
+#### Output Files
 
 Given `--out PREFIX`, the tool generates one main output file per contrast, plus auxiliary files.
 
@@ -192,17 +254,15 @@ Given `--out PREFIX`, the tool generates one main output file per contrast, plus
     - `p_perm`: Included only when `--perm > 0`.
 
 - Auxiliary files:
-    - `PREFIX.nobs.tsv`: The number of units and total pixel counts per cell type and dataset.
-    - `PREFIX.sums.tsv`: Nonzero total feature counts per cell type and dataset for units passing filters.
+    - `PREFIX.nobs.tsv`: The number of units and total counts per factor and group.
+    - `PREFIX.sums.tsv`: Nonzero total feature counts per factor and group for units passing filters.
     - `PREFIX.CONTRAST.da.tsv`: Differential abundance chi-square test per cell type for each contrast. `Count0` and `Count1` are factor-specific abundance totals for the negative/reference and positive/comparison groups; `FC` is the positive/comparison group abundance fraction divided by the negative/reference group abundance fraction using group totals from `PREFIX.nobs.tsv`.
 
-## conditional-de-region-pixel
+### conditional-de-region-pixel
 
-`conditional-de-region-pixel` runs the same conditional DE test for one annotation dataset split into two groups by two polygon-defined regions. Pixel-mode annotation input is joined with a transcript dataset; single-molecule annotation input already contains feature and factor information and does not need transcript tiles. The two groups are defined by `--region-neg` and `--region-pos`, and the command computes one confusion matrix from each region on the fly from the annotation probabilities that are actually used during aggregation.
+`conditional-de-region-pixel` compares two groups defined by `--region-neg` and `--region-pos` in one dataset. For pixel-mode input, region membership is defined by transcript coordinates. For single-molecule and PMTiles input, region membership is defined by molecule coordinates in the annotated input.
 
-For pixel-mode input, region membership is defined by transcript coordinates. Annotation pixels are used to annotate transcripts after region filtering, with a raster-assisted fast path to avoid exact polygon checks for most transcripts. For single-molecule input, region membership is defined by molecule coordinates in the annotation file.
-
-Example usage:
+Example usage with pixel-mode annotation:
 ```bash
 punkst conditional-de-region-pixel \
   --anno sample/pixel --binary \
@@ -217,65 +277,40 @@ punkst conditional-de-region-pixel \
   --out de/region_de --threads 8
 ```
 
-### Required Parameters
+Example usage with annotated PMTiles:
+```bash
+punkst conditional-de-region-pixel \
+  --pmtiles sample/genes_all.pmtiles \
+  --pmtiles-feature-field gene \
+  --pmtiles-factor-prefix celltype-pixel \
+  --K 25 --features features.tsv \
+  --region-neg regions/control.geojson \
+  --region-pos regions/treatment.geojson \
+  --grid-size 20 --min-count 10 \
+  --out de/region_pmtiles_de --threads 8
+```
 
-Provide either `--anno` or both `--anno-data` and `--anno-index`.
+#### Required Parameters
+
+Provide either `--anno`, both `--anno-data` and `--anno-index`, or `--pmtiles`.
 
 `--anno` - Prefix of the annotation files. The tool expects `<prefix>.tsv` (or `<prefix>.bin` if `--binary`) and `<prefix>.index`.
 
 `--anno-data`, `--anno-index` - Alternative to `--anno`. Provide the explicit annotation data and index files.
 
+`--pmtiles` - Annotated point PMTiles file. MLT and MVT point tiles are supported; non-point layers are ignored. For pyramid PMTiles, the default is the archive max zoom.
+
 `--pts` - Prefix of the transcript tiled dataset. Required only for pixel-mode annotation input. The tool expects `<prefix>.tsv` and `<prefix>.index`.
 
 `--region-neg`, `--region-pos` - GeoJSON files defining the negative/reference and positive/comparison regions. See [GeoJSON Region Input](../input/geojson-region.md) for the accepted file format.
 
-`--K` - Number of factors in the annotation file. Optional for indexed annotation files whose headers store the total factor count.
-
-`--features` - A list of features to test, one feature name per line (lines starting with `#` are ignored). Optional only for single-molecule annotation input with embedded feature names.
-
-`--grid-size` - Grid size used to aggregate transcripts or single-molecule records into units.
-
-`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in the transcript file (0-based). Defaults are `0`, `1`, `2`, and `3`; ignored for single-molecule annotation input.
-
-`--out` - Output prefix.
-
 For pixel-mode input, the annotation and transcript tiled inputs must use the same tile size.
 
-### Optional Parameters
+#### Optional Parameters
 
 `--region-label-neg`, `--region-label-pos` - Labels used in the contrast name and auxiliary outputs. Defaults: `0`, `1`.
 
-`--region-scale` - Integer coordinate scale used during GeoJSON preprocessing. Default: 10.
-
-`--binary` - Indicates the annotation data file is binary (`.bin`).
-
-`--pseudo-rel` - Relative pseudo count fraction used in the Binomial model. Default: 0.05.
-
-`--min-prob` - Minimum annotation probability for a pixel to contribute to a slice. Default: 0.01.
-
-`--min-count-per-feature` - Minimum total count for a feature to be considered. Default: 100.
-
-`--max-pval` - Max p-value for output. Default: 1.
-
-`--max-pval-deconv` - If at least two cell types reach this p-value threshold, run deconvolution. Default: 0.05.
-
-`--min-or` - Minimum odds ratio for output. Default: 1.
-
-`--min-or-perm` - Minimum odds ratio for doing permutation. Default: 1.2.
-
-`--min-count` - Minimum observed factor-specific count for a unit to be included. Default: 10.
-
-`--perm` - Number of permutations for beta calibration. Default: 0.
-
-`--seed` - Random seed for permutation.
-
-`--threads` - Number of threads. Default: 1.
-
-`--aux-suff` - Optional suffix inserted before `.nobs.tsv` and `.sums.tsv`.
-
-`--debug` - Enable debug logging.
-
-### Output Files
+#### Output Files
 
 Given `--out PREFIX`, the command generates:
 
@@ -300,7 +335,7 @@ The main output columns are the same as `multi-conditional-de-pixel`:
 
 If the two regions overlap, transcripts in the overlap contribute to both groups.
 
-## multi-conditional-de-pois
+## Conditional DE for spot/cell level data
 
 `multi-conditional-de-pois` performs cell-type-specific differential expression on pre-defined spatial units (e.g. hexagons from `tiles2hex`, other binned data, single cells, or low resolution data like Visium). It leverages a pre-trained topic model (e.g., LDA from `punkst topic-model`) to estimate cell type mixture proportions within each unit, then for each gene fits a Poisson regression model to estimate differential expression between specified groups of datasets.
 

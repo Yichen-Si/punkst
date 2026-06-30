@@ -97,6 +97,7 @@ enum class VectorGeometryType {
 };
 
 inline constexpr const char* PUNKST_VECTOR_SCHEMA_METADATA_KEY = "punkst_vector_schema";
+inline constexpr const char* PUNKST_FACTOR_MODELS_METADATA_KEY = "punkst_factor_models";
 
 struct SingleLayerVectorPmtilesOptions {
     FeatureTableSchema schema;

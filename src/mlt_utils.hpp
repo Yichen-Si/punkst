@@ -51,6 +51,9 @@ std::string encode_polygon_tile_subset(const FeatureTableSchema& schema,
 std::string rewrite_point_tile_layer_name(const std::string& rawTile,
     const std::string& newLayerName);
 DecodedPointTile decode_point_tile(const std::string& rawTile);
+DecodedPointTile decode_point_tile_select(
+    const std::string& rawTile,
+    const std::vector<std::string>& includeColumns);
 DecodedPolygonTile decode_polygon_tile(const std::string& rawTile);
 
 } // namespace mlt_pmtiles

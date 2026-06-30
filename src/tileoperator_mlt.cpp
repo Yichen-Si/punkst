@@ -1139,7 +1139,8 @@ void write_single_layer_pmtiles_archive(const std::string& outFile,
     uint64_t totalRecordCount, double coordScale,
     size_t featureDictionarySize, uint8_t outputZoom,
     double geoMinX, double geoMinY, double geoMaxX, double geoMaxY,
-    const std::string& generator);
+    const std::string& generator,
+    const nlohmann::json& extraMetadata = nlohmann::json::object());
 
 bool has_gene_bin_definition(const TileOperator::MltPmtilesOptions& mltOptions) {
     if (!mltOptions.gene_bin_info_file.empty()) {
@@ -1656,13 +1657,117 @@ std::vector<pm_core::EncodedTilePayload> encode_epsg3857_tile_map(
     return encodedTiles;
 }
 
+nlohmann::json build_factor_model_metadata(
+    const std::vector<uint32_t>& factorCounts,
+    const std::vector<uint32_t>& keptPairs,
+    const std::vector<std::string>& mergePrefixes) {
+    if (factorCounts.empty()) {
+        return nlohmann::json::object();
+    }
+    nlohmann::json out = nlohmann::json::object();
+    nlohmann::json models = nlohmann::json::array();
+    const bool onePerGroup = factorCounts.size() > 1 && keptPairs.size() == factorCounts.size();
+    const bool hasPrefixes = !mergePrefixes.empty() && mergePrefixes.size() == factorCounts.size();
+    if (onePerGroup || hasPrefixes) {
+        for (size_t i = 0; i < factorCounts.size(); ++i) {
+            if (factorCounts[i] == 0) {
+                continue;
+            }
+            nlohmann::json model;
+            if (hasPrefixes) {
+                model["prefix"] = mergePrefixes[i];
+            }
+            model["model_index"] = i;
+            model["K"] = factorCounts[i];
+            if (i < keptPairs.size()) {
+                model["top_k"] = keptPairs[i];
+            }
+            models.push_back(std::move(model));
+        }
+    } else {
+        uint32_t totalK = 0;
+        uint32_t totalTopK = 0;
+        for (uint32_t k : factorCounts) {
+            totalK += k;
+        }
+        for (uint32_t k : keptPairs) {
+            totalTopK += k;
+        }
+        if (totalK > 0) {
+            nlohmann::json model;
+            model["prefix"] = "";
+            model["K"] = totalK;
+            if (totalTopK > 0) {
+                model["top_k"] = totalTopK;
+            }
+            models.push_back(std::move(model));
+        }
+    }
+    if (models.empty()) {
+        return out;
+    }
+    out[pm_vector::PUNKST_FACTOR_MODELS_METADATA_KEY] = models;
+    if (models.size() == 1 && models.front().contains("K")) {
+        out["K"] = models.front()["K"];
+    }
+    return out;
+}
+
+std::vector<uint32_t> resolve_pmtiles_factor_counts(
+    int32_t totalK,
+    const std::vector<uint32_t>& keptPairs,
+    const std::vector<uint32_t>& requestedFactorCounts,
+    const char* context) {
+    if (keptPairs.size() > 1) {
+        if (requestedFactorCounts.empty()) {
+            error("%s: writing PMTiles from an already merged input with %zu factor groups requires --Ks with one total factor count per group",
+                  context, keptPairs.size());
+        }
+        if (requestedFactorCounts.size() != keptPairs.size()) {
+            error("%s: --Ks expects %zu values, got %zu",
+                  context, keptPairs.size(), requestedFactorCounts.size());
+        }
+        for (size_t i = 0; i < keptPairs.size(); ++i) {
+            if (requestedFactorCounts[i] == 0) {
+                error("%s: --Ks values must be positive", context);
+            }
+            if (requestedFactorCounts[i] < keptPairs[i]) {
+                error("%s: --Ks value %u for group %zu is smaller than retained top-pair count %u",
+                      context, requestedFactorCounts[i], i, keptPairs[i]);
+            }
+        }
+        return requestedFactorCounts;
+    }
+    if (!requestedFactorCounts.empty()) {
+        if (requestedFactorCounts.size() != 1) {
+            error("%s: --Ks expects one value for single-model PMTiles output, got %zu",
+                  context, requestedFactorCounts.size());
+        }
+        if (requestedFactorCounts.front() == 0) {
+            error("%s: --Ks values must be positive", context);
+        }
+        return requestedFactorCounts;
+    }
+    return std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, totalK))};
+}
+
+std::vector<uint32_t> factor_counts_from_sources(const std::vector<TileOperator*>& opPtrs) {
+    std::vector<uint32_t> out;
+    out.reserve(opPtrs.size());
+    for (const TileOperator* op : opPtrs) {
+        out.push_back(static_cast<uint32_t>(std::max(0, op->getFactorCount())));
+    }
+    return out;
+}
+
 void write_single_layer_pmtiles_archive(const std::string& outFile,
     const pm_vector::FeatureTableSchema& schema,
     std::vector<pm_core::EncodedTilePayload> encodedTiles,
     uint64_t totalRecordCount, double coordScale,
     size_t featureDictionarySize, uint8_t outputZoom,
     double geoMinX, double geoMinY, double geoMaxX, double geoMaxY,
-    const std::string& generator) {
+    const std::string& generator,
+    const nlohmann::json& extraMetadata) {
     pm_vector::SingleLayerVectorPmtilesOptions options;
     options.schema = schema;
     options.geometryType = pm_vector::VectorGeometryType::Point;
@@ -1680,6 +1785,7 @@ void write_single_layer_pmtiles_archive(const std::string& outFile,
     options.description = options.tileType == pmtiles::TILETYPE_MVT
         ? "Generated PMTiles by punkst for MVT points"
         : "Generated PMTiles by punkst for MLT points";
+    options.extraMetadata = extraMetadata;
     pm_vector::write_single_layer_vector_pmtiles_archive(outFile, std::move(encodedTiles), options);
 }
 
@@ -2800,7 +2906,11 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
         error("%s: encodeProbEps must be <= 1", __func__);
     }
     if (k2keep.size() == 0) {
-        k2keep.push_back(static_cast<uint32_t>(k_));
+        if (!kvec_.empty()) {
+            k2keep = kvec_;
+        } else {
+            k2keep.push_back(static_cast<uint32_t>(k_));
+        }
     }
 
     const std::vector<std::string> featureNames = loadFeatureNames();
@@ -2808,6 +2918,10 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
     featureDictionary.values = featureNames;
     size_t dictSize = featureDictionary.values.size();
     const std::vector<std::string> probColumnNames = build_merge_column_names(k2keep, mergePrefixes);
+    const std::vector<uint32_t> factorCounts = resolve_pmtiles_factor_counts(
+        K_, k2keep, mltOptions.factorCounts, __func__);
+    const nlohmann::json factorMetadata = build_factor_model_metadata(
+        factorCounts, k2keep, mergePrefixes);
     const bool hasZ = (coord_dim_ == 3);
     const bool useMvt = mltOptions.write_mvt_pmtiles;
     const std::string generator = useMvt
@@ -2900,7 +3014,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
             mltOptions.coordScale, featureNames.size(), outputZoom,
             allResult.geoMinX, allResult.geoMinY,
             allResult.geoMaxX, allResult.geoMaxY,
-            generator);
+            generator, factorMetadata);
         return;
     }
 
@@ -2922,7 +3036,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
         std::move(pipeline.allEncodedTiles), pipeline.totalRecordCount,
         mltOptions.coordScale, dictSize, outputZoom,
         pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
-        generator);
+        generator, factorMetadata);
 
     for (auto& kv : pipeline.binEncodedTiles) {
         const std::string outFile = outPrefix + "_bin" + std::to_string(kv.first) + ".pmtiles";
@@ -2936,7 +3050,7 @@ void TileOperator::writeMltPmtiles(const std::string& outPrefix,
             binCount, mltOptions.coordScale, dictSize, outputZoom,
             pipeline.geoMinX, pipeline.geoMinY,
             pipeline.geoMaxX, pipeline.geoMaxY,
-            generator);
+            generator, factorMetadata);
     }
     geneBins.write_gene_bin_info_json(outPrefix + ".bin_counts.json");
     write_pmtiles_index_tsv(outPrefix + ".pmtiles_index.tsv", outPrefix,
@@ -2982,6 +3096,10 @@ void TileOperator::annotatePlainToMltPmtiles(
     const std::vector<uint32_t> headerKvec = kvec_.empty()
         ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
         : kvec_;
+    const std::vector<uint32_t> factorCounts = resolve_pmtiles_factor_counts(
+        K_, headerKvec, mltOptions.factorCounts, __func__);
+    const nlohmann::json factorMetadata = build_factor_model_metadata(
+        factorCounts, headerKvec, mergePrefixes);
     const size_t totalK = std::accumulate(headerKvec.begin(), headerKvec.end(), size_t(0));
     const std::vector<std::string> probColumnNames = build_merge_column_names(headerKvec, mergePrefixes);
     std::string layer_name_suff0 = packaging.haveGeneBins ? "_all" : "";
@@ -3098,7 +3216,8 @@ void TileOperator::annotatePlainToMltPmtiles(
         pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
         mltOptions.write_mvt_pmtiles
             ? "punkst tile-op --annotate-pts --write-mvt-pmtiles"
-            : "punkst tile-op --annotate-pts --write-mlt-pmtiles");
+            : "punkst tile-op --annotate-pts --write-mlt-pmtiles",
+        factorMetadata);
 
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
@@ -3114,7 +3233,8 @@ void TileOperator::annotatePlainToMltPmtiles(
                 pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
                 mltOptions.write_mvt_pmtiles
                     ? "punkst tile-op --annotate-pts --write-mvt-pmtiles"
-                    : "punkst tile-op --annotate-pts --write-mlt-pmtiles");
+                    : "punkst tile-op --annotate-pts --write-mlt-pmtiles",
+                factorMetadata);
         }
         geneBinsPtr->write_gene_bin_info_json(outPrefix + ".bin_counts.json");
         write_pmtiles_index_tsv(outPrefix + ".pmtiles_index.tsv", outPrefix,
@@ -3174,6 +3294,8 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
     }
     check_k2keep(k2keep, opPtrs);
     const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
+    const nlohmann::json factorMetadata = build_factor_model_metadata(
+        factor_counts_from_sources(opPtrs), k2keep, mergePrefixes);
 
     const std::vector<std::string> queryFeatureNames = load_query_feature_names(ptPrefix, icol_f);
     const AnnotatePackagingConfig packaging =
@@ -3301,7 +3423,8 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
         pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
         mltOptions.write_mvt_pmtiles
             ? "punkst tile-op --annotate-pts --merge-emb --write-mvt-pmtiles"
-            : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles");
+            : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles",
+        factorMetadata);
 
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
@@ -3317,7 +3440,8 @@ void TileOperator::annotateMergedPlainToMltPmtiles(
                 pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
                 mltOptions.write_mvt_pmtiles
                     ? "punkst tile-op --annotate-pts --merge-emb --write-mvt-pmtiles"
-                    : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles");
+                    : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles",
+                factorMetadata);
         }
         geneBinsPtr->write_gene_bin_info_json(outPrefix + ".bin_counts.json");
         write_pmtiles_index_tsv(outPrefix + ".pmtiles_index.tsv", outPrefix,
@@ -3365,6 +3489,10 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
     const std::vector<uint32_t> headerKvec = kvec_.empty()
         ? std::vector<uint32_t>{static_cast<uint32_t>(std::max(0, k_))}
         : kvec_;
+    const std::vector<uint32_t> factorCounts = resolve_pmtiles_factor_counts(
+        K_, headerKvec, mltOptions.factorCounts, __func__);
+    const nlohmann::json factorMetadata = build_factor_model_metadata(
+        factorCounts, headerKvec, mergePrefixes);
     const std::vector<std::string> probColumnNames = build_merge_column_names(headerKvec, mergePrefixes);
     std::string layer_name_suff0 = packaging.haveGeneBins ? "_all" : "";
     const AnnotateQueryPlan queryPlan = build_annotate_query_plan(*this,
@@ -3475,7 +3603,8 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
         pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
         mltOptions.write_mvt_pmtiles
             ? "punkst tile-op --annotate-pts --write-mvt-pmtiles"
-            : "punkst tile-op --annotate-pts --write-mlt-pmtiles");
+            : "punkst tile-op --annotate-pts --write-mlt-pmtiles",
+        factorMetadata);
 
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
@@ -3490,7 +3619,8 @@ void TileOperator::annotateSingleMoleculeToMltPmtiles(
                 pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
                 mltOptions.write_mvt_pmtiles
                     ? "punkst tile-op --annotate-pts --write-mvt-pmtiles"
-                    : "punkst tile-op --annotate-pts --write-mlt-pmtiles");
+                    : "punkst tile-op --annotate-pts --write-mlt-pmtiles",
+                factorMetadata);
         }
         geneBinsPtr->write_gene_bin_info_json(outPrefix + ".bin_counts.json");
         write_pmtiles_index_tsv(outPrefix + ".pmtiles_index.tsv", outPrefix,
@@ -3559,6 +3689,8 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
     }
 
     const std::vector<MergeSourcePlan> mergePlans = validateMergeSources(opPtrs, k2keep);
+    const nlohmann::json factorMetadata = build_factor_model_metadata(
+        factor_counts_from_sources(opPtrs), k2keep, mergePrefixes);
     const FeatureRemapPlan featureRemap = build_feature_remap_plan(opPtrs, __func__);
     const auto canonicalFeatureIndex = build_feature_index_map(featureRemap.canonicalNames);
     const AnnotatePackagingConfig packaging =
@@ -3683,7 +3815,8 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
         pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
         mltOptions.write_mvt_pmtiles
             ? "punkst tile-op --annotate-pts --merge-emb --write-mvt-pmtiles"
-            : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles");
+            : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles",
+        factorMetadata);
 
     if (geneBinsPtr != nullptr) {
         for (auto& kv : pipeline.binEncodedTiles) {
@@ -3699,7 +3832,8 @@ void TileOperator::annotateMergedSingleMoleculeToMltPmtiles(
                 pipeline.geoMinX, pipeline.geoMinY, pipeline.geoMaxX, pipeline.geoMaxY,
                 mltOptions.write_mvt_pmtiles
                     ? "punkst tile-op --annotate-pts --merge-emb --write-mvt-pmtiles"
-                    : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles");
+                    : "punkst tile-op --annotate-pts --merge-emb --write-mlt-pmtiles",
+                factorMetadata);
         }
         geneBinsPtr->write_gene_bin_info_json(outPrefix + ".bin_counts.json");
         write_pmtiles_index_tsv(outPrefix + ".pmtiles_index.tsv", outPrefix,

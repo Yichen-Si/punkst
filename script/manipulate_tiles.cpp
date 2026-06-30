@@ -153,6 +153,7 @@ int32_t cmdManipulateTiles(int32_t argc, char** argv) {
       .add_option("merge-keep-all-main", "Keep all main-input records in --merge-emb and fill missing source slots with (-1, 0)", mergeKeepAllMain)
       .add_option("merge-keep-all", "Keep any pixel observed in at least one source when merging", mergeKeepAll)
       .add_option("k2keep", "Number of factors to keep from each source (merge only)", k2keep)
+      .add_option("Ks", "Total number of factors for each factor group when writing PMTiles from an already merged input", mltOptions.factorCounts)
       .add_option("null-k", "Placeholder printed for missing K values in TSV merge outputs", nullK)
       .add_option("null-p", "Placeholder printed for missing P values in TSV merge outputs", nullP)
       .add_option("annotate-pts", "Prefix of the data file to annotate", inMergePtsPrefix)
