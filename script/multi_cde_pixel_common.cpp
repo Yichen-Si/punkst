@@ -92,6 +92,131 @@ void finalizeConfusionMatrix(Eigen::MatrixXd& confusion,
     }
 }
 
+namespace {
+
+template<typename RecT>
+void accumulateConfusionFromProbRecord(const RecT& rec,
+                                       Eigen::MatrixXd& confusion,
+                                       double& residualAccum) {
+    double residual = 1.0;
+    for (size_t ii = 0; ii < rec.ks.size(); ++ii) {
+        residual -= rec.ps[ii];
+        for (size_t jj = ii; jj < rec.ks.size(); ++jj) {
+            confusion(rec.ks[ii], rec.ks[jj]) += rec.ps[ii] * rec.ps[jj];
+        }
+    }
+    if (residual > 0.0) {
+        residualAccum += residual * residual;
+    }
+}
+
+} // namespace
+
+std::unordered_map<int32_t, TileOperator::Slice> aggOneFeatureTile(
+    const std::vector<PixTopProbsFeature<float>>& records,
+    const std::vector<int32_t>& featureRemap,
+    double gridSize,
+    double minProb,
+    int32_t union_key,
+    Eigen::MatrixXd* confusion,
+    double* residualAccum) {
+    std::unordered_map<int32_t, TileOperator::Slice> tileAgg;
+    if (records.empty()) {
+        return tileAgg;
+    }
+    auto aggIt0 = tileAgg.emplace(union_key, TileOperator::Slice()).first;
+    auto& oneSlice0 = aggIt0->second;
+    for (const auto& rec : records) {
+        const uint32_t rawFeature = rec.featureIdx;
+        if (rawFeature >= featureRemap.size()) {
+            continue;
+        }
+        const int32_t feature = featureRemap[rawFeature];
+        if (feature < 0) {
+            continue;
+        }
+        const double wx = static_cast<double>(rec.x);
+        const double wy = static_cast<double>(rec.y);
+        if (confusion != nullptr && residualAccum != nullptr) {
+            accumulateConfusionFromProbRecord(rec, *confusion, *residualAccum);
+        }
+        const int32_t ux = static_cast<int32_t>(std::floor(wx / gridSize));
+        const int32_t uy = static_cast<int32_t>(std::floor(wy / gridSize));
+        for (size_t i = 0; i < rec.ks.size(); ++i) {
+            if (rec.ps[i] < minProb) {
+                continue;
+            }
+            const int32_t k = rec.ks[i];
+            auto aggIt = tileAgg.find(k);
+            if (aggIt == tileAgg.end()) {
+                aggIt = tileAgg.emplace(k, TileOperator::Slice()).first;
+            }
+            aggIt->second[std::make_pair(ux, uy)].add(feature, rec.ps[i]);
+        }
+        if (union_key != 0) {
+            oneSlice0[std::make_pair(ux, uy)].add(feature, 1.0);
+        }
+    }
+    return tileAgg;
+}
+
+std::unordered_map<int32_t, TileOperator::Slice> aggOneFeatureTileRegion(
+    const std::vector<PixTopProbsFeature<float>>& records,
+    const PreparedRegionMask2D& region,
+    const TileKey& tile,
+    RegionTileState tileState,
+    const std::vector<int32_t>& featureRemap,
+    double gridSize,
+    double minProb,
+    int32_t union_key,
+    Eigen::MatrixXd* confusion,
+    double* residualAccum) {
+    std::unordered_map<int32_t, TileOperator::Slice> tileAgg;
+    if (records.empty()) {
+        return tileAgg;
+    }
+    if (tileState == RegionTileState::Outside) {
+        return tileAgg;
+    }
+    auto aggIt0 = tileAgg.emplace(union_key, TileOperator::Slice()).first;
+    auto& oneSlice0 = aggIt0->second;
+    for (const auto& rec : records) {
+        const uint32_t rawFeature = rec.featureIdx;
+        if (rawFeature >= featureRemap.size()) {
+            continue;
+        }
+        const int32_t feature = featureRemap[rawFeature];
+        if (feature < 0) {
+            continue;
+        }
+        const double wx = static_cast<double>(rec.x);
+        const double wy = static_cast<double>(rec.y);
+        if (tileState == RegionTileState::Partial && !region.containsPoint(wx, wy, &tile)) {
+            continue;
+        }
+        if (confusion != nullptr && residualAccum != nullptr) {
+            accumulateConfusionFromProbRecord(rec, *confusion, *residualAccum);
+        }
+        const int32_t ux = static_cast<int32_t>(std::floor(wx / gridSize));
+        const int32_t uy = static_cast<int32_t>(std::floor(wy / gridSize));
+        for (size_t i = 0; i < rec.ks.size(); ++i) {
+            if (rec.ps[i] < minProb) {
+                continue;
+            }
+            const int32_t k = rec.ks[i];
+            auto aggIt = tileAgg.find(k);
+            if (aggIt == tileAgg.end()) {
+                aggIt = tileAgg.emplace(k, TileOperator::Slice()).first;
+            }
+            aggIt->second[std::make_pair(ux, uy)].add(feature, rec.ps[i]);
+        }
+        if (union_key != 0) {
+            oneSlice0[std::make_pair(ux, uy)].add(feature, 1.0);
+        }
+    }
+    return tileAgg;
+}
+
 int32_t runConditionalPixelTests(const std::string& outPrefix,
                                  const std::string& auxSuffix,
                                  const std::vector<std::string>& dataLabels,

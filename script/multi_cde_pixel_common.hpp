@@ -2,10 +2,13 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "glm.hpp"
+#include "region_query.hpp"
 #include "tile_io.hpp"
+#include "tileoperator.hpp"
 
 struct ContrastDef {
     std::string name;
@@ -37,6 +40,55 @@ void accumulateConfusionFromTopProbs(const TopProbs& tp,
 void finalizeConfusionMatrix(Eigen::MatrixXd& confusion,
                              double residualAccum,
                              int K);
+
+template<typename LocalAggT>
+void mergeTileAggGeneric(const std::unordered_map<int32_t, TileOperator::Slice>& tileAgg,
+                         int group,
+                         int K,
+                         int nPerm,
+                         LocalAggT& local) {
+    for (const auto& kv : tileAgg) {
+        const int32_t k = kv.first;
+        if (k < 0 || k > K) {
+            continue;
+        }
+        if (k == K) {
+            for (const auto& unitKv : kv.second) {
+                const auto& obs = unitKv.second;
+                local.statu.add_unit(group, obs.totalCount, obs.featureCounts);
+            }
+            continue;
+        }
+        for (const auto& unitKv : kv.second) {
+            const auto& obs = unitKv.second;
+            local.stat.slice(k).add_unit(group, obs.totalCount, obs.featureCounts);
+            if (nPerm > 0) {
+                local.cache.add_unit(k, group, obs.totalCount, obs.featureCounts);
+            }
+        }
+    }
+}
+
+std::unordered_map<int32_t, TileOperator::Slice> aggOneFeatureTile(
+    const std::vector<PixTopProbsFeature<float>>& records,
+    const std::vector<int32_t>& featureRemap,
+    double gridSize,
+    double minProb,
+    int32_t union_key,
+    Eigen::MatrixXd* confusion,
+    double* residualAccum);
+
+std::unordered_map<int32_t, TileOperator::Slice> aggOneFeatureTileRegion(
+    const std::vector<PixTopProbsFeature<float>>& records,
+    const PreparedRegionMask2D& region,
+    const TileKey& tile,
+    RegionTileState tileState,
+    const std::vector<int32_t>& featureRemap,
+    double gridSize,
+    double minProb,
+    int32_t union_key,
+    Eigen::MatrixXd* confusion,
+    double* residualAccum);
 
 int32_t runConditionalPixelTests(const std::string& outPrefix,
                                  const std::string& auxSuffix,

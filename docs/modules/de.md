@@ -1,7 +1,7 @@
 # Differential expression tests
 
 - `punkst multi-conditional-de-pixel`: Multi-sample cell type-specific DE using pixel-level annotations (allowing GeoJSON region selection in each sample).
-- `punkst conditional-de-region-pixel`: Cell type-specific DE between two GeoJSON-defined regions using one annotation file and one transcript file.
+- `punkst conditional-de-region-pixel`: Cell type-specific DE between two GeoJSON-defined regions using one annotation file.
 - `punkst multi-conditional-de-pois`: Multi-sample (pairwise), cell type-specific DE using Poisson regression on spot-level data.
 - `punkst de-chisq`: Chi-squared DE on pseudobulk matrices.
 
@@ -198,9 +198,9 @@ Given `--out PREFIX`, the tool generates one main output file per contrast, plus
 
 ## conditional-de-region-pixel
 
-`conditional-de-region-pixel` runs the same pixel-based conditional DE test, but for a single annotation dataset and a single transcript dataset split into two groups by two polygon-defined regions. The two groups are defined by `--region-neg` and `--region-pos`, and the command computes one confusion matrix from each region on the fly from the annotation probabilities that are actually used during aggregation.
+`conditional-de-region-pixel` runs the same conditional DE test for one annotation dataset split into two groups by two polygon-defined regions. Pixel-mode annotation input is joined with a transcript dataset; single-molecule annotation input already contains feature and factor information and does not need transcript tiles. The two groups are defined by `--region-neg` and `--region-pos`, and the command computes one confusion matrix from each region on the fly from the annotation probabilities that are actually used during aggregation.
 
-Region membership is defined by transcript coordinates. Annotation pixels are used to annotate transcripts after region filtering, with a raster-assisted fast path to avoid exact polygon checks for most transcripts.
+For pixel-mode input, region membership is defined by transcript coordinates. Annotation pixels are used to annotate transcripts after region filtering, with a raster-assisted fast path to avoid exact polygon checks for most transcripts. For single-molecule input, region membership is defined by molecule coordinates in the annotation file.
 
 Example usage:
 ```bash
@@ -211,7 +211,7 @@ punkst conditional-de-region-pixel \
   --region-pos regions/treatment.geojson \
   --region-label-neg control \
   --region-label-pos treatment \
-  --K 12 --features features.tsv \
+  --features features.tsv \
   --grid-size 20 --min-count 10 --perm 2000 \
   --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
   --out de/region_de --threads 8
@@ -221,25 +221,25 @@ punkst conditional-de-region-pixel \
 
 Provide either `--anno` or both `--anno-data` and `--anno-index`.
 
-`--anno` - Prefix of the pixel annotation files. The tool expects `<prefix>.tsv` (or `<prefix>.bin` if `--binary`) and `<prefix>.index`.
+`--anno` - Prefix of the annotation files. The tool expects `<prefix>.tsv` (or `<prefix>.bin` if `--binary`) and `<prefix>.index`.
 
 `--anno-data`, `--anno-index` - Alternative to `--anno`. Provide the explicit annotation data and index files.
 
-`--pts` - Prefix of the transcript tiled dataset. The tool expects `<prefix>.tsv` and `<prefix>.index`.
+`--pts` - Prefix of the transcript tiled dataset. Required only for pixel-mode annotation input. The tool expects `<prefix>.tsv` and `<prefix>.index`.
 
 `--region-neg`, `--region-pos` - GeoJSON files defining the negative/reference and positive/comparison regions. See [GeoJSON Region Input](../input/geojson-region.md) for the accepted file format.
 
-`--K` - Number of factors in the annotation file.
+`--K` - Number of factors in the annotation file. Optional for indexed annotation files whose headers store the total factor count.
 
-`--features` - A list of features to test, one feature name per line (lines starting with `#` are ignored).
+`--features` - A list of features to test, one feature name per line (lines starting with `#` are ignored). Optional only for single-molecule annotation input with embedded feature names.
 
-`--grid-size` - Grid size used to aggregate transcripts into units.
+`--grid-size` - Grid size used to aggregate transcripts or single-molecule records into units.
 
-`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in the transcript file (0-based).
+`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in the transcript file (0-based). Defaults are `0`, `1`, `2`, and `3`; ignored for single-molecule annotation input.
 
 `--out` - Output prefix.
 
-The annotation and transcript tiled inputs must use the same tile size.
+For pixel-mode input, the annotation and transcript tiled inputs must use the same tile size.
 
 ### Optional Parameters
 
@@ -280,6 +280,7 @@ The annotation and transcript tiled inputs must use the same tile size.
 Given `--out PREFIX`, the command generates:
 
 - `PREFIX.REGIONNEG_vs_REGIONPOS.tsv`, where the names come from `--region-label-neg` and `--region-label-pos`.
+- `PREFIX.REGIONNEG_vs_REGIONPOS.da.tsv`
 - `PREFIX.nobs.tsv`
 - `PREFIX.sums.tsv`
 

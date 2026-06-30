@@ -35,33 +35,6 @@ struct RegionTileAggLocal {
           confusion_pos(Eigen::MatrixXd::Zero(K, K)) {}
 };
 
-void mergeTileAgg(const std::unordered_map<int32_t, TileOperator::Slice>& tileAgg,
-                  int group,
-                  int K,
-                  int nPerm,
-                  RegionTileAggLocal& local) {
-    for (const auto& kv : tileAgg) {
-        const int32_t k = kv.first;
-        if (k < 0 || k > K) {
-            continue;
-        }
-        if (k == K) {
-            for (const auto& unitKv : kv.second) {
-                const auto& obs = unitKv.second;
-                local.statu.add_unit(group, obs.totalCount, obs.featureCounts);
-            }
-            continue;
-        }
-        for (const auto& unitKv : kv.second) {
-            const auto& obs = unitKv.second;
-            local.stat.slice(k).add_unit(group, obs.totalCount, obs.featureCounts);
-            if (nPerm > 0) {
-                local.cache.add_unit(k, group, obs.totalCount, obs.featureCounts);
-            }
-        }
-    }
-}
-
 } // namespace
 
 int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
@@ -76,7 +49,7 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
     bool isBinary = false;
     double gridSize = 0.0;
     int32_t K = 0;
-    int32_t icol_x = 0, icol_y = 0, icol_feature = 0, icol_val = 0;
+    int32_t icol_x = 0, icol_y = 1, icol_feature = 2, icol_val = 3;
     double minCount = 10.0;
     double minProb = 0.01;
     int32_t debug_ = 0;
@@ -87,21 +60,21 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
     pl.add_option("anno-data", "Input pixel file", annoData)
       .add_option("anno-index", "Input pixel index file", annoIndex)
       .add_option("anno", "Prefix of the input pixel data file", annoPrefix)
-      .add_option("pts", "Prefix of the transcript data file", ptsPrefix, true)
+      .add_option("pts", "Prefix of the transcript data file; required for pixel-mode annotation input", ptsPrefix)
       .add_option("region-neg", "GeoJSON file for the negative/reference region", regionNegFile, true)
       .add_option("region-pos", "GeoJSON file for the positive/comparison region", regionPosFile, true)
       .add_option("region-scale", "Integer coordinate scale for GeoJSON preprocessing", regionScale)
       .add_option("region-label-neg", "Label for the negative/reference region", regionLabelNeg)
       .add_option("region-label-pos", "Label for the positive/comparison region", regionLabelPos)
       .add_option("binary", "Annotation file is in binary format", isBinary)
-      .add_option("K", "Number of factors in the annotation file", K, true)
-      .add_option("features", "List of features to test", dictFile, true)
+      .add_option("K", "Number of factors in the annotation file; optional for indexed binary inputs with K in the header", K)
+      .add_option("features", "List of features to test; optional for single-molecule annotation input with embedded feature names", dictFile)
       .add_option("grid-size", "Grid size", gridSize, true)
       .add_option("pseudo-rel", "Relative pseudo count fraction w.r.t. null", testOpts.pseudoFracRel)
-      .add_option("icol-x", "Column index for x coordinate for files in --pts (0-based)", icol_x, true)
-      .add_option("icol-y", "Column index for y coordinate for files in --pts (0-based)", icol_y, true)
-      .add_option("icol-feature", "Column index for feature for files in --pts (0-based)", icol_feature, true)
-      .add_option("icol-val", "Column index for count/value for files in --pts (0-based)", icol_val, true)
+      .add_option("icol-x", "Column index for x coordinate for files in --pts (0-based)", icol_x)
+      .add_option("icol-y", "Column index for y coordinate for files in --pts (0-based)", icol_y)
+      .add_option("icol-feature", "Column index for feature for files in --pts (0-based)", icol_feature)
+      .add_option("icol-val", "Column index for count/value for files in --pts (0-based)", icol_val)
       .add_option("threads", "Number of threads to use", nThreads)
       .add_option("out", "Output prefix", outPrefix, true)
       .add_option("aux-suff", "Suffix for auxiliary output files", auxiSuff)
@@ -145,23 +118,66 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
     if (gridSize <= 0) {
         error("--grid-size must be positive");
     }
+    TileOperator tileOp(annoData, annoIndex, "", nThreads);
+    const bool isFeatureInput = tileOp.hasFeatureIndex();
+    const int32_t headerK = tileOp.getFactorCount();
+    if (K <= 0 && headerK > 0) {
+        K = headerK;
+    }
+    if (K > 0 && headerK > 0 && headerK != K) {
+        error("Annotation input has K=%d in the index header, expected %d", headerK, K);
+    }
     if (K <= 0) {
-        error("--K must be positive");
+        error("--K must be specified when it cannot be read from the annotation index header");
     }
 
-    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    std::unique_ptr<TileReader> reader;
+    if (!isFeatureInput) {
+        if (ptsPrefix.empty()) {
+            error("--pts is required for pixel-mode annotation input");
+        }
+        reader = std::make_unique<TileReader>(ptsPrefix + ".tsv", ptsPrefix + ".index");
+        if (reader->getTileSize() != tileOp.getTileSize()) {
+            error("Currently we require the tile size to be the same for the annotation and transcript data (%d vs %d)",
+                  tileOp.getTileSize(), reader->getTileSize());
+        }
+    }
+
     std::vector<std::string> featureList;
-    parser.getFeatureList(featureList);
+    if (!dictFile.empty()) {
+        lineParserUnival featureParser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+        featureParser.getFeatureList(featureList);
+    } else if (isFeatureInput) {
+        featureList = tileOp.getFeatureNames();
+    } else {
+        error("--features is required for pixel-mode annotation input");
+    }
     const int32_t M = static_cast<int32_t>(featureList.size());
     if (M == 0) {
         error("No features found");
     }
-
-    TileOperator tileOp(annoData, annoIndex, "", nThreads);
-    TileReader reader(ptsPrefix + ".tsv", ptsPrefix + ".index");
-    if (reader.getTileSize() != tileOp.getTileSize()) {
-        error("Currently we require the tile size to be the same for the annotation and transcript data (%d vs %d)",
-              tileOp.getTileSize(), reader.getTileSize());
+    lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val, dictFile);
+    std::vector<int32_t> featureRemap;
+    if (isFeatureInput) {
+        std::unordered_map<std::string, int32_t> featureIndex;
+        for (int32_t m = 0; m < M; ++m) {
+            featureIndex[featureList[m]] = m;
+        }
+        const auto& annoFeatures = tileOp.getFeatureNames();
+        featureRemap.assign(annoFeatures.size(), -1);
+        int32_t nMapped = 0;
+        for (size_t f = 0; f < annoFeatures.size(); ++f) {
+            auto it = featureIndex.find(annoFeatures[f]);
+            if (it == featureIndex.end()) {
+                continue;
+            }
+            featureRemap[f] = it->second;
+            nMapped++;
+        }
+        if (nMapped == 0) {
+            error("No embedded annotation features map to the requested feature list");
+        }
+        notice("Mapped %d / %zu embedded features", nMapped, annoFeatures.size());
     }
 
     PreparedRegionMask2D regionNeg = loadPreparedRegionGeoJSON(regionNegFile, tileOp.getTileSize(), regionScale);
@@ -173,24 +189,40 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
         error("Positive region is empty after preprocessing: %s", regionPosFile.c_str());
     }
 
-    const float pixelResolution = tileOp.getPixelResolution() > 0.0f ? tileOp.getPixelResolution() : 1.0f;
-    const PreparedRegionRasterMask2D maskNeg = prepareRegionRasterMask2D(regionNeg, pixelResolution);
-    const PreparedRegionRasterMask2D maskPos = prepareRegionRasterMask2D(regionPos, pixelResolution);
-
-    std::vector<Rectangle<double>> queryRects;
-    queryRects.emplace_back(regionNeg.bbox_f.xmin, regionNeg.bbox_f.ymin,
-                            regionNeg.bbox_f.xmax, regionNeg.bbox_f.ymax);
-    queryRects.emplace_back(regionPos.bbox_f.xmin, regionPos.bbox_f.ymin,
-                            regionPos.bbox_f.xmax, regionPos.bbox_f.ymax);
     std::vector<TileKey> tileList;
-    std::vector<bool> isContained;
-    reader.getTileList(queryRects, tileList, isContained);
+    std::unordered_map<TileKey, RegionTileState, TileKeyHash> featureTileStatesNeg;
+    std::unordered_map<TileKey, RegionTileState, TileKeyHash> featureTileStatesPos;
+    if (isFeatureInput) {
+        for (const auto& tileInfo : tileOp.getTileInfo()) {
+            TileKey tile{tileInfo.row, tileInfo.col};
+            const RegionTileState stateNeg = regionNeg.classifyTile(tile);
+            const RegionTileState statePos = regionPos.classifyTile(tile);
+            if (stateNeg != RegionTileState::Outside || statePos != RegionTileState::Outside) {
+                tileList.push_back(tile);
+                featureTileStatesNeg.emplace(tile, stateNeg);
+                featureTileStatesPos.emplace(tile, statePos);
+            }
+        }
+    } else {
+        std::vector<Rectangle<double>> queryRects;
+        queryRects.emplace_back(regionNeg.bbox_f.xmin, regionNeg.bbox_f.ymin,
+                                regionNeg.bbox_f.xmax, regionNeg.bbox_f.ymax);
+        queryRects.emplace_back(regionPos.bbox_f.xmin, regionPos.bbox_f.ymin,
+                                regionPos.bbox_f.xmax, regionPos.bbox_f.ymax);
+        std::vector<bool> isContained;
+        reader->getTileList(queryRects, tileList, isContained);
+    }
     std::sort(tileList.begin(), tileList.end());
     tileList.erase(std::unique(tileList.begin(), tileList.end()), tileList.end());
     if (tileList.empty()) {
-        error("No transcript tiles intersect the two region bounding boxes");
+        error("No input tiles intersect the two region bounding boxes");
     }
 
+    const float pixelResolution = tileOp.getPixelResolution() > 0.0f ? tileOp.getPixelResolution() : 1.0f;
+    const PreparedRegionRasterMask2D maskNeg = isFeatureInput ?
+        PreparedRegionRasterMask2D{} : prepareRegionRasterMask2D(regionNeg, pixelResolution);
+    const PreparedRegionRasterMask2D maskPos = isFeatureInput ?
+        PreparedRegionRasterMask2D{} : prepareRegionRasterMask2D(regionPos, pixelResolution);
     const std::vector<Rectangle<float>> pixelRects = {regionNeg.bbox_f, regionPos.bbox_f};
     MultiSlicePairwiseBinom statOp(K, 2, M, minCount);
     PairwiseBinomRobust statUnion(2, M, minCount);
@@ -216,6 +248,42 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
             std::ifstream tileStream;
             for (size_t ti = range.begin(); ti != range.end(); ++ti) {
                 const TileKey tile = tileList[ti];
+                if (isFeatureInput) {
+                    std::vector<PixTopProbsFeature<float>> records;
+                    tileOp.loadTileFeatureRecords(tile, records, &tileStream);
+                    if (records.empty()) {
+                        const int32_t done = processed.fetch_add(1) + 1;
+                        if (done % 10 == 0) {
+                            notice("... processed %d / %zu region tiles", done, ntasks);
+                        }
+                        continue;
+                    }
+                    RegionTileState tileStateNeg = RegionTileState::Partial;
+                    RegionTileState tileStatePos = RegionTileState::Partial;
+                    auto stateItNeg = featureTileStatesNeg.find(tile);
+                    if (stateItNeg != featureTileStatesNeg.end()) {
+                        tileStateNeg = stateItNeg->second;
+                    }
+                    auto stateItPos = featureTileStatesPos.find(tile);
+                    if (stateItPos != featureTileStatesPos.end()) {
+                        tileStatePos = stateItPos->second;
+                    }
+                    auto tileAggNeg = aggOneFeatureTileRegion(
+                        records, regionNeg, tile, tileStateNeg, featureRemap,
+                        gridSize, minProb, K, &local.confusion_neg, &local.residual_neg);
+                    auto tileAggPos = aggOneFeatureTileRegion(
+                        records, regionPos, tile, tileStatePos, featureRemap,
+                        gridSize, minProb, K, &local.confusion_pos, &local.residual_pos);
+
+                    mergeTileAggGeneric(tileAggNeg, 0, K, testOpts.nPerm, local);
+                    mergeTileAggGeneric(tileAggPos, 1, K, testOpts.nPerm, local);
+
+                    const int32_t done = processed.fetch_add(1) + 1;
+                    if (done % 10 == 0) {
+                        notice("... processed %d / %zu region tiles", done, ntasks);
+                    }
+                    continue;
+                }
                 std::map<std::pair<int32_t, int32_t>, TopProbs> pixelMap;
                 tileOp.loadTileToMap(tile, pixelMap, &pixelRects, &tileStream);
                 if (pixelMap.empty()) {
@@ -236,14 +304,14 @@ int32_t cmdConditionalTestRegionPixel(int32_t argc, char** argv) {
                 }
 
                 auto tileAggNeg = tileOp.aggOneTileRegion(
-                    pixelMap, stateNeg, reader, parser, tile, regionNeg,
+                    pixelMap, stateNeg, *reader, parser, tile, regionNeg,
                     gridSize, minProb, K, &local.confusion_neg, &local.residual_neg);
                 auto tileAggPos = tileOp.aggOneTileRegion(
-                    pixelMap, statePos, reader, parser, tile, regionPos,
+                    pixelMap, statePos, *reader, parser, tile, regionPos,
                     gridSize, minProb, K, &local.confusion_pos, &local.residual_pos);
 
-                mergeTileAgg(tileAggNeg, 0, K, testOpts.nPerm, local);
-                mergeTileAgg(tileAggPos, 1, K, testOpts.nPerm, local);
+                mergeTileAggGeneric(tileAggNeg, 0, K, testOpts.nPerm, local);
+                mergeTileAggGeneric(tileAggPos, 1, K, testOpts.nPerm, local);
 
                 const int32_t done = processed.fetch_add(1) + 1;
                 if (done % 10 == 0) {
