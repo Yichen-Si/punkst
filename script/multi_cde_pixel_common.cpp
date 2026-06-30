@@ -390,6 +390,45 @@ int32_t runConditionalPixelTests(const std::string& outPrefix,
         }
         fclose(out_stream);
         notice("Result for %s is written to:\n  %s", contrast.name.c_str(), outFile.c_str());
+
+        outFile = outPrefix + "." + contrast.name + ".da.tsv";
+        FILE* out_da = fopen(outFile.c_str(), "w");
+        if (!out_da) {
+            error("Cannot open output file: %s", outFile.c_str());
+        }
+        fprintf(out_da, "Slice\tCount0\tCount1\tFC\tChi2\tlog10p\n");
+        const double pseudoCountDA = 0.5;
+        std::vector<double> total0(K, 0.0);
+        std::vector<double> total1(K, 0.0);
+        double grand0 = 0.0;
+        double grand1 = 0.0;
+        for (int k = 0; k < K; ++k) {
+            const auto& totals = statOp.slice(k).get_group_totals();
+            for (int32_t g0 : contrast.group_neg) {
+                total0[k] += totals[g0];
+            }
+            for (int32_t g1 : contrast.group_pos) {
+                total1[k] += totals[g1];
+            }
+            grand0 += total0[k];
+            grand1 += total1[k];
+        }
+        if (grand0 > 0.0 && grand1 > 0.0) {
+            for (int k = 0; k < K; ++k) {
+                const double count0 = total0[k];
+                const double count1 = total1[k];
+                const double rest0 = std::max(0.0, grand0 - count0);
+                const double rest1 = std::max(0.0, grand1 - count1);
+                auto stats = chisq2x2_log10p(count0, count1, rest0, rest1, pseudoCountDA);
+                const double fc = ((count1 + pseudoCountDA) / (grand1 + pseudoCountDA)) /
+                                  ((count0 + pseudoCountDA) / (grand0 + pseudoCountDA));
+                fprintf(out_da, "%d\t%.1f\t%.1f\t%.4e\t%.4f\t%.4f\n",
+                        k, count0, count1, fc, stats.first, stats.second);
+            }
+        }
+        fclose(out_da);
+        notice("Differential abundance result for %s is written to:\n  %s",
+               contrast.name.c_str(), outFile.c_str());
     }
 
     const std::string suffix = auxSuffix.empty() ? "" : ("." + auxSuffix);
@@ -415,6 +454,9 @@ int32_t runConditionalPixelTests(const std::string& outPrefix,
                     k, dataLabels[i].c_str(), n_units[i], totals[i]);
             for (int32_t m = 0; m < M; ++m) {
                 const size_t j = static_cast<size_t>(i) * M + m;
+                if (std::round(counts[j] * 10.0) == 0.0) {
+                    continue;
+                }
                 fprintf(out_sums, "%d\t%s\t%s\t%.1f\n",
                         k, dataLabels[i].c_str(), featureList[m].c_str(), counts[j]);
             }

@@ -103,6 +103,7 @@ public:
 
     /* Small get/set helpers */
     int32_t getK() const { return k_; }
+    int32_t getFactorCount() const { return K_; }
     std::vector<uint32_t> getKvec() const { return kvec_; }
     int32_t getTileSize() const { return formatInfo_.tileSize; }
     float getPixelResolution() const { return formatInfo_.pixelResolution; }
@@ -268,6 +269,9 @@ public:
         std::ifstream* dataStream = nullptr) const;
     int32_t loadTileToMap3D(const TileKey& key,
         std::map<PixelKey3, TopProbs>& pixelMap,
+        std::ifstream* dataStream = nullptr) const;
+    int32_t loadTileFeatureRecords(const TileKey& key,
+        std::vector<PixTopProbsFeature<float>>& records,
         std::ifstream* dataStream = nullptr) const;
     // Aggregate (softly) observations by factor ("slice")
     using Slice = std::unordered_map<std::pair<int32_t, int32_t>, SparseObsDict, PairHash>; // unitKey -> sparse feature counts
@@ -534,7 +538,6 @@ private:
         std::map<PixelFeatureKey3, TopProbs>& pixelMap,
         std::ifstream* dataStream = nullptr) const;
     std::vector<std::string> loadFeatureNames() const;
-
     /* Geometry & spatial related */
     struct TileGeom {
         TileKey key;

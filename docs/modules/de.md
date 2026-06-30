@@ -1,6 +1,6 @@
 # Differential expression tests
 
-- `punkst multi-conditional-de-pixel`: Multi-sample (pairwise), cell type-specific DE using pixel-level annotations.
+- `punkst multi-conditional-de-pixel`: Multi-sample cell type-specific DE using pixel-level annotations (allowing GeoJSON region selection in each sample).
 - `punkst conditional-de-region-pixel`: Cell type-specific DE between two GeoJSON-defined regions using one annotation file and one transcript file.
 - `punkst multi-conditional-de-pois`: Multi-sample (pairwise), cell type-specific DE using Poisson regression on spot-level data.
 - `punkst de-chisq`: Chi-squared DE on pseudobulk matrices.
@@ -70,7 +70,8 @@ Rows are sorted by factor (ascending) and Chi2 (descending) within each factor.
 
 ## multi-conditional-de-pixel
 
-`multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between dataset groups. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests for each cell type using a Binomial model. By default it builds all pairwise contrasts from `--labels` (or numeric indices); for more general comparisons, use a contrast design file.
+`multi-conditional-de-pixel` joins pixel-level annotation results with the original transcript data on the fly and performs cell-type-specific DE between dataset groups. It aggregates transcripts into grid units of size `--grid-size` stratified by pixel level cell type assignments then runs pairwise tests for each cell type using a Binomial model. By default it builds all pairwise contrasts from `--labels` (or numeric indices); for more general comparisons, use a contrast design file. A contrast file can also define each input row as a `(dataset, region)` pair by including a `region` column that contains one GeoJSON file for each dataset.
+
 The main p-values are computed from robust sandwich estimators of the standard errors of the estimated effect sizes. Optional permutation p-values can also be added with `--perm`.
 
 $X^{(k)}_{im} \sim$ Binom $(N^{(k)}_{im}, \pi^{(k)}_{im})$ for cell type $k$, bin $i$ and gene $m$, where both $X$ and $N$ are soft-aggregated counts from pixel level cell type assignments.
@@ -103,12 +104,21 @@ punkst multi-conditional-de-pixel \
 
 `contrast.tsv` format (tab-delimited):
 ```tsv
-anno_prefix	pts_prefix	B_vs_A  C_vs_A
+anno_prefix	pts_prefix	B_vs_A	C_vs_A
 sampleA/pixel	sampleA/transcripts.tiled	-1	-1
 sampleB/pixel	sampleB/transcripts.tiled	1	0
 sampleC/pixel	sampleC/transcripts.tiled	0	1
 ```
 Each contrast column uses `-1` (group 0), `1` (group 1), or `0` (exclude). Contrast names come from the header.
+
+Region-aware `contrast.tsv` format:
+```tsv
+anno	pts	region	label	confusion	B_region_vs_A_region
+sampleA/pixel	sampleA/transcripts.tiled	regions/A.geojson	A_region		-1
+sampleB/pixel	sampleB/transcripts.tiled	regions/B.geojson	B_region		1
+sampleC/pixel	sampleC/transcripts.tiled	regions/C.geojson	C_region		0
+```
+When `region` is present, each row is treated as one pseudo-sample defined by the annotation dataset, transcript dataset, and GeoJSON region. The `anno` column may contain either an annotation prefix or an explicit `.bin`/`.tsv` annotation file. Single-molecule annotation rows can leave `pts` empty because the annotation file already contains feature and factor information; pixel-mode rows still require `pts`. The same annotation factor index must refer to the same factor across all rows. The optional `label` column names rows in auxiliary outputs, and the optional `confusion` column supplies a per-row `K x K` matrix. Empty `confusion` cells are allowed and trigger on-the-fly estimation from the region-filtered pixels.
 
 ### Required Parameters
 
@@ -120,19 +130,19 @@ Provide either `--anno`, `--pts` (or `--anno-data`/`--anno-index`, `--pts`) or a
 
 `--pts` - Prefixes of transcript data files (from `punkst pts2tiles`). For each prefix, the tool expects `<prefix>.tsv` and `<prefix>.index`. Cannot be combined with `--contrast`.
 
-`--contrast` - Contrast design TSV with columns: `anno_prefix`, `pts_prefix`, and one or more contrast columns (values -1/0/1). When provided, it replaces `--anno/--anno-data/--anno-index/--pts` and `--labels`.
+`--contrast` - Contrast design TSV with columns: `anno`/`anno_prefix`, `pts`/`pts_prefix`, optional `region`, optional `label`, optional `confusion`, and one or more contrast columns (values -1/0/1). When provided, it replaces `--anno/--anno-data/--anno-index/--pts`, `--confusion`, and `--labels`.
 
-`--K` - Number of factors in the annotation files.
+`--K` - Number of factors in the annotation files. Optional for indexed annotation files whose headers store the total factor count.
 
-`--features` - A list of features to test, one feature name per line (lines starting with `#` are ignored).
+`--features` - A list of features to test, one feature name per line (lines starting with `#` are ignored). Optional only when every annotation input is single-molecule mode with embedded feature names.
 
 `--grid-size` - Grid size used to aggregate transcripts into units.
 
-`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in the transcript files (0-based).
+`--icol-x`, `--icol-y`, `--icol-feature`, `--icol-val` - Column indices for X/Y coordinates, feature name, and count in the transcript files (0-based). Defaults are `0`, `1`, `2`, and `3`; ignored for single-molecule annotation rows that do not use transcript files.
 
 `--out` - Output prefix.
 
-Annotation and transcript tiles must use the same tile size for each dataset pair (this is guaranteed if the pixel level decoding results are generated from the corresponding transcript tiles by `punkst pixel-decode`).
+For pixel-mode annotation rows, annotation and transcript tiles must use the same tile size for each dataset pair (this is guaranteed if the pixel level decoding results are generated from the corresponding transcript tiles by `punkst pixel-decode`).
 
 ### Optional Parameters
 
@@ -141,6 +151,8 @@ Annotation and transcript tiles must use the same tile size for each dataset pai
 `--binary` - Indicates the annotation data files are binary (`.bin`).
 
 `--confusion` - Optional per-dataset confusion matrices (`K x K` TSV). When omitted, the command estimates one confusion matrix from each annotation dataset on the fly.
+
+`--region-scale` - Integer coordinate scale used during GeoJSON preprocessing for region-aware contrast files. Default: 10.
 
 `--min-count-per-feature` - Minimum total count (in each pairwise comparison) for a feature to be considered. Default: 100.
 
@@ -159,8 +171,6 @@ Annotation and transcript tiles must use the same tile size for each dataset pai
 `--seed` - Random seed for permutation.
 
 `--threads` - Number of threads. Default: 1. Almost the entire runtime is spent in data loading, so multi-threading is very useful for large datasets since tiles of data are loaded simultaneously.
-
-`--bounded`, `--xmin`, `--xmax`, `--ymin`, `--ymax` - Optional transcript-side bounding-box subsetting before aggregation.
 
 `--debug` - Enable debug logging.
 
@@ -183,7 +193,8 @@ Given `--out PREFIX`, the tool generates one main output file per contrast, plus
 
 - Auxiliary files:
     - `PREFIX.nobs.tsv`: The number of units and total pixel counts per cell type and dataset.
-    - `PREFIX.sums.tsv`: Total feature counts per cell type and dataset for units passing filters.
+    - `PREFIX.sums.tsv`: Nonzero total feature counts per cell type and dataset for units passing filters.
+    - `PREFIX.CONTRAST.da.tsv`: Differential abundance chi-square test per cell type for each contrast. `Count0` and `Count1` are factor-specific abundance totals for the negative/reference and positive/comparison groups; `FC` is the positive/comparison group abundance fraction divided by the negative/reference group abundance fraction using group totals from `PREFIX.nobs.tsv`.
 
 ## conditional-de-region-pixel
 

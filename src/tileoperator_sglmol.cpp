@@ -144,6 +144,51 @@ int32_t TileOperator::loadTileToMapFeature(const TileKey& key,
     return static_cast<int32_t>(pixelMap.size());
 }
 
+int32_t TileOperator::loadTileFeatureRecords(const TileKey& key,
+    std::vector<PixTopProbsFeature<float>>& records, std::ifstream* dataStream) const {
+    if (coord_dim_ != 2) {
+        error("%s: 2D data required, but coord_dim_=%u", __func__, coord_dim_);
+    }
+    if (!hasFeatureIndex()) {
+        error("%s: Feature-bearing input required", __func__);
+    }
+    records.clear();
+    auto lookup = tile_lookup_.find(key);
+    if (lookup == tile_lookup_.end()) {
+        return 0;
+    }
+
+    std::ifstream localStream;
+    std::ifstream* stream = dataStream;
+    if (stream == nullptr) {
+        stream = &localStream;
+    }
+    if (!stream->is_open()) {
+        stream->open(dataFile_, std::ios::binary);
+    }
+    if (!stream->is_open()) {
+        error("Error opening data file: %s", dataFile_.c_str());
+    }
+
+    const TileInfo& blk = blocks_[lookup->second];
+    stream->clear();
+    stream->seekg(blk.idx.st);
+    records.reserve(blk.idx.n);
+    uint64_t pos = blk.idx.st;
+    while (pos < blk.idx.ed) {
+        PixTopProbsFeature<float> rec;
+        if (!readBinaryRecord2D(*stream, rec, false)) {
+            if (stream->eof()) {
+                break;
+            }
+            error("%s: Corrupted binary data", __func__);
+        }
+        pos += formatInfo_.recordSize;
+        records.push_back(std::move(rec));
+    }
+    return static_cast<int32_t>(records.size());
+}
+
 int32_t TileOperator::loadTileToMapFeature3D(const TileKey& key,
     std::map<PixelFeatureKey3, TopProbs>& pixelMap, std::ifstream* dataStream) const {
     if (coord_dim_ != 3) {
