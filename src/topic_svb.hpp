@@ -52,6 +52,9 @@ public:
     void applyWeights(Document& doc) const {
         reader.applyWeights(doc);
     }
+    double rawCountFor(uint32_t feature, double count, bool countWeighted) const {
+        return reader.rawCountFor(feature, count, countWeighted);
+    }
     void printTopicAbundance();
     void writeModelToFile(const std::string& outFile);
     void writeModelHeader(std::ostream& outFileStream);
@@ -342,7 +345,9 @@ protected:
                 (int)priorMatrix.rows(), (int)priorMatrix.cols(), (int)priorFeatureNames.size());
         // Apply scaling if specified
         if (priorScaleRel > 0 && reader.readFullSums) {
-            const std::vector<double>& featureSumsRaw = reader.getFeatureSumsRaw();
+            const std::vector<double>& featureSumsRaw = reader.hasFeatureWeights()
+                ? reader.getFeatureSums()
+                : reader.getFeatureSumsRaw();
             double totalCount = 0.;
             for (double s : featureSumsRaw) { totalCount += s;  }
             if (totalCount <= 0) {

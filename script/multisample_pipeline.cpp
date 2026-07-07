@@ -66,6 +66,18 @@ int32_t cmdMultiSample(int32_t argc, char** argv) {
         if (!inTsvList.empty())
             error("If --tiles2hex-only is set, --in-tsv is not allowed and --in-tsv-list is required. The file in --in-tsv-list should contain the following columns: sample ID, path to the tiled pixel level data, path to the corresponding index, path to the per-sample feature count file (all output from pts2tiles).");
     }
+    if (hexOpts.featureInfoOptions.idfQ < 0.0 || hexOpts.featureInfoOptions.idfQ > 100.0) {
+        error("--idf-q must be between 0 and 100");
+    }
+    if (hexOpts.featureInfoOptions.idfPower <= 0.0) {
+        error("--idf-power must be positive");
+    }
+    if (hexOpts.featureInfoOptions.idfMin < 0.0 || hexOpts.featureInfoOptions.idfMin > 1.0) {
+        error("--idf-min must be between 0 and 1");
+    }
+    if (hexOpts.featureInfoOptions.idfMax <= 0.0) {
+        error("--idf-max must be positive");
+    }
 
     ptsOpts.normalizeScales();
     const int32_t out_icol_x = tiles2hex_only ? ptsOpts.icol_x : ptsOpts.remapColumn(ptsOpts.icol_x);
@@ -364,8 +376,18 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         for (size_t s = 0; s < S; ++s) { // 2) Run tiles2hex on each sample
             std::string outFile = outDirs[s] + "/" + samples[s] + "." + hexIden + ".txt";
             std::string outJson = outDirs[s] + "/" + samples[s] + "." + hexIden + ".json";
+            std::string outPref = outDirs[s] + "/" + samples[s] + "." + hexIden;
+            bool featureInfoExists = true;
+            const size_t nModalSidecars = out_icol_ints.empty() ? 1 : out_icol_ints.size();
+            for (size_t modal = 0; modal < nModalSidecars; ++modal) {
+                const std::string outFeatureInfo = nModalSidecars == 1
+                    ? outPref + ".feature.stats.tsv"
+                    : outPref + ".modal" + std::to_string(modal) + ".feature.stats.tsv";
+                featureInfoExists = featureInfoExists && std::filesystem::exists(outFeatureInfo);
+            }
             if (!overwrite && std::filesystem::exists(outFile) &&
-                              std::filesystem::exists(outJson)) {
+                              std::filesystem::exists(outJson) &&
+                              featureInfoExists) {
                 notice("tiles2hex output is present for sample %s and size %.1f (%s).\nTo overwrite, add --overwrite", samples[s].c_str(), unitSize, outFile.c_str());
                 continue;
             }
@@ -379,7 +401,9 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             }
             parser.setFeatureDict(featureDict);
             if (anchorList.size() != S || anchorList[s].empty()) {
-                Tiles2Hex tiles2Hex(nThreads, ptsOpts.tmpDir, outFile, hexGrid, tileReader, parser, hexOpts.min_counts, hexOpts.seed, useBcc3D ? unitSize : -1.0);
+                Tiles2Hex tiles2Hex(nThreads, ptsOpts.tmpDir, outFile, hexGrid,
+                    tileReader, parser, hexOpts.min_counts, hexOpts.seed,
+                    useBcc3D ? unitSize : -1.0, hexOpts.featureInfoOptions);
                 if (!tiles2Hex.run()) {
                     error("Error running tiles2hex for sample %s", samples[s].c_str());
                 }
@@ -387,7 +411,10 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             } else {
                 std::vector<std::string> localAnchor = {anchorList[s]};
                 std::vector<float> localRadius = {hexOpts.radius.front()};
-                Tiles2UnitsByAnchor tiles2Hex(nThreads, ptsOpts.tmpDir, outFile, hexGrid, tileReader, parser, localAnchor, localRadius, hexOpts.min_counts, hexOpts.noBackground, hexOpts.seed);
+                Tiles2UnitsByAnchor tiles2Hex(nThreads, ptsOpts.tmpDir, outFile,
+                    hexGrid, tileReader, parser, localAnchor, localRadius,
+                    hexOpts.min_counts, hexOpts.noBackground, hexOpts.seed,
+                    hexOpts.featureInfoOptions);
                 if (!tiles2Hex.run()) {
                     error("Error running tiles2hex for sample %s", samples[s].c_str());
                 }
@@ -416,8 +443,10 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         meta["header_info"] = {"random_key", "sample"};
         meta["n_features"] = n_shared;
         std::unordered_map<std::string, uint32_t> dict;
+        std::vector<std::string> sharedFeatureNames(n_shared);
         for(uint32_t i = 0; i < n_shared; ++i) {
             dict[unionFeatures[i].first] = i;
+            sharedFeatureNames[i] = unionFeatures[i].first;
         }
         meta["dictionary"] = (nlohmann::json) dict;
 
@@ -426,6 +455,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
             error("Error opening merged output file for output: %s", mergedFile.c_str());
         }
         int32_t nUnits = 0;
+        FeatureOccurrenceStats combinedOccurrence;
         for (size_t s = 0; s < S; ++s) {
             std::string localPref = outDirs[s] + "/" + samples[s] + "." + hexIden;
             HexReader reader(localPref + ".json");
@@ -444,6 +474,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
                 std::stringstream ss1, ss2;
                 ss1 << tokens[0] << "\t" << std::to_string(s);
                 int32_t nFeatures = 0, totCount = 0;
+                std::map<uint32_t, uint32_t> sharedVals;
                 for (size_t i = offset + 2; i < tokens.size(); ++i) {
                     std::vector<std::string> pair;
                     split(pair, " ", tokens[i]);
@@ -451,6 +482,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
                     if (str2uint32(pair[0], u) && u < n_shared &&
                         str2uint32(pair[1], v)) {
                         ss2 << "\t" << tokens[i];
+                        sharedVals[u] = v;
                         nFeatures++;
                         totCount += v;
                     }
@@ -459,6 +491,7 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
                     continue;
                 }
                 nUnits++;
+                combinedOccurrence.observeUnit(sharedVals);
                 ss1 << "\t" << nFeatures << "\t" << totCount;
                 mergedOut << ss1.str() << ss2.str() << "\n";
             }
@@ -472,6 +505,14 @@ if (!tiles2hex_only) { // 1) Run pts2tiles on each sample
         }
         mergedOut << std::setw(4) << meta << std::endl;
         mergedOut.close();
+        combinedOccurrence.ensureFeatureCount(n_shared);
+        std::string mergedPref = mergedFile;
+        size_t pos = mergedPref.find_last_of(".");
+        if (pos != std::string::npos) {
+            mergedPref = mergedPref.substr(0, pos);
+        }
+        FeatureOccurrenceStats::writeTsv(mergedPref + ".feature.stats.tsv",
+            sharedFeatureNames, n_shared, combinedOccurrence, hexOpts.featureInfoOptions);
 
         hexOpts.outFile = mergedFile;
         hexOpts.sortOutput(true);

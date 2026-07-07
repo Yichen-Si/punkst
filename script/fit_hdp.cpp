@@ -23,6 +23,7 @@ int32_t cmdHDPSVI(int argc, char** argv) {
     int32_t nThreads = 0;
     int32_t modal = 0;
     int32_t minCountTrain = 20, minCountFeature = 1;
+    int32_t icolWeight = 1;
     double defaultWeight = 1.0;
     bool transform = false;
     bool append_topk = false;
@@ -61,6 +62,7 @@ int32_t cmdHDPSVI(int argc, char** argv) {
       .add_option("features", "Feature list", featureFile)
       .add_option("min-count-per-feature", "Min count for features to be included", minCountFeature)
       .add_option("default-weight", "Default weight for features not in weight file", defaultWeight)
+      .add_option("icol-weight", "0-based column index for weight in --feature-weights (feature name/index is column 0)", icolWeight)
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
 
@@ -152,7 +154,7 @@ int32_t cmdHDPSVI(int argc, char** argv) {
         reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
     }
     if (!weightFile.empty()) {
-        reader.setWeights(weightFile, defaultWeight);
+        reader.setWeights(weightFile, defaultWeight, icolWeight);
     }
 
     auto hdp4hex = std::make_unique<HDP4Hex>(reader, modal, 10);

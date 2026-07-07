@@ -358,7 +358,7 @@ int32_t cmdLDAFactorEval(int argc, char** argv) {
             opt.includeFeatureRegex, opt.excludeFeatureRegex);
     }
     if (!opt.weightFile.empty()) {
-        reader.setWeights(opt.weightFile, opt.defaultWeight);
+        reader.setWeights(opt.weightFile, opt.defaultWeight, opt.icolWeight);
     }
 
     LDA4Hex lda(reader, opt.modal, opt.verbose);

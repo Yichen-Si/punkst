@@ -112,6 +112,12 @@ If you use `topic-model`, you should always shuffle the hexagon file.
 
 `tiles2hex` also writes `<prefix>.count_hist.tsv`, a tab-delimited histogram of the total feature count per output unit. By default the histogram uses bin size `5`, so the rows represent count ranges `0-4`, `5-9`, `10-14`, and so on.
 
+`tiles2hex` also writes feature statistics sidecars for TF-IDF/IDF-style downstream weighting. For single-modality output the file is `<prefix>.feature.stats.tsv`; for multi-modality output the files are `<prefix>.modal0.feature.stats.tsv`, `<prefix>.modal1.feature.stats.tsv`, and so on. Each sidecar contains:
+
+`#feature`, `total_count`, `n_units_present`, `n_units_count_gt1`, `n_units_count_gt2`, `n_units_count_gt_mean`, `idf`, `info_weight`
+
+The `total_count` column is the total count of the feature across emitted units. The `n_units_count_gt_mean` column counts units where the feature count is greater than that feature's average count per emitted unit. The `idf` column is a smoothed, normalized, capped IDF weight using raw score `log(N / (1 + n_units_present))`; tune it with `--idf-q` (default `95`), `--idf-power` (default `0.3`), and `--idf-min` (default `0.1`). The `info_weight` column is the capped, token-mean-normalized information-content weight; tune its cap with `--idf-max` (default `5`).
+
 The metadata JSON also stores the seed used by `tiles2hex` as `seed`.
 
 The remaining of each line is structured as follows:

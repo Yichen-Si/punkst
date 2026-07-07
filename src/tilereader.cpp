@@ -1,5 +1,6 @@
 #include "tilereader.hpp"
 #include "tileoperator.hpp"
+#include <cmath>
 
 /*
     lineParser
@@ -249,30 +250,46 @@ int32_t lineParser::parse(PixelValues3D& pixel, std::string& line, bool checkBou
     return totVal;
 }
 
-int32_t lineParser::readWeights(const std::string& weightFile, double defaultWeight, int32_t nFeatures) {
+int32_t lineParser::readWeights(const std::string& weightFile, double defaultWeight, int32_t nFeatures, int32_t icolWeight) {
+    if (icolWeight < 0) {
+        error("--icol-weight must be non-negative");
+    }
     std::ifstream inWeight(weightFile);
     if (!inWeight) {
         error("Error opening weights file: %s", weightFile.c_str());
     }
     weighted = true;
-    int32_t novlp = 0;
+    int32_t novlp = 0, nrejected = 0;
     std::string line;
+    std::vector<std::string> tokens;
     if (isFeatureDict) {
         weights.resize(featureDict.size());
         std::fill(weights.begin(), weights.end(), defaultWeight);
 
         while (std::getline(inWeight, line)) {
-            std::istringstream iss(line);
-            std::string feature;
+            std::string_view stripped = strip_str(line);
+            if (stripped.empty() || stripped.front() == '#') {
+                continue;
+            }
             double weight;
-            if (!(iss >> feature >> weight)) {
+            split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
+            if (tokens.size() <= static_cast<size_t>(icolWeight) ||
+                !str2double(tokens[static_cast<size_t>(icolWeight)], weight)) {
                 error("Error reading weights file at line: %s", line.c_str());
             }
+            if (!std::isfinite(weight) || weight < 0.0) {
+                nrejected++;
+                continue;
+            }
+            const std::string& feature = tokens[0];
             auto it = featureDict.find(feature);
             if (it != featureDict.end()) {
                 weights[it->second] = weight;
                 novlp++;
             }
+        }
+        if (nrejected > 0) {
+            warning("Ignored %d feature weights with negative or non-finite values", nrejected);
         }
         return novlp;
     }
@@ -280,11 +297,21 @@ int32_t lineParser::readWeights(const std::string& weightFile, double defaultWei
         weights.resize(nFeatures);
         std::fill(weights.begin(), weights.end(), defaultWeight);
         while (std::getline(inWeight, line)) {
-            std::istringstream iss(line);
+            std::string_view stripped = strip_str(line);
+            if (stripped.empty() || stripped.front() == '#') {
+                continue;
+            }
             uint32_t idx;
             double weight;
-            if (!(iss >> idx >> weight)) {
+            split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
+            if (tokens.size() <= static_cast<size_t>(icolWeight) ||
+                !str2uint32(tokens[0], idx) ||
+                !str2double(tokens[static_cast<size_t>(icolWeight)], weight)) {
                 error("Error reading weights file at line: %s", line.c_str());
+            }
+            if (!std::isfinite(weight) || weight < 0.0) {
+                nrejected++;
+                continue;
             }
             if (idx >= static_cast<uint32_t>(nFeatures)) {
                 warning("Weight file feature out of range: %s", line.c_str());
@@ -293,17 +320,30 @@ int32_t lineParser::readWeights(const std::string& weightFile, double defaultWei
             weights[idx] = weight;
             novlp++;
         }
+        if (nrejected > 0) {
+            warning("Ignored %d feature weights with negative or non-finite values", nrejected);
+        }
         return novlp;
     }
 
     int32_t max_idx = 0;
     std::unordered_map<uint32_t, double> weights_map;
     while (std::getline(inWeight, line)) {
-        std::istringstream iss(line);
+        std::string_view stripped = strip_str(line);
+        if (stripped.empty() || stripped.front() == '#') {
+            continue;
+        }
         uint32_t idx;
         double weight;
-        if (!(iss >> idx >> weight)) {
+        split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
+        if (tokens.size() <= static_cast<size_t>(icolWeight) ||
+            !str2uint32(tokens[0], idx) ||
+            !str2double(tokens[static_cast<size_t>(icolWeight)], weight)) {
             error("Error reading weights file at line: %s", line.c_str());
+        }
+        if (!std::isfinite(weight) || weight < 0.0) {
+            nrejected++;
+            continue;
         }
         if (idx >= static_cast<uint32_t>(max_idx)) {
             max_idx = static_cast<int32_t>(idx);
@@ -315,6 +355,9 @@ int32_t lineParser::readWeights(const std::string& weightFile, double defaultWei
     std::fill(weights.begin(), weights.end(), defaultWeight);
     for (const auto& pair : weights_map) {
         weights[pair.first] = pair.second;
+    }
+    if (nrejected > 0) {
+        warning("Ignored %d feature weights with negative or non-finite values", nrejected);
     }
     return novlp;
 }

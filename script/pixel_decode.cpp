@@ -67,6 +67,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double zMax = std::numeric_limits<double>::quiet_NaN();
     std::vector<float> thin3DZLevels;
     int32_t thin3DNZLevels = -1;
+    int32_t icolWeight = 1;
     bool ignoreOutsideZrange = false;
     bool thin3D = false;
     bool standard3D = false;
@@ -121,6 +122,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("feature-is-index", "If the feature column contains integer indices, otherwise assume it contains feature names", featureIsIndex)
       .add_option("default-weight", "Default weight for features not in the weight file", defaultWeight)
       .add_option("feature-weights", "Input weights file", weightFile)
+      .add_option("icol-weight", "0-based column index for weight in --feature-weights (feature name/index is column 0)", icolWeight)
       .add_option("pixel-res", "Resolution of pixel level inference", pixelResolution)
       .add_option("pixel-res-z", "Resolution of pixel level inference in z dimension", pixelResolutionZ)
       .add_option("hex-size", "Hexagon size (side length)", hexSize)
@@ -373,7 +375,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         parser.setFeatureDict(featureNames);
     }
     if (!weightFile.empty()) {
-        parser.readWeights(weightFile, defaultWeight, M_model);
+        parser.readWeights(weightFile, defaultWeight, M_model, icolWeight);
     }
     if (featureSpecificMode != FeatureSpecificMode::Off && (parser.isExtended || parser.weighted)) {
         error("feature-specific decoding modes currently require standard input records and do not support --ext-col-* or feature weights");
@@ -446,7 +448,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         M_model = emPois.get_M();
         K_model = emPois.get_K();
         if (!weightFile.empty()) {
-            parser.readWeights(weightFile, defaultWeight, M_model);
+            parser.readWeights(weightFile, defaultWeight, M_model, icolWeight);
         }
 
         for (const auto& ds : datasets) {

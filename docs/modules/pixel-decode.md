@@ -100,9 +100,12 @@ Current restrictions for both `--single-feature-pixel` and `--single-molecule`:
 
 `--feature-is-index` - If set, the values in `--icol-feature` are interpreted as feature indices. Otherwise, they are expected to be feature names.
 
-`--feature-weights` - Specifies a file to weight each feature. The first column should contain the feature names, and the second column should contain the weights.
+`--feature-weights` - Specifies a file to weight each feature. The first column should contain the feature names or indices. Empty lines and lines starting with `#` are skipped.
+Negative and non-finite weights are ignored with a warning; zero weights are allowed.
 
 `--default-weight` - Specifies the default weight for features not present in the weights file (only if `--feature-weights` is specified). Default: 0.
+
+`--icol-weight` - 0-based column index for the weight in `--feature-weights`. Default: 1.
 
 `--anchor` - Specifies a file containing fixed anchor points. This is currently
 only supported for 2D `slda`. In 3D, fixed anchors are ignored. In `nmf`,

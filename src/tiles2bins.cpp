@@ -1,7 +1,7 @@
 #include "tiles2bins.hpp"
 
-Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts, int32_t _seed, double _bccSize)
-: nThreads(nThreads), outFile(_outFile), tmpDir(_tmpDirPath), nUnits(0), nFeatures(0), minCounts(_minCounts), is3D(parser.hasZCoord()), parser(parser), hexGrid(hexGrid), bccGrid((parser.hasZCoord() && _bccSize > 0) ? _bccSize : hexGrid.size), tileReader(tileReader) {
+Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _outFile, HexGrid& hexGrid, TileReader& tileReader, lineParser& parser, std::vector<int32_t> _minCounts, int32_t _seed, double _bccSize, FeatureInfoOptions _featureInfoOptions)
+: nThreads(nThreads), outFile(_outFile), tmpDir(_tmpDirPath), nUnits(0), nFeatures(0), minCounts(_minCounts), is3D(parser.hasZCoord()), parser(parser), hexGrid(hexGrid), bccGrid((parser.hasZCoord() && _bccSize > 0) ? _bccSize : hexGrid.size), tileReader(tileReader), featureInfoOptions(_featureInfoOptions) {
     nModal = parser.n_ct;
     mainOut.open(outFile, std::ios::out);
     if (!mainOut) {
@@ -13,6 +13,7 @@ Tiles2Hex::Tiles2Hex(int32_t nThreads, std::string& _tmpDirPath, std::string& _o
         minCounts.resize(nModal);
         std::fill(minCounts.begin(), minCounts.end(), 1);
     }
+    featureOccurrenceByModal.resize(nModal);
     if (is3D && _bccSize <= 0) {
         error("3D aggregation requires a positive BCC size");
     }
@@ -60,6 +61,7 @@ void Tiles2Hex::writeMetadata() {
     metaOut << std::setw(4) << meta << std::endl;
     metaOut.close();
     writeCountHistogram();
+    writeFeatureInfoSidecars();
 }
 
 void Tiles2Hex::writeCountHistogram() const {
@@ -76,6 +78,42 @@ void Tiles2Hex::writeCountHistogram() const {
         histOut << binStart << "\t" << binEnd << "\t" << entry.second << "\n";
     }
     histOut.close();
+}
+
+std::vector<std::string> Tiles2Hex::featureNamesForSidecar() const {
+    const size_t n = parser.isFeatureDict
+        ? parser.featureDict.size()
+        : static_cast<size_t>(std::max(0, nFeatures));
+    std::vector<std::string> featureNames(n);
+    if (parser.isFeatureDict) {
+        for (const auto& entry : parser.featureDict) {
+            if (entry.second < featureNames.size()) {
+                featureNames[entry.second] = entry.first;
+            }
+        }
+    } else {
+        for (size_t i = 0; i < featureNames.size(); ++i) {
+            featureNames[i] = std::to_string(i);
+        }
+    }
+    return featureNames;
+}
+
+void Tiles2Hex::writeFeatureInfoSidecars() const {
+    const std::string pref = outputPrefix();
+    const std::vector<std::string> featureNames = featureNamesForSidecar();
+    const size_t nFeaturesOut = featureNames.size();
+    for (size_t modal = 0; modal < featureOccurrenceByModal.size(); ++modal) {
+        std::string outFile;
+        if (featureOccurrenceByModal.size() == 1) {
+            outFile = pref + ".feature.stats.tsv";
+        } else {
+            outFile = pref + ".modal" + std::to_string(modal) + ".feature.stats.tsv";
+        }
+        FeatureOccurrenceStats stats = featureOccurrenceByModal[modal];
+        stats.ensureFeatureCount(nFeaturesOut);
+        FeatureOccurrenceStats::writeTsv(outFile, featureNames, nFeaturesOut, stats, featureInfoOptions);
+    }
 }
 
 void Tiles2Hex::worker(int threadId) {

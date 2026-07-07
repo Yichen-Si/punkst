@@ -4,6 +4,7 @@
 #include <sstream>
 #include <algorithm>
 #include <utility>
+#include <cmath>
 
 UnitFactorResultHeader parse_unit_factor_result_header(
     const std::vector<std::string>& header,
@@ -257,6 +258,8 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
     doc.cnts.clear();
     doc.ct_tot = -1;
     doc.raw_ct_tot = -1;
+    doc.counts_weighted = false;
+    doc.counts_weighted = false;
     if (remap) {
         doc.ids.reserve(nfeatures[modal]);
         doc.cnts.reserve(nfeatures[modal]);
@@ -294,6 +297,7 @@ int32_t HexReader::parseLine(Document& doc, std::string &info, const std::string
             weighted_total += doc.cnts[i];
         }
         doc.ct_tot = weighted_total;
+        doc.counts_weighted = true;
     }
     if (accumulate_sums && add2sums) {
         for (size_t i = 0; i < doc.ids.size(); ++i) {
@@ -522,6 +526,166 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     setFeatureIndexRemap(remap_new);
 }
 
+void HexReader::setFeatureFilterAndWeights(const std::string& featureFile,
+    int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex,
+    int32_t icolWeight, double defaultWeight_, bool keep_missing_with_default,
+    bool read_sums) {
+    if (icolWeight < 0) {
+        error("--icol-weight must be non-negative when feature weights are active");
+    }
+    if (defaultWeight_ < 0.0 && keep_missing_with_default) {
+        error("--default-weight must be non-negative when retaining features missing from --features");
+    }
+    std::ifstream inFeature(featureFile);
+    if (!inFeature) {
+        error("Error opening features file: %s", featureFile.c_str());
+    }
+
+    const bool check_include = !include_ftr_regex.empty();
+    const bool check_exclude = !exclude_ftr_regex.empty();
+    std::regex regex_include(include_ftr_regex);
+    std::regex regex_exclude(exclude_ftr_regex);
+
+    std::unordered_map<std::string, uint32_t> dict;
+    const bool has_dict = featureDict(dict);
+    std::unordered_map<uint32_t, double> valid_weights;
+    std::unordered_map<uint32_t, double> valid_counts;
+    std::unordered_set<uint32_t> excluded_present;
+    std::unordered_set<std::string> kept_features;
+    std::vector<uint32_t> valid_order;
+    std::vector<std::string> tokens;
+    std::string line;
+    bool has_sums = false;
+    bool sums_consistent = true;
+    uint32_t idx0 = 0;
+    int32_t nrejected = 0;
+    int32_t nweighted = 0;
+
+    while (std::getline(inFeature, line)) {
+        std::string_view stripped = strip_str(line);
+        if (stripped.empty() || stripped.front() == '#') {
+            continue;
+        }
+        split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
+        if (tokens.empty()) {
+            error("Error reading feature file at line: %s", line.c_str());
+        }
+
+        uint32_t idx_prev = idx0++;
+        const std::string& feature = tokens[0];
+        if (has_dict) {
+            auto it = dict.find(feature);
+            if (it == dict.end()) {
+                continue;
+            }
+            idx_prev = it->second;
+        } else if (idx_prev >= static_cast<uint32_t>(nFeatures)) {
+            continue;
+        }
+        if (kept_features.find(feature) != kept_features.end()) {
+            continue;
+        }
+
+        double count = -1.0;
+        if (read_sums) {
+            if (!has_sums && sums_consistent && tokens.size() > 1) {
+                if (!str2num(tokens[1], count) || count < 0.0) {
+                    warning("%s: Non-numerical value on the second column is ignored: %s", __func__, line.c_str());
+                } else {
+                    has_sums = true;
+                }
+            } else if (has_sums) {
+                if (tokens.size() <= 1 || !str2num(tokens[1], count) || count < 0.0) {
+                    warning("%s: Expect non-negative numerical value on all or none of the second column: %s", __func__, line.c_str());
+                    has_sums = false;
+                    sums_consistent = false;
+                    valid_counts.clear();
+                }
+            }
+            if (count >= 0.0 && count < minCount) {
+                excluded_present.insert(idx_prev);
+                continue;
+            }
+        }
+
+        const bool include = !check_include || std::regex_match(feature, regex_include);
+        const bool exclude = check_exclude && std::regex_match(feature, regex_exclude);
+        if (!include || exclude) {
+            excluded_present.insert(idx_prev);
+            continue;
+        }
+
+        double weight = 0.0;
+        if (tokens.size() <= static_cast<size_t>(icolWeight) ||
+            !str2double(tokens[static_cast<size_t>(icolWeight)], weight) ||
+            !std::isfinite(weight) || weight < 0.0) {
+            excluded_present.insert(idx_prev);
+            nrejected++;
+            continue;
+        }
+
+        valid_weights[idx_prev] = weight;
+        if (has_sums && count >= 0.0) {
+            valid_counts[idx_prev] = count;
+        }
+        valid_order.push_back(idx_prev);
+        kept_features.insert(feature);
+        nweighted++;
+    }
+
+    if (nrejected > 0) {
+        warning("Ignored %d features due to negative or non-finite weights in --features", nrejected);
+    }
+    if (valid_weights.empty()) {
+        error("No valid feature weights found in %s", featureFile.c_str());
+    }
+
+    defaultWeight = defaultWeight_;
+    std::unordered_map<uint32_t, uint32_t> remap_new;
+    uint32_t idx1 = 0;
+    if (keep_missing_with_default) {
+        weights.assign(nFeatures, defaultWeight);
+        for (uint32_t i = 0; i < static_cast<uint32_t>(nFeatures); ++i) {
+            if (excluded_present.find(i) != excluded_present.end()) {
+                continue;
+            }
+            remap_new[i] = idx1++;
+        }
+        for (const auto& entry : valid_weights) {
+            if (entry.first < weights.size()) {
+                weights[entry.first] = entry.second;
+            }
+        }
+    } else {
+        weights.assign(nFeatures, 0.0);
+        for (uint32_t old_idx : valid_order) {
+            if (valid_weights.find(old_idx) == valid_weights.end()) {
+                continue;
+            }
+            remap_new[old_idx] = idx1++;
+            weights[old_idx] = valid_weights[old_idx];
+        }
+    }
+
+    if (read_sums && has_sums && sums_consistent) {
+        feature_sums_raw.assign(nFeatures, 0.0);
+        feature_sums.assign(nFeatures, 0.0);
+        for (const auto& entry : valid_counts) {
+            if (entry.first < feature_sums_raw.size()) {
+                feature_sums_raw[entry.first] = entry.second;
+                feature_sums[entry.first] = entry.second * weights[entry.first];
+            }
+        }
+        readFullSums = true;
+        accumulate_sums = false;
+    }
+
+    weightFeatures = true;
+    notice("%s: %d valid weights read; %d features are kept out of %d",
+        __func__, nweighted, idx1, nFeatures);
+    setFeatureIndexRemap(remap_new);
+}
+
 int32_t HexReader::filterCurrentFeatures(int32_t minCount,
     const std::string& include_ftr_regex, const std::string& exclude_ftr_regex) {
     if (features.empty()) {
@@ -555,26 +719,40 @@ int32_t HexReader::filterCurrentFeatures(int32_t minCount,
     return static_cast<int32_t>(kept);
 }
 
-void HexReader::setWeights(const std::string& weightFile, double defaultWeight_) {
+void HexReader::setWeights(const std::string& weightFile, double defaultWeight_, int32_t icolWeight) {
+    if (icolWeight < 0) {
+        error("--icol-weight must be non-negative");
+    }
     std::ifstream inWeight(weightFile);
     if (!inWeight) {
         error("Error opening weights file: %s", weightFile.c_str());
     }
     defaultWeight = defaultWeight_;
-    int32_t nweighted = 0, novlp = 0;
+    int32_t nweighted = 0, novlp = 0, nrejected = 0;
     weights.resize(nFeatures);
     std::fill(weights.begin(), weights.end(), defaultWeight);
     std::unordered_map<std::string, uint32_t> dict;
+    std::vector<std::string> tokens;
     if (!featureDict(dict)) {
         warning("Feature dictionary is not found in the input metadata, we assume the weight file (--feature-weights) refers to features by their index as in the input file");
         std::string line;
         while (std::getline(inWeight, line)) {
+            std::string_view stripped = strip_str(line);
+            if (stripped.empty() || stripped.front() == '#') {
+                continue;
+            }
             nweighted++;
-            std::istringstream iss(line);
             uint32_t idx;
             double weight;
-            if (!(iss >> idx >> weight)) {
+            split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
+            if (tokens.size() <= static_cast<size_t>(icolWeight) ||
+                !str2uint32(tokens[0], idx) ||
+                !str2double(tokens[static_cast<size_t>(icolWeight)], weight)) {
                 error("Error reading weights file at line: %s", line.c_str());
+            }
+            if (!std::isfinite(weight) || weight < 0.0) {
+                nrejected++;
+                continue;
             }
             if (idx >= nFeatures) {
                 warning("Input file contains %zu features, feature index %u in the weights file is out of range", nFeatures, idx);
@@ -586,13 +764,22 @@ void HexReader::setWeights(const std::string& weightFile, double defaultWeight_)
     } else { // assume the weight file refers to features by their names
         std::string line;
         while (std::getline(inWeight, line)) {
+            std::string_view stripped = strip_str(line);
+            if (stripped.empty() || stripped.front() == '#') {
+                continue;
+            }
             nweighted++;
-            std::istringstream iss(line);
-            std::string feature;
+            split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
             double weight;
-            if (!(iss >> feature >> weight)) {
+            if (tokens.size() <= static_cast<size_t>(icolWeight) ||
+                !str2double(tokens[static_cast<size_t>(icolWeight)], weight)) {
                 error("Error reading weights file at line: %s", line.c_str());
             }
+            if (!std::isfinite(weight) || weight < 0.0) {
+                nrejected++;
+                continue;
+            }
+            const std::string& feature = tokens[0];
             auto it = dict.find(feature);
             if (it != dict.end()) {
                 weights[it->second] = weight;
@@ -601,6 +788,9 @@ void HexReader::setWeights(const std::string& weightFile, double defaultWeight_)
                 warning("Feature %s not found in the input", feature.c_str());
             }
         }
+    }
+    if (nrejected > 0) {
+        warning("Ignored %d feature weights with negative or non-finite values", nrejected);
     }
     notice("Read %d weights from file, %d features overlap with the input file", nweighted, novlp);
     if (novlp == 0) {
@@ -622,7 +812,7 @@ void HexReader::setWeights(const std::string& weightFile, double defaultWeight_)
 }
 
 void HexReader::applyWeights(Document& doc) const {
-    if (!weightFeatures) {
+    if (!weightFeatures || doc.counts_weighted) {
         return;
     }
     if (doc.raw_ct_tot < 0) { // keep the raw total count first
@@ -636,6 +826,21 @@ void HexReader::applyWeights(Document& doc) const {
         }
     }
     doc.ct_tot = -1;
+    doc.counts_weighted = true;
+}
+
+double HexReader::rawCountFor(uint32_t feature, double count, bool countWeighted) const {
+    if (!weightFeatures || !countWeighted) {
+        return count;
+    }
+    if (feature >= weights.size()) {
+        return count;
+    }
+    const double weight = weights[feature];
+    if (weight == 0.0) {
+        return 0.0;
+    }
+    return count / weight;
 }
 
 void HexReader::setFeatureSums(const std::vector<double>& sums, bool read_full) {
@@ -667,7 +872,7 @@ int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>
         if (ct < 0) {
             error("Error parsing line %s", line.c_str());
         }
-        if (ct < minCount) {
+        if (doc.get_raw_sum() < minCount) {
             continue;
         }
         if (accumulate_sums && add2sums) {
@@ -700,7 +905,7 @@ int32_t HexReader::readAll(std::vector<Document>& docs, const std::string &inFil
         if (ct < 0) {
             error("Error parsing line %s", line.c_str());
         }
-        if (ct < minCount) {
+        if (doc.get_raw_sum() < minCount) {
             continue;
         }
         if (accumulate_sums && add2sums) {
@@ -1160,7 +1365,7 @@ int32_t HexReader::readAll(Eigen::SparseMatrix<double, Eigen::RowMajor> &X,
         if (ct < 0) {
             error("Error parsing line %s", line.c_str());
         }
-        if (ct < minCount) {
+        if (doc.get_raw_sum() < minCount) {
             continue;
         }
         if (accumulate_sums && add2sums) {
@@ -1468,6 +1673,10 @@ bool DGEReader10X::next(Document& doc, int32_t* barcode_idx, std::string* barcod
     return false;
 }
 
+void DGEReader10X::resetStream() {
+    closeMatrixStream();
+}
+
 int32_t DGEReader10X::readAll(std::vector<Document>& docs, int32_t minCount) {
     std::vector<std::string> barcodes_out;
     return readAll(docs, barcodes_out, minCount);
@@ -1495,7 +1704,7 @@ int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<std::stri
         if (global_idx < 0) {
             continue;
         }
-        if (min_count > 0 && doc.get_sum() < min_count) {
+        if (min_count > 0 && doc.get_raw_sum() < min_count) {
             continue;
         }
         docs.push_back(std::move(doc));
@@ -1527,7 +1736,7 @@ int32_t DGEReader10X::readAll(std::vector<Document>& docs, std::vector<int32_t>&
         if (global_idx < 0) {
             continue;
         }
-        if (min_count > 0 && doc.get_sum() < min_count) {
+        if (min_count > 0 && doc.get_raw_sum() < min_count) {
             continue;
         }
         docs.push_back(std::move(doc));

@@ -143,7 +143,7 @@ void TopicModelWrapper::prepare10XCache(DGEReader10X& dge, int32_t _minCountTrai
     for (size_t i = 0; i < dge_docs_cache_.size(); ++i) {
         Document& doc = dge_docs_cache_[i];
         applyWeights(doc);
-        if (doc.get_sum() >= _minCountTrain) {
+        if (doc.get_raw_sum() >= _minCountTrain) {
             dge_train_idx_cache_.push_back(static_cast<int32_t>(i));
         }
     }
@@ -315,8 +315,9 @@ void TopicModelWrapper::fitAndWriteToFile(const std::string& inFile, const std::
             Document& doc = minibatch[i];
             for (int j = 0; j < doc.ids.size(); ++j) {
                 uint32_t m = doc.ids[j];
+                const double raw_count = rawCountFor(m, doc.cnts[j], doc.counts_weighted);
                 for (int k = 0; k < doc_topic.cols(); ++k) {
-                    pseudobulk(m, k) += doc.cnts[j] * doc_topic(i, k);
+                    pseudobulk(m, k) += raw_count * doc_topic(i, k);
                 }
             }
         }
@@ -393,8 +394,9 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
                 const Document& doc = minibatch_view[i];
                 for (int j = 0; j < doc.ids.size(); ++j) {
                     uint32_t m = doc.ids[j];
+                    const double raw_count = rawCountFor(m, doc.cnts[j], doc.counts_weighted);
                     for (int k = 0; k < doc_topic.cols(); ++k) {
-                        pseudobulk(m, k) += doc.cnts[j] * doc_topic(i, k);
+                        pseudobulk(m, k) += raw_count * doc_topic(i, k);
                     }
                 }
             }
@@ -439,8 +441,9 @@ void TopicModelWrapper::fitAndWriteToFile10X(DGEReader10X& dge, const std::strin
                 Document& doc = minibatch_local[i];
                 for (int j = 0; j < doc.ids.size(); ++j) {
                     uint32_t m = doc.ids[j];
+                    const double raw_count = rawCountFor(m, doc.cnts[j], doc.counts_weighted);
                     for (int k = 0; k < doc_topic.cols(); ++k) {
-                        pseudobulk(m, k) += doc.cnts[j] * doc_topic(i, k);
+                        pseudobulk(m, k) += raw_count * doc_topic(i, k);
                     }
                 }
             }
@@ -480,7 +483,7 @@ bool TopicModelWrapper::readMinibatch(std::ifstream& inFileStream) {
         if (ct < 0) {
             error("Error parsing line %s", line.c_str());
         }
-        if (ct < minCountTrain) {
+        if (doc.get_raw_sum() < minCountTrain) {
             continue;
         }
         minibatch.push_back(std::move(doc));
@@ -531,7 +534,7 @@ bool TopicModelWrapper::readMinibatch(std::ifstream& inFileStream, std::vector<D
         if (ct < 0) {
             error("%s: Error parsing the %d-th line", __FUNCTION__, ntot + nlocal);
         }
-        if (minCount > 0 && doc.get_sum() < minCount) {
+        if (minCount > 0 && doc.get_raw_sum() < minCount) {
             continue;
         }
         idens.push_back(info);

@@ -54,8 +54,8 @@ int32_t runDelegatedTransform(const std::string& modelFile,
         int32_t minCountFeature,
         const std::string& includeFeatureRegex,
         const std::string& excludeFeatureRegex,
-        const std::string& weightFile,
         double defaultWeight,
+        int32_t icolWeight,
         int32_t maxIter,
         double meanChangeTol,
         int32_t nThreads,
@@ -99,9 +99,9 @@ int32_t runDelegatedTransform(const std::string& modelFile,
     if (!excludeFeatureRegex.empty()) {
         appendOption(args, "exclude-feature-regex", excludeFeatureRegex);
     }
-    if (!weightFile.empty()) {
-        appendOption(args, "feature-weights", weightFile);
+    if (!featureFile.empty() && icolWeight >= 0) {
         appendOption(args, "default-weight", defaultWeight);
+        appendOption(args, "icol-weight", icolWeight);
     }
     if (computeResiduals) {
         appendFlag(args, "residuals");
@@ -121,7 +121,7 @@ int32_t runDelegatedTransform(const std::string& modelFile,
 } // namespace
 
 int32_t cmdTopicModelSVI(int argc, char** argv) {
-    std::string inFile, metaFile, weightFile, outPrefix, priorFile, featureFile;
+    std::string inFile, metaFile, outPrefix, priorFile, featureFile;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
@@ -131,7 +131,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     int32_t modal = 0;
     int32_t minCountTrain = 20, minCountFeature = 1;
     int32_t topk_only = -1;
-    double defaultWeight = 1.0;
+    int32_t icolWeight = -1;
+    double defaultWeight = -1.0;
     bool transform = false;
     bool computeResiduals = false;
     bool sort_topics = false;
@@ -170,10 +171,10 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
       .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids);
 
-    pl.add_option("feature-weights", "Input weights file", weightFile)
-      .add_option("features", "Feature list", featureFile)
+    pl.add_option("features", "Feature list", featureFile)
       .add_option("min-count-per-feature", "Min count for features to be included", minCountFeature)
-      .add_option("default-weight", "Default weight for features not in weight file", defaultWeight)
+      .add_option("default-weight", "Default weight for model/prior features missing from --features when feature weights are active; <0 drops missing features", defaultWeight)
+      .add_option("icol-weight", "0-based column index for feature weight in --features; <0 disables feature weights", icolWeight)
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
 
@@ -229,6 +230,10 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     if (seed <= 0) {
         seed = std::random_device{}();
     }
+    const bool weights_active = !featureFile.empty() && icolWeight >= 0;
+    if (defaultWeight < 0.0) {
+        defaultWeight = -1.0;
+    }
 
     int32_t nUnits;
     HexReader reader;
@@ -246,7 +251,13 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         const bool has_model_prior = !priorFile.empty();
         if (!featureFile.empty()) {
             tenx_feature_mode = TenXFeatureMode::FeatureFile;
-            reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex, true);
+            if (weights_active) {
+                reader.setFeatureFilterAndWeights(featureFile, minCountFeature,
+                    include_ftr_regex, exclude_ftr_regex, icolWeight, defaultWeight,
+                    has_model_prior && defaultWeight >= 0.0, true);
+            } else {
+                reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex, true);
+            }
         } else if (has_model_prior) {
             tenx_feature_mode = TenXFeatureMode::ModelOnly;
         } else if (minCountFeature <= 1) {
@@ -258,10 +269,13 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             tenx_feature_mode = TenXFeatureMode::PostloadCounts;
         }
     } else if (!featureFile.empty()) {
-        reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
-    }
-    if (!weightFile.empty()) {
-        reader.setWeights(weightFile, defaultWeight);
+        if (weights_active) {
+            reader.setFeatureFilterAndWeights(featureFile, minCountFeature,
+                include_ftr_regex, exclude_ftr_regex, icolWeight, defaultWeight,
+                !priorFile.empty() && defaultWeight >= 0.0);
+        } else {
+            reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
+        }
     }
 
     if (projection_only) {
@@ -392,7 +406,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (!fitBackground) {
             return runDelegatedTransform(transformModel, outPrefix, inFile, metaFile,
                 dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
-                include_ftr_regex, exclude_ftr_regex, weightFile, defaultWeight,
+                include_ftr_regex, exclude_ftr_regex, defaultWeight, icolWeight,
                 maxIter, mDelta, nThreads, modal, debug_, computeResiduals, topk_only);
         }
         if (computeResiduals || topk_only > 0) {

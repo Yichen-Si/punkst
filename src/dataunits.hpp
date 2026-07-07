@@ -18,6 +18,7 @@ struct Document {
     std::vector<double> cnts;
     double ct_tot = -1;
     double raw_ct_tot = -1;
+    bool counts_weighted = false;
 
     inline Eigen::VectorXd to_dense(size_t n) const {
         Eigen::VectorXd y_dense = Eigen::VectorXd::Zero(n);
@@ -404,12 +405,18 @@ public:
     void setFeatureIndexRemap(std::unordered_map<uint32_t, uint32_t>& _idx_remap);
     void setFeatureIndexRemap(std::vector<std::string>& new_features, bool keep_unmapped = false);
     void setFeatureFilter(const std::string& featureFile, int32_t minCount, std::string& include_ftr_regex, std::string& exclude_ftr_regex, bool read_sums = true);
+    void setFeatureFilterAndWeights(const std::string& featureFile, int32_t minCount,
+        std::string& include_ftr_regex, std::string& exclude_ftr_regex,
+        int32_t icolWeight, double defaultWeight_, bool keep_missing_with_default,
+        bool read_sums = true);
     int32_t filterCurrentFeatures(int32_t minCount = 1,
         const std::string& include_ftr_regex = "",
         const std::string& exclude_ftr_regex = "");
     void setFeatureSums(const std::vector<double>& sums, bool read_full = true);
-    void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0);
+    void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0, int32_t icolWeight = 1);
+    bool hasFeatureWeights() const { return weightFeatures; }
     void applyWeights(Document& doc) const;
+    double rawCountFor(uint32_t feature, double count, bool countWeighted) const;
 
     int32_t parseLine(Document& doc, const std::string &line, int32_t modal = 0, bool add2sums = true) {
         std::string info;
@@ -494,11 +501,10 @@ public:
 
     bool next(Document& doc, int32_t* barcode_idx = nullptr,
         std::string* barcode = nullptr);
+    void resetStream();
     int32_t readAll(std::vector<Document>& docs, int32_t minCount = 1);
-    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& barcodes_out,
-        int32_t minCount = 1);
-    int32_t readAll(std::vector<Document>& docs, std::vector<int32_t>& barcode_idx_out,
-        int32_t minCount = 1);
+    int32_t readAll(std::vector<Document>& docs, std::vector<std::string>& barcodes_out, int32_t minCount = 1);
+    int32_t readAll(std::vector<Document>& docs, std::vector<int32_t>& barcode_idx_out, int32_t minCount = 1);
     bool readMinibatch(std::vector<Document>& docs, std::vector<int32_t>& barcode_idx_out,
         int32_t batchSize, int32_t maxUnits, int32_t minCount = 0);
     int32_t setFeatureIndexRemap(const std::vector<std::string>& new_features,

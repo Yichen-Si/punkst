@@ -27,6 +27,7 @@ struct FactorEvalCommonOptions {
     int32_t nThreads = 1;
     int32_t modal = 0;
     int32_t minCountFeature = 1;
+    int32_t icolWeight = 1;
     int32_t debug = 0;
     int32_t verbose = 0;
     int32_t maxIter = 100;

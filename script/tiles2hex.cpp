@@ -31,13 +31,17 @@ int32_t cmdTiles2HexTxt(int32_t argc, char** argv) {
     lineParser parser = opts.makeParser(&rects, true);
 
     if (opts.anchorFiles.empty()) {
-        Tiles2Hex tiles2Hex(opts.nThreads, opts.tmpDir, opts.outFile, hexGrid, tileReader, parser, opts.min_counts, opts.seed, opts.bccSize);
+        Tiles2Hex tiles2Hex(opts.nThreads, opts.tmpDir, opts.outFile, hexGrid,
+            tileReader, parser, opts.min_counts, opts.seed, opts.bccSize,
+            opts.featureInfoOptions);
         if (!tiles2Hex.run()) {
             return 1;
         }
         tiles2Hex.writeMetadata();
     } else {
-        Tiles2UnitsByAnchor tiles2Hex(opts.nThreads, opts.tmpDir, opts.outFile, hexGrid, tileReader, parser, opts.anchorFiles, opts.radius, opts.min_counts, opts.noBackground, opts.seed);
+        Tiles2UnitsByAnchor tiles2Hex(opts.nThreads, opts.tmpDir, opts.outFile,
+            hexGrid, tileReader, parser, opts.anchorFiles, opts.radius,
+            opts.min_counts, opts.noBackground, opts.seed, opts.featureInfoOptions);
         if (!tiles2Hex.run()) {
             return 1;
         }

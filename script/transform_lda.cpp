@@ -198,8 +198,9 @@ public:
                     for (size_t j = 0; j < doc.ids.size(); ++j) {
                         const uint32_t m = doc.ids[j];
                         const double cnt = doc.cnts[j];
+                        const double raw_count = lda.rawCountFor(m, cnt, doc.counts_weighted);
                         for (int32_t k = 0; k < K; ++k) {
-                            local.pseudobulk(m, k) += cnt * doc_topic(i, k);
+                            local.pseudobulk(m, k) += raw_count * doc_topic(i, k);
                         }
                         if (residualState != nullptr) {
                             local.featureTotals(m) += cnt;
@@ -329,7 +330,7 @@ private:
 } // namespace
 
 int32_t cmdLDATransform(int argc, char** argv) {
-    std::string inFile, metaFile, modelFile, outPrefix, featureFile, weightFile;
+    std::string inFile, metaFile, modelFile, outPrefix, featureFile;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
@@ -337,10 +338,11 @@ int32_t cmdLDATransform(int argc, char** argv) {
     int32_t nThreads = 1;
     int32_t modal = 0;
     int32_t minCountFeature = 1;
+    int32_t icolWeight = -1;
     double minCount = 20;
     int32_t debug_ = 0;
     int32_t verbose = 0;
-    double defaultWeight = 1.0;
+    double defaultWeight = -1.0;
     int32_t maxIter = 100;
     double mDelta = 1e-3;
     int32_t topk_only = -1;
@@ -371,8 +373,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
     pl.add_option("features", "Feature names and total counts file", featureFile)
       .add_option("min-count-per-feature", "Min count for features to be included (requires --features)", minCountFeature)
       .add_option("min-count", "Minimum total feature count for a unit to be kept", minCount)
-      .add_option("feature-weights", "Input weights file", weightFile)
-      .add_option("default-weight", "Default weight for features not in weight file", defaultWeight)
+      .add_option("default-weight", "Default weight for model features missing from --features when feature weights are active; <0 drops missing features", defaultWeight)
+      .add_option("icol-weight", "0-based column index for feature weight in --features; <0 disables feature weights", icolWeight)
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
 
@@ -401,6 +403,10 @@ int32_t cmdLDATransform(int argc, char** argv) {
     if (seed <= 0) {
         seed = std::random_device{}();
     }
+    const bool weights_active = !featureFile.empty() && icolWeight >= 0;
+    if (defaultWeight < 0.0) {
+        defaultWeight = -1.0;
+    }
 
     const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
     bool use_10x = !dge_inputs.empty();
@@ -422,10 +428,13 @@ int32_t cmdLDATransform(int argc, char** argv) {
         reader.readMetadata(metaFile);
     }
     if (!featureFile.empty()) {
-        reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
-    }
-    if (!weightFile.empty()) {
-        reader.setWeights(weightFile, defaultWeight);
+        if (weights_active) {
+            reader.setFeatureFilterAndWeights(featureFile, minCountFeature,
+                include_ftr_regex, exclude_ftr_regex, icolWeight, defaultWeight,
+                defaultWeight >= 0.0);
+        } else {
+            reader.setFeatureFilter(featureFile, minCountFeature, include_ftr_regex, exclude_ftr_regex);
+        }
     }
 
     std::string info_header;

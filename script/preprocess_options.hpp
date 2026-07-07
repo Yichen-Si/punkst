@@ -280,6 +280,7 @@ struct Tiles2HexOptions {
     bool randomize_output = false;
     std::string sort_mem;
     bool use_internal_sort = false;
+    FeatureInfoOptions featureInfoOptions;
 
     ParamList& addStandaloneOptions(ParamList& pl) {
         pl.add_option("in-tsv", "Input TSV file. Header must begin with #", inTsv)
@@ -304,6 +305,10 @@ struct Tiles2HexOptions {
           .add_option("randomize", "Randomize output order", randomize_output)
           .add_option("sort-mem", "Memory to use for sorting, with units K, M, or G similar to -S in linux sort", sort_mem)
           .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort)
+          .add_option("idf-q", "Percentile of raw IDF scores used to normalize capped IDF weights", featureInfoOptions.idfQ)
+          .add_option("idf-power", "Power gamma for capped IDF weights", featureInfoOptions.idfPower)
+          .add_option("idf-min", "Minimum/floor value for capped IDF weights", featureInfoOptions.idfMin)
+          .add_option("idf-max", "Maximum/cap value for information-content weights", featureInfoOptions.idfMax)
           .add_option("min-count", "Minimum count for each integer column, applied with OR", min_counts)
           .add_option("ignore-background", "Ignore pixels not within radius of any of the anchors", noBackground);
     }
@@ -325,7 +330,11 @@ struct Tiles2HexOptions {
           .add_option("ignore-background", "Ignore pixels not within radius of any of the anchors", noBackground)
           .add_option("seed", "Random seed for randomized output keys", seed)
           .add_option("sort-mem", "Memory to use for sorting, with units K, M, or G similar to -S in linux sort", sort_mem)
-          .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort);
+          .add_option("use-internal-sort", "Use internal sort instead of system sort command for randomization (default: false)", use_internal_sort)
+          .add_option("idf-q", "Percentile of raw IDF scores used to normalize capped IDF weights", featureInfoOptions.idfQ)
+          .add_option("idf-power", "Power gamma for capped IDF weights", featureInfoOptions.idfPower)
+          .add_option("idf-min", "Minimum/floor value for capped IDF weights", featureInfoOptions.idfMin)
+          .add_option("idf-max", "Maximum/cap value for information-content weights", featureInfoOptions.idfMax);
     }
 
     int32_t minCount() const {
@@ -342,6 +351,18 @@ struct Tiles2HexOptions {
         }
         if (icol_feature < 0) {
             error("--icol-feature is required");
+        }
+        if (featureInfoOptions.idfQ < 0.0 || featureInfoOptions.idfQ > 100.0) {
+            error("--idf-q must be between 0 and 100");
+        }
+        if (featureInfoOptions.idfPower <= 0.0) {
+            error("--idf-power must be positive");
+        }
+        if (featureInfoOptions.idfMin < 0.0 || featureInfoOptions.idfMin > 1.0) {
+            error("--idf-min must be between 0 and 1");
+        }
+        if (featureInfoOptions.idfMax <= 0.0) {
+            error("--idf-max must be positive");
         }
     }
 

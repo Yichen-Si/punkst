@@ -64,11 +64,15 @@ Minimum feature total count. Default: `1`.
 `--include-feature-regex`, `--exclude-feature-regex`
 Regex-based feature filtering.
 
-`--feature-weights`
-Per-feature weights applied during fitting and transform.
+`--icol-weight`
+0-based column index for per-feature weights in `--features`. Default: `-1`, which disables feature weighting. Column 0 of `--features` is the feature name, and column 1 remains the total count when present. Fractional weighted counts are supported.
+Negative and non-finite weights are ignored with a warning; zero weights are allowed. Count and regex feature filtering are applied before weights.
 
 `--default-weight`
-Default weight for features missing from the weight file.
+Default weight for model/prior features missing from `--features` when feature weighting is active. Default: `-1`, which drops missing model/prior features. Set this to a non-negative value, such as `0`, to keep missing model/prior features and fill their weights.
+
+Model fitting and transform use the weighted counts. Pseudobulk output remains on the original count scale.
+When `--prior-scale-rel` is used with feature weights, the prior is scaled relative to weighted feature totals, so continued fitting or transform should use the same feature weights.
 
 For 10X input, the feature-selection behavior is:
 
@@ -239,7 +243,7 @@ Either:
 `--min-count`
 Minimum total count per unit to keep. Default: `20`.
 
-`--feature-weights`, `--default-weight`
+`--icol-weight`, `--default-weight`
 
 `--include-feature-regex`, `--exclude-feature-regex`
 

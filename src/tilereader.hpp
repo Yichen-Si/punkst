@@ -67,7 +67,7 @@ struct lineParser {
 
     int32_t parse(PixelValues& pixel, std::string& line, bool checkBounds = false);
     int32_t parse(PixelValues3D& pixel, std::string& line, bool checkBounds = false);
-    int32_t readWeights(const std::string& weightFile, double defaultWeight = 1.0, int32_t nFeatures = -1);
+    int32_t readWeights(const std::string& weightFile, double defaultWeight = 1.0, int32_t nFeatures = -1, int32_t icolWeight = 1);
 };
 
 struct lineParserUnival : public lineParser {

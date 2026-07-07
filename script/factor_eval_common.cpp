@@ -33,6 +33,7 @@ void addFactorEvalCommonOptions(ParamList& pl, FactorEvalCommonOptions& opt,
       .add_option("min-count", "Minimum total feature count for a unit to be kept", opt.minCount)
       .add_option("feature-weights", "Input weights file", opt.weightFile)
       .add_option("default-weight", "Default weight for features not in weight file", opt.defaultWeight)
+      .add_option("icol-weight", "0-based column index for weight in --feature-weights (feature name/index is column 0)", opt.icolWeight)
       .add_option("include-feature-regex", "Regex for including features", opt.includeFeatureRegex)
       .add_option("exclude-feature-regex", "Regex for excluding features", opt.excludeFeatureRegex);
 
