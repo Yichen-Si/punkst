@@ -192,6 +192,8 @@ set(SOURCE_FILES
     script/cells2pmtiles.cpp
     script/tiles2mono.cpp
     script/deploy_cartoscope.cpp
+    script/multi_cde_lowres_common.hpp
+    script/multi_cde_lowres_common.cpp
     script/multi_cde_lowres.cpp
     script/multi_cde_lowres_nb.cpp
     script/multi_cde_pixel_common.cpp
