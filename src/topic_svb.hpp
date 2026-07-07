@@ -44,7 +44,7 @@ public:
     int32_t nFeatures() const { return M_; }
     bool hasFullFeatureSums() const { return reader.readFullSums; }
     const std::vector<double>& getFeatureSumsRaw() const { return reader.getFeatureSumsRaw(); }
-    void getTopicAbundance(std::vector<double>& topic_weights);
+    virtual void getTopicAbundance(std::vector<double>& topic_weights);
     virtual void filterTopics(double threshold, double coverage) {}
     std::vector<std::string> getFeatureNames() const {
         return featureNames.empty() ? reader.features : featureNames;

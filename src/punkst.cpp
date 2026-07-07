@@ -6,6 +6,8 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv);
 int32_t cmdTiles2HexTxt(int32_t argc, char** argv);
 int32_t cmdTiles2Rois(int32_t argc, char** argv);
 int32_t cmdTopicModelSVI(int argc, char** argv);
+int32_t cmdGammaPoisFit(int argc, char** argv);
+int32_t cmdGammaPoisTransform(int argc, char** argv);
 int32_t cmdHDPSVI(int argc, char** argv);
 int32_t cmdLDATransform(int argc, char** argv);
 int32_t cmdLDAFactorEval(int argc, char** argv);
@@ -52,6 +54,8 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("tiles2rois", "Aggregate tiled transcript counts into GeoJSON ROI polygons", cmdTiles2Rois)
         .add_command("lda4hex", "Train LDA model", cmdTopicModelSVI) // backward compatibility
         .add_command("topic-model", "Train LDA model", cmdTopicModelSVI)
+        .add_command("gamma-pois-fit", "Train Gamma-Poisson topic model", cmdGammaPoisFit)
+        .add_command("gamma-pois-transform", "Transform data using fitted Gamma-Poisson topic model state", cmdGammaPoisTransform)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)
         .add_command("lda-transform", "Transform data using fitted LDA model", cmdLDATransform)
         .add_command("lda-factor-eval", "Evaluate leave-one-out LDA factor contribution", cmdLDAFactorEval)

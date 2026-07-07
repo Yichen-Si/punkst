@@ -103,6 +103,8 @@ set(SOURCE_FILES
     src/lda.cpp
     src/lda_svb.cpp
     src/lda_scvb0.cpp
+    src/gamma_pois_topic.hpp
+    src/gamma_pois_topic.cpp
     src/hdp.hpp
     src/hdp.cpp
     src/topic_svb.hpp
@@ -118,6 +120,8 @@ set(SOURCE_FILES
     script/tiles2hex.cpp
     script/tiles2rois.cpp
     script/fit_lda.cpp
+    script/fit_gamma_pois.cpp
+    script/transform_gamma_pois.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp
