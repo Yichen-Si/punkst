@@ -1260,6 +1260,49 @@ std::vector<DGEReader10X::DatasetInput> resolveDge10XInputs(
     return inputs;
 }
 
+std::unique_ptr<DGEReader10X> makeDGEReader10X(
+    const std::vector<std::string>& dgeDirs,
+    const std::vector<std::string>& barcodesFiles,
+    const std::vector<std::string>& featuresFiles,
+    const std::vector<std::string>& matrixFiles,
+    const std::vector<std::string>& datasetIds,
+    bool keep_barcodes) {
+    const auto inputs = resolveDge10XInputs(dgeDirs, barcodesFiles, featuresFiles, matrixFiles, datasetIds);
+    if (inputs.empty()) {
+        return nullptr;
+    }
+    if (!barcodesFiles.empty() || !featuresFiles.empty() || !matrixFiles.empty()) {
+        return std::make_unique<DGEReader10X>(barcodesFiles, featuresFiles, matrixFiles, datasetIds, keep_barcodes);
+    }
+    return std::make_unique<DGEReader10X>(dgeDirs, datasetIds, keep_barcodes);
+}
+
+bool initHexOrDgeInput(
+    HexReader& reader,
+    std::unique_ptr<DGEReader10X>& dgePtr,
+    const std::string& inFile,
+    const std::string& metaFile,
+    const std::vector<std::string>& dgeDirs,
+    const std::vector<std::string>& barcodesFiles,
+    const std::vector<std::string>& featuresFiles,
+    const std::vector<std::string>& matrixFiles,
+    const std::vector<std::string>& datasetIds,
+    bool keep_barcodes) {
+    dgePtr = makeDGEReader10X(dgeDirs, barcodesFiles, featuresFiles, matrixFiles, datasetIds, keep_barcodes);
+    if (dgePtr) {
+        if (!inFile.empty()) {
+            warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
+        }
+        reader.initFromFeatures(dgePtr->features, dgePtr->nBarcodes);
+        return true;
+    }
+    if (metaFile.empty() || inFile.empty()) {
+        error("Missing --in-data or --in-meta");
+    }
+    reader.readMetadata(metaFile);
+    return false;
+}
+
 void DGEReader10X::open(const std::string &dgeDir) {
     open(std::vector<std::string>{dgeDir});
 }

@@ -32,7 +32,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     bool fit_background = false;
     bool fix_background = false;
     double pi0 = 0.1;
-    int32_t mode = 1;
+    int32_t mode = 1; // 1: TRON, 2: FISTA, 3: Diagonal line search
     NmfFitOptions nmf_opts;
     nmf_opts.max_iter = 20;
     nmf_opts.tol = 1e-4;
@@ -59,10 +59,11 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
       .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
       .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids);
 	pl.add_option("K", "K", K, true)
-      .add_option("mode", "Algorithm", mode)
+    //   .add_option("mode", "Algorithm", mode)
       .add_option("fit-background", "Fit background noise", fit_background)
       .add_option("fix-background", "Fix background model during training", fix_background)
       .add_option("background-init", "Initial background proportion pi0", pi0)
+      .add_option("c", "Constant c in log(1+lambda/c)", c)
       .add_option("size-factor", "L: c_i=y_i/L, g()=log(1+lambda/c_i)", size_factor)
       .add_option("max-iter-outer", "Maximum outer iterations", nmf_opts.max_iter)
       .add_option("tol-outer", "Outer tolerance", nmf_opts.tol)
@@ -105,9 +106,10 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
         pl.print_help_noexit();
         return 1;
     }
-    if (size_factor <= 0) {
+    if (c <= 0 && size_factor <= 0) {
         error("Error: --size-factor must be positive (Seurat uses 10000)");
     }
+    opts.exact_zero = exact;
     bool per_doc_c = c <= 0;
     std::mt19937 rng(seed > 0 ? seed : std::random_device{}());
 
@@ -121,24 +123,8 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
 
     std::unique_ptr<DGEReader10X> dge_ptr;
     HexReader reader;
-    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
-    bool use_10x = !dge_inputs.empty();
-    if (use_10x) {
-        if (!inFile.empty()) {
-            warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
-        }
-        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
-            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
-        } else {
-            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
-        }
-        reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
-    } else {
-        if (metaFile.empty() || inFile.empty()) {
-            error("Missing --in-data or --in-meta");
-        }
-        reader.readMetadata(metaFile);
-    }
+    bool use_10x = initHexOrDgeInput(reader, dge_ptr, inFile, metaFile,
+        dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
 
     TenXFeatureMode tenx_feature_mode = TenXFeatureMode::Default;
     if (use_10x) {
@@ -373,7 +359,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     M = reader.nFeatures;
     notice("Read %lu units with %d features", N, M);
 
-    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, exact, debug_);
+    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, debug_);
     if (fit_background) {
         nmf.set_background_model(pi0, nullptr, fix_background);
     }

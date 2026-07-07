@@ -149,18 +149,16 @@ RowMajorMatrixXd PoissonLog1pNMF::transform(std::vector<SparseObs>& docs, const 
             local_fres_ptr = &local_residuals;
         }
         for (int i = r.begin(); i != r.end(); ++i) {
-            cM.setConstant(docs[i].ct_tot / size_factor_);
+            if (docs[i].c <= 0) {
+                error("%s: scaling factor c must be positive for document %d", __func__, i);
+            }
+            cM.setConstant(docs[i].c);
             if (Bcov_.size() > 0) {
                 oM.noalias() = Bcov_ * docs[i].covar;
             }
             VectorXd b;
-            double obj;
             MLEStats& stats = res[i];
-            if (exact_) {
-                obj = pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_, local_fres_ptr);
-            } else {
-                obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_, local_fres_ptr);
-            }
+            pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts, b, stats, debug_, local_fres_ptr);
             new_theta.row(i) = b.transpose();
         }
         if (fres_ptr) {
@@ -298,6 +296,10 @@ double PoissonLog1pNMF::update_beta(int32_t& niters_beta) {
     std::vector<int32_t> niters_reg_beta(M_, 0);
     tbb::combinable<int> nkept(0.0);
     size_t grainsize_m = std::min(64, std::max(1, int(M_/ (2 * nThreads_))) );
+    std::unique_ptr<PoisLog1pSparseContext> ctx;
+    if (!mle_opts_fit_.exact_zero) {
+        ctx = std::make_unique<PoisLog1pSparseContext>(theta_, cvec_, mle_opts_fit_);
+    }
     double objective_current = tbb::parallel_reduce(
         tbb::blocked_range<int>(0, M_, grainsize_m), 0.0,
         [&](const tbb::blocked_range<int>& r, double local_sum) {
@@ -312,9 +314,8 @@ double PoissonLog1pNMF::update_beta(int32_t& niters_beta) {
                     off_ptr = &oN;
                 }
                 double obj;
-                if (exact_) {
-                    obj = pois_log1p_mle_exact(
-                        theta_, mtx_t_[j], cvec_, off_ptr, mle_opts_fit_, beta_j, stats_beta, debug_);
+                if (ctx) {
+                    obj = pois_log1p_mle(*ctx, mtx_t_[j], off_ptr, mle_opts_fit_, beta_j, stats_beta, debug_);
                 } else {
                     obj = pois_log1p_mle(
                         theta_, mtx_t_[j], cvec_, off_ptr, mle_opts_fit_, beta_j, stats_beta, debug_);
@@ -347,6 +348,10 @@ double PoissonLog1pNMF::update_bcov(int32_t& niters_bcov) {
     std::vector<int32_t> niters_reg_bcov(M_, 0);
     tbb::combinable<int> nkept(0.0);
     size_t grainsize_m = std::min(64, std::max(1, int(M_/ (2 * nThreads_))) );
+    std::unique_ptr<PoisLog1pSparseContext> ctx;
+    if (!mle_opts_bcov_.exact_zero) {
+        ctx = std::make_unique<PoisLog1pSparseContext>(X_, cvec_, mle_opts_bcov_);
+    }
     double objective_current = tbb::parallel_reduce(
         tbb::blocked_range<int>(0, M_, grainsize_m), 0.0,
         [&](const tbb::blocked_range<int>& r, double local_sum) {
@@ -357,9 +362,8 @@ double PoissonLog1pNMF::update_bcov(int32_t& niters_bcov) {
                 oN.noalias() = theta_ * beta_.row(j).transpose(); // N_
                 VectorXd bj = Bcov_.row(j).transpose();
                 double obj;
-                if (exact_) {
-                    obj = pois_log1p_mle_exact(
-                    X_, mtx_t_[j], cvec_, &oN, mle_opts_bcov_, bj, stats_b, debug_);
+                if (ctx) {
+                    obj = pois_log1p_mle(*ctx, mtx_t_[j], &oN, mle_opts_bcov_, bj, stats_b, debug_);
                 } else {
                     obj = pois_log1p_mle(
                     X_, mtx_t_[j], cvec_, &oN, mle_opts_bcov_, bj, stats_b, debug_);
@@ -411,12 +415,7 @@ double PoissonLog1pNMF::update_theta(const std::vector<SparseObs>& docs,
             if (theta_valid_[i]) {
                 b = theta_.row(i).transpose();
             }
-            double obj;
-            if (exact_) {
-                obj = pois_log1p_mle_exact(beta_, docs[i].doc, cM, oM_ptr, mle_opts_fit_, b, stats, debug_);
-            } else {
-                obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts_fit_, b, stats, debug_);
-            }
+            double obj = pois_log1p_mle(beta_, docs[i].doc, cM, oM_ptr, mle_opts_fit_, b, stats, debug_);
             if (std::isnan(obj) || std::isinf(obj)) {
                 warning("%s: NaN/Inf objective encountered when updating theta", __func__);
                 theta_valid_[i] = false;
@@ -446,9 +445,10 @@ void PoissonLog1pNMF::transpose_data(const std::vector<SparseObs>& docs, std::ve
     transpose_data_common(
         mtx_t, docs, row_idx,
         [](const SparseObs& obs) -> const Document& { return obs.doc; },
-        [](const SparseObs& obs, const Document& doc) {
-            return (obs.ct_tot >= 0) ? obs.ct_tot
-                : std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+        [this](const SparseObs& obs, const Document& doc) {
+            return (obs.c > 0) ? obs.c
+                : ((obs.ct_tot >= 0) ? obs.ct_tot
+                    : std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0)) / size_factor_;
         });
 }
 
@@ -456,9 +456,10 @@ void PoissonLog1pNMF::transpose_data(const std::vector<Document>& docs, std::vec
     transpose_data_common(
         mtx_t, docs, row_idx,
         [](const Document& doc) -> const Document& { return doc; },
-        [](const Document&, const Document& doc) {
-            return (doc.ct_tot >= 0) ? doc.ct_tot
+        [this](const Document&, const Document& doc) {
+            const double total = (doc.ct_tot >= 0) ? doc.ct_tot
                 : std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+            return total / size_factor_;
         });
 }
 
@@ -573,7 +574,10 @@ void PoissonLog1pNMF::init_denoise(const std::vector<SparseObs>& docs) {
 double PoissonLog1pNMF::init_data(const std::vector<SparseObs>& docs, bool reset_beta, std::vector<int32_t>* labels) {
     cvec_ = VectorXd(N_);
     for (size_t i = 0; i < N_; ++i) {
-        cvec_(i) = docs[i].ct_tot / size_factor_;
+        cvec_(i) = docs[i].c;
+        if (cvec_(i) <= 0) {
+            error("%s: scaling factor c must be positive for document %lu", __func__, i);
+        }
     }
     transpose_data(docs, mtx_t_);
     if (fit_background_) {
@@ -621,6 +625,10 @@ double PoissonLog1pNMF::init_data(const std::vector<SparseObs>& docs, bool reset
     // Do one round of regression for covariates only, with a mean offset
     notice("Fit initial regressions for covariates");
     size_t grainsize_m = std::min(64, std::max(1, int(M_/ (2 * nThreads_))) );
+    std::unique_ptr<PoisLog1pSparseContext> ctx;
+    if (!mle_opts_bcov_.exact_zero) {
+        ctx = std::make_unique<PoisLog1pSparseContext>(X_, cvec_, mle_opts_bcov_);
+    }
     obj = tbb::parallel_reduce(
         tbb::blocked_range<int>(0, M_, grainsize_m), 0.0,
         [&](const tbb::blocked_range<int>& r, double local_sum) {
@@ -638,8 +646,8 @@ double PoissonLog1pNMF::init_data(const std::vector<SparseObs>& docs, bool reset
             mu_j /= N_;
             VectorXd o = VectorXd::Constant(N_, mu_j);
             VectorXd bj; // empty
-            if (exact_) {
-                local_sum += pois_log1p_mle_exact(X_, mtx_t_[j], cvec_, &o, mle_opts_bcov_, bj, stats, debug_);
+            if (ctx) {
+                local_sum += pois_log1p_mle(*ctx, mtx_t_[j], &o, mle_opts_bcov_, bj, stats, debug_);
             } else {
                 local_sum += pois_log1p_mle(X_, mtx_t_[j], cvec_, &o, mle_opts_bcov_, bj, stats, debug_);
             }
@@ -743,10 +751,12 @@ double PoissonLog1pNMF::update_local(const std::vector<SparseObs>& docs,
                 continue;
             }
             double phi_i = 0.0;
+            const double doc_total = docs[i].ct_tot > 0 ? docs[i].ct_tot
+                : std::accumulate(docs[i].doc.cnts.begin(), docs[i].doc.cnts.end(), 0.0);
             for (size_t idx = 0; idx < mtx_[i].ids.size(); ++idx) {
                 int m = mtx_[i].ids[idx];
                 double y = docs[i].doc.cnts[idx];
-                double lam = std::max(std::exp(beta_.row(m).dot(theta_.row(i))) - 1.0, 1e-12) / size_factor_;
+                double lam = cvec_[i] * std::max(std::exp(beta_.row(m).dot(theta_.row(i))) - 1.0, 1e-12) / doc_total;
                 double phi = pi_ * beta0_(m);
                 double denom = phi + (1 - pi_) * lam;
                 phi = denom > 0 ? phi / denom : 0.0;

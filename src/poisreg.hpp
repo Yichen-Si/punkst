@@ -259,6 +259,73 @@ private:
     }
 };
 
+class PoisLog1pSparseContext {
+public:
+    const RowMajorMatrixXd& A;
+    const VectorXd& c;
+    const MLEOptions& opt;
+    VectorXd zak_all;
+    MatrixXd zakl_all;
+    VectorXd dZ_all;
+
+    PoisLog1pSparseContext(const RowMajorMatrixXd& A_,
+        const VectorXd& c_, const MLEOptions& opt_);
+};
+
+class PoisLog1pRegSparseCachedProblem {
+public:
+    const PoisLog1pSparseContext& ctx;
+    const RowMajorMatrixXd& A;
+    const VectorXd& c;
+    const VectorXd* o;
+    const MLEOptions& opt;
+    const bool has_offset;
+    const std::vector<uint32_t>& ids;
+    const std::vector<double>& cnts;
+    const size_t n;
+    RowMajorMatrixXd Anz;
+    MatrixXd AsqnzT;
+    Eigen::Map<const VectorXd> yvec;
+    VectorXd cS;
+    VectorXd oS;
+    VectorXd zak;
+    MatrixXd zakl;
+    VectorXd dZ;
+    VectorXd zoak;
+    bool nonnegative;
+
+    PoisLog1pRegSparseCachedProblem(const PoisLog1pSparseContext& ctx_,
+        const Document& y_, const VectorXd* o_);
+
+    void init();
+    void eval(const VectorXd& bvec,
+              double* f_out = nullptr,
+              VectorXd* g_out = nullptr,
+              VectorXd* q_out = nullptr,
+              ArrayXd* w_out = nullptr) const;
+    void eval_safe(const VectorXd& bvec,
+              double* f_out = nullptr,
+              VectorXd* g_out = nullptr,
+              VectorXd* q_out = nullptr,
+              ArrayXd* w_out = nullptr) const;
+    double f(const VectorXd& bvec) const {
+        double f_val;
+        eval(bvec, &f_val, nullptr, nullptr, nullptr);
+        return f_val;
+    }
+    void grad(const VectorXd& bvec, VectorXd& gout) const {
+        eval(bvec, nullptr, &gout, nullptr, nullptr);
+    }
+    auto make_Hv(const ArrayXd& w) const {
+        return [this, &w](const VectorXd& v) -> VectorXd {
+            VectorXd Av = Anz * v;
+            VectorXd Hv_nz = Anz.transpose() * (w * Av.array()).matrix();
+            return Hv_nz + zakl * v;
+        };
+    }
+    ArrayXd residual(const VectorXd& bvec) const;
+};
+
 // Return -logP (final objective)
 double pois_log1p_mle_exact(
     const RowMajorMatrixXd& A,
@@ -274,6 +341,14 @@ double pois_log1p_mle(
     const RowMajorMatrixXd& A,
     const Document& y,
     const VectorXd& c,
+    const VectorXd* o,
+    const MLEOptions& opt,
+    VectorXd& b, MLEStats& stats, int32_t debug_ = 0,
+    ArrayXd* res_ptr = nullptr);
+
+double pois_log1p_mle(
+    const PoisLog1pSparseContext& ctx,
+    const Document& y,
     const VectorXd* o,
     const MLEOptions& opt,
     VectorXd& b, MLEStats& stats, int32_t debug_ = 0,

@@ -21,7 +21,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     bool allow_na = false;
     bool exact = false;
     int32_t se_method = 1;
-    int32_t mode = 1;
+    int32_t mode = 1; // 1: TRON, 2: FISTA, 3: Diagonal line search
 
     ParamList pl;
     // Input Options
@@ -38,10 +38,10 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
       .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
       .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids);
     // Transform & Algorithm Options
-    pl.add_option("mode", "Algorithm for regression (1:TRON, 2:FISTA, 3:DiagLS)", mode)
-      .add_option("c", "Constant c in log(1+lambda/c)", c)
+    pl.add_option("c", "Constant c in log(1+lambda/c)", c)
       .add_option("size-factor", "L: c_i=y_i/L, g()=log(1+lambda/c_i)", size_factor)
       .add_option("max-iter-inner", "Maximum inner iterations for transform", max_iter_inner)
+    //   .add_option("mode", "Algorithm for regression (1:TRON, 2:FISTA, 3:DiagLS)", mode)
       .add_option("tol-inner", "Inner tolerance for transform", tol_inner)
       .add_option("exact", "Exact, no approximation on zero terms", exact)
       .add_option("se-method", "Method for calculating SE of beta: 1: Fisher, 2: robust", se_method)
@@ -62,6 +62,9 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
         pl.print_help_noexit();
         return 1;
     }
+    if (c <= 0 && size_factor <= 0) {
+        error("Error: --size-factor must be positive when --c is not set");
+    }
 
     // --- 1. Load Model ---
     notice("Loading model...");
@@ -74,7 +77,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     const int32_t M = beta.rows();
     notice("Loaded model with %d features and %d factors", M, K);
 
-    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, exact, debug_);
+    PoissonLog1pNMF nmf(K, M, nThreads, size_factor, seed, debug_);
     nmf.set_beta(beta);
 
     if (!covarCoefFile.empty()) {
@@ -86,6 +89,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     }
 
     MLEOptions opts{};
+    opts.exact_zero = exact;
     opts.optim.max_iters = max_iter_inner;
     opts.optim.tol = tol_inner;
     if (mode == 1) {
@@ -103,22 +107,13 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     notice("Loading input data...");
     std::vector<SparseObs> docs;
     std::vector<std::string> rnames, covar_names;
-    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
-    const bool use_10x = !dge_inputs.empty();
     HexReader reader;
+    std::unique_ptr<DGEReader10X> dge_ptr;
+    const bool use_10x = initHexOrDgeInput(reader, dge_ptr, inFile, metaFile,
+        dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
     int32_t N = 0;
     int32_t n_covar = 0;
     if (use_10x) {
-        if (!inFile.empty()) {
-            warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
-        }
-        std::unique_ptr<DGEReader10X> dge_ptr;
-        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
-            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
-        } else {
-            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
-        }
-        reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
         reader.setFeatureIndexRemap(model_features);
 
         int32_t n_overlap = dge_ptr->setFeatureIndexRemap(reader.features, false);
@@ -214,10 +209,6 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
         }
         N = static_cast<int32_t>(docs.size());
     } else {
-        if (metaFile.empty() || inFile.empty()) {
-            error("Missing --in-data or --in-meta");
-        }
-        reader = HexReader(metaFile);
         reader.setFeatureIndexRemap(model_features);
         SparseObsMinibatchReader minibatch_reader(inFile, reader,
             minCount, size_factor, c, debug_N);

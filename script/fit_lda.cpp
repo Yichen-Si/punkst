@@ -233,24 +233,11 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     int32_t nUnits;
     HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
-    const auto dge_inputs = resolveDge10XInputs(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
-    const bool use_10x = !dge_inputs.empty();
+    const bool use_10x = initHexOrDgeInput(reader, dge_ptr, inFile, metaFile,
+        dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
     if (use_10x) {
-        if (!inFile.empty()) {
-            warning("Both --in-data and 10X inputs are provided; using 10X inputs and ignoring --in-data");
-        }
-        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
-            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids);
-        } else {
-            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids);
-        }
         nUnits = dge_ptr->nBarcodes;
-        reader.initFromFeatures(dge_ptr->features, nUnits);
     } else {
-        if (metaFile.empty() || inFile.empty()) {
-            error("Missing --in-data or --in-meta");
-        }
-        reader.readMetadata(metaFile);
         nUnits = reader.nUnits;
     }
 

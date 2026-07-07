@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <array>
 #include <fstream>
+#include <memory>
 #include "zlib.h"
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
@@ -64,7 +65,7 @@ private:
 
 struct SparseObs {
     Document doc;
-    double c;
+    double c = -1;
     Eigen::VectorXd covar; // covariates
     double ct_tot = -1;
 
@@ -559,6 +560,26 @@ std::vector<DGEReader10X::DatasetInput> resolveDge10XInputs(
     const std::vector<std::string>& featuresFiles,
     const std::vector<std::string>& matrixFiles,
     const std::vector<std::string>& datasetIds);
+
+std::unique_ptr<DGEReader10X> makeDGEReader10X(
+    const std::vector<std::string>& dgeDirs,
+    const std::vector<std::string>& barcodesFiles,
+    const std::vector<std::string>& featuresFiles,
+    const std::vector<std::string>& matrixFiles,
+    const std::vector<std::string>& datasetIds,
+    bool keep_barcodes = false);
+
+bool initHexOrDgeInput(
+    HexReader& reader,
+    std::unique_ptr<DGEReader10X>& dgePtr,
+    const std::string& inFile,
+    const std::string& metaFile,
+    const std::vector<std::string>& dgeDirs,
+    const std::vector<std::string>& barcodesFiles,
+    const std::vector<std::string>& featuresFiles,
+    const std::vector<std::string>& matrixFiles,
+    const std::vector<std::string>& datasetIds,
+    bool keep_barcodes = false);
 
 struct SparseObsMinibatchReader {
     SparseObsMinibatchReader(const std::string &inFile, HexReader &reader,

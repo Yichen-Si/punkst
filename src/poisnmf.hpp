@@ -37,8 +37,8 @@ class PoissonLog1pNMF {
 public:
 
     PoissonLog1pNMF(int K, int M, int nThreads = -1, double L = 10000,
-        int seed = std::random_device{}(), bool exact = true, int debug = 0) :
-        K_(K), M_(M), size_factor_(L), seed_(seed), exact_(exact), debug_(debug) {
+        int seed = std::random_device{}(), int debug = 0) :
+        K_(K), M_(M), size_factor_(L), seed_(seed), debug_(debug) {
         set_nthreads(nThreads);
         rng_.seed(seed_);
     }
@@ -107,7 +107,6 @@ private:
     int K_, M_, P_ = 0;
     int seed_;
     int nThreads_;
-    bool exact_;
     double size_factor_;
     RowMajorMatrixXd beta_;  // M x K
     RowMajorMatrixXd theta_; // N x K
@@ -185,7 +184,7 @@ private:
             cvec_.resize(N);
             for (size_t i = 0; i < N; ++i) {
                 const Document& doc = doc_of(docs[i]);
-                cvec_(i) = sum_of(docs[i], doc) / size_factor_;
+                cvec_(i) = sum_of(docs[i], doc);
                 for (size_t k = 0; k < doc.ids.size(); ++k) {
                     int j = doc.ids[k];
                     if (j >= M_) { continue; }
@@ -203,7 +202,7 @@ private:
         for (size_t rr = 0; rr < N; ++rr) {
             const uint32_t i = (*row_idx)[rr];
             const Document& doc = doc_of(docs[i]);
-            cvec_(i) = sum_of(docs[i], doc) / size_factor_;
+            cvec_(i) = sum_of(docs[i], doc);
             for (size_t k = 0; k < doc.ids.size(); ++k) {
                 int j = doc.ids[k];
                 if (j >= M_) { continue; }

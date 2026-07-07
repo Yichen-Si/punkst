@@ -413,11 +413,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
     if (use_10x) {
-        if (!in_bc.empty() || !in_ft.empty() || !in_mtx.empty()) {
-            dge_ptr = std::make_unique<DGEReader10X>(in_bc, in_ft, in_mtx, dataset_ids, keep_barcodes);
-        } else {
-            dge_ptr = std::make_unique<DGEReader10X>(dge_dirs, dataset_ids, keep_barcodes);
-        }
+        dge_ptr = makeDGEReader10X(dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, keep_barcodes);
         reader.initFromFeatures(dge_ptr->features, dge_ptr->nBarcodes);
     } else {
         if (metaFile.empty()) {
