@@ -451,10 +451,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     bool check_exclude = !exclude_ftr_regex.empty();
     std::regex regex_include(include_ftr_regex);
     std::regex regex_exclude(exclude_ftr_regex);
-    std::ifstream inFeature(featureFile);
-    if (!inFeature) {
-        error("Error opening features file: %s", featureFile.c_str());
-    }
+    TextLineReader inFeature(featureFile);
     std::string line;
     uint32_t idx0 = 0, idx1 = 0;
     std::unordered_map<uint32_t, uint32_t> remap_new;
@@ -464,7 +461,7 @@ void HexReader::setFeatureFilter(const std::string& featureFile, int32_t minCoun
     bool has_dict = featureDict(dict);
     std::unordered_set<std::string> kept_features; // avoid duplicates
     bool has_sums = false;
-    while (std::getline(inFeature, line)) {
+    while (inFeature.getline(line)) {
         if (line.empty() || line[0] == '#') continue;
         split(token, "\t ", line);
         if (token.size() < 1) {
@@ -536,10 +533,7 @@ void HexReader::setFeatureFilterAndWeights(const std::string& featureFile,
     if (defaultWeight_ < 0.0 && keep_missing_with_default) {
         error("--default-weight must be non-negative when retaining features missing from --features");
     }
-    std::ifstream inFeature(featureFile);
-    if (!inFeature) {
-        error("Error opening features file: %s", featureFile.c_str());
-    }
+    TextLineReader inFeature(featureFile);
 
     const bool check_include = !include_ftr_regex.empty();
     const bool check_exclude = !exclude_ftr_regex.empty();
@@ -561,7 +555,7 @@ void HexReader::setFeatureFilterAndWeights(const std::string& featureFile,
     int32_t nrejected = 0;
     int32_t nweighted = 0;
 
-    while (std::getline(inFeature, line)) {
+    while (inFeature.getline(line)) {
         std::string_view stripped = strip_str(line);
         if (stripped.empty() || stripped.front() == '#') {
             continue;
@@ -684,6 +678,70 @@ void HexReader::setFeatureFilterAndWeights(const std::string& featureFile,
     notice("%s: %d valid weights read; %d features are kept out of %d",
         __func__, nweighted, idx1, nFeatures);
     setFeatureIndexRemap(remap_new);
+}
+
+std::vector<double> HexReader::readPositiveFeatureColumn(const std::string& featureFile,
+    int32_t valueColumn, const std::string& valueName) const {
+    if (valueColumn <= 0) {
+        error("%s: 0-based %s column must be greater than 0 because column 0 contains feature names",
+            __func__, valueName.c_str());
+    }
+    std::unordered_map<std::string, size_t> feature_index;
+    feature_index.reserve(features.size());
+    for (size_t i = 0; i < features.size(); ++i) {
+        if (!feature_index.emplace(features[i], i).second) {
+            error("%s: duplicate current feature name: %s", __func__, features[i].c_str());
+        }
+    }
+    TextLineReader reader(featureFile);
+    std::vector<double> values(features.size(), 0.0);
+    std::vector<uint8_t> seen(features.size(), 0);
+    std::vector<std::string> tokens;
+    std::string line;
+    uint64_t row = 0;
+    bool first_data_row = true;
+    while (reader.getline(line)) {
+        ++row;
+        std::string_view stripped = strip_str(line);
+        if (stripped.empty() || stripped.front() == '#') continue;
+        split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
+        if (tokens.empty()) continue;
+        auto it = feature_index.find(tokens[0]);
+        if (it == feature_index.end()) {
+            first_data_row = false;
+            continue;
+        }
+        const size_t idx = it->second;
+        if (seen[idx]) {
+            error("%s: duplicate feature %s at row %" PRIu64 " in %s",
+                __func__, tokens[0].c_str(), row, featureFile.c_str());
+        }
+        if (tokens.size() <= static_cast<size_t>(valueColumn)) {
+            error("%s: row %" PRIu64 " in %s has no column %d for %s",
+                __func__, row, featureFile.c_str(), valueColumn, valueName.c_str());
+        }
+        double value = 0.0;
+        if (!str2double(tokens[valueColumn], value) || !std::isfinite(value) || value <= 0.0) {
+            const std::string key = to_lower(tokens[0]);
+            if (first_data_row && (key == "feature" || key == "gene")) {
+                first_data_row = false;
+                continue;
+            }
+            error("%s: %s for feature %s at row %" PRIu64
+                " in %s must be positive and finite",
+                __func__, valueName.c_str(), tokens[0].c_str(), row, featureFile.c_str());
+        }
+        values[idx] = value;
+        seen[idx] = 1;
+        first_data_row = false;
+    }
+    for (size_t i = 0; i < features.size(); ++i) {
+        if (!seen[i]) {
+            error("%s: missing positive finite %s for kept feature %s in %s",
+                __func__, valueName.c_str(), features[i].c_str(), featureFile.c_str());
+        }
+    }
+    return values;
 }
 
 int32_t HexReader::filterCurrentFeatures(int32_t minCount,

@@ -135,6 +135,38 @@ weighting is active. Default: `-1`, which drops missing features.
 Fitting and transform use weighted counts. Pseudobulk output remains on the
 original count scale.
 
+### Per-feature dispersion
+
+The default likelihood is Poisson. A fixed per-feature NB2 dispersion can be
+supplied from the `--features` file with `--icol-dispersion`, whose value is the
+positive NB size \(\tau_w\):
+
+\[
+\operatorname{Var}(n_{dw}\mid\text{topics})=
+\mu_{dw}+\mu_{dw}^2/\tau_w.
+\]
+
+Smaller \(\tau_w\) permits more residual feature-specific count variation;
+\(\tau_w\to\infty\) recovers the Poisson model. Every kept feature must have a
+positive finite value in that column.
+
+Alternatively, `--estimate-dispersion` fits \(\tau_w\) after a Poisson warmup.
+It is mutually exclusive with `--icol-dispersion`. The estimator uses fitted
+topic means on observed cells, a positive-truncated NB2 residual moment, a
+direct all-feature log-mean LOESS trend, and shrinkage for rare features. The
+residual scan performs document-local inference in parallel without
+materializing a unit-by-feature mean matrix.
+
+`--dispersion-init-epochs` controls the number of initial Poisson epochs
+(default `1`); it must be smaller than `--n-epochs`. The remaining tuning
+options are `--dispersion-loess-span`, `--dispersion-min-positive`,
+`--dispersion-mu-bins`, `--dispersion-delta-min`,
+and `--dispersion-delta-max`.
+
+Estimated fits write `{prefix}.dispersion.tsv`, with raw, trend, and shrunk
+inverse-dispersion estimates plus the resulting \(\tau_w\). Both supplied and
+estimated dispersion vectors are stored in `{prefix}.state.tsv`.
+
 ### SVI options
 
 `--n-epochs`
@@ -215,6 +247,10 @@ One input source is required:
 The model TSV stores only normalized topic-word distributions for reporting and
 downstream compatibility; it does not contain the Gamma variational rates needed
 for exact projection.
+
+When the fit used per-feature dispersion, transform automatically reads its
+stored \(\tau_w\) vector from the state file. It deliberately has no
+transform-time dispersion input, so projection remains consistent with fitting.
 
 ### Optional
 

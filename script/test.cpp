@@ -1,6 +1,7 @@
 #include "punkst.h"
 #include "dataunits.hpp"
 #include "eb_topic_activity.hpp"
+#include "gamma_pois_dispersion.hpp"
 #include "numerical_utils.hpp"
 #include "topic_svb.hpp"
 #include "tiles2bins.hpp"
@@ -266,6 +267,19 @@ void test_vst_feature_eligibility() {
         vst.stats.var_standardized[3], 0.0, 0.0, 0.0);
 }
 
+void test_gamma_poisson_dispersion_helpers() {
+    const double low_mean =
+        GammaPoissonDispersionEstimator::positive_truncated_residual_expectation(1e-8, 0.01);
+    check_true("Gamma-Poisson truncated residual preserves low-mean scale",
+        std::isfinite(low_mean) && low_mean > 9000.0);
+    const double d1 =
+        GammaPoissonDispersionEstimator::positive_truncated_residual_expectation(0.1, 1.0);
+    const double d2 =
+        GammaPoissonDispersionEstimator::positive_truncated_residual_expectation(1.0, 1.0);
+    check_true("Gamma-Poisson truncated residual increases with dispersion",
+        std::isfinite(d1) && std::isfinite(d2) && d2 > d1);
+}
+
 void test_hexreader_feature_weights() {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "punkst_hexreader_weight_test";
     std::filesystem::create_directories(dir);
@@ -387,6 +401,22 @@ void test_hexreader_feature_weights() {
         combined_doc.ids.size() == 1 && combined_doc.ids[0] == 0);
     check_close("feature weights from feature file apply active weight",
         combined_doc.cnts[0], 4.0, 0.0, 0.0);
+    const std::vector<double> positiveColumn = combined_reader.readPositiveFeatureColumn(
+        weightedFeatureFile.string(), 2, "test value");
+    check_true("aligned positive feature column",
+        positiveColumn.size() == 1 && positiveColumn[0] == 2.0);
+
+    const std::filesystem::path gzFeatureFile = dir / "positive_features.tsv.gz";
+    {
+        gzFile out = gzopen(gzFeatureFile.c_str(), "wb");
+        const std::string contents = "#feature\tcount\ttau\nA\t10\t3.5\n";
+        gzwrite(out, contents.data(), static_cast<unsigned int>(contents.size()));
+        gzclose(out);
+    }
+    const std::vector<double> gzPositiveColumn = combined_reader.readPositiveFeatureColumn(
+        gzFeatureFile.string(), 2, "test value");
+    check_true("aligned positive feature column supports gzip",
+        gzPositiveColumn.size() == 1 && gzPositiveColumn[0] == 3.5);
 
     HexReader default_reader;
     default_reader.readMetadata(metaFile2.string());
@@ -503,6 +533,7 @@ int32_t test(int32_t, char**) {
         test_fit_eta_em();
         test_unit_factor_result_header_ranges();
         test_vst_feature_eligibility();
+        test_gamma_poisson_dispersion_helpers();
         test_hexreader_feature_weights();
         test_feature_stats();
     } catch (const std::exception& ex) {

@@ -66,3 +66,4 @@ claude_log/
 
 .cache/
 .scratch/
+.agents/

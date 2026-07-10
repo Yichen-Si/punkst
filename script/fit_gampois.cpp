@@ -1,7 +1,6 @@
 #include "gamma_pois_topic.hpp"
 
 #include <climits>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -21,6 +20,11 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     int32_t modal = 0;
     int32_t minCountTrain = 20, minCountFeature = 1;
     int32_t icolWeight = -1;
+    int32_t icolDispersion = -1;
+    bool estimateDispersion = false;
+    int32_t dispersionInitEpochs = 1;
+    int32_t dispersionMinPositive = 10;
+    int32_t dispersionMuBins = 32;
     double defaultWeight = -1.0;
     bool transform = false;
     bool sort_topics = false;
@@ -36,6 +40,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     double nuShape = 1.0;
     double nuRate = -1.0;
     double sizeFactor = -1.0;
+    double dispersionLoessSpan = 0.3;
+    double dispersionDeltaMin = 1e-8;
+    double dispersionDeltaMax = 1e4;
     bool symmetricNu = false;
 
     ParamList pl;
@@ -43,7 +50,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("in-meta", "Metadata file", metaFile)
       .add_option("out-prefix", "Output prefix for model and results files", outPrefix, true)
       .add_option("transform", "Transform data to topic space after training", transform)
-      .add_option("sort-topics", "Sort topics by topic capacity after training", sort_topics);
+      .add_option("sort-topics", "Sort topics by decreasing usage after training", sort_topics);
 
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
@@ -55,6 +62,8 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("min-count-per-feature", "Min count for features to be included", minCountFeature)
       .add_option("default-weight", "Default weight for model features missing from --features when feature weights are active; <0 drops missing features", defaultWeight)
       .add_option("icol-weight", "0-based column index for feature weight in --features; <0 disables feature weights", icolWeight)
+      .add_option("icol-dispersion", "0-based column index for per-feature dispersion tau in --features; <0 disables dispersion", icolDispersion)
+      .add_option("estimate-dispersion", "Estimate per-feature dispersion after a Poisson warmup", estimateDispersion)
       .add_option("include-feature-regex", "Regex for including features", include_ftr_regex)
       .add_option("exclude-feature-regex", "Regex for excluding features", exclude_ftr_regex);
 
@@ -81,6 +90,13 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("symmetric-nu", "Fix E[nu_r] to 1 and skip asymmetric nu updates", symmetricNu)
       .add_option("size-factor", "Corpus mean document length nbar; required when full feature counts are unavailable", sizeFactor);
 
+    pl.add_option("dispersion-init-epochs", "Poisson warmup epochs before estimating dispersion", dispersionInitEpochs)
+      .add_option("dispersion-loess-span", "LOESS span for the dispersion abundance trend", dispersionLoessSpan)
+      .add_option("dispersion-min-positive", "Minimum positive cells for a raw dispersion estimate", dispersionMinPositive)
+      .add_option("dispersion-mu-bins", "Log-mean bins per feature during dispersion estimation", dispersionMuBins)
+      .add_option("dispersion-delta-min", "Lower bound for estimated inverse dispersion", dispersionDeltaMin)
+      .add_option("dispersion-delta-max", "Upper bound for estimated inverse dispersion", dispersionDeltaMax);
+
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -93,6 +109,22 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     if (batchSize <= 0) batchSize = 512;
     if (nEpochs <= 0) nEpochs = 1;
     if (nTopics <= 0) error("--n-topics must be greater than 0");
+    if (icolDispersion >= 0 && featureFile.empty()) {
+        error("--features is required when --icol-dispersion is non-negative");
+    }
+    if (estimateDispersion && icolDispersion >= 0) {
+        error("--estimate-dispersion and --icol-dispersion are mutually exclusive");
+    }
+    if (estimateDispersion && (dispersionInitEpochs < 1 || dispersionInitEpochs >= nEpochs)) {
+        error("--dispersion-init-epochs must be at least 1 and smaller than --n-epochs");
+    }
+    if (estimateDispersion && (dispersionMinPositive < 1 || dispersionMuBins < 1
+        || !std::isfinite(dispersionLoessSpan) || dispersionLoessSpan <= 0.0
+        || dispersionLoessSpan > 1.0
+        || dispersionDeltaMin <= 0.0 || dispersionDeltaMax < dispersionDeltaMin
+        || !std::isfinite(dispersionDeltaMin) || !std::isfinite(dispersionDeltaMax))) {
+        error("Invalid dispersion estimation options");
+    }
     if (seed <= 0) seed = std::random_device{}();
     const bool weights_active = !featureFile.empty() && icolWeight >= 0;
     if (defaultWeight < 0.0) defaultWeight = -1.0;
@@ -117,6 +149,10 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         }
     }
 
+    std::vector<double> suppliedTau;
+    if (icolDispersion >= 0) {
+        suppliedTau = reader.readPositiveFeatureColumn(featureFile, icolDispersion, "dispersion tau");
+    }
     auto gp = std::make_unique<GammaPoisson4Hex>(reader, modal, verbose);
     if (use_10x) {
         int32_t n_overlap = dge_ptr->setFeatureIndexRemap(gp->getFeatureNames(), false);
@@ -148,6 +184,11 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     gp->initialize(nTopics, seed, nThreads, verbose, betaShape, xiShape, xiMean,
         thetaShape, nuShape, nuRate, kappa, tau0, gp->nUnits(), resolvedSizeFactor,
         symmetricNu, maxIter, mDelta);
+    if (icolDispersion >= 0) {
+        gp->setFeatureDispersion(suppliedTau);
+        notice("Using per-feature dispersion tau from column %d of %s",
+            icolDispersion, featureFile.c_str());
+    }
 
     const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
     notice("Starting Gamma-Poisson model training....");
@@ -160,6 +201,23 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         }
         notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
         gp->printTopicAbundance();
+        if (estimateDispersion && epoch + 1 == dispersionInitEpochs) {
+            GammaPoissonDispersionOptions options;
+            options.min_positive = dispersionMinPositive;
+            options.mu_bins = dispersionMuBins;
+            options.loess_span = dispersionLoessSpan;
+            options.delta_min = dispersionDeltaMin;
+            options.delta_max = dispersionDeltaMax;
+            GammaPoissonDispersionResult dispersion = use_10x
+                ? gp->estimateFeatureDispersion10X(options, batchSize, maxUnits)
+                : gp->estimateFeatureDispersion(options, inFile, batchSize,
+                    minCountTrain, maxUnits);
+            const std::string outDispersion = outPrefix + ".dispersion.tsv";
+            write_gamma_poisson_dispersion_diagnostics(outDispersion,
+                gp->getFeatureNames(), dispersion);
+            notice("Estimated per-feature dispersion from %d documents; diagnostics written to %s",
+                dispersion.n_documents, outDispersion.c_str());
+        }
     }
     if (sort_topics) {
         gp->sortTopicsByWeight();

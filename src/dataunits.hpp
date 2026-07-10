@@ -409,6 +409,8 @@ public:
         std::string& include_ftr_regex, std::string& exclude_ftr_regex,
         int32_t icolWeight, double defaultWeight_, bool keep_missing_with_default,
         bool read_sums = true);
+    std::vector<double> readPositiveFeatureColumn(const std::string& featureFile,
+        int32_t valueColumn, const std::string& valueName) const;
     int32_t filterCurrentFeatures(int32_t minCount = 1,
         const std::string& include_ftr_regex = "",
         const std::string& exclude_ftr_regex = "");
