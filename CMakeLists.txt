@@ -122,6 +122,8 @@ set(SOURCE_FILES
     src/topic_svb.cpp
     src/numerical_utils.hpp
     src/numerical_utils.cpp
+    src/leiden.hpp
+    src/leiden.cpp
     src/pts2tiles.hpp
     script/preprocess_options.hpp
     script/factor_eval_common.hpp
