@@ -392,6 +392,27 @@ void validate_cluster_state(const GammaPoissonClusterState& state) {
         || (state.diagnostics.covariance_accumulation != "diagonal"
             && state.diagnostics.covariance_accumulation != "dense"
             && state.diagnostics.covariance_accumulation != "compact")
+        || (state.diagnostics.optimizer != "batch"
+            && state.diagnostics.optimizer != "svi")
+        || state.diagnostics.candidate_components < 0
+        || state.diagnostics.candidate_dimensions < 0
+        || state.diagnostics.candidate_dimensions > dim
+        || (state.diagnostics.candidate_components > 0
+            && (state.diagnostics.optimizer != "svi"
+                || state.diagnostics.candidate_components < 3
+                || state.diagnostics.candidate_components >= components
+                || state.diagnostics.candidate_dimensions <= 0
+                || (state.diagnostics.candidate_search != "linear"
+                    && state.diagnostics.candidate_search != "kdtree")))
+        || (state.diagnostics.candidate_components == 0
+            && (state.diagnostics.candidate_dimensions != 0
+                || state.diagnostics.full_refreshes != 0
+                || state.diagnostics.candidate_search != "none"))
+        || state.diagnostics.full_refreshes < 0
+        || (state.diagnostics.optimizer == "batch"
+            && (state.diagnostics.candidate_components != 0
+                || state.diagnostics.candidate_dimensions != 0
+                || state.diagnostics.full_refreshes != 0))
         || !state.basis.allFinite()
         || !model.dirichlet_parameters.allFinite() || !model.means.allFinite()
         || !model.variances.allFinite() || !model.orientation.allFinite()
@@ -439,6 +460,7 @@ void write_gamma_poisson_cluster_state(const std::string& path,
     }
     out << "\n##document_uncertainty_rank\t" << state.document_uncertainty_rank << "\n";
     out << "##cluster_covariance_rank\t" << model.orientation.cols() << "\n";
+    out << "##optimizer\t" << diagnostics.optimizer << "\n";
     out << "##covariance_accumulation\t"
         << diagnostics.covariance_accumulation << "\n";
     out << "##input_row_order\t" << state.input_row_order << "\n";
@@ -451,11 +473,22 @@ void write_gamma_poisson_cluster_state(const std::string& path,
     out << "##diagonal_warmup_iterations\t" << diagnostics.warmup_iterations << "\n";
     out << "##structured_iterations\t" << diagnostics.structured_iterations << "\n";
     out << "##orientation_updates\t" << diagnostics.orientation_updates << "\n";
+    out << "##epochs\t" << diagnostics.epochs << "\n";
+    out << "##svi_updates\t" << diagnostics.svi_updates << "\n";
+    out << "##refinement_iterations\t"
+        << diagnostics.refinement_iterations << "\n";
+    out << "##candidate_components\t" << diagnostics.candidate_components << "\n";
+    out << "##candidate_dimensions\t" << diagnostics.candidate_dimensions << "\n";
+    out << "##candidate_search\t" << diagnostics.candidate_search << "\n";
+    out << "##full_refreshes\t" << diagnostics.full_refreshes << "\n";
     out << "##orientation_converged\t" << (diagnostics.orientation_converged ? 1 : 0) << "\n";
     out << "##orientation_change\t" << diagnostics.orientation_change << "\n";
     out << "##converged\t" << (diagnostics.converged ? 1 : 0) << "\n";
+    out << "##svi_converged\t" << (diagnostics.svi_converged ? 1 : 0) << "\n";
     out << "##termination\t" << (diagnostics.converged ? "converged" : "max_iterations") << "\n";
     out << "##relative_elbo_change\t" << diagnostics.relative_elbo_change << "\n";
+    out << "##relative_predictive_log_likelihood_change\t"
+        << diagnostics.relative_predictive_log_likelihood_change << "\n";
     out << "##mean_responsibility_l1_change\t" << diagnostics.mean_responsibility_l1_change << "\n";
     out << "##p90_responsibility_l1_change\t" << diagnostics.p90_responsibility_l1_change << "\n";
     out << "##top_assignment_change_fraction\t" << diagnostics.top_assignment_change_fraction << "\n";
@@ -658,6 +691,7 @@ GammaPoissonClusterState read_gamma_poisson_cluster_state(
         return parsed;
     };
     auto& diagnostics = state.diagnostics;
+    diagnostics.optimizer = required("optimizer");
     diagnostics.covariance_accumulation = required("covariance_accumulation");
     diagnostics.elbo = parse_diagnostic("elbo");
     diagnostics.log_likelihood = parse_diagnostic("log_likelihood");
@@ -668,6 +702,18 @@ GammaPoissonClusterState read_gamma_poisson_cluster_state(
         required("structured_iterations"), "structured iterations");
     diagnostics.orientation_updates = parse_cluster_i32(
         required("orientation_updates"), "orientation updates");
+    diagnostics.epochs = parse_cluster_i32(required("epochs"), "epochs");
+    diagnostics.svi_updates = parse_cluster_i32(
+        required("svi_updates"), "SVI updates");
+    diagnostics.refinement_iterations = parse_cluster_i32(
+        required("refinement_iterations"), "refinement iterations");
+    diagnostics.candidate_components = parse_cluster_i32(
+        required("candidate_components"), "candidate components");
+    diagnostics.candidate_dimensions = parse_cluster_i32(
+        required("candidate_dimensions"), "candidate dimensions");
+    diagnostics.candidate_search = required("candidate_search");
+    diagnostics.full_refreshes = parse_cluster_i32(
+        required("full_refreshes"), "full refreshes");
     const auto parse_boolean = [&](const std::string& key) {
         const int32_t value = parse_cluster_i32(required(key), key);
         if (value != 0 && value != 1) {
@@ -679,6 +725,7 @@ GammaPoissonClusterState read_gamma_poisson_cluster_state(
     diagnostics.orientation_converged = parse_boolean("orientation_converged");
     diagnostics.orientation_change = parse_diagnostic("orientation_change");
     diagnostics.converged = parse_boolean("converged");
+    diagnostics.svi_converged = parse_boolean("svi_converged");
     const std::string& termination = required("termination");
     if (termination != (diagnostics.converged
             ? "converged" : "max_iterations")) {
@@ -686,6 +733,8 @@ GammaPoissonClusterState read_gamma_poisson_cluster_state(
             "Gamma-Poisson cluster state termination metadata mismatch");
     }
     diagnostics.relative_elbo_change = parse_diagnostic("relative_elbo_change");
+    diagnostics.relative_predictive_log_likelihood_change = parse_diagnostic(
+        "relative_predictive_log_likelihood_change");
     diagnostics.mean_responsibility_l1_change = parse_diagnostic(
         "mean_responsibility_l1_change");
     diagnostics.p90_responsibility_l1_change = parse_diagnostic(

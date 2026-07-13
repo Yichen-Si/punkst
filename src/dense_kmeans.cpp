@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -34,6 +35,50 @@ void assign_to_centers(
         ++counts(best);
         inertia += best_distance;
     }
+}
+
+bool update_centers_with_empty_repair(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    Eigen::VectorXi& assignments, Eigen::VectorXd& distances,
+    Eigen::VectorXi& counts, RowMajorMatrixXd& centers) {
+    RowMajorMatrixXd sums = RowMajorMatrixXd::Zero(
+        centers.rows(), centers.cols());
+    for (Eigen::Index d = 0; d < observations.rows(); ++d) {
+        sums.row(assignments(d)) += observations.row(d);
+    }
+
+    bool repaired = false;
+    std::vector<bool> reseeded(observations.rows(), false);
+    for (Eigen::Index empty = 0; empty < centers.rows(); ++empty) {
+        if (counts(empty) > 0) continue;
+        Eigen::Index farthest = -1;
+        double farthest_distance = -1.0;
+        for (Eigen::Index d = 0; d < observations.rows(); ++d) {
+            const int32_t donor = assignments(d);
+            if (!reseeded[d] && counts(donor) > 1
+                && distances(d) > farthest_distance) {
+                farthest = d;
+                farthest_distance = distances(d);
+            }
+        }
+        if (farthest < 0) {
+            throw std::runtime_error("Cannot reseed empty dense k-means cluster");
+        }
+        const int32_t donor = assignments(farthest);
+        sums.row(donor) -= observations.row(farthest);
+        --counts(donor);
+        assignments(farthest) = static_cast<int32_t>(empty);
+        sums.row(empty) = observations.row(farthest);
+        counts(empty) = 1;
+        distances(farthest) = 0.0;
+        reseeded[farthest] = true;
+        repaired = true;
+    }
+
+    for (Eigen::Index c = 0; c < centers.rows(); ++c) {
+        centers.row(c) = sums.row(c) / static_cast<double>(counts(c));
+    }
+    return repaired;
 }
 
 } // namespace
@@ -101,41 +146,8 @@ DenseKMeansResult dense_kmeans(
         assign_to_centers(observations, out.centers, out.assignments,
             distances, out.counts, out.inertia);
         bool changed = (out.assignments.array() != previous.array()).any();
-        RowMajorMatrixXd sums = RowMajorMatrixXd::Zero(clusters, dim);
-        for (Eigen::Index d = 0; d < n; ++d) {
-            sums.row(out.assignments(d)) += observations.row(d);
-        }
-
-        std::vector<bool> reseeded(n, false);
-        for (int32_t empty = 0; empty < clusters; ++empty) {
-            if (out.counts(empty) > 0) continue;
-            Eigen::Index farthest = -1;
-            double farthest_distance = -1.0;
-            for (Eigen::Index d = 0; d < n; ++d) {
-                const int32_t donor = out.assignments(d);
-                if (!reseeded[d] && out.counts(donor) > 1
-                    && distances(d) > farthest_distance) {
-                    farthest = d;
-                    farthest_distance = distances(d);
-                }
-            }
-            if (farthest < 0) {
-                throw std::runtime_error("Cannot reseed empty dense k-means cluster");
-            }
-            const int32_t donor = out.assignments(farthest);
-            sums.row(donor) -= observations.row(farthest);
-            --out.counts(donor);
-            out.assignments(farthest) = empty;
-            sums.row(empty) = observations.row(farthest);
-            out.counts(empty) = 1;
-            distances(farthest) = 0.0;
-            reseeded[farthest] = true;
-            changed = true;
-        }
-
-        for (int32_t c = 0; c < clusters; ++c) {
-            out.centers.row(c) = sums.row(c) / static_cast<double>(out.counts(c));
-        }
+        changed = update_centers_with_empty_repair(observations,
+            out.assignments, distances, out.counts, out.centers) || changed;
         out.iterations = iteration + 1;
         if (!changed) {
             out.converged = true;
@@ -145,6 +157,48 @@ DenseKMeansResult dense_kmeans(
     }
     out.inertia = 0.0;
     for (Eigen::Index d = 0; d < n; ++d) {
+        out.inertia += (observations.row(d)
+            - out.centers.row(out.assignments(d))).squaredNorm();
+    }
+    return out;
+}
+
+DenseKMeansResult sampled_dense_kmeans(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const DenseKMeansOptions& options, int32_t max_samples) {
+    if (max_samples <= 0) {
+        throw std::invalid_argument("Dense k-means sample size must be positive");
+    }
+    if (max_samples >= observations.rows()) {
+        return dense_kmeans(observations, options);
+    }
+    if (max_samples < options.n_clusters) {
+        throw std::invalid_argument(
+            "Dense k-means sample must contain at least one row per cluster");
+    }
+
+    std::mt19937 random_engine(static_cast<uint32_t>(options.seed));
+    std::vector<Eigen::Index> sample(max_samples);
+    std::iota(sample.begin(), sample.end(), Eigen::Index{0});
+    for (Eigen::Index d = max_samples; d < observations.rows(); ++d) {
+        std::uniform_int_distribution<Eigen::Index> draw(0, d);
+        const Eigen::Index selected = draw(random_engine);
+        if (selected < max_samples) sample[selected] = d;
+    }
+    std::sort(sample.begin(), sample.end());
+    RowMajorMatrixXd sampled(max_samples, observations.cols());
+    for (int32_t i = 0; i < max_samples; ++i) {
+        sampled.row(i) = observations.row(sample[i]);
+    }
+
+    DenseKMeansResult out = dense_kmeans(sampled, options);
+    Eigen::VectorXd distances;
+    assign_to_centers(observations, out.centers, out.assignments,
+        distances, out.counts, out.inertia);
+    update_centers_with_empty_repair(observations, out.assignments,
+        distances, out.counts, out.centers);
+    out.inertia = 0.0;
+    for (Eigen::Index d = 0; d < observations.rows(); ++d) {
         out.inertia += (observations.row(d)
             - out.centers.row(out.assignments(d))).squaredNorm();
     }

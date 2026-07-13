@@ -22,3 +22,7 @@ struct DenseKMeansResult {
 DenseKMeansResult dense_kmeans(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const DenseKMeansOptions& options);
+
+DenseKMeansResult sampled_dense_kmeans(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const DenseKMeansOptions& options, int32_t max_samples);

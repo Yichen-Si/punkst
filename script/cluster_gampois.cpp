@@ -191,6 +191,7 @@ void write_fit_outputs(const std::string& out_prefix,
 
 int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     std::string state_file, posterior_file, dispersion_file, out_prefix;
+    std::string optimizer = "batch";
     std::string covariance_accumulation = "auto";
     int32_t n_clusters_max = 10;
     int32_t max_iterations = 100;
@@ -201,6 +202,15 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     int32_t orientation_update_interval = 10;
     int32_t orientation_max_updates = 10;
     int32_t orientation_patience = 2;
+    int32_t minibatch_size = 1024;
+    int32_t n_epochs = 30;
+    int32_t svi_eval_size = 4096;
+    int32_t refine_max_iterations = 20;
+    int32_t candidate_components = 0;
+    int32_t candidate_dimensions = 0;
+    int32_t candidate_refresh_epochs = 5;
+    int32_t prune_patience = 0;
+    std::string candidate_search = "auto";
     int32_t n_representatives = 10;
     int32_t seed = 1;
     int32_t threads = 1;
@@ -213,6 +223,8 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     double low_rank_variance_floor = 1e-6;
     double orientation_tolerance = 1e-3;
     double orientation_step = 0.5;
+    double svi_kappa = 0.7;
+    double svi_tau0 = 10.0;
     double min_cluster_size = 5.0;
 
     ParamList pl;
@@ -220,6 +232,7 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
       .add_option("in-posterior", "Input Gamma-Poisson local posterior", posterior_file, true)
       .add_option("in-posterior-dispersion", "Optional posterior dispersion sidecar", dispersion_file)
       .add_option("out-prefix", "Output prefix for clustering files", out_prefix, true)
+      .add_option("optimizer", "Cluster optimizer: batch or svi", optimizer)
       .add_option("n-clusters-max", "Number of overfitted mixture components", n_clusters_max)
       .add_option("min-cluster-size", "Minimum absolute expected membership for an active cluster", min_cluster_size)
       .add_option("n-representatives", "Representative documents written per active cluster", n_representatives)
@@ -228,10 +241,21 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
       .add_option("convergence-patience", "Consecutive stable iterations required for convergence", convergence_patience)
       .add_option("cluster-covariance-rank", "Shared-orientation cluster covariance rank; -1 selects min(5,K-1), zero selects diagonal", cluster_covariance_rank)
       .add_option("covariance-accumulation", "Conditional covariance accumulation: auto, dense, or compact", covariance_accumulation)
-      .add_option("diagonal-warmup-iter", "Diagonal warmup iterations before activating cluster covariance", diagonal_warmup_iterations)
-      .add_option("orientation-update-interval", "EM iterations between shared-orientation updates", orientation_update_interval)
+      .add_option("diagonal-warmup-iter", "Batch-EM diagonal warmup iterations before activating cluster covariance", diagonal_warmup_iterations)
+      .add_option("orientation-update-interval", "EM iterations or SVI updates between shared-orientation updates", orientation_update_interval)
       .add_option("orientation-max-updates", "Maximum shared-orientation updates", orientation_max_updates)
       .add_option("orientation-patience", "Consecutive stable shared-orientation updates", orientation_patience)
+      .add_option("minibatch-size", "Documents per in-memory SVI update", minibatch_size)
+      .add_option("n-epochs", "Maximum shuffled SVI epochs", n_epochs)
+      .add_option("svi-eval-size", "Fixed validation documents used for SVI convergence", svi_eval_size)
+      .add_option("refine-max-iter", "Maximum deterministic EM iterations after SVI", refine_max_iterations)
+      .add_option("candidate-components", "SVI candidate components per document; zero scores all", candidate_components)
+      .add_option("candidate-dim", "Dimensions used by the SVI candidate proxy; zero uses all", candidate_dimensions)
+      .add_option("candidate-refresh-epochs", "SVI epochs between exact full-component refreshes", candidate_refresh_epochs)
+      .add_option("candidate-search", "Candidate selector: auto, linear, or kdtree", candidate_search)
+      .add_option("prune-patience", "Full refreshes below minimum size before a component becomes dormant; zero disables", prune_patience)
+      .add_option("svi-kappa", "Robbins-Monro SVI learning-rate exponent", svi_kappa)
+      .add_option("svi-tau0", "Robbins-Monro SVI learning-rate offset", svi_tau0)
       .add_option("seed", "Initialization seed", seed)
       .add_option("threads", "Number of threads used by loading and the clustering E-step", threads)
       .add_option("verbose", "Verbose level", verbose)
@@ -269,6 +293,13 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
             throw std::invalid_argument("Cluster covariance rank exceeds K-1");
         }
         GammaPoissonClusterFitOptions options;
+        if (optimizer == "batch") {
+            options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Batch;
+        } else if (optimizer == "svi") {
+            options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Svi;
+        } else {
+            throw std::invalid_argument("--optimizer must be batch or svi");
+        }
         if (covariance_accumulation == "auto") {
             options.covariance_accumulation = GammaPoissonClusterFitOptions::
                 CovarianceAccumulation::Auto;
@@ -292,12 +323,36 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
         options.orientation_update_interval = orientation_update_interval;
         options.orientation_max_updates = orientation_max_updates;
         options.orientation_patience = orientation_patience;
+        options.minibatch_size = minibatch_size;
+        options.n_epochs = n_epochs;
+        options.svi_eval_size = svi_eval_size;
+        options.refine_max_iterations = refine_max_iterations;
+        options.candidate_components = candidate_components;
+        options.candidate_dimensions = candidate_dimensions;
+        options.candidate_refresh_epochs = candidate_refresh_epochs;
+        if (candidate_search == "auto") {
+            options.candidate_search = GammaPoissonClusterFitOptions::
+                CandidateSearch::Auto;
+        } else if (candidate_search == "linear") {
+            options.candidate_search = GammaPoissonClusterFitOptions::
+                CandidateSearch::Linear;
+        } else if (candidate_search == "kdtree") {
+            options.candidate_search = GammaPoissonClusterFitOptions::
+                CandidateSearch::KdTree;
+        } else {
+            throw std::invalid_argument(
+                "--candidate-search must be auto, linear, or kdtree");
+        }
+        options.prune_patience = prune_patience;
         options.seed = seed;
         options.dirichlet_concentration = dirichlet_concentration;
         options.variance_floor = variance_floor;
         options.low_rank_variance_floor = low_rank_variance_floor;
         options.orientation_tolerance = orientation_tolerance;
         options.orientation_step = orientation_step;
+        options.svi_kappa = svi_kappa;
+        options.svi_tau0 = svi_tau0;
+        options.min_cluster_size = min_cluster_size;
         options.tolerance = tolerance;
         options.responsibility_p90_tolerance = responsibility_p90_tolerance;
         options.top_assignment_change_tolerance = top_assignment_change_tolerance;
@@ -306,10 +361,13 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
         GammaPoissonClusterState state = make_cluster_state(
             dataset, coordinates, fit, min_cluster_size);
         write_fit_outputs(out_prefix, dataset, state, fit, n_representatives);
-        notice("Loaded %zu posterior rows into memory and fitted %d components (%d active) in %d iterations (%s; %s covariance accumulation)",
+        notice("Loaded %zu posterior rows into memory and fitted %d components (%d active) with %s in %d iterations (%d epochs, %d SVI updates, %d refinement iterations; %s; %s covariance accumulation)",
             dataset.identifiers.size(), static_cast<int32_t>(state.model.dirichlet_parameters.size()),
             static_cast<int32_t>(std::count(state.active.begin(), state.active.end(), uint8_t{1})),
+            state.diagnostics.optimizer.c_str(),
             state.diagnostics.iterations,
+            state.diagnostics.epochs, state.diagnostics.svi_updates,
+            state.diagnostics.refinement_iterations,
             state.diagnostics.converged ? "converged" : "maximum reached",
             state.diagnostics.covariance_accumulation.c_str());
         notice("Gamma-Poisson clustering outputs written to %s.{state,model,results,separation,representatives}.tsv",

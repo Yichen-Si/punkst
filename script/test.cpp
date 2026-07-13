@@ -4,6 +4,7 @@
 #include "dense_kmeans.hpp"
 #include "gamma_pois_dispersion.hpp"
 #include "gamma_pois_cluster.hpp"
+#include "gamma_pois_cluster_internal.hpp"
 #include "gamma_pois_posterior_io.hpp"
 #include "gamma_pois_topic.hpp"
 #include "low_rank_covariance.hpp"
@@ -12,16 +13,22 @@
 #include "vst.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <limits>
+#include <map>
+#include <numeric>
 #include <random>
 #include <sstream>
 #include <string>
 #include <vector>
+
 
 namespace {
 
@@ -46,6 +53,88 @@ void check_true(const std::string& name, bool ok) {
     } else {
         std::cerr << "PASS " << name << "\n";
     }
+}
+
+double cluster_statistics_distance(
+    const GammaPoissonClusterSufficientStatistics& first,
+    const GammaPoissonClusterSufficientStatistics& second) {
+    if (first.dense != second.dense
+        || first.second_projected.size() != second.second_projected.size()
+        || first.second_dense.size() != second.second_dense.size()) {
+        return std::numeric_limits<double>::infinity();
+    }
+    double out = (first.membership - second.membership).norm()
+        + (first.first - second.first).norm()
+        + (first.second_diagonal - second.second_diagonal).norm()
+        + (first.pooled_second_sketch - second.pooled_second_sketch).norm()
+        + std::abs(first.elbo_local - second.elbo_local)
+        + std::abs(first.predictive_log_likelihood
+            - second.predictive_log_likelihood);
+    for (size_t c = 0; c < first.second_projected.size(); ++c) {
+        out += (first.second_projected[c] - second.second_projected[c]).norm();
+    }
+    for (size_t c = 0; c < first.second_dense.size(); ++c) {
+        out += (first.second_dense[c] - second.second_dense[c]).norm();
+    }
+    return out;
+}
+
+double adjusted_rand_index(
+    const std::vector<int32_t>& truth,
+    const std::vector<int32_t>& predicted) {
+    if (truth.size() != predicted.size() || truth.empty()) {
+        throw std::invalid_argument("Invalid labels for adjusted Rand index");
+    }
+    std::map<std::pair<int32_t, int32_t>, int64_t> cells;
+    std::map<int32_t, int64_t> truth_counts, predicted_counts;
+    for (size_t i = 0; i < truth.size(); ++i) {
+        ++cells[{truth[i], predicted[i]}];
+        ++truth_counts[truth[i]];
+        ++predicted_counts[predicted[i]];
+    }
+    const auto pairs = [](int64_t n) {
+        return 0.5 * static_cast<double>(n) * static_cast<double>(n - 1);
+    };
+    double cell_pairs = 0.0, truth_pairs = 0.0, predicted_pairs = 0.0;
+    for (const auto& entry : cells) cell_pairs += pairs(entry.second);
+    for (const auto& entry : truth_counts) truth_pairs += pairs(entry.second);
+    for (const auto& entry : predicted_counts) predicted_pairs += pairs(entry.second);
+    const double total_pairs = pairs(static_cast<int64_t>(truth.size()));
+    const double expected = truth_pairs * predicted_pairs / total_pairs;
+    const double denominator = 0.5 * (truth_pairs + predicted_pairs) - expected;
+    return denominator > 0.0 ? (cell_pairs - expected) / denominator : 1.0;
+}
+
+struct KnownClusterMetrics {
+    double ari = 0.0;
+    double center_rmse = 0.0;
+};
+
+KnownClusterMetrics known_cluster_metrics(
+    const GammaPoissonClusterFitResult& fit,
+    const Eigen::Ref<const RowMajorMatrixXd>& true_centers,
+    const std::vector<int32_t>& labels) {
+    std::vector<int32_t> predicted(labels.size());
+    for (Eigen::Index d = 0; d < fit.responsibilities.rows(); ++d) {
+        Eigen::Index top = 0;
+        fit.responsibilities.row(d).maxCoeff(&top);
+        predicted[d] = static_cast<int32_t>(top);
+    }
+    std::vector<int32_t> permutation(true_centers.rows());
+    std::iota(permutation.begin(), permutation.end(), int32_t{0});
+    double best_error = std::numeric_limits<double>::infinity();
+    do {
+        double error = 0.0;
+        for (Eigen::Index c = 0; c < fit.model.means.rows(); ++c) {
+            error += (fit.model.means.row(c)
+                - true_centers.row(permutation[c])).squaredNorm();
+        }
+        best_error = std::min(best_error, error);
+    } while (std::next_permutation(permutation.begin(), permutation.end()));
+    KnownClusterMetrics out;
+    out.ari = adjusted_rand_index(labels, predicted);
+    out.center_rmse = std::sqrt(best_error / true_centers.size());
+    return out;
 }
 
 void test_gauss_legendre16() {
@@ -494,6 +583,154 @@ void test_dense_kmeans() {
     DenseKMeansResult reseeded = dense_kmeans(identical, options);
     check_true("dense k-means reseeds empty clusters",
         reseeded.counts.minCoeff() > 0 && reseeded.inertia == 0.0);
+    RowMajorMatrixXd repeated = RowMajorMatrixXd::Zero(8, 2);
+    DenseKMeansResult sampled_reseeded = sampled_dense_kmeans(
+        repeated, options, 5);
+    check_true("sampled dense k-means repairs tied full-data assignments",
+        sampled_reseeded.counts.minCoeff() > 0
+        && sampled_reseeded.counts.sum() == repeated.rows()
+        && sampled_reseeded.centers.allFinite()
+        && std::isfinite(sampled_reseeded.inertia));
+
+    options.n_clusters = 3;
+    options.max_iterations = 20;
+    DenseKMeansResult sampled_first = sampled_dense_kmeans(
+        observations, options, 5);
+    DenseKMeansResult sampled_second = sampled_dense_kmeans(
+        observations, options, 5);
+    check_true("sampled dense k-means is deterministic with full assignments",
+        sampled_first.assignments.size() == observations.rows()
+        && sampled_first.counts.sum() == observations.rows()
+        && sampled_first.counts.minCoeff() > 0
+        && (sampled_first.centers - sampled_second.centers).norm() == 0.0
+        && (sampled_first.assignments - sampled_second.assignments).norm() == 0);
+    DenseKMeansResult uncapped = sampled_dense_kmeans(
+        observations, options, static_cast<int32_t>(observations.rows()));
+    DenseKMeansResult full = dense_kmeans(observations, options);
+    check_true("uncapped sampled dense k-means uses the exact full path",
+        (uncapped.centers - full.centers).norm() == 0.0
+        && (uncapped.assignments - full.assignments).norm() == 0
+        && uncapped.inertia == full.inertia);
+}
+
+void test_gamma_poisson_dormancy_tracker() {
+    using gamma_pois_cluster_detail::DormancyTracker;
+    DormancyTracker tracker(3);
+    Eigen::Vector3d exact(10.0, 2.0, 1.0);
+    tracker.observe_exact(exact, 5.0, 2, true);
+    check_true("dormancy patience delays component freezing",
+        tracker.dormant() == std::vector<uint8_t>({0, 0, 0}));
+    tracker.observe_exact(exact, 5.0, 2, true);
+    check_true("dormancy activates after consecutive low-mass refreshes",
+        tracker.dormant() == std::vector<uint8_t>({0, 1, 1}));
+    Eigen::Vector3d candidate(13.0, 0.0, 0.0);
+    const Eigen::VectorXd preserved = tracker.preserve_exact_weights(candidate);
+    check_true("dormancy preserves last exact-refresh component weights",
+        (preserved - exact).norm() == 0.0
+        && preserved.sum() == exact.sum());
+
+    Eigen::Vector3d recovered(7.0, 5.5, 0.5);
+    tracker.observe_exact(recovered, 5.0, 2, true);
+    check_true("exact refresh reactivates recovered dormant components",
+        tracker.dormant() == std::vector<uint8_t>({0, 0, 1}));
+
+    DormancyTracker safeguard(3);
+    Eigen::Vector3d all_small(1.0, 2.0, 3.0);
+    safeguard.observe_exact(all_small, 5.0, 1, true);
+    check_true("dormancy keeps the largest component available",
+        safeguard.dormant() == std::vector<uint8_t>({1, 1, 0}));
+}
+
+void test_gamma_poisson_candidate_selectors() {
+    using namespace gamma_pois_cluster_detail;
+    constexpr int32_t components = 128;
+    constexpr int32_t dim = 15;
+    constexpr int32_t n = 256;
+    constexpr int32_t candidate_count = 16;
+    GammaPoissonClusterModel model;
+    model.means.resize(components, dim);
+    model.variances = RowMajorMatrixXd::Constant(components, dim, 0.25);
+    model.dirichlet_parameters.resize(components);
+    for (int32_t c = 0; c < components; ++c) {
+        model.dirichlet_parameters(c) = 1.0 + 100.0 / (c + 1.0);
+        for (int32_t j = 0; j < dim; ++j) {
+            model.means(c, j) = std::sin(0.17 * (c + 1) * (j + 1));
+        }
+    }
+    GammaPoissonClusterCoordinates coordinates;
+    coordinates.mean.resize(n, dim);
+    coordinates.uncertainty_diagonal =
+        RowMajorMatrixXd::Constant(n, dim, 0.05);
+    coordinates.uncertainty_rank = 0;
+    coordinates.uncertainty_factor.resize(n, 0);
+    for (int32_t d = 0; d < n; ++d) {
+        coordinates.mean.row(d) = model.means.row(d % components);
+        coordinates.mean(d, d % dim) += 0.01;
+    }
+    const PreparedEStepModel prepared = prepare_e_step_model(model, false);
+    std::vector<int32_t> documents(n), previous_top(
+        static_cast<size_t>(n) * 3, -1);
+    std::vector<uint8_t> dormant(components);
+    std::iota(documents.begin(), documents.end(), int32_t{0});
+    previous_top[0] = 127;
+    previous_top[1] = 126;
+    previous_top[2] = 125;
+    dormant[126] = 1;
+    const std::vector<int32_t> linear = select_candidate_components_linear(
+        coordinates, model, prepared, documents.data(), n, candidate_count,
+        dim, previous_top, dormant);
+    const std::vector<int32_t> indexed = select_candidate_components_kdtree(
+        coordinates, model, prepared, documents.data(), n, candidate_count,
+        dim, 2, previous_top, dormant);
+    const std::vector<int32_t> indexed_repeat =
+        select_candidate_components_kdtree(coordinates, model, prepared,
+            documents.data(), n, candidate_count, dim, 2,
+            previous_top, dormant);
+    int64_t top_matches = 0;
+    int64_t overlap = 0;
+    for (int32_t d = 0; d < n; ++d) {
+        top_matches += linear[static_cast<size_t>(d) * candidate_count]
+            == indexed[static_cast<size_t>(d) * candidate_count];
+        for (int32_t i = 0; i < candidate_count; ++i) {
+            const int32_t value = indexed[
+                static_cast<size_t>(d) * candidate_count + i];
+            for (int32_t j = 0; j < candidate_count; ++j) {
+                if (value == linear[
+                    static_cast<size_t>(d) * candidate_count + j]) {
+                    ++overlap;
+                    break;
+                }
+            }
+        }
+    }
+    check_true("indexed candidates retain previous active top components",
+        indexed[0] == 127 && indexed[1] == 125
+        && std::find(indexed.begin(), indexed.begin() + candidate_count, 126)
+            == indexed.begin() + candidate_count);
+    check_true("indexed candidate search is deterministic",
+        indexed == indexed_repeat);
+    check_true("indexed candidate search preserves proxy top component",
+        static_cast<double>(top_matches) / n >= 0.995);
+    check_true("indexed candidate search preserves proxy candidate set",
+        static_cast<double>(overlap) / (n * candidate_count) >= 0.98);
+
+    GammaPoissonClusterModel tied = model;
+    tied.means.topRows(4).setZero();
+    tied.variances.topRows(4).setConstant(0.25);
+    tied.dirichlet_parameters.head(4).setConstant(10.0);
+    tied.dirichlet_parameters.tail(components - 4).setConstant(1e-6);
+    GammaPoissonClusterCoordinates tied_coordinates = coordinates;
+    tied_coordinates.mean.row(0).setZero();
+    const PreparedEStepModel tied_prepared = prepare_e_step_model(tied, false);
+    std::vector<int32_t> no_previous(static_cast<size_t>(n) * 3, -1);
+    std::fill(dormant.begin(), dormant.end(), uint8_t{1});
+    for (int32_t c = 0; c < 4; ++c) dormant[c] = 0;
+    const std::vector<int32_t> tied_candidates =
+        select_candidate_components_kdtree(tied_coordinates, tied,
+            tied_prepared, documents.data(), 1, 3, dim, 2,
+            no_previous, dormant);
+    check_true("indexed candidate ties use component order",
+        tied_candidates == std::vector<int32_t>({0, 1, 2}));
 }
 
 void test_low_rank_covariance() {
@@ -619,6 +856,37 @@ void test_gamma_poisson_structured_mixture() {
         CovarianceAccumulation::Dense;
     GammaPoissonClusterFitResult explicit_dense =
         fit_gamma_poisson_cluster_mixture(coordinates, dense_options);
+    GammaPoissonClusterFitOptions svi_options = options;
+    svi_options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Svi;
+    svi_options.minibatch_size = 48;
+    svi_options.n_epochs = 20;
+    svi_options.svi_eval_size = n;
+    svi_options.refine_max_iterations = 20;
+    svi_options.orientation_update_interval = 10;
+    svi_options.orientation_max_updates = 2;
+    GammaPoissonClusterFitResult svi = fit_gamma_poisson_cluster_mixture(
+        coordinates, svi_options);
+    GammaPoissonClusterFitResult svi_repeat = fit_gamma_poisson_cluster_mixture(
+        coordinates, svi_options);
+    GammaPoissonClusterFitOptions svi_refresh_options = svi_options;
+    svi_refresh_options.candidate_refresh_epochs = 100;
+    GammaPoissonClusterFitResult svi_irrelevant_refresh =
+        fit_gamma_poisson_cluster_mixture(coordinates, svi_refresh_options);
+    GammaPoissonClusterFitOptions svi_serial_options = svi_options;
+    svi_serial_options.n_threads = 1;
+    GammaPoissonClusterFitResult svi_serial = fit_gamma_poisson_cluster_mixture(
+        coordinates, svi_serial_options);
+    GammaPoissonClusterFitOptions svi_all_candidate_options = svi_options;
+    svi_all_candidate_options.candidate_components = 2;
+    svi_all_candidate_options.candidate_dimensions = 1;
+    GammaPoissonClusterFitResult svi_all_candidates =
+        fit_gamma_poisson_cluster_mixture(
+            coordinates, svi_all_candidate_options);
+    GammaPoissonClusterFitOptions svi_compact_options = svi_options;
+    svi_compact_options.covariance_accumulation =
+        GammaPoissonClusterFitOptions::CovarianceAccumulation::Compact;
+    GammaPoissonClusterFitResult svi_compact = fit_gamma_poisson_cluster_mixture(
+        coordinates, svi_compact_options);
     options.n_threads = 1;
     GammaPoissonClusterFitResult serial = fit_gamma_poisson_cluster_mixture(
         coordinates, options);
@@ -663,6 +931,91 @@ void test_gamma_poisson_structured_mixture() {
             .abs().maxCoeff() < 1e-12);
     check_true("structured covariance improves correlated-data likelihood",
         first.diagnostics.log_likelihood > diagonal.diagnostics.log_likelihood);
+    const Eigen::Index svi_low = svi.model.means(0, 0)
+            < svi.model.means(1, 0)
+        ? 0 : 1;
+    const Eigen::Index svi_high = 1 - svi_low;
+    check_true("SVI records stochastic optimizer diagnostics",
+        svi.diagnostics.optimizer == "svi"
+        && svi.diagnostics.epochs > 0
+        && svi.diagnostics.svi_updates >= svi.diagnostics.epochs
+        && svi.diagnostics.refinement_iterations > 0);
+    check_true("SVI is deterministic for a fixed seed and thread count",
+        (svi.model.means - svi_repeat.model.means).norm() == 0.0
+        && (svi.model.variances - svi_repeat.model.variances).norm() == 0.0
+        && (svi.responsibilities - svi_repeat.responsibilities).norm() == 0.0);
+    check_true("exact SVI ignores candidate refresh scheduling",
+        (svi.model.means - svi_irrelevant_refresh.model.means).norm() == 0.0
+        && (svi.model.variances
+            - svi_irrelevant_refresh.model.variances).norm() == 0.0
+        && (svi.responsibilities
+            - svi_irrelevant_refresh.responsibilities).norm() == 0.0);
+    check_true("serial and parallel SVI agree numerically",
+        (svi.model.means - svi_serial.model.means).norm() < 1e-10
+        && (svi.model.variances - svi_serial.model.variances).norm() < 1e-10
+        && (svi.responsibilities
+            - svi_serial.responsibilities).norm() < 1e-9);
+    check_true("SVI all-component candidate request preserves exact path",
+        svi_all_candidates.diagnostics.candidate_components == 0
+        && svi_all_candidates.diagnostics.candidate_dimensions == 0
+        && (svi.model.means - svi_all_candidates.model.means).norm() == 0.0
+        && (svi.model.variances
+            - svi_all_candidates.model.variances).norm() == 0.0
+        && (svi.responsibilities
+            - svi_all_candidates.responsibilities).norm() == 0.0);
+    check_close("SVI low center remains near batch EM",
+        svi.model.means(svi_low, 0), model.means(low, 0), 0.2, 0.0);
+    check_close("SVI high center remains near batch EM",
+        svi.model.means(svi_high, 0), model.means(high, 0), 0.2, 0.0);
+    check_true("SVI exact final responsibilities are normalized",
+        svi.responsibilities.allFinite()
+        && (svi.responsibilities.rowwise().sum().array() - 1.0)
+            .abs().maxCoeff() < 1e-12);
+    check_true("SVI predictive likelihood remains near batch EM",
+        svi.diagnostics.log_likelihood
+            >= first.diagnostics.log_likelihood - 5.0);
+    check_true("compact SVI produces a finite exact final fit",
+        svi_compact.diagnostics.covariance_accumulation == "compact"
+        && svi_compact.model.means.allFinite()
+        && svi_compact.model.variances.allFinite()
+        && svi_compact.responsibilities.allFinite());
+
+    Eigen::VectorXi all_indices(n), even_indices(n / 2), odd_indices(n / 2);
+    for (int32_t d = 0; d < n; ++d) {
+        all_indices(d) = d;
+        (d % 2 == 0 ? even_indices(d / 2) : odd_indices(d / 2)) = d;
+    }
+    for (bool dense_accumulation : {false, true}) {
+        GammaPoissonClusterBatchExpectation all = gamma_poisson_cluster_e_step(
+            coordinates, model, all_indices, 2, dense_accumulation);
+        GammaPoissonClusterBatchExpectation even = gamma_poisson_cluster_e_step(
+            coordinates, model, even_indices, 2, dense_accumulation);
+        GammaPoissonClusterBatchExpectation odd = gamma_poisson_cluster_e_step(
+            coordinates, model, odd_indices, 2, dense_accumulation);
+        GammaPoissonClusterSufficientStatistics combined = even.statistics;
+        combined.add_scaled(odd.statistics, 1.0);
+        RowMajorMatrixXd recombined(n, model.means.rows());
+        for (int32_t i = 0; i < n / 2; ++i) {
+            recombined.row(even_indices(i)) = even.responsibilities.row(i);
+            recombined.row(odd_indices(i)) = odd.responsibilities.row(i);
+        }
+        const std::string mode = dense_accumulation ? "dense" : "compact";
+        check_true(mode + " indexed E-step responsibilities preserve row identity",
+            (recombined - all.responsibilities).norm() == 0.0);
+        check_true(mode + " indexed E-step statistics recombine",
+            cluster_statistics_distance(combined, all.statistics) < 1e-9);
+        GammaPoissonClusterBatchExpectation statistics_only =
+            gamma_poisson_cluster_e_step(coordinates, model, all_indices, 2,
+                dense_accumulation, false);
+        check_true(mode + " E-step can omit responsibility materialization",
+            statistics_only.responsibilities.size() == 0
+            && cluster_statistics_distance(
+                statistics_only.statistics, all.statistics) == 0.0);
+        GammaPoissonClusterSufficientStatistics interpolated = even.statistics;
+        interpolated.interpolate(odd.statistics, 1.0);
+        check_true(mode + " sufficient-statistics interpolation supports rho one",
+            cluster_statistics_distance(interpolated, odd.statistics) == 0.0);
+    }
 
     GammaPoissonClusterCoordinates boundary_coordinates;
     boundary_coordinates.mean = RowMajorMatrixXd::Random(8, 47);
@@ -782,6 +1135,27 @@ void test_gamma_poisson_structured_mixture() {
         && (restored.model.orientation - model.orientation).norm() < 1e-14
         && (restored.model.low_rank_variances
             - model.low_rank_variances).norm() < 1e-14);
+    GammaPoissonClusterState svi_state = state;
+    svi_state.model = svi.model;
+    svi_state.diagnostics = svi.diagnostics;
+    svi_state.active = gamma_poisson_active_components(
+        svi.effective_membership, svi_state.min_cluster_size);
+    const std::filesystem::path svi_state_path =
+        state_path.string() + ".svi";
+    write_gamma_poisson_cluster_state(svi_state_path.string(), svi_state);
+    GammaPoissonClusterState restored_svi = read_gamma_poisson_cluster_state(
+        svi_state_path.string(), svi_state.topic_state_checksum);
+    check_true("SVI cluster state round trip preserves optimizer diagnostics",
+        restored_svi.diagnostics.optimizer == "svi"
+        && restored_svi.diagnostics.epochs == svi.diagnostics.epochs
+        && restored_svi.diagnostics.svi_updates == svi.diagnostics.svi_updates
+        && restored_svi.diagnostics.refinement_iterations
+            == svi.diagnostics.refinement_iterations
+        && restored_svi.diagnostics.svi_converged
+            == svi.diagnostics.svi_converged
+        && restored_svi.diagnostics.candidate_search
+            == svi.diagnostics.candidate_search
+        && (restored_svi.model.means - svi.model.means).norm() < 1e-14);
     bool cluster_checksum_rejected = false;
     try {
         read_gamma_poisson_cluster_state(
@@ -806,6 +1180,8 @@ void test_gamma_poisson_structured_mixture() {
     const std::string cluster_state_text{
         std::istreambuf_iterator<char>(cluster_state_in),
         std::istreambuf_iterator<char>()};
+    check_true("cluster state omits optimizer-local dormancy metadata",
+        cluster_state_text.find("dormant_components") == std::string::npos);
     const std::string marker = "##punkst_gamma_pois_cluster\n";
     const std::filesystem::path duplicate_metadata_path =
         state_path.string() + ".duplicate-metadata";
@@ -845,6 +1221,221 @@ void test_gamma_poisson_structured_mixture() {
     }
     check_true("cluster state rejects missing records",
         incomplete_state_rejected);
+}
+
+void test_gamma_poisson_svi_known_clusters() {
+    constexpr int32_t dim = 3;
+    struct Scenario {
+        const char* separation_name;
+        double separation;
+        const char* balance_name;
+        std::array<int32_t, 3> sizes;
+    };
+    const std::vector<Scenario> scenarios = {
+        {"clear", 1.8, "balanced", {120, 120, 120}},
+        {"moderate", 1.0, "balanced", {120, 120, 120}},
+        {"high_overlap", 0.55, "balanced", {120, 120, 120}},
+        {"clear", 1.8, "imbalanced", {220, 100, 40}},
+        {"moderate", 1.0, "imbalanced", {220, 100, 40}},
+        {"high_overlap", 0.55, "imbalanced", {220, 100, 40}}
+    };
+    std::map<std::string, double> oracle_ari;
+    for (size_t scenario_index = 0;
+         scenario_index < scenarios.size(); ++scenario_index) {
+        const Scenario& scenario = scenarios[scenario_index];
+        const int32_t n = std::accumulate(
+            scenario.sizes.begin(), scenario.sizes.end(), int32_t{0});
+        RowMajorMatrixXd centers(3, dim);
+        const double s = scenario.separation;
+        centers <<
+            -s, -s / std::sqrt(3.0),  0.15 * s,
+             s, -s / std::sqrt(3.0), -0.15 * s,
+             0,  2.0 * s / std::sqrt(3.0), 0;
+
+        GammaPoissonClusterCoordinates coordinates;
+        coordinates.mean.resize(n, dim);
+        coordinates.uncertainty_diagonal.resize(n, dim);
+        coordinates.uncertainty_factor.resize(n, dim);
+        coordinates.uncertainty_rank = 1;
+        std::vector<int32_t> labels(n);
+        Eigen::Vector3d intrinsic_direction(0.8, -0.4, 0.5);
+        intrinsic_direction.normalize();
+        const Eigen::Matrix3d intrinsic = 0.16 * Eigen::Matrix3d::Identity()
+            + 0.20 * intrinsic_direction * intrinsic_direction.transpose();
+        std::mt19937 random_engine(
+            1009 + static_cast<uint32_t>(scenario_index));
+        std::normal_distribution<double> normal(0.0, 1.0);
+        int32_t d = 0;
+        for (int32_t c = 0; c < 3; ++c) {
+            for (int32_t i = 0; i < scenario.sizes[c]; ++i, ++d) {
+                labels[d] = c;
+                coordinates.uncertainty_diagonal.row(d).setConstant(
+                    0.06 + 0.02 * (d % 3));
+                Eigen::Vector3d document_factor(
+                    0.16 + 0.03 * (d % 4), -0.12, 0.09);
+                Eigen::Map<RowMajorMatrixXd>(
+                    coordinates.uncertainty_factor.row(d).data(), dim, 1) =
+                    document_factor;
+                Eigen::Matrix3d total = intrinsic
+                    + document_factor * document_factor.transpose();
+                total.diagonal() +=
+                    coordinates.uncertainty_diagonal.row(d).transpose();
+                Eigen::Vector3d noise;
+                noise << normal(random_engine), normal(random_engine),
+                    normal(random_engine);
+                coordinates.mean.row(d) = (centers.row(c).transpose()
+                    + total.llt().matrixL() * noise).transpose();
+            }
+        }
+
+        GammaPoissonClusterFitOptions batch_options;
+        batch_options.n_components = 3;
+        batch_options.cluster_covariance_rank = 1;
+        batch_options.diagonal_warmup_iterations = 4;
+        batch_options.orientation_update_interval = 4;
+        batch_options.orientation_max_updates = 3;
+        batch_options.max_iterations = 80;
+        batch_options.convergence_patience = 3;
+        batch_options.n_threads = 2;
+        batch_options.seed = 71;
+        GammaPoissonClusterFitResult batch = fit_gamma_poisson_cluster_mixture(
+            coordinates, batch_options);
+        GammaPoissonClusterFitOptions svi_options = batch_options;
+        svi_options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Svi;
+        svi_options.minibatch_size = 72;
+        svi_options.n_epochs = 25;
+        svi_options.svi_eval_size = n;
+        svi_options.refine_max_iterations = 20;
+        svi_options.orientation_update_interval = 10;
+        GammaPoissonClusterFitResult svi = fit_gamma_poisson_cluster_mixture(
+            coordinates, svi_options);
+
+        if (scenario_index == 0) {
+            GammaPoissonClusterFitOptions candidate_options = svi_options;
+            candidate_options.n_components = 6;
+            candidate_options.n_epochs = 6;
+            candidate_options.refine_max_iterations = 6;
+            candidate_options.candidate_components = 3;
+            candidate_options.candidate_dimensions = 2;
+            candidate_options.candidate_refresh_epochs = 2;
+            GammaPoissonClusterFitResult candidate =
+                fit_gamma_poisson_cluster_mixture(
+                    coordinates, candidate_options);
+            GammaPoissonClusterFitResult candidate_repeat =
+                fit_gamma_poisson_cluster_mixture(
+                    coordinates, candidate_options);
+            GammaPoissonClusterFitOptions indexed_options = candidate_options;
+            indexed_options.candidate_search = GammaPoissonClusterFitOptions::
+                CandidateSearch::KdTree;
+            GammaPoissonClusterFitResult indexed_candidate =
+                fit_gamma_poisson_cluster_mixture(
+                    coordinates, indexed_options);
+            std::vector<int32_t> candidate_labels(n);
+            std::vector<int32_t> candidate_to_truth(6);
+            for (int32_t fitted = 0; fitted < 6; ++fitted) {
+                Eigen::Index closest = 0;
+                double best = (candidate.model.means.row(fitted)
+                    - centers.row(0)).squaredNorm();
+                for (Eigen::Index truth = 1; truth < centers.rows(); ++truth) {
+                    const double distance = (candidate.model.means.row(fitted)
+                        - centers.row(truth)).squaredNorm();
+                    if (distance < best) {
+                        best = distance;
+                        closest = truth;
+                    }
+                }
+                candidate_to_truth[fitted] = static_cast<int32_t>(closest);
+            }
+            for (int32_t row = 0; row < n; ++row) {
+                Eigen::Index top = 0;
+                candidate.responsibilities.row(row).maxCoeff(&top);
+                candidate_labels[row] = candidate_to_truth[top];
+            }
+            check_true("truncated SVI runs scheduled exact refreshes",
+                candidate.diagnostics.candidate_components == 3
+                && candidate.diagnostics.candidate_dimensions == 2
+                && candidate.diagnostics.candidate_search == "linear"
+                && candidate.diagnostics.full_refreshes > 0);
+            check_true("truncated SVI is deterministic",
+                (candidate.model.means
+                    - candidate_repeat.model.means).norm() == 0.0
+                && (candidate.responsibilities
+                    - candidate_repeat.responsibilities).norm() == 0.0);
+            check_true("explicit indexed SVI matches exhaustive small search",
+                indexed_candidate.diagnostics.candidate_search == "kdtree"
+                && (candidate.model.means
+                    - indexed_candidate.model.means).norm() == 0.0
+                && (candidate.responsibilities
+                    - indexed_candidate.responsibilities).norm() == 0.0);
+            check_true("truncated SVI final output retains all slots and is normalized",
+                candidate.responsibilities.cols() == 6
+                && candidate.responsibilities.allFinite()
+                && (candidate.responsibilities.rowwise().sum().array() - 1.0)
+                    .abs().maxCoeff() < 1e-12);
+            check_true("truncated SVI recovers clear clusters after center mapping",
+                adjusted_rand_index(labels, candidate_labels) > 0.8);
+
+            candidate_options.prune_patience = 1;
+            candidate_options.min_cluster_size = 1000.0;
+            GammaPoissonClusterFitResult pruned =
+                fit_gamma_poisson_cluster_mixture(
+                    coordinates, candidate_options);
+            check_true("truncated SVI preserves dormant component slots",
+                pruned.model.means.rows() == 6
+                && pruned.responsibilities.cols() == 6
+                && pruned.responsibilities.allFinite()
+                && (pruned.responsibilities.rowwise().sum().array() - 1.0)
+                    .abs().maxCoeff() < 1e-12);
+        }
+
+        const KnownClusterMetrics batch_metrics = known_cluster_metrics(
+            batch, centers, labels);
+        const KnownClusterMetrics svi_metrics = known_cluster_metrics(
+            svi, centers, labels);
+        std::vector<int32_t> oracle(labels.size());
+        for (Eigen::Index row = 0; row < coordinates.mean.rows(); ++row) {
+            Eigen::Index closest = 0;
+            double best = (coordinates.mean.row(row) - centers.row(0)).squaredNorm();
+            for (Eigen::Index c = 1; c < centers.rows(); ++c) {
+                const double distance =
+                    (coordinates.mean.row(row) - centers.row(c)).squaredNorm();
+                if (distance < best) {
+                    best = distance;
+                    closest = c;
+                }
+            }
+            oracle[row] = static_cast<int32_t>(closest);
+        }
+        const double oracle_value = adjusted_rand_index(labels, oracle);
+        oracle_ari[std::string(scenario.balance_name) + ":"
+            + scenario.separation_name] = oracle_value;
+        std::cerr << std::fixed << std::setprecision(4)
+            << "SIM_COMPARE separation=" << scenario.separation_name
+            << " sizes=" << scenario.balance_name
+            << " oracle_ari=" << oracle_value
+            << " batch_ari=" << batch_metrics.ari
+            << " svi_ari=" << svi_metrics.ari
+            << " batch_center_rmse=" << batch_metrics.center_rmse
+            << " svi_center_rmse=" << svi_metrics.center_rmse << "\n";
+        check_true(std::string("known-cluster metrics are finite for ")
+                + scenario.separation_name + " " + scenario.balance_name,
+            std::isfinite(batch_metrics.ari)
+            && std::isfinite(svi_metrics.ari)
+            && std::isfinite(batch_metrics.center_rmse)
+            && std::isfinite(svi_metrics.center_rmse));
+        if (std::string(scenario.separation_name) == "clear") {
+            check_true(std::string("clear known clusters are recovered for ")
+                    + scenario.balance_name,
+                batch_metrics.ari > 0.85 && svi_metrics.ari > 0.85);
+        }
+    }
+    for (const std::string balance : {"balanced", "imbalanced"}) {
+        check_true("oracle recovery decreases with overlap for " + balance,
+            oracle_ari[balance + ":clear"]
+                > oracle_ari[balance + ":moderate"]
+            && oracle_ari[balance + ":moderate"]
+                > oracle_ari[balance + ":high_overlap"]);
+    }
 }
 
 void test_gamma_poisson_posterior_and_sidecar() {
@@ -1330,10 +1921,13 @@ int32_t test(int32_t, char**) {
         test_gamma_poisson_dispersion_helpers();
         test_gamma_poisson_cluster_basis();
         test_dense_kmeans();
+        test_gamma_poisson_dormancy_tracker();
+        test_gamma_poisson_candidate_selectors();
         test_low_rank_covariance();
         test_gamma_poisson_conditional_moments();
         test_gamma_poisson_diagonal_mixture();
         test_gamma_poisson_structured_mixture();
+        test_gamma_poisson_svi_known_clusters();
         test_gamma_poisson_posterior_and_sidecar();
         test_hexreader_feature_weights();
         test_feature_stats();

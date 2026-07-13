@@ -113,7 +113,12 @@ set(SOURCE_FILES
     src/low_rank_covariance.cpp
     src/gamma_pois_cluster.hpp
     src/gamma_pois_cluster.cpp
-    src/gamma_pois_structured_cluster.cpp
+    src/gamma_pois_cluster_internal.hpp
+    src/gamma_pois_cluster_candidates.cpp
+    src/gamma_pois_cluster_expectation.cpp
+    src/gamma_pois_cluster_covariance.cpp
+    src/gamma_pois_cluster_fit.cpp
+    src/gamma_pois_cluster_svi.cpp
     src/gamma_pois_posterior_io.hpp
     src/gamma_pois_posterior_io.cpp
     src/hdp.hpp

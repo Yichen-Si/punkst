@@ -95,11 +95,20 @@ GammaPoissonClusterCoordinates make_gamma_poisson_cluster_coordinates(
     const Eigen::Ref<const Eigen::MatrixXd>& basis);
 
 struct GammaPoissonClusterFitOptions {
+    enum class Optimizer {
+        Batch,
+        Svi
+    } optimizer = Optimizer::Batch;
     enum class CovarianceAccumulation {
         Auto,
         Dense,
         Compact
     } covariance_accumulation = CovarianceAccumulation::Auto;
+    enum class CandidateSearch {
+        Auto,
+        Linear,
+        KdTree
+    } candidate_search = CandidateSearch::Auto;
     int32_t n_components = 10;
     int32_t max_iterations = 100;
     int32_t kmeans_max_iterations = 20;
@@ -110,6 +119,14 @@ struct GammaPoissonClusterFitOptions {
     int32_t orientation_update_interval = 10;
     int32_t orientation_max_updates = 10;
     int32_t orientation_patience = 2;
+    int32_t minibatch_size = 1024;
+    int32_t n_epochs = 30;
+    int32_t svi_eval_size = 4096;
+    int32_t refine_max_iterations = 20;
+    int32_t candidate_components = 0;
+    int32_t candidate_dimensions = 0;
+    int32_t candidate_refresh_epochs = 5;
+    int32_t prune_patience = 0;
     int32_t seed = 1;
     double dirichlet_concentration = 1.0;
     double variance_floor = 1e-4;
@@ -119,6 +136,9 @@ struct GammaPoissonClusterFitOptions {
     double low_rank_variance_floor = 1e-6;
     double orientation_tolerance = 1e-3;
     double orientation_step = 0.5;
+    double svi_kappa = 0.7;
+    double svi_tau0 = 10.0;
+    double min_cluster_size = 5.0;
 };
 
 struct GammaPoissonResponsibilityChange {
@@ -151,11 +171,49 @@ struct GammaPoissonClusterModel {
     RowMajorMatrixXd low_rank_variances;
 };
 
+struct GammaPoissonClusterSufficientStatistics {
+    Eigen::VectorXd membership;
+    RowMajorMatrixXd first;
+    RowMajorMatrixXd second_diagonal;
+    std::vector<Eigen::MatrixXd> second_projected;
+    Eigen::MatrixXd pooled_second_sketch;
+    std::vector<Eigen::MatrixXd> second_dense;
+    bool dense = false;
+    double elbo_local = 0.0;
+    double predictive_log_likelihood = 0.0;
+
+    GammaPoissonClusterSufficientStatistics() = default;
+    GammaPoissonClusterSufficientStatistics(int32_t components, int32_t dim,
+        int32_t rank, int32_t sketch_size, bool dense_ = false);
+
+    void add_scaled(const GammaPoissonClusterSufficientStatistics& other,
+        double scale);
+    void scale(double factor);
+    void interpolate(
+        const GammaPoissonClusterSufficientStatistics& target, double step);
+};
+
+struct GammaPoissonClusterBatchExpectation {
+    GammaPoissonClusterSufficientStatistics statistics;
+    RowMajorMatrixXd responsibilities;
+};
+
+GammaPoissonClusterBatchExpectation gamma_poisson_cluster_e_step(
+    const GammaPoissonClusterCoordinates& coordinates,
+    const GammaPoissonClusterModel& model,
+    const Eigen::Ref<const Eigen::VectorXi>& document_indices,
+    int32_t n_threads, bool dense_accumulation,
+    bool collect_responsibilities = true);
+
 struct GammaPoissonClusterFitDiagnostics {
+    std::string optimizer = "batch";
     std::string covariance_accumulation = "diagonal";
+    std::string candidate_search = "none";
     double elbo = 0.0;
     double log_likelihood = 0.0;
     double relative_elbo_change = std::numeric_limits<double>::infinity();
+    double relative_predictive_log_likelihood_change =
+        std::numeric_limits<double>::infinity();
     double mean_responsibility_l1_change = std::numeric_limits<double>::infinity();
     double p90_responsibility_l1_change = std::numeric_limits<double>::infinity();
     double top_assignment_change_fraction = 1.0;
@@ -170,8 +228,15 @@ struct GammaPoissonClusterFitDiagnostics {
     int32_t warmup_iterations = 0;
     int32_t structured_iterations = 0;
     int32_t orientation_updates = 0;
+    int32_t epochs = 0;
+    int32_t svi_updates = 0;
+    int32_t refinement_iterations = 0;
+    int32_t candidate_components = 0;
+    int32_t candidate_dimensions = 0;
+    int32_t full_refreshes = 0;
     bool kmeans_converged = false;
     bool orientation_converged = false;
+    bool svi_converged = false;
     bool converged = false;
 };
 
