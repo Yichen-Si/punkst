@@ -69,6 +69,7 @@ punkst draw-pixel-features \
     --icol-x 0 --icol-y 1 --icol-feature 2 --icol-val 3 \
     --feature-list Myh1 Myh8 Prkar1a \
     --color-list 65ff65 65b2ff ffb265 \
+    --density-background --density-adjust-quantile 0.99 --background-max 0.75 \
     --out ${pref}.genes.png
 ```
 
@@ -90,6 +91,12 @@ If the feature column in the TSV already contains feature names, `--feature-dict
 `--scale` (default 1) converts input coordinates to output image pixels, using `int((x-xmin)/scale)` and `int((y-ymin)/scale)`.
 
 `--threads` controls how many indexed tiles are processed in parallel.
+
+`--density-background` adds a grayscale layer representing the sum of positive `--icol-val` values from all features at each output pixel. Selected-feature colors are drawn on top and replace the grayscale wherever selected signal is present. The option is disabled by default.
+
+`--density-adjust-quantile` controls the nonzero density quantile that reaches the maximum linear grayscale background intensity (default: `0.99`). Values above the threshold use the same maximum. The option has no effect unless `--density-background` is enabled.
+
+`--background-max` restricts the maximum grayscale background intensity to a value in `[0,1]` (default: `1`, no restriction). For example, `--background-max 0.75` maps the brightest background pixels to 75% gray instead of white. Selected-feature colors are not changed.
 
 ## HTML report for factor weights and top genes
 

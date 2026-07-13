@@ -98,24 +98,6 @@ void merge_tile_map(TileMap& dst, const TileMap& src) {
     }
 }
 
-uint32_t quantile_threshold_from_values(std::vector<uint32_t>& values, double quantile) {
-    if (values.empty()) {
-        return 255;
-    }
-    const double q = std::clamp(quantile, 0.0, 1.0);
-    size_t nth = 0;
-    if (q >= 1.0) {
-        nth = values.size() - 1;
-    } else {
-        nth = static_cast<size_t>(
-            std::floor(q * static_cast<double>(values.size())));
-        nth = std::min(nth, values.size() - 1);
-    }
-    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(nth),
-        values.end());
-    return std::max<uint32_t>(1, values[nth]);
-}
-
 uint8_t adjusted_intensity(uint32_t raw, bool autoAdjust, uint32_t threshold,
     DisplayTransform transform) {
     if (raw == 0) {
@@ -133,11 +115,7 @@ uint8_t adjusted_intensity(uint32_t raw, bool autoAdjust, uint32_t threshold,
         return static_cast<uint8_t>(
             std::clamp<int32_t>(static_cast<int32_t>(std::llround(scaled)), 1, 255));
     }
-    if (raw > safeThreshold) {
-        return 255;
-    }
-    const uint64_t scaled = static_cast<uint64_t>(raw) * 255u / safeThreshold;
-    return static_cast<uint8_t>(std::min<uint64_t>(255u, scaled));
+    return linear_adjusted_intensity_u8(raw, safeThreshold);
 }
 
 TileMap accumulate_zoom(const TileReader& reader,
@@ -262,7 +240,7 @@ size_t append_zoom_tiles(const TileMap& accum,
         }
     }
     threshold = options.autoAdjust
-        ? quantile_threshold_from_values(nonzeroValues, options.adjustQuantile)
+        ? quantile_threshold_u32(nonzeroValues, options.adjustQuantile)
         : 255;
     size_t written = 0;
     for (const auto& kv : accum) {

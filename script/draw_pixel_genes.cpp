@@ -3,6 +3,9 @@
 #include "utils.h"
 #include "threads.hpp"
 #include "image_utils.hpp"
+#include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <thread>
 #include <mutex>
@@ -13,8 +16,39 @@ struct TileResult {
     int left;
     Image2D<Color3f> color_accumulator;
     Image2D<float> weight_accumulator;
+    Image2D<uint32_t> density_accumulator;
     float median_weight;
 };
+
+bool parse_draw_record(const std::string& line, const lineParserUnival& parser,
+        RecordT<float>& rec) {
+    std::vector<std::string> tokens;
+    split(tokens, "\t", line);
+    const size_t requiredColumns = 1 + std::max({
+        parser.icol_x, parser.icol_y, parser.icol_feature, parser.icol_val});
+    if (tokens.size() < requiredColumns
+        || !str2float(tokens[parser.icol_x], rec.x)
+        || !str2float(tokens[parser.icol_y], rec.y)
+        || !std::isfinite(rec.x) || !std::isfinite(rec.y)
+        || tokens[parser.icol_feature].empty()
+        || !str2uint32(tokens[parser.icol_val], rec.ct)) {
+        return false;
+    }
+    if (parser.isFeatureDict) {
+        const auto it = parser.featureDict.find(tokens[parser.icol_feature]);
+        rec.idx = it == parser.featureDict.end()
+            ? std::numeric_limits<uint32_t>::max() : it->second;
+    } else if (!str2uint32(tokens[parser.icol_feature], rec.idx)) {
+        return false;
+    }
+    return true;
+}
+
+void add_density_saturating(uint32_t& dst, uint32_t value) {
+    const uint64_t next = static_cast<uint64_t>(dst) + value;
+    dst = static_cast<uint32_t>(
+        std::min<uint64_t>(next, std::numeric_limits<uint32_t>::max()));
+}
 
 void draw_worker(
     ThreadSafeQueue<TileInfo>& tileQueue,
@@ -23,8 +57,8 @@ void draw_worker(
     const TileReader& tileReader,
     const lineParserUnival& parser,
     const std::unordered_map<uint32_t, std::vector<int32_t>>& feature_color_map,
-    double xmin, double ymin, double scale,
-    int image_width, int image_height
+    double xmin, double xmax, double ymin, double ymax, double scale,
+    bool density_background
 ) {
     TileInfo block;
     while (tileQueue.pop(block)) {
@@ -48,6 +82,9 @@ void draw_worker(
         result.left = left;
         result.color_accumulator = Image2D<Color3f>(tile_h, tile_w, Color3f{0.f, 0.f, 0.f});
         result.weight_accumulator = Image2D<float>(tile_h, tile_w, 0.f);
+        if (density_background) {
+            result.density_accumulator = Image2D<uint32_t>(tile_h, tile_w, 0u);
+        }
 
         auto iter = tileReader.get_block_iterator(block);
         if (!iter) continue;
@@ -55,12 +92,19 @@ void draw_worker(
         std::string line;
         while (iter->next(line)) {
             RecordT<float> rec;
-            if (parser.parse(rec, line, true) < 0 || rec.ct <= 0) continue;
+            if (!parse_draw_record(line, parser, rec) || rec.ct == 0
+                || rec.x < xmin || rec.x >= xmax || rec.y < ymin || rec.y >= ymax) {
+                continue;
+            }
 
             int xpix = static_cast<int>((rec.x - xmin) / scale) - left;
             int ypix = static_cast<int>((rec.y - ymin) / scale) - top;
 
             if (xpix < 0 || xpix >= tile_w || ypix < 0 || ypix >= tile_h) continue;
+
+            if (density_background) {
+                add_density_saturating(result.density_accumulator(ypix, xpix), rec.ct);
+            }
 
             auto it = feature_color_map.find(rec.idx);
             if (it != feature_color_map.end()) {
@@ -103,7 +147,10 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
     std::string inPrefix, dataFile, indexFile, featureColorFile, dictFile, rangeFile, outFile;
     std::vector<std::string> featureListStr, colorListStr;
     double scale = 1.0;
+    double densityAdjustQuantile = 0.99;
+    double backgroundMax = 1.0;
     double xmin = 0, xmax = -1, ymin = 0, ymax = -1;
+    bool densityBackground = false;
     int32_t verbose = 1000000;
     int icol_x, icol_y, icol_feature, icol_val;
     int n_threads = 1;
@@ -122,6 +169,9 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
       .add_option("feature-list", "A list of feature names to draw.", featureListStr)
       .add_option("color-list", "A list of hex colors (#RRGGBB) for features.", colorListStr)
       .add_option("scale", "Scale factor for coordinates.", scale)
+      .add_option("density-background", "Draw overall feature density as a grayscale background.", densityBackground)
+      .add_option("density-adjust-quantile", "Nonzero density quantile reaching maximum background intensity (default: 0.99).", densityAdjustQuantile)
+      .add_option("background-max", "Maximum grayscale background intensity in [0,1] (default: 1).", backgroundMax)
       .add_option("range", "File with coordinate range (xmin ymin xmax ymax).", rangeFile)
       .add_option("xmin", "Minimum x coordinate.", xmin)
       .add_option("xmax", "Maximum x coordinate.", xmax)
@@ -138,6 +188,14 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
         std::cerr << "Error parsing options: " << ex.what() << "\n";
         pl.print_help_noexit();
         return 1;
+    }
+
+    if (!std::isfinite(densityAdjustQuantile)
+        || densityAdjustQuantile < 0.0 || densityAdjustQuantile > 1.0) {
+        error("--density-adjust-quantile must be in [0,1]");
+    }
+    if (!std::isfinite(backgroundMax) || backgroundMax < 0.0 || backgroundMax > 1.0) {
+        error("--background-max must be in [0,1]");
     }
 
     if (!checkOutputWritable(outFile))
@@ -272,7 +330,7 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
             std::ref(results), std::ref(results_mutex),
             std::cref(tileReader), std::cref(parser),
             std::cref(feature_color_map),
-            xmin, ymin, scale, width, height);
+            xmin, xmax, ymin, ymax, scale, densityBackground);
     }
 
     for (auto& th : threads) {
@@ -283,6 +341,10 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
 
     Image2D<Color3f> global_color_accumulator(height, width, Color3f{0.f, 0.f, 0.f});
     Image2D<float> global_weight_accumulator(height, width, 0.f);
+    Image2D<uint32_t> global_density_accumulator;
+    if (densityBackground) {
+        global_density_accumulator = Image2D<uint32_t>(height, width, 0u);
+    }
     IntRect global_rect{0, 0, width, height};
     std::vector<float> per_tile_medians;
 
@@ -298,6 +360,11 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
                         res.color_accumulator(src_y0 + yy, src_x0 + xx);
                     global_weight_accumulator(roi.y + yy, roi.x + xx) +=
                         res.weight_accumulator(src_y0 + yy, src_x0 + xx);
+                    if (densityBackground) {
+                        add_density_saturating(
+                            global_density_accumulator(roi.y + yy, roi.x + xx),
+                            res.density_accumulator(src_y0 + yy, src_x0 + xx));
+                    }
                 }
             }
         }
@@ -317,9 +384,29 @@ int32_t cmdDrawPixelFeatures(int32_t argc, char** argv) {
     }
     notice("Global median weight calculated: %.2f", global_median_weight);
 
+    uint32_t densityThreshold = 255;
+    if (densityBackground) {
+        std::vector<uint32_t> nonzeroDensities;
+        for (uint32_t density : global_density_accumulator.data()) {
+            if (density > 0) {
+                nonzeroDensities.push_back(density);
+            }
+        }
+        densityThreshold = quantile_threshold_u32(nonzeroDensities, densityAdjustQuantile);
+        notice("Overall density adjustment threshold at quantile %.4f: %u",
+            densityAdjustQuantile, densityThreshold);
+    }
+
     Image2D<Rgb8> out_image(height, width, Rgb8{0, 0, 0});
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
+            if (densityBackground) {
+                const uint8_t gray = clamp_u8(static_cast<float>(
+                    linear_adjusted_intensity_u8(
+                        global_density_accumulator(y, x), densityThreshold))
+                    * static_cast<float>(backgroundMax));
+                out_image(y, x) = Rgb8{gray, gray, gray};
+            }
             float total_weight = global_weight_accumulator(y, x);
             if (total_weight > 0) {
                 Color3f avg_color = global_color_accumulator(y, x) / total_weight;

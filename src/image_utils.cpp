@@ -37,6 +37,36 @@ bool has_png_extension(const std::string& filename) {
 
 }
 
+uint32_t quantile_threshold_u32(std::vector<uint32_t>& values, double quantile) {
+    if (values.empty()) {
+        return 255;
+    }
+    const double q = std::clamp(quantile, 0.0, 1.0);
+    size_t nth = 0;
+    if (q >= 1.0) {
+        nth = values.size() - 1;
+    } else {
+        nth = static_cast<size_t>(
+            std::floor(q * static_cast<double>(values.size())));
+        nth = std::min(nth, values.size() - 1);
+    }
+    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(nth),
+        values.end());
+    return std::max<uint32_t>(1, values[nth]);
+}
+
+uint8_t linear_adjusted_intensity_u8(uint32_t raw, uint32_t threshold) {
+    if (raw == 0) {
+        return 0;
+    }
+    const uint32_t safeThreshold = std::max<uint32_t>(1, threshold);
+    if (raw > safeThreshold) {
+        return 255;
+    }
+    const uint64_t scaled = static_cast<uint64_t>(raw) * 255u / safeThreshold;
+    return static_cast<uint8_t>(std::min<uint64_t>(255u, scaled));
+}
+
 void save_png_rgb8(const std::string& filename, const Image2D<Rgb8>& image) {
     static_assert(sizeof(Rgb8) == 3, "Rgb8 must be tightly packed");
     if (!has_png_extension(filename)) {

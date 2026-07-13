@@ -73,6 +73,9 @@ inline uint8_t clamp_u8(float value) {
     return static_cast<uint8_t>(rounded);
 }
 
+uint32_t quantile_threshold_u32(std::vector<uint32_t>& values, double quantile);
+uint8_t linear_adjusted_intensity_u8(uint32_t raw, uint32_t threshold);
+
 template <typename T>
 class Image2D {
 public:

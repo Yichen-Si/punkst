@@ -7,6 +7,7 @@
 #include "gamma_pois_cluster_internal.hpp"
 #include "gamma_pois_posterior_io.hpp"
 #include "gamma_pois_topic.hpp"
+#include "image_utils.hpp"
 #include "low_rank_covariance.hpp"
 #include "numerical_utils.hpp"
 #include "preprocess_options.hpp"
@@ -34,6 +35,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+int32_t cmdDrawPixelFeatures(int32_t argc, char** argv);
 
 namespace {
 
@@ -1913,6 +1915,124 @@ void test_feature_stats() {
     check_close("feature occurrence absent info weight", infoWeight, 5.0, 1e-6, 0.0);
 }
 
+void test_draw_pixel_features_density_background() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path()
+        / "punkst_draw_pixel_features_density_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path dataFile = dir / "input.tsv";
+    const std::filesystem::path indexFile = dir / "input.index";
+
+    uint64_t dataStart = 0;
+    uint64_t dataEnd = 0;
+    {
+        std::ofstream out(dataFile, std::ios::binary);
+        out << "#x\ty\tfeature\tcount\n";
+        dataStart = static_cast<uint64_t>(out.tellp());
+        out << "0.2\t0.2\tselected\t1\n";
+        out << "0.2\t0.2\tother\t10\n";
+        out << "1.2\t0.2\tother\t2\n";
+        out << "2.2\t0.2\tother\t100\n";
+        dataEnd = static_cast<uint64_t>(out.tellp());
+    }
+    {
+        std::ofstream out(indexFile, std::ios::binary);
+        IndexHeader header;
+        header.magic = PUNKST_INDEX_MAGIC;
+        header.tileSize = 10;
+        header.xmin = 0.0f;
+        header.xmax = 4.0f;
+        header.ymin = 0.0f;
+        header.ymax = 1.0f;
+        out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        IndexEntryF entry(0, 0);
+        entry.st = dataStart;
+        entry.ed = dataEnd;
+        entry.n = 4;
+        entry.xmin = 0;
+        entry.xmax = 4;
+        entry.ymin = 0;
+        entry.ymax = 1;
+        out.write(reinterpret_cast<const char*>(&entry), sizeof(entry));
+    }
+
+    auto runDraw = [&](const std::filesystem::path& outFile,
+            bool densityBackground, double backgroundMax, int32_t threads) {
+        std::vector<std::string> args = {
+            "draw-pixel-features",
+            "--in-tsv", dataFile.string(),
+            "--in-index", indexFile.string(),
+            "--icol-x", "0", "--icol-y", "1",
+            "--icol-feature", "2", "--icol-val", "3",
+            "--feature-list", "selected",
+            "--color-list", "FF0000",
+            "--scale", "1",
+            "--xmin", "0", "--xmax", "4",
+            "--ymin", "0", "--ymax", "1",
+            "--threads", std::to_string(threads),
+            "--out", outFile.string()
+        };
+        if (densityBackground) {
+            args.push_back("--density-background");
+            args.push_back("--density-adjust-quantile");
+            args.push_back("0.5");
+            args.push_back("--background-max");
+            args.push_back(std::to_string(backgroundMax));
+        }
+        std::vector<char*> argv;
+        argv.reserve(args.size());
+        for (auto& arg : args) {
+            argv.push_back(arg.data());
+        }
+        return cmdDrawPixelFeatures(static_cast<int32_t>(argv.size()), argv.data());
+    };
+
+    const std::filesystem::path plainOut = dir / "plain.png";
+    check_true("draw pixel features without density runs", runDraw(plainOut, false, 1.0, 1) == 0);
+    const Image2D<Rgb8> plain = load_png_rgb8(plainOut.string());
+    check_true("draw pixel features keeps black background by default",
+        plain.width() == 4 && plain.height() == 1
+            && plain(0, 0).r == 255 && plain(0, 0).g == 0 && plain(0, 0).b == 0
+            && plain(0, 1).r == 0 && plain(0, 1).g == 0 && plain(0, 1).b == 0
+            && plain(0, 2).r == 0 && plain(0, 2).g == 0 && plain(0, 2).b == 0);
+
+    const std::filesystem::path densityOut = dir / "density.png";
+    check_true("draw pixel features with density runs", runDraw(densityOut, true, 1.0, 1) == 0);
+    const Image2D<Rgb8> density = load_png_rgb8(densityOut.string());
+    check_true("density background includes unselected named features",
+        density(0, 1).r == 46 && density(0, 1).g == 46 && density(0, 1).b == 46
+            && density(0, 2).r == 255 && density(0, 2).g == 255
+            && density(0, 2).b == 255);
+    check_true("selected feature replaces density background",
+        density(0, 0).r == 255 && density(0, 0).g == 0 && density(0, 0).b == 0);
+    check_true("zero density remains black",
+        density(0, 3).r == 0 && density(0, 3).g == 0 && density(0, 3).b == 0);
+
+    const std::filesystem::path restrictedOut = dir / "density_restricted.png";
+    check_true("restricted density rendering runs",
+        runDraw(restrictedOut, true, 0.5, 1) == 0);
+    const Image2D<Rgb8> restricted = load_png_rgb8(restrictedOut.string());
+    check_true("background max restricts grayscale only",
+        restricted(0, 1).r == 23 && restricted(0, 1).g == 23
+            && restricted(0, 1).b == 23
+            && restricted(0, 2).r == 128 && restricted(0, 2).g == 128
+            && restricted(0, 2).b == 128
+            && restricted(0, 0).r == 255 && restricted(0, 0).g == 0
+            && restricted(0, 0).b == 0);
+
+    const std::filesystem::path threadedOut = dir / "density_threaded.png";
+    check_true("threaded density rendering runs", runDraw(threadedOut, true, 1.0, 2) == 0);
+    const Image2D<Rgb8> threaded = load_png_rgb8(threadedOut.string());
+    bool samePixels = density.width() == threaded.width() && density.height() == threaded.height();
+    for (size_t i = 0; samePixels && i < density.data().size(); ++i) {
+        const Rgb8& lhs = density.data()[i];
+        const Rgb8& rhs = threaded.data()[i];
+        samePixels = lhs.r == rhs.r && lhs.g == rhs.g && lhs.b == rhs.b;
+    }
+    check_true("threaded density rendering is deterministic", samePixels);
+    std::filesystem::remove_all(dir);
+}
+
 void write_tileoperator_feature_fixture(const std::filesystem::path& prefix) {
     const std::string dataFile = prefix.string() + ".bin";
     const std::string indexFile = prefix.string() + ".index";
@@ -2268,6 +2388,7 @@ int32_t test(int32_t, char**) {
         test_gamma_poisson_posterior_and_sidecar();
         test_hexreader_feature_weights();
         test_feature_stats();
+        test_draw_pixel_features_density_background();
         test_tileoperator_feature_index_exports();
         test_pts2tiles_factor_binary_import();
     } catch (const std::exception& ex) {
