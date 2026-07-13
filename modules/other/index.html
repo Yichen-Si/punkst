@@ -8,7 +8,7 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/poisnmf/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/other/">
       
       
       
@@ -21,7 +21,7 @@
     
     
       
-        <title>Poisson NMF with shifted log link - punkst</title>
+        <title>Other Utilities - punkst</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#poisson-nmf-with-shifted-log-link" class="md-skip">
+        <a href="#other-utilities" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Poisson NMF with shifted log link
+              Other Utilities
             
           </span>
         </div>
@@ -1137,33 +1137,22 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#input-formats" class="md-nav__link">
+  <a href="#feature-vst" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Input formats
+        feature-vst
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#nmf-pois-log1p" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        nmf-pois-log1p
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="nmf-pois-log1p">
+    <nav class="md-nav" aria-label="feature-vst">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required" class="md-nav__link">
+  <a href="#basic-usage" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required
+        Basic Usage
       
     </span>
   </a>
@@ -1171,10 +1160,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#input-and-feature-options" class="md-nav__link">
+  <a href="#input-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Input and feature options
+        Input Options
       
     </span>
   </a>
@@ -1182,10 +1171,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optimization-options" class="md-nav__link">
+  <a href="#unit-and-feature-filtering" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optimization options
+        Unit And Feature Filtering
       
     </span>
   </a>
@@ -1193,10 +1182,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#warm-start-and-supervision" class="md-nav__link">
+  <a href="#vst-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Warm start and supervision
+        VST Options
       
     </span>
   </a>
@@ -1204,10 +1193,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#covariate-options" class="md-nav__link">
+  <a href="#idf-and-information-weights" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Covariate options
+        IDF And Information Weights
       
     </span>
   </a>
@@ -1215,93 +1204,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#diagnostics-and-inference" class="md-nav__link">
+  <a href="#output-files" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Diagnostics and inference
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#background-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Background options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#outputs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outputs
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#nmf-pois-log1p-transform" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        nmf-pois-log1p-transform
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="nmf-pois-log1p-transform">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Required
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#input-and-covariate-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Input and covariate options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transform-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transform options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#outputs_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outputs
+        Output Files
       
     </span>
   </a>
@@ -1333,263 +1239,61 @@
   
 
 
-<h1 id="poisson-nmf-with-shifted-log-link">Poisson NMF with shifted log link<a class="headerlink" href="#poisson-nmf-with-shifted-log-link" title="Permanent link">&para;</a></h1>
-<p>This page documents:</p>
-<ul>
-<li><code>punkst nmf-pois-log1p</code>: fit a Poisson NMF model</li>
-<li><code>punkst nmf-pois-log1p-transform</code>: project new data with a fitted model</li>
-</ul>
-<p>The model is</p>
-<div class="arithmatex">\[
-y_{im} \sim \mathrm{Poisson}(\lambda_{im}), \qquad
-\log(1 + \lambda_{im}/c_i) = \sum_k \theta_{ik}\beta_{mk} + \sum_p X_{ip} B_{mp},
-\]</div>
-<p>where the covariate term is optional. By default the scale is per unit,</p>
-<div class="arithmatex">\[
-c_i = n_i / L,
-\]</div>
-<p>with total count <span class="arithmatex">\(n_i\)</span> and size factor <span class="arithmatex">\(L\)</span>. Use <code>--c</code> to set a fixed
-constant <span class="arithmatex">\(c\)</span> for all units instead.</p>
-<h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
-<p>Both commands accept either:</p>
-<ul>
-<li>custom sparse text input with <code>--in-data</code> and <code>--in-meta</code></li>
-<li>10X MEX input via one or more <code>--in-dge-dir</code></li>
-<li>matching repeated 10X triplets: <code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code></li>
-</ul>
-<p>If both custom and 10X inputs are provided, 10X input is used. For multiple 10X
-datasets, repeated <code>--dataset-id</code> values may be provided. If omitted, IDs default
-to <code>1</code>, <code>2</code>, <code>3</code>, ... in input order.</p>
-<p>For 10X fitting, data are loaded into memory. Multiple datasets are treated as a
-joint corpus. If <code>--features</code> is not provided during fitting,
-<code>nmf-pois-log1p</code> writes <code>{prefix}.features.tsv</code> with the final feature names and
-total counts.</p>
-<h2 id="nmf-pois-log1p"><code>nmf-pois-log1p</code><a class="headerlink" href="#nmf-pois-log1p" title="Permanent link">&para;</a></h2>
-<p>Fits a Poisson log1p NMF model.</p>
-<h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
-<p><code>--K</code>
-Number of factors.</p>
-<p><code>--out-prefix</code>
-Prefix for output files.</p>
-<p>One input source is required:</p>
-<ul>
-<li>custom format: <code>--in-data</code> and <code>--in-meta</code></li>
-<li>10X format: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
-</ul>
-<h3 id="input-and-feature-options">Input and feature options<a class="headerlink" href="#input-and-feature-options" title="Permanent link">&para;</a></h3>
-<p><code>--in-data</code>, <code>--in-meta</code>
-Custom sparse input and metadata files.</p>
-<p><code>--in-dge-dir</code>
-Input 10X MEX directory. May be repeated.</p>
-<p><code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code>
-Input 10X MEX triplet files. Each option may be repeated.</p>
-<p><code>--dataset-id</code>
-Dataset IDs for joint 10X input. Default: generated as <code>1</code>, <code>2</code>, <code>3</code>, ...</p>
-<p><code>--features</code>
-Feature list used to define or filter the feature space.</p>
-<p><code>--min-count-per-feature</code>
-Minimum feature total count. Default: <code>100</code>.</p>
-<p><code>--include-feature-regex</code>
-Keep only matching features.</p>
-<p><code>--exclude-feature-regex</code>
-Drop matching features.</p>
-<p><code>--min-count-train</code>
-Minimum total count per unit for training. Default: <code>50</code>.</p>
-<h3 id="optimization-options">Optimization options<a class="headerlink" href="#optimization-options" title="Permanent link">&para;</a></h3>
-<p><code>--mode</code>
-Inner regression solver. <code>1</code> = TRON, <code>2</code> = FISTA, <code>3</code> = diagonal line search. Default: <code>1</code>.</p>
-<p><code>--size-factor</code>
-Size factor <span class="arithmatex">\(L\)</span> for per-unit scaling <span class="arithmatex">\(c_i=n_i/L\)</span>. Default: <code>10000</code>.</p>
-<p><code>--c</code>
-Fixed scaling factor <span class="arithmatex">\(c\)</span>. If positive, overrides <code>--size-factor</code>. Default: unset (<code>-1</code>).</p>
-<p><code>--max-iter-outer</code>
-Maximum alternating-update iterations. Default: <code>20</code>.</p>
-<p><code>--tol-outer</code>
-Outer-loop convergence tolerance. Default: <code>1e-4</code>.</p>
-<p><code>--max-iter-inner</code>
-Maximum inner regression iterations. Default: <code>50</code>.</p>
-<p><code>--tol-inner</code>
-Inner-loop convergence tolerance. Default: <code>1e-6</code>.</p>
-<p><code>--exact</code>
-Use exact zero-count likelihood terms instead of the approximation. Default: <code>false</code>.</p>
-<p><code>--minibatch-epoch</code>
-Number of initial minibatch epochs. Default: <code>1</code>.</p>
-<p><code>--minibatch-size</code>
-Minibatch size. Default: <code>1024</code>.</p>
-<p><code>--t0</code>
-Minibatch decay offset. Default: automatic (<code>-1</code>).</p>
-<p><code>--kappa</code>
-Minibatch decay exponent. Default: <code>0.7</code>.</p>
-<p><code>--seed</code>
-Random seed. Default: random (<code>-1</code>).</p>
-<p><code>--threads</code>
-Number of threads. Default: <code>1</code>.</p>
-<h3 id="warm-start-and-supervision">Warm start and supervision<a class="headerlink" href="#warm-start-and-supervision" title="Permanent link">&para;</a></h3>
-<p><code>--in-model</code>
-Warm-start from an existing model matrix.</p>
-<p><code>--random-init-missing</code>
-Randomly initialize data features missing from the input model. Default: <code>false</code>.</p>
-<p><code>--icol-label</code>
-Column index in <code>--in-covar</code> for guided labels. Default: unset (<code>-1</code>).</p>
-<p><code>--label-list</code>
-List of unique labels to map to factors.</p>
-<p><code>--label-na</code>
-String for missing labels. Default: empty string.</p>
-<h3 id="covariate-options">Covariate options<a class="headerlink" href="#covariate-options" title="Permanent link">&para;</a></h3>
-<p><code>--in-covar</code>
-Covariate table with one row per unit.</p>
-<p><code>--icol-covar</code>
-Selected covariate columns, 0-based. If omitted and covariates are used, all columns except the first are used.</p>
-<p><code>--allow-na</code>
-Replace non-numeric covariate values with zero. Default: <code>false</code>.</p>
-<p><code>--covar-coef-min</code>
-Lower bound for covariate coefficients. Default: <code>-1e6</code>.</p>
-<p><code>--covar-coef-max</code>
-Upper bound for covariate coefficients. Default: <code>1e6</code>.</p>
-<h3 id="diagnostics-and-inference">Diagnostics and inference<a class="headerlink" href="#diagnostics-and-inference" title="Permanent link">&para;</a></h3>
-<p><code>--feature-residuals</code>
-Compute and write per-feature residual diagnostics. Default: <code>false</code>.</p>
-<p><code>--fit-stats</code>
-Write per-unit fit statistics. Currently skipped when <code>--fit-background</code> is enabled. Default: <code>false</code>.</p>
-<p><code>--write-se</code>
-Write standard errors for model coefficients. Default: <code>false</code>.</p>
-<p><code>--detest-vs-avg</code>
-Compute factor-vs-average DE statistics. Default: <code>false</code>.</p>
-<p><code>--se-method</code>
-Standard error method: <code>1</code> = Fisher, <code>2</code> = robust, <code>3</code> = both. Default: <code>1</code>.</p>
-<p><code>--min-fc</code>
-Minimum fold-change for DE output. Default: <code>1.5</code>.</p>
-<p><code>--max-p</code>
-Maximum p-value for DE output. Default: <code>0.05</code>.</p>
-<p><code>--min-ct</code>
-Minimum total count for a feature to be tested. Default: <code>100</code>.</p>
-<p><code>--verbose</code>
-Verbose interval. Default: <code>500000</code>.</p>
-<p><code>--debug-N</code>
-Use only the first N units. Default: <code>0</code> (disabled).</p>
-<p><code>--debug</code>
-Debug verbosity. Default: <code>0</code>.</p>
-<h3 id="background-options">Background options<a class="headerlink" href="#background-options" title="Permanent link">&para;</a></h3>
-<p><code>--fit-background</code>
-Fit a background component. Default: <code>false</code>.</p>
-<p><code>--fix-background</code>
-Keep the background model fixed during fitting. Default: <code>false</code>.</p>
-<p><code>--background-init</code>
-Initial background proportion. Default: <code>0.1</code>.</p>
-<h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
-<p><code>{prefix}.model.tsv</code>
-Feature-by-factor matrix.</p>
-<p><code>{prefix}.theta.tsv</code>
-Unit-by-factor matrix. Written when <code>--max-iter-inner &gt; 0</code>.</p>
-<p><code>{prefix}.features.tsv</code>
-Written for 10X fitting when <code>--features</code> is not supplied.</p>
-<p><code>{prefix}.covar.tsv</code>
-Covariate coefficient matrix. Written when covariates are used.</p>
-<p><code>{prefix}.background.tsv</code>
-Background model. Written when <code>--fit-background</code> is used.</p>
-<p><code>{prefix}.bgprob.tsv</code>
-Per-unit posterior background probabilities. Written when <code>--fit-background</code> is used.</p>
-<p><code>{prefix}.model.se.fisher.tsv</code>, <code>{prefix}.model.se.robust.tsv</code>
-Written when <code>--write-se</code> is requested for the corresponding <code>--se-method</code>.</p>
-<p><code>{prefix}.de.fisher.tsv</code>, <code>{prefix}.de.robust.tsv</code>
-Written when <code>--detest-vs-avg</code> is requested for the corresponding <code>--se-method</code>.</p>
-<p><code>{prefix}.feature.residuals.tsv</code>
-Written when <code>--feature-residuals</code> is used.</p>
-<p><code>{prefix}.unit_stats.tsv</code>
-Written when <code>--fit-stats</code> is used and <code>--fit-background</code> is not set. Columns:</p>
-<ul>
-<li><code>#Index</code></li>
-<li><code>TotalCount</code></li>
-<li><code>ll</code></li>
-<li><code>Residual</code></li>
-<li><code>VarMu</code></li>
-<li><code>entropy</code></li>
-<li><code>sh_lcr</code></li>
-<li><code>sh_q</code></li>
-</ul>
-<p>Here <code>entropy</code>, <code>sh_lcr</code>, and <code>sh_q</code> are computed from row-normalized
-nonnegative factor loadings. The factor similarity matrix is cosine similarity
-among L1-normalized model factors.</p>
-<h2 id="nmf-pois-log1p-transform"><code>nmf-pois-log1p-transform</code><a class="headerlink" href="#nmf-pois-log1p-transform" title="Permanent link">&para;</a></h2>
-<p>Projects new data using a fitted NMF model and writes transformed unit loadings
-plus diagnostics.</p>
-<h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
-<p><code>--in-model</code>
-Input model matrix from <code>nmf-pois-log1p</code>.</p>
-<p><code>--out-prefix</code>
-Prefix for output files.</p>
-<p>One input source is required:</p>
-<ul>
-<li>custom format: <code>--in-data</code> and <code>--in-meta</code></li>
-<li>10X format: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
-</ul>
-<h3 id="input-and-covariate-options">Input and covariate options<a class="headerlink" href="#input-and-covariate-options" title="Permanent link">&para;</a></h3>
-<p><code>--in-data</code>, <code>--in-meta</code>
-Custom sparse input and metadata files.</p>
-<p><code>--in-dge-dir</code>
-Input 10X MEX directory. May be repeated.</p>
-<p><code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code>
-Input 10X MEX triplet files. Each option may be repeated.</p>
-<p><code>--dataset-id</code>
-Dataset IDs for joint 10X input. Default: generated as <code>1</code>, <code>2</code>, <code>3</code>, ...</p>
-<p><code>--in-covar</code>
-Covariate table for new data. For 10X input, rows must match the combined unit order after concatenating datasets.</p>
-<p><code>--in-covar-coef</code>
-Covariate coefficient matrix from a previous fit.</p>
-<p><code>--icol-covar</code>
-Selected covariate columns, 0-based. If omitted and covariates are used, all columns except the first are used.</p>
-<p><code>--allow-na</code>
-Replace non-numeric covariate values with zero. Default: <code>false</code>.</p>
-<p><code>--min-count</code>
-Minimum total count per unit. Default: <code>50</code>.</p>
-<h3 id="transform-options">Transform options<a class="headerlink" href="#transform-options" title="Permanent link">&para;</a></h3>
-<p><code>--size-factor</code>
-Size factor <span class="arithmatex">\(L\)</span> for per-unit scaling <span class="arithmatex">\(c_i=n_i/L\)</span>. Default: <code>10000</code>.</p>
-<p><code>--c</code>
-Fixed scaling factor <span class="arithmatex">\(c\)</span>. If positive, overrides <code>--size-factor</code>. Default: unset (<code>-1</code>).</p>
-<p><code>--max-iter-inner</code>
-Maximum inner regression iterations. Default: <code>20</code>.</p>
-<p><code>--tol-inner</code>
-Inner-loop convergence tolerance. Default: <code>1e-6</code>.</p>
-<p><code>--exact</code>
-Use exact zero-count likelihood terms instead of the approximation. Default: <code>false</code>.</p>
-<p><code>--se-method</code>
-Standard error method for transformed loadings: <code>1</code> = Fisher, <code>2</code> = robust. Default: <code>1</code>.</p>
-<p><code>--seed</code>
-Random seed. Default: random (<code>-1</code>).</p>
-<p><code>--threads</code>
-Number of threads. Default: <code>1</code>.</p>
-<p><code>--verbose</code>
-Verbose interval. Default: <code>500000</code>.</p>
-<p><code>--debug-N</code>
-Use only the first N units. Default: <code>0</code> (disabled).</p>
-<p><code>--debug</code>
-Debug verbosity. Default: <code>0</code>.</p>
-<h3 id="outputs_1">Outputs<a class="headerlink" href="#outputs_1" title="Permanent link">&para;</a></h3>
-<p><code>{prefix}.theta.tsv</code>
-Projected unit-by-factor matrix. The row identifier is <code>#Index</code> for custom sparse input. For 10X input it is the barcode/identifier: unchanged for a single dataset, or <code>&lt;dataset_id&gt;:&lt;barcode&gt;</code> for multiple datasets.</p>
-<p><code>{prefix}.feature_residuals.tsv</code>
-Per-feature averaged residuals on the projected data.</p>
-<p><code>{prefix}.unit_stats.tsv</code>
-Per-unit summary statistics with columns:</p>
-<ul>
-<li><code>#Index</code></li>
-<li><code>total_count</code></li>
-<li><code>residual</code></li>
-<li><code>ll</code></li>
-<li><code>var_mu</code></li>
-<li><code>entropy</code></li>
-<li><code>sh_lcr</code></li>
-<li><code>sh_q</code></li>
-</ul>
-<p>The entropy summaries use row-normalized transformed <code>theta</code> values as a
-probability distribution over factors:</p>
-<ul>
-<li><code>entropy = -\sum_k p_k \log p_k</code></li>
-<li><code>sh_lcr = -\sum_k p_k \log((Zp)_k)</code></li>
-<li><code>sh_q = 1 - p^T Z p</code></li>
-</ul>
-<p>where <code>Z</code> is the cosine similarity matrix among L1-normalized model factors.</p>
+<h1 id="other-utilities">Other Utilities<a class="headerlink" href="#other-utilities" title="Permanent link">&para;</a></h1>
+<p>This page documents utility commands that are useful in preprocessing or exploratory analysis but are not part of the main topic-model fitting workflow.</p>
+<h2 id="feature-vst">feature-vst<a class="headerlink" href="#feature-vst" title="Permanent link">&para;</a></h2>
+<p><code>feature-vst</code> computes variance-stabilized feature scores and selects highly variable features (HVFs).</p>
+<p><code>feature-vst</code> accepts either the custom hex-unit format produced by <code>tiles2hex</code> or 10X DGE input in Matrix Market format.</p>
+<h3 id="basic-usage">Basic Usage<a class="headerlink" href="#basic-usage" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>feature-vst<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in-data<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.txt<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--in-meta<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/hex_12.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--min-count-train<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--min-count-per-feature<span class="w"> </span><span class="m">100</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--n-top<span class="w"> </span><span class="m">2000</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/feature_vst<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span>
+</span></code></pre></div>
+<h3 id="input-options">Input Options<a class="headerlink" href="#input-options" title="Permanent link">&para;</a></h3>
+<p>For hex input, provide both:</p>
+<p><code>--in-data</code> specifies the hex-unit file.</p>
+<p><code>--in-meta</code> specifies the matching metadata JSON file.</p>
+<p>For 10X input, provide either:</p>
+<p><code>--in-dge-dir</code> specifies a directory containing <code>barcodes.tsv.gz</code>, <code>features.tsv.gz</code>, and <code>matrix.mtx.gz</code>.</p>
+<p>or:</p>
+<p><code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code> specify the three 10X files directly.</p>
+<p>Multiple 10X datasets can be provided by repeating these options. In that case, <code>feature-vst</code> uses the shared feature space across datasets. <code>--dataset-id</code> can be used to label datasets.</p>
+<h3 id="unit-and-feature-filtering">Unit And Feature Filtering<a class="headerlink" href="#unit-and-feature-filtering" title="Permanent link">&para;</a></h3>
+<p><code>--min-count-train</code> filters units by total raw count before computing VST statistics.</p>
+<p><code>--features</code> provides an optional feature list. The first column is interpreted as the feature name. If a second column is present, it may contain total counts, but <code>feature-vst</code> computes observed totals from the input data for its own HVF eligibility checks.</p>
+<p><code>--include-feature-regex</code> keeps only features whose names match the regex.</p>
+<p><code>--exclude-feature-regex</code> removes features whose names match the regex.</p>
+<p><code>--min-count-per-feature</code> sets the minimum observed total count required for a feature to be eligible for HVF selection.</p>
+<p>Feature filters in <code>feature-vst</code> affect HVF eligibility, while the full <code>.feature.stats.tsv</code> file still contains all input features.</p>
+<h3 id="vst-options">VST Options<a class="headerlink" href="#vst-options" title="Permanent link">&para;</a></h3>
+<p><code>--loess-span</code> controls the LOESS span for the mean-variance trend fit. The default is <code>0.3</code>.</p>
+<p><code>--clip-max</code> caps absolute standardized values before computing standardized variance. The default <code>-1</code> uses <code>sqrt(N)</code>, where <code>N</code> is the number of units.</p>
+<p><code>--n-top</code> controls how many HVFs are written to <code>.hvf.tsv</code>. The default <code>0</code> writes all eligible features.</p>
+<p><code>--streaming</code> uses a two-pass streaming implementation instead of loading all units into memory. This is useful for large inputs. For 10X input, the matrix entries must be sorted by barcode; if unsorted entries are detected, <code>feature-vst</code> exits with an error.</p>
+<h3 id="idf-and-information-weights">IDF And Information Weights<a class="headerlink" href="#idf-and-information-weights" title="Permanent link">&para;</a></h3>
+<p>The full statistics output includes two feature weight columns that can be used as input weights for later model fitting:</p>
+<p><code>idf</code> is a smoothed, normalized, capped IDF-style weight based on the raw score <code>log(N / (1 + n_units_present))</code>, where <code>N</code> is the number of units.</p>
+<p><code>info_weight</code> is a capped, token-mean-normalized information-content weight.</p>
+<p>The following options control these columns:</p>
+<p><code>--idf-q</code> sets the percentile of raw IDF scores used for normalization. The default is <code>95</code>.</p>
+<p><code>--idf-power</code> sets the power used for capped IDF weighting. The default is <code>0.3</code>.</p>
+<p><code>--idf-min</code> sets the minimum IDF weight. The default is <code>0.1</code>.</p>
+<p><code>--idf-max</code> sets the cap for <code>info_weight</code>. The default is <code>5</code>.</p>
+<h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
+<p><code>feature-vst</code> writes two tab-delimited files:</p>
+<p><code>&lt;out-prefix&gt;.feature.stats.tsv</code></p>
+<p>This file contains one row per input feature. Columns are:</p>
+<p><code>#Feature</code>, <code>Mean</code>, <code>Var</code>, <code>VarExpected</code>, <code>VarStd</code>, <code>TotalCount</code>, <code>n_units_present</code>, <code>n_units_count_gt1</code>, <code>n_units_count_gt2</code>, <code>n_units_count_gt_mean</code>, <code>idf</code>, <code>info_weight</code></p>
+<p><code>Mean</code>, <code>Var</code>, and <code>TotalCount</code> are computed across all retained units. <code>VarExpected</code> and <code>VarStd</code> come from the VST mean-variance model. Features that are not eligible for HVF selection remain in this file.</p>
+<p><code>&lt;out-prefix&gt;.hvf.tsv</code></p>
+<p>This file contains the highly variable feature list. Columns are:</p>
+<p><code>#Feature</code>, <code>TotalCount</code>, <code>Score</code></p>
+<p>Rows are sorted by decreasing VST score. Only features passing <code>--features</code>, regex filters, and <code>--min-count-per-feature</code> eligibility are written.</p>
 
 
 

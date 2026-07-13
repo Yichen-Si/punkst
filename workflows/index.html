@@ -1199,48 +1199,61 @@
 
 
 <h1 id="quickstart-with-the-example-data">Quickstart with the example data<a class="headerlink" href="#quickstart-with-the-example-data" title="Permanent link">&para;</a></h1>
-<p>This example runs the full pixel level analysis workflow on the small example data <code>transcripts.tsv.gz</code> in <code>punkst/examples/data</code> using a template Makefile, then prepares the output for deployment on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
+<p>This example runs the full pixel level analysis workflow on the small example dataset distributed as <code>punkst/examples/data/example_data.tar.gz</code>, then prepares the output for deployment on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
 <p>See <a href="basics/">Basics</a> for details on configuring the workflow for your own data.</p>
 <p>See <a href="multisample/">Multisample</a> for joint analysis of multiple samples.</p>
 <p>See <a href="deploy_carto/">Deployment</a> for details on CartoScope deployment.</p>
 <h3 id="example-data">Example data<a class="headerlink" href="#example-data" title="Permanent link">&para;</a></h3>
-<p>There is a small example data <code>transcripts.tsv.gz</code> in <code>punkst/examples/data</code> with four columns:
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>X       Y       gene    Count
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>6711.14 6772    Esam    1
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>6727.83 6772    Gck     1
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>6732.65 6772    Akr1a1  1
+<p>The example dataset is packaged as a tarball in the repository. Unpack it into a working directory:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>mkdir<span class="w"> </span>-p<span class="w"> </span>/path/to/work
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>/path/to/work
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>tar<span class="w"> </span>-xzf<span class="w"> </span>/path/to/punkst/examples/data/example_data.tar.gz
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nb">cd</span><span class="w"> </span>data
 </span></code></pre></div>
-(The <code>Count</code> column is optional)</p>
+<p>The unpacked <code>data</code> directory contains <code>transcripts.tsv.gz</code>, a <code>config.json</code>, a step-by-step <code>cmd.sh</code>, cell boundary files in TSV and GeoJSON formats, and a 10X-style segmented cell count matrix under <code>cells_dge/</code>.</p>
+<p>The transcript file <code>transcripts.tsv.gz</code> has four columns:
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>#x      y       gene    count
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>6690.33 6726.23 Acsl1   1
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>6690.07 6725.90 Tmod1   1
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>6690.29 6725.67 Eif3a   1
+</span></code></pre></div>
+(The <code>count</code> column is optional)</p>
+<p>The same unpacked directory includes optional cell-level example inputs used by the CartoScope deployment workflow. See <a href="deploy_carto/">Deployment</a> for adding these cell-level assets to the same CartoScope model.</p>
+<p>For the full prepared example, set the path to your punkst checkout and run the bundled commands:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PUNKST_REPO</span><span class="o">=</span>/path/to/punkst
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>./cmd.sh
+</span></code></pre></div>
+<p>(If your punkst binary is not at <code>${PUNKST_REPO}/bin/punkst</code>, set <code>PUNKST_BIN</code> as well. Optionally, set <code>THREADS</code> to control the number of threads used by the workflow.)</p>
 <h3 id="use-the-makefile-template">Use the Makefile template<a class="headerlink" href="#use-the-makefile-template" title="Permanent link">&para;</a></h3>
 <p>We provide template Makefile and config files in <code>punkst/examples</code> to generate the full workflows.</p>
-<p>First copy <code>punkst/examples/basic/config.json</code> to your own directory and modify the data path and parameters, then use <code>punkst/ext/py/generate_workflow.py</code> to generate a data-specific Makefile for your task.</p>
-<p>Set <code>workflow.punkst</code> in the config to the <code>punkst</code> binary you want to run. For source builds this is usually <code>${repopath}/bin/punkst</code>; for prebuilt tarballs, point it at the binary inside the unpacked tarball.</p>
-<p>The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the <code>-o</code> option.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># set repopath to the path of the punkst repo</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>python<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/ext/py/generate_workflow.py<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span>-c<span class="w"> </span>config.json<span class="w"> </span>-o<span class="w"> </span>run.sh<span class="w"> </span>-m<span class="w"> </span>Makefile<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">    </span>-t<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/examples/basic/Makefile
+<p>The unpacked example dataset already contains a concrete <code>config.json</code> and <code>cmd.sh</code>. For your own data, copy <code>punkst/examples/basic/config.json</code> to your working directory and modify the paths and parameters. Set <code>workflow.punkst</code> in the config to the <code>punkst</code> binary you want to use. For source builds this is usually <code>${repopath}/bin/punkst</code>; for prebuilt tarballs, point it at the binary inside the unpacked tarball.</p>
+<p>Then run <code>punkst/ext/py/generate_workflow.py</code> as follows to generate a data-specific Makefile for your task.
+The python script also generates a bash script that can be submitted as a slurm job. If you are not using slurm just ignore the parameters in the "job"  section of the config and run the generation script without the <code>-o</code> option.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># set repopath to the path of the punkst repo</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>python<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/ext/py/generate_workflow.py<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>-c<span class="w"> </span>config.json<span class="w"> </span>-o<span class="w"> </span>run.sh<span class="w"> </span>-m<span class="w"> </span>Makefile<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>-t<span class="w"> </span><span class="si">${</span><span class="nv">repopath</span><span class="si">}</span>/examples/basic/Makefile
 </span></code></pre></div>
 <p>You can check the generated workflow before execution by
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>make<span class="w"> </span>-f<span class="w"> </span>Makefile<span class="w"> </span>--dry-run
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>make<span class="w"> </span>-f<span class="w"> </span>Makefile<span class="w"> </span>--dry-run
 </span></code></pre></div></p>
-<p>Then <code>make -f Makefile</code> to exectute the workflow.</p>
+<p>Then <code>make -f Makefile</code> to execute the workflow.</p>
 <h3 id="prepare-the-results-for-cartoscope">Prepare the results for CartoScope<a class="headerlink" href="#prepare-the-results-for-cartoscope" title="Permanent link">&para;</a></h3>
 <p>Make a directory to store the CartoScope deployment files, then run</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>deploy-cartoscope<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--config<span class="w"> </span>config.json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--out-dir<span class="w"> </span>/path/for/carto<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>--id<span class="w"> </span>sample-id<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span>--title<span class="w"> </span><span class="s2">&quot;Sample title&quot;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">    </span>--pmtiles-format<span class="w"> </span>MVT<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span>--threads<span class="w"> </span><span class="m">4</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>deploy-cartoscope<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">    </span>--config<span class="w"> </span>config.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span>--out-dir<span class="w"> </span>/path/for/carto<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span>--id<span class="w"> </span>sample-id<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">    </span>--title<span class="w"> </span><span class="s2">&quot;Sample title&quot;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span>--pmtiles-format<span class="w"> </span>MVT<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span>--threads<span class="w"> </span><span class="m">4</span>
 </span></code></pre></div>
 <p>The output path <code>/path/for/carto</code> should contain a <code>catalog.yaml</code> file, the entry point for CartoScope.</p>
 <p>Serve the deployment directory:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nb">cd</span><span class="w"> </span>/path/for/carto
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>npx<span class="w"> </span>http-server<span class="w"> </span>--cors
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">cd</span><span class="w"> </span>/path/for/carto
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>npx<span class="w"> </span>http-server<span class="w"> </span>--cors
 </span></code></pre></div></p>
-<p>Then use the url <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual port may differ) on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
+<p>Then use the URL <code>http://127.0.0.1:8080/catalog.yaml</code> (the actual port may differ) on <a href="https://main.cartoscope.app/summary">CartoScope</a>.</p>
 
 
 

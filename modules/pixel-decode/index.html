@@ -916,6 +916,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#inference-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inference Modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#required-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -982,32 +993,21 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#feature-specific-modes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Feature-Specific Modes
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#3d-modes" class="md-nav__link">
+  <a href="#3d-data" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3D Modes
+        3D data
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="3D Modes">
+    <nav class="md-nav" aria-label="3D data">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1387,6 +1387,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#inference-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inference Modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#required-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1453,32 +1464,21 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#feature-specific-modes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Feature-Specific Modes
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#3d-modes" class="md-nav__link">
+  <a href="#3d-data" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3D Modes
+        3D data
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="3D Modes">
+    <nav class="md-nav" aria-label="3D data">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1582,17 +1582,44 @@
 <h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
 <p><code>pixel-decode</code> projects a trained factor model onto the space and annotates each pixel/voxel/molecule with the top factors and their probabilities. In standard mode, the inference is done at pixel or voxel level. In the feature-specific modes, the inference is feature-specific even at the same location.</p>
 <p>In all cases, the input is the x-y tiled data created by <code>pts2tiles</code>.</p>
-<!-- The default decoder is `slda`; `--algo nmf` enables the EM-NMF decoder. -->
-
-<p>Basic usage:
+<p>Basic usage in pixel mode:
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/model.tsv<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">out_prefix</span><span class="si">}</span><span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div></p>
-<p>The main inference result in this example is written to <code>${path}/pixel.bin</code> together with <code>${path}/pixel.index</code>. The output are organized in regular square tiles for efficient downstream analysis (see <a href="../tileop/">tile-op</a>).</p>
+<p>Basic usage in single-molecule mode:
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/model.tsv<span class="w"> </span>--single-molecule<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">out_prefix</span><span class="si">}</span><span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div></p>
+<p>The main inference result in this example is written to <code>${out_prefix}.bin</code> together with <code>${out_prefix}.index</code>. The output are organized in regular square tiles for efficient downstream analysis (see <a href="../tileop/">tile-op</a>).</p>
+<h2 id="inference-modes">Inference Modes<a class="headerlink" href="#inference-modes" title="Permanent link">&para;</a></h2>
+<p>There are three inference modes:</p>
+<ul>
+<li>pixel mode jointly considers all observations in the same pixel or voxel and compute one probability distribution over factors per pixel/voxel.</li>
+<li><code>--single-feature-pixel</code> still collapses the raw data by analysis resolution, but may assign different factor probabilities to features within the same pixel or voxel</li>
+<li><code>--single-molecule</code> does not collapse the data before inference; each accepted input record is treated on its own</li>
+</ul>
+<p>In both feature-specific modes, different features are considered separately even if they have the same location. Use the feature-specific modes if your factors are closer to <strong>transcriptional programs</strong> than (categorical) cell types or clusters.</p>
+<p>Caution: for Visium HD, where the resolution is 2μm, only <code>--single-feature-pixel</code> is valid.</p>
+<p>Output differences:</p>
+<ul>
+<li><code>--single-feature-pixel</code> writes integer pixel or voxel coordinates plus one extra <code>uint32_t featureIdx</code></li>
+<li><code>--single-molecule</code> writes raw float coordinates plus one extra <code>uint32_t featureIdx</code></li>
+</ul>
+<p>Current restrictions for both <code>--single-feature-pixel</code> and <code>--single-molecule</code>:</p>
+<ul>
+<li>requires <code>--output-binary</code></li>
+<li>does not support <code>--output-original</code></li>
+<li>does not support <code>--output-bg-prob-expand</code>, <code>--ext-col-ints</code>, <code>--ext-col-floats</code>, or <code>--ext-col-strs</code></li>
+<li>does not support extended or weighted parser modes</li>
+</ul>
 <h2 id="required-parameters">Required Parameters<a class="headerlink" href="#required-parameters" title="Permanent link">&para;</a></h2>
 <p><code>--in-tsv</code> - Specifies the tiled data created by <code>pts2tiles</code>.</p>
 <p><code>--in-index</code> - Specifies the index file created by <code>pts2tiles</code>.</p>
@@ -1618,8 +1645,10 @@
 <p><code>--thin-3D</code> - Activates the thin 3D path. (See the 3D modes section below)</p>
 <p><code>--standard-3D</code> - Activates the standard 3D path. (See the 3D modes section below)</p>
 <p><code>--feature-is-index</code> - If set, the values in <code>--icol-feature</code> are interpreted as feature indices. Otherwise, they are expected to be feature names.</p>
-<p><code>--feature-weights</code> - Specifies a file to weight each feature. The first column should contain the feature names, and the second column should contain the weights.</p>
+<p><code>--feature-weights</code> - Specifies a file to weight each feature. The first column should contain the feature names or indices. Empty lines and lines starting with <code>#</code> are skipped.
+Negative and non-finite weights are ignored with a warning; zero weights are allowed.</p>
 <p><code>--default-weight</code> - Specifies the default weight for features not present in the weights file (only if <code>--feature-weights</code> is specified). Default: 0.</p>
+<p><code>--icol-weight</code> - 0-based column index for the weight in <code>--feature-weights</code>. Default: 1.</p>
 <p><code>--anchor</code> - Specifies a file containing fixed anchor points. This is currently
 only supported for 2D <code>slda</code>. In 3D, fixed anchors are ignored. In <code>nmf</code>,
 externally loaded anchors are not currently used.</p>
@@ -1684,29 +1713,7 @@ generate between <code>zmin</code> and <code>zmax</code>.</p>
 <p><code>--ext-col-ints</code> - Additional integer columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: <code>--ext-col-ints 4:celltype 5:cluster</code>.</p>
 <p><code>--ext-col-floats</code> - Additional float columns to carry over to the output file. Format: "idx1:name1 idx2:name2 ..." where 'idx' are 0-based column indices. Example: <code>--ext-col-floats 6:quality</code>.</p>
 <p><code>--ext-col-strs</code> - Additional string columns to carry over to the output file. Format: "idx1:name1:len1 idx2:name2:len2 ..." where 'idx' are 0-based column indices and 'len' are maximum lengths of strings. Example: <code>--ext-col-strs 7:sample_id:20 8:batch:10</code>.</p>
-<h3 id="feature-specific-modes">Feature-Specific Modes<a class="headerlink" href="#feature-specific-modes" title="Permanent link">&para;</a></h3>
-<p>The two feature-specific modes share the same inference path, where different features are considered separately even if they have the same location. Consider the feature-specific modes only if your factors are closer to "transcriptional modules" than "cell types".</p>
-<p>Caution: for Visium HD, where the resolution is 2μm, only <code>--single-feature-pixel</code> is valid.</p>
-<p>Compared with the standard pixel mode:</p>
-<ul>
-<li>standard mode jointly considers all observations in the same pixel or voxel and makes one inference result per pixel/voxel</li>
-<li><code>--single-feature-pixel</code> still collapses the raw data by analysis resolution, but can assign different factor probabilities to features within the same pixel or voxel</li>
-<li><code>--single-molecule</code> does not collapse the data before inference; each accepted input record is treated on its own</li>
-</ul>
-<p>Output differences:</p>
-<ul>
-<li><code>--single-feature-pixel</code> writes integer pixel or voxel coordinates plus one extra <code>uint32_t featureIdx</code></li>
-<li><code>--single-molecule</code> writes raw float coordinates plus one extra <code>uint32_t featureIdx</code></li>
-</ul>
-<p>Current restrictions for both <code>--single-feature-pixel</code> and <code>--single-molecule</code>:</p>
-<ul>
-<li>requires <code>--output-binary</code></li>
-<li>does not support <code>--output-original</code></li>
-<li>does not support <code>--output-bg-prob-expand</code></li>
-<li>does not support <code>--ext-col-ints</code>, <code>--ext-col-floats</code>, or <code>--ext-col-strs</code></li>
-<li>does not support extended or weighted parser modes</li>
-</ul>
-<h2 id="3d-modes">3D Modes<a class="headerlink" href="#3d-modes" title="Permanent link">&para;</a></h2>
+<h2 id="3d-data">3D data<a class="headerlink" href="#3d-data" title="Permanent link">&para;</a></h2>
 <p>3D mode needs to be configured explicitly</p>
 <ul>
 <li>Use <code>--icol-z --thin-3D</code> for thin 3D (e.g. 10um tissue slice from imaging-based platforms)</li>
@@ -1735,13 +1742,13 @@ generate between <code>zmin</code> and <code>zmax</code>.</p>
 <p>If <code>--zmin</code> and <code>--zmax</code> are provided in standard 3D, they are ignored unless
 <code>--ignore-outside-zrange</code> is also set.</p>
 <p>Example:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/bcc.model.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel_3d<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>--standard-3D<span class="w"> </span>--anchor-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/bcc.model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">out_prefix</span><span class="si">}</span><span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>--standard-3D<span class="w"> </span>--anchor-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <h3 id="thin-3d">Thin 3D<a class="headerlink" href="#thin-3d" title="Permanent link">&para;</a></h3>
 <p>Thin 3D keeps anchor lattice in x-y and adds a small set of z levels across <code>[zmin, zmax]</code> to distribute these anchors. This is an experimental mode designed for thin tissue slices from imaging-based platforms where the range on the z axis is typically only 5-10μm.</p>
@@ -1765,15 +1772,15 @@ generate between <code>zmin</code> and <code>zmax</code>.</p>
   planes” based.</li>
 </ul>
 <p>Example:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/thin3d.model.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel_thin3d<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>--thin-3D<span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">18</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>--thin-3d-z-levels<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span>.5<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">4</span>.5<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="m">9</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>--zmin<span class="w"> </span><span class="m">0</span><span class="w"> </span>--zmax<span class="w"> </span><span class="m">20</span><span class="w"> </span>--radius<span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/thin3d.model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.tsv<span class="w"> </span>--in-index<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/transcripts.tiled.index<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">out_prefix</span><span class="si">}</span><span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>--thin-3D<span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">18</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>--thin-3d-z-levels<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span>.5<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">4</span>.5<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="m">9</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>--zmin<span class="w"> </span><span class="m">0</span><span class="w"> </span>--zmax<span class="w"> </span><span class="m">20</span><span class="w"> </span>--radius<span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <h2 id="process-multiple-samples">Process multiple samples<a class="headerlink" href="#process-multiple-samples" title="Permanent link">&para;</a></h2>
 <p>If you want to project the same model onto multiple datasets/samples, you can use <code>--sample-list</code> to pass a tsv file containing all samples' information. (In this case, <code>--in-tsv</code> and <code>--in-index</code> are ignored.)
@@ -1784,10 +1791,10 @@ sample_id, path to the transcript file created by <code>pts2tiles</code>, path t
 <p>Optional fourth column: output prefix.</p>
 <p>Optional fifth column: anchor file path.</p>
 <p>If there are headers, all header lines should start with "#".</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--sample-list<span class="w"> </span>multi.persample_file_list.tsv<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>pixel-decode<span class="w"> </span>--model<span class="w"> </span>model.tsv<span class="w"> </span>--sample-list<span class="w"> </span>multi.persample_file_list.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>--temp-dir<span class="w"> </span>/tmp<span class="w"> </span>--out-pref<span class="w"> </span>results<span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>--hex-grid-dist<span class="w"> </span><span class="m">12</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">2</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">8</span>
 </span></code></pre></div>
 <h2 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h2>
 <p>Files are written with the prefix specified by <code>--out-pref</code> (or inferred from <code>--out</code>).</p>

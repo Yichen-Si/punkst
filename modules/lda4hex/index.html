@@ -1581,11 +1581,9 @@
 <h1 id="lda-with-stochastic-variational-inference">LDA with stochastic variational inference<a class="headerlink" href="#lda-with-stochastic-variational-inference" title="Permanent link">&para;</a></h1>
 <p>This document describes the current behavior of:</p>
 <ul>
-<li><code>punkst lda4hex</code></li>
 <li><code>punkst topic-model</code></li>
 <li><code>punkst lda-transform</code></li>
 </ul>
-<p><code>lda4hex</code> and <code>topic-model</code> are aliases for the same command. They currently expose only the SVI-based LDA workflow. This document does not cover HDP or SCVB0.</p>
 <h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
 <h3 id="custom-sparse-text-input">Custom sparse text input<a class="headerlink" href="#custom-sparse-text-input" title="Permanent link">&para;</a></h3>
 <p>This is the sparse unit-by-feature format produced by <code>tiles2hex</code>.</p>
@@ -1633,10 +1631,13 @@ Optional feature list used to define or filter the feature space.</p>
 Minimum feature total count. Default: <code>1</code>.</p>
 <p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code>
 Regex-based feature filtering.</p>
-<p><code>--feature-weights</code>
-Per-feature weights applied during fitting and transform.</p>
+<p><code>--icol-weight</code>
+0-based column index for per-feature weights in <code>--features</code>. Default: <code>-1</code>, which disables feature weighting. Column 0 of <code>--features</code> is the feature name, and column 1 remains the total count when present. Fractional weighted counts are supported.
+Negative and non-finite weights are ignored with a warning; zero weights are allowed. Count and regex feature filtering are applied before weights.</p>
 <p><code>--default-weight</code>
-Default weight for features missing from the weight file.</p>
+Default weight for model/prior features missing from <code>--features</code> when feature weighting is active. Default: <code>-1</code>, which drops missing model/prior features. Set this to a non-negative value, such as <code>0</code>, to keep missing model/prior features and fill their weights.</p>
+<p>Model fitting and transform use the weighted counts. Pseudobulk output remains on the original count scale.
+When <code>--prior-scale-rel</code> is used with feature weights, the prior is scaled relative to weighted feature totals, so continued fitting or transform should use the same feature weights.</p>
 <p>For 10X input, the feature-selection behavior is:</p>
 <ol>
 <li>If <code>--features</code> is provided, it defines the feature space before loading the full matrix.</li>
@@ -1752,7 +1753,7 @@ Input topic-word model matrix.</p>
 <p><code>--features</code>, <code>--min-count-per-feature</code></p>
 <p><code>--min-count</code>
 Minimum total count per unit to keep. Default: <code>20</code>.</p>
-<p><code>--feature-weights</code>, <code>--default-weight</code></p>
+<p><code>--icol-weight</code>, <code>--default-weight</code></p>
 <p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code></p>
 <p><code>--max-iter</code>, <code>--mean-change-tol</code></p>
 <p><code>--sorted-by-barcode</code>

@@ -1991,7 +1991,7 @@
 <li><a href="#fix-fragmented-tiles">Fix Fragmented Tiles</a></li>
 <li><a href="#region-query">Region Query</a></li>
 <li><a href="#convert-to-tsv">Export as TSV</a></li>
-<li><a href="#write-pmtiles">Export as MLT PMTiles</a></li>
+<li><a href="#write-pmtiles">Export as PMTiles</a></li>
 </ul>
 </li>
 <li>
@@ -2034,19 +2034,25 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <ul>
 <li><code>punkst pixel-decode --single-feature-pixel</code></li>
 <li><code>punkst pixel-decode --single-molecule</code></li>
+<li><code>punkst pts2tiles --tile-op-factor-tsv --binary-out</code> with <code>--icol-feature</code> and <code>--feature-dict</code></li>
 </ul>
 <p>In both cases, each binary record carries an additional feature index in addition to coordinates and factor probabilities, so <code>tile-op</code> uses feature-aware loaders / matching logic where supported.</p>
 <p>Current <code>tile-op</code> support for these inputs is:</p>
 <ul>
-<li>supported:</li>
+<li>supported:<ul>
 <li><code>--dump-tsv</code></li>
+<li><code>--extract-region</code></li>
+<li><code>--extract-region-geojson</code></li>
+<li><code>--reorganize</code></li>
 <li><code>--merge-emb</code></li>
 <li><code>--annotate-pts</code></li>
 <li><code>--annotate-cell</code></li>
 <li><code>--prob-dot</code></li>
 <li><code>--confusion</code></li>
-<li>direct <code>--write-mlt-pmtiles</code></li>
-<li>raster image processing style operations are not supported:</li>
+<li>direct <code>--write-mlt-pmtiles</code> and <code>--write-mvt-pmtiles</code></li>
+</ul>
+</li>
+<li>raster image processing style operations are not supported:<ul>
 <li><code>--smooth-top-labels</code></li>
 <li><code>--spatial-metrics</code></li>
 <li><code>--shell-surface</code></li>
@@ -2054,6 +2060,8 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--soft-factor-mask</code></li>
 <li><code>--soft-mask-composition</code></li>
 <li><code>--hard-factor-mask</code></li>
+</ul>
+</li>
 </ul>
 <p>Additional flags used with supported single-molecule workflows:</p>
 <ul>
@@ -2063,7 +2071,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <ul>
 <li><code>tile-op</code> no longer takes <code>--features</code></li>
 <li><code>--dump-tsv</code>, <code>--merge-emb</code>, <code>--annotate-pts</code>, <code>--annotate-cell</code>, and feature-aware <code>--prob-dot</code> decode names from the embedded dictionary</li>
-<li>direct <code>--write-mlt-pmtiles</code> also uses the embedded dictionary</li>
+<li>direct <code>--write-mlt-pmtiles</code> and <code>--write-mvt-pmtiles</code> also use the embedded dictionary</li>
 <li>when multiple feature-bearing sources are merged together, <code>tile-op</code> first compares dictionaries and then either uses the original indices directly or remaps them through a canonical union of feature names</li>
 </ul>
 <h3 id="parallel-execution">Parallel Execution<a class="headerlink" href="#parallel-execution" title="Permanent link">&para;</a></h3>
@@ -2074,9 +2082,8 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--annotate-pts</code></li>
 <li><code>--prob-dot</code></li>
 <li><code>--confusion</code></li>
-<li><code>--write-mlt-pmtiles</code></li>
-<li><code>--extract-region</code></li>
-<li><code>--extract-region-geojson</code></li>
+<li><code>--write-mlt-pmtiles</code>, <code>--write-mvt-pmtiles</code></li>
+<li><code>--extract-region</code>, <code>--extract-region-geojson</code></li>
 <li><code>--smooth-top-labels</code></li>
 <li><code>--spatial-metrics</code></li>
 <li><code>--shell-surface</code></li>
@@ -2214,7 +2221,9 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </ul>
 <!-- - feature names come from the embedded dictionary in the input `.index` -->
 <ul>
-<li><code>--emb-prefix</code> (optional) can rename exported <code>K/P</code> column groups</li>
+<li>PMTiles metadata records the total factor count <code>K</code>; multi-model PMTiles record <code>K</code> for each model when available</li>
+<li>if direct PMTiles export reads an already merged binary with multiple factor groups, provide <code>--Ks</code> with the total factor count for each group</li>
+<li><code>--emb-prefix</code> can name exported <code>K/P</code> column groups, making them selectable later by <code>--pmtiles-factor-prefix</code></li>
 <li><code>--coord-scale</code> optionally scales <code>x/y</code> before EPSG:3857 packaging; if omitted, stored coordinates are used directly</li>
 <li><code>--encode-prob-min</code> prunes later <code>K/P</code> pairs by writing them as null once <code>P2+</code> falls below the threshold; negative disables pruning</li>
 <li><code>--encode-prob-eps</code> makes <code>P1</code> nullable and omits it when <code>P1 &gt; 1 - eps</code>; non-positive disables this rule</li>
@@ -2230,6 +2239,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--feature-count-file path/features.tsv --n-gene-bins N</code></li>
 </ul>
 <p>If both are provided, <code>--gene-bin-info</code> takes precedence. The JSON can be generated ahead of time with <code>punkst gene-bins</code>.</p>
+<p>When bins are derived from a feature-count TSV, the default mode is adaptive. <code>--n-gene-bins</code> is a cap, <code>--gene-bin-target-molecules</code> sets the target molecule budget per bin, and <code>--gene-bin-singleton-ratio</code> controls when high-count genes are assigned singleton bins. Use <code>--gene-bin-mode fixed</code> to reproduce the legacy fixed-bin assignment.</p>
 <h4 id="annotate-and-package-to-pmtiles">Annotate and package to PMTiles<a class="headerlink" href="#annotate-and-package-to-pmtiles" title="Permanent link">&para;</a></h4>
 <p><code>--annotate-pts</code> can package the annotated rows directly as PMTiles for both standard pixel decode input and feature-bearing single-molecule input:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/pixel.ann2d<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
@@ -2245,6 +2255,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li><code>--ext-col-ints</code></li>
 <li><code>--ext-col-floats</code></li>
 <li><code>--ext-col-strs</code></li>
+<li><code>--null-other</code></li>
 </ul>
 <p>Each extra-column spec has the form <code>idx[:name[:nullval]]</code>:</p>
 <ul>
@@ -2252,6 +2263,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <li>if <code>name</code> is omitted, the query TSV header supplies the property name</li>
 <li>if <code>nullval</code> is provided, that exact token is encoded as null and the property becomes nullable</li>
 </ul>
+<p>Empty tab-delimited fields are preserved when parsing query TSV rows, so later columns do not shift. By default, empty string properties are written as empty strings. Use <code>--null-other NA</code> to replace empty string query properties with a fixed value in PMTiles output.</p>
 <h4 id="merge-annotate-and-package-in-one-pass">Merge, annotate, and package in one pass<a class="headerlink" href="#merge-annotate-and-package-in-one-pass" title="Permanent link">&para;</a></h4>
 <p><code>--merge-emb</code> can be combined with <code>--annotate-pts</code> and PMTiles packaging:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/pixel.smol<span class="w"> </span>--binary<span class="w"> </span><span class="se">\</span>
@@ -2264,6 +2276,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 </span></code></pre></div>
 <p>For MVT output, use <code>--write-mvt-pmtiles</code>.</p>
 <p>This follows the same merge and annotation rules described below, but writes PMTiles instead of TSV. The output is <code>path/out_all.pmtiles</code> plus optional gene-bin side outputs.</p>
+<p>When PMTiles are written in the same command as <code>--merge-emb</code>, per-model factor counts are read from the source inference files automatically. When writing PMTiles later from an already merged binary, provide <code>--Ks K1 K2 ...</code> with one total factor count per group. Use <code>--emb-prefix</code> when the PMTiles should be selectable later by model id.</p>
 <h3 id="merge-multiple-inference-results">Merge Multiple Inference Results<a class="headerlink" href="#merge-multiple-inference-results" title="Permanent link">&para;</a></h3>
 <p>You can merge multiple inference files (e.g., from fitting different models) concerning the same spatial dataset into a single file. The main input (<code>--in</code>) defines the output lattice. Auxiliary inputs from <code>--merge-emb</code> are matched onto that lattice when they have the same tile size, the same or coarser resolution, and compatible dimensionality.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/result1<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
@@ -2275,7 +2288,7 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p><code>--binary-out</code> - (Optional) Save the merged output in binary format instead of TSV.</p>
 <p><code>--merge-keep-all-main</code> - (Optional) Keep all records from the main input and fill any unmatched auxiliary source slots with <code>(-1, 0)</code>. By default, merge keeps only records that match in every source.</p>
 <p><code>--merge-keep-all</code> - (Optional) Outer-style merge. Emit a merged record if any source matches, instead of requiring the main input or all sources. Missing source slots are filled with placeholders.</p>
-<p><code>--emb-prefix</code> - (Optional, TSV output only) Rename merged <code>(K, P)</code> columns per source. For example, <code>--k2keep 2 2 --emb-prefix rna atac</code> writes <code>rna_K1 rna_P1 rna_K2 rna_P2 atac_K1 atac_P1 atac_K2 atac_P2</code>.</p>
+<p><code>--emb-prefix</code> - (Optional) Rename merged <code>(K, P)</code> columns per source. For example, <code>--k2keep 2 2 --emb-prefix rna atac</code> writes <code>rna_K1 rna_P1 rna_K2 rna_P2 atac_K1 atac_P1 atac_K2 atac_P2</code>.</p>
 <p><code>--null-k</code>, <code>--null-p</code> - (Optional, TSV output only) Override the placeholder text used for missing merged <code>(K, P)</code> pairs. Defaults are <code>-1</code> and <code>0</code>.</p>
 <p><code>--threads</code> - (Optional) Number of worker threads for tile-local merge processing.</p>
 <p>In the above example, we keep top 3 factors from file <code>result1.bin</code> (or <code>.tsv</code>), top 1 from <code>result2.tsv</code>, and top 2 from <code>result3.bin</code>. If the specified number exceeds the number of factors available in the corresponding file, all factors in the file are kept.</p>
@@ -2290,12 +2303,11 @@ When using <code>--in</code>, without <code>--binary</code>, the tool assumes th
 <p>If the feature-bearing main input stores original float coordinates and has no usable pixel resolution in its header, omitting <code>--pixel-res-override</code> now triggers a warning and a default fallback to <code>0.001</code>. That effective resolution is then reused for auxiliary raw-float sources whose own resolution is unset.</p>
 <p>Current restrictions:</p>
 <ul>
-<li><code>--emb-prefix</code> is only for TSV output, not <code>--binary-out</code></li>
 <li>standalone <code>--merge-keep-all</code> with a 3D main input does not support 2D auxiliary sources</li>
 <li>standalone single-molecule <code>--merge-keep-all</code> requires all merged sources to carry feature indices</li>
 </ul>
 <h3 id="annotate-points-with-inference-results">Annotate Points with Inference Results<a class="headerlink" href="#annotate-points-with-inference-results" title="Permanent link">&para;</a></h3>
-<p>You can annotate a transcript file with the inference results. The query file is required to be generated by <code>punkst pts2tiles</code> with the same tile structure as the result file (since you normally run <code>pixel-decode</code> with the output from <code>pts2tiles</code> as the input), but you can apply <code>pts2tiles</code> to any tsv file that contains X, Y coordinates as two of its columns.</p>
+<p>You can annotate a transcript file with the inference results. The query file is required to be generated by <code>punkst pts2tiles</code> with the same tile structure as the result file (since you normally run <code>pixel-decode</code> with the output from <code>pts2tiles</code> as the input), but you can apply <code>pts2tiles</code> to any TSV file that contains X, Y coordinates as two of its columns.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>punkst<span class="w"> </span>tile-op<span class="w"> </span>--in<span class="w"> </span>path/prefix<span class="w"> </span><span class="o">[</span>--binary<span class="o">]</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>--annotate-pts<span class="w"> </span>path/transcripts<span class="w"> </span>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span>--out<span class="w"> </span>path/merged<span class="w"> </span>--threads<span class="w"> </span><span class="m">4</span>
@@ -2448,20 +2460,24 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </span></code></pre></div>
 <p>The output includes two files:</p>
 <ul>
-<li><code>path/prefix.stats.single.tsv</code> for per-channel (factor or cell type) metrics. Columns are:</li>
+<li><code>path/prefix.stats.single.tsv</code> for per-channel (factor or cell type) metrics. Columns are:<ul>
 <li>channel index (<code>#k</code>)</li>
 <li>total number of pixels (<code>area</code>)</li>
 <li>total length of all pixel-to-pixel boundaries shared with other channels, including the explicit background channel <code>K</code> (<code>perim</code>)</li>
 </ul>
+</li>
+</ul>
 <p>The single-channel table includes one extra row with <code>#k = K</code>, representing empty/background area.</p>
 <ul>
-<li><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are</li>
+<li><code>path/prefix.stats.pairwise.tsv</code> for pairwise metrics between channels. Let the areas and non-boundary perimeters a pair of channels be <span class="arithmatex">\(A_k, P_k, A_l, P_l\)</span>, the columns are<ul>
 <li>channel indices for the pair (<code>#k</code>, <code>l</code>)</li>
 <li>length of shared boundary <span class="arithmatex">\(L_{kl}\)</span> (<code>contact</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / (P_k + P_l - L_{kl})\)</span> (<code>frac0</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / P_k\)</span> (<code>frac1</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / P_l\)</span> (<code>frac2</code>)</li>
 <li><span class="arithmatex">\(L_{kl} / (A_k + A_l)\)</span> (<code>density</code>)</li>
+</ul>
+</li>
 </ul>
 <h3 id="shell-and-surface-profiles">Shell and Surface Profiles<a class="headerlink" href="#shell-and-surface-profiles" title="Permanent link">&para;</a></h3>
 <p>Profile the factor composition in the immediate neighborhood of a factor, and pairwise spatial proximity between factors.</p>
@@ -2482,21 +2498,25 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <p><code>--raster-pixel-res</code> - (Optional) run shell and surface profiling on a coarser raster grid.</p>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.shell.tsv</code>: shell occupancy summary with columns</li>
+<li>
+<p><code>path/out_prefix.shell.tsv</code>: shell occupancy summary with columns</p>
+<ul>
 <li>focal label (<code>#K_focal</code>)</li>
 <li>other label (<code>K2</code>)</li>
 <li>radius (<code>r</code>)</li>
 <li>number of <code>K2</code> pixels within distance <code>r</code> from boundary of focal label (<code>n_within</code>)</li>
-<li>
-<p>total number of <code>K2</code> pixels (<code>n_K2_total</code>)</p>
+<li>total number of <code>K2</code> pixels (<code>n_K2_total</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.surface.tsv</code>: directional surface-distance histogram with columns</p>
-</li>
+<ul>
 <li>source label (<code>#from_K1</code>)</li>
 <li>target label (<code>to_K2</code>)</li>
 <li>distance bin (<code>d</code>)</li>
 <li>number of <code>K1</code> boundary pixels that find the neraest boundary of <code>K2</code> at distance <code>d</code> (<code>count</code>)</li>
+</ul>
+</li>
 </ul>
 <h3 id="profile-the-area-covered-by-one-focal-factor">Profile the area covered by one focal factor<a class="headerlink" href="#profile-the-area-covered-by-one-focal-factor" title="Permanent link">&para;</a></h3>
 <p>Build a raster mask for one focal factor using local neighborhood probability mass, optionally remove isolated small spots/patches, then report the factor composition inside the mask. Optionally, it then creates a soft mask for each of the factors with a high total probability mass inside the focal mask and calculate pairwise overlaps among the focal and selected factor masks.
@@ -2519,17 +2539,19 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.factor_hist.tsv</code>: factor histogram for both the focal mask and the full processed region with columns</li>
+<li>
+<p><code>path/out_prefix.factor_hist.tsv</code>: factor histogram for both the focal mask and the full processed region with columns</p>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>total mass inside the focal mask (<code>mass_in_mask</code>)</li>
 <li>fraction of the total focal-mask mass (<code>frac_in_mask</code>)</li>
 <li>total mass in the full processed region (<code>mass_global</code>)</li>
-<li>
-<p>fraction of the total global mass (<code>frac_global</code>)</p>
+<li>fraction of the total global mass (<code>frac_global</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.pairwise.tsv</code>: pairwise overlap summary for the selected factor set <code>{focal_k} U {significant secondary factors}</code> with columns</p>
-</li>
+<ul>
 <li>factor indices (<code>k1</code>, <code>k2</code>)</li>
 <li>mask areas (<code>area1_pix</code>, <code>area2_pix</code>)</li>
 <li>area intersection (<code>area_ovlp_pix</code>)</li>
@@ -2537,6 +2559,8 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 <li>area Jaccard (<code>area_jaccard</code>)</li>
 <li>factor-specific mass in the intersection (<code>mass1_in_ovlp</code>, <code>mass2_in_ovlp</code>)</li>
 <li>directional mass overlap fractions relative to each factor's total global mass (<code>mass_ovlp_f1</code>, <code>mass_ovlp_f2</code>)</li>
+</ul>
+</li>
 </ul>
 <h3 id="soft-factor-mask">Soft factor mask<a class="headerlink" href="#soft-factor-mask" title="Permanent link">&para;</a></h3>
 <p>Build a soft binary mask for every factor, optionally remove small connected components, and write global summaries. By default this also polygonizes the kept mask and exports one GeoJSON <code>MultiPolygon</code> feature per factor; use <code>--skip-boundaries</code> to disable geometry export.</p>
@@ -2563,29 +2587,31 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</li>
+<li>
+<p><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</p>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>number of tiles where the factor passed <code>--mask-min-tile-mass</code> (<code>n_tiles</code>)</li>
 <li>total kept soft-mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of final connected components after seam merge (<code>n_components</code>)</p>
+<li>number of final connected components after seam merge (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.component_hist.tsv</code>: final component-size histogram with columns</p>
-</li>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>component size (<code>size</code>)</li>
-<li>
-<p>number of components with that size (<code>n_components</code>)</p>
+<li>number of components with that size (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.geojson</code>: optional <code>FeatureCollection</code> containing one <code>MultiPolygon</code> feature per factor with properties</p>
-</li>
+<ul>
 <li>factor index (<code>Factor</code>)</li>
 <li>number of contributing tiles (<code>n_tiles</code>)</li>
 <li>total kept mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of final connected components (<code>n_components</code>)</p>
+<li>number of final connected components (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.k&lt;factor&gt;.geojson</code>: optional per-factor GeoJSON files written only when <code>--template-geojson</code> is provided. If <code>--template-out-prefix</code> is set, that prefix is used instead of <code>out_prefix</code>. Each file preserves the template's top-level metadata, sets <code>title</code> to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.</p>
@@ -2607,11 +2633,13 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.mask_composition.tsv</code>: mask factor histograms and, unless skipped, the global factor histogram, with columns</li>
+<li><code>path/out_prefix.mask_composition.tsv</code>: mask factor histograms and, unless skipped, the global factor histogram, with columns<ul>
 <li>focal factor index (<code>k_focal</code>)</li>
 <li>factor index (<code>k</code>)</li>
 <li>total probability mass (<code>mass</code>)</li>
 <li>fraction of the total mass for that focal mask (<code>frac</code>)</li>
+</ul>
+</li>
 </ul>
 <p>For the global histogram block, <code>k_focal</code> is written as <code>-1</code>. If <code>--soft-mask-composition-skip-global</code> is set, this global block is omitted.</p>
 <h3 id="hard-factor-mask">Hard factor mask<a class="headerlink" href="#hard-factor-mask" title="Permanent link">&para;</a></h3>
@@ -2629,29 +2657,31 @@ The output is a new tiled data file where for each pixel, only the smoothed top 
 </ul>
 <p>Output:</p>
 <ul>
-<li><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</li>
+<li>
+<p><code>path/out_prefix.factor_summary.tsv</code>: per-factor summary with columns</p>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>number of tiles containing the factor (<code>n_tiles</code>)</li>
 <li>total retained mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of retained final connected components (<code>n_components</code>)</p>
+<li>number of retained final connected components (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.component_hist.tsv</code>: retained component-size histogram with columns</p>
-</li>
+<ul>
 <li>factor index (<code>k</code>)</li>
 <li>component size (<code>size</code>)</li>
-<li>
-<p>number of components with that size (<code>n_components</code>)</p>
+<li>number of components with that size (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.geojson</code>: optional <code>FeatureCollection</code> containing one <code>MultiPolygon</code> feature per factor with properties</p>
-</li>
+<ul>
 <li>factor index (<code>Factor</code>)</li>
 <li>number of contributing tiles (<code>n_tiles</code>)</li>
 <li>total retained mask area in pixels (<code>mask_area_pix</code>)</li>
-<li>
-<p>number of retained final connected components (<code>n_components</code>)</p>
+<li>number of retained final connected components (<code>n_components</code>)</li>
+</ul>
 </li>
 <li>
 <p><code>path/out_prefix.k&lt;factor&gt;.geojson</code>: optional per-factor GeoJSON files written only when <code>--template-geojson</code> is provided. If <code>--template-out-prefix</code> is set, that prefix is used instead of <code>out_prefix</code>. Each file preserves the template's top-level metadata, sets <code>title</code> to the factor index, and replaces the template's GeoJSON payload with the corresponding per-factor boundary.</p>

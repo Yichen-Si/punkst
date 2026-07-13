@@ -1368,7 +1368,7 @@
 
 <h1 id="pts2tiles">pts2tiles<a class="headerlink" href="#pts2tiles" title="Permanent link">&para;</a></h1>
 <h3 id="group-points-into-square-tiles-for-faster-downstream-access">Group points into square tiles for faster downstream access<a class="headerlink" href="#group-points-into-square-tiles-for-faster-downstream-access" title="Permanent link">&para;</a></h3>
-<p><code>pts2tiles</code> rewrites a delimited text point file so records are grouped into non-overlapping square tiles in <code>(x, y)</code> space. It writes a tiled <code>.tsv</code> output file plus a binary index storing byte offsets for each tile to help faster region query.</p>
+<p><code>pts2tiles</code> rewrites a delimited text point file so records are grouped into non-overlapping square tiles in <code>(x, y)</code> space. By default it writes a tiled <code>.tsv</code> output file plus a binary index storing byte offsets for each tile to help faster region query. Factor-probability TSVs can instead be converted to the canonical <code>tile-op</code> binary format.</p>
 <p>The row order is preserved only at the tile level. Records inside a tile may be arbitrary.</p>
 <p>Example usage:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
@@ -1405,6 +1405,26 @@
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/legacy_factors.tiled
 </span></code></pre></div>
+<p>Example for converting a factor-probability TSV without an existing punkst index to canonical binary records and a new index:</p>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel_factors.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span>--tile-op-factor-tsv<span class="w"> </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/pixel_factors.tiled
+</span></code></pre></div>
+Add an optional <code>--binary-out</code> flag to write the output in binary format.</p>
+<p>For rows that also contain a feature name, supply its column and an ordered feature dictionary:</p>
+<p><div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>punkst<span class="w"> </span>pts2tiles<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span>--in-tsv<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/molecule_factors.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>--tile-op-factor-tsv<span class="w"> </span>--binary-out<span class="w"> </span>--K<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--feature-dict<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/features.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>--tile-size<span class="w"> </span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>--out-prefix<span class="w"> </span><span class="si">${</span><span class="nv">path</span><span class="si">}</span>/molecule_factors.tiled
+</span></code></pre></div>
+Currently only binary format is supported for feature-aware factor files.</p>
 <h3 id="accepted-input-forms">Accepted Input Forms<a class="headerlink" href="#accepted-input-forms" title="Permanent link">&para;</a></h3>
 <p><code>pts2tiles</code> currently accepts these input forms through <code>--in-tsv</code>:</p>
 <ul>
@@ -1416,7 +1436,7 @@
 <ul>
 <li>By default, input is parsed as tab-delimited text.</li>
 <li>With <code>--csv</code>, input is parsed as comma-delimited text.</li>
-<li>Output is always written as tab-delimited <code>.tsv</code>, even when the input is CSV.</li>
+<li>Output is written as tab-delimited <code>.tsv</code>, even when the input is CSV, except when <code>--tile-op-factor-tsv --binary-out</code> writes <code>.bin</code> records.</li>
 </ul>
 <p>Current parser behavior:</p>
 <ul>
@@ -1467,6 +1487,17 @@
 <dd>Treat the last skipped line as the header line. Requires <code>--skip &gt; 0</code>.</dd>
 <dt><code>--tile-op-factor-tsv</code></dt>
 <dd>Retile a TSV with <code>x</code>, <code>y</code>, optional <code>z</code>, and contiguous <code>K1/P1</code>, <code>K2/P2</code>, ... factor-probability columns. This mode ignores any existing index, infers coordinate and K/P columns from a header line starting with <code>#</code>, and writes an index that <code>tile-op</code> can read directly. For a non-comment header, use <code>--skip N --skip-last-is-header</code>.</dd>
+<dt><code>--binary-out</code></dt>
+<dd>With <code>--tile-op-factor-tsv</code>, convert each row to canonical binary factor records and write <code>prefix.bin</code> plus <code>prefix.index</code>. Coordinates are stored as raw <code>float</code> world coordinates; setting a pixel resolution does not rescale them.</dd>
+<dt><code>--K</code></dt>
+<dd>Total number of factors. Required with <code>--tile-op-factor-tsv --binary-out</code>; valid factor indices in the input are <code>0</code> through <code>K - 1</code>.</dd>
+<dt><code>--pixel-res</code>, <code>--pixel-res-z</code></dt>
+<dd>Optional positive pixel-resolution metadata for binary factor output. <code>--pixel-res-z</code> requires a <code>z</code> column. Because the records use raw float coordinates, <code>tile-op</code> preserves the stored coordinates and uses these values only where an operation needs raster/pixel resolution metadata.</dd>
+<dt><code>--feature-dict</code></dt>
+<dd>Ordered feature dictionary for feature-bearing binary factor output. It must be used together with <code>--icol-feature</code>. The first whitespace-delimited field of each non-comment line is a feature name. Duplicate dictionary names are rejected; rows whose feature is absent from the dictionary are skipped and reported.</dd>
+</dl>
+<p>Binary factor import validates every K/P value. Each K value must be an integer in <code>[0,K)</code>, and each probability must be finite and in <code>[0,1]</code>. Invalid rows stop the command with an error.</p>
+<dl>
 <dt><code>--tile-buffer</code></dt>
 <dd>Per-thread, per-tile in-memory buffer size in number of records before flushing to disk. Default: <code>1000</code>.</dd>
 <dt><code>--batch-size</code></dt>
@@ -1497,7 +1528,8 @@
 </ul>
 <h3 id="output-files">Output Files<a class="headerlink" href="#output-files" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>prefix.tsv</code>: tiled tab-delimited output records.</li>
+<li><code>prefix.tsv</code>: tiled tab-delimited output records in the default mode.</li>
+<li><code>prefix.bin</code>: canonical factor records written by <code>--tile-op-factor-tsv --binary-out</code>.</li>
 <li><code>prefix.index</code>: binary tile index with per-tile byte offsets and bounding boxes.</li>
 <li><code>prefix.coord_range.tsv</code>: global coordinate range containing <code>xmin</code>, <code>xmax</code>, <code>ymin</code>, <code>ymax</code>, and also <code>zmin</code>, <code>zmax</code> if <code>--icol-z</code> is provided.</li>
 <li><code>prefix.z_hist.tsv</code>: two-column tab-delimited histogram of <code>z</code> using unit-width bins. The unit is the same as the effective <code>z</code> after scaling. Written only when <code>--icol-z</code> is provided.</li>

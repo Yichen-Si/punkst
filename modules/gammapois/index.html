@@ -8,7 +8,7 @@
       
       
       
-        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/poisnmf/">
+        <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/gammapois/">
       
       
       
@@ -21,7 +21,7 @@
     
     
       
-        <title>Poisson NMF with shifted log link - punkst</title>
+        <title>Gamma-Poisson topic model - punkst</title>
       
     
     
@@ -72,7 +72,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#poisson-nmf-with-shifted-log-link" class="md-skip">
+        <a href="#gamma-poisson-topic-model" class="md-skip">
           Skip to content
         </a>
       
@@ -108,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Poisson NMF with shifted log link
+              Gamma-Poisson topic model
             
           </span>
         </div>
@@ -1137,6 +1137,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#input-formats" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1145,18 +1156,46 @@
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#nmf-pois-log1p" class="md-nav__link">
+    <nav class="md-nav" aria-label="Input formats">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#custom-sparse-text-input" class="md-nav__link">
     <span class="md-ellipsis">
       
-        nmf-pois-log1p
+        Custom sparse text input
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="nmf-pois-log1p">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10x-mex-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10X MEX input
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gamma-pois-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        gamma-pois-fit
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="gamma-pois-fit">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1171,10 +1210,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#input-and-feature-options" class="md-nav__link">
+  <a href="#size-factor" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Input and feature options
+        Size factor
       
     </span>
   </a>
@@ -1182,10 +1221,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optimization-options" class="md-nav__link">
+  <a href="#feature-selection-and-weighting" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optimization options
+        Feature selection and weighting
       
     </span>
   </a>
@@ -1193,10 +1232,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#warm-start-and-supervision" class="md-nav__link">
+  <a href="#per-feature-dispersion" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Warm start and supervision
+        Per-feature dispersion
       
     </span>
   </a>
@@ -1204,10 +1243,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#covariate-options" class="md-nav__link">
+  <a href="#svi-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Covariate options
+        SVI options
       
     </span>
   </a>
@@ -1215,10 +1254,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#diagnostics-and-inference" class="md-nav__link">
+  <a href="#model-hyperparameters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Diagnostics and inference
+        Model hyperparameters
       
     </span>
   </a>
@@ -1226,21 +1265,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#background-options" class="md-nav__link">
+  <a href="#other-fitting-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Background options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#outputs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outputs
+        Other fitting options
       
     </span>
   </a>
@@ -1253,15 +1281,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#nmf-pois-log1p-transform" class="md-nav__link">
+  <a href="#gamma-pois-transform" class="md-nav__link">
     <span class="md-ellipsis">
       
-        nmf-pois-log1p-transform
+        gamma-pois-transform
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="nmf-pois-log1p-transform">
+    <nav class="md-nav" aria-label="gamma-pois-transform">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1276,32 +1304,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#input-and-covariate-options" class="md-nav__link">
+  <a href="#optional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Input and covariate options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transform-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transform options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#outputs_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Outputs
+        Optional
       
     </span>
   </a>
@@ -1310,6 +1316,50 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gamma-pois-cluster-fit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        gamma-pois-cluster-fit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#outputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Outputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#implementation-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation notes
+      
+    </span>
+  </a>
   
 </li>
       
@@ -1333,263 +1383,334 @@
   
 
 
-<h1 id="poisson-nmf-with-shifted-log-link">Poisson NMF with shifted log link<a class="headerlink" href="#poisson-nmf-with-shifted-log-link" title="Permanent link">&para;</a></h1>
+<h1 id="gamma-poisson-topic-model">Gamma-Poisson topic model<a class="headerlink" href="#gamma-poisson-topic-model" title="Permanent link">&para;</a></h1>
 <p>This page documents:</p>
 <ul>
-<li><code>punkst nmf-pois-log1p</code>: fit a Poisson NMF model</li>
-<li><code>punkst nmf-pois-log1p-transform</code>: project new data with a fitted model</li>
+<li><code>punkst gamma-pois-fit</code>: fit a degree-corrected Gamma-Poisson topic model</li>
+<li><code>punkst gamma-pois-transform</code>: project units with a fitted Gamma-Poisson state</li>
 </ul>
-<p>The model is</p>
+<p>The command uses the same custom sparse text and 10X MEX input conventions as
+<code>topic-model</code> / <code>lda-transform</code>.</p>
+<h2 id="model">Model<a class="headerlink" href="#model" title="Permanent link">&para;</a></h2>
+<p>For each unit or document <span class="arithmatex">\(d\)</span>, feature <span class="arithmatex">\(w\)</span>, and topic <span class="arithmatex">\(r\)</span>, the observed
+count is modeled as</p>
 <div class="arithmatex">\[
-y_{im} \sim \mathrm{Poisson}(\lambda_{im}), \qquad
-\log(1 + \lambda_{im}/c_i) = \sum_k \theta_{ik}\beta_{mk} + \sum_p X_{ip} B_{mp},
+n_{dw} \sim \mathrm{Poisson}\left(c_d \sum_r \theta_{dr}\beta_{wr}\right),
+\qquad c_d = n_d / \bar n,
 \]</div>
-<p>where the covariate term is optional. By default the scale is per unit,</p>
+<p>where <span class="arithmatex">\(n_d\)</span> is the total count in unit <span class="arithmatex">\(d\)</span>, and <span class="arithmatex">\(\bar n\)</span> is the corpus mean
+unit size. The exposure <span class="arithmatex">\(c_d\)</span> carries unit size, so the latent topic intensity
+<span class="arithmatex">\(\theta_d\)</span> is on a common corpus scale.</p>
+<p>The topic loadings use a feature-specific degree correction:</p>
 <div class="arithmatex">\[
-c_i = n_i / L,
+\xi_w \sim \mathrm{Gamma}(a_0, a_0 / b_0), \qquad
+\beta_{wr} \mid \xi_w \sim \mathrm{Gamma}(a, \xi_w).
 \]</div>
-<p>with total count <span class="arithmatex">\(n_i\)</span> and size factor <span class="arithmatex">\(L\)</span>. Use <code>--c</code> to set a fixed
-constant <span class="arithmatex">\(c\)</span> for all units instead.</p>
+<p>Here <span class="arithmatex">\(\xi_w\)</span> is an inverse feature-activity rate. Frequent features tend to
+have smaller <span class="arithmatex">\(\xi_w\)</span>, which allows large baseline loadings without making those
+features define a content-specific topic by themselves.</p>
+<p>The unit-topic intensities use</p>
+<div class="arithmatex">\[
+\nu_r \sim \mathrm{Gamma}(e_0, f_0), \qquad
+\theta_{dr} \mid \nu_r \sim \mathrm{Gamma}(s_0, \nu_r).
+\]</div>
+<p>The global rate <span class="arithmatex">\(\nu_r\)</span> is an inverse topic-popularity parameter. Use
+<code>--symmetric-nu</code> to fix <span class="arithmatex">\(E[\nu_r]=1\)</span> and remove this asymmetry.</p>
+<p>For output, the fitted beta means are normalized to topic-word distributions:</p>
+<div class="arithmatex">\[
+b_r = \sum_w E[\beta_{wr}], \qquad
+\hat\phi_{wr} = E[\beta_{wr}] / b_r.
+\]</div>
+<p>Per-unit transform output reports normalized token-unit topic intensities:</p>
+<div class="arithmatex">\[
+\hat\theta_{dr} \propto E[\theta_{dr}] b_r, \qquad \sum_r \hat\theta_{dr}=1.
+\]</div>
 <h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
-<p>Both commands accept either:</p>
+<h3 id="custom-sparse-text-input">Custom sparse text input<a class="headerlink" href="#custom-sparse-text-input" title="Permanent link">&para;</a></h3>
+<p>Use <code>--in-data</code> with the sparse unit-by-feature file produced by <code>tiles2hex</code>, and
+<code>--in-meta</code> with its metadata JSON.</p>
+<p>The metadata supplies:</p>
 <ul>
-<li>custom sparse text input with <code>--in-data</code> and <code>--in-meta</code></li>
-<li>10X MEX input via one or more <code>--in-dge-dir</code></li>
-<li>matching repeated 10X triplets: <code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code></li>
+<li><code>dictionary</code>: feature name to feature index mapping, unless a feature list is
+  supplied with <code>--features</code></li>
+<li><code>offset_data</code>: number of prefix columns before the sparse payload</li>
+<li><code>header_info</code>: names of those prefix columns</li>
 </ul>
-<p>If both custom and 10X inputs are provided, 10X input is used. For multiple 10X
-datasets, repeated <code>--dataset-id</code> values may be provided. If omitted, IDs default
-to <code>1</code>, <code>2</code>, <code>3</code>, ... in input order.</p>
-<p>For 10X fitting, data are loaded into memory. Multiple datasets are treated as a
-joint corpus. If <code>--features</code> is not provided during fitting,
-<code>nmf-pois-log1p</code> writes <code>{prefix}.features.tsv</code> with the final feature names and
-total counts.</p>
-<h2 id="nmf-pois-log1p"><code>nmf-pois-log1p</code><a class="headerlink" href="#nmf-pois-log1p" title="Permanent link">&para;</a></h2>
-<p>Fits a Poisson log1p NMF model.</p>
+<h3 id="10x-mex-input">10X MEX input<a class="headerlink" href="#10x-mex-input" title="Permanent link">&para;</a></h3>
+<p>You can also use:</p>
+<ul>
+<li>one or more <code>--in-dge-dir</code> values</li>
+<li>or matching lists for <code>--in-barcodes</code>, <code>--in-features</code>, and <code>--in-matrix</code></li>
+<li>optional <code>--dataset-id</code> values, one per dataset</li>
+</ul>
+<p>For 10X fitting, the matrix is loaded into memory. If <code>--features</code> is not
+supplied during fitting, <code>{prefix}.features.tsv</code> is written with the final
+feature names and total counts.</p>
+<h2 id="gamma-pois-fit"><code>gamma-pois-fit</code><a class="headerlink" href="#gamma-pois-fit" title="Permanent link">&para;</a></h2>
+<p>Fits the Gamma-Poisson topic model with minibatch stochastic variational
+inference.</p>
 <h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
-<p><code>--K</code>
-Number of factors.</p>
 <p><code>--out-prefix</code>
-Prefix for output files.</p>
+Output prefix.</p>
+<p><code>--n-topics</code>
+Number of topics.</p>
 <p>One input source is required:</p>
 <ul>
-<li>custom format: <code>--in-data</code> and <code>--in-meta</code></li>
-<li>10X format: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
+<li>custom input: <code>--in-data</code> and <code>--in-meta</code></li>
+<li>10X input: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> +
+  <code>--in-features</code> + <code>--in-matrix</code></li>
 </ul>
-<h3 id="input-and-feature-options">Input and feature options<a class="headerlink" href="#input-and-feature-options" title="Permanent link">&para;</a></h3>
-<p><code>--in-data</code>, <code>--in-meta</code>
-Custom sparse input and metadata files.</p>
-<p><code>--in-dge-dir</code>
-Input 10X MEX directory. May be repeated.</p>
-<p><code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code>
-Input 10X MEX triplet files. Each option may be repeated.</p>
-<p><code>--dataset-id</code>
-Dataset IDs for joint 10X input. Default: generated as <code>1</code>, <code>2</code>, <code>3</code>, ...</p>
-<p><code>--features</code>
-Feature list used to define or filter the feature space.</p>
-<p><code>--min-count-per-feature</code>
-Minimum feature total count. Default: <code>100</code>.</p>
-<p><code>--include-feature-regex</code>
-Keep only matching features.</p>
-<p><code>--exclude-feature-regex</code>
-Drop matching features.</p>
-<p><code>--min-count-train</code>
-Minimum total count per unit for training. Default: <code>50</code>.</p>
-<h3 id="optimization-options">Optimization options<a class="headerlink" href="#optimization-options" title="Permanent link">&para;</a></h3>
-<p><code>--mode</code>
-Inner regression solver. <code>1</code> = TRON, <code>2</code> = FISTA, <code>3</code> = diagonal line search. Default: <code>1</code>.</p>
+<h3 id="size-factor">Size factor<a class="headerlink" href="#size-factor" title="Permanent link">&para;</a></h3>
 <p><code>--size-factor</code>
-Size factor <span class="arithmatex">\(L\)</span> for per-unit scaling <span class="arithmatex">\(c_i=n_i/L\)</span>. Default: <code>10000</code>.</p>
-<p><code>--c</code>
-Fixed scaling factor <span class="arithmatex">\(c\)</span>. If positive, overrides <code>--size-factor</code>. Default: unset (<code>-1</code>).</p>
-<p><code>--max-iter-outer</code>
-Maximum alternating-update iterations. Default: <code>20</code>.</p>
-<p><code>--tol-outer</code>
-Outer-loop convergence tolerance. Default: <code>1e-4</code>.</p>
-<p><code>--max-iter-inner</code>
-Maximum inner regression iterations. Default: <code>50</code>.</p>
-<p><code>--tol-inner</code>
-Inner-loop convergence tolerance. Default: <code>1e-6</code>.</p>
-<p><code>--exact</code>
-Use exact zero-count likelihood terms instead of the approximation. Default: <code>false</code>.</p>
-<p><code>--minibatch-epoch</code>
-Number of initial minibatch epochs. Default: <code>1</code>.</p>
+Corpus mean unit size <span class="arithmatex">\(\bar n\)</span>. If omitted, the command uses
+<code>sum(feature totals) / number of units</code> when full feature totals are available.
+If full feature totals are unavailable, <code>--size-factor</code> is required.</p>
+<p>For custom sparse input without a feature-total file, a practical choice is the
+mean total count per unit in the input file.</p>
+<h3 id="feature-selection-and-weighting">Feature selection and weighting<a class="headerlink" href="#feature-selection-and-weighting" title="Permanent link">&para;</a></h3>
+<p><code>--features</code>
+Optional feature list used to define or filter the feature space. If the second
+column contains total counts, those counts can be used for <code>--size-factor</code>
+resolution.</p>
+<p><code>--min-count-per-feature</code>
+Minimum feature total count. Default: <code>1</code>.</p>
+<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code>
+Regex-based feature filtering.</p>
+<p><code>--icol-weight</code>
+0-based column index for per-feature weights in <code>--features</code>. Default: <code>-1</code>,
+which disables feature weighting.</p>
+<p><code>--default-weight</code>
+Default weight for model features missing from <code>--features</code> when feature
+weighting is active. Default: <code>-1</code>, which drops missing features.</p>
+<p>Fitting and transform use weighted counts. Pseudobulk output remains on the
+original count scale.</p>
+<h3 id="per-feature-dispersion">Per-feature dispersion<a class="headerlink" href="#per-feature-dispersion" title="Permanent link">&para;</a></h3>
+<p>The default likelihood is Poisson. A fixed per-feature NB2 dispersion can be
+supplied from the <code>--features</code> file with <code>--icol-dispersion</code>, whose value is the
+positive NB size <span class="arithmatex">\(\tau_w\)</span>:</p>
+<div class="arithmatex">\[
+\operatorname{Var}(n_{dw}\mid\text{topics})=
+\mu_{dw}+\mu_{dw}^2/\tau_w.
+\]</div>
+<p>Smaller <span class="arithmatex">\(\tau_w\)</span> permits more residual feature-specific count variation;
+<span class="arithmatex">\(\tau_w\to\infty\)</span> recovers the Poisson model. Every kept feature must have a
+positive finite value in that column.</p>
+<p>Alternatively, <code>--estimate-dispersion</code> fits <span class="arithmatex">\(\tau_w\)</span> after a Poisson warmup.
+It is mutually exclusive with <code>--icol-dispersion</code>. The estimator uses fitted
+topic means on observed cells, a positive-truncated NB2 residual moment, a
+direct all-feature log-mean LOESS trend, and shrinkage for rare features. The
+residual scan performs document-local inference in parallel without
+materializing a unit-by-feature mean matrix.</p>
+<p><code>--dispersion-init-epochs</code> controls the number of initial Poisson epochs
+(default <code>1</code>); it must be smaller than <code>--n-epochs</code>. The remaining tuning
+options are <code>--dispersion-loess-span</code>, <code>--dispersion-min-positive</code>,
+<code>--dispersion-mu-bins</code>, <code>--dispersion-delta-min</code>,
+and <code>--dispersion-delta-max</code>.</p>
+<p>Estimated fits write <code>{prefix}.dispersion.tsv</code>, with raw, trend, and shrunk
+inverse-dispersion estimates plus the resulting <span class="arithmatex">\(\tau_w\)</span>. Both supplied and
+estimated dispersion vectors are stored in <code>{prefix}.state.tsv</code>.</p>
+<h3 id="svi-options">SVI options<a class="headerlink" href="#svi-options" title="Permanent link">&para;</a></h3>
+<p><code>--n-epochs</code>
+Number of training passes. Default: <code>1</code>.</p>
 <p><code>--minibatch-size</code>
-Minibatch size. Default: <code>1024</code>.</p>
-<p><code>--t0</code>
-Minibatch decay offset. Default: automatic (<code>-1</code>).</p>
-<p><code>--kappa</code>
-Minibatch decay exponent. Default: <code>0.7</code>.</p>
-<p><code>--seed</code>
-Random seed. Default: random (<code>-1</code>).</p>
-<p><code>--threads</code>
-Number of threads. Default: <code>1</code>.</p>
-<h3 id="warm-start-and-supervision">Warm start and supervision<a class="headerlink" href="#warm-start-and-supervision" title="Permanent link">&para;</a></h3>
-<p><code>--in-model</code>
-Warm-start from an existing model matrix.</p>
-<p><code>--random-init-missing</code>
-Randomly initialize data features missing from the input model. Default: <code>false</code>.</p>
-<p><code>--icol-label</code>
-Column index in <code>--in-covar</code> for guided labels. Default: unset (<code>-1</code>).</p>
-<p><code>--label-list</code>
-List of unique labels to map to factors.</p>
-<p><code>--label-na</code>
-String for missing labels. Default: empty string.</p>
-<h3 id="covariate-options">Covariate options<a class="headerlink" href="#covariate-options" title="Permanent link">&para;</a></h3>
-<p><code>--in-covar</code>
-Covariate table with one row per unit.</p>
-<p><code>--icol-covar</code>
-Selected covariate columns, 0-based. If omitted and covariates are used, all columns except the first are used.</p>
-<p><code>--allow-na</code>
-Replace non-numeric covariate values with zero. Default: <code>false</code>.</p>
-<p><code>--covar-coef-min</code>
-Lower bound for covariate coefficients. Default: <code>-1e6</code>.</p>
-<p><code>--covar-coef-max</code>
-Upper bound for covariate coefficients. Default: <code>1e6</code>.</p>
-<h3 id="diagnostics-and-inference">Diagnostics and inference<a class="headerlink" href="#diagnostics-and-inference" title="Permanent link">&para;</a></h3>
-<p><code>--feature-residuals</code>
-Compute and write per-feature residual diagnostics. Default: <code>false</code>.</p>
-<p><code>--fit-stats</code>
-Write per-unit fit statistics. Currently skipped when <code>--fit-background</code> is enabled. Default: <code>false</code>.</p>
-<p><code>--write-se</code>
-Write standard errors for model coefficients. Default: <code>false</code>.</p>
-<p><code>--detest-vs-avg</code>
-Compute factor-vs-average DE statistics. Default: <code>false</code>.</p>
-<p><code>--se-method</code>
-Standard error method: <code>1</code> = Fisher, <code>2</code> = robust, <code>3</code> = both. Default: <code>1</code>.</p>
-<p><code>--min-fc</code>
-Minimum fold-change for DE output. Default: <code>1.5</code>.</p>
-<p><code>--max-p</code>
-Maximum p-value for DE output. Default: <code>0.05</code>.</p>
-<p><code>--min-ct</code>
-Minimum total count for a feature to be tested. Default: <code>100</code>.</p>
-<p><code>--verbose</code>
-Verbose interval. Default: <code>500000</code>.</p>
-<p><code>--debug-N</code>
-Use only the first N units. Default: <code>0</code> (disabled).</p>
-<p><code>--debug</code>
-Debug verbosity. Default: <code>0</code>.</p>
-<h3 id="background-options">Background options<a class="headerlink" href="#background-options" title="Permanent link">&para;</a></h3>
-<p><code>--fit-background</code>
-Fit a background component. Default: <code>false</code>.</p>
-<p><code>--fix-background</code>
-Keep the background model fixed during fitting. Default: <code>false</code>.</p>
-<p><code>--background-init</code>
-Initial background proportion. Default: <code>0.1</code>.</p>
-<h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
+Minibatch size. Default: <code>512</code>.</p>
+<p><code>--min-count-train</code>
+Minimum total count per unit for training. Default: <code>20</code>.</p>
+<p><code>--kappa</code>, <code>--tau0</code>
+Learning-rate schedule parameters. The step size is
+<span class="arithmatex">\((t + \tau_0)^{-\kappa}\)</span>. Defaults: <code>--kappa 0.7</code>, <code>--tau0 10</code>.</p>
+<p><code>--max-iter</code>
+Maximum per-unit local variational iterations. Default: <code>100</code>.</p>
+<p><code>--mean-change-tol</code>
+Per-unit convergence tolerance. Default: <code>1e-3</code>.</p>
+<p><code>--threads</code>, <code>--seed</code>, <code>--verbose</code>, <code>--debug</code>
+Standard execution controls. <code>--debug</code> limits the number of units processed.</p>
+<h3 id="model-hyperparameters">Model hyperparameters<a class="headerlink" href="#model-hyperparameters" title="Permanent link">&para;</a></h3>
+<p><code>--beta-shape</code>
+Shape <span class="arithmatex">\(a\)</span> for <span class="arithmatex">\(\beta_{wr}\)</span>. Default: <code>0.3</code>. Smaller values encourage
+spikier topic-word profiles.</p>
+<p><code>--xi-shape</code>
+Shape <span class="arithmatex">\(a_0\)</span> for the feature degree-correction prior. Default: <code>0.3</code>.</p>
+<p><code>--xi-mean</code>
+Prior mean <span class="arithmatex">\(b_0\)</span> for <span class="arithmatex">\(\xi_w\)</span>. Since <span class="arithmatex">\(\xi_w\)</span> is an inverse feature-activity
+rate, larger values shrink beta loadings downward. If omitted, the default is
+derived from vocabulary size and <code>--size-factor</code>.</p>
+<p><code>--theta-shape</code>
+Shape <span class="arithmatex">\(s_0\)</span> for per-unit topic intensities. Default: <code>1</code>.</p>
+<p><code>--nu-shape</code>, <code>--nu-rate</code>
+Shape <span class="arithmatex">\(e_0\)</span> and rate <span class="arithmatex">\(f_0\)</span> for the global topic-rate prior. If <code>--nu-rate</code>
+is omitted, it is derived from <code>--theta-shape</code>, <code>--n-topics</code>, and
+<code>--size-factor</code>.</p>
+<p><code>--symmetric-nu</code>
+Fix <span class="arithmatex">\(E[\nu_r]=1\)</span> and skip asymmetric topic-rate updates.</p>
+<h3 id="other-fitting-options">Other fitting options<a class="headerlink" href="#other-fitting-options" title="Permanent link">&para;</a></h3>
+<p><code>--sort-topics</code>
+Sort topics by fitted corpus usage before writing outputs.</p>
+<p><code>--transform</code>
+Transform the input units after fitting and write <code>{prefix}.results.tsv</code> and
+<code>{prefix}.pseudobulk.tsv</code>.</p>
+<p><code>--skip-posterior</code>
+With <code>--transform</code>, suppress the local Gamma shape/rate output. Posterior output
+is enabled by default and is separate from the normalized topic probabilities
+in <code>{prefix}.results.tsv</code>.</p>
+<p><code>--posterior-dispersion-rank</code>
+Rank of the optional compressed dispersion covariance sidecar. The default is
+<code>0</code>, retaining only its diagonal; a positive value retains off-diagonal factors
+and a negative value disables the sidecar.</p>
+<p><code>--randomize-output</code>
+Randomize document order before writing row-aligned transform outputs. Use this
+when preparing posterior input for future opt-in streaming clustering.</p>
+<h2 id="gamma-pois-transform"><code>gamma-pois-transform</code><a class="headerlink" href="#gamma-pois-transform" title="Permanent link">&para;</a></h2>
+<p>Projects new units with a fitted Gamma-Poisson state.</p>
+<h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
+<p><code>--in-state</code>
+Input Gamma-Poisson state file written by <code>gamma-pois-fit</code>.</p>
+<p><code>--out-prefix</code>
+Output prefix.</p>
+<p>One input source is required:</p>
+<ul>
+<li>custom input: <code>--in-data</code> and <code>--in-meta</code></li>
+<li>10X input: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> +
+  <code>--in-features</code> + <code>--in-matrix</code></li>
+</ul>
+<p><code>gamma-pois-transform</code> requires the state file, not just <code>{prefix}.model.tsv</code>.
+The model TSV stores only normalized topic-word distributions for reporting and
+downstream compatibility; it does not contain the Gamma variational rates needed
+for exact projection.</p>
+<p>When the fit used per-feature dispersion, transform automatically reads its
+stored <span class="arithmatex">\(\tau_w\)</span> vector from the state file. It deliberately has no
+transform-time dispersion input, so projection remains consistent with fitting.</p>
+<h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
+<p><code>--minibatch-size</code>
+Transform batch size. Default: <code>1024</code>.</p>
+<p><code>--min-count</code>
+Minimum total count per unit to keep. Default: <code>20</code>.</p>
+<p><code>--features</code>, <code>--min-count-per-feature</code>
+Optional feature list and feature filtering.</p>
+<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code>
+Regex-based feature filtering.</p>
+<p><code>--icol-weight</code>, <code>--default-weight</code>
+Feature weighting options.</p>
+<p><code>--max-iter</code>, <code>--mean-change-tol</code>
+Per-unit local inference controls.</p>
+<p><code>--skip-posterior</code>, <code>--posterior-dispersion-rank</code>
+The local Gamma posterior is written by default. Suppress it with
+<code>--skip-posterior</code>; when the fitted state contains feature dispersion, control
+its optional covariance correction with <code>--posterior-dispersion-rank</code>.</p>
+<p><code>--randomize-output</code>
+Randomize document order before writing results, posterior rows, and the
+dispersion sidecar. Posterior metadata records whether order is <code>input</code> or
+<code>randomized</code>.</p>
+<p><code>--sorted-by-barcode</code>
+For 10X input sorted by barcode, use streaming mode.</p>
+<p><code>--keep-barcodes</code>
+For 10X input, write IDs from <code>barcodes.tsv.gz</code> instead of 0-based barcode
+indices.</p>
+<p><code>--threads</code>, <code>--seed</code>, <code>--verbose</code>, <code>--debug</code>
+Execution controls.</p>
+<h2 id="gamma-pois-cluster-fit"><code>gamma-pois-cluster-fit</code><a class="headerlink" href="#gamma-pois-cluster-fit" title="Permanent link">&para;</a></h2>
+<p>Fits an uncertainty-aware Gaussian mixture to a local posterior handoff.
+Required options are <code>--in-state</code>, <code>--in-posterior</code>, and <code>--out-prefix</code>; use
+<code>--in-posterior-dispersion</code> to activate the compressed correlated document
+uncertainty and <code>--n-clusters-max</code> to set the overfitted component count.</p>
+<p>Initialization uses deterministic k-means++ followed by full Lloyd refinement.
+Component means, weights, and temporary intrinsic variances are initialized
+from the resulting partition. EM then updates means and covariance from exact
+conditional latent Gaussian moments, so document uncertainty is not subtracted
+a second time. Mixture weights use a variational Dirichlet posterior.</p>
+<p>The default cluster covariance is shared-orientation rank 5 plus a
+component-specific diagonal. <code>--cluster-covariance-rank 0</code> selects the diagonal
+special case. Structured fitting performs a diagonal warmup, alternates
+component covariance projections with damped shared-orientation updates, then
+freezes the orientation for the final convergence phase. The warmup and
+orientation schedule are controlled by <code>--diagonal-warmup-iter</code>,
+<code>--orientation-update-interval</code>, and <code>--orientation-max-updates</code>.</p>
+<p>Likelihoods, log determinants, and conditional moments use Woodbury operations
+on the combined document and cluster factors. The E-step runs over fixed,
+contiguous document shards using <code>--threads</code>; shard accumulators are reduced in
+a fixed order for deterministic repetition with the same thread count.
+<code>--covariance-accumulation auto</code> uses dense conditional covariance accumulation
+when the topic count is at most 48 and compact diagonal/projected contractions
+above 48. Override the decision with <code>dense</code> or <code>compact</code>. Dense mode uses
+<code>O(CK^2)</code> accumulator memory; compact mode uses <code>O(CK+Cq^2)</code> plus a pooled
+orientation sketch.</p>
+<p>Convergence requires stable ELBO, soft responsibilities, and top assignments
+for a configurable number of consecutive iterations. <code>--tol</code> controls relative
+ELBO change; <code>--tol-resp-p90</code> controls the 90<sup>th</sup> percentile per-document
+responsibility L1 change; <code>--tol-top-change</code> controls the fraction of changed
+top assignments; and <code>--convergence-patience</code> controls the required consecutive
+stable iterations. <code>--kmeans-max-iter</code> limits Lloyd initialization.</p>
+<p>The current implementation loads all posterior means and uncertainty into
+memory, with <code>O(DK(1+h))</code> storage. Full-data loading remains the default when
+SVI is added. Input streaming will be opt-in and will require a posterior written
+with <code>--randomize-output</code> to avoid order-biased stochastic updates.</p>
+<p>The command writes <code>{prefix}.state.tsv</code>, <code>{prefix}.model.tsv</code>, and
+<code>{prefix}.results.tsv</code>. Results contain full responsibilities, top-two
+memberships, and membership entropy; the model reports component mass,
+intrinsic variance, and topic-composition profiles.</p>
+<h2 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h2>
 <p><code>{prefix}.model.tsv</code>
-Feature-by-factor matrix.</p>
-<p><code>{prefix}.theta.tsv</code>
-Unit-by-factor matrix. Written when <code>--max-iter-inner &gt; 0</code>.</p>
+Feature-by-topic matrix containing <span class="arithmatex">\(\hat\phi_{wr}\)</span>, the normalized topic-word
+distributions. Values are written in scientific notation.</p>
+<p><code>{prefix}.state.tsv</code>
+Full Gamma-Poisson variational state. This file is required by
+<code>gamma-pois-transform</code>.</p>
 <p><code>{prefix}.features.tsv</code>
 Written for 10X fitting when <code>--features</code> is not supplied.</p>
-<p><code>{prefix}.covar.tsv</code>
-Covariate coefficient matrix. Written when covariates are used.</p>
-<p><code>{prefix}.background.tsv</code>
-Background model. Written when <code>--fit-background</code> is used.</p>
-<p><code>{prefix}.bgprob.tsv</code>
-Per-unit posterior background probabilities. Written when <code>--fit-background</code> is used.</p>
-<p><code>{prefix}.model.se.fisher.tsv</code>, <code>{prefix}.model.se.robust.tsv</code>
-Written when <code>--write-se</code> is requested for the corresponding <code>--se-method</code>.</p>
-<p><code>{prefix}.de.fisher.tsv</code>, <code>{prefix}.de.robust.tsv</code>
-Written when <code>--detest-vs-avg</code> is requested for the corresponding <code>--se-method</code>.</p>
-<p><code>{prefix}.feature.residuals.tsv</code>
-Written when <code>--feature-residuals</code> is used.</p>
-<p><code>{prefix}.unit_stats.tsv</code>
-Written when <code>--fit-stats</code> is used and <code>--fit-background</code> is not set. Columns:</p>
-<ul>
-<li><code>#Index</code></li>
-<li><code>TotalCount</code></li>
-<li><code>ll</code></li>
-<li><code>Residual</code></li>
-<li><code>VarMu</code></li>
-<li><code>entropy</code></li>
-<li><code>sh_lcr</code></li>
-<li><code>sh_q</code></li>
-</ul>
-<p>Here <code>entropy</code>, <code>sh_lcr</code>, and <code>sh_q</code> are computed from row-normalized
-nonnegative factor loadings. The factor similarity matrix is cosine similarity
-among L1-normalized model factors.</p>
-<h2 id="nmf-pois-log1p-transform"><code>nmf-pois-log1p-transform</code><a class="headerlink" href="#nmf-pois-log1p-transform" title="Permanent link">&para;</a></h2>
-<p>Projects new data using a fitted NMF model and writes transformed unit loadings
-plus diagnostics.</p>
-<h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
-<p><code>--in-model</code>
-Input model matrix from <code>nmf-pois-log1p</code>.</p>
-<p><code>--out-prefix</code>
-Prefix for output files.</p>
-<p>One input source is required:</p>
-<ul>
-<li>custom format: <code>--in-data</code> and <code>--in-meta</code></li>
-<li>10X format: one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
-</ul>
-<h3 id="input-and-covariate-options">Input and covariate options<a class="headerlink" href="#input-and-covariate-options" title="Permanent link">&para;</a></h3>
-<p><code>--in-data</code>, <code>--in-meta</code>
-Custom sparse input and metadata files.</p>
-<p><code>--in-dge-dir</code>
-Input 10X MEX directory. May be repeated.</p>
-<p><code>--in-barcodes</code>, <code>--in-features</code>, <code>--in-matrix</code>
-Input 10X MEX triplet files. Each option may be repeated.</p>
-<p><code>--dataset-id</code>
-Dataset IDs for joint 10X input. Default: generated as <code>1</code>, <code>2</code>, <code>3</code>, ...</p>
-<p><code>--in-covar</code>
-Covariate table for new data. For 10X input, rows must match the combined unit order after concatenating datasets.</p>
-<p><code>--in-covar-coef</code>
-Covariate coefficient matrix from a previous fit.</p>
-<p><code>--icol-covar</code>
-Selected covariate columns, 0-based. If omitted and covariates are used, all columns except the first are used.</p>
-<p><code>--allow-na</code>
-Replace non-numeric covariate values with zero. Default: <code>false</code>.</p>
-<p><code>--min-count</code>
-Minimum total count per unit. Default: <code>50</code>.</p>
-<h3 id="transform-options">Transform options<a class="headerlink" href="#transform-options" title="Permanent link">&para;</a></h3>
-<p><code>--size-factor</code>
-Size factor <span class="arithmatex">\(L\)</span> for per-unit scaling <span class="arithmatex">\(c_i=n_i/L\)</span>. Default: <code>10000</code>.</p>
-<p><code>--c</code>
-Fixed scaling factor <span class="arithmatex">\(c\)</span>. If positive, overrides <code>--size-factor</code>. Default: unset (<code>-1</code>).</p>
-<p><code>--max-iter-inner</code>
-Maximum inner regression iterations. Default: <code>20</code>.</p>
-<p><code>--tol-inner</code>
-Inner-loop convergence tolerance. Default: <code>1e-6</code>.</p>
-<p><code>--exact</code>
-Use exact zero-count likelihood terms instead of the approximation. Default: <code>false</code>.</p>
-<p><code>--se-method</code>
-Standard error method for transformed loadings: <code>1</code> = Fisher, <code>2</code> = robust. Default: <code>1</code>.</p>
-<p><code>--seed</code>
-Random seed. Default: random (<code>-1</code>).</p>
-<p><code>--threads</code>
-Number of threads. Default: <code>1</code>.</p>
-<p><code>--verbose</code>
-Verbose interval. Default: <code>500000</code>.</p>
-<p><code>--debug-N</code>
-Use only the first N units. Default: <code>0</code> (disabled).</p>
-<p><code>--debug</code>
-Debug verbosity. Default: <code>0</code>.</p>
-<h3 id="outputs_1">Outputs<a class="headerlink" href="#outputs_1" title="Permanent link">&para;</a></h3>
-<p><code>{prefix}.theta.tsv</code>
-Projected unit-by-factor matrix. The row identifier is <code>#Index</code> for custom sparse input. For 10X input it is the barcode/identifier: unchanged for a single dataset, or <code>&lt;dataset_id&gt;:&lt;barcode&gt;</code> for multiple datasets.</p>
-<p><code>{prefix}.feature_residuals.tsv</code>
-Per-feature averaged residuals on the projected data.</p>
-<p><code>{prefix}.unit_stats.tsv</code>
-Per-unit summary statistics with columns:</p>
-<ul>
-<li><code>#Index</code></li>
-<li><code>total_count</code></li>
-<li><code>residual</code></li>
-<li><code>ll</code></li>
-<li><code>var_mu</code></li>
-<li><code>entropy</code></li>
-<li><code>sh_lcr</code></li>
-<li><code>sh_q</code></li>
-</ul>
-<p>The entropy summaries use row-normalized transformed <code>theta</code> values as a
-probability distribution over factors:</p>
-<ul>
-<li><code>entropy = -\sum_k p_k \log p_k</code></li>
-<li><code>sh_lcr = -\sum_k p_k \log((Zp)_k)</code></li>
-<li><code>sh_q = 1 - p^T Z p</code></li>
-</ul>
-<p>where <code>Z</code> is the cosine similarity matrix among L1-normalized model factors.</p>
+<p>When <code>--transform</code> is used during fitting, or when running
+<code>gamma-pois-transform</code>, the transform outputs are:</p>
+<p><code>{prefix}.results.tsv</code>
+Normalized per-unit topic intensities. For custom sparse input, metadata columns
+from <code>header_info</code> appear before the topic columns. For 10X input, the leading
+identifier column is <code>#barcode</code>.</p>
+<p><code>{prefix}.pseudobulk.tsv</code>
+Feature-by-topic pseudobulk counts. Entry <code>(w, r)</code> is
+<span class="arithmatex">\(\sum_d \hat\theta_{dr} n_{dw}\)</span>, where <span class="arithmatex">\(\hat\theta_d\)</span> is the normalized
+topic vector written to <code>{prefix}.results.tsv</code>.</p>
+<p><code>{prefix}.posterior.tsv</code>
+Written by default unless <code>--skip-posterior</code> is used. Contains the unit identifiers, row index,
+exposure, and round-trip-precision Gamma shape and rate for every topic. Metadata
+records the format version, topic count, and checksum of the matching state
+file. Rows have the same order as <code>{prefix}.results.tsv</code>.</p>
+<p><code>{prefix}.posterior-dispersion.bin</code>
+Written by default when the state contains feature dispersion and
+<code>--posterior-dispersion-rank</code> is nonnegative. This versioned, row-aligned binary
+sidecar stores a float32 diagonal-plus-low-rank approximation to the optional
+dispersion-induced log-topic covariance correction.</p>
+<h2 id="example">Example<a class="headerlink" href="#example" title="Permanent link">&para;</a></h2>
+<p>Fit a 12-topic model on hexagon-level input and transform the same units:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>gamma-pois-fit<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in-data<span class="w"> </span>hex_12.txt<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--in-meta<span class="w"> </span>hex_12.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--out-prefix<span class="w"> </span>gp_h12_k12<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--n-topics<span class="w"> </span><span class="m">12</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>--n-epochs<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--minibatch-size<span class="w"> </span><span class="m">256</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--min-count-train<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span>--size-factor<span class="w"> </span><span class="m">672</span>.5<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span>--transform<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span>--seed<span class="w"> </span><span class="m">13</span>
+</span></code></pre></div>
+<p>Project another dataset with the fitted state:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>gamma-pois-transform<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in-data<span class="w"> </span>new_hex_12.txt<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--in-meta<span class="w"> </span>new_hex_12.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--in-state<span class="w"> </span>gp_h12_k12.state.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--out-prefix<span class="w"> </span>new_gp_h12_k12<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">  </span>--min-count<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span>
+</span></code></pre></div>
+<h2 id="implementation-notes">Implementation notes<a class="headerlink" href="#implementation-notes" title="Permanent link">&para;</a></h2>
+<p>The current implementation uses dense <code>K x V</code> global sufficient statistics,
+matching the existing SVI LDA implementation style in this repository. Per
+minibatch, local inference costs <span class="arithmatex">\(O(I K \mathrm{nnz}(S))\)</span>, where <span class="arithmatex">\(I\)</span> is the
+number of local iterations. The dense global update costs <span class="arithmatex">\(O(KV)\)</span> and uses
+thread-local <code>K x V</code> buffers.</p>
+<p>A sparse minibatch-vocabulary update can reduce global work when each minibatch
+touches only a small fraction of the vocabulary, but the dense form is simpler,
+cache-friendly, and can be faster for moderate <code>K x V</code> or minibatches that touch
+much of the vocabulary.</p>
 
 
 
