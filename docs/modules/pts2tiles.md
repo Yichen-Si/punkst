@@ -2,7 +2,7 @@
 
 ### Group points into square tiles for faster downstream access
 
-`pts2tiles` rewrites a delimited text point file so records are grouped into non-overlapping square tiles in `(x, y)` space. It writes a tiled `.tsv` output file plus a binary index storing byte offsets for each tile to help faster region query.
+`pts2tiles` rewrites a delimited text point file so records are grouped into non-overlapping square tiles in `(x, y)` space. By default it writes a tiled `.tsv` output file plus a binary index storing byte offsets for each tile to help faster region query. Factor-probability TSVs can instead be converted to the canonical `tile-op` binary format.
 
 The row order is preserved only at the tile level. Records inside a tile may be arbitrary.
 
@@ -53,6 +53,32 @@ punkst pts2tiles \
   --out-prefix ${path}/legacy_factors.tiled
 ```
 
+Example for converting a factor-probability TSV without an existing punkst index to canonical binary records and a new index:
+
+```bash
+punkst pts2tiles \
+  --in-tsv ${path}/pixel_factors.tsv \
+  --tile-op-factor-tsv --K 12 \
+  --pixel-res 0.5 \
+  --tile-size 500 \
+  --temp-dir ${tmpdir} \
+  --out-prefix ${path}/pixel_factors.tiled
+```
+Add an optional `--binary-out` flag to write the output in binary format.
+
+For rows that also contain a feature name, supply its column and an ordered feature dictionary:
+
+```bash
+punkst pts2tiles \
+  --in-tsv ${path}/molecule_factors.tsv \
+  --tile-op-factor-tsv --binary-out --K 12 \
+  --icol-feature 3 --feature-dict ${path}/features.tsv \
+  --tile-size 500 \
+  --temp-dir ${tmpdir} \
+  --out-prefix ${path}/molecule_factors.tiled
+```
+Currently only binary format is supported for feature-aware factor files.
+
 ### Accepted Input Forms
 
 `pts2tiles` currently accepts these input forms through `--in-tsv`:
@@ -65,7 +91,7 @@ Delimiter handling:
 
 - By default, input is parsed as tab-delimited text.
 - With `--csv`, input is parsed as comma-delimited text.
-- Output is always written as tab-delimited `.tsv`, even when the input is CSV.
+- Output is written as tab-delimited `.tsv`, even when the input is CSV, except when `--tile-op-factor-tsv --binary-out` writes `.bin` records.
 
 Current parser behavior:
 
@@ -127,6 +153,20 @@ Behavior of `prefix.features.tsv`:
 `--tile-op-factor-tsv`
 : Retile a TSV with `x`, `y`, optional `z`, and contiguous `K1/P1`, `K2/P2`, ... factor-probability columns. This mode ignores any existing index, infers coordinate and K/P columns from a header line starting with `#`, and writes an index that `tile-op` can read directly. For a non-comment header, use `--skip N --skip-last-is-header`.
 
+`--binary-out`
+: With `--tile-op-factor-tsv`, convert each row to canonical binary factor records and write `prefix.bin` plus `prefix.index`. Coordinates are stored as raw `float` world coordinates; setting a pixel resolution does not rescale them.
+
+`--K`
+: Total number of factors. Required with `--tile-op-factor-tsv --binary-out`; valid factor indices in the input are `0` through `K - 1`.
+
+`--pixel-res`, `--pixel-res-z`
+: Optional positive pixel-resolution metadata for binary factor output. `--pixel-res-z` requires a `z` column. Because the records use raw float coordinates, `tile-op` preserves the stored coordinates and uses these values only where an operation needs raster/pixel resolution metadata.
+
+`--feature-dict`
+: Ordered feature dictionary for feature-bearing binary factor output. It must be used together with `--icol-feature`. The first whitespace-delimited field of each non-comment line is a feature name. Duplicate dictionary names are rejected; rows whose feature is absent from the dictionary are skipped and reported.
+
+Binary factor import validates every K/P value. Each K value must be an integer in `[0,K)`, and each probability must be finite and in `[0,1]`. Invalid rows stop the command with an error.
+
 `--tile-buffer`
 : Per-thread, per-tile in-memory buffer size in number of records before flushing to disk. Default: `1000`.
 
@@ -166,7 +206,8 @@ Behavior of `prefix.features.tsv`:
 
 ### Output Files
 
-- `prefix.tsv`: tiled tab-delimited output records.
+- `prefix.tsv`: tiled tab-delimited output records in the default mode.
+- `prefix.bin`: canonical factor records written by `--tile-op-factor-tsv --binary-out`.
 - `prefix.index`: binary tile index with per-tile byte offsets and bounding boxes.
 - `prefix.coord_range.tsv`: global coordinate range containing `xmin`, `xmax`, `ymin`, `ymax`, and also `zmin`, `zmax` if `--icol-z` is provided.
 - `prefix.z_hist.tsv`: two-column tab-delimited histogram of `z` using unit-width bins. The unit is the same as the effective `z` after scaling. Written only when `--icol-z` is provided.

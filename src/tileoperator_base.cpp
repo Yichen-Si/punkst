@@ -384,7 +384,7 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
 
     Rectangle<float> outBox;
     std::ofstream out;
-    std::ofstream idxOut;
+    int fdIndex = -1;
     bool outputOpen = false;
     uint64_t currentOffset = 0;
     size_t nEntries = 0;
@@ -398,8 +398,8 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
         if (!out.is_open()) {
             error("%s: Error opening output data file: %s", __func__, outData.c_str());
         }
-        idxOut.open(outIndex, std::ios::binary);
-        if (!idxOut.is_open()) {
+        fdIndex = open(outIndex.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) {
             error("%s: Error opening output index file: %s", __func__, outIndex.c_str());
         }
         if (!binaryInput) {
@@ -411,10 +411,7 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
                 error("%s: Error writing header to %s", __func__, outData.c_str());
             }
         }
-        idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
-        if (!idxOut) {
-            error("%s: Error writing placeholder header to %s", __func__, outIndex.c_str());
-        }
+        writeIndexHeaderWithFeatureDict(fdIndex, outHeader);
         currentOffset = static_cast<uint64_t>(out.tellp());
         outputOpen = true;
     };
@@ -604,8 +601,7 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
             }
 
             outEntry.ed = currentOffset;
-            idxOut.write(reinterpret_cast<const char*>(&outEntry), sizeof(outEntry));
-            if (!idxOut) {
+            if (!write_all(fdIndex, &outEntry, sizeof(outEntry))) {
                 error("%s: Error writing index entry", __func__);
             }
             outBox.extendToInclude(Rectangle<float>(
@@ -628,13 +624,12 @@ void TileOperator::extractRegionPrepared(const std::string& outPrefix, const Pre
     outHeader.xmax = outBox.xmax;
     outHeader.ymin = outBox.ymin;
     outHeader.ymax = outBox.ymax;
-    idxOut.seekp(0);
-    idxOut.write(reinterpret_cast<const char*>(&outHeader), sizeof(outHeader));
-    if (!idxOut) {
-        error("%s: Error finalizing output index header", __func__);
+    if (lseek(fdIndex, 0, SEEK_SET) < 0) {
+        error("%s: Error seeking output index file", __func__);
     }
+    writeIndexHeaderWithFeatureDict(fdIndex, outHeader);
     out.close();
-    idxOut.close();
+    close(fdIndex);
     notice("%s: Wrote %zu indexed tile(s) to %s (index: %s)", __func__, nEntries, outData.c_str(), outIndex.c_str());
 }
 
@@ -1655,45 +1650,6 @@ void TileOperator::parseHeaderLine() {
             [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         return key;
     };
-    struct ParsedKPCol {
-        bool ok = false;
-        bool isK = false;
-        uint32_t idx = 0;
-        std::string prefix;
-    };
-    auto parse_kp_col = [](const std::string& key) -> ParsedKPCol {
-        ParsedKPCol out;
-        if (key.size() < 2) {
-            return out;
-        }
-        size_t pos = key.size();
-        while (pos > 0 && std::isdigit(static_cast<unsigned char>(key[pos - 1]))) {
-            --pos;
-        }
-        if (pos == key.size() || pos == 0) {
-            return out;
-        }
-        const char kp = static_cast<char>(std::toupper(static_cast<unsigned char>(key[pos - 1])));
-        if (kp != 'K' && kp != 'P') {
-            return out;
-        }
-        if (pos > 1) {
-            const std::string prefix = key.substr(0, pos - 1);
-            if (!prefix.empty() && prefix.back() != '_') {
-                return out;
-            }
-            out.prefix = prefix;
-        }
-        uint32_t parsedIdx = 0;
-        if (!str2uint32(key.substr(pos), parsedIdx) || parsedIdx == 0) {
-            return out;
-        }
-        out.ok = true;
-        out.isK = (kp == 'K');
-        out.idx = parsedIdx;
-        return out;
-    };
-
     std::unordered_map<std::string, uint32_t> header;
     for (uint32_t i = 0; i < tokens.size(); ++i) {
         const std::string coordKey = normalize_coord_name(tokens[i]);
@@ -1721,7 +1677,7 @@ void TileOperator::parseHeaderLine() {
     std::vector<std::string> prefixOrder;
     std::unordered_map<std::string, KPColsByPrefix> kpCols;
     for (uint32_t col = 0; col < tokens.size(); ++col) {
-        const ParsedKPCol parsed = parse_kp_col(tokens[col]);
+        const FactorTsvColumnName parsed = parseFactorTsvColumnName(tokens[col]);
         if (!parsed.ok) {
             continue;
         }

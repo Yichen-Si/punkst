@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cmath>
+#include <cctype>
 #include <cstdint>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include <variant>
@@ -566,3 +569,74 @@ void configureFeatureDictionaryHeader(IndexHeader& header,
     const std::vector<std::string>& featureNames, const char* funcName);
 bool writeFeatureDictionaryPayload(int fd, const IndexHeader& header,
     const std::vector<std::string>& featureNames);
+
+struct FactorTsvColumnName {
+    bool ok = false;
+    bool isK = false;
+    uint32_t idx = 0;
+    std::string prefix;
+};
+
+inline FactorTsvColumnName parseFactorTsvColumnName(const std::string& key) {
+    FactorTsvColumnName out;
+    if (key.size() < 2) {
+        return out;
+    }
+    size_t pos = key.size();
+    while (pos > 0 && std::isdigit(static_cast<unsigned char>(key[pos - 1]))) {
+        --pos;
+    }
+    if (pos == key.size() || pos == 0) {
+        return out;
+    }
+    const char kp = static_cast<char>(std::toupper(static_cast<unsigned char>(key[pos - 1])));
+    if (kp != 'K' && kp != 'P') {
+        return out;
+    }
+    if (pos > 1) {
+        out.prefix = key.substr(0, pos - 1);
+        if (!out.prefix.empty() && out.prefix.back() != '_') {
+            return FactorTsvColumnName{};
+        }
+    }
+    uint32_t parsedIdx = 0;
+    if (!str2uint32(key.substr(pos), parsedIdx) || parsedIdx == 0) {
+        return FactorTsvColumnName{};
+    }
+    out.ok = true;
+    out.isK = (kp == 'K');
+    out.idx = parsedIdx;
+    return out;
+}
+
+inline bool parseFactorTsvValuesStrict(const std::vector<std::string>& tokens,
+    const std::vector<uint32_t>& kCols, const std::vector<uint32_t>& pCols,
+    uint32_t factorCount, std::vector<int32_t>& ks, std::vector<float>& ps,
+    std::string& reason) {
+    if (kCols.empty() || kCols.size() != pCols.size()) {
+        reason = "invalid K/P column layout";
+        return false;
+    }
+    ks.resize(kCols.size());
+    ps.resize(pCols.size());
+    for (size_t i = 0; i < kCols.size(); ++i) {
+        if (kCols[i] >= tokens.size() || pCols[i] >= tokens.size()) {
+            reason = "row has fewer columns than the factor header";
+            return false;
+        }
+        if (!str2int32(tokens[kCols[i]], ks[i])) {
+            reason = "K" + std::to_string(i + 1) + " is not an integer";
+            return false;
+        }
+        if (ks[i] < 0 || static_cast<uint32_t>(ks[i]) >= factorCount) {
+            reason = "K" + std::to_string(i + 1) + " is outside [0,K)";
+            return false;
+        }
+        if (!str2float(tokens[pCols[i]], ps[i]) || !std::isfinite(ps[i])
+            || ps[i] < 0.0f || ps[i] > 1.0f) {
+            reason = "P" + std::to_string(i + 1) + " is not a finite probability in [0,1]";
+            return false;
+        }
+    }
+    return true;
+}

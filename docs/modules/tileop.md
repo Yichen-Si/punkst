@@ -55,6 +55,7 @@ Use `--out` to specify the output prefix. In some operations use `--binary-out` 
 
 - `punkst pixel-decode --single-feature-pixel`
 - `punkst pixel-decode --single-molecule`
+- `punkst pts2tiles --tile-op-factor-tsv --binary-out` with `--icol-feature` and `--feature-dict`
 
 In both cases, each binary record carries an additional feature index in addition to coordinates and factor probabilities, so `tile-op` uses feature-aware loaders / matching logic where supported.
 
@@ -62,6 +63,9 @@ Current `tile-op` support for these inputs is:
 
 - supported:
     - `--dump-tsv`
+    - `--extract-region`
+    - `--extract-region-geojson`
+    - `--reorganize`
     - `--merge-emb`
     - `--annotate-pts`
     - `--annotate-cell`

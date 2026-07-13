@@ -34,6 +34,7 @@ int32_t cmdPts2TilesTsv(int32_t argc, char** argv) {
         return 1;
     }
 
-    notice("Processing completed. Output is written to %s.tsv and index file is written to %s.index", opts.outPref.c_str(), opts.outPref.c_str());
+    notice("Processing completed. Output is written to %s.%s and index file is written to %s.index",
+        opts.outPref.c_str(), opts.tile_op_binary_out ? "bin" : "tsv", opts.outPref.c_str());
     return 0;
 }

@@ -8,11 +8,13 @@
 #include <sstream>
 #include <map>
 #include <cctype>
+#include <cinttypes>
 #include <cerrno>
 #include <cstring>
 #include <unordered_map>
 #include <memory>
 #include <array>
+#include <atomic>
 #include <fcntl.h>
 #include <unistd.h>
 #include "zlib.h"
@@ -35,7 +37,12 @@ public:
         bool tileOpFactorTsv = false,
         std::vector<int32_t> includeCols = {},
         std::vector<int32_t> excludeCols = {},
-        std::vector<int32_t> keepQuotes = {}) :
+        std::vector<int32_t> keepQuotes = {},
+        bool tileOpBinaryOutput = false,
+        int32_t factorCount = -1,
+        double pixelResolution = -1.0,
+        double pixelResolutionZ = -1.0,
+        std::string featureDictFile = {}) :
         nThreads_(nthreads),
         inFile_(inFile), tmpDir_(tmpDir),
         outPref_(outPref), tileSize_(tileSize),
@@ -46,6 +53,9 @@ public:
         scale_x_(scale_x), scale_y_(scale_y), scale_z_(scale_z),
         digits_(digits), inputDelimiter_(1, inputDelimiter),
         tileOpFactorTsv_(tileOpFactorTsv),
+        tileOpBinaryOutput_(tileOpBinaryOutput), factorCount_(factorCount),
+        pixelResolution_(pixelResolution), pixelResolutionZ_(pixelResolutionZ),
+        featureDictFile_(std::move(featureDictFile)),
         includeCols_(std::move(includeCols)), excludeCols_(std::move(excludeCols)),
         keepQuotes_(std::move(keepQuotes))
     {
@@ -57,6 +67,9 @@ public:
         }
         if (!keepQuotes_.empty() && inputDelimiter_ != ",") {
             error("--keep-quotes can only be used together with CSV input");
+        }
+        if (tileOpBinaryOutput_) {
+            loadFeatureDictionary();
         }
         std::sort(keepQuotes_.begin(), keepQuotes_.end());
         keepQuotes_.erase(std::unique(keepQuotes_.begin(), keepQuotes_.end()), keepQuotes_.end());
@@ -125,6 +138,10 @@ public:
             warning("Error writing auxiliary files");
             return false;
         }
+        if (tileOpBinaryOutput_ && unknownFeatureRows_ > 0) {
+            warning("Skipped %" PRIu64 " rows whose feature was not in the supplied dictionary",
+                unknownFeatureRows_.load());
+        }
         return true;
     }
 
@@ -144,8 +161,17 @@ protected:
     bool appendDummyCount_;
     bool rewriteLine_;
     bool tileOpFactorTsv_;
+    bool tileOpBinaryOutput_;
     bool filterColumns_;
     int32_t tileOpTopK_ = 0;
+    int32_t factorCount_ = -1;
+    double pixelResolution_ = -1.0;
+    double pixelResolutionZ_ = -1.0;
+    std::string featureDictFile_;
+    std::vector<std::string> featureNames_;
+    std::unordered_map<std::string, uint32_t> featureIndex_;
+    std::vector<uint32_t> tileOpKCols_, tileOpPCols_;
+    std::atomic<uint64_t> unknownFeatureRows_{0};
     int32_t digits_;
     std::string inputDelimiter_;
     std::vector<int32_t> includeCols_, excludeCols_;
@@ -183,49 +209,47 @@ protected:
         bool quoted = false;
     };
 
+    void loadFeatureDictionary() {
+        if (featureDictFile_.empty()) {
+            return;
+        }
+        std::ifstream in(featureDictFile_);
+        if (!in) {
+            error("Error opening feature dictionary file: %s", featureDictFile_.c_str());
+        }
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty() || line[0] == '#') {
+                continue;
+            }
+            const size_t pos = line.find_first_of(" \t");
+            const std::string name = pos == std::string::npos ? line : line.substr(0, pos);
+            if (name.empty()) {
+                continue;
+            }
+            const uint32_t idx = static_cast<uint32_t>(featureNames_.size());
+            if (!featureIndex_.emplace(name, idx).second) {
+                error("Duplicate feature '%s' in dictionary file %s",
+                    name.c_str(), featureDictFile_.c_str());
+            }
+            featureNames_.push_back(name);
+        }
+        if (featureNames_.empty()) {
+            error("Feature dictionary is empty: %s", featureDictFile_.c_str());
+        }
+        notice("Read %zu features from dictionary file", featureNames_.size());
+    }
+
+    template<typename T>
+    static void appendBinaryValue(std::string& out, const T& value) {
+        out.append(reinterpret_cast<const char*>(&value), sizeof(value));
+    }
+
     static std::string normalizeHeaderKey(std::string key) {
         key = std::string(strip_str(key));
         std::transform(key.begin(), key.end(), key.begin(),
             [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
         return key;
-    }
-
-    struct KPColumnName {
-        bool ok = false;
-        bool isK = false;
-        uint32_t idx = 0;
-    };
-
-    static KPColumnName parseKPColumnName(const std::string& key) {
-        KPColumnName out;
-        if (key.size() < 2) {
-            return out;
-        }
-        size_t pos = key.size();
-        while (pos > 0 && std::isdigit(static_cast<unsigned char>(key[pos - 1]))) {
-            --pos;
-        }
-        if (pos == key.size() || pos == 0) {
-            return out;
-        }
-        const char kp = static_cast<char>(std::toupper(static_cast<unsigned char>(key[pos - 1])));
-        if (kp != 'K' && kp != 'P') {
-            return out;
-        }
-        if (pos > 1) {
-            const std::string prefix = key.substr(0, pos - 1);
-            if (!prefix.empty() && prefix.back() != '_') {
-                return out;
-            }
-        }
-        uint32_t parsedIdx = 0;
-        if (!str2uint32(key.substr(pos), parsedIdx) || parsedIdx == 0) {
-            return out;
-        }
-        out.ok = true;
-        out.isK = (kp == 'K');
-        out.idx = parsedIdx;
-        return out;
     }
 
     bool isTileOpFactorHeaderCandidate(const std::string& line) const {
@@ -244,7 +268,7 @@ protected:
             } else if (key == "y") {
                 hasY = true;
             }
-            const KPColumnName kp = parseKPColumnName(key);
+            const FactorTsvColumnName kp = parseFactorTsvColumnName(key);
             if (kp.ok && kp.idx == 1) {
                 if (kp.isK) {
                     hasK1 = true;
@@ -270,7 +294,7 @@ protected:
             } else if (key == "z") {
                 headerZ = static_cast<int32_t>(i);
             }
-            const KPColumnName kp = parseKPColumnName(key);
+            const FactorTsvColumnName kp = parseFactorTsvColumnName(key);
             if (!kp.ok) {
                 continue;
             }
@@ -308,7 +332,20 @@ protected:
         if (topK <= 0) {
             error("%s: --tile-op-factor-tsv requires at least one K/P pair", __func__);
         }
+        if (kcols.size() != static_cast<size_t>(topK)
+            || pcols.size() != static_cast<size_t>(topK)) {
+            error("%s: TileOperator factor TSV K/P columns must be contiguous starting at 1",
+                __func__);
+        }
         tileOpTopK_ = topK;
+        tileOpKCols_.clear();
+        tileOpPCols_.clear();
+        tileOpKCols_.reserve(static_cast<size_t>(topK));
+        tileOpPCols_.reserve(static_cast<size_t>(topK));
+        for (uint32_t idx = 1; idx <= static_cast<uint32_t>(topK); ++idx) {
+            tileOpKCols_.push_back(kcols[idx]);
+            tileOpPCols_.push_back(pcols[idx]);
+        }
         scaling_ = std::abs(scale_x_ - 1) > 1e-8
             || std::abs(scale_y_ - 1) > 1e-8
             || (icol_z_ >= 0 && std::abs(scale_z_ - 1) > 1e-8);
@@ -320,6 +357,9 @@ protected:
         for (int32_t idx = 1; idx <= tileOpTopK_; ++idx) {
             ntokens_ = std::max(ntokens_, static_cast<int32_t>(kcols[static_cast<uint32_t>(idx)]));
             ntokens_ = std::max(ntokens_, static_cast<int32_t>(pcols[static_cast<uint32_t>(idx)]));
+        }
+        if (icol_feature_ >= 0) {
+            ntokens_ = std::max(ntokens_, icol_feature_);
         }
         ntokens_ += 1;
     }
@@ -480,6 +520,22 @@ protected:
         if (icol_x_ < 0 || icol_y_ < 0 || tileOpTopK_ <= 0) {
             error("%s: --tile-op-factor-tsv requires a parsed header with x, y, and K/P columns",
                 __func__);
+        }
+        if (!tileOpBinaryOutput_) {
+            return;
+        }
+        if (factorCount_ <= 0 || factorCount_ > 0xFFFF) {
+            error("%s: factor binary output requires K in [1,65535]", __func__);
+        }
+        if (tileOpKCols_.size() != static_cast<size_t>(tileOpTopK_)
+            || tileOpPCols_.size() != static_cast<size_t>(tileOpTopK_)) {
+            error("%s: incomplete factor column layout", __func__);
+        }
+        if ((icol_feature_ >= 0) != !featureNames_.empty()) {
+            error("%s: feature-bearing output requires both feature column and dictionary", __func__);
+        }
+        if (pixelResolutionZ_ > 0.0 && icol_z_ < 0) {
+            error("%s: --pixel-res-z requires a z column", __func__);
         }
     }
 
@@ -780,7 +836,66 @@ protected:
 
     std::filesystem::path getTmpFilename(const TileKey& tile, int threadId) const {
         return tmpDir_.path / (std::to_string(tile.row) + "_" + std::to_string(tile.col)
-            + "_" + std::to_string(threadId) + ".tsv");
+            + "_" + std::to_string(threadId) + (tileOpBinaryOutput_ ? ".bin" : ".tsv"));
+    }
+
+    bool parseTileOpBinaryRecord(const std::string& line, PtRecord& pt,
+            TileKey& tile, std::string& encoded) {
+        std::vector<std::string> tokens;
+        tokenizeLine(line, tokens);
+        if (tokens.size() < static_cast<size_t>(ntokens_)) {
+            error("Error parsing factor row with too few columns: %s", line.c_str());
+        }
+        if (!str2float(tokens[icol_x_], pt.x) || !str2float(tokens[icol_y_], pt.y)
+            || !std::isfinite(pt.x) || !std::isfinite(pt.y)) {
+            error("Error parsing factor row coordinates: %s", line.c_str());
+        }
+        pt.x = static_cast<float>(pt.x * scale_x_);
+        pt.y = static_cast<float>(pt.y * scale_y_);
+        if (icol_z_ >= 0) {
+            if (!str2float(tokens[icol_z_], pt.z) || !std::isfinite(pt.z)) {
+                error("Error parsing factor row z coordinate: %s", line.c_str());
+            }
+            pt.z = static_cast<float>(pt.z * scale_z_);
+        }
+
+        uint32_t featureIdx = 0;
+        if (icol_feature_ >= 0) {
+            pt.feature = tokens[icol_feature_];
+            const auto featureIt = featureIndex_.find(pt.feature);
+            if (featureIt == featureIndex_.end()) {
+                ++unknownFeatureRows_;
+                return false;
+            }
+            featureIdx = featureIt->second;
+        }
+
+        std::vector<int32_t> ks;
+        std::vector<float> ps;
+        std::string reason;
+        if (!parseFactorTsvValuesStrict(tokens, tileOpKCols_, tileOpPCols_,
+                static_cast<uint32_t>(factorCount_), ks, ps, reason)) {
+            error("Invalid factor row (%s): %s", reason.c_str(), line.c_str());
+        }
+
+        encoded.clear();
+        encoded.reserve((icol_z_ >= 0 ? 3u : 2u) * sizeof(float)
+            + (icol_feature_ >= 0 ? sizeof(uint32_t) : 0u)
+            + ks.size() * (sizeof(int32_t) + sizeof(float)));
+        appendBinaryValue(encoded, pt.x);
+        appendBinaryValue(encoded, pt.y);
+        if (icol_z_ >= 0) {
+            appendBinaryValue(encoded, pt.z);
+        }
+        if (icol_feature_ >= 0) {
+            appendBinaryValue(encoded, featureIdx);
+        }
+        encoded.append(reinterpret_cast<const char*>(ks.data()), ks.size() * sizeof(int32_t));
+        encoded.append(reinterpret_cast<const char*>(ps.data()), ps.size() * sizeof(float));
+
+        tile.row = static_cast<int32_t>(std::floor(pt.y / tileSize_));
+        tile.col = static_cast<int32_t>(std::floor(pt.x / tileSize_));
+        return true;
     }
 
     // Parse a line, extract coordinates and return the tile key
@@ -842,7 +957,16 @@ protected:
             float& localZMax,
             std::unordered_map<int64_t, uint64_t>& localZHist) {
         PtRecord pt;
-        TileKey tile = parse(line, pt);
+        TileKey tile;
+        std::string outputRecord;
+        if (tileOpBinaryOutput_) {
+            if (!parseTileOpBinaryRecord(line, pt, tile, outputRecord)) {
+                return;
+            }
+        } else {
+            tile = parse(line, pt);
+            outputRecord = line;
+        }
 
         // feature counts
         if (icol_feature_ >= 0) {
@@ -867,7 +991,7 @@ protected:
         }
         // buffer + flush
         auto &buf = buffers[tile];
-        buf.push_back(line);
+        buf.push_back(std::move(outputRecord));
         if (buf.size() >= static_cast<size_t>(tileBuffer_))
             flushBuffer(threadId, tile, buf);
     }
@@ -880,8 +1004,14 @@ protected:
             globalTiles_[tile] += buf.size();
         }
         auto fn = getTmpFilename(tile, threadId);
-        std::ofstream out(fn, std::ios::app);
-        for (auto &l : buf) out << l << "\n";
+        std::ofstream out(fn, std::ios::app | std::ios::binary);
+        for (auto &l : buf) {
+            if (tileOpBinaryOutput_) {
+                out.write(l.data(), static_cast<std::streamsize>(l.size()));
+            } else {
+                out << l << "\n";
+            }
+        }
         out.close();
         buf.clear();
     }
@@ -1027,7 +1157,7 @@ protected:
                     if (got > 0) {
                         if (!write_all(fdOut, buffer.data(), static_cast<size_t>(got))) {
                             const int err = errno;
-                            error("%s: failed writing temporary shard %s to output %s.tsv: %s",
+                            error("%s: failed writing temporary shard %s to output prefix %s: %s",
                                 __func__, tmpFilename.string().c_str(), outPref_.c_str(), std::strerror(err));
                             return false;
                         }
@@ -1049,13 +1179,16 @@ protected:
 
     // Merge all temporary files and write index file
     bool mergeAndWriteIndex() {
-        std::string outFile = outPref_ + ".tsv";
+        if (globalTiles_.empty()) {
+            error("%s: no input records were retained", __func__);
+        }
+        std::string outFile = outPref_ + (tileOpBinaryOutput_ ? ".bin" : ".tsv");
         int fdOut = open(outFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
         if (fdOut < 0) {
             error("Error opening output file for writing: %s: %s", outFile.c_str(), std::strerror(errno));
         }
         uint64_t currentOffset = 0;
-        if (!metaLines_.empty()) {
+        if (!tileOpBinaryOutput_ && !metaLines_.empty()) {
             if (!write_all(fdOut, metaLines_.data(), metaLines_.size())) {
                 const int err = errno;
                 close(fdOut);
@@ -1066,8 +1199,8 @@ protected:
         }
 
         std::string indexFilename = outPref_ + ".index";
-        std::ofstream indexfile(indexFilename, std::ios::binary);
-        if (!indexfile) {
+        int fdIndex = open(indexFilename.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+        if (fdIndex < 0) {
             close(fdOut);
             error("Error opening index file for writing: %s", indexFilename.c_str());
         }
@@ -1075,7 +1208,7 @@ protected:
         // Write header
         IndexHeader header;
         header.magic = PUNKST_INDEX_MAGIC;
-        header.mode = 0; // tsv, no scaling, float coords, regular tiles
+        header.mode = 0; // raw float coordinates in regular tiles
         if (icol_z_ >= 0) {header.mode |= 0x10;} // 3D
         if (tileOpFactorTsv_) {
             if (!header.packKvec({static_cast<uint32_t>(tileOpTopK_)})) {
@@ -1083,10 +1216,35 @@ protected:
                     __func__, tileOpTopK_);
             }
         }
+        if (tileOpBinaryOutput_) {
+            header.mode |= 0x1u;
+            header.mode |= (static_cast<uint32_t>(factorCount_) & 0xFFFFu) << 16;
+            if (icol_feature_ >= 0) {
+                header.mode |= 0x40u;
+            }
+            if (icol_z_ >= 0 && pixelResolutionZ_ > 0.0) {
+                header.mode |= 0x20u;
+            }
+            const uint32_t coordCount = icol_z_ >= 0 ? 3u : 2u;
+            header.recordSize = coordCount * sizeof(float)
+                + (icol_feature_ >= 0 ? sizeof(uint32_t) : 0u)
+                + static_cast<uint32_t>(tileOpTopK_)
+                    * (sizeof(int32_t) + sizeof(float));
+            header.pixelResolution = pixelResolution_ > 0.0
+                ? static_cast<float>(pixelResolution_) : -1.0f;
+            header.pixelResolutionZ = pixelResolutionZ_ > 0.0
+                ? static_cast<float>(pixelResolutionZ_) : -1.0f;
+        }
         header.tileSize = tileSize_;
         header.xmin = globalBox_.xmin; header.xmax = globalBox_.xmax;
         header.ymin = globalBox_.ymin; header.ymax = globalBox_.ymax;
-        indexfile.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        configureFeatureDictionaryHeader(header, featureNames_, __func__);
+        if (!write_all(fdIndex, &header, sizeof(header))
+            || !writeFeatureDictionaryPayload(fdIndex, header, featureNames_)) {
+            close(fdOut);
+            close(fdIndex);
+            error("%s: failed writing index header", __func__);
+        }
 
         std::vector<TileKey> sortedTiles;
         for (const auto& pair : globalTiles_) {
@@ -1098,6 +1256,7 @@ protected:
             const uint64_t startOffset = currentOffset;
             if (!mergeTmpFileToOutput(tile, fdOut, currentOffset)) {
                 close(fdOut);
+                close(fdIndex);
                 return false;
             }
             const uint64_t endOffset = currentOffset;
@@ -1106,8 +1265,7 @@ protected:
             entry.ed = endOffset;
             entry.n = static_cast<uint32_t>(globalTiles_[tile]);
             tile2bound(tile.row, tile.col, entry.xmin, entry.xmax, entry.ymin, entry.ymax, tileSize_);
-            indexfile.write(reinterpret_cast<const char*>(&entry), sizeof(entry));
-            if (!indexfile) {
+            if (!write_all(fdIndex, &entry, sizeof(entry))) {
                 error("%s: failed writing index entry for tile (%d, %d)",
                     __func__, tile.row, tile.col);
             }
@@ -1118,9 +1276,10 @@ protected:
             error("%s: failed closing output file %s: %s",
                 __func__, outFile.c_str(), std::strerror(err));
         }
-        indexfile.close();
-        if (!indexfile) {
-            error("%s: failed closing index file %s", __func__, indexFilename.c_str());
+        if (close(fdIndex) != 0) {
+            const int err = errno;
+            error("%s: failed closing index file %s: %s",
+                __func__, indexFilename.c_str(), std::strerror(err));
         }
         return true;
     }

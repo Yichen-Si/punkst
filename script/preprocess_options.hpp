@@ -22,6 +22,11 @@ struct Pts2TilesOptions {
     bool csv_input = false;
     std::vector<int32_t> keep_quotes;
     bool tile_op_factor_tsv = false;
+    bool tile_op_binary_out = false;
+    int32_t factor_count = -1;
+    double pixel_res = -1.0;
+    double pixel_res_z = -1.0;
+    std::string feature_dict;
     double scale = 1.0;
     double scale_x = std::numeric_limits<double>::quiet_NaN();
     double scale_y = std::numeric_limits<double>::quiet_NaN();
@@ -51,7 +56,12 @@ struct Pts2TilesOptions {
           .add_option("icol-feature", "Column index for feature (0-based)", icol_feature, requireFeature)
           .add_option("icol-int", "Column index for integer values (0-based)", icol_ints);
         if (allowTileOpFactorTsv) {
-            pl.add_option("tile-op-factor-tsv", "Input is a TileOperator factor-probability TSV with x/y[/z] and K1/P1 columns; write a tile-op compatible index", tile_op_factor_tsv);
+            pl.add_option("tile-op-factor-tsv", "Input is a TileOperator factor-probability TSV with x/y[/z] and K1/P1 columns; write a tile-op compatible index", tile_op_factor_tsv)
+              .add_option("binary-out", "With --tile-op-factor-tsv, write canonical binary records instead of TSV", tile_op_binary_out)
+              .add_option("K", "Total factor count (required with --tile-op-factor-tsv --binary-out)", factor_count)
+              .add_option("pixel-res", "Optional x/y pixel resolution metadata for factor binary output", pixel_res)
+              .add_option("pixel-res-z", "Optional z pixel resolution metadata for 3D factor binary output", pixel_res_z)
+              .add_option("feature-dict", "Ordered feature dictionary for feature-bearing factor binary output", feature_dict);
         }
         pl.add_option("csv", "Treat the input as comma-delimited CSV instead of tab-delimited text; otherwise inferred from input extension when possible", csv_input)
           .add_option("keep-quotes", "Columns to keep quoted in CSV output (0-based)", keep_quotes)
@@ -83,8 +93,11 @@ struct Pts2TilesOptions {
 
     void validateStandalone() {
         validateCommon();
-        if (tile_op_factor_tsv && (icol_feature >= 0 || !icol_ints.empty())) {
-            error("--tile-op-factor-tsv cannot be combined with --icol-feature or --icol-int");
+        if (tile_op_factor_tsv && !icol_ints.empty()) {
+            error("--tile-op-factor-tsv cannot be combined with --icol-int");
+        }
+        if (tile_op_factor_tsv && !tile_op_binary_out && icol_feature >= 0) {
+            error("--tile-op-factor-tsv supports --icol-feature only together with --binary-out");
         }
         if (!tile_op_factor_tsv && (icol_x < 0 || icol_y < 0)) {
             error("--icol-x and --icol-y are required unless --tile-op-factor-tsv is used");
@@ -108,6 +121,25 @@ struct Pts2TilesOptions {
         }
         if (tile_op_factor_tsv && (!include_cols.empty() || !exclude_cols.empty())) {
             error("--include-cols/--exclude-cols cannot be combined with --tile-op-factor-tsv");
+        }
+        if (tile_op_binary_out && !tile_op_factor_tsv) {
+            error("--binary-out requires --tile-op-factor-tsv");
+        }
+        if (tile_op_binary_out && (factor_count <= 0 || factor_count > 0xFFFF)) {
+            error("--tile-op-factor-tsv --binary-out requires --K in [1,65535]");
+        }
+        if (tile_op_binary_out && ((icol_feature >= 0) != !feature_dict.empty())) {
+            error("--icol-feature and --feature-dict must be provided together");
+        }
+        if (!tile_op_binary_out && !feature_dict.empty()) {
+            error("--feature-dict is supported only with --tile-op-factor-tsv --binary-out");
+        }
+        if ((pixel_res != -1.0 && pixel_res <= 0.0)
+            || (pixel_res_z != -1.0 && pixel_res_z <= 0.0)) {
+            error("--pixel-res and --pixel-res-z must be positive when supplied");
+        }
+        if ((pixel_res > 0.0 || pixel_res_z > 0.0) && !tile_op_binary_out) {
+            error("--pixel-res/--pixel-res-z are supported only with --tile-op-factor-tsv --binary-out");
         }
         if (inputDelimiter() != ',' && !keep_quotes.empty()) {
             error("--keep-quotes can only be used with CSV input");
@@ -215,7 +247,8 @@ struct Pts2TilesOptions {
             icol_x, icol_y, icol_z, icol_feature, icol_ints, nskip,
             skip_last_is_header, streamingInput(), tileBuffer, batchSize,
             scale_x, scale_y, scale_z, digits, inputDelimiter(), tile_op_factor_tsv,
-            include_cols, exclude_cols, keep_quotes);
+            include_cols, exclude_cols, keep_quotes, tile_op_binary_out,
+            factor_count, pixel_res, pixel_res_z, feature_dict);
     }
 
     int32_t remapColumn(int32_t col, bool includeImplicitCount = false) const {

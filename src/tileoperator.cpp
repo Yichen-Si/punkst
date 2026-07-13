@@ -1048,7 +1048,7 @@ void TileOperator::reorgTilesBinary(const std::string& outPrefix, int32_t tileSi
     IndexHeader idxHeader = formatInfo_;
     idxHeader.mode &= ~0x8;
     idxHeader.tileSize = tileSize;
-    if (!write_all(fdIndex, &idxHeader, sizeof(idxHeader))) error("Index header write error");
+    writeIndexHeaderWithFeatureDict(fdIndex, idxHeader);
 
     size_t currentOffset = 0;
     std::vector<TileKey> allKeys;

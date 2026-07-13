@@ -9,6 +9,8 @@
 #include "gamma_pois_topic.hpp"
 #include "low_rank_covariance.hpp"
 #include "numerical_utils.hpp"
+#include "preprocess_options.hpp"
+#include "tileoperator.hpp"
 #include "tiles2bins.hpp"
 #include "vst.hpp"
 
@@ -26,8 +28,11 @@
 #include <numeric>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
+#include <fcntl.h>
+#include <unistd.h>
 
 
 namespace {
@@ -1908,6 +1913,338 @@ void test_feature_stats() {
     check_close("feature occurrence absent info weight", infoWeight, 5.0, 1e-6, 0.0);
 }
 
+void write_tileoperator_feature_fixture(const std::filesystem::path& prefix) {
+    const std::string dataFile = prefix.string() + ".bin";
+    const std::string indexFile = prefix.string() + ".index";
+    int fdData = open(dataFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    int fdIndex = open(indexFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdData < 0 || fdIndex < 0) {
+        if (fdData >= 0) close(fdData);
+        if (fdIndex >= 0) close(fdIndex);
+        throw std::runtime_error("Failed to create tile-operator feature fixture");
+    }
+
+    const std::vector<std::string> featureNames = {"gene_a", "gene_b"};
+    IndexHeader header;
+    header.magic = PUNKST_INDEX_MAGIC;
+    header.mode = (3u << 16) | 0x1u | 0x4u | 0x40u;
+    header.tileSize = 10;
+    header.pixelResolution = 1.0f;
+    header.packKvec({1});
+    header.recordSize = 2 * sizeof(int32_t) + sizeof(uint32_t)
+        + sizeof(int32_t) + sizeof(float);
+    header.xmin = 0.0f;
+    header.xmax = 20.0f;
+    header.ymin = 0.0f;
+    header.ymax = 10.0f;
+    configureFeatureDictionaryHeader(header, featureNames, __func__);
+    if (!write_all(fdIndex, &header, sizeof(header))
+        || !writeFeatureDictionaryPayload(fdIndex, header, featureNames)) {
+        close(fdData);
+        close(fdIndex);
+        throw std::runtime_error("Failed to write tile-operator feature index header");
+    }
+
+    std::vector<PixTopProbsFeature<int32_t>> records;
+    records.emplace_back(1, 1, 0);
+    records.back().ks = {2};
+    records.back().ps = {0.75f};
+    records.emplace_back(8, 8, 1);
+    records.back().ks = {1};
+    records.back().ps = {0.50f};
+    records.emplace_back(11, 1, 1);
+    records.back().ks = {0};
+    records.back().ps = {0.90f};
+
+    const std::array<std::pair<size_t, size_t>, 2> ranges = {{{0, 2}, {2, 3}}};
+    for (size_t tileIdx = 0; tileIdx < ranges.size(); ++tileIdx) {
+        IndexEntryF entry(0, static_cast<int32_t>(tileIdx));
+        tile2bound(0, static_cast<int32_t>(tileIdx), entry.xmin, entry.xmax,
+            entry.ymin, entry.ymax, header.tileSize);
+        entry.st = static_cast<uint64_t>(lseek(fdData, 0, SEEK_CUR));
+        for (size_t i = ranges[tileIdx].first; i < ranges[tileIdx].second; ++i) {
+            if (records[i].write(fdData) != static_cast<int32_t>(header.recordSize)) {
+                close(fdData);
+                close(fdIndex);
+                throw std::runtime_error("Failed to write tile-operator feature record");
+            }
+        }
+        entry.ed = static_cast<uint64_t>(lseek(fdData, 0, SEEK_CUR));
+        entry.n = static_cast<uint32_t>(ranges[tileIdx].second - ranges[tileIdx].first);
+        if (!write_all(fdIndex, &entry, sizeof(entry))) {
+            close(fdData);
+            close(fdIndex);
+            throw std::runtime_error("Failed to write tile-operator feature index entry");
+        }
+    }
+    close(fdData);
+    close(fdIndex);
+}
+
+void check_tileoperator_feature_output(const std::string& name,
+    const std::filesystem::path& prefix, size_t expectedEntries,
+    uint32_t expectedRecords) {
+    const std::string dataFile = prefix.string() + ".bin";
+    const std::string indexFile = prefix.string() + ".index";
+    const LoadedTileIndexData loaded = loadTileIndexData(indexFile);
+    check_true(name + " reloads dictionary",
+        loaded.featureNames == std::vector<std::string>({"gene_a", "gene_b"}));
+    check_true(name + " reloads entries", loaded.entries.size() == expectedEntries);
+    uint32_t records = 0;
+    for (const auto& entry : loaded.entries) records += entry.n;
+    check_true(name + " preserves record count", records == expectedRecords);
+    const uintmax_t expectedIndexSize = sizeof(IndexHeader)
+        + static_cast<uintmax_t>(loaded.header.featureCount) * loaded.header.featureNameSize
+        + expectedEntries * sizeof(IndexEntryF);
+    check_true(name + " has aligned index layout",
+        std::filesystem::file_size(indexFile) == expectedIndexSize);
+    check_true(name + " data size matches records",
+        std::filesystem::file_size(dataFile)
+            == static_cast<uintmax_t>(expectedRecords) * loaded.header.recordSize);
+    TileOperator reloaded(dataFile, indexFile);
+    check_true(name + " is recognized by TileOperator",
+        reloaded.hasFeatureIndex()
+            && reloaded.getFeatureNames() == loaded.featureNames);
+}
+
+void write_tileoperator_standard_fixture(const std::filesystem::path& prefix) {
+    const std::string dataFile = prefix.string() + ".bin";
+    const std::string indexFile = prefix.string() + ".index";
+    int fdData = open(dataFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    int fdIndex = open(indexFile.c_str(), O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644);
+    if (fdData < 0 || fdIndex < 0) {
+        if (fdData >= 0) close(fdData);
+        if (fdIndex >= 0) close(fdIndex);
+        throw std::runtime_error("Failed to create standard tile-operator fixture");
+    }
+    IndexHeader header;
+    header.magic = PUNKST_INDEX_MAGIC;
+    header.mode = (3u << 16) | 0x1u | 0x4u;
+    header.tileSize = 10;
+    header.pixelResolution = 1.0f;
+    header.packKvec({1});
+    header.recordSize = 2 * sizeof(int32_t) + sizeof(int32_t) + sizeof(float);
+    header.xmin = 0.0f;
+    header.xmax = 10.0f;
+    header.ymin = 0.0f;
+    header.ymax = 10.0f;
+    if (!write_all(fdIndex, &header, sizeof(header))) {
+        close(fdData);
+        close(fdIndex);
+        throw std::runtime_error("Failed to write standard tile-operator index header");
+    }
+    PixTopProbs<int32_t> record(1, 1);
+    record.ks = {2};
+    record.ps = {0.75f};
+    if (record.write(fdData) != static_cast<int32_t>(header.recordSize)) {
+        close(fdData);
+        close(fdIndex);
+        throw std::runtime_error("Failed to write standard tile-operator record");
+    }
+    IndexEntryF entry(0, 0);
+    entry.st = 0;
+    entry.ed = header.recordSize;
+    entry.n = 1;
+    tile2bound(0, 0, entry.xmin, entry.xmax, entry.ymin, entry.ymax, header.tileSize);
+    if (!write_all(fdIndex, &entry, sizeof(entry))) {
+        close(fdData);
+        close(fdIndex);
+        throw std::runtime_error("Failed to write standard tile-operator index entry");
+    }
+    close(fdData);
+    close(fdIndex);
+}
+
+void test_tileoperator_feature_index_exports() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path()
+        / "punkst_tileoperator_feature_index_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path input = dir / "input";
+    write_tileoperator_feature_fixture(input);
+
+    const std::filesystem::path rectangleOut = dir / "rectangle";
+    {
+        TileOperator op(input.string() + ".bin", input.string() + ".index");
+        op.extractRegion(rectangleOut.string(), 0.0f, 5.0f, 0.0f, 5.0f);
+    }
+    check_tileoperator_feature_output("feature rectangle extraction", rectangleOut, 1, 1);
+
+    const std::filesystem::path geojson = dir / "region.geojson";
+    {
+        std::ofstream out(geojson);
+        out << R"({"type":"Polygon","coordinates":[[[0,0],[20,0],[20,5],[0,5],[0,0]]]})";
+    }
+    const std::filesystem::path geojsonOut = dir / "geojson";
+    {
+        TileOperator op(input.string() + ".bin", input.string() + ".index");
+        op.setThreads(2);
+        op.extractRegionGeoJSON(geojsonOut.string(), geojson.string());
+    }
+    check_tileoperator_feature_output("feature GeoJSON extraction", geojsonOut, 2, 2);
+
+    const std::filesystem::path reorgOut = dir / "reorg";
+    {
+        TileOperator op(input.string() + ".bin", input.string() + ".index");
+        op.reorgTiles(reorgOut.string(), 10);
+    }
+    check_tileoperator_feature_output("feature binary reorganization", reorgOut, 2, 3);
+
+    const std::filesystem::path standardInput = dir / "standard_input";
+    const std::filesystem::path standardOut = dir / "standard_rectangle";
+    write_tileoperator_standard_fixture(standardInput);
+    {
+        TileOperator op(standardInput.string() + ".bin", standardInput.string() + ".index");
+        op.extractRegion(standardOut.string(), 0.0f, 5.0f, 0.0f, 5.0f);
+    }
+    const LoadedTileIndexData standardLoaded =
+        loadTileIndexData(standardOut.string() + ".index");
+    check_true("standard binary extraction has no dictionary",
+        standardLoaded.featureNames.empty()
+            && standardLoaded.header.featureCount == 0
+            && standardLoaded.header.featureNameSize == 0);
+    check_true("standard binary extraction retains header-entry layout",
+        std::filesystem::file_size(standardOut.string() + ".index")
+            == sizeof(IndexHeader) + sizeof(IndexEntryF));
+    std::filesystem::remove_all(dir);
+}
+
+void test_pts2tiles_factor_binary_import() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path()
+        / "punkst_pts2tiles_factor_binary_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path input = dir / "factor.tsv";
+    const std::filesystem::path dict = dir / "features.tsv";
+    {
+        std::ofstream out(input);
+        out << "#x\ty\tz\tfeature\tK1\tP1\tK2\tP2\n";
+        out << "1.25\t2.5\t3.5\tgene_a\t1\t0.75\t2\t0.25\n";
+        out << "11.25\t2.5\t4.5\tunknown\t0\t0.8\t3\t0.2\n";
+        out << "12.25\t3.5\t5.5\tgene_b\t3\t0.6\t0\t0.4\n";
+    }
+    {
+        std::ofstream out(dict);
+        out << "gene_b\n";
+        out << "gene_a\n";
+    }
+
+    Pts2TilesOptions opts;
+    opts.inTsv = input.string();
+    opts.outPref = (dir / "feature_out").string();
+    opts.tmpDir = (dir / "tmp").string();
+    opts.nThreads0 = 2;
+    opts.tileSize = 10;
+    opts.icol_feature = 3;
+    opts.tile_op_factor_tsv = true;
+    opts.tile_op_binary_out = true;
+    opts.factor_count = 4;
+    opts.pixel_res = 0.5;
+    opts.pixel_res_z = 2.0;
+    opts.feature_dict = dict.string();
+    opts.validateStandalone();
+    Pts2Tiles runner = opts.makeRunner(opts.resolveThreads());
+    check_true("factor binary feature import runs", runner.run());
+
+    const LoadedTileIndexData loaded = loadTileIndexData(opts.outPref + ".index");
+    check_true("factor binary feature header flags",
+        (loaded.header.mode & 0x1u) != 0u
+            && (loaded.header.mode & 0x10u) != 0u
+            && (loaded.header.mode & 0x20u) != 0u
+            && (loaded.header.mode & 0x40u) != 0u
+            && (loaded.header.mode & 0x6u) == 0u);
+    check_true("factor binary feature metadata",
+        (loaded.header.mode >> 16) == 4u
+            && loaded.header.pixelResolution == 0.5f
+            && loaded.header.pixelResolutionZ == 2.0f
+            && loaded.header.recordSize == 3 * sizeof(float) + sizeof(uint32_t)
+                + 2 * (sizeof(int32_t) + sizeof(float)));
+    check_true("factor binary dictionary order",
+        loaded.featureNames == std::vector<std::string>({"gene_b", "gene_a"}));
+    uint32_t retained = 0;
+    for (const auto& entry : loaded.entries) retained += entry.n;
+    check_true("factor binary unknown feature filtering", retained == 2);
+
+    std::ifstream binary(opts.outPref + ".bin", std::ios::binary);
+    PixTopProbsFeature3D<float> first;
+    check_true("factor binary record is readable", first.read(binary, 2));
+    check_true("factor binary keeps raw float coordinates",
+        first.x == 1.25f && first.y == 2.5f && first.z == 3.5f);
+    check_true("factor binary maps canonical feature index",
+        first.featureIdx == 1u && first.ks == std::vector<int32_t>({1, 2}));
+    {
+        TileOperator op(opts.outPref + ".bin", opts.outPref + ".index");
+        check_true("factor binary reloads in TileOperator",
+            op.hasFeatureIndex() && op.getFactorCount() == 4
+                && op.getPixelResolution() == 0.5f
+                && op.getPixelResolutionZ() == 2.0f);
+        op.dumpTSV((dir / "feature_dump").string());
+    }
+    std::ifstream dumped(dir / "feature_dump.tsv");
+    const std::string dumpedText((std::istreambuf_iterator<char>(dumped)),
+        std::istreambuf_iterator<char>());
+    check_true("factor binary feature names round trip",
+        dumpedText.find("gene_a") != std::string::npos
+            && dumpedText.find("gene_b") != std::string::npos
+            && dumpedText.find("unknown") == std::string::npos);
+
+    const std::filesystem::path plainInput = dir / "plain.tsv";
+    {
+        std::ofstream out(plainInput);
+        out << "#x\ty\tK1\tP1\n";
+        out << "4.5\t6.5\t2\t1.0\n";
+    }
+    Pts2TilesOptions plainOpts;
+    plainOpts.inTsv = plainInput.string();
+    plainOpts.outPref = (dir / "plain_out").string();
+    plainOpts.tmpDir = (dir / "plain_tmp").string();
+    plainOpts.tileSize = 10;
+    plainOpts.tile_op_factor_tsv = true;
+    plainOpts.tile_op_binary_out = true;
+    plainOpts.factor_count = 3;
+    plainOpts.validateStandalone();
+    Pts2Tiles plainRunner = plainOpts.makeRunner(1);
+    check_true("factor binary plain import runs", plainRunner.run());
+    const LoadedTileIndexData plainLoaded = loadTileIndexData(plainOpts.outPref + ".index");
+    check_true("factor binary plain header",
+        (plainLoaded.header.mode & 0x1u) != 0u
+            && (plainLoaded.header.mode & 0x50u) == 0u
+            && plainLoaded.featureNames.empty()
+            && plainLoaded.header.recordSize == 2 * sizeof(float)
+                + sizeof(int32_t) + sizeof(float));
+
+    const std::filesystem::path gzipInput = dir / "stream.tsv.gz";
+    gzFile gzip = gzopen(gzipInput.c_str(), "wb");
+    check_true("factor binary gzip fixture opens", gzip != nullptr);
+    if (gzip != nullptr) {
+        gzputs(gzip, "#x\ty\tK1\tP1\n4.5\t6.5\t2\t1.0\n");
+        gzclose(gzip);
+        Pts2TilesOptions gzipOpts = plainOpts;
+        gzipOpts.inTsv = gzipInput.string();
+        gzipOpts.outPref = (dir / "gzip_out").string();
+        gzipOpts.tmpDir = (dir / "gzip_tmp").string();
+        gzipOpts.validateStandalone();
+        Pts2Tiles gzipRunner = gzipOpts.makeRunner(2);
+        check_true("factor binary gzip streaming import runs", gzipRunner.run());
+        TileOperator gzipOp(gzipOpts.outPref + ".bin", gzipOpts.outPref + ".index");
+        const LoadedTileIndexData gzipLoaded =
+            loadTileIndexData(gzipOpts.outPref + ".index");
+        check_true("factor binary gzip output reloads",
+            gzipOp.getFactorCount() == 3 && (gzipLoaded.header.mode & 0x4u) == 0u);
+    }
+
+    std::vector<std::string> invalidTokens = {"1", "nan"};
+    std::vector<int32_t> ks;
+    std::vector<float> ps;
+    std::string reason;
+    check_true("factor binary strict probability validation",
+        !parseFactorTsvValuesStrict(invalidTokens, {0}, {1}, 3, ks, ps, reason));
+    invalidTokens = {"3", "0.5"};
+    check_true("factor binary strict factor validation",
+        !parseFactorTsvValuesStrict(invalidTokens, {0}, {1}, 3, ks, ps, reason));
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int32_t test(int32_t, char**) {
@@ -1931,6 +2268,8 @@ int32_t test(int32_t, char**) {
         test_gamma_poisson_posterior_and_sidecar();
         test_hexreader_feature_weights();
         test_feature_stats();
+        test_tileoperator_feature_index_exports();
+        test_pts2tiles_factor_binary_import();
     } catch (const std::exception& ex) {
         std::cerr << "Unhandled exception in test command: " << ex.what() << "\n";
         return 1;
