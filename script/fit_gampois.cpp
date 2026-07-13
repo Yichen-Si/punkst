@@ -9,6 +9,29 @@
 
 int32_t cmdGammaPoisTransform(int argc, char** argv);
 
+namespace {
+
+void append_arg(std::vector<std::string>& args, const std::string& key,
+    const std::string& value) {
+    if (!value.empty()) {
+        args.push_back(key);
+        args.push_back(value);
+    }
+}
+
+template <typename T>
+void append_arg(std::vector<std::string>& args, const std::string& key, T value) {
+    args.push_back(key);
+    args.push_back(std::to_string(value));
+}
+
+void append_repeated(std::vector<std::string>& args, const std::string& key,
+    const std::vector<std::string>& values) {
+    for (const auto& value : values) append_arg(args, key, value);
+}
+
+} // namespace
+
 int32_t cmdGammaPoisFit(int argc, char** argv) {
     std::string inFile, metaFile, outPrefix, featureFile;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
@@ -27,6 +50,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     int32_t dispersionMuBins = 32;
     double defaultWeight = -1.0;
     bool transform = false;
+    bool skipPosterior = false;
+    bool randomizeOutput = false;
+    int32_t posteriorDispersionRank = 0;
     bool sort_topics = false;
 
     double kappa = 0.7, tau0 = 10.0;
@@ -50,6 +76,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("in-meta", "Metadata file", metaFile)
       .add_option("out-prefix", "Output prefix for model and results files", outPrefix, true)
       .add_option("transform", "Transform data to topic space after training", transform)
+      .add_option("skip-posterior", "Skip local Gamma posterior output during --transform", skipPosterior)
+      .add_option("randomize-output", "Randomize transform output for downstream streaming clustering", randomizeOutput)
+      .add_option("posterior-dispersion-rank", "Rank of optional dispersion covariance sidecar", posteriorDispersionRank)
       .add_option("sort-topics", "Sort topics by decreasing usage after training", sort_topics);
 
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
@@ -109,6 +138,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     if (batchSize <= 0) batchSize = 512;
     if (nEpochs <= 0) nEpochs = 1;
     if (nTopics <= 0) error("--n-topics must be greater than 0");
+    if (randomizeOutput && !transform) {
+        error("--randomize-output requires --transform");
+    }
     if (icolDispersion >= 0 && featureFile.empty()) {
         error("--features is required when --icol-dispersion is non-negative");
     }
@@ -231,12 +263,41 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     notice("Gamma-Poisson state written to %s", outState.c_str());
 
     if (transform) {
-        gp->setTransformOutputOptions(false);
-        if (use_10x) {
-            gp->fitAndWriteToFile10X(*dge_ptr, outPrefix, batchSize);
-        } else {
-            gp->fitAndWriteToFile(inFile, outPrefix, batchSize);
-        }
+        std::vector<std::string> args;
+        args.push_back("gamma-pois-transform");
+        append_arg(args, "--in-data", inFile);
+        append_arg(args, "--in-meta", metaFile);
+        append_repeated(args, "--in-dge-dir", dge_dirs);
+        append_repeated(args, "--in-barcodes", in_bc);
+        append_repeated(args, "--in-features", in_ft);
+        append_repeated(args, "--in-matrix", in_mtx);
+        append_repeated(args, "--dataset-id", dataset_ids);
+        append_arg(args, "--in-state", outState);
+        append_arg(args, "--out-prefix", outPrefix);
+        append_arg(args, "--minibatch-size", batchSize);
+        append_arg(args, "--modal", modal);
+        append_arg(args, "--threads", nThreads);
+        append_arg(args, "--seed", seed);
+        append_arg(args, "--debug", debug_);
+        append_arg(args, "--verbose", verbose);
+        append_arg(args, "--features", featureFile);
+        append_arg(args, "--min-count-per-feature", minCountFeature);
+        append_arg(args, "--min-count", minCountTrain);
+        append_arg(args, "--default-weight", defaultWeight);
+        append_arg(args, "--icol-weight", icolWeight);
+        append_arg(args, "--include-feature-regex", include_ftr_regex);
+        append_arg(args, "--exclude-feature-regex", exclude_ftr_regex);
+        append_arg(args, "--max-iter", maxIter);
+        append_arg(args, "--mean-change-tol", mDelta);
+        append_arg(args, "--posterior-dispersion-rank", posteriorDispersionRank);
+        if (skipPosterior) args.push_back("--skip-posterior");
+        if (randomizeOutput) args.push_back("--randomize-output");
+        std::vector<char*> cargs;
+        cargs.reserve(args.size());
+        for (auto& arg : args) cargs.push_back(arg.data());
+        const int32_t rc = cmdGammaPoisTransform(
+            static_cast<int32_t>(cargs.size()), cargs.data());
+        if (rc != 0) return rc;
     }
     return 0;
 }

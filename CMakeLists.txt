@@ -107,6 +107,15 @@ set(SOURCE_FILES
     src/gamma_pois_topic.cpp
     src/gamma_pois_dispersion.hpp
     src/gamma_pois_dispersion.cpp
+    src/dense_kmeans.hpp
+    src/dense_kmeans.cpp
+    src/low_rank_covariance.hpp
+    src/low_rank_covariance.cpp
+    src/gamma_pois_cluster.hpp
+    src/gamma_pois_cluster.cpp
+    src/gamma_pois_structured_cluster.cpp
+    src/gamma_pois_posterior_io.hpp
+    src/gamma_pois_posterior_io.cpp
     src/hdp.hpp
     src/hdp.cpp
     src/topic_svb.hpp
@@ -125,6 +134,7 @@ set(SOURCE_FILES
     script/fit_gampois.cpp
     script/fit_gampois_jc.cpp
     script/transform_gampois.cpp
+    script/cluster_gampois.cpp
     script/transform_gampois_jc.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp

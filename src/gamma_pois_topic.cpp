@@ -1,5 +1,8 @@
 #include "gamma_pois_topic.hpp"
 
+#include <Eigen/Eigenvalues>
+#include <Eigen/QR>
+
 namespace {
 
 double positive_or(double x, double fallback) {
@@ -444,12 +447,33 @@ void GammaPoissonTopicModel::partial_fit(const std::vector<Document>& docs) {
 }
 
 RowMajorMatrixXd GammaPoissonTopicModel::transform(DocumentView docs) {
+    RowMajorMatrixXd out;
+    std::vector<GammaPoissonDocumentPosterior> posteriors;
+    transform_with_posteriors(docs, out, posteriors);
+    return out;
+}
+
+void GammaPoissonTopicModel::infer_document_posterior(const Document& doc,
+    GammaPoissonDocumentPosterior& posterior) const {
+    VectorXd elog_theta;
+    fit_one_document(posterior.shape, posterior.rate, elog_theta, doc);
+    posterior.exposure = doc_exposure(doc);
+}
+
+RowVectorXd GammaPoissonTopicModel::normalized_topic_mean(
+    const GammaPoissonDocumentPosterior& posterior) const {
+    return normalized_theta_hat(posterior.shape, posterior.rate);
+}
+
+void GammaPoissonTopicModel::transform_with_posteriors(DocumentView docs,
+    RowMajorMatrixXd& topics,
+    std::vector<GammaPoissonDocumentPosterior>& posteriors) const {
     const int32_t n_docs = static_cast<int32_t>(docs.size());
-    RowMajorMatrixXd out(n_docs, n_topics_);
+    topics.resize(n_docs, n_topics_);
+    posteriors.resize(n_docs);
     auto process_doc = [&](int32_t d) {
-        VectorXd theta_shape, theta_rate, elog_theta;
-        fit_one_document(theta_shape, theta_rate, elog_theta, docs[d]);
-        out.row(d) = normalized_theta_hat(theta_shape, theta_rate);
+        infer_document_posterior(docs[d], posteriors[d]);
+        topics.row(d) = normalized_topic_mean(posteriors[d]);
     };
     if (nThreads_ == 1) {
         for (int32_t d = 0; d < n_docs; ++d) {
@@ -458,7 +482,84 @@ RowMajorMatrixXd GammaPoissonTopicModel::transform(DocumentView docs) {
     } else {
         tbb::parallel_for(0, n_docs, [&](int32_t d) { process_doc(d); });
     }
-    return out;
+}
+
+void GammaPoissonTopicModel::dispersion_covariance_approximation(
+    const Document& doc, const GammaPoissonDocumentPosterior& posterior,
+    int32_t rank, uint64_t seed, GammaPoissonDispersionApproximation& out) const {
+    if (!has_dispersion_) {
+        error("%s: model does not have feature dispersion", __func__);
+    }
+    if (posterior.shape.size() != n_topics_ || posterior.rate.size() != n_topics_) {
+        error("%s: posterior has wrong topic dimension", __func__);
+    }
+    const int32_t target_rank = std::min(std::max(rank, 0), n_topics_);
+    const int32_t n_cells = static_cast<int32_t>(doc.ids.size());
+    Eigen::MatrixXd loading = Eigen::MatrixXd::Zero(n_topics_, n_cells);
+    const VectorXd e_theta = posterior.shape.array()
+        / posterior.rate.array().max(1e-12);
+    for (int32_t j = 0; j < n_cells; ++j) {
+        const uint32_t w = doc.ids[j];
+        if (w >= static_cast<uint32_t>(n_features_)) {
+            error("%s: feature index %u is out of range", __func__, w);
+        }
+        double lambda = 0.0;
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            lambda += e_theta(k) * e_beta_(k, w);
+        }
+        const double tau = tau_(w);
+        const double eps_rate = std::max(tau + posterior.exposure * lambda, 1e-12);
+        const double eps_var = (tau + doc.cnts[j]) / (eps_rate * eps_rate);
+        const double scale = posterior.exposure * std::sqrt(std::max(eps_var, 0.0));
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            loading(k, j) = scale * e_beta_(k, w)
+                / std::max(posterior.rate(k), 1e-12);
+        }
+    }
+
+    const VectorXd exact_diagonal = loading.array().square().rowwise().sum();
+    out.factor = RowMajorMatrixXd::Zero(n_topics_, target_rank);
+    if (target_rank > 0 && n_cells > 0 && exact_diagonal.maxCoeff() > 0.0) {
+        if (target_rank == n_topics_) {
+            Eigen::MatrixXd gram = loading * loading.transpose();
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(gram);
+            if (solver.info() != Eigen::Success) {
+                error("%s: dispersion covariance eigendecomposition failed", __func__);
+            }
+            for (int32_t a = 0; a < target_rank; ++a) {
+                const int32_t idx = n_topics_ - 1 - a;
+                const double value = std::max(0.0, solver.eigenvalues()(idx));
+                out.factor.col(a) = solver.eigenvectors().col(idx) * std::sqrt(value);
+            }
+        } else {
+            const int32_t sketch_rank = std::min(n_topics_, target_rank + 4);
+            std::mt19937_64 rng(seed);
+            std::normal_distribution<double> normal(0.0, 1.0);
+            Eigen::MatrixXd omega(n_cells, sketch_rank);
+            for (Eigen::Index i = 0; i < omega.size(); ++i) {
+                omega.data()[i] = normal(rng);
+            }
+            Eigen::MatrixXd range = loading * omega;
+            range = loading * (loading.transpose() * range);
+            Eigen::HouseholderQR<Eigen::MatrixXd> qr(range);
+            Eigen::MatrixXd q = qr.householderQ()
+                * Eigen::MatrixXd::Identity(n_topics_, sketch_rank);
+            Eigen::MatrixXd projected = q.transpose() * loading;
+            Eigen::MatrixXd core = projected * projected.transpose();
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(core);
+            if (solver.info() != Eigen::Success) {
+                error("%s: compressed dispersion covariance eigendecomposition failed", __func__);
+            }
+            for (int32_t a = 0; a < target_rank; ++a) {
+                const int32_t idx = sketch_rank - 1 - a;
+                const double value = std::max(0.0, solver.eigenvalues()(idx));
+                out.factor.col(a) = q * solver.eigenvectors().col(idx) * std::sqrt(value);
+            }
+        }
+    }
+    out.residual_diagonal = exact_diagonal
+        - out.factor.array().square().rowwise().sum().matrix();
+    out.residual_diagonal = out.residual_diagonal.cwiseMax(0.0);
 }
 
 const std::vector<std::string>& GammaPoissonTopicBase::get_topic_names() {
@@ -1683,6 +1784,35 @@ void GammaPoisson4Hex::do_partial_fit(const std::vector<Document>& batch) {
 
 MatrixXd GammaPoisson4Hex::do_transform(DocumentView batch) {
     return model_->transform(batch);
+}
+
+void GammaPoisson4Hex::transformWithPosteriors(DocumentView batch,
+    RowMajorMatrixXd& topics,
+    std::vector<GammaPoissonDocumentPosterior>& posteriors) const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    model_->transform_with_posteriors(batch, topics, posteriors);
+}
+
+void GammaPoisson4Hex::dispersionCovarianceApproximation(const Document& doc,
+    const GammaPoissonDocumentPosterior& posterior, int32_t rank,
+    uint64_t seed, GammaPoissonDispersionApproximation& out) const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    model_->dispersion_covariance_approximation(doc, posterior, rank, seed, out);
+}
+
+bool GammaPoisson4Hex::hasFeatureDispersion() const {
+    return model_ && model_->has_feature_dispersion();
+}
+
+const VectorXd& GammaPoisson4Hex::getTopicCapacity() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_topic_capacity();
 }
 
 void GammaPoisson4Hex::getTopicAbundance(std::vector<double>& topic_weights) {

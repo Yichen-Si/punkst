@@ -143,6 +143,27 @@ T psi(T x) {
     return result;
 }
 
+// Trigamma function for positive arguments.
+template<typename T>
+T trigamma(T x) {
+    if (!(x > 0) || !std::isfinite(x)) {
+        return std::numeric_limits<T>::quiet_NaN();
+    }
+    T result = 0;
+    while (x < 20) {
+        result += 1 / (x * x);
+        x += 1;
+    }
+    const T inv = 1 / x;
+    const T inv2 = inv * inv;
+    result += inv + inv2 / 2
+        + inv2 * inv / 6
+        - inv2 * inv2 * inv / 30
+        + inv2 * inv2 * inv2 * inv / 42
+        - inv2 * inv2 * inv2 * inv2 * inv / 30;
+    return result;
+}
+
 template<typename VectorType>
 VectorType expect_log_sticks(const VectorType& alpha, const VectorType& beta) {
     assert(alpha.size() == beta.size() && "alpha and beta must have same length");

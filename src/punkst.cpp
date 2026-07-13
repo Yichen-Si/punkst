@@ -8,6 +8,8 @@ int32_t cmdTiles2Rois(int32_t argc, char** argv);
 int32_t cmdTopicModelSVI(int argc, char** argv);
 int32_t cmdGammaPoisFit(int argc, char** argv);
 int32_t cmdGammaPoisTransform(int argc, char** argv);
+int32_t cmdGammaPoisClusterFit(int argc, char** argv);
+int32_t cmdGammaPoisClusterTransform(int argc, char** argv);
 int32_t cmdGammaPoisJointFit(int argc, char** argv);
 int32_t cmdGammaPoisJointTransform(int argc, char** argv);
 int32_t cmdHDPSVI(int argc, char** argv);
@@ -58,6 +60,8 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("topic-model", "Train LDA model", cmdTopicModelSVI)
         .add_command("gamma-pois-fit", "Train Gamma-Poisson topic model", cmdGammaPoisFit)
         .add_command("gamma-pois-transform", "Transform data using fitted Gamma-Poisson topic model state", cmdGammaPoisTransform)
+        .add_command("gamma-pois-cluster-fit", "Cluster Gamma-Poisson local posteriors", cmdGammaPoisClusterFit)
+        .add_command("gamma-pois-cluster-transform", "Assign Gamma-Poisson posteriors using a fitted cluster state", cmdGammaPoisClusterTransform)
         .add_command("gamma-pois-jc-fit", "Train joint-clustering Gamma-Poisson topic model", cmdGammaPoisJointFit)
         .add_command("gamma-pois-jc-transform", "Transform data using fitted joint-clustering Gamma-Poisson state", cmdGammaPoisJointTransform)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)

@@ -24,6 +24,17 @@
 #include "numerical_utils.hpp"
 #include "topic_svb.hpp"
 
+struct GammaPoissonDocumentPosterior {
+    VectorXd shape;
+    VectorXd rate;
+    double exposure = 0.0;
+};
+
+struct GammaPoissonDispersionApproximation {
+    VectorXd residual_diagonal;
+    RowMajorMatrixXd factor;
+};
+
 class GammaPoissonTopicBase {
 public:
     GammaPoissonTopicBase() = default;
@@ -107,9 +118,19 @@ public:
 
     void partial_fit(const std::vector<Document>& docs);
     RowMajorMatrixXd transform(DocumentView docs);
+    void transform_with_posteriors(DocumentView docs, RowMajorMatrixXd& topics,
+        std::vector<GammaPoissonDocumentPosterior>& posteriors) const;
+    void infer_document_posterior(const Document& doc,
+        GammaPoissonDocumentPosterior& posterior) const;
+    RowVectorXd normalized_topic_mean(
+        const GammaPoissonDocumentPosterior& posterior) const;
+    void dispersion_covariance_approximation(const Document& doc,
+        const GammaPoissonDocumentPosterior& posterior, int32_t rank,
+        uint64_t seed, GammaPoissonDispersionApproximation& out) const;
     void sort_topics();
     void set_feature_dispersion(const std::vector<double>& tau);
     bool has_feature_dispersion() const { return has_dispersion_; }
+    const VectorXd& get_topic_capacity() const { return topic_capacity_; }
     void expected_observed_counts(const Document& doc, std::vector<double>& means) const;
     void write_state(const std::string& outFile, const std::vector<std::string>& featureNames);
     static std::vector<std::string> read_state_feature_names(const std::string& stateFile);
@@ -218,6 +239,13 @@ public:
     const std::vector<std::string>& get_topic_names() override;
     void do_partial_fit(const std::vector<Document>& batch) override;
     MatrixXd do_transform(DocumentView batch) override;
+    void transformWithPosteriors(DocumentView batch, RowMajorMatrixXd& topics,
+        std::vector<GammaPoissonDocumentPosterior>& posteriors) const;
+    void dispersionCovarianceApproximation(const Document& doc,
+        const GammaPoissonDocumentPosterior& posterior, int32_t rank,
+        uint64_t seed, GammaPoissonDispersionApproximation& out) const;
+    bool hasFeatureDispersion() const;
+    const VectorXd& getTopicCapacity() const;
     void getTopicAbundance(std::vector<double>& topic_weights) override;
     void get_topic_abundance(std::vector<double>& topic_weights);
 

@@ -1,9 +1,13 @@
 #include "punkst.h"
 #include "dataunits.hpp"
 #include "eb_topic_activity.hpp"
+#include "dense_kmeans.hpp"
 #include "gamma_pois_dispersion.hpp"
+#include "gamma_pois_cluster.hpp"
+#include "gamma_pois_posterior_io.hpp"
+#include "gamma_pois_topic.hpp"
+#include "low_rank_covariance.hpp"
 #include "numerical_utils.hpp"
-#include "topic_svb.hpp"
 #include "tiles2bins.hpp"
 #include "vst.hpp"
 
@@ -13,6 +17,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -25,7 +31,7 @@ void check_close(const std::string& name, double got, double expected,
         double abs_tol, double rel_tol = 0.0) {
     const double tol = abs_tol + rel_tol * std::abs(expected);
     if (!std::isfinite(got) || std::abs(got - expected) > tol) {
-        std::cerr << "FAIL " << name << ": got " << got
+        std::cerr << std::setprecision(17) << "FAIL " << name << ": got " << got
             << ", expected " << expected << ", tol " << tol << "\n";
         ++g_failures;
     } else {
@@ -278,6 +284,794 @@ void test_gamma_poisson_dispersion_helpers() {
         GammaPoissonDispersionEstimator::positive_truncated_residual_expectation(1.0, 1.0);
     check_true("Gamma-Poisson truncated residual increases with dispersion",
         std::isfinite(d1) && std::isfinite(d2) && d2 > d1);
+}
+
+void test_gamma_poisson_cluster_basis() {
+    const double pi = std::acos(-1.0);
+    check_close("trigamma(1)", trigamma(1.0), pi * pi / 6.0, 2e-12, 0.0);
+    check_close("trigamma(1/2)", trigamma(0.5), pi * pi / 2.0, 2e-11, 0.0);
+
+    Eigen::MatrixXd helmert = normalized_helmert_basis(4);
+    check_true("Helmert annihilates common scale",
+        (helmert * Eigen::VectorXd::Ones(4)).norm() < 1e-14);
+    check_true("Helmert rows are orthonormal",
+        (helmert * helmert.transpose() - Eigen::MatrixXd::Identity(3, 3)).norm() < 1e-14);
+
+    Eigen::VectorXd shape(3), rate(3), capacity(3);
+    shape << 1.0, 2.0, 3.0;
+    rate << 2.0, 4.0, 5.0;
+    capacity << 3.0, 7.0, 11.0;
+    GammaPoissonLogMoments moments = gamma_poisson_log_moments(shape, rate, capacity);
+    Eigen::VectorXd scaled_rate = rate.array() * Eigen::Array3d(2.0, 0.5, 4.0);
+    Eigen::VectorXd scaled_capacity = capacity.array() * Eigen::Array3d(2.0, 0.5, 4.0);
+    GammaPoissonLogMoments scaled = gamma_poisson_log_moments(
+        shape, scaled_rate, scaled_capacity);
+    check_true("token-unit log moments are factor-rescaling invariant",
+        (moments.mean - scaled.mean).norm() < 1e-14);
+
+    GammaPoissonTopicCovariance covariance;
+    covariance.diagonal.resize(3);
+    covariance.diagonal << 0.2, 0.3, 0.4;
+    covariance.factor.resize(3, 1);
+    covariance.factor << 0.1, -0.2, 0.3;
+    Eigen::MatrixXd h3 = normalized_helmert_basis(3);
+    check_true("structured covariance projection matches dense multiplication",
+        (covariance.transformed(h3) - h3 * covariance.dense() * h3.transpose()).norm() < 1e-14);
+
+    GammaPoissonBasisAccumulator accumulator(3);
+    Eigen::VectorXd mean1(3), mean2(3), mean3(3), mean4(3);
+    mean1 << 1.0, 0.0, -1.0;
+    mean2 << 1.2, 0.1, -1.1;
+    mean3 << -1.0, 0.0, 1.0;
+    mean4 << -1.2, -0.1, 1.1;
+    covariance.factor.resize(3, 0);
+    covariance.diagonal.setConstant(0.01);
+    accumulator.add(mean1, covariance);
+    accumulator.add(mean2, covariance);
+    accumulator.add(mean3, covariance);
+    accumulator.add(mean4, covariance);
+    GammaPoissonLogRatioBasis basis = accumulator.finish();
+    check_true("adaptive basis rows are orthonormal",
+        (basis.basis * basis.basis.transpose()
+            - Eigen::MatrixXd::Identity(2, 2)).norm() < 1e-12);
+    check_true("adaptive basis removes common scale",
+        (basis.basis * Eigen::VectorXd::Ones(3)).norm() < 1e-12);
+    check_true("signal eigenvalues are nonnegative and ordered",
+        basis.signal_eigenvalues.minCoeff() >= 0.0
+        && basis.signal_eigenvalues(0) >= basis.signal_eigenvalues(1));
+
+    GammaPoissonClusterDataset dataset;
+    dataset.log_mean.resize(4, 3);
+    dataset.log_mean << mean1.transpose(), mean2.transpose(),
+        mean3.transpose(), mean4.transpose();
+    covariance.diagonal << 0.2, 0.3, 0.4;
+    covariance.factor.resize(3, 1);
+    covariance.factor << 0.1, -0.2, 0.3;
+    dataset.topic_covariance.assign(4, covariance);
+    GammaPoissonClusterCoordinates coordinates =
+        make_gamma_poisson_cluster_coordinates(dataset);
+    const Eigen::MatrixXd projected_factor =
+        coordinates.log_ratio_basis.basis * covariance.factor;
+    const Eigen::VectorXd projected_diagonal =
+        coordinates.log_ratio_basis.basis.array().square().matrix()
+        * covariance.diagonal;
+    check_true("cluster handoff retains projected uncertainty factor",
+        coordinates.uncertainty_rank == 1
+        && (coordinates.factor(0) - projected_factor).norm() < 1e-14);
+    check_true("cluster handoff retains transformed diagonal approximation",
+        (coordinates.uncertainty_diagonal.row(0).transpose()
+            - projected_diagonal).norm() < 1e-14);
+}
+
+void test_gamma_poisson_diagonal_mixture() {
+    constexpr int32_t n_per_cluster = 300;
+    constexpr int32_t n = 2 * n_per_cluster;
+    RowMajorMatrixXd observations(n, 2);
+    RowMajorMatrixXd uncertainty(n, 2);
+    std::mt19937 random_engine(193);
+    std::normal_distribution<double> standard_normal(0.0, 1.0);
+    for (int32_t d = 0; d < n; ++d) {
+        const double center = d < n_per_cluster ? -1.0 : 1.0;
+        const double measurement_variance = d % 3 == 0 ? 0.8 : 0.05;
+        for (int32_t j = 0; j < 2; ++j) {
+            const double latent = center + std::sqrt(0.2) * standard_normal(random_engine);
+            observations(d, j) = latent
+                + std::sqrt(measurement_variance) * standard_normal(random_engine);
+            uncertainty(d, j) = measurement_variance;
+        }
+    }
+    GammaPoissonClusterCoordinates coordinates;
+    coordinates.mean = observations;
+    coordinates.uncertainty_diagonal = uncertainty;
+    coordinates.uncertainty_rank = 0;
+    coordinates.uncertainty_factor.resize(n, 0);
+    GammaPoissonClusterFitOptions options;
+    options.n_components = 2;
+    options.max_iterations = 200;
+    options.seed = 17;
+    options.variance_floor = 1e-5;
+    options.tolerance = 1e-8;
+    GammaPoissonClusterFitResult fit = fit_gamma_poisson_cluster_mixture(
+        coordinates, options);
+    const GammaPoissonClusterModel& fitted_model = fit.model;
+    const GammaPoissonClusterFitDiagnostics& diagnostics = fit.diagnostics;
+    const Eigen::VectorXd weights = gamma_poisson_cluster_weights(fitted_model);
+    const Eigen::Index low = fitted_model.means(0, 0) < fitted_model.means(1, 0)
+        ? 0 : 1;
+    const Eigen::Index high = 1 - low;
+    check_close("diagonal heteroscedastic mixture low mean",
+        fitted_model.means(low, 0), -1.0, 0.2, 0.0);
+    check_close("diagonal heteroscedastic mixture high mean",
+        fitted_model.means(high, 0), 1.0, 0.2, 0.0);
+    check_close("diagonal heteroscedastic mixture weight",
+        weights(low), 0.5, 0.08, 0.0);
+    check_close("diagonal heteroscedastic mixture intrinsic variance",
+        fitted_model.variances.mean(), 0.2, 0.12, 0.0);
+    double certain_confidence = 0.0;
+    double uncertain_confidence = 0.0;
+    int32_t n_certain = 0;
+    int32_t n_uncertain = 0;
+    for (int32_t d = 0; d < n; ++d) {
+        const double confidence = fit.responsibilities.row(d).maxCoeff();
+        if (uncertainty(d, 0) > 0.5) {
+            uncertain_confidence += confidence;
+            ++n_uncertain;
+        } else {
+            certain_confidence += confidence;
+            ++n_certain;
+        }
+    }
+    check_true("high uncertainty softens mixture memberships",
+        uncertain_confidence / n_uncertain < certain_confidence / n_certain);
+    check_true("diagonal mixture responsibilities sum to one",
+        (fit.responsibilities.rowwise().sum().array() - 1.0).abs().maxCoeff() < 1e-12);
+    check_close("variational mixture Dirichlet mass",
+        fitted_model.dirichlet_parameters.sum(), n + options.dirichlet_concentration,
+        1e-10, 0.0);
+    check_true("variational mixture diagnostics are finite",
+        std::isfinite(diagnostics.elbo) && std::isfinite(diagnostics.log_likelihood)
+        && std::isfinite(diagnostics.p90_responsibility_l1_change)
+        && std::isfinite(diagnostics.top_assignment_change_fraction));
+    check_true("variational mixture reaches composite convergence",
+        diagnostics.converged
+        && diagnostics.iterations >= options.convergence_patience);
+    bool monotone_elbo = true;
+    for (size_t i = 1; i < diagnostics.elbo_trace.size(); ++i) {
+        monotone_elbo = monotone_elbo
+            && diagnostics.elbo_trace[i] + 1e-8 >= diagnostics.elbo_trace[i - 1];
+    }
+    check_true("variational mixture ELBO is nondecreasing", monotone_elbo);
+
+    RowMajorMatrixXd previous = RowMajorMatrixXd::Zero(10, 2);
+    previous.col(0).setOnes();
+    RowMajorMatrixXd current = previous;
+    current.row(0) << 0.75, 0.25;
+    current.row(1) << 0.0, 1.0;
+    GammaPoissonResponsibilityChange change =
+        gamma_poisson_responsibility_change(previous, current);
+    check_close("responsibility change mean L1", change.mean_l1, 0.25, 1e-14, 0.0);
+    check_close("responsibility change p90 L1", change.p90_l1, 0.5, 1e-14, 0.0);
+    check_close("responsibility top-assignment fraction",
+        change.top_assignment_fraction, 0.1, 1e-14, 0.0);
+
+    GammaPoissonClusterFitOptions capped_options = options;
+    capped_options.max_iterations = 1;
+    GammaPoissonClusterFitResult capped = fit_gamma_poisson_cluster_mixture(
+        coordinates, capped_options);
+    check_true("variational mixture reports maximum-iteration termination",
+        !capped.diagnostics.converged && capped.diagnostics.iterations == 1);
+}
+
+void test_dense_kmeans() {
+    RowMajorMatrixXd observations(8, 2);
+    observations <<
+        -3.0, -3.0,
+        -2.8, -3.1,
+        -3.2, -2.9,
+         3.0,  3.0,
+         2.8,  3.1,
+         3.2,  2.9,
+         0.0,  0.1,
+         0.0, -0.1;
+    DenseKMeansOptions options;
+    options.n_clusters = 3;
+    options.max_iterations = 20;
+    options.seed = 41;
+    DenseKMeansResult first = dense_kmeans(observations, options);
+    DenseKMeansResult second = dense_kmeans(observations, options);
+    check_true("dense k-means is deterministic",
+        (first.centers - second.centers).norm() == 0.0
+        && (first.assignments - second.assignments).norm() == 0);
+    check_true("dense k-means converges with nonempty clusters",
+        first.converged && first.counts.minCoeff() > 0
+        && first.iterations <= options.max_iterations);
+    check_true("dense k-means separates compact groups",
+        first.inertia < 0.3);
+
+    RowMajorMatrixXd identical = RowMajorMatrixXd::Zero(5, 2);
+    options.n_clusters = 3;
+    options.max_iterations = 3;
+    DenseKMeansResult reseeded = dense_kmeans(identical, options);
+    check_true("dense k-means reseeds empty clusters",
+        reseeded.counts.minCoeff() > 0 && reseeded.inertia == 0.0);
+}
+
+void test_low_rank_covariance() {
+    LowRankDiagonalCovariance covariance;
+    covariance.diagonal.resize(4);
+    covariance.diagonal << 0.7, 1.2, 0.4, 2.0;
+    covariance.factor.resize(4, 2);
+    covariance.factor <<
+        0.2, -0.1,
+        0.4,  0.3,
+       -0.2,  0.5,
+        0.1,  0.2;
+    const Eigen::MatrixXd dense = covariance.dense();
+    LowRankDiagonalSolver solver(covariance.diagonal, covariance.factor);
+    Eigen::VectorXd value(4);
+    value << 0.5, -1.0, 0.3, 2.0;
+    Eigen::VectorXd expected = dense.llt().solve(value);
+    check_true("Woodbury vector solve matches dense LLT",
+        (solver.solve_vector(value) - expected).norm() < 1e-12);
+    Eigen::MatrixXd matrix = Eigen::MatrixXd::Random(4, 3);
+    check_true("Woodbury matrix solve matches dense LLT",
+        (solver.solve_matrix(matrix) - dense.llt().solve(matrix)).norm() < 1e-12);
+    check_close("Woodbury quadratic matches dense LLT",
+        solver.quadratic(value), value.dot(expected), 1e-12, 1e-12);
+    check_close("Woodbury log determinant matches dense LLT",
+        solver.log_determinant(), std::log(dense.determinant()), 1e-12, 1e-12);
+    check_true("low-rank covariance apply matches dense",
+        (covariance.apply_matrix(matrix) - dense * matrix).norm() < 1e-12);
+
+    RowMajorMatrixXd no_factor(4, 0);
+    LowRankDiagonalSolver diagonal_solver(covariance.diagonal, no_factor);
+    check_true("rank-zero Woodbury solve is diagonal",
+        (diagonal_solver.solve_vector(value)
+            - covariance.diagonal.cwiseInverse().cwiseProduct(value)).norm() < 1e-14);
+}
+
+void test_gamma_poisson_conditional_moments() {
+    LowRankDiagonalCovariance document;
+    document.diagonal.resize(3);
+    document.diagonal << 0.3, 0.5, 0.2;
+    document.factor.resize(3, 1);
+    document.factor << 0.4, -0.2, 0.1;
+    LowRankDiagonalCovariance cluster;
+    cluster.diagonal.resize(3);
+    cluster.diagonal << 0.7, 0.4, 0.6;
+    cluster.factor.resize(3, 1);
+    cluster.factor << 0.5, 0.3, -0.1;
+    Eigen::VectorXd observation(3), mean(3);
+    observation << 1.2, -0.4, 0.8;
+    mean << 0.2, 0.1, -0.3;
+    GammaPoissonConditionalMoments moments = gamma_poisson_conditional_moments(
+        observation, mean, document, cluster);
+    const Eigen::MatrixXd sigma = cluster.dense();
+    const Eigen::MatrixXd total = sigma + document.dense();
+    const Eigen::VectorXd expected_mean = mean
+        + sigma * total.llt().solve(observation - mean);
+    const Eigen::MatrixXd expected_covariance = sigma
+        - sigma * total.llt().solve(sigma);
+    const double expected_log_likelihood = -0.5 * (
+        3.0 * std::log(2.0 * std::acos(-1.0))
+        + std::log(total.determinant())
+        + (observation - mean).dot(total.llt().solve(observation - mean)));
+    check_true("structured conditional mean matches dense Gaussian conditioning",
+        (moments.mean - expected_mean).norm() < 1e-12);
+    check_true("structured conditional covariance matches dense Gaussian conditioning",
+        (moments.covariance - expected_covariance).norm() < 1e-12);
+    check_close("structured marginal likelihood matches dense Gaussian",
+        moments.log_likelihood, expected_log_likelihood, 1e-12, 1e-12);
+}
+
+void test_gamma_poisson_structured_mixture() {
+    constexpr int32_t n = 240;
+    constexpr int32_t dim = 3;
+    GammaPoissonClusterCoordinates coordinates;
+    coordinates.mean.resize(n, dim);
+    coordinates.uncertainty_diagonal =
+        RowMajorMatrixXd::Constant(n, dim, 0.08);
+    coordinates.uncertainty_rank = 1;
+    coordinates.uncertainty_factor.resize(n, dim);
+    Eigen::Vector3d cluster_direction(1.0, 0.8, -0.3);
+    cluster_direction.normalize();
+    const Eigen::Matrix3d intrinsic = 0.12 * Eigen::Matrix3d::Identity()
+        + 0.55 * cluster_direction * cluster_direction.transpose();
+    std::mt19937 random_engine(931);
+    std::normal_distribution<double> normal(0.0, 1.0);
+    for (int32_t d = 0; d < n; ++d) {
+        const double center = d < n / 2 ? -1.4 : 1.4;
+        Eigen::Vector3d document_factor(0.25 + 0.1 * (d % 3), -0.2, 0.15);
+        Eigen::Matrix3d total = intrinsic
+            + document_factor * document_factor.transpose();
+        total.diagonal() += coordinates.uncertainty_diagonal.row(d).transpose();
+        Eigen::Vector3d noise;
+        noise << normal(random_engine), normal(random_engine), normal(random_engine);
+        coordinates.mean.row(d) = (
+            Eigen::Vector3d::Constant(center) + total.llt().matrixL() * noise).transpose();
+        Eigen::Map<RowMajorMatrixXd>(
+            coordinates.uncertainty_factor.row(d).data(), dim, 1) = document_factor;
+    }
+    GammaPoissonClusterFitOptions options;
+    options.n_components = 2;
+    options.cluster_covariance_rank = 1;
+    options.diagonal_warmup_iterations = 4;
+    options.orientation_update_interval = 3;
+    options.orientation_max_updates = 2;
+    options.orientation_patience = 1;
+    options.max_iterations = 50;
+    options.convergence_patience = 3;
+    options.n_threads = 2;
+    options.seed = 37;
+    options.tolerance = 1e-7;
+    options.responsibility_p90_tolerance = 2e-3;
+    GammaPoissonClusterFitResult first = fit_gamma_poisson_cluster_mixture(
+        coordinates, options);
+    GammaPoissonClusterFitResult second = fit_gamma_poisson_cluster_mixture(
+        coordinates, options);
+    GammaPoissonClusterFitOptions compact_options = options;
+    compact_options.covariance_accumulation = GammaPoissonClusterFitOptions::
+        CovarianceAccumulation::Compact;
+    GammaPoissonClusterFitResult compact = fit_gamma_poisson_cluster_mixture(
+        coordinates, compact_options);
+    GammaPoissonClusterFitOptions dense_options = options;
+    dense_options.covariance_accumulation = GammaPoissonClusterFitOptions::
+        CovarianceAccumulation::Dense;
+    GammaPoissonClusterFitResult explicit_dense =
+        fit_gamma_poisson_cluster_mixture(coordinates, dense_options);
+    options.n_threads = 1;
+    GammaPoissonClusterFitResult serial = fit_gamma_poisson_cluster_mixture(
+        coordinates, options);
+    options.cluster_covariance_rank = 0;
+    GammaPoissonClusterFitResult diagonal = fit_gamma_poisson_cluster_mixture(
+        coordinates, options);
+    const GammaPoissonClusterModel& model = first.model;
+    const Eigen::Index low = model.means(0, 0) < model.means(1, 0) ? 0 : 1;
+    const Eigen::Index high = 1 - low;
+    check_close("structured mixture low mean", model.means(low, 0), -1.4, 0.3, 0.0);
+    check_close("structured mixture high mean", model.means(high, 0), 1.4, 0.3, 0.0);
+    check_true("structured mixture uses both covariance ranks",
+        model.orientation.rows() == dim && model.orientation.cols() == 1
+        && model.low_rank_variances.minCoeff() > 0.0);
+    check_true("small topic models select dense covariance accumulation",
+        first.diagnostics.covariance_accumulation == "dense"
+        && explicit_dense.diagnostics.covariance_accumulation == "dense"
+        && compact.diagnostics.covariance_accumulation == "compact");
+    check_true("explicit dense accumulation matches automatic dense selection",
+        (model.means - explicit_dense.model.means).norm() == 0.0
+        && (model.variances - explicit_dense.model.variances).norm() == 0.0
+        && (first.responsibilities
+            - explicit_dense.responsibilities).norm() == 0.0);
+    check_true("compact override produces finite structured fit",
+        compact.model.means.allFinite()
+        && compact.model.variances.allFinite()
+        && compact.responsibilities.allFinite());
+    check_true("structured orientation is orthonormal",
+        (model.orientation.transpose() * model.orientation
+            - Eigen::MatrixXd::Identity(1, 1)).norm() < 1e-12);
+    check_true("fixed-shard parallel E-step is deterministic",
+        (model.means - second.model.means).norm() == 0.0
+        && (model.variances - second.model.variances).norm() == 0.0
+        && (first.responsibilities - second.responsibilities).norm() == 0.0);
+    check_true("parallel and serial structured fits agree numerically",
+        (model.means - serial.model.means).norm() < 1e-10
+        && (model.variances - serial.model.variances).norm() < 1e-10
+        && (first.responsibilities - serial.responsibilities).norm() < 1e-9);
+    check_true("structured responsibilities are normalized and finite",
+        first.responsibilities.allFinite()
+        && (first.responsibilities.rowwise().sum().array() - 1.0)
+            .abs().maxCoeff() < 1e-12);
+    check_true("structured covariance improves correlated-data likelihood",
+        first.diagnostics.log_likelihood > diagonal.diagnostics.log_likelihood);
+
+    GammaPoissonClusterCoordinates boundary_coordinates;
+    boundary_coordinates.mean = RowMajorMatrixXd::Random(8, 47);
+    boundary_coordinates.uncertainty_diagonal =
+        RowMajorMatrixXd::Constant(8, 47, 0.1);
+    boundary_coordinates.uncertainty_factor.resize(8, 0);
+    boundary_coordinates.uncertainty_rank = 0;
+    GammaPoissonClusterCoordinates threshold_coordinates;
+    threshold_coordinates.mean = RowMajorMatrixXd::Random(8, 48);
+    threshold_coordinates.uncertainty_diagonal =
+        RowMajorMatrixXd::Constant(8, 48, 0.1);
+    threshold_coordinates.uncertainty_factor.resize(8, 0);
+    threshold_coordinates.uncertainty_rank = 0;
+    GammaPoissonClusterFitOptions threshold_options;
+    threshold_options.n_components = 2;
+    threshold_options.cluster_covariance_rank = 1;
+    threshold_options.diagonal_warmup_iterations = 0;
+    threshold_options.orientation_max_updates = 0;
+    threshold_options.max_iterations = 1;
+    threshold_options.kmeans_max_iterations = 2;
+    GammaPoissonClusterFitResult boundary_fit =
+        fit_gamma_poisson_cluster_mixture(
+            boundary_coordinates, threshold_options);
+    GammaPoissonClusterFitResult threshold_fit =
+        fit_gamma_poisson_cluster_mixture(
+            threshold_coordinates, threshold_options);
+    check_true("automatic covariance accumulation switches above 48 topics",
+        boundary_fit.diagnostics.covariance_accumulation == "dense"
+        && threshold_fit.diagnostics.covariance_accumulation == "compact");
+
+    GammaPoissonClusterScore rescored = score_gamma_poisson_cluster_mixture(
+        coordinates, model, 2);
+    check_true("fixed-state scorer reproduces fitted responsibilities",
+        (rescored.responsibilities - first.responsibilities).norm() < 1e-12);
+    check_close("fixed-state scorer reproduces predictive likelihood",
+        rescored.predictive_log_likelihood, first.diagnostics.log_likelihood,
+        1e-10, 1e-12);
+
+    Eigen::VectorXd expected_sizes(3);
+    expected_sizes << 4.999, 5.0, 6.0;
+    const std::vector<uint8_t> active = gamma_poisson_active_components(
+        expected_sizes, 5.0);
+    check_true("absolute cluster activation includes threshold boundary",
+        active == std::vector<uint8_t>({0, 1, 1}));
+    RowMajorMatrixXd membership_example(3, 2);
+    membership_example << 1.0, 0.0,
+                          0.5, 0.5,
+                          0.0, 1.0;
+    const Eigen::VectorXd effective_size =
+        gamma_poisson_effective_membership_size(membership_example);
+    check_true("effective membership size uses squared soft mass",
+        (effective_size.array() - 1.8).abs().maxCoeff() < 1e-14);
+
+    const int32_t first_component = 0;
+    const int32_t second_component = 1;
+    Eigen::MatrixXd covariance_first =
+        model.variances.row(first_component).transpose().asDiagonal();
+    covariance_first.noalias() += model.orientation
+        * model.low_rank_variances.row(first_component).asDiagonal()
+        * model.orientation.transpose();
+    Eigen::MatrixXd covariance_second =
+        model.variances.row(second_component).transpose().asDiagonal();
+    covariance_second.noalias() += model.orientation
+        * model.low_rank_variances.row(second_component).asDiagonal()
+        * model.orientation.transpose();
+    const Eigen::MatrixXd covariance_average =
+        0.5 * (covariance_first + covariance_second);
+    const Eigen::VectorXd center_difference =
+        (model.means.row(first_component)
+            - model.means.row(second_component)).transpose();
+    const double squared_separation = center_difference.dot(
+        covariance_average.llt().solve(center_difference));
+    const double expected_bhattacharyya = 0.125 * squared_separation
+        + 0.5 * (std::log(covariance_average.determinant())
+            - 0.5 * (std::log(covariance_first.determinant())
+                + std::log(covariance_second.determinant())));
+    const GammaPoissonClusterSeparation separation =
+        gamma_poisson_cluster_separation(
+            model, first_component, second_component);
+    check_close("cluster log volume matches dense determinant",
+        gamma_poisson_cluster_log_volume(model, first_component),
+        0.5 * std::log(covariance_first.determinant()), 1e-11, 1e-11);
+    check_close("standardized cluster separation matches dense solve",
+        separation.standardized_distance, std::sqrt(squared_separation),
+        1e-11, 1e-11);
+    check_close("Bhattacharyya distance matches dense calculation",
+        separation.bhattacharyya_distance, expected_bhattacharyya,
+        1e-11, 1e-11);
+
+    GammaPoissonClusterState state;
+    state.topic_state_checksum = 1234567;
+    state.topic_names = {"0", "1", "2", "3"};
+    state.basis = normalized_helmert_basis(4);
+    state.model = model;
+    state.diagnostics = first.diagnostics;
+    state.document_uncertainty_model =
+        GammaPoissonClusterDataset::UncertaintyModel::MeanFieldPlusDispersionLowRank;
+    state.document_uncertainty_rank = coordinates.uncertainty_rank;
+    state.min_cluster_size = 5.0;
+    state.active = gamma_poisson_active_components(
+        first.effective_membership, state.min_cluster_size);
+    const std::filesystem::path state_path =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_cluster_state_test.tsv";
+    write_gamma_poisson_cluster_state(state_path.string(), state);
+    GammaPoissonClusterState restored = read_gamma_poisson_cluster_state(
+        state_path.string(), state.topic_state_checksum);
+    check_true("cluster state round trip preserves fixed model",
+        restored.topic_names == state.topic_names
+        && restored.active == state.active
+        && restored.min_cluster_size == state.min_cluster_size
+        && (restored.basis - state.basis).norm() < 1e-14
+        && restored.document_uncertainty_model == state.document_uncertainty_model
+        && restored.document_uncertainty_rank == state.document_uncertainty_rank
+        && (restored.model.means - model.means).norm() < 1e-14
+        && (restored.model.variances - model.variances).norm() < 1e-14
+        && (restored.model.orientation - model.orientation).norm() < 1e-14
+        && (restored.model.low_rank_variances
+            - model.low_rank_variances).norm() < 1e-14);
+    bool cluster_checksum_rejected = false;
+    try {
+        read_gamma_poisson_cluster_state(
+            state_path.string(), state.topic_state_checksum + 1);
+    } catch (const std::exception&) {
+        cluster_checksum_rejected = true;
+    }
+    check_true("cluster state rejects topic checksum mismatch",
+        cluster_checksum_rejected);
+    bool nonorthogonal_rejected = false;
+    try {
+        GammaPoissonClusterState invalid = state;
+        invalid.basis(0, 0) += 0.1;
+        write_gamma_poisson_cluster_state(
+            (state_path.string() + ".invalid"), invalid);
+    } catch (const std::exception&) {
+        nonorthogonal_rejected = true;
+    }
+    check_true("cluster state rejects nonorthonormal basis",
+        nonorthogonal_rejected);
+    std::ifstream cluster_state_in(state_path);
+    const std::string cluster_state_text{
+        std::istreambuf_iterator<char>(cluster_state_in),
+        std::istreambuf_iterator<char>()};
+    const std::string marker = "##punkst_gamma_pois_cluster\n";
+    const std::filesystem::path duplicate_metadata_path =
+        state_path.string() + ".duplicate-metadata";
+    {
+        std::ofstream out(duplicate_metadata_path);
+        out << marker << "##state_checksum\t1234567\n"
+            << cluster_state_text.substr(marker.size());
+    }
+    bool duplicate_metadata_rejected = false;
+    try {
+        read_gamma_poisson_cluster_state(
+            duplicate_metadata_path.string(), state.topic_state_checksum);
+    } catch (const std::exception&) {
+        duplicate_metadata_rejected = true;
+    }
+    check_true("cluster state rejects duplicate metadata",
+        duplicate_metadata_rejected);
+
+    std::string incomplete_state = cluster_state_text;
+    const size_t record_begin = incomplete_state.find("dirichlet\t0\t");
+    const size_t record_end = incomplete_state.find('\n', record_begin);
+    if (record_begin != std::string::npos && record_end != std::string::npos) {
+        incomplete_state.erase(record_begin, record_end - record_begin + 1);
+    }
+    const std::filesystem::path incomplete_state_path =
+        state_path.string() + ".incomplete";
+    {
+        std::ofstream out(incomplete_state_path);
+        out << incomplete_state;
+    }
+    bool incomplete_state_rejected = false;
+    try {
+        read_gamma_poisson_cluster_state(
+            incomplete_state_path.string(), state.topic_state_checksum);
+    } catch (const std::exception&) {
+        incomplete_state_rejected = true;
+    }
+    check_true("cluster state rejects missing records",
+        incomplete_state_rejected);
+}
+
+void test_gamma_poisson_posterior_and_sidecar() {
+    GammaPoissonTopicModel model(3, 4, 19, 1, 0, 0.3, 0.3, 1.0,
+        1.0, 1.0, 1.0, 0.7, 10.0, 10, 6.0);
+    Document doc;
+    doc.ids = {0, 2, 3};
+    doc.cnts = {4.0, 2.0, 1.0};
+    GammaPoissonDocumentPosterior posterior;
+    model.infer_document_posterior(doc, posterior);
+    RowVectorXd normalized = model.normalized_topic_mean(posterior);
+    RowVectorXd reconstructed = (posterior.shape.array() / posterior.rate.array()
+        * model.get_topic_capacity().array()).matrix().transpose();
+    reconstructed /= reconstructed.sum();
+    check_true("local posterior reconstructs normalized topic output",
+        (normalized - reconstructed).norm() < 1e-14);
+    check_true("local posterior has positive finite parameters",
+        posterior.exposure > 0.0
+        && posterior.shape.array().isFinite().all()
+        && posterior.rate.array().isFinite().all()
+        && (posterior.shape.array() > 0.0).all()
+        && (posterior.rate.array() > 0.0).all());
+
+    model.set_feature_dispersion({2.0, 3.0, 4.0, 5.0});
+    model.infer_document_posterior(doc, posterior);
+    GammaPoissonDispersionApproximation exact;
+    model.dispersion_covariance_approximation(doc, posterior, 3, 41, exact);
+    check_true("full-rank dispersion approximation preserves covariance diagonal",
+        exact.residual_diagonal.maxCoeff() < 1e-10);
+    GammaPoissonDispersionApproximation compressed1, compressed2;
+    model.dispersion_covariance_approximation(doc, posterior, 1, 41, compressed1);
+    model.dispersion_covariance_approximation(doc, posterior, 1, 41, compressed2);
+    check_true("dispersion compression is deterministic",
+        (compressed1.factor - compressed2.factor).norm() < 1e-14
+        && (compressed1.residual_diagonal - compressed2.residual_diagonal).norm() < 1e-14);
+
+    const std::filesystem::path dir = std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_posterior_test";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path state = dir / "model.state.tsv";
+    model.write_state(state.string(), {"A", "B", "C", "D"});
+    const uint64_t checksum = gamma_poisson_state_checksum(state.string());
+    GammaPoissonArtifactId artifact_id;
+    artifact_id.words = {0x0123456789abcdefULL, 0xfedcba9876543210ULL};
+    const std::filesystem::path posterior_file = dir / "posterior.tsv";
+    {
+        std::ofstream out(posterior_file);
+        out << "##punkst_gamma_pois_posterior_v2\n";
+        out << "##n_topics\t3\n";
+        out << "##state_checksum\t" << checksum << "\n";
+        out << "##row_order\trandomized\n";
+        out << "##dispersion_sidecar_id\t"
+            << gamma_poisson_artifact_id_string(artifact_id) << "\n";
+        out << "#unit\tgp_row\tgp_exposure\tgp_shape_0\tgp_shape_1\tgp_shape_2"
+            << "\tgp_rate_0\tgp_rate_1\tgp_rate_2\n";
+        out << std::setprecision(17) << "unit-a\t0\t" << posterior.exposure;
+        for (int32_t k = 0; k < 3; ++k) out << "\t" << posterior.shape(k);
+        for (int32_t k = 0; k < 3; ++k) out << "\t" << posterior.rate(k);
+        out << "\n";
+        out << std::setprecision(17) << "unit-b\t1\t" << posterior.exposure;
+        for (int32_t k = 0; k < 3; ++k) out << "\t" << posterior.shape(k);
+        for (int32_t k = 0; k < 3; ++k) out << "\t" << posterior.rate(k);
+        out << "\n";
+    }
+    GammaPoissonPosteriorReader posterior_reader(posterior_file.string(), checksum);
+    GammaPoissonPosteriorRow posterior_row;
+    check_true("posterior TSV header round trip",
+        posterior_reader.header().n_topics == 3
+        && posterior_reader.header().row_order == "randomized"
+        && posterior_reader.header().dispersion_sidecar_id == artifact_id
+        && posterior_reader.header().topic_names == std::vector<std::string>({"0", "1", "2"}));
+    check_true("posterior TSV reads row", posterior_reader.read_next(posterior_row));
+    check_true("posterior TSV preserves identifiers and parameters",
+        posterior_row.row == 0 && posterior_row.identifiers == "unit-a"
+        && (posterior_row.posterior.shape - posterior.shape).norm() < 1e-14
+        && (posterior_row.posterior.rate - posterior.rate).norm() < 1e-14);
+    check_true("posterior TSV reads sequential second row",
+        posterior_reader.read_next(posterior_row) && posterior_row.row == 1);
+    check_true("posterior TSV stops at end of input", !posterior_reader.read_next(posterior_row));
+    GammaPoissonClusterDataset cluster_dataset = load_gamma_poisson_cluster_dataset(
+        posterior_file.string(), "", checksum, model.get_topic_capacity(),
+        model.get_topic_names());
+    GammaPoissonClusterCoordinates cluster_coordinates =
+        make_gamma_poisson_cluster_coordinates(cluster_dataset);
+    check_true("in-memory clustering handoff dimensions",
+        cluster_dataset.log_mean.rows() == 2
+        && cluster_dataset.log_mean.cols() == 3
+        && cluster_coordinates.mean.rows() == 2
+        && cluster_coordinates.mean.cols() == 2
+        && cluster_coordinates.uncertainty_diagonal.minCoeff() > 0.0);
+    const std::filesystem::path sidecar = dir / "posterior-dispersion.bin";
+    {
+        GammaPoissonDispersionWriter writer(
+            sidecar.string(), 3, 1, checksum, artifact_id);
+        writer.append(compressed1);
+        writer.append(compressed2);
+        writer.close();
+    }
+    GammaPoissonDispersionReader reader(sidecar.string(), checksum);
+    check_true("dispersion sidecar header round trip",
+        reader.header().n_topics == 3 && reader.header().rank == 1
+        && reader.header().record_count == 2
+        && reader.header().state_checksum == checksum
+        && reader.header().artifact_id == artifact_id);
+    GammaPoissonDispersionApproximation restored;
+    check_true("dispersion sidecar reads first record", reader.read_next(restored));
+    check_true("dispersion sidecar float32 values round trip",
+        (restored.factor - compressed1.factor).norm() < 1e-6
+        && (restored.residual_diagonal - compressed1.residual_diagonal).norm() < 1e-6);
+    check_true("dispersion sidecar reads second record", reader.read_next(restored));
+    check_true("dispersion sidecar stops at declared record count", !reader.read_next(restored));
+    GammaPoissonClusterDataset paired_dataset = load_gamma_poisson_cluster_dataset(
+        posterior_file.string(), sidecar.string(), checksum,
+        model.get_topic_capacity(), model.get_topic_names());
+    check_true("paired posterior and sidecar IDs load together",
+        paired_dataset.uncertainty_model
+            == GammaPoissonClusterDataset::UncertaintyModel::MeanFieldPlusDispersionLowRank
+        && paired_dataset.topic_covariance.size() == 2
+        && paired_dataset.topic_covariance.front().factor.cols() == 1);
+
+    GammaPoissonArtifactId other_artifact_id;
+    other_artifact_id.words = {artifact_id.words[0] + 1, artifact_id.words[1]};
+    const std::filesystem::path mismatched_sidecar = dir / "posterior-mismatched.bin";
+    {
+        GammaPoissonDispersionWriter writer(
+            mismatched_sidecar.string(), 3, 1, checksum, other_artifact_id);
+        writer.append(compressed1);
+        writer.append(compressed2);
+        writer.close();
+    }
+    bool sidecar_id_mismatch_rejected = false;
+    try {
+        load_gamma_poisson_cluster_dataset(posterior_file.string(),
+            mismatched_sidecar.string(), checksum, model.get_topic_capacity(),
+            model.get_topic_names());
+    } catch (const std::exception&) {
+        sidecar_id_mismatch_rejected = true;
+    }
+    check_true("clustering handoff rejects mismatched posterior and sidecar IDs",
+        sidecar_id_mismatch_rejected);
+    bool mismatch_rejected = false;
+    try {
+        GammaPoissonDispersionReader bad(sidecar.string(), checksum + 1);
+    } catch (const std::exception&) {
+        mismatch_rejected = true;
+    }
+    check_true("dispersion sidecar rejects state checksum mismatch", mismatch_rejected);
+
+    std::ifstream sidecar_input(sidecar, std::ios::binary);
+    std::vector<char> sidecar_bytes((std::istreambuf_iterator<char>(sidecar_input)),
+        std::istreambuf_iterator<char>());
+    const std::filesystem::path truncated_sidecar = dir / "posterior-truncated.bin";
+    {
+        std::ofstream out(truncated_sidecar, std::ios::binary);
+        out.write(sidecar_bytes.data(), sidecar_bytes.size() - 1);
+    }
+    bool truncation_rejected = false;
+    try {
+        GammaPoissonDispersionReader bad(truncated_sidecar.string(), checksum);
+    } catch (const std::exception&) {
+        truncation_rejected = true;
+    }
+    check_true("dispersion sidecar rejects truncated payload", truncation_rejected);
+    const std::filesystem::path trailing_sidecar = dir / "posterior-trailing.bin";
+    {
+        std::ofstream out(trailing_sidecar, std::ios::binary);
+        out.write(sidecar_bytes.data(), sidecar_bytes.size());
+        out.put('\0');
+    }
+    bool trailing_rejected = false;
+    try {
+        GammaPoissonDispersionReader bad(trailing_sidecar.string(), checksum);
+    } catch (const std::exception&) {
+        trailing_rejected = true;
+    }
+    check_true("dispersion sidecar rejects trailing payload", trailing_rejected);
+
+    const std::filesystem::path duplicate_columns = dir / "posterior-duplicate.tsv";
+    {
+        std::ofstream out(duplicate_columns);
+        out << "##punkst_gamma_pois_posterior_v2\n"
+            << "##n_topics\t1\n"
+            << "##state_checksum\t" << checksum << "\n"
+            << "##row_order\tinput\n"
+            << "#gp_row\tgp_row\tgp_exposure\tgp_shape_0\tgp_rate_0\n";
+    }
+    bool duplicate_rejected = false;
+    try {
+        GammaPoissonPosteriorReader bad(duplicate_columns.string(), checksum);
+    } catch (const std::exception&) {
+        duplicate_rejected = true;
+    }
+    check_true("posterior TSV rejects duplicate columns", duplicate_rejected);
+
+    const std::filesystem::path bad_row_file = dir / "posterior-bad-row.tsv";
+    {
+        std::ofstream out(bad_row_file);
+        out << "##punkst_gamma_pois_posterior_v2\n"
+            << "##n_topics\t1\n"
+            << "##state_checksum\t" << checksum << "\n"
+            << "##row_order\tinput\n"
+            << "#gp_row\tgp_exposure\tgp_shape_0\tgp_rate_0\n"
+            << "1\t1\t1\t1\n";
+    }
+    bool row_order_rejected = false;
+    try {
+        GammaPoissonPosteriorReader bad(bad_row_file.string(), checksum);
+        GammaPoissonPosteriorRow bad_row;
+        bad.read_next(bad_row);
+    } catch (const std::exception&) {
+        row_order_rejected = true;
+    }
+    check_true("posterior TSV rejects nonsequential rows", row_order_rejected);
+
+    const std::filesystem::path obsolete_posterior = dir / "posterior-v1.tsv";
+    {
+        std::ofstream out(obsolete_posterior);
+        out << "##punkst_gamma_pois_posterior_v1\n";
+    }
+    bool obsolete_posterior_rejected = false;
+    try {
+        GammaPoissonPosteriorReader bad(obsolete_posterior.string(), checksum);
+    } catch (const std::exception&) {
+        obsolete_posterior_rejected = true;
+    }
+    check_true("posterior reader rejects obsolete v1 format",
+        obsolete_posterior_rejected);
 }
 
 void test_hexreader_feature_weights() {
@@ -534,6 +1328,13 @@ int32_t test(int32_t, char**) {
         test_unit_factor_result_header_ranges();
         test_vst_feature_eligibility();
         test_gamma_poisson_dispersion_helpers();
+        test_gamma_poisson_cluster_basis();
+        test_dense_kmeans();
+        test_low_rank_covariance();
+        test_gamma_poisson_conditional_moments();
+        test_gamma_poisson_diagonal_mixture();
+        test_gamma_poisson_structured_mixture();
+        test_gamma_poisson_posterior_and_sidecar();
         test_hexreader_feature_weights();
         test_feature_stats();
     } catch (const std::exception& ex) {

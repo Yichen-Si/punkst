@@ -225,6 +225,20 @@ Sort topics by fitted corpus usage before writing outputs.
 Transform the input units after fitting and write `{prefix}.results.tsv` and
 `{prefix}.pseudobulk.tsv`.
 
+`--skip-posterior`
+With `--transform`, suppress the local Gamma shape/rate output. Posterior output
+is enabled by default and is separate from the normalized topic probabilities
+in `{prefix}.results.tsv`.
+
+`--posterior-dispersion-rank`
+Rank of the optional compressed dispersion covariance sidecar. The default is
+`0`, retaining only its diagonal; a positive value retains off-diagonal factors
+and a negative value disables the sidecar.
+
+`--randomize-output`
+Randomize document order before writing row-aligned transform outputs. Use this
+when preparing posterior input for future opt-in streaming clustering.
+
 ## `gamma-pois-transform`
 
 Projects new units with a fitted Gamma-Poisson state.
@@ -272,6 +286,16 @@ Feature weighting options.
 `--max-iter`, `--mean-change-tol`
 Per-unit local inference controls.
 
+`--skip-posterior`, `--posterior-dispersion-rank`
+The local Gamma posterior is written by default. Suppress it with
+`--skip-posterior`; when the fitted state contains feature dispersion, control
+its optional covariance correction with `--posterior-dispersion-rank`.
+
+`--randomize-output`
+Randomize document order before writing results, posterior rows, and the
+dispersion sidecar. Posterior metadata records whether order is `input` or
+`randomized`.
+
 `--sorted-by-barcode`
 For 10X input sorted by barcode, use streaming mode.
 
@@ -281,6 +305,54 @@ indices.
 
 `--threads`, `--seed`, `--verbose`, `--debug`
 Execution controls.
+
+## `gamma-pois-cluster-fit`
+
+Fits an uncertainty-aware Gaussian mixture to a local posterior handoff.
+Required options are `--in-state`, `--in-posterior`, and `--out-prefix`; use
+`--in-posterior-dispersion` to activate the compressed correlated document
+uncertainty and `--n-clusters-max` to set the overfitted component count.
+
+Initialization uses deterministic k-means++ followed by full Lloyd refinement.
+Component means, weights, and temporary intrinsic variances are initialized
+from the resulting partition. EM then updates means and covariance from exact
+conditional latent Gaussian moments, so document uncertainty is not subtracted
+a second time. Mixture weights use a variational Dirichlet posterior.
+
+The default cluster covariance is shared-orientation rank 5 plus a
+component-specific diagonal. `--cluster-covariance-rank 0` selects the diagonal
+special case. Structured fitting performs a diagonal warmup, alternates
+component covariance projections with damped shared-orientation updates, then
+freezes the orientation for the final convergence phase. The warmup and
+orientation schedule are controlled by `--diagonal-warmup-iter`,
+`--orientation-update-interval`, and `--orientation-max-updates`.
+
+Likelihoods, log determinants, and conditional moments use Woodbury operations
+on the combined document and cluster factors. The E-step runs over fixed,
+contiguous document shards using `--threads`; shard accumulators are reduced in
+a fixed order for deterministic repetition with the same thread count.
+`--covariance-accumulation auto` uses dense conditional covariance accumulation
+when the topic count is at most 48 and compact diagonal/projected contractions
+above 48. Override the decision with `dense` or `compact`. Dense mode uses
+`O(CK^2)` accumulator memory; compact mode uses `O(CK+Cq^2)` plus a pooled
+orientation sketch.
+
+Convergence requires stable ELBO, soft responsibilities, and top assignments
+for a configurable number of consecutive iterations. `--tol` controls relative
+ELBO change; `--tol-resp-p90` controls the 90th percentile per-document
+responsibility L1 change; `--tol-top-change` controls the fraction of changed
+top assignments; and `--convergence-patience` controls the required consecutive
+stable iterations. `--kmeans-max-iter` limits Lloyd initialization.
+
+The current implementation loads all posterior means and uncertainty into
+memory, with `O(DK(1+h))` storage. Full-data loading remains the default when
+SVI is added. Input streaming will be opt-in and will require a posterior written
+with `--randomize-output` to avoid order-biased stochastic updates.
+
+The command writes `{prefix}.state.tsv`, `{prefix}.model.tsv`, and
+`{prefix}.results.tsv`. Results contain full responsibilities, top-two
+memberships, and membership entropy; the model reports component mass,
+intrinsic variance, and topic-composition profiles.
 
 ## Outputs
 
@@ -307,6 +379,18 @@ identifier column is `#barcode`.
 Feature-by-topic pseudobulk counts. Entry `(w, r)` is
 \(\sum_d \hat\theta_{dr} n_{dw}\), where \(\hat\theta_d\) is the normalized
 topic vector written to `{prefix}.results.tsv`.
+
+`{prefix}.posterior.tsv`
+Written by default unless `--skip-posterior` is used. Contains the unit identifiers, row index,
+exposure, and round-trip-precision Gamma shape and rate for every topic. Metadata
+records the format version, topic count, and checksum of the matching state
+file. Rows have the same order as `{prefix}.results.tsv`.
+
+`{prefix}.posterior-dispersion.bin`
+Written by default when the state contains feature dispersion and
+`--posterior-dispersion-rank` is nonnegative. This versioned, row-aligned binary
+sidecar stores a float32 diagonal-plus-low-rank approximation to the optional
+dispersion-induced log-topic covariance correction.
 
 ## Example
 
