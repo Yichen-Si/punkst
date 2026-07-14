@@ -3,6 +3,7 @@
 #include "gamma_pois_cluster.hpp"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace gamma_pois_cluster_detail {
@@ -27,6 +28,25 @@ private:
 };
 
 using ClusterStatistics = GammaPoissonClusterSufficientStatistics;
+
+// Relative change statistics used for convergence, for the periodic notice.
+// relative_label names the first quantity ("dELBO" for batch EM,
+// "dPredLL" for SVI); the other two are shared across optimizers.
+struct ClusterConvergenceStats {
+    double relative_change = 0.0;
+    double p90_responsibility_change = 0.0;
+    double top_assignment_change = 0.0;
+    const char* relative_label = "dRel";
+};
+
+// Emit a NOTICE with the top-10 cluster sizes as fractions of the total unit
+// count (expected membership mass per cluster / n_units), for periodic
+// progress. When convergence != nullptr, also append the relative change
+// statistics used to determine convergence.
+void log_top_cluster_size_fractions(
+    const Eigen::Ref<const Eigen::VectorXd>& membership, int32_t n_units,
+    const std::string& stage,
+    const ClusterConvergenceStats* convergence = nullptr);
 
 struct PreparedComponent {
     Eigen::VectorXd diagonal;

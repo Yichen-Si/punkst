@@ -36,11 +36,10 @@ autom4te.cache/*
 *~
 
 .deps/
-.deps/*
 *.Po
 
+zz/
 test/
-test/*
 examples/data/data/
 
 .idea
@@ -50,20 +49,16 @@ bin/
 app/
 
 .DS_Store
-.vscode
-.vscode/*
+.vscode/
 
 dist/
 site/
 
 venv
 
-zz/
-
 claude_log/
 .claude/
 .codex
-
 .cache/
 .scratch/
 .agents/

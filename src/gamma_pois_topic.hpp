@@ -88,13 +88,13 @@ protected:
     int32_t max_doc_update_iter_ = 100;
     double mean_change_tol_ = 1e-3;
 
-    RowMajorMatrixXd beta_shape_;
+    RowMajorMatrixXd beta_shape_; // K x W
     RowMajorMatrixXd beta_rate_;
     RowMajorMatrixXd e_beta_;
     RowMajorMatrixXd elog_beta_;
     RowMajorMatrixXd model_phi_;
-    VectorXd topic_capacity_;
-    VectorXd xi_shape_;
+    VectorXd topic_capacity_; // K, \sum_w E[\beta_{kw}]
+    VectorXd xi_shape_; // W
     VectorXd xi_rate_;
     VectorXd topic_usage_;
     std::vector<std::string> topic_names_;
@@ -108,10 +108,12 @@ public:
     GammaPoissonTopicModel(int32_t n_topics, int32_t n_features,
         int seed = std::random_device{}(), int32_t nThreads = 0, int32_t verbose = 0,
         double beta_shape = 0.3, double xi_shape = 0.3, double xi_mean = 1.0,
-        double theta_shape = 1.0, double nu_shape = 1.0, double nu_rate = -1.0,
+        double theta_shape = 1.0, double theta_concentration = 1.0,
+        double nu_shape = 1.0, double nu_rate = -1.0,
         double learning_decay = 0.7, double learning_offset = 10.0,
         int32_t total_doc_count = 1000000, double size_factor = 1.0,
-        bool symmetric_nu = false, const std::vector<double>* feature_sums = nullptr);
+        bool symmetric_nu = true, double nu_max = -1.0,
+        const std::vector<double>* feature_sums = nullptr);
 
     explicit GammaPoissonTopicModel(const std::string& stateFile,
         int seed = std::random_device{}(), int32_t nThreads = 0, int32_t verbose = 0);
@@ -141,12 +143,23 @@ private:
     double expected_epsilon(int32_t w, double y, double c,
         const VectorXd& e_theta) const;
     void read_state(const std::string& stateFile);
+    void apply_nu_cap();
+    double theta_prior_shape() const {
+        return symmetric_nu_
+            ? theta_concentration_ / static_cast<double>(n_topics_)
+            : s0_;
+    }
+    double theta_prior_rate(int32_t k) const {
+        return symmetric_nu_ ? theta_concentration_ : expected_nu(k);
+    }
     double expected_nu(int32_t k) const {
-        return symmetric_nu_ ? 1.0 : nu_shape_(k) / nu_rate_(k);
+        return nu_shape_(k) / nu_rate_(k);
     }
 
-    bool symmetric_nu_ = false;
+    bool symmetric_nu_ = true;
     bool has_dispersion_ = false;
+    double theta_concentration_ = 1.0;
+    double nu_max_ = -1.0;
     VectorXd nu_shape_;
     VectorXd nu_rate_;
     VectorXd tau_;
@@ -217,8 +230,8 @@ public:
 
     void initialize(int32_t nTopics, int32_t seed, int32_t nThreads, int32_t verbose,
         double beta_shape, double xi_shape, double xi_mean, double theta_shape,
-        double nu_shape, double nu_rate, double kappa, double tau0,
-        int32_t totalDocCount, double sizeFactor, bool symmetricNu,
+        double theta_concentration, double nu_shape, double nu_rate, double kappa, double tau0,
+        int32_t totalDocCount, double sizeFactor, bool symmetricNu, double nuMax,
         int32_t maxIter, double mDelta);
     void setFeatureDispersion(const std::vector<double>& tau);
     GammaPoissonDispersionResult estimateFeatureDispersion(

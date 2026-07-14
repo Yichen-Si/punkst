@@ -16,6 +16,13 @@ struct GammaPoissonDispersionOptions {
     double delta_max = 1e4;
 };
 
+enum GammaPoissonDispersionStatus : int32_t {
+    GAMMA_POIS_DISPERSION_LOW_POSITIVE = -2,
+    GAMMA_POIS_DISPERSION_CLAMPED_LOW = -1,
+    GAMMA_POIS_DISPERSION_ESTIMATED = 0,
+    GAMMA_POIS_DISPERSION_CLAMPED_HIGH = 1,
+};
+
 struct GammaPoissonDispersionDiagnostic {
     double mean_mu = 0.0;
     int64_t n_positive = 0;
@@ -23,7 +30,7 @@ struct GammaPoissonDispersionDiagnostic {
     double delta_trend = 0.0;
     double delta_shrunk = 0.0;
     double tau = 0.0;
-    std::string status;
+    int32_t status = GAMMA_POIS_DISPERSION_LOW_POSITIVE;
 };
 
 struct GammaPoissonDispersionResult {

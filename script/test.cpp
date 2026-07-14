@@ -380,6 +380,29 @@ void test_gamma_poisson_dispersion_helpers() {
         GammaPoissonDispersionEstimator::positive_truncated_residual_expectation(1.0, 1.0);
     check_true("Gamma-Poisson truncated residual increases with dispersion",
         std::isfinite(d1) && std::isfinite(d2) && d2 > d1);
+
+    GammaPoissonDispersionResult result;
+    result.tau = {4.0};
+    result.diagnostics = {{2.0, 7, 0.5, 0.3, 0.25, 4.0,
+        GAMMA_POIS_DISPERSION_ESTIMATED}};
+    const std::filesystem::path output = std::filesystem::temp_directory_path()
+        / ("punkst-dispersion-" + std::to_string(getpid()) + ".tsv");
+    write_gamma_poisson_dispersion_diagnostics(output.string(), {"feature-a"}, result);
+    std::ifstream in(output);
+    std::string header;
+    std::getline(in, header);
+    check_true("Gamma-Poisson dispersion output names model parameters",
+        header == "Feature\tn_positive\tphi_raw\tphi_shrunk\ttau\tstatus");
+    std::string row;
+    std::getline(in, row);
+    check_true("Gamma-Poisson dispersion output writes integer status",
+        row == "feature-a\t7\t5.000000e-01\t2.500000e-01\t4.000000e+00\t0");
+    check_true("Gamma-Poisson dispersion status codes are stable",
+        GAMMA_POIS_DISPERSION_LOW_POSITIVE == -2
+        && GAMMA_POIS_DISPERSION_CLAMPED_LOW == -1
+        && GAMMA_POIS_DISPERSION_ESTIMATED == 0
+        && GAMMA_POIS_DISPERSION_CLAMPED_HIGH == 1);
+    std::filesystem::remove(output);
 }
 
 void test_gamma_poisson_cluster_basis() {
@@ -459,6 +482,22 @@ void test_gamma_poisson_cluster_basis() {
             - projected_diagonal).norm() < 1e-14);
 }
 
+void test_gamma_poisson_cluster_option_defaults() {
+    const GammaPoissonClusterFitOptions options;
+    check_true("Gamma-Poisson clustering defaults to SVI",
+        options.optimizer == GammaPoissonClusterFitOptions::Optimizer::Svi);
+    check_true("Gamma-Poisson clustering uses tuned iteration defaults",
+        options.max_iterations == 50
+        && options.convergence_patience == 3
+        && options.diagonal_warmup_iterations == 5
+        && options.orientation_update_interval == 1
+        && options.orientation_max_updates == 5);
+    check_close("Gamma-Poisson clustering default relative tolerance",
+        options.tolerance, 1e-5, 0.0, 0.0);
+    check_close("Gamma-Poisson clustering default responsibility tolerance",
+        options.responsibility_p90_tolerance, 0.01, 0.0, 0.0);
+}
+
 void test_gamma_poisson_diagonal_mixture() {
     constexpr int32_t n_per_cluster = 300;
     constexpr int32_t n = 2 * n_per_cluster;
@@ -482,6 +521,7 @@ void test_gamma_poisson_diagonal_mixture() {
     coordinates.uncertainty_rank = 0;
     coordinates.uncertainty_factor.resize(n, 0);
     GammaPoissonClusterFitOptions options;
+    options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Batch;
     options.n_components = 2;
     options.max_iterations = 200;
     options.seed = 17;
@@ -526,7 +566,7 @@ void test_gamma_poisson_diagonal_mixture() {
         1e-10, 0.0);
     check_true("variational mixture diagnostics are finite",
         std::isfinite(diagnostics.elbo) && std::isfinite(diagnostics.log_likelihood)
-        && std::isfinite(diagnostics.p90_responsibility_l1_change)
+        && std::isfinite(diagnostics.p90_responsibility_linf_change)
         && std::isfinite(diagnostics.top_assignment_change_fraction));
     check_true("variational mixture reaches composite convergence",
         diagnostics.converged
@@ -545,8 +585,8 @@ void test_gamma_poisson_diagonal_mixture() {
     current.row(1) << 0.0, 1.0;
     GammaPoissonResponsibilityChange change =
         gamma_poisson_responsibility_change(previous, current);
-    check_close("responsibility change mean L1", change.mean_l1, 0.25, 1e-14, 0.0);
-    check_close("responsibility change p90 L1", change.p90_l1, 0.5, 1e-14, 0.0);
+    check_close("responsibility change mean max-abs", change.mean_linf, 0.125, 1e-14, 0.0);
+    check_close("responsibility change p90 max-abs", change.p90_linf, 0.25, 1e-14, 0.0);
     check_close("responsibility top-assignment fraction",
         change.top_assignment_fraction, 0.1, 1e-14, 0.0);
 
@@ -556,6 +596,17 @@ void test_gamma_poisson_diagonal_mixture() {
         coordinates, capped_options);
     check_true("variational mixture reports maximum-iteration termination",
         !capped.diagnostics.converged && capped.diagnostics.iterations == 1);
+
+    GammaPoissonClusterFitOptions invalid_tolerance = options;
+    invalid_tolerance.responsibility_p90_tolerance = 1.01;
+    bool invalid_tolerance_rejected = false;
+    try {
+        fit_gamma_poisson_cluster_mixture(coordinates, invalid_tolerance);
+    } catch (const std::invalid_argument&) {
+        invalid_tolerance_rejected = true;
+    }
+    check_true("responsibility max-abs tolerance rejects values above one",
+        invalid_tolerance_rejected);
 }
 
 void test_dense_kmeans() {
@@ -658,6 +709,11 @@ void test_gamma_poisson_candidate_selectors() {
     model.means.resize(components, dim);
     model.variances = RowMajorMatrixXd::Constant(components, dim, 0.25);
     model.dirichlet_parameters.resize(components);
+    // Rank-0 (diagonal) covariance: orientation is dim x 0 and low_rank_variances
+    // is components x 0, so prepare_e_step_model's per-component
+    // low_rank_variances.row(c) is a valid empty row.
+    model.orientation.resize(dim, 0);
+    model.low_rank_variances.resize(components, 0);
     for (int32_t c = 0; c < components; ++c) {
         model.dirichlet_parameters(c) = 1.0 + 100.0 / (c + 1.0);
         for (int32_t j = 0; j < dim; ++j) {
@@ -837,6 +893,7 @@ void test_gamma_poisson_structured_mixture() {
             coordinates.uncertainty_factor.row(d).data(), dim, 1) = document_factor;
     }
     GammaPoissonClusterFitOptions options;
+    options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Batch;
     options.n_components = 2;
     options.cluster_covariance_rank = 1;
     options.diagonal_warmup_iterations = 4;
@@ -1037,6 +1094,7 @@ void test_gamma_poisson_structured_mixture() {
     threshold_coordinates.uncertainty_factor.resize(8, 0);
     threshold_coordinates.uncertainty_rank = 0;
     GammaPoissonClusterFitOptions threshold_options;
+    threshold_options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Batch;
     threshold_options.n_components = 2;
     threshold_options.cluster_covariance_rank = 1;
     threshold_options.diagonal_warmup_iterations = 0;
@@ -1207,6 +1265,34 @@ void test_gamma_poisson_structured_mixture() {
     check_true("cluster state rejects duplicate metadata",
         duplicate_metadata_rejected);
 
+    std::string legacy_diagnostics_state = cluster_state_text;
+    const auto replace_key = [&](const std::string& current,
+                                 const std::string& legacy) {
+        const size_t pos = legacy_diagnostics_state.find(current);
+        if (pos != std::string::npos) {
+            legacy_diagnostics_state.replace(pos, current.size(), legacy);
+        }
+    };
+    replace_key("mean_responsibility_linf_change",
+        "mean_responsibility_l1_change");
+    replace_key("p90_responsibility_linf_change",
+        "p90_responsibility_l1_change");
+    const std::filesystem::path legacy_diagnostics_path =
+        state_path.string() + ".legacy-diagnostics";
+    {
+        std::ofstream out(legacy_diagnostics_path);
+        out << legacy_diagnostics_state;
+    }
+    bool legacy_diagnostics_rejected = false;
+    try {
+        read_gamma_poisson_cluster_state(
+            legacy_diagnostics_path.string(), state.topic_state_checksum);
+    } catch (const std::exception&) {
+        legacy_diagnostics_rejected = true;
+    }
+    check_true("cluster state rejects legacy L1 diagnostic keys",
+        legacy_diagnostics_rejected);
+
     std::string incomplete_state = cluster_state_text;
     const size_t record_begin = incomplete_state.find("dirichlet\t0\t");
     const size_t record_end = incomplete_state.find('\n', record_begin);
@@ -1296,6 +1382,7 @@ void test_gamma_poisson_svi_known_clusters() {
         }
 
         GammaPoissonClusterFitOptions batch_options;
+        batch_options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Batch;
         batch_options.n_components = 3;
         batch_options.cluster_covariance_rank = 1;
         batch_options.diagonal_warmup_iterations = 4;
@@ -1445,9 +1532,139 @@ void test_gamma_poisson_svi_known_clusters() {
     }
 }
 
+void test_gamma_poisson_nu_cap() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_nu_cap_test";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path state_path = dir / "model.state.tsv";
+    const std::filesystem::path restored_path = dir / "restored.state.tsv";
+    constexpr double cap = 0.2;
+    GammaPoissonTopicModel model(2, 3, 29, 1, 0, 0.3, 0.3, 1.0,
+        1.0, 1.0, 1.0, 1.0, 0.7, 10.0, 2, 6.0, false, cap);
+    Document first;
+    first.ids = {0, 1};
+    first.cnts = {5.0, 2.0};
+    Document second;
+    second.ids = {1, 2};
+    second.cnts = {1.0, 4.0};
+    model.partial_fit({first, second});
+    model.write_state(state_path.string(), {"A", "B", "C"});
+
+    const auto read_state_values = [](const std::filesystem::path& path,
+                                      const std::string& key) {
+        std::ifstream in(path);
+        std::string line;
+        std::vector<double> values;
+        while (std::getline(in, line)) {
+            if (line.rfind(key, 0) != 0 || line.size() <= key.size()
+                || line[key.size()] != '\t') {
+                continue;
+            }
+            std::istringstream fields(line.substr(key.size()));
+            double value = 0.0;
+            while (fields >> value) values.push_back(value);
+            break;
+        }
+        return values;
+    };
+    const std::vector<double> shapes = read_state_values(state_path, "#nu_shape");
+    const std::vector<double> rates = read_state_values(state_path, "#nu_rate");
+    bool cap_respected = shapes.size() == 2 && rates.size() == 2;
+    for (size_t k = 0; cap_respected && k < shapes.size(); ++k) {
+        cap_respected = std::isfinite(shapes[k]) && std::isfinite(rates[k])
+            && rates[k] > 0.0 && shapes[k] / rates[k] <= cap + 1e-14;
+    }
+    check_true("empirical-Bayes nu posterior mean respects cap after update",
+        cap_respected);
+
+    GammaPoissonTopicModel restored(state_path.string(), 29, 1, 0);
+    restored.write_state(restored_path.string(), {"A", "B", "C"});
+    const std::vector<double> restored_cap = read_state_values(
+        restored_path, "#nu_max");
+    check_true("empirical-Bayes nu cap survives state round trip",
+        restored_cap.size() == 1 && std::abs(restored_cap[0] - cap) < 1e-14);
+
+    bool zero_cap_rejected = false;
+    try {
+        GammaPoissonTopicModel invalid(2, 3, 29, 1, 0, 0.3, 0.3, 1.0,
+            1.0, 1.0, 1.0, 1.0, 0.7, 10.0, 2, 6.0, false, 0.0);
+    } catch (const std::invalid_argument&) {
+        zero_cap_rejected = true;
+    }
+    check_true("empirical-Bayes shrinkage rejects a zero nu cap",
+        zero_cap_rejected);
+    bool nonfinite_cap_rejected = false;
+    try {
+        GammaPoissonTopicModel invalid(2, 3, 29, 1, 0, 0.3, 0.3, 1.0,
+            1.0, 1.0, 1.0, 1.0, 0.7, 10.0, 2, 6.0, false,
+            std::numeric_limits<double>::infinity());
+    } catch (const std::invalid_argument&) {
+        nonfinite_cap_rejected = true;
+    }
+    check_true("empirical-Bayes shrinkage rejects a nonfinite nu cap",
+        nonfinite_cap_rejected);
+    std::filesystem::remove_all(dir);
+}
+
+void test_gamma_poisson_theta_concentration() {
+    constexpr int32_t topics = 4;
+    constexpr double concentration = 2.5;
+    GammaPoissonTopicModel model(topics, 3, 31, 1, 0, 0.3, 0.3, 1.0,
+        1.0, concentration, 1.0, 1.0, 0.7, 10.0, 5, 6.0, true, -1.0);
+
+    Document empty;
+    GammaPoissonDocumentPosterior posterior;
+    model.infer_document_posterior(empty, posterior);
+    check_true("symmetric theta prior has alpha/K posterior shape",
+        (posterior.shape.array() - concentration / topics).abs().maxCoeff()
+            < 1e-14);
+    check_true("symmetric theta prior has common alpha posterior rate",
+        (posterior.rate.array() - concentration).abs().maxCoeff() < 1e-14);
+    check_close("symmetric theta prior has unit expected total mass",
+        (posterior.shape.array() / posterior.rate.array()).sum(),
+        1.0, 1e-14, 0.0);
+
+    Document observed;
+    observed.ids = {0, 2};
+    observed.cnts = {3.0, 2.0};
+    model.infer_document_posterior(observed, posterior);
+    check_close("symmetric theta posterior adds total concentration",
+        posterior.shape.sum(), 5.0 + concentration, 1e-12, 0.0);
+    const double exposure = 5.0 / 6.0;
+    const VectorXd expected_rate = concentration
+        + exposure * model.get_topic_capacity().array();
+    check_true("symmetric theta posterior rate starts at concentration",
+        (posterior.rate - expected_rate).norm() < 1e-12);
+
+    const std::filesystem::path dir = std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_theta_concentration_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path state = dir / "symmetric.state.tsv";
+    model.write_state(state.string(), {"A", "B", "C"});
+    std::ifstream state_in(state);
+    const std::string state_text((std::istreambuf_iterator<char>(state_in)),
+        std::istreambuf_iterator<char>());
+    check_true("symmetric state writes v2 concentration metadata",
+        state_text.find("#punkst_gamma_pois_state_v2\n") != std::string::npos
+        && state_text.find("#theta_prior_mode\tsymmetric_concentration\n")
+            != std::string::npos
+        && state_text.find("#theta_concentration_prior\t2.5\n")
+            != std::string::npos
+        && state_text.find("#theta_shape_prior\t") == std::string::npos);
+
+    GammaPoissonTopicModel restored(state.string(), 31, 1, 0);
+    restored.infer_document_posterior(empty, posterior);
+    check_close("symmetric concentration survives state round trip",
+        (posterior.shape.array() / posterior.rate.array()).sum(),
+        1.0, 1e-14, 0.0);
+
+    std::filesystem::remove_all(dir);
+}
+
 void test_gamma_poisson_posterior_and_sidecar() {
     GammaPoissonTopicModel model(3, 4, 19, 1, 0, 0.3, 0.3, 1.0,
-        1.0, 1.0, 1.0, 0.7, 10.0, 10, 6.0);
+        1.0, 1.0, 1.0, 1.0, 0.7, 10.0, 10, 6.0);
     Document doc;
     doc.ids = {0, 2, 3};
     doc.cnts = {4.0, 2.0, 1.0};
@@ -2367,30 +2584,89 @@ void test_pts2tiles_factor_binary_import() {
 
 } // namespace
 
-int32_t test(int32_t, char**) {
+int32_t test(int32_t argc, char** argv) {
+    std::string suite = "fast";
+    for (int32_t i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--suite" && i + 1 < argc) {
+            suite = argv[++i];
+        } else if (arg.rfind("--suite=", 0) == 0) {
+            suite = arg.substr(8);
+        } else {
+            std::cerr << "Unknown test option: " << arg << "\n";
+            return 1;
+        }
+    }
+    const bool all = suite == "all";
+    const bool fast = suite == "fast";
+    const bool topic = suite == "gamma-pois-topic";
+    const bool cluster = suite == "gamma-pois-cluster";
+    const bool io = suite == "io";
+    if (!all && !fast && !topic && !cluster && !io) {
+        std::cerr << "Unknown test suite '" << suite
+            << "'; expected fast, gamma-pois-topic, gamma-pois-cluster, io, or all\n";
+        return 1;
+    }
+    g_failures = 0;
     try {
-        test_gauss_legendre16();
-        test_beta_helpers_and_evidence();
-        test_multinomial_evidence();
-        test_fit_eta_em();
-        test_unit_factor_result_header_ranges();
-        test_vst_feature_eligibility();
-        test_gamma_poisson_dispersion_helpers();
-        test_gamma_poisson_cluster_basis();
-        test_dense_kmeans();
-        test_gamma_poisson_dormancy_tracker();
-        test_gamma_poisson_candidate_selectors();
-        test_low_rank_covariance();
-        test_gamma_poisson_conditional_moments();
-        test_gamma_poisson_diagonal_mixture();
-        test_gamma_poisson_structured_mixture();
-        test_gamma_poisson_svi_known_clusters();
-        test_gamma_poisson_posterior_and_sidecar();
-        test_hexreader_feature_weights();
-        test_feature_stats();
-        test_draw_pixel_features_density_background();
-        test_tileoperator_feature_index_exports();
-        test_pts2tiles_factor_binary_import();
+        if (all) {
+            test_gauss_legendre16();
+            test_beta_helpers_and_evidence();
+            test_multinomial_evidence();
+            test_fit_eta_em();
+            test_unit_factor_result_header_ranges();
+            test_vst_feature_eligibility();
+            test_gamma_poisson_dispersion_helpers();
+            test_gamma_poisson_cluster_basis();
+            test_gamma_poisson_cluster_option_defaults();
+            test_dense_kmeans();
+            test_gamma_poisson_dormancy_tracker();
+            test_gamma_poisson_candidate_selectors();
+            test_low_rank_covariance();
+            test_gamma_poisson_conditional_moments();
+            test_gamma_poisson_diagonal_mixture();
+            test_gamma_poisson_structured_mixture();
+            test_gamma_poisson_svi_known_clusters();
+            test_gamma_poisson_nu_cap();
+            test_gamma_poisson_theta_concentration();
+            test_gamma_poisson_posterior_and_sidecar();
+            test_hexreader_feature_weights();
+            test_feature_stats();
+            test_draw_pixel_features_density_background();
+            test_tileoperator_feature_index_exports();
+            test_pts2tiles_factor_binary_import();
+        } else if (fast) {
+            test_gauss_legendre16();
+            test_beta_helpers_and_evidence();
+            test_multinomial_evidence();
+            test_unit_factor_result_header_ranges();
+            test_vst_feature_eligibility();
+            test_gamma_poisson_dispersion_helpers();
+            test_gamma_poisson_theta_concentration();
+            test_feature_stats();
+        } else if (topic) {
+            test_gamma_poisson_dispersion_helpers();
+            test_gamma_poisson_nu_cap();
+            test_gamma_poisson_theta_concentration();
+            test_gamma_poisson_posterior_and_sidecar();
+        } else if (cluster) {
+            test_gamma_poisson_cluster_basis();
+            test_gamma_poisson_cluster_option_defaults();
+            test_dense_kmeans();
+            test_gamma_poisson_dormancy_tracker();
+            test_gamma_poisson_candidate_selectors();
+            test_low_rank_covariance();
+            test_gamma_poisson_conditional_moments();
+            test_gamma_poisson_diagonal_mixture();
+            test_gamma_poisson_structured_mixture();
+            test_gamma_poisson_svi_known_clusters();
+        } else if (io) {
+            test_fit_eta_em();
+            test_hexreader_feature_weights();
+            test_draw_pixel_features_density_background();
+            test_tileoperator_feature_index_exports();
+            test_pts2tiles_factor_binary_import();
+        }
     } catch (const std::exception& ex) {
         std::cerr << "Unhandled exception in test command: " << ex.what() << "\n";
         return 1;
@@ -2400,6 +2676,6 @@ int32_t test(int32_t, char**) {
         std::cerr << g_failures << " test checks failed\n";
         return 1;
     }
-    std::cerr << "All EB topic-activity tests passed\n";
+    std::cerr << "Test suite '" << suite << "' passed\n";
     return 0;
 }

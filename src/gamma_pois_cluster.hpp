@@ -98,7 +98,7 @@ struct GammaPoissonClusterFitOptions {
     enum class Optimizer {
         Batch,
         Svi
-    } optimizer = Optimizer::Batch;
+    } optimizer = Optimizer::Svi;
     enum class CovarianceAccumulation {
         Auto,
         Dense,
@@ -110,14 +110,14 @@ struct GammaPoissonClusterFitOptions {
         KdTree
     } candidate_search = CandidateSearch::Auto;
     int32_t n_components = 10;
-    int32_t max_iterations = 100;
+    int32_t max_iterations = 50;
     int32_t kmeans_max_iterations = 20;
-    int32_t convergence_patience = 5;
+    int32_t convergence_patience = 3;
     int32_t n_threads = 1;
     int32_t cluster_covariance_rank = 0;
-    int32_t diagonal_warmup_iterations = 50;
-    int32_t orientation_update_interval = 10;
-    int32_t orientation_max_updates = 10;
+    int32_t diagonal_warmup_iterations = 5;
+    int32_t orientation_update_interval = 1;
+    int32_t orientation_max_updates = 5;
     int32_t orientation_patience = 2;
     int32_t minibatch_size = 1024;
     int32_t n_epochs = 30;
@@ -128,10 +128,11 @@ struct GammaPoissonClusterFitOptions {
     int32_t candidate_refresh_epochs = 5;
     int32_t prune_patience = 0;
     int32_t seed = 1;
+    int32_t verbose = 0;
     double dirichlet_concentration = 1.0;
     double variance_floor = 1e-4;
-    double tolerance = 1e-6;
-    double responsibility_p90_tolerance = 1e-3;
+    double tolerance = 1e-5;
+    double responsibility_p90_tolerance = 0.01;
     double top_assignment_change_tolerance = 1e-3;
     double low_rank_variance_floor = 1e-6;
     double orientation_tolerance = 1e-3;
@@ -142,8 +143,8 @@ struct GammaPoissonClusterFitOptions {
 };
 
 struct GammaPoissonResponsibilityChange {
-    double mean_l1 = 0.0;
-    double p90_l1 = 0.0;
+    double mean_linf = 0.0;
+    double p90_linf = 0.0;
     double top_assignment_fraction = 0.0;
 };
 
@@ -214,8 +215,8 @@ struct GammaPoissonClusterFitDiagnostics {
     double relative_elbo_change = std::numeric_limits<double>::infinity();
     double relative_predictive_log_likelihood_change =
         std::numeric_limits<double>::infinity();
-    double mean_responsibility_l1_change = std::numeric_limits<double>::infinity();
-    double p90_responsibility_l1_change = std::numeric_limits<double>::infinity();
+    double mean_responsibility_linf_change = std::numeric_limits<double>::infinity();
+    double p90_responsibility_linf_change = std::numeric_limits<double>::infinity();
     double top_assignment_change_fraction = 1.0;
     double max_standardized_center_change = std::numeric_limits<double>::infinity();
     double max_weight_change = std::numeric_limits<double>::infinity();

@@ -1,14 +1,48 @@
 #include "gamma_pois_cluster_internal.hpp"
 #include "dense_kmeans.hpp"
+#include "error.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <numeric>
+#include <sstream>
 #include <stdexcept>
 
 #include <tbb/global_control.h>
 
 namespace gamma_pois_cluster_detail {
+
+void log_top_cluster_size_fractions(
+    const Eigen::Ref<const Eigen::VectorXd>& membership, int32_t n_units,
+    const std::string& stage, const ClusterConvergenceStats* convergence) {
+    const int32_t components = static_cast<int32_t>(membership.size());
+    if (n_units <= 0 || components == 0 || !membership.allFinite()) {
+        return;
+    }
+    std::vector<int32_t> order(components);
+    std::iota(order.begin(), order.end(), 0);
+    const int32_t topk = std::min(10, components);
+    std::partial_sort(order.begin(), order.begin() + topk, order.end(),
+        [&](int32_t a, int32_t b) { return membership(a) > membership(b); });
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(4);
+    for (int32_t i = 0; i < topk; ++i) {
+        const int32_t c = order[i];
+        oss << (i ? " " : "") << c << ":"
+            << membership(c) / static_cast<double>(n_units);
+    }
+    if (convergence != nullptr) {
+        oss << std::scientific << std::setprecision(3) << "\n    "
+            << convergence->relative_label << "="
+            << convergence->relative_change
+            << " p90dResp=" << convergence->p90_responsibility_change
+            << " dTop=" << convergence->top_assignment_change;
+    }
+    notice("Gamma-Poisson cluster sizes [%s] top %d fractions:\n    %s",
+        stage.c_str(), topk, oss.str().c_str());
+}
 
 double dirichlet_elbo(const Eigen::Ref<const Eigen::VectorXd>& parameters,
     double alpha) {
@@ -169,7 +203,7 @@ void validate_common_fit_input(
         || !finite(options.tolerance) || options.tolerance < 0.0
         || !finite(options.responsibility_p90_tolerance)
         || options.responsibility_p90_tolerance < 0.0
-        || options.responsibility_p90_tolerance > 2.0
+        || options.responsibility_p90_tolerance > 1.0
         || !finite(options.top_assignment_change_tolerance)
         || options.top_assignment_change_tolerance < 0.0
         || options.top_assignment_change_tolerance > 1.0
@@ -263,6 +297,13 @@ InitializedClusterFit initialize_cluster_fit(
     out.kmeans_iterations = kmeans.iterations;
     out.kmeans_inertia = kmeans.inertia;
     out.kmeans_converged = kmeans.converged;
+    if (options.verbose > 0) {
+        notice("Gamma-Poisson clusters initialized with k-means++ "
+            "(%d components, %d iterations, %s)", components, kmeans.iterations,
+            kmeans.converged ? "converged" : "not converged");
+        const Eigen::VectorXd initial_sizes = kmeans.counts.cast<double>();
+        log_top_cluster_size_fractions(initial_sizes, n, "kmeans++ init");
+    }
     return out;
 }
 
@@ -303,12 +344,14 @@ void run_exact_em(const GammaPoissonClusterCoordinates& coordinates,
         } else {
             ++out.diagnostics.structured_iterations;
         }
-        if (previous_responsibilities.rows() == n) {
+        const bool have_change = previous_responsibilities.rows() == n;
+        bool converged_now = false;
+        if (have_change) {
             const GammaPoissonResponsibilityChange change =
                 gamma_poisson_responsibility_change(
                     previous_responsibilities, out.responsibilities);
-            out.diagnostics.mean_responsibility_l1_change = change.mean_l1;
-            out.diagnostics.p90_responsibility_l1_change = change.p90_l1;
+            out.diagnostics.mean_responsibility_linf_change = change.mean_linf;
+            out.diagnostics.p90_responsibility_linf_change = change.p90_linf;
             out.diagnostics.top_assignment_change_fraction =
                 change.top_assignment_fraction;
             out.diagnostics.relative_elbo_change = std::abs(
@@ -319,15 +362,27 @@ void run_exact_em(const GammaPoissonClusterCoordinates& coordinates,
                 / (1.0 + std::abs(previous_log_likelihood));
             const bool stable = out.diagnostics.relative_elbo_change
                     <= options.tolerance
-                && out.diagnostics.p90_responsibility_l1_change
+                && out.diagnostics.p90_responsibility_linf_change
                     <= options.responsibility_p90_tolerance
                 && out.diagnostics.top_assignment_change_fraction
                     <= options.top_assignment_change_tolerance;
             stable_iterations = stable ? stable_iterations + 1 : 0;
-            if (stable_iterations >= options.convergence_patience) {
-                out.diagnostics.converged = true;
-                break;
-            }
+            converged_now = stable_iterations >= options.convergence_patience;
+        }
+        if (options.verbose > 0
+            && (iteration % options.verbose == 0 || converged_now)) {
+            const ClusterConvergenceStats conv{
+                out.diagnostics.relative_elbo_change,
+                out.diagnostics.p90_responsibility_linf_change,
+                out.diagnostics.top_assignment_change_fraction, "dELBO"};
+            log_top_cluster_size_fractions(stats.membership, n,
+                (refinement ? "refine iter " : "em iter ")
+                + std::to_string(iteration),
+                have_change ? &conv : nullptr);
+        }
+        if (converged_now) {
+            out.diagnostics.converged = true;
+            break;
         }
         previous_responsibilities = out.responsibilities;
         previous_elbo = out.diagnostics.elbo;
@@ -408,6 +463,10 @@ GammaPoissonClusterFitResult fit_batch(
             out.responsibilities, use_sketch, true, dense_accumulation);
         out.model = model;
         update_diagnostics(stats, alpha, out);
+        if (options.verbose > 0 && iteration % options.verbose == 0) {
+            log_top_cluster_size_fractions(stats.membership, n,
+                "warmup iter " + std::to_string(iteration));
+        }
         run_m_step(stats, model, alpha, options, out.diagnostics);
         ++out.diagnostics.warmup_iterations;
     }
@@ -440,6 +499,12 @@ GammaPoissonClusterFitResult fit_batch(
                     dense_accumulation);
                 out.model = model;
                 update_diagnostics(stats, alpha, out);
+                if (options.verbose > 0
+                    && out.diagnostics.structured_iterations % options.verbose == 0) {
+                    log_top_cluster_size_fractions(stats.membership, n,
+                        "structured iter "
+                        + std::to_string(out.diagnostics.structured_iterations));
+                }
                 run_m_step(stats, model, alpha, options, out.diagnostics);
                 ++out.diagnostics.structured_iterations;
             }
@@ -453,6 +518,10 @@ GammaPoissonClusterFitResult fit_batch(
                 model.orientation, std::move(candidate), options.orientation_step);
             transport_orientation(model, previous, options);
             ++out.diagnostics.orientation_updates;
+            if (options.verbose > 0) {
+                notice("Gamma-Poisson orientation update %d: change = %.3e ", out.diagnostics.orientation_updates,
+                    out.diagnostics.orientation_change);
+            }
             stable_updates = out.diagnostics.orientation_change
                     <= options.orientation_tolerance
                 ? stable_updates + 1 : 0;

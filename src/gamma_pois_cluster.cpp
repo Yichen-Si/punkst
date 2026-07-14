@@ -489,8 +489,8 @@ void write_gamma_poisson_cluster_state(const std::string& path,
     out << "##relative_elbo_change\t" << diagnostics.relative_elbo_change << "\n";
     out << "##relative_predictive_log_likelihood_change\t"
         << diagnostics.relative_predictive_log_likelihood_change << "\n";
-    out << "##mean_responsibility_l1_change\t" << diagnostics.mean_responsibility_l1_change << "\n";
-    out << "##p90_responsibility_l1_change\t" << diagnostics.p90_responsibility_l1_change << "\n";
+    out << "##mean_responsibility_linf_change\t" << diagnostics.mean_responsibility_linf_change << "\n";
+    out << "##p90_responsibility_linf_change\t" << diagnostics.p90_responsibility_linf_change << "\n";
     out << "##top_assignment_change_fraction\t" << diagnostics.top_assignment_change_fraction << "\n";
     out << "##max_standardized_center_change\t" << diagnostics.max_standardized_center_change << "\n";
     out << "##max_weight_change\t" << diagnostics.max_weight_change << "\n";
@@ -735,10 +735,10 @@ GammaPoissonClusterState read_gamma_poisson_cluster_state(
     diagnostics.relative_elbo_change = parse_diagnostic("relative_elbo_change");
     diagnostics.relative_predictive_log_likelihood_change = parse_diagnostic(
         "relative_predictive_log_likelihood_change");
-    diagnostics.mean_responsibility_l1_change = parse_diagnostic(
-        "mean_responsibility_l1_change");
-    diagnostics.p90_responsibility_l1_change = parse_diagnostic(
-        "p90_responsibility_l1_change");
+    diagnostics.mean_responsibility_linf_change = parse_diagnostic(
+        "mean_responsibility_linf_change");
+    diagnostics.p90_responsibility_linf_change = parse_diagnostic(
+        "p90_responsibility_linf_change");
     diagnostics.top_assignment_change_fraction = parse_diagnostic(
         "top_assignment_change_fraction");
     diagnostics.max_standardized_center_change = parse_diagnostic(
@@ -764,7 +764,7 @@ GammaPoissonResponsibilityChange responsibility_change_impl(
     int64_t top_changes = 0;
     double sum = 0.0;
     for (Eigen::Index d = 0; d < current.rows(); ++d) {
-        changes[d] = (current.row(d) - previous.row(d)).cwiseAbs().sum();
+        changes[d] = (current.row(d) - previous.row(d)).cwiseAbs().maxCoeff();
         sum += changes[d];
         Eigen::Index previous_top = 0;
         Eigen::Index current_top = 0;
@@ -772,11 +772,11 @@ GammaPoissonResponsibilityChange responsibility_change_impl(
         current.row(d).maxCoeff(&current_top);
         top_changes += previous_top != current_top;
     }
-    out.mean_l1 = sum / static_cast<double>(current.rows());
+    out.mean_linf = sum / static_cast<double>(current.rows());
     const size_t p90_index = static_cast<size_t>(
         std::ceil(0.9 * changes.size())) - 1;
     std::nth_element(changes.begin(), changes.begin() + p90_index, changes.end());
-    out.p90_l1 = changes[p90_index];
+    out.p90_linf = changes[p90_index];
     out.top_assignment_fraction = static_cast<double>(top_changes) / current.rows();
     return out;
 }

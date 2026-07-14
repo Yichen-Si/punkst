@@ -261,6 +261,11 @@ public:
         std::cerr << "\n\n";
     }
 
+    bool was_provided(const std::string& name) const {
+        const auto it = options_.find(name);
+        return it != options_.end() && it->second.provided;
+    }
+
 private:
     struct Option {
         Callback callback;

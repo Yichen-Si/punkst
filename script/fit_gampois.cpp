@@ -1,6 +1,7 @@
 #include "gamma_pois_topic.hpp"
 
 #include <climits>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -63,13 +64,15 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     double xiShape = 0.3;
     double xiMean = -1.0;
     double thetaShape = 1.0;
+    double thetaConcentration = 1.0;
     double nuShape = 1.0;
     double nuRate = -1.0;
     double sizeFactor = -1.0;
     double dispersionLoessSpan = 0.3;
     double dispersionDeltaMin = 1e-8;
     double dispersionDeltaMax = 1e4;
-    bool symmetricNu = false;
+    bool ebShrinkage = false;
+    double nuMax = -1.0;
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
@@ -113,10 +116,12 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("beta-shape", "Gamma shape a for beta_wr", betaShape)
       .add_option("xi-shape", "Gamma shape a0 for xi_w", xiShape)
       .add_option("xi-mean", "Prior mean b0 for xi_w; default derives from size factor and vocabulary", xiMean)
-      .add_option("theta-shape", "Gamma shape s0 for theta_dr", thetaShape)
-      .add_option("nu-shape", "Gamma shape e0 for nu_r", nuShape)
-      .add_option("nu-rate", "Gamma rate f0 for nu_r; default derives from size factor", nuRate)
-      .add_option("symmetric-nu", "Fix E[nu_r] to 1 and skip asymmetric nu updates", symmetricNu)
+      .add_option("theta-shape", "Gamma shape s0 for theta_dr under --eb-shrinkage", thetaShape)
+      .add_option("theta-concentration", "Total symmetric theta concentration; used without --eb-shrinkage", thetaConcentration)
+      .add_option("nu-shape", "Gamma shape e0 for nu_r; only used with --eb-shrinkage", nuShape)
+      .add_option("nu-rate", "Gamma rate f0 for nu_r; default derives from size factor; only used with --eb-shrinkage", nuRate)
+      .add_option("eb-shrinkage", "Activate asymmetric empirical-Bayes topic-rate nu_r; default uses the symmetric theta concentration prior", ebShrinkage)
+      .add_option("nu-max", "Positive cap on E[nu_r] under --eb-shrinkage; default 0.1*size-factor", nuMax)
       .add_option("size-factor", "Corpus mean document length nbar; required when full feature counts are unavailable", sizeFactor);
 
     pl.add_option("dispersion-init-epochs", "Poisson warmup epochs before estimating dispersion", dispersionInitEpochs)
@@ -140,6 +145,28 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     if (nTopics <= 0) error("--n-topics must be greater than 0");
     if (randomizeOutput && !transform) {
         error("--randomize-output requires --transform");
+    }
+    const bool nuMaxProvided = pl.was_provided("nu-max");
+    const bool thetaShapeProvided = pl.was_provided("theta-shape");
+    const bool thetaConcentrationProvided = pl.was_provided("theta-concentration");
+    if (thetaShapeProvided && !ebShrinkage) {
+        error("--theta-shape requires --eb-shrinkage");
+    }
+    if (thetaConcentrationProvided && ebShrinkage) {
+        error("--theta-concentration cannot be used with --eb-shrinkage");
+    }
+    const double activeThetaParameter = ebShrinkage
+        ? thetaShape : thetaConcentration;
+    if (!std::isfinite(activeThetaParameter) || activeThetaParameter <= 0.0) {
+        error(ebShrinkage
+            ? "--theta-shape must be positive and finite"
+            : "--theta-concentration must be positive and finite");
+    }
+    if (nuMaxProvided && !ebShrinkage) {
+        error("--nu-max requires --eb-shrinkage");
+    }
+    if (nuMaxProvided && (!std::isfinite(nuMax) || nuMax <= 0.0)) {
+        error("--nu-max must be positive and finite");
     }
     if (icolDispersion >= 0 && featureFile.empty()) {
         error("--features is required when --icol-dispersion is non-negative");
@@ -213,9 +240,20 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         xiMean = static_cast<double>(std::max(1, gp->nFeatures())) / resolvedSizeFactor;
     }
     notice("Using size factor nbar = %.6g", resolvedSizeFactor);
+    if (ebShrinkage && !nuMaxProvided) {
+        nuMax = 0.1 * resolvedSizeFactor;
+    }
+    if (ebShrinkage) {
+        if (!std::isfinite(nuMax) || nuMax <= 0.0) {
+            error("Resolved --nu-max must be positive and finite");
+        }
+        notice("Empirical-Bayes nu_r shrinkage active; E[nu_r] cap = %.6g",
+            nuMax);
+    }
     gp->initialize(nTopics, seed, nThreads, verbose, betaShape, xiShape, xiMean,
-        thetaShape, nuShape, nuRate, kappa, tau0, gp->nUnits(), resolvedSizeFactor,
-        symmetricNu, maxIter, mDelta);
+        thetaShape, thetaConcentration, nuShape, nuRate, kappa, tau0,
+        gp->nUnits(), resolvedSizeFactor,
+        !ebShrinkage, nuMax, maxIter, mDelta);
     if (icolDispersion >= 0) {
         gp->setFeatureDispersion(suppliedTau);
         notice("Using per-feature dispersion tau from column %d of %s",

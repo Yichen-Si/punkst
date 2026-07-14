@@ -1,4 +1,5 @@
 #include "gamma_pois_cluster_internal.hpp"
+#include "error.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -266,6 +267,10 @@ GammaPoissonClusterFitResult fit_svi(
             options.prune_patience, false);
         run_m_step(persistent, model, alpha, options, out.diagnostics);
         ++out.diagnostics.warmup_iterations;
+        if (options.verbose > 0) {
+            log_top_cluster_size_fractions(persistent.membership, n,
+                "initial refresh");
+        }
     }
 
     std::vector<int32_t> permutation(n);
@@ -366,6 +371,11 @@ GammaPoissonClusterFitResult fit_svi(
                             std::move(candidate), options.orientation_step);
                     transport_orientation(model, previous, options);
                     ++out.diagnostics.orientation_updates;
+                    if (options.verbose > 0) {
+                        notice("Gamma-Poisson orientation update %d: change = %.3e",
+                            out.diagnostics.orientation_updates,
+                            out.diagnostics.orientation_change);
+                    }
                     stable_orientation_updates =
                         out.diagnostics.orientation_change
                             <= options.orientation_tolerance
@@ -403,14 +413,16 @@ GammaPoissonClusterFitResult fit_svi(
         out.model = model;
         update_diagnostics(validation_stats, alpha, out);
         ++out.diagnostics.epochs;
-        if (previous_validation_responsibilities.rows()
-                == validation_responsibilities.rows()) {
+        const bool have_change = previous_validation_responsibilities.rows()
+            == validation_responsibilities.rows();
+        bool converged_now = false;
+        if (have_change) {
             const GammaPoissonResponsibilityChange change =
                 gamma_poisson_responsibility_change(
                     previous_validation_responsibilities,
                     validation_responsibilities);
-            out.diagnostics.mean_responsibility_l1_change = change.mean_l1;
-            out.diagnostics.p90_responsibility_l1_change = change.p90_l1;
+            out.diagnostics.mean_responsibility_linf_change = change.mean_linf;
+            out.diagnostics.p90_responsibility_linf_change = change.p90_linf;
             out.diagnostics.top_assignment_change_fraction =
                 change.top_assignment_fraction;
             out.diagnostics.relative_elbo_change = std::abs(
@@ -423,18 +435,37 @@ GammaPoissonClusterFitResult fit_svi(
             const bool stable =
                 out.diagnostics.relative_predictive_log_likelihood_change
                     <= options.tolerance
-                && out.diagnostics.p90_responsibility_l1_change
+                && out.diagnostics.p90_responsibility_linf_change
                     <= options.responsibility_p90_tolerance
                 && out.diagnostics.top_assignment_change_fraction
                     <= options.top_assignment_change_tolerance;
             stable_epochs = stable ? stable_epochs + 1 : 0;
             const int32_t minimum_epochs = candidate_enabled
                 ? std::max(5, options.candidate_refresh_epochs) : 5;
-            if (epoch + 1 >= minimum_epochs
-                && stable_epochs >= options.convergence_patience) {
-                out.diagnostics.svi_converged = true;
-                break;
+            converged_now = epoch + 1 >= minimum_epochs
+                && stable_epochs >= options.convergence_patience;
+        }
+        if (options.verbose > 0) {
+            std::string label;
+            if (refresh_epoch) {
+                label = "full refresh "
+                    + std::to_string(out.diagnostics.full_refreshes);
+            } else if (!candidate_enabled
+                && ((epoch + 1) % options.verbose == 0 || converged_now)) {
+                label = "epoch " + std::to_string(epoch + 1);
             }
+            if (!label.empty()) {
+                const ClusterConvergenceStats conv{
+                    out.diagnostics.relative_predictive_log_likelihood_change,
+                    out.diagnostics.p90_responsibility_linf_change,
+                    out.diagnostics.top_assignment_change_fraction, "dPredLL"};
+                log_top_cluster_size_fractions(persistent.membership, n, label,
+                    have_change ? &conv : nullptr);
+            }
+        }
+        if (converged_now) {
+            out.diagnostics.svi_converged = true;
+            break;
         }
         previous_validation_responsibilities =
             std::move(validation_responsibilities);

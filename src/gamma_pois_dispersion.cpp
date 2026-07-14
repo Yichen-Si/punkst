@@ -160,7 +160,7 @@ GammaPoissonDispersionResult GammaPoissonDispersionEstimator::finish() {
     std::vector<double> raw(n_features_, std::numeric_limits<double>::quiet_NaN());
     std::vector<double> trend(n_features_, std::numeric_limits<double>::quiet_NaN());
     std::vector<double> shrunk(n_features_, std::numeric_limits<double>::quiet_NaN());
-    std::vector<std::string> status(n_features_, "low_positive");
+    std::vector<int32_t> status(n_features_, GAMMA_POIS_DISPERSION_LOW_POSITIVE);
     std::vector<double> trend_x, trend_y, trend_fit;
     std::vector<int32_t> trend_features;
     for (int32_t w = 0; w < n_features_; ++w) {
@@ -168,8 +168,10 @@ GammaPoissonDispersionResult GammaPoissonDispersionEstimator::finish() {
         if (n < options_.min_positive) continue;
         raw[w] = solve_feature_delta(w);
         status[w] = raw[w] <= options_.delta_min * (1.0 + 1e-10)
-            ? "clamped_low" : raw[w] >= options_.delta_max * (1.0 - 1e-10)
-            ? "clamped_high" : "estimated";
+            ? GAMMA_POIS_DISPERSION_CLAMPED_LOW
+            : raw[w] >= options_.delta_max * (1.0 - 1e-10)
+            ? GAMMA_POIS_DISPERSION_CLAMPED_HIGH
+            : GAMMA_POIS_DISPERSION_ESTIMATED;
         trend_x.push_back(std::log(std::max(sum_mu_[w] / n, 1e-12)));
         trend_y.push_back(std::log(raw[w]));
         trend_features.push_back(w);
@@ -246,13 +248,13 @@ void write_gamma_poisson_dispersion_diagnostics(const std::string& out_file,
     }
     std::ofstream out(out_file);
     if (!out) error("%s: Error opening output file: %s", __func__, out_file.c_str());
-    out << "Feature\tmean_mu\tn_positive\tdelta_raw\tdelta_trend\tdelta_shrunk\ttau\tstatus\n";
+    out << "Feature\tn_positive\tphi_raw\tphi_shrunk\ttau\tstatus\n";
     out << std::scientific << std::setprecision(6);
     for (size_t w = 0; w < result.diagnostics.size(); ++w) {
         const auto& d = result.diagnostics[w];
         out << (w < feature_names.size() ? feature_names[w] : std::to_string(w))
-            << "\t" << d.mean_mu << "\t" << d.n_positive << "\t" << d.delta_raw
-            << "\t" << d.delta_trend << "\t" << d.delta_shrunk << "\t" << d.tau
+            << "\t" << d.n_positive << "\t" << d.delta_raw
+            << "\t" << d.delta_shrunk << "\t" << d.tau
             << "\t" << d.status << "\n";
     }
 }

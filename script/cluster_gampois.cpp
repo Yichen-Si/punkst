@@ -191,16 +191,16 @@ void write_fit_outputs(const std::string& out_prefix,
 
 int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     std::string state_file, posterior_file, dispersion_file, out_prefix;
-    std::string optimizer = "batch";
+    std::string optimizer = "svi";
     std::string covariance_accumulation = "auto";
     int32_t n_clusters_max = 10;
-    int32_t max_iterations = 100;
+    int32_t max_iterations = 50;
     int32_t kmeans_max_iterations = 20;
-    int32_t convergence_patience = 5;
+    int32_t convergence_patience = 3;
     int32_t cluster_covariance_rank = -1;
-    int32_t diagonal_warmup_iterations = 50;
-    int32_t orientation_update_interval = 10;
-    int32_t orientation_max_updates = 10;
+    int32_t diagonal_warmup_iterations = 5;
+    int32_t orientation_update_interval = 1;
+    int32_t orientation_max_updates = 5;
     int32_t orientation_patience = 2;
     int32_t minibatch_size = 1024;
     int32_t n_epochs = 30;
@@ -217,8 +217,8 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     int32_t verbose = 0;
     double dirichlet_concentration = 1.0;
     double variance_floor = 1e-4;
-    double tolerance = 1e-6;
-    double responsibility_p90_tolerance = 1e-3;
+    double tolerance = 1e-5;
+    double responsibility_p90_tolerance = 0.01;
     double top_assignment_change_tolerance = 1e-3;
     double low_rank_variance_floor = 1e-6;
     double orientation_tolerance = 1e-3;
@@ -258,14 +258,14 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
       .add_option("svi-tau0", "Robbins-Monro SVI learning-rate offset", svi_tau0)
       .add_option("seed", "Initialization seed", seed)
       .add_option("threads", "Number of threads used by loading and the clustering E-step", threads)
-      .add_option("verbose", "Verbose level", verbose)
+      .add_option("verbose", "Progress reporting interval; zero disables", verbose)
       .add_option("dirichlet-concentration", "Symmetric total concentration for mixture weights", dirichlet_concentration)
       .add_option("variance-floor", "Minimum intrinsic variance per coordinate", variance_floor)
       .add_option("low-rank-variance-floor", "Minimum intrinsic low-rank variance", low_rank_variance_floor)
       .add_option("tol-orientation", "Shared-orientation convergence tolerance", orientation_tolerance)
       .add_option("orientation-step", "Shared-orientation damping step in (0,1]", orientation_step)
       .add_option("tol", "Relative ELBO convergence tolerance", tolerance)
-      .add_option("tol-resp-p90", "90th percentile responsibility L1 convergence tolerance", responsibility_p90_tolerance)
+      .add_option("tol-resp-p90", "90th percentile per-unit max-abs (L-inf) responsibility change convergence tolerance", responsibility_p90_tolerance)
       .add_option("tol-top-change", "Top-assignment change fraction convergence tolerance", top_assignment_change_tolerance);
     try {
         pl.readArgs(argc, argv);
@@ -345,6 +345,7 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
         }
         options.prune_patience = prune_patience;
         options.seed = seed;
+        options.verbose = verbose;
         options.dirichlet_concentration = dirichlet_concentration;
         options.variance_floor = variance_floor;
         options.low_rank_variance_floor = low_rank_variance_floor;

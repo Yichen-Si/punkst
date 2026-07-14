@@ -56,15 +56,39 @@ GammaPoissonTopicBase::GammaPoissonTopicBase(int32_t n_topics, int32_t n_feature
 
 GammaPoissonTopicModel::GammaPoissonTopicModel(int32_t n_topics, int32_t n_features,
     int seed, int32_t nThreads, int32_t verbose, double beta_shape, double xi_shape,
-    double xi_mean, double theta_shape, double nu_shape, double nu_rate,
+    double xi_mean, double theta_shape, double theta_concentration,
+    double nu_shape, double nu_rate,
     double learning_decay, double learning_offset, int32_t total_doc_count,
-    double size_factor, bool symmetric_nu, const std::vector<double>* feature_sums)
+    double size_factor, bool symmetric_nu, double nu_max,
+    const std::vector<double>* feature_sums)
     : GammaPoissonTopicBase(n_topics, n_features, seed, nThreads, verbose,
           beta_shape, xi_shape, xi_mean, theta_shape, nu_shape, nu_rate,
           learning_decay, learning_offset, total_doc_count, size_factor, feature_sums),
-      symmetric_nu_(symmetric_nu) {
+      symmetric_nu_(symmetric_nu), theta_concentration_(theta_concentration),
+      nu_max_(nu_max) {
+    const double active_theta_parameter = symmetric_nu_
+        ? theta_concentration_ : theta_shape;
+    if (!std::isfinite(active_theta_parameter) || active_theta_parameter <= 0.0) {
+        throw std::invalid_argument(symmetric_nu_
+            ? "Symmetric Gamma-Poisson theta concentration must be positive and finite"
+            : "Empirical-Bayes Gamma-Poisson theta shape must be positive and finite");
+    }
+    if (!symmetric_nu_ && (!std::isfinite(nu_max_) || nu_max_ <= 0.0)) {
+        throw std::invalid_argument(
+            "Asymmetric Gamma-Poisson shrinkage requires a positive finite nu_max");
+    }
     nu_shape_ = VectorXd::Constant(n_topics_, e0_ + s0_ * total_doc_count_);
     nu_rate_ = VectorXd::Constant(n_topics_, f0_ + total_doc_count_ * s0_);
+    apply_nu_cap();
+}
+
+void GammaPoissonTopicModel::apply_nu_cap() {
+    if (symmetric_nu_ || nu_max_ <= 0.0) {
+        return;
+    }
+    for (int32_t k = 0; k < n_topics_; ++k) {
+        nu_rate_(k) = std::max(nu_rate_(k), nu_shape_(k) / nu_max_);
+    }
 }
 
 void GammaPoissonTopicModel::set_feature_dispersion(const std::vector<double>& tau) {
@@ -141,7 +165,7 @@ void GammaPoissonTopicBase::init_from_feature_sums(const std::vector<double>* fe
 }
 
 void GammaPoissonTopicBase::refresh_cache() {
-    e_beta_.resize(n_topics_, n_features_);
+    e_beta_.resize(n_topics_, n_features_); // E[\beta_{kw}]
     elog_beta_.resize(n_topics_, n_features_);
     for (int32_t k = 0; k < n_topics_; ++k) {
         for (int32_t w = 0; w < n_features_; ++w) {
@@ -203,11 +227,12 @@ void GammaPoissonTopicModel::expected_observed_counts(const Document& doc,
 int32_t GammaPoissonTopicModel::fit_one_document(VectorXd& theta_shape,
     VectorXd& theta_rate, VectorXd& elog_theta, const Document& doc) const {
     const int32_t n_ids = static_cast<int32_t>(doc.ids.size());
-    theta_shape = VectorXd::Constant(n_topics_, s0_);
+    const double prior_shape = theta_prior_shape();
+    theta_shape = VectorXd::Constant(n_topics_, prior_shape);
     theta_rate.resize(n_topics_);
     const double c = doc_exposure(doc);
     for (int32_t k = 0; k < n_topics_; ++k) {
-        theta_rate(k) = expected_nu(k) + c * topic_capacity_(k);
+        theta_rate(k) = theta_prior_rate(k) + c * topic_capacity_(k);
     }
     if (n_ids == 0) {
         elog_theta.resize(n_topics_);
@@ -232,7 +257,7 @@ int32_t GammaPoissonTopicModel::fit_one_document(VectorXd& theta_shape,
         if (has_dispersion_) {
             VectorXd e_theta = theta_shape.array() / theta_rate.array().max(1e-12);
             for (int32_t k = 0; k < n_topics_; ++k) {
-                theta_rate(k) = expected_nu(k) + c * topic_capacity_(k);
+                theta_rate(k) = theta_prior_rate(k) + c * topic_capacity_(k);
             }
             for (int32_t j = 0; j < n_ids; ++j) {
                 const uint32_t w = doc.ids[j];
@@ -265,7 +290,7 @@ int32_t GammaPoissonTopicModel::fit_one_document(VectorXd& theta_shape,
                 assigned(k) += doc.cnts[j] * log_phi[k] / norm;
             }
         }
-        theta_shape = assigned.array() + s0_;
+        theta_shape = assigned.array() + prior_shape;
         diff = (theta_shape - last_shape).cwiseAbs().sum() / static_cast<double>(n_topics_);
         ++iter;
         if (diff < mean_change_tol_) {
@@ -275,7 +300,7 @@ int32_t GammaPoissonTopicModel::fit_one_document(VectorXd& theta_shape,
     if (has_dispersion_) {
         VectorXd e_theta = theta_shape.array() / theta_rate.array().max(1e-12);
         for (int32_t k = 0; k < n_topics_; ++k) {
-            theta_rate(k) = expected_nu(k) + c * topic_capacity_(k);
+            theta_rate(k) = theta_prior_rate(k) + c * topic_capacity_(k);
         }
         for (int32_t j = 0; j < n_ids; ++j) {
             const uint32_t w = doc.ids[j];
@@ -424,6 +449,7 @@ void GammaPoissonTopicModel::partial_fit(const std::vector<Document>& docs) {
             const double target_rate = f0_ + scale * theta(k);
             nu_rate_(k) = (1.0 - rho) * nu_rate_(k) + rho * std::max(target_rate, 1e-12);
         }
+        apply_nu_cap();
     }
     VectorXd target_usage = scale * theta.array() * topic_capacity_.array();
     if (topic_usage_.size() != n_topics_ || topic_usage_.sum() <= 0.0) {
@@ -697,7 +723,7 @@ void GammaPoissonTopicModel::write_state(const std::string& outFile,
         error("%s: Error opening output file: %s", __func__, outFile.c_str());
     }
     out << std::setprecision(17);
-    out << "#punkst_gamma_pois_state_v1\n";
+    out << "#punkst_gamma_pois_state_v2\n";
     out << "#n_topics\t" << n_topics_ << "\n";
     out << "#n_features\t" << n_features_ << "\n";
     out << "#total_doc_count\t" << total_doc_count_ << "\n";
@@ -705,18 +731,28 @@ void GammaPoissonTopicModel::write_state(const std::string& outFile,
     out << "#beta_shape_prior\t" << a_ << "\n";
     out << "#xi_shape_prior\t" << a0_ << "\n";
     out << "#xi_mean_prior\t" << b0_ << "\n";
-    out << "#theta_shape_prior\t" << s0_ << "\n";
-    out << "#nu_shape_prior\t" << e0_ << "\n";
-    out << "#nu_rate_prior\t" << f0_ << "\n";
+    out << "#theta_prior_mode\t"
+        << (symmetric_nu_ ? "symmetric_concentration" : "eb_rate") << "\n";
+    if (symmetric_nu_) {
+        out << "#theta_concentration_prior\t" << theta_concentration_ << "\n";
+    } else {
+        out << "#theta_shape_prior\t" << s0_ << "\n";
+        out << "#nu_shape_prior\t" << e0_ << "\n";
+        out << "#nu_rate_prior\t" << f0_ << "\n";
+    }
     out << "#learning_decay\t" << learning_decay_ << "\n";
     out << "#learning_offset\t" << learning_offset_ << "\n";
     out << "#update_count\t" << update_count_ << "\n";
     out << "#symmetric_nu\t" << (symmetric_nu_ ? 1 : 0) << "\n";
-    out << "#nu_shape";
-    for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << nu_shape_(k);
-    out << "\n#nu_rate";
-    for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << nu_rate_(k);
-    out << "\n#topic_usage";
+    if (!symmetric_nu_) {
+        out << "#nu_max\t" << nu_max_ << "\n";
+        out << "#nu_shape";
+        for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << nu_shape_(k);
+        out << "\n#nu_rate";
+        for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << nu_rate_(k);
+        out << "\n";
+    }
+    out << "#topic_usage";
     for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << topic_usage_(k);
     if (has_dispersion_) {
         out << "\n#dispersion_tau";
@@ -782,6 +818,14 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
     std::vector<double> nu_shape_vals, nu_rate_vals;
     std::vector<double> topic_usage_vals;
     std::vector<double> tau_vals;
+    bool saw_state_version = false;
+    std::string theta_prior_mode;
+    bool saw_theta_shape = false;
+    bool saw_theta_concentration = false;
+    bool saw_symmetric_nu = false;
+    bool saw_nu_shape_prior = false;
+    bool saw_nu_rate_prior = false;
+    bool saw_nu_max = false;
     bool saw_header = false;
     while (std::getline(in, line)) {
         if (line.empty()) {
@@ -791,20 +835,40 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
             std::string payload = line.substr(1);
             auto tok = split_ws(payload);
             if (tok.empty()) continue;
-            if (tok[0] == "n_topics" && tok.size() > 1) n_topics_ = std::stoi(tok[1]);
+            if (tok[0] == "punkst_gamma_pois_state_v2") saw_state_version = true;
+            else if (tok[0] == "n_topics" && tok.size() > 1) n_topics_ = std::stoi(tok[1]);
             else if (tok[0] == "n_features" && tok.size() > 1) n_features_ = std::stoi(tok[1]);
             else if (tok[0] == "total_doc_count" && tok.size() > 1) total_doc_count_ = std::stoi(tok[1]);
             else if (tok[0] == "size_factor" && tok.size() > 1) size_factor_ = std::stod(tok[1]);
             else if (tok[0] == "beta_shape_prior" && tok.size() > 1) a_ = std::stod(tok[1]);
             else if (tok[0] == "xi_shape_prior" && tok.size() > 1) a0_ = std::stod(tok[1]);
             else if (tok[0] == "xi_mean_prior" && tok.size() > 1) b0_ = std::stod(tok[1]);
-            else if (tok[0] == "theta_shape_prior" && tok.size() > 1) s0_ = std::stod(tok[1]);
-            else if (tok[0] == "nu_shape_prior" && tok.size() > 1) e0_ = std::stod(tok[1]);
-            else if (tok[0] == "nu_rate_prior" && tok.size() > 1) f0_ = std::stod(tok[1]);
+            else if (tok[0] == "theta_prior_mode" && tok.size() > 1) theta_prior_mode = tok[1];
+            else if (tok[0] == "theta_shape_prior" && tok.size() > 1) {
+                s0_ = std::stod(tok[1]);
+                saw_theta_shape = true;
+            } else if (tok[0] == "theta_concentration_prior" && tok.size() > 1) {
+                theta_concentration_ = std::stod(tok[1]);
+                saw_theta_concentration = true;
+            }
+            else if (tok[0] == "nu_shape_prior" && tok.size() > 1) {
+                e0_ = std::stod(tok[1]);
+                saw_nu_shape_prior = true;
+            } else if (tok[0] == "nu_rate_prior" && tok.size() > 1) {
+                f0_ = std::stod(tok[1]);
+                saw_nu_rate_prior = true;
+            }
             else if (tok[0] == "learning_decay" && tok.size() > 1) learning_decay_ = std::stod(tok[1]);
             else if (tok[0] == "learning_offset" && tok.size() > 1) learning_offset_ = std::stod(tok[1]);
             else if (tok[0] == "update_count" && tok.size() > 1) update_count_ = std::stoi(tok[1]);
-            else if (tok[0] == "symmetric_nu" && tok.size() > 1) symmetric_nu_ = std::stoi(tok[1]) != 0;
+            else if (tok[0] == "symmetric_nu" && tok.size() > 1) {
+                symmetric_nu_ = std::stoi(tok[1]) != 0;
+                saw_symmetric_nu = true;
+            }
+            else if (tok[0] == "nu_max" && tok.size() > 1) {
+                nu_max_ = std::stod(tok[1]);
+                saw_nu_max = true;
+            }
             else if (tok[0] == "nu_shape") {
                 nu_shape_vals.clear();
                 for (size_t i = 1; i < tok.size(); ++i) nu_shape_vals.push_back(std::stod(tok[i]));
@@ -847,6 +911,37 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
         xi_shape_vals.push_back(std::stod(tok[pos++]));
         xi_rate_vals.push_back(std::stod(tok[pos++]));
     }
+    if (!saw_state_version) {
+        error("%s: Missing or unsupported Gamma-Poisson state version in %s",
+            __func__, stateFile.c_str());
+    }
+    if (!saw_symmetric_nu) {
+        error("%s: Gamma-Poisson state is missing symmetric_nu in %s",
+            __func__, stateFile.c_str());
+    }
+    const bool symmetric_mode = theta_prior_mode == "symmetric_concentration";
+    const bool eb_mode = theta_prior_mode == "eb_rate";
+    if ((!symmetric_mode && !eb_mode) || symmetric_mode != symmetric_nu_) {
+        error("%s: Invalid or inconsistent theta prior mode in Gamma-Poisson state: %s",
+            __func__, stateFile.c_str());
+    }
+    if (symmetric_mode) {
+        if (!saw_theta_concentration || saw_theta_shape
+            || !std::isfinite(theta_concentration_)
+            || theta_concentration_ <= 0.0) {
+            error("%s: Symmetric Gamma-Poisson state requires one positive finite theta concentration: %s",
+                __func__, stateFile.c_str());
+        }
+    } else if (!saw_theta_shape || saw_theta_concentration
+        || !std::isfinite(s0_) || s0_ <= 0.0
+        || !saw_nu_shape_prior || !std::isfinite(e0_) || e0_ <= 0.0
+        || !saw_nu_rate_prior || !std::isfinite(f0_) || f0_ <= 0.0
+        || !saw_nu_max || !std::isfinite(nu_max_) || nu_max_ <= 0.0
+        || static_cast<int32_t>(nu_shape_vals.size()) != n_topics_
+        || static_cast<int32_t>(nu_rate_vals.size()) != n_topics_) {
+        error("%s: Empirical-Bayes Gamma-Poisson state has invalid theta or nu metadata: %s",
+            __func__, stateFile.c_str());
+    }
     if (n_features_ <= 0) {
         n_features_ = static_cast<int32_t>(bshape_rows.size());
     }
@@ -875,6 +970,16 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
     }
     if (static_cast<int32_t>(nu_rate_vals.size()) == n_topics_) {
         for (int32_t k = 0; k < n_topics_; ++k) nu_rate_(k) = nu_rate_vals[k];
+    }
+    if (!symmetric_nu_) {
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            if (!std::isfinite(nu_shape_(k)) || nu_shape_(k) <= 0.0
+                || !std::isfinite(nu_rate_(k)) || nu_rate_(k) <= 0.0) {
+                error("%s: Invalid empirical-Bayes nu posterior in state %s",
+                    __func__, stateFile.c_str());
+            }
+        }
+        apply_nu_cap();
     }
     topic_usage_ = VectorXd::Constant(n_topics_, 1.0);
     if (static_cast<int32_t>(topic_usage_vals.size()) == n_topics_) {
@@ -1630,8 +1735,9 @@ void GammaPoissonTopicJointC::read_state(const std::string& stateFile) {
 
 void GammaPoisson4Hex::initialize(int32_t nTopics, int32_t seed, int32_t nThreads,
     int32_t verbose, double beta_shape, double xi_shape, double xi_mean,
-    double theta_shape, double nu_shape, double nu_rate, double kappa, double tau0,
-    int32_t totalDocCount, double sizeFactor, bool symmetricNu,
+    double theta_shape, double theta_concentration, double nu_shape,
+    double nu_rate, double kappa, double tau0,
+    int32_t totalDocCount, double sizeFactor, bool symmetricNu, double nuMax,
     int32_t maxIter, double mDelta) {
     if (reader.features.size() != static_cast<size_t>(M_)) {
         featureNames.resize(M_);
@@ -1642,8 +1748,9 @@ void GammaPoisson4Hex::initialize(int32_t nTopics, int32_t seed, int32_t nThread
     const std::vector<double>& sums = reader.getFeatureSums();
     model_ = std::make_unique<GammaPoissonTopicModel>(
         nTopics, M_, seed, nThreads, verbose, beta_shape, xi_shape, xi_mean,
-        theta_shape, nu_shape, nu_rate, kappa, tau0, totalDocCount, sizeFactor,
-        symmetricNu, reader.readFullSums ? &sums : nullptr);
+        theta_shape, theta_concentration, nu_shape, nu_rate, kappa, tau0,
+        totalDocCount, sizeFactor,
+        symmetricNu, nuMax, reader.readFullSums ? &sums : nullptr);
     model_->set_svb_parameters(maxIter, mDelta);
     initialized = true;
 }
