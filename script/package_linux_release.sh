@@ -37,7 +37,7 @@ dist_dir="$repo_root/dist"
 jobs=4
 cmake_extra=()
 allow_newer_glibc=0
-keep_build=0
+clean_build=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -55,8 +55,8 @@ while [ "$#" -gt 0 ]; do
       jobs="${2:-}"; shift 2 ;;
     --cmake-extra)
       cmake_extra+=("${2:-}"); shift 2 ;;
-    --keep-build)
-      keep_build=1; shift ;;
+    --clean-build)
+      clean_build=1; shift ;;
     --allow-newer-glibc)
       allow_newer_glibc=1; shift ;;
     --help)
@@ -120,6 +120,11 @@ tarball="$dist_dir/$artifact_base.tar.gz"
 manifest="$dist_dir/$version-linux-manifest.$artifact_base.jsonl"
 checksum_file="$dist_dir/SHA256SUMS.$artifact_base"
 
+if [ "$clean_build" -eq 1 ]; then
+  rm -rf "$build_dir"
+  rm -rf "$stage_dir"
+fi
+
 printf 'Packaging %s\n' "$artifact_base"
 printf 'Build directory: %s\n' "$build_dir"
 printf 'Dist directory: %s\n' "$dist_dir"
@@ -134,10 +139,8 @@ cmake -S "$repo_root" -B "$build_dir" \
 cmake --build "$build_dir" --parallel "$jobs"
 
 mkdir -p "$dist_dir"
-if [ "$keep_build" -ne 1 ]; then
-  rm -rf "$stage_dir"
-fi
 rm -f "$tarball"
+
 mkdir -p "$stage_dir/bin" "$stage_dir/lib" "$stage_dir/docs"
 
 cp "$build_dir/bin/punkst" "$stage_dir/bin/punkst"
@@ -273,7 +276,10 @@ esac
 #    exit 1 ;;
 #esac
 
+set +e
 "$stage_dir/bin/env-check" --help >/dev/null
+set -e
+
 ldd "$stage_dir/bin/punkst" > "$stage_dir/BUILDINFO.ldd.txt"
 readelf --version-info "$stage_dir/bin/punkst" > "$stage_dir/BUILDINFO.readelf-version-info.txt"
 objdump -p "$stage_dir/bin/punkst" > "$stage_dir/BUILDINFO.objdump-p.txt"
