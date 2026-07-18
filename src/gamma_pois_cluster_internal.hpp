@@ -81,6 +81,12 @@ struct InitializedClusterFit {
     int32_t kmeans_iterations = 0;
     double kmeans_inertia = 0.0;
     bool kmeans_converged = false;
+    std::string initializer = "kmeans++";
+    int32_t initializer_communities = 0;
+    double initializer_quality = 0.0;
+    CosineKnnDiagnostics knn;
+    int32_t knn_neighbors = 0;
+    double knn_search_epsilon = 0.0;
 };
 
 RowMajorMatrixXd covariance_factor(
@@ -139,7 +145,8 @@ void transport_orientation(GammaPoissonClusterModel& model,
     const GammaPoissonClusterFitOptions& options);
 
 void update_diagnostics(const ClusterStatistics& stats, double alpha,
-    GammaPoissonClusterFitResult& out);
+    GammaPoissonClusterFitResult& out,
+    const RowMajorMatrixXd* responsibilities = nullptr);
 void validate_common_fit_input(
     const GammaPoissonClusterCoordinates& coordinates,
     const GammaPoissonClusterFitOptions& options);

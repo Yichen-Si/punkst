@@ -19,7 +19,7 @@ using LeidenSparseMatrix = Eigen::SparseMatrix<double, Eigen::RowMajor>;
 
 struct LeidenOptions {
     double  resolution     = 1.0;   // gamma; 1.0 == standard modularity
-    int32_t max_iterations = -1;    // < 0: iterate to convergence; otherwise cap the number of passes
+    int32_t max_iterations = -1;    // < 0: convergence with internal safety cap
     int32_t seed           = 1;     // RNG seed for reproducible runs
 };
 
@@ -38,8 +38,8 @@ LeidenResult leiden_cluster(const Eigen::Ref<const LeidenSparseMatrix>& adjacenc
                             const LeidenOptions& options);
 
 // Cluster a weighted, undirected graph given as an edge list. Each undirected
-// edge should be listed once; parallel edges are summed. Endpoints must lie in
-// [0, n_nodes); self-edges (u == v) are treated as self-loops.
+// edge should be listed once; parallel edges are canonically summed. Endpoints
+// must lie in [0, n_nodes); self-edges (u == v) are treated as self-loops.
 LeidenResult leiden_cluster(int32_t n_nodes,
                             const std::vector<std::pair<int32_t, int32_t>>& edges,
                             const std::vector<double>& weights,

@@ -31,6 +31,7 @@ GammaPoissonArtifactId parse_gamma_poisson_artifact_id(
 struct GammaPoissonPosteriorHeader {
     int32_t n_topics = 0;
     uint64_t state_checksum = 0;
+    GammaPoissonArtifactId artifact_id;
     GammaPoissonArtifactId dispersion_sidecar_id;
     std::string row_order = "input";
     std::vector<std::string> identifier_columns;

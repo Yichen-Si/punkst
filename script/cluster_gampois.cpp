@@ -12,7 +12,18 @@ namespace {
 
 Eigen::VectorXd cluster_topic_profile(
     const Eigen::Ref<const Eigen::MatrixXd>& basis,
-    const Eigen::Ref<const Eigen::RowVectorXd>& cluster_mean) {
+    const Eigen::Ref<const Eigen::RowVectorXd>& cluster_mean,
+    const std::string& coordinate_model, double power_ilr_lambda) {
+    if (coordinate_model == "l2") {
+        Eigen::VectorXd profile = cluster_mean.transpose().cwiseMax(0.0);
+        if (profile.sum() <= 0.0) profile.setOnes();
+        profile /= profile.sum();
+        return profile;
+    }
+    if (coordinate_model == "power-ilr") {
+        return gamma_poisson_power_ilr_inverse(
+            basis, cluster_mean.transpose(), power_ilr_lambda);
+    }
     Eigen::VectorXd logits = basis.transpose() * cluster_mean.transpose();
     logits.array() -= logits.maxCoeff();
     Eigen::VectorXd profile = logits.array().exp();
@@ -40,12 +51,14 @@ void write_cluster_model(const std::string& path,
     out << "#cluster\tactive\tweight\texpected_size\teffective_membership_size"
         << "\tmean_intrinsic_variance\tlog_intrinsic_volume";
     for (const auto& topic : state.topic_names) out << "\t" << topic;
-    out << "\n" << std::scientific << std::setprecision(10);
+    out << "\n" << std::scientific << std::setprecision(4);
     const Eigen::VectorXd effective_membership_size =
         gamma_poisson_effective_membership_size(fit.responsibilities);
     const Eigen::VectorXd weights = gamma_poisson_cluster_weights(model);
     for (Eigen::Index c = 0; c < weights.size(); ++c) {
-        Eigen::VectorXd profile = cluster_topic_profile(state.basis, model.means.row(c));
+        Eigen::VectorXd profile = cluster_topic_profile(
+            state.basis, model.means.row(c), state.coordinate_model,
+            state.power_ilr_lambda);
         const double mean_variance = (model.variances.row(c).sum()
             + model.low_rank_variances.row(c).sum()) / model.variances.cols();
         out << c << "\t" << static_cast<int32_t>(state.active[c])
@@ -72,7 +85,7 @@ void write_cluster_results(const std::string& path,
     if (!dataset.posterior_header.identifier_columns.empty()) out << "\t";
     out << "top_cluster\ttop_probability\tsecond_cluster\tsecond_probability\tentropy";
     for (Eigen::Index c = 0; c < responsibilities.cols(); ++c) out << "\tcluster_" << c;
-    out << "\n" << std::scientific << std::setprecision(10);
+    out << "\n" << std::scientific << std::setprecision(4);
     for (Eigen::Index d = 0; d < responsibilities.rows(); ++d) {
         if (!dataset.posterior_header.identifier_columns.empty()) {
             out << dataset.identifiers[d] << "\t";
@@ -105,7 +118,7 @@ void write_cluster_separation(const std::string& path,
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot open cluster separation output: " + path);
     out << "#cluster_a\tcluster_b\tstandardized_separation\tbhattacharyya_distance\n"
-        << std::scientific << std::setprecision(10);
+        << std::scientific << std::setprecision(4);
     for (int32_t first = 0; first < static_cast<int32_t>(state.active.size()); ++first) {
         if (!state.active[first]) continue;
         for (int32_t second = first + 1;
@@ -131,7 +144,7 @@ void write_cluster_representatives(const std::string& path,
         out << "\t" << column;
     }
     out << "\tprobability\ttop_probability\tentropy\n"
-        << std::scientific << std::setprecision(10);
+        << std::scientific << std::setprecision(4);
     std::vector<Eigen::Index> order(fit.responsibilities.rows());
     for (int32_t c = 0; c < static_cast<int32_t>(state.active.size()); ++c) {
         if (!state.active[c]) continue;
@@ -159,14 +172,20 @@ void write_cluster_representatives(const std::string& path,
 GammaPoissonClusterState make_cluster_state(
     const GammaPoissonClusterDataset& dataset,
     const GammaPoissonClusterCoordinates& coordinates,
-    const GammaPoissonClusterFitResult& fit, double min_cluster_size) {
+    const GammaPoissonClusterFitResult& fit, double min_cluster_size,
+    const std::string& coordinate_model) {
     GammaPoissonClusterState state;
     state.topic_state_checksum = dataset.posterior_header.state_checksum;
     state.topic_names = dataset.posterior_header.topic_names;
     state.basis = coordinates.log_ratio_basis.basis;
+    state.coordinate_model = coordinate_model;
     state.model = fit.model;
     state.diagnostics = fit.diagnostics;
-    state.document_uncertainty_model = dataset.uncertainty_model;
+    state.document_uncertainty_model = coordinate_model == "l2"
+        && dataset.uncertainty_model
+            == GammaPoissonClusterDataset::UncertaintyModel::MeanFieldPlusDispersionLowRank
+        ? GammaPoissonClusterDataset::UncertaintyModel::MeanFieldPlusDispersionDiagonal
+        : dataset.uncertainty_model;
     state.document_uncertainty_rank = coordinates.uncertainty_rank;
     state.min_cluster_size = min_cluster_size;
     state.input_row_order = dataset.posterior_header.row_order;
@@ -193,9 +212,14 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     std::string state_file, posterior_file, dispersion_file, out_prefix;
     std::string optimizer = "svi";
     std::string covariance_accumulation = "auto";
+    std::string coordinate_model = "l2";
+    std::string initializer = "kmeans++";
+    std::string leiden_knn_backend = "auto";
     int32_t n_clusters_max = 10;
     int32_t max_iterations = 50;
     int32_t kmeans_max_iterations = 20;
+    int32_t leiden_neighbors = 15;
+    int32_t leiden_max_iterations = -1;
     int32_t convergence_patience = 3;
     int32_t cluster_covariance_rank = -1;
     int32_t diagonal_warmup_iterations = 5;
@@ -215,7 +239,12 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     int32_t seed = 1;
     int32_t threads = 1;
     int32_t verbose = 0;
+    int32_t posterior_coordinate_samples = 16;
+    int32_t coordinate_covariance_rank = 8;
+    uint64_t coordinate_seed = 0;
     double dirichlet_concentration = 1.0;
+    double leiden_resolution = 1.0;
+    double leiden_knn_epsilon = 0.0;
     double variance_floor = 1e-4;
     double tolerance = 1e-5;
     double responsibility_p90_tolerance = 0.01;
@@ -226,6 +255,7 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
     double svi_kappa = 0.7;
     double svi_tau0 = 10.0;
     double min_cluster_size = 5.0;
+    double power_ilr_lambda = 0.5;
 
     ParamList pl;
     pl.add_option("in-state", "Input Gamma-Poisson topic state", state_file, true)
@@ -233,11 +263,22 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
       .add_option("in-posterior-dispersion", "Optional posterior dispersion sidecar", dispersion_file)
       .add_option("out-prefix", "Output prefix for clustering files", out_prefix, true)
       .add_option("optimizer", "Cluster optimizer: batch or svi", optimizer)
+      .add_option("coordinate-model", "Mixture coordinates: l2 or power-ilr", coordinate_model)
+      .add_option("power-ilr-lambda", "Power-ILR exponent in (0,1]", power_ilr_lambda)
+      .add_option("posterior-coordinate-samples", "Deterministic Gamma draws per document: 8, 16, 32, or 64", posterior_coordinate_samples)
+      .add_option("coordinate-cov-rank", "Document coordinate covariance rank", coordinate_covariance_rank)
+      .add_option("coordinate-seed", "Deterministic coordinate sampling seed; zero inherits --seed", coordinate_seed)
+      .add_option("initializer", "Initialization: kmeans++ or leiden", initializer)
       .add_option("n-clusters-max", "Number of overfitted mixture components", n_clusters_max)
       .add_option("min-cluster-size", "Minimum absolute expected membership for an active cluster", min_cluster_size)
       .add_option("n-representatives", "Representative documents written per active cluster", n_representatives)
       .add_option("max-iter", "Maximum final fixed-covariance EM iterations", max_iterations)
       .add_option("kmeans-max-iter", "Maximum Lloyd initialization iterations", kmeans_max_iterations)
+      .add_option("leiden-neighbors", "Cosine k-NN neighbors for Leiden initialization", leiden_neighbors)
+      .add_option("leiden-knn-backend", "Cosine k-NN backend: auto, kdtree, or flat", leiden_knn_backend)
+      .add_option("leiden-knn-epsilon", "Nanoflann search epsilon; positive values require kdtree", leiden_knn_epsilon)
+      .add_option("leiden-resolution", "Leiden RBConfiguration resolution", leiden_resolution)
+      .add_option("leiden-max-iter", "Maximum Leiden passes; negative runs to convergence", leiden_max_iterations)
       .add_option("convergence-patience", "Consecutive stable iterations required for convergence", convergence_patience)
       .add_option("cluster-covariance-rank", "Shared-orientation cluster covariance rank; -1 selects min(5,K-1), zero selects diagonal", cluster_covariance_rank)
       .add_option("covariance-accumulation", "Conditional covariance accumulation: auto, dense, or compact", covariance_accumulation)
@@ -280,19 +321,46 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
         const auto& topic_names = topic_model.get_topic_names();
         GammaPoissonClusterDataset dataset = load_gamma_poisson_cluster_dataset(
             posterior_file, dispersion_file, checksum,
-            topic_model.get_topic_capacity(), topic_names);
-        GammaPoissonClusterCoordinates coordinates =
-            make_gamma_poisson_cluster_coordinates(dataset);
+            topic_model.get_topic_capacity(), topic_names, coordinate_model);
+        GammaPoissonClusterCoordinates coordinates;
+        const int32_t coordinate_dim = static_cast<int32_t>(topic_names.size()) - 1;
+        if (!pl.was_provided("coordinate-cov-rank")) {
+            coordinate_covariance_rank = std::min(8, coordinate_dim);
+        }
+        if (coordinate_seed == 0) coordinate_seed = static_cast<uint64_t>(seed);
+        if (coordinate_model == "l2") {
+            coordinates = make_gamma_poisson_theta_l2_coordinates(dataset);
+        } else if (coordinate_model == "power-ilr") {
+            GammaPoissonPowerIlrOptions coordinate_options;
+            coordinate_options.lambda = power_ilr_lambda;
+            coordinate_options.samples = posterior_coordinate_samples;
+            coordinate_options.covariance_rank = coordinate_covariance_rank;
+            coordinate_options.n_threads = threads;
+            coordinate_options.seed = coordinate_seed;
+            coordinates = make_gamma_poisson_power_ilr_coordinates(
+                dataset, coordinate_options);
+        } else {
+            throw std::invalid_argument(
+                "--coordinate-model must be l2 or power-ilr");
+        }
         dataset.log_mean.resize(0, 0);
         dataset.topic_covariance.clear();
         dataset.topic_covariance.shrink_to_fit();
         const int32_t dim = static_cast<int32_t>(coordinates.mean.cols());
         if (cluster_covariance_rank < 0) {
-            cluster_covariance_rank = std::min(5, dim);
+            cluster_covariance_rank = coordinate_model == "power-ilr"
+                ? 0 : std::min(5, dim);
         } else if (cluster_covariance_rank > dim) {
-            throw std::invalid_argument("Cluster covariance rank exceeds K-1");
+            throw std::invalid_argument("Cluster covariance rank exceeds coordinate dimension");
         }
         GammaPoissonClusterFitOptions options;
+        if (initializer == "kmeans++") {
+            options.initializer = GammaPoissonClusterFitOptions::Initializer::KMeans;
+        } else if (initializer == "leiden") {
+            options.initializer = GammaPoissonClusterFitOptions::Initializer::Leiden;
+        } else {
+            throw std::invalid_argument("--initializer must be kmeans++ or leiden");
+        }
         if (optimizer == "batch") {
             options.optimizer = GammaPoissonClusterFitOptions::Optimizer::Batch;
         } else if (optimizer == "svi") {
@@ -316,9 +384,18 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
         options.n_components = n_clusters_max;
         options.max_iterations = max_iterations;
         options.kmeans_max_iterations = kmeans_max_iterations;
+        options.leiden_neighbors = leiden_neighbors;
+        options.leiden_knn_backend = parse_cosine_knn_backend(
+            leiden_knn_backend);
+        options.leiden_knn_epsilon = leiden_knn_epsilon;
+        options.leiden_resolution = leiden_resolution;
+        options.leiden_max_iterations = leiden_max_iterations;
         options.convergence_patience = convergence_patience;
         options.n_threads = threads;
         options.cluster_covariance_rank = cluster_covariance_rank;
+        if (coordinate_model == "power-ilr" && cluster_covariance_rank > 0) {
+            warning("Structured cluster covariance with power-ILR is experimental; batch fitting will retain the diagonal warmup model if the structured update lowers predictive likelihood");
+        }
         options.diagonal_warmup_iterations = diagonal_warmup_iterations;
         options.orientation_update_interval = orientation_update_interval;
         options.orientation_max_updates = orientation_max_updates;
@@ -360,7 +437,20 @@ int32_t cmdGammaPoisClusterFit(int argc, char** argv) {
         GammaPoissonClusterFitResult fit = fit_gamma_poisson_cluster_mixture(
             coordinates, options);
         GammaPoissonClusterState state = make_cluster_state(
-            dataset, coordinates, fit, min_cluster_size);
+            dataset, coordinates, fit, min_cluster_size, coordinate_model);
+        state.power_ilr_lambda = power_ilr_lambda;
+        state.posterior_coordinate_samples = posterior_coordinate_samples;
+        state.coordinate_covariance_rank = coordinate_model == "power-ilr"
+            ? coordinate_covariance_rank : 0;
+        state.coordinate_seed = coordinate_seed;
+        state.coordinate_sampler = coordinate_model == "power-ilr"
+            ? "philox-v1" : "none";
+        state.coordinate_rotation = "none";
+        state.coordinate_fallback_rows = coordinates.diagnostics.fallback_rows;
+        state.mean_document_uncertainty_trace =
+            coordinates.diagnostics.mean_covariance_trace;
+        state.observed_coordinate_trace =
+            coordinates.diagnostics.observed_coordinate_trace;
         write_fit_outputs(out_prefix, dataset, state, fit, n_representatives);
         notice("Loaded %zu posterior rows into memory and fitted %d components (%d active) with %s in %d iterations (%d epochs, %d SVI updates, %d refinement iterations; %s; %s covariance accumulation)",
             dataset.identifiers.size(), static_cast<int32_t>(state.model.dirichlet_parameters.size()),
@@ -405,13 +495,33 @@ int32_t cmdGammaPoisClusterTransform(int argc, char** argv) {
             cluster_state_file, checksum);
         GammaPoissonClusterDataset dataset = load_gamma_poisson_cluster_dataset(
             posterior_file, dispersion_file, checksum,
-            topic_model.get_topic_capacity(), topic_names);
+            topic_model.get_topic_capacity(), topic_names,
+            state.coordinate_model);
         if (dataset.posterior_header.topic_names != state.topic_names) {
             throw std::runtime_error("Posterior topic names do not match cluster state");
         }
-        GammaPoissonClusterCoordinates coordinates =
-            make_gamma_poisson_cluster_coordinates(dataset, state.basis);
-        if (dataset.uncertainty_model != state.document_uncertainty_model
+        GammaPoissonClusterCoordinates coordinates;
+        if (state.coordinate_model == "l2") {
+            coordinates = make_gamma_poisson_theta_l2_coordinates(dataset);
+        } else if (state.coordinate_model == "power-ilr") {
+            GammaPoissonPowerIlrOptions coordinate_options;
+            coordinate_options.lambda = state.power_ilr_lambda;
+            coordinate_options.samples = state.posterior_coordinate_samples;
+            coordinate_options.covariance_rank = state.coordinate_covariance_rank;
+            coordinate_options.n_threads = threads;
+            coordinate_options.seed = state.coordinate_seed;
+            coordinates = make_gamma_poisson_power_ilr_coordinates(
+                dataset, coordinate_options);
+        } else {
+            coordinates = make_gamma_poisson_cluster_coordinates(
+                dataset, state.basis);
+        }
+        const auto effective_uncertainty = state.coordinate_model == "l2"
+            && dataset.uncertainty_model
+                == GammaPoissonClusterDataset::UncertaintyModel::MeanFieldPlusDispersionLowRank
+            ? GammaPoissonClusterDataset::UncertaintyModel::MeanFieldPlusDispersionDiagonal
+            : dataset.uncertainty_model;
+        if (effective_uncertainty != state.document_uncertainty_model
             || coordinates.uncertainty_rank != state.document_uncertainty_rank) {
             throw std::runtime_error(
                 "Posterior document uncertainty rank does not match cluster state");

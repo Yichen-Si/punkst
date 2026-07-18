@@ -411,7 +411,8 @@ GammaPoissonClusterFitResult fit_svi(
         validation_stats.scale(
             static_cast<double>(n) / validation.size());
         out.model = model;
-        update_diagnostics(validation_stats, alpha, out);
+        update_diagnostics(validation_stats, alpha, out,
+            &validation_responsibilities);
         ++out.diagnostics.epochs;
         const bool have_change = previous_validation_responsibilities.rows()
             == validation_responsibilities.rows();

@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.15...3.23)
 project(punkst)
 
 include(CheckCXXCompilerFlag)
+include(CheckCXXSourceCompiles)
 include(CheckIPOSupported)
 
 # Default single-config generators to Release for better runtime performance.
@@ -52,6 +53,42 @@ endif()
 add_library(Eigen3::Eigen INTERFACE IMPORTED)
 set_target_properties(Eigen3::Eigen PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
+
+# Developer-only for tiled exact cosine k-NN
+option(PUNKST_EXPERIMENTAL_CBLAS "Build the developer-only CBLAS comparison kernel" OFF)
+mark_as_advanced(PUNKST_EXPERIMENTAL_CBLAS)
+set(PUNKST_HAVE_CBLAS 0)
+set(PUNKST_HAVE_OPENBLAS 0)
+if (PUNKST_EXPERIMENTAL_CBLAS)
+  find_package(BLAS QUIET)
+  find_path(PUNKST_CBLAS_INCLUDE_DIR cblas.h
+    PATH_SUFFIXES openblas openblas-pthread)
+  if (BLAS_FOUND AND PUNKST_CBLAS_INCLUDE_DIR)
+    set(CMAKE_REQUIRED_INCLUDES "${PUNKST_CBLAS_INCLUDE_DIR}")
+    set(CMAKE_REQUIRED_LIBRARIES "${BLAS_LIBRARIES}")
+    check_cxx_source_compiles(
+      "#include <cblas.h>\nint main() { double a=1,b=1,c=0; cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,1,1,1,1,&a,1,&b,1,0,&c,1); return c == 1 ? 0 : 1; }"
+      PUNKST_CBLAS_WORKS)
+    if (PUNKST_CBLAS_WORKS)
+      set(PUNKST_HAVE_CBLAS 1)
+      check_cxx_source_compiles(
+        "#include <cblas.h>\nint main() { int n=openblas_get_num_threads(); openblas_set_num_threads(n); return 0; }"
+        PUNKST_OPENBLAS_THREAD_API_WORKS)
+      if (PUNKST_OPENBLAS_THREAD_API_WORKS)
+        set(PUNKST_HAVE_OPENBLAS 1)
+      endif()
+      message(STATUS "Enabled developer-only CBLAS cosine k-NN comparison kernel")
+    else()
+      message(STATUS "BLAS found without a usable CBLAS interface; using Eigen cosine k-NN")
+    endif()
+    unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_LIBRARIES)
+  else()
+    message(STATUS "CBLAS not found; using Eigen cosine k-NN")
+  endif()
+else()
+  message(STATUS "Using Eigen cosine k-NN (developer CBLAS comparison disabled)")
+endif()
 
 option(ENABLE_IMAGE_OUTPUT "Build PNG image output commands" ON)
 if (ENABLE_IMAGE_OUTPUT)
@@ -109,6 +146,8 @@ set(SOURCE_FILES
     src/gamma_pois_dispersion.cpp
     src/dense_kmeans.hpp
     src/dense_kmeans.cpp
+    src/cosine_clustering.hpp
+    src/cosine_clustering.cpp
     src/low_rank_covariance.hpp
     src/low_rank_covariance.cpp
     src/gamma_pois_cluster.hpp
@@ -255,6 +294,7 @@ target_include_directories(${APP_EXE} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/cimg
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanoflann
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nlohmann
+    $<$<BOOL:${PUNKST_HAVE_CBLAS}>:${PUNKST_CBLAS_INCLUDE_DIR}>
 )
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
@@ -274,6 +314,8 @@ target_compile_options(${APP_EXE} PRIVATE
 target_compile_definitions(${APP_EXE} PRIVATE
   PUNKST_ENABLE_REMOTE_IO=$<BOOL:${ENABLE_REMOTE_IO}>
   PUNKST_ENABLE_IMAGE_OUTPUT=$<BOOL:${ENABLE_IMAGE_OUTPUT}>
+  PUNKST_HAVE_CBLAS=${PUNKST_HAVE_CBLAS}
+  PUNKST_HAVE_OPENBLAS=${PUNKST_HAVE_OPENBLAS}
 )
 
 # Faster Debug builds
@@ -374,6 +416,10 @@ target_link_libraries(${APP_EXE} PRIVATE
     $<$<CXX_COMPILER_ID:GNU>:stdc++fs>
     $<$<CXX_COMPILER_ID:IntelLLVM>:stdc++fs>
 )
+
+if (PUNKST_HAVE_CBLAS)
+  target_link_libraries(${APP_EXE} PRIVATE ${BLAS_LIBRARIES})
+endif()
 
 if (ENABLE_IMAGE_OUTPUT)
   target_link_libraries(${APP_EXE} PRIVATE PNG::PNG)

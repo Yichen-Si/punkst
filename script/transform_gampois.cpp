@@ -275,12 +275,14 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     }
     writeUnitIdHeader(results, use_10x, info_header);
     gp.writeUnitHeader(results);
-    results << std::fixed << std::setprecision(4);
+    results << std::scientific << std::setprecision(4);
 
     const uint64_t stateChecksum = gamma_poisson_state_checksum(stateFile);
     std::unique_ptr<std::ofstream> posterior;
     std::unique_ptr<GammaPoissonDispersionWriter> dispersion;
     if (!skip_posterior) {
+        const GammaPoissonArtifactId posteriorId =
+            generate_gamma_poisson_artifact_id();
         GammaPoissonArtifactId sidecarId;
         if (gp.hasFeatureDispersion() && posterior_dispersion_rank >= 0) {
             const int32_t actualRank = std::min(posterior_dispersion_rank, K);
@@ -297,6 +299,8 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
         *posterior << "##punkst_gamma_pois_posterior_v2\n";
         *posterior << "##n_topics\t" << K << "\n";
         *posterior << "##state_checksum\t" << stateChecksum << "\n";
+        *posterior << "##artifact_id\t"
+            << gamma_poisson_artifact_id_string(posteriorId) << "\n";
         *posterior << "##row_order\t" << (randomize_output ? "randomized" : "input") << "\n";
         if (!sidecarId.empty()) {
             *posterior << "##dispersion_sidecar_id\t"
@@ -311,7 +315,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
         for (int32_t k = 0; k < K; ++k) {
             *posterior << "\tgp_rate_" << topicNames[k];
         }
-        *posterior << "\n" << std::scientific << std::setprecision(17);
+        *posterior << "\n" << std::scientific << std::setprecision(4);
         notice("Gamma-Poisson local posterior will be written to %s", posteriorPath.c_str());
     }
 

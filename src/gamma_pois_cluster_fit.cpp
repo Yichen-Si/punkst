@@ -1,4 +1,5 @@
 #include "gamma_pois_cluster_internal.hpp"
+#include "cosine_clustering.hpp"
 #include "dense_kmeans.hpp"
 #include "error.hpp"
 
@@ -169,11 +170,25 @@ static ClusterStatistics run_full_e_step(
 
 
 void update_diagnostics(const ClusterStatistics& stats, double alpha,
-    GammaPoissonClusterFitResult& out) {
+    GammaPoissonClusterFitResult& out,
+    const RowMajorMatrixXd* responsibilities) {
     out.diagnostics.elbo = stats.elbo_local
         + dirichlet_elbo(out.model.dirichlet_parameters, alpha);
     out.diagnostics.log_likelihood = stats.predictive_log_likelihood;
     out.diagnostics.elbo_trace.push_back(out.diagnostics.elbo);
+    out.diagnostics.predictive_log_likelihood_trace.push_back(
+        out.diagnostics.log_likelihood);
+    if (responsibilities != nullptr && responsibilities->rows() > 0) {
+        double entropy = 0.0;
+        for (Eigen::Index d = 0; d < responsibilities->rows(); ++d) {
+            for (Eigen::Index c = 0; c < responsibilities->cols(); ++c) {
+                const double probability = (*responsibilities)(d, c);
+                if (probability > 0.0) entropy -= probability * std::log(probability);
+            }
+        }
+        out.diagnostics.mean_responsibility_entropy_trace.push_back(
+            entropy / responsibilities->rows());
+    }
 }
 
 void validate_common_fit_input(
@@ -188,6 +203,12 @@ void validate_common_fit_input(
         || coordinates.uncertainty_factor.cols()
             != coordinates.mean.cols() * coordinates.uncertainty_rank
         || options.n_components <= 0 || options.kmeans_max_iterations <= 0
+        || options.leiden_neighbors <= 0
+        || options.leiden_max_iterations == 0
+        || !finite(options.leiden_knn_epsilon)
+        || options.leiden_knn_epsilon < 0.0
+        || !finite(options.leiden_resolution)
+        || options.leiden_resolution <= 0.0
         || options.convergence_patience <= 0 || options.n_threads <= 0
         || options.cluster_covariance_rank < 0
         || options.cluster_covariance_rank > coordinates.mean.cols()
@@ -220,7 +241,11 @@ void validate_common_fit_input(
                 CandidateSearch::Auto)
         || static_cast<int32_t>(options.candidate_search)
             > static_cast<int32_t>(GammaPoissonClusterFitOptions::
-                CandidateSearch::KdTree)) {
+                CandidateSearch::KdTree)
+        || static_cast<int32_t>(options.initializer)
+            < static_cast<int32_t>(GammaPoissonClusterFitOptions::Initializer::KMeans)
+        || static_cast<int32_t>(options.initializer)
+            > static_cast<int32_t>(GammaPoissonClusterFitOptions::Initializer::Leiden)) {
         throw std::invalid_argument(
             "Invalid structured Gamma-Poisson mixture input or options");
     }
@@ -256,20 +281,64 @@ InitializedClusterFit initialize_cluster_fit(
     kmeans_options.max_iterations = options.kmeans_max_iterations;
     kmeans_options.seed = options.seed;
 
+    const bool cosine = coordinates.initialization_mean.rows() == n;
+    const RowMajorMatrixXd& initialization = cosine
+        ? coordinates.initialization_mean : coordinates.mean;
     DenseKMeansResult kmeans;
-    if (sampled) {
+    InitializedClusterFit out;
+    int32_t initializer_communities = components;
+    double initializer_quality = 0.0;
+    if (options.initializer == GammaPoissonClusterFitOptions::Initializer::Leiden) {
+        CosineLeidenOptions leiden_options;
+        leiden_options.n_neighbors = options.leiden_neighbors;
+        leiden_options.knn_search_epsilon = options.leiden_knn_epsilon;
+        leiden_options.backend = options.leiden_knn_backend;
+        leiden_options.n_threads = options.n_threads;
+        leiden_options.leiden.resolution = options.leiden_resolution;
+        leiden_options.leiden.max_iterations = options.leiden_max_iterations;
+        leiden_options.leiden.seed = options.seed;
+        const CosineLeidenResult leiden = cosine_leiden_cluster(
+            initialization, leiden_options);
+        initializer_communities = leiden.clustering.n_communities;
+        initializer_quality = leiden.clustering.quality;
+        out.knn = leiden.knn;
+        out.knn_neighbors = options.leiden_neighbors;
+        out.knn_search_epsilon = options.leiden_knn_epsilon;
+        Eigen::VectorXi labels = reconcile_cosine_communities(
+            leiden.clustering.membership, leiden.clustering.n_communities,
+            components, initialization, kmeans_options);
+        kmeans.assignments = std::move(labels);
+        kmeans.counts = Eigen::VectorXi::Zero(components);
+        for (int32_t d = 0; d < n; ++d) ++kmeans.counts(kmeans.assignments(d));
+        kmeans.iterations = leiden.clustering.iterations;
+        kmeans.converged = leiden.clustering.converged;
+        kmeans.inertia = 0.0;
+    } else if (sampled && !cosine) {
         const int64_t requested_sample = std::max<int64_t>(
             8192, int64_t{256} * components);
         const int32_t sample_size = static_cast<int32_t>(std::min<int64_t>(
             n, std::min<int64_t>(50000, requested_sample)));
         kmeans = sampled_dense_kmeans(
             coordinates.mean, kmeans_options, sample_size);
+    } else if (cosine) {
+        // Matching sklearn's successful reference path: k-means++ on L2
+        // normalized posterior mean topic proportions.
+        kmeans = cosine_dense_kmeans(initialization, kmeans_options);
     } else {
         kmeans = dense_kmeans(coordinates.mean, kmeans_options);
     }
 
-    InitializedClusterFit out;
-    out.model.means = kmeans.centers;
+    out.model.means = RowMajorMatrixXd::Zero(components, dim);
+    for (int32_t d = 0; d < n; ++d) {
+        out.model.means.row(kmeans.assignments(d)) += coordinates.mean.row(d);
+    }
+    for (int32_t c = 0; c < components; ++c) {
+        if (kmeans.counts(c) <= 0) {
+            throw std::runtime_error(
+                "Gamma-Poisson initialization produced an empty cluster");
+        }
+        out.model.means.row(c) /= kmeans.counts(c);
+    }
     out.model.variances = RowMajorMatrixXd::Zero(components, dim);
     out.initial_shared = Eigen::MatrixXd::Zero(dim, dim);
     for (int32_t d = 0; d < n; ++d) {
@@ -281,10 +350,6 @@ InitializedClusterFit initialize_cluster_fit(
         out.initial_shared.noalias() += residual * residual.transpose();
     }
     for (int32_t c = 0; c < components; ++c) {
-        if (kmeans.counts(c) <= 0) {
-            throw std::runtime_error(
-                "Gamma-Poisson initialization produced an empty cluster");
-        }
         out.model.variances.row(c) = (
             out.model.variances.row(c)
                 / static_cast<double>(kmeans.counts(c))).array()
@@ -297,12 +362,34 @@ InitializedClusterFit initialize_cluster_fit(
     out.kmeans_iterations = kmeans.iterations;
     out.kmeans_inertia = kmeans.inertia;
     out.kmeans_converged = kmeans.converged;
+    out.initializer = options.initializer
+            == GammaPoissonClusterFitOptions::Initializer::Leiden
+        ? "leiden" : "kmeans++";
+    out.initializer_communities = initializer_communities;
+    out.initializer_quality = initializer_quality;
     if (options.verbose > 0) {
-        notice("Gamma-Poisson clusters initialized with k-means++ "
-            "(%d components, %d iterations, %s)", components, kmeans.iterations,
+        notice("Gamma-Poisson clusters initialized with %s "
+            "(%d components, %d iterations, %s)",
+            options.initializer == GammaPoissonClusterFitOptions::Initializer::Leiden
+                ? "Leiden" : "cosine k-means++",
+            components, kmeans.iterations,
             kmeans.converged ? "converged" : "not converged");
+        if (options.initializer
+                == GammaPoissonClusterFitOptions::Initializer::Leiden) {
+            notice("Cosine k-NN used %s (%d neighbors; normalize %.3fs, "
+                "build %.3fs, query %.3fs, top-k %.3fs, reduce %.3fs)",
+                cosine_knn_backend_name(out.knn.resolved_backend),
+                out.knn_neighbors,
+                out.knn.timings.normalization_seconds,
+                out.knn.timings.index_build_seconds,
+                out.knn.timings.query_seconds,
+                out.knn.timings.topk_seconds,
+                out.knn.timings.graph_reduction_seconds);
+        }
         const Eigen::VectorXd initial_sizes = kmeans.counts.cast<double>();
-        log_top_cluster_size_fractions(initial_sizes, n, "kmeans++ init");
+        log_top_cluster_size_fractions(initial_sizes, n,
+            options.initializer == GammaPoissonClusterFitOptions::Initializer::Leiden
+                ? "Leiden init" : "kmeans++ init");
     }
     return out;
 }
@@ -311,11 +398,24 @@ void initialize_fit_diagnostics(const InitializedClusterFit& initialized,
     const char* optimizer, bool dense_accumulation, int32_t rank,
     GammaPoissonClusterFitResult& out) {
     out.diagnostics.optimizer = optimizer;
+    out.diagnostics.initializer = initialized.initializer;
     out.diagnostics.covariance_accumulation = rank == 0
         ? "diagonal" : (dense_accumulation ? "dense" : "compact");
     out.diagnostics.kmeans_iterations = initialized.kmeans_iterations;
     out.diagnostics.kmeans_inertia = initialized.kmeans_inertia;
     out.diagnostics.kmeans_converged = initialized.kmeans_converged;
+    out.diagnostics.initializer_communities =
+        initialized.initializer_communities;
+    out.diagnostics.initializer_quality = initialized.initializer_quality;
+    if (initialized.initializer == "leiden") {
+        out.diagnostics.knn_backend_requested = cosine_knn_backend_name(
+            initialized.knn.requested_backend);
+        out.diagnostics.knn_backend_resolved = cosine_knn_backend_name(
+            initialized.knn.resolved_backend);
+        out.diagnostics.knn_neighbors = initialized.knn_neighbors;
+        out.diagnostics.knn_search_epsilon =
+            initialized.knn_search_epsilon;
+    }
 }
 
 void run_exact_em(const GammaPoissonClusterCoordinates& coordinates,
@@ -337,7 +437,7 @@ void run_exact_em(const GammaPoissonClusterCoordinates& coordinates,
             out.responsibilities, nullptr, true, dense_accumulation);
         final_scored = true;
         out.model = model;
-        update_diagnostics(stats, alpha, out);
+        update_diagnostics(stats, alpha, out, &out.responsibilities);
         out.effective_membership = stats.membership;
         if (refinement) {
             ++out.diagnostics.refinement_iterations;
@@ -394,7 +494,7 @@ void run_exact_em(const GammaPoissonClusterCoordinates& coordinates,
         stats = run_full_e_step(coordinates, model, options.n_threads,
             out.responsibilities, nullptr, true, dense_accumulation);
         out.model = model;
-        update_diagnostics(stats, alpha, out);
+        update_diagnostics(stats, alpha, out, &out.responsibilities);
         out.effective_membership = stats.membership;
     }
     out.model = model;
@@ -462,7 +562,7 @@ GammaPoissonClusterFitResult fit_batch(
         stats = run_full_e_step(coordinates, model, options.n_threads,
             out.responsibilities, use_sketch, true, dense_accumulation);
         out.model = model;
-        update_diagnostics(stats, alpha, out);
+        update_diagnostics(stats, alpha, out, &out.responsibilities);
         if (options.verbose > 0 && iteration % options.verbose == 0) {
             log_top_cluster_size_fractions(stats.membership, n,
                 "warmup iter " + std::to_string(iteration));
@@ -470,6 +570,14 @@ GammaPoissonClusterFitResult fit_batch(
         run_m_step(stats, model, alpha, options, out.diagnostics);
         ++out.diagnostics.warmup_iterations;
     }
+
+    GammaPoissonClusterModel diagonal_baseline = model;
+    RowMajorMatrixXd diagonal_responsibilities;
+    ClusterStatistics diagonal_stats = run_full_e_step(
+        coordinates, diagonal_baseline, options.n_threads,
+        diagonal_responsibilities, nullptr, true, dense_accumulation);
+    const double diagonal_log_likelihood =
+        diagonal_stats.predictive_log_likelihood;
 
     if (rank > 0) {
         if (warmup > 0) {
@@ -498,7 +606,7 @@ GammaPoissonClusterFitResult fit_batch(
                     out.responsibilities, use_sketch, true,
                     dense_accumulation);
                 out.model = model;
-                update_diagnostics(stats, alpha, out);
+                update_diagnostics(stats, alpha, out, &out.responsibilities);
                 if (options.verbose > 0
                     && out.diagnostics.structured_iterations % options.verbose == 0) {
                     log_top_cluster_size_fractions(stats.membership, n,
@@ -537,6 +645,16 @@ GammaPoissonClusterFitResult fit_batch(
 
     run_exact_em(coordinates, model, options, alpha, dense_accumulation,
         options.max_iterations, false, out);
+    if (rank > 0
+        && out.diagnostics.log_likelihood + 1e-8 < diagonal_log_likelihood) {
+        model = std::move(diagonal_baseline);
+        out.model = model;
+        out.responsibilities = std::move(diagonal_responsibilities);
+        out.effective_membership = diagonal_stats.membership;
+        out.diagnostics.structured_covariance_fallback = true;
+        out.diagnostics.covariance_accumulation = "diagonal-fallback";
+        update_diagnostics(diagonal_stats, alpha, out, &out.responsibilities);
+    }
     out.diagnostics.iterations = out.diagnostics.warmup_iterations
         + out.diagnostics.structured_iterations;
     return out;

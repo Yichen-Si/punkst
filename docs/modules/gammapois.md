@@ -98,7 +98,7 @@ punkst gamma-pois-fit \
   --in-data hex_12.txt --in-meta hex_12.json \
   --n-topics 12 --n-epochs 4 --size-factor 1000 \
   --minibatch-size 256 --min-count-train 20 \
-  ----estimate-dispersion ----dispersion-init-epochs 2 \
+  --estimate-dispersion --dispersion-init-epochs 2 \
   --out-prefix gp_h12_k12 \
   --transform --threads 4 --seed 1
 ```
@@ -342,11 +342,10 @@ Execution controls.
 
 ## `gamma-pois-cluster-fit`
 
-Fits an uncertainty-aware Gaussian mixture to a local posterior handoff. Each
-unit is represented in an identifiable log-ratio space, and the fitted first-
-stage Gamma posterior enters the mixture likelihood as per-unit measurement
-uncertainty, so units with noisier topic estimates are down-weighted during
-centroid estimation.
+Fits an uncertainty-aware Gaussian mixture to a local posterior handoff. The
+fitted first-stage Gamma posterior enters the mixture likelihood as per-unit
+measurement uncertainty, so units with noisier topic estimates are
+down-weighted during centroid estimation.
 
 ### Required
 
@@ -367,11 +366,51 @@ compressed correlated document uncertainty; otherwise mean-field diagonal
 uncertainty is used.
 
 `--n-clusters-max`
-Number of overfitted mixture components. Default: `10`.
+Number of mixture components. Default: `10`.
+
+`--coordinate-model`
+Document coordinates used by the mixture: `l2` (default) uses L2-normalized
+posterior mean topic intensities; `power-ilr` uses boundary-robust powered
+compositions in a fixed Helmert basis.
+
+For `power-ilr`, `--power-ilr-lambda` sets the exponent (default `0.5`),
+`--posterior-coordinate-samples` selects 8, 16, 32, or 64 deterministic Gamma
+draws per unit (default `16`), `--coordinate-cov-rank` controls the retained
+document-uncertainty rank (default `min(8,K-1)`), and `--coordinate-seed`
+controls the counter-based sampler. These settings are stored in the cluster
+state and automatically reused by `gamma-pois-cluster-transform`.
+
+Until structured covariance updates are validated for this geometry,
+power-ILR defaults to diagonal intrinsic cluster covariance when
+`--cluster-covariance-rank` is left automatic. An explicitly requested
+positive rank is experimental. Batch fitting compares it with the final
+diagonal warmup model and records `diagonal-fallback` in the state if the
+structured update lowers predictive likelihood.
+
+All coordinate models use the same plain cosine geometry on posterior mean
+topic intensities for k-means++ or Leiden initialization. This isolates the
+mixture coordinate and uncertainty model from the initializer.
+
+`--initializer leiden` constructs a cosine k-nearest-neighbor graph before
+community detection. Rows are L2-normalized even though topic intensities are
+compositions: a fixed L1 norm does not imply a fixed L2 norm, and Euclidean
+distance between normalized rows is exactly equivalent to cosine similarity.
+`--leiden-neighbors` defaults to `15`.
+
+`--leiden-knn-backend` selects `auto` (default), `kdtree`, or `flat`.
+Exact search remains automatic: positive `--leiden-knn-epsilon` selects the
+nanoflann kd-tree; otherwise `auto` uses the kd-tree through 16 dimensions and
+tiled exact flat search above 16 dimensions. The flat path never constructs a
+full pairwise matrix and uses Eigen multiplication. A positive epsilon is
+rejected by non-kd-tree backends. The requested and resolved backends are
+stored in the cluster state for reproducibility.
 
 `--min-cluster-size`
 Minimum absolute expected membership for a component to be reported active.
 Default: `5`. Filtering active flags never renormalizes responsibilities.
+
+`--candidate-components`
+Candidate components evaluated for each unit. Default: `0`, scoring all components. When the number of components (`--n-clusters-max`) is large, this option bounds per-unit work.
 
 `--n-representatives`
 Representative units written per active cluster. Default: `10`.
@@ -385,8 +424,9 @@ Default: `1`.
 `--optimizer`
 `svi` (default) runs in-memory stochastic VI; `batch` runs deterministic full-data EM.
 
-Initialization uses deterministic k-means++ followed by Lloyd refinement
-(`--kmeans-max-iter`, default `20`). EM updates means and covariance from exact
+The default initialization uses deterministic k-means++ followed by Lloyd
+refinement (`--kmeans-max-iter`, default `20`). Leiden is selected explicitly
+with `--initializer leiden`. EM updates means and covariance from exact
 conditional latent Gaussian moments, so document uncertainty is not subtracted
 a second time.
 
@@ -454,7 +494,9 @@ persisted basis and mixture model, and writes `{prefix}.results.tsv`.
 
 `{prefix}.model.tsv`
 Feature-by-topic matrix containing \(\hat\phi_{wr}\), the normalized topic-word
-distributions. Values are written in scientific notation.
+distributions. Floating-point values in Gamma-Poisson TSV outputs use
+scientific notation with four digits after the decimal point. The pseudobulk
+matrix retains its existing fixed three-decimal format.
 
 `{prefix}.state.tsv`
 Full Gamma-Poisson variational state. This file is required by
@@ -487,17 +529,3 @@ Written by default when the state contains feature dispersion and
 `--posterior-dispersion-rank` is nonnegative. This versioned, row-aligned binary
 sidecar stores a float32 diagonal-plus-low-rank approximation to the optional
 dispersion-induced log-topic covariance correction.
-
-
-## Implementation notes
-
-The current implementation uses dense `K x V` global sufficient statistics,
-matching the existing SVI LDA implementation style in this repository. Per
-minibatch, local inference costs \(O(I K \mathrm{nnz}(S))\), where \(I\) is the
-number of local iterations. The dense global update costs \(O(KV)\) and uses
-thread-local `K x V` buffers.
-
-A sparse minibatch-vocabulary update can reduce global work when each minibatch
-touches only a small fraction of the vocabulary, but the dense form is simpler,
-cache-friendly, and can be faster for moderate `K x V` or minibatches that touch
-much of the vocabulary.

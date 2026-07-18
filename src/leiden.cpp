@@ -37,7 +37,7 @@
 
 namespace {
 
-constexpr double kEps = 1e-9;           // strict-improvement threshold for moves
+constexpr double kMoveQualityEps = 1e-9; // dimensionless move-quality threshold
 constexpr double kQConvergeEps = 1e-9;  // quality-improvement threshold for convergence
 constexpr int32_t kUnboundedCap = 10000; // safety cap when max_iterations < 0
 
@@ -60,28 +60,53 @@ void finalize_strength(Graph& g) {
     for (int32_t i = 0; i < g.n; ++i) {
         double s = 2.0 * g.self_w[i];
         for (int64_t e = g.indptr[i]; e < g.indptr[i + 1]; ++e) s += g.wt[e];
+        if (!std::isfinite(s) || !std::isfinite(m2 + s)) {
+            throw std::invalid_argument(
+                "leiden_cluster: accumulated graph weight is not finite");
+        }
         g.strength[i] = s;
         m2 += s;
     }
     g.m2 = m2;
 }
 
-// Sort each node's adjacency by neighbor id so the graph has a canonical layout
-// (makes results independent of input edge order and improves locality).
-void sort_adjacency(Graph& g) {
+// Canonicalize each row and physically sum parallel edges.
+void sort_and_sum_adjacency(Graph& g) {
     std::vector<std::pair<int32_t, double>> tmp;
+    std::vector<int64_t> indptr(g.n + 1, 0);
+    std::vector<int32_t> neighbors;
+    std::vector<double> weights;
+    neighbors.reserve(g.nbr.size());
+    weights.reserve(g.wt.size());
     for (int32_t i = 0; i < g.n; ++i) {
-        const int64_t b = g.indptr[i], e = g.indptr[i + 1];
+        const int64_t begin = g.indptr[i], end = g.indptr[i + 1];
         tmp.clear();
-        tmp.reserve(static_cast<size_t>(e - b));
-        for (int64_t k = b; k < e; ++k) tmp.emplace_back(g.nbr[k], g.wt[k]);
-        std::sort(tmp.begin(), tmp.end(),
-                  [](const auto& a, const auto& b) { return a.first < b.first; });
-        for (int64_t k = b; k < e; ++k) {
-            g.nbr[k] = tmp[k - b].first;
-            g.wt[k] = tmp[k - b].second;
+        tmp.reserve(static_cast<size_t>(end - begin));
+        for (int64_t edge = begin; edge < end; ++edge) {
+            tmp.emplace_back(g.nbr[edge], g.wt[edge]);
         }
+        std::sort(tmp.begin(), tmp.end());
+        for (size_t position = 0; position < tmp.size();) {
+            const int32_t neighbor = tmp[position].first;
+            double weight = tmp[position].second;
+            size_t next = position + 1;
+            while (next < tmp.size() && tmp[next].first == neighbor) {
+                weight += tmp[next].second;
+                if (!std::isfinite(weight)) {
+                    throw std::invalid_argument(
+                        "leiden_cluster: accumulated graph weight is not finite");
+                }
+                ++next;
+            }
+            neighbors.push_back(neighbor);
+            weights.push_back(weight);
+            position = next;
+        }
+        indptr[i + 1] = static_cast<int64_t>(neighbors.size());
     }
+    g.indptr = std::move(indptr);
+    g.nbr = std::move(neighbors);
+    g.wt = std::move(weights);
 }
 
 double compute_quality(const Graph& g, const std::vector<int32_t>& memb, double gamma) {
@@ -105,6 +130,7 @@ double compute_quality(const Graph& g, const std::vector<int32_t>& memb, double 
 bool local_move(const Graph& g, std::vector<int32_t>& memb, double gamma, std::mt19937& rng) {
     const int32_t n = g.n;
     const double inv_m2 = 1.0 / g.m2;
+    const double move_eps = kMoveQualityEps * g.m2;
 
     std::vector<double> comm_strength(n, 0.0);
     std::vector<int32_t> comm_size(n, 0);
@@ -146,12 +172,12 @@ bool local_move(const Graph& g, std::vector<int32_t>& memb, double gamma, std::m
         for (int32_t c : touched) {
             if (c == old) continue;
             const double score = ewt[c] - gamma * kv * comm_strength[c] * inv_m2;
-            if (score > best_score + kEps) { best_score = score; best_c = c; best_empty = false; }
+            if (score > best_score + move_eps) { best_score = score; best_c = c; best_empty = false; }
         }
         // Consider isolating v into a fresh community (score 0) when it is not
         // already alone and an empty community id is available.
         if (comm_size[old] > 1 && !empty_comms.empty()) {
-            if (0.0 > best_score + kEps) { best_score = 0.0; best_empty = true; }
+            if (0.0 > best_score + move_eps) { best_score = 0.0; best_empty = true; }
         }
 
         for (int32_t c : touched) ewt[c] = 0.0;
@@ -182,6 +208,7 @@ std::vector<int32_t> refine(const Graph& g, const std::vector<int32_t>& memb,
                             double gamma, std::mt19937& rng, int32_t& n_refined_out) {
     const int32_t n = g.n;
     const double inv_m2 = 1.0 / g.m2;
+    const double move_eps = kMoveQualityEps * g.m2;
 
     std::vector<double> Kcomm(n, 0.0);
     for (int32_t i = 0; i < n; ++i) Kcomm[memb[i]] += g.strength[i];
@@ -230,7 +257,7 @@ std::vector<int32_t> refine(const Graph& g, const std::vector<int32_t>& memb,
             if (sub_size[refined[v]] != 1) continue;   // only singletons move
             const double kv = g.strength[v];
             // v must be well-connected to the rest of its community.
-            if (e_in_P[v] < gamma * kv * (K_R - kv) * inv_m2 - kEps) continue;
+            if (e_in_P[v] < gamma * kv * (K_R - kv) * inv_m2 - move_eps) continue;
 
             touched.clear();
             for (int64_t e = g.indptr[v]; e < g.indptr[v + 1]; ++e) {
@@ -242,11 +269,11 @@ std::vector<int32_t> refine(const Graph& g, const std::vector<int32_t>& memb,
             }
 
             int32_t best_c = -1;
-            double best_score = kEps;   // require a strictly positive gain
+            double best_score = move_eps;   // require a positive quality gain
             for (int32_t C : touched) {
                 if (C == refined[v]) continue;
                 // C must itself be well-connected to the rest of its community.
-                if (sub_ext[C] < gamma * sub_strength[C] * (K_R - sub_strength[C]) * inv_m2 - kEps) continue;
+                if (sub_ext[C] < gamma * sub_strength[C] * (K_R - sub_strength[C]) * inv_m2 - move_eps) continue;
                 const double score = ewt[C] - gamma * kv * sub_strength[C] * inv_m2;
                 if (score > best_score) { best_score = score; best_c = C; }
             }
@@ -348,20 +375,21 @@ Graph aggregate(const Graph& g, const std::vector<int32_t>& refined, int32_t nre
 // returning the resulting partition over the original nodes of g0.
 std::vector<int32_t> one_pass(const Graph& g0, const std::vector<int32_t>& init_memb,
                               double gamma, std::mt19937& rng) {
-    Graph g = g0;                       // level 0 operates on a working copy
+    const Graph* g = &g0;
+    Graph owned_graph;
     std::vector<int32_t> P = init_memb;
     std::vector<int32_t> cur_of_orig(g0.n);
     std::iota(cur_of_orig.begin(), cur_of_orig.end(), 0);
 
     while (true) {
-        local_move(g, P, gamma, rng);
+        local_move(*g, P, gamma, rng);
         int32_t nref = 0;
-        std::vector<int32_t> refined = refine(g, P, gamma, rng, nref);
-        if (nref >= g.n) break;         // refinement produced no aggregation
+        std::vector<int32_t> refined = refine(*g, P, gamma, rng, nref);
+        if (nref >= g->n) break;         // refinement produced no aggregation
 
-        Graph g_next = aggregate(g, refined, nref);
+        Graph g_next = aggregate(*g, refined, nref);
         std::vector<int32_t> P_next(nref, -1);
-        for (int32_t i = 0; i < g.n; ++i) {
+        for (int32_t i = 0; i < g->n; ++i) {
             const int32_t a = refined[i];
             if (P_next[a] < 0) P_next[a] = P[i];
         }
@@ -369,7 +397,7 @@ std::vector<int32_t> one_pass(const Graph& g0, const std::vector<int32_t>& init_
         // stay within the aggregate graph's node count (scratch arrays in the
         // next level's local_move/refine are sized to the node count).
         {
-            std::vector<int32_t> remap(g0.n, -1);
+            std::vector<int32_t> remap(g->n, -1);
             int32_t C = 0;
             for (int32_t a = 0; a < nref; ++a) {
                 if (remap[P_next[a]] == -1) remap[P_next[a]] = C++;
@@ -377,7 +405,8 @@ std::vector<int32_t> one_pass(const Graph& g0, const std::vector<int32_t>& init_
             }
         }
         for (int32_t i = 0; i < g0.n; ++i) cur_of_orig[i] = refined[cur_of_orig[i]];
-        g = std::move(g_next);
+        owned_graph = std::move(g_next);
+        g = &owned_graph;
         P = std::move(P_next);
     }
 
@@ -387,6 +416,11 @@ std::vector<int32_t> one_pass(const Graph& g0, const std::vector<int32_t>& init_
 }
 
 LeidenResult run_leiden(const Graph& g0, const LeidenOptions& options) {
+    if (!std::isfinite(options.resolution) || options.resolution <= 0.0
+        || options.max_iterations == 0) {
+        throw std::invalid_argument(
+            "leiden_cluster: resolution must be positive and iteration cap nonzero");
+    }
     const int32_t n = g0.n;
     const double gamma = options.resolution;
     std::mt19937 rng(static_cast<uint32_t>(options.seed));
@@ -402,8 +436,16 @@ LeidenResult run_leiden(const Graph& g0, const LeidenOptions& options) {
         std::vector<int32_t> newm = one_pass(g0, memb, gamma, rng);
         ++iter;
         const double q_new = compute_quality(g0, newm, gamma);
+        if (q_new < q_prev - kQConvergeEps) {
+            converged = true;
+            break;
+        }
         memb = std::move(newm);
-        if (q_new <= q_prev + kQConvergeEps) { q_prev = q_new; converged = true; break; }
+        if (q_new <= q_prev + kQConvergeEps) {
+            q_prev = q_new;
+            converged = true;
+            break;
+        }
         q_prev = q_new;
     }
 
@@ -439,7 +481,13 @@ Graph build_from_sparse(const Eigen::Ref<const LeidenSparseMatrix>& A) {
             if (!std::isfinite(w) || w < 0.0)
                 throw std::invalid_argument("leiden_cluster: weights must be finite and non-negative");
             if (w == 0.0) continue;
-            if (j == i) g.self_w[i] += w;
+            if (j == i) {
+                g.self_w[i] += w;
+                if (!std::isfinite(g.self_w[i])) {
+                    throw std::invalid_argument(
+                        "leiden_cluster: accumulated graph weight is not finite");
+                }
+            }
             else g.indptr[i + 1] += 1;
         }
     }
@@ -457,7 +505,7 @@ Graph build_from_sparse(const Eigen::Ref<const LeidenSparseMatrix>& A) {
             pos[i]++;
         }
     }
-    sort_adjacency(g);
+    sort_and_sum_adjacency(g);
     finalize_strength(g);
     if (g.m2 <= 0.0)
         throw std::invalid_argument("leiden_cluster: graph has no positive-weight edges");
@@ -484,7 +532,13 @@ Graph build_from_edges(int32_t n, const std::vector<std::pair<int32_t, int32_t>>
         if (!std::isfinite(w) || w < 0.0)
             throw std::invalid_argument("leiden_cluster: weights must be finite and non-negative");
         if (w == 0.0) continue;
-        if (u == v) g.self_w[u] += w;
+        if (u == v) {
+            g.self_w[u] += w;
+            if (!std::isfinite(g.self_w[u])) {
+                throw std::invalid_argument(
+                    "leiden_cluster: accumulated graph weight is not finite");
+            }
+        }
         else { g.indptr[u + 1] += 1; g.indptr[v + 1] += 1; }
     }
     for (int32_t i = 0; i < n; ++i) g.indptr[i + 1] += g.indptr[i];
@@ -498,7 +552,7 @@ Graph build_from_edges(int32_t n, const std::vector<std::pair<int32_t, int32_t>>
         g.nbr[pos[u]] = v; g.wt[pos[u]] = w; pos[u]++;
         g.nbr[pos[v]] = u; g.wt[pos[v]] = w; pos[v]++;
     }
-    sort_adjacency(g);
+    sort_and_sum_adjacency(g);
     finalize_strength(g);
     if (g.m2 <= 0.0)
         throw std::invalid_argument("leiden_cluster: graph has no positive-weight edges");

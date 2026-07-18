@@ -8,6 +8,9 @@
 #include <stdexcept>
 #include <vector>
 
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+
 namespace {
 
 void assign_to_centers(
@@ -18,26 +21,34 @@ void assign_to_centers(
     const Eigen::Index n = observations.rows();
     assignments.resize(n);
     distances.resize(n);
+    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, n, 256),
+        [&](const tbb::blocked_range<Eigen::Index>& range) {
+            for (Eigen::Index d = range.begin(); d < range.end(); ++d) {
+                Eigen::Index best = 0;
+                double best_distance =
+                    (observations.row(d) - centers.row(0)).squaredNorm();
+                for (Eigen::Index c = 1; c < centers.rows(); ++c) {
+                    const double distance =
+                        (observations.row(d) - centers.row(c)).squaredNorm();
+                    if (distance < best_distance) {
+                        best = c;
+                        best_distance = distance;
+                    }
+                }
+                assignments(d) = static_cast<int32_t>(best);
+                distances(d) = best_distance;
+            }
+        });
+
     counts = Eigen::VectorXi::Zero(centers.rows());
     inertia = 0.0;
     for (Eigen::Index d = 0; d < n; ++d) {
-        Eigen::Index best = 0;
-        double best_distance = (observations.row(d) - centers.row(0)).squaredNorm();
-        for (Eigen::Index c = 1; c < centers.rows(); ++c) {
-            const double distance = (observations.row(d) - centers.row(c)).squaredNorm();
-            if (distance < best_distance) {
-                best = c;
-                best_distance = distance;
-            }
-        }
-        assignments(d) = static_cast<int32_t>(best);
-        distances(d) = best_distance;
-        ++counts(best);
-        inertia += best_distance;
+        ++counts(assignments(d));
+        inertia += distances(d);
     }
 }
 
-bool update_centers_with_empty_repair(
+void update_centers_with_empty_repair(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     Eigen::VectorXi& assignments, Eigen::VectorXd& distances,
     Eigen::VectorXi& counts, RowMajorMatrixXd& centers) {
@@ -47,16 +58,13 @@ bool update_centers_with_empty_repair(
         sums.row(assignments(d)) += observations.row(d);
     }
 
-    bool repaired = false;
-    std::vector<bool> reseeded(observations.rows(), false);
     for (Eigen::Index empty = 0; empty < centers.rows(); ++empty) {
         if (counts(empty) > 0) continue;
         Eigen::Index farthest = -1;
         double farthest_distance = -1.0;
         for (Eigen::Index d = 0; d < observations.rows(); ++d) {
             const int32_t donor = assignments(d);
-            if (!reseeded[d] && counts(donor) > 1
-                && distances(d) > farthest_distance) {
+            if (counts(donor) > 1 && distances(d) > farthest_distance) {
                 farthest = d;
                 farthest_distance = distances(d);
             }
@@ -71,14 +79,23 @@ bool update_centers_with_empty_repair(
         sums.row(empty) = observations.row(farthest);
         counts(empty) = 1;
         distances(farthest) = 0.0;
-        reseeded[farthest] = true;
-        repaired = true;
     }
 
     for (Eigen::Index c = 0; c < centers.rows(); ++c) {
         centers.row(c) = sums.row(c) / static_cast<double>(counts(c));
     }
-    return repaired;
+}
+
+double assigned_inertia(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const Eigen::Ref<const RowMajorMatrixXd>& centers,
+    const Eigen::VectorXi& assignments) {
+    double inertia = 0.0;
+    for (Eigen::Index d = 0; d < observations.rows(); ++d) {
+        inertia += (observations.row(d)
+            - centers.row(assignments(d))).squaredNorm();
+    }
+    return inertia;
 }
 
 } // namespace
@@ -103,15 +120,21 @@ DenseKMeansResult dense_kmeans(
     std::uniform_int_distribution<Eigen::Index> first_distribution(0, n - 1);
     std::vector<Eigen::Index> seeds;
     seeds.reserve(clusters);
+    std::vector<uint8_t> selected_seed(static_cast<size_t>(n), uint8_t{0});
     seeds.push_back(first_distribution(random_engine));
+    selected_seed[seeds.back()] = 1;
     Eigen::VectorXd min_distance = Eigen::VectorXd::Constant(
         n, std::numeric_limits<double>::infinity());
     while (static_cast<int32_t>(seeds.size()) < clusters) {
         const Eigen::Index latest = seeds.back();
-        for (Eigen::Index d = 0; d < n; ++d) {
-            min_distance(d) = std::min(min_distance(d),
-                (observations.row(d) - observations.row(latest)).squaredNorm());
-        }
+        tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, n, 256),
+            [&](const tbb::blocked_range<Eigen::Index>& range) {
+                for (Eigen::Index d = range.begin(); d < range.end(); ++d) {
+                    min_distance(d) = std::min(min_distance(d),
+                        (observations.row(d)
+                            - observations.row(latest)).squaredNorm());
+                }
+            });
         const double total = min_distance.sum();
         Eigen::Index selected = -1;
         if (total > 0.0 && std::isfinite(total)) {
@@ -128,13 +151,14 @@ DenseKMeansResult dense_kmeans(
         }
         if (selected < 0) {
             for (Eigen::Index d = 0; d < n; ++d) {
-                if (std::find(seeds.begin(), seeds.end(), d) == seeds.end()) {
+                if (!selected_seed[d]) {
                     selected = d;
                     break;
                 }
             }
         }
         seeds.push_back(selected);
+        selected_seed[selected] = 1;
     }
     for (int32_t c = 0; c < clusters; ++c) {
         out.centers.row(c) = observations.row(seeds[c]);
@@ -145,9 +169,10 @@ DenseKMeansResult dense_kmeans(
     for (int32_t iteration = 0; iteration < options.max_iterations; ++iteration) {
         assign_to_centers(observations, out.centers, out.assignments,
             distances, out.counts, out.inertia);
-        bool changed = (out.assignments.array() != previous.array()).any();
-        changed = update_centers_with_empty_repair(observations,
-            out.assignments, distances, out.counts, out.centers) || changed;
+        update_centers_with_empty_repair(observations,
+            out.assignments, distances, out.counts, out.centers);
+        const bool changed =
+            (out.assignments.array() != previous.array()).any();
         out.iterations = iteration + 1;
         if (!changed) {
             out.converged = true;
@@ -155,11 +180,8 @@ DenseKMeansResult dense_kmeans(
         }
         previous = out.assignments;
     }
-    out.inertia = 0.0;
-    for (Eigen::Index d = 0; d < n; ++d) {
-        out.inertia += (observations.row(d)
-            - out.centers.row(out.assignments(d))).squaredNorm();
-    }
+    out.inertia = assigned_inertia(
+        observations, out.centers, out.assignments);
     return out;
 }
 
@@ -197,10 +219,10 @@ DenseKMeansResult sampled_dense_kmeans(
         distances, out.counts, out.inertia);
     update_centers_with_empty_repair(observations, out.assignments,
         distances, out.counts, out.centers);
-    out.inertia = 0.0;
-    for (Eigen::Index d = 0; d < observations.rows(); ++d) {
-        out.inertia += (observations.row(d)
-            - out.centers.row(out.assignments(d))).squaredNorm();
-    }
+    out.inertia = assigned_inertia(
+        observations, out.centers, out.assignments);
+    // The sample fit may converge, but the bounded full-data update is not a
+    // full Lloyd solve and must not be reported as one.
+    out.converged = false;
     return out;
 }

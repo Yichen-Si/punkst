@@ -704,7 +704,7 @@ void GammaPoissonTopicBase::write_model(const std::string& outFile,
         out << "\t" << t_names[k];
     }
     out << "\n";
-    out << std::scientific << std::setprecision(6);
+    out << std::scientific << std::setprecision(4);
     for (int32_t w = 0; w < n_features_; ++w) {
         const std::string feature = w < static_cast<int32_t>(featureNames.size())
             ? featureNames[w] : std::to_string(w);
@@ -722,7 +722,7 @@ void GammaPoissonTopicModel::write_state(const std::string& outFile,
     if (!out) {
         error("%s: Error opening output file: %s", __func__, outFile.c_str());
     }
-    out << std::setprecision(17);
+    out << std::scientific << std::setprecision(4);
     out << "#punkst_gamma_pois_state_v2\n";
     out << "#n_topics\t" << n_topics_ << "\n";
     out << "#n_features\t" << n_features_ << "\n";

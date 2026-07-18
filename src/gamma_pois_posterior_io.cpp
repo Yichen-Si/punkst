@@ -187,6 +187,7 @@ GammaPoissonPosteriorReader::GammaPoissonPosteriorReader(
     bool saw_n_topics = false;
     bool saw_checksum = false;
     bool saw_row_order = false;
+    bool saw_artifact_id = false;
     bool saw_sidecar_id = false;
     std::vector<std::string> rate_topic_names;
     while (std::getline(in_, line)) {
@@ -209,6 +210,13 @@ GammaPoissonPosteriorReader::GammaPoissonPosteriorReader(
                 if (saw_row_order) throw std::runtime_error("Duplicate Gamma-Poisson posterior row order");
                 header_.row_order = fields[1];
                 saw_row_order = true;
+            } else if (fields[0] == "artifact_id" && fields.size() == 2) {
+                if (saw_artifact_id) {
+                    throw std::runtime_error(
+                        "Duplicate Gamma-Poisson posterior artifact ID");
+                }
+                header_.artifact_id = parse_gamma_poisson_artifact_id(fields[1]);
+                saw_artifact_id = true;
             } else if (fields[0] == "dispersion_sidecar_id"
                     && fields.size() == 2) {
                 if (saw_sidecar_id) {

@@ -249,7 +249,7 @@ void write_gamma_poisson_dispersion_diagnostics(const std::string& out_file,
     std::ofstream out(out_file);
     if (!out) error("%s: Error opening output file: %s", __func__, out_file.c_str());
     out << "Feature\tn_positive\tphi_raw\tphi_shrunk\ttau\tstatus\n";
-    out << std::scientific << std::setprecision(6);
+    out << std::scientific << std::setprecision(4);
     for (size_t w = 0; w < result.diagnostics.size(); ++w) {
         const auto& d = result.diagnostics[w];
         out << (w < feature_names.size() ? feature_names[w] : std::to_string(w))
