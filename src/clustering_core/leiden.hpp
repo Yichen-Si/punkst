@@ -1,5 +1,7 @@
 #pragma once
 
+// Reusable native Leiden community detection.
+
 #include <cstdint>
 #include <utility>
 #include <vector>

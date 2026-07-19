@@ -54,7 +54,7 @@ add_library(Eigen3::Eigen INTERFACE IMPORTED)
 set_target_properties(Eigen3::Eigen PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}")
 
-# Developer-only for tiled exact cosine k-NN
+# Developer-only comparison for tiled exact inner-product k-NN.
 option(PUNKST_EXPERIMENTAL_CBLAS "Build the developer-only CBLAS comparison kernel" OFF)
 mark_as_advanced(PUNKST_EXPERIMENTAL_CBLAS)
 set(PUNKST_HAVE_CBLAS 0)
@@ -77,17 +77,17 @@ if (PUNKST_EXPERIMENTAL_CBLAS)
       if (PUNKST_OPENBLAS_THREAD_API_WORKS)
         set(PUNKST_HAVE_OPENBLAS 1)
       endif()
-      message(STATUS "Enabled developer-only CBLAS cosine k-NN comparison kernel")
+      message(STATUS "Enabled developer-only CBLAS inner-product k-NN comparison kernel")
     else()
-      message(STATUS "BLAS found without a usable CBLAS interface; using Eigen cosine k-NN")
+      message(STATUS "BLAS found without a usable CBLAS interface; using Eigen k-NN")
     endif()
     unset(CMAKE_REQUIRED_INCLUDES)
     unset(CMAKE_REQUIRED_LIBRARIES)
   else()
-    message(STATUS "CBLAS not found; using Eigen cosine k-NN")
+    message(STATUS "CBLAS not found; using Eigen k-NN")
   endif()
 else()
-  message(STATUS "Using Eigen cosine k-NN (developer CBLAS comparison disabled)")
+  message(STATUS "Using Eigen k-NN (developer CBLAS comparison disabled)")
 endif()
 
 option(ENABLE_IMAGE_OUTPUT "Build PNG image output commands" ON)
@@ -111,6 +111,31 @@ add_library(Clipper2_core STATIC
 )
 target_include_directories(Clipper2_core PUBLIC
   ${CLIPPER2_DIR}/CPP/Clipper2Lib/include
+)
+
+set(CLUSTERING_CORE_SOURCE_FILES
+    src/clustering_core/dense_kmeans.hpp
+    src/clustering_core/dense_kmeans.cpp
+    src/clustering_core/knn.hpp
+    src/clustering_core/knn_internal.hpp
+    src/clustering_core/knn.cpp
+    src/clustering_core/cosine_clustering.hpp
+    src/clustering_core/cosine_clustering.cpp
+    src/clustering_core/leiden.hpp
+    src/clustering_core/leiden.cpp
+)
+
+set(CLUSTERING_SOURCE_FILES
+    src/clustering/low_rank_covariance.hpp
+    src/clustering/low_rank_covariance.cpp
+    src/clustering/gamma_pois_cluster.hpp
+    src/clustering/gamma_pois_cluster.cpp
+    src/clustering/gamma_pois_cluster_internal.hpp
+    src/clustering/gamma_pois_cluster_candidates.cpp
+    src/clustering/gamma_pois_cluster_expectation.cpp
+    src/clustering/gamma_pois_cluster_covariance.cpp
+    src/clustering/gamma_pois_cluster_fit.cpp
+    src/clustering/gamma_pois_cluster_svi.cpp
 )
 
 set(SOURCE_FILES
@@ -144,20 +169,8 @@ set(SOURCE_FILES
     src/gamma_pois_topic.cpp
     src/gamma_pois_dispersion.hpp
     src/gamma_pois_dispersion.cpp
-    src/dense_kmeans.hpp
-    src/dense_kmeans.cpp
-    src/cosine_clustering.hpp
-    src/cosine_clustering.cpp
-    src/low_rank_covariance.hpp
-    src/low_rank_covariance.cpp
-    src/gamma_pois_cluster.hpp
-    src/gamma_pois_cluster.cpp
-    src/gamma_pois_cluster_internal.hpp
-    src/gamma_pois_cluster_candidates.cpp
-    src/gamma_pois_cluster_expectation.cpp
-    src/gamma_pois_cluster_covariance.cpp
-    src/gamma_pois_cluster_fit.cpp
-    src/gamma_pois_cluster_svi.cpp
+    ${CLUSTERING_CORE_SOURCE_FILES}
+    ${CLUSTERING_SOURCE_FILES}
     src/gamma_pois_posterior_io.hpp
     src/gamma_pois_posterior_io.cpp
     src/hdp.hpp
@@ -166,8 +179,6 @@ set(SOURCE_FILES
     src/topic_svb.cpp
     src/numerical_utils.hpp
     src/numerical_utils.cpp
-    src/leiden.hpp
-    src/leiden.cpp
     src/pts2tiles.hpp
     script/preprocess_options.hpp
     script/factor_eval_common.hpp

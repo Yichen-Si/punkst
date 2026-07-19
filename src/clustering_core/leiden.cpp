@@ -1,4 +1,4 @@
-#include "leiden.hpp"
+#include "clustering_core/leiden.hpp"
 
 #include <algorithm>
 #include <cassert>

@@ -1,6 +1,6 @@
-#include "gamma_pois_cluster_internal.hpp"
-#include "cosine_clustering.hpp"
-#include "dense_kmeans.hpp"
+#include "clustering/gamma_pois_cluster_internal.hpp"
+#include "clustering_core/cosine_clustering.hpp"
+#include "clustering_core/dense_kmeans.hpp"
 #include "error.hpp"
 
 #include <algorithm>

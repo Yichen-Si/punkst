@@ -1,5 +1,5 @@
-#include "gamma_pois_cluster.hpp"
-#include "dense_kmeans.hpp"
+#include "clustering/gamma_pois_cluster.hpp"
+#include "clustering_core/dense_kmeans.hpp"
 
 #include <algorithm>
 #include <array>

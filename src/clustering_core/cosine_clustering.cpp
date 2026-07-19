@@ -1,5 +1,6 @@
-#include "cosine_clustering.hpp"
+#include "clustering_core/cosine_clustering.hpp"
 
+#include "clustering_core/knn_internal.hpp"
 #include "nanoflann.hpp"
 
 #include <algorithm>
@@ -7,7 +8,6 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -17,11 +17,6 @@
 #include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
 #include <tbb/parallel_for.h>
-#include <tbb/parallel_sort.h>
-
-#if PUNKST_HAVE_CBLAS
-#include <cblas.h>
-#endif
 
 namespace {
 
@@ -85,62 +80,13 @@ private:
     double* distances_ = nullptr;
 };
 
-struct WeightedEdge {
-    int32_t first = 0;
-    int32_t second = 0;
-    double weight = 0.0;
-};
-
-struct CosineCandidate {
-    int32_t index = -1;
-    double similarity = -std::numeric_limits<double>::infinity();
-};
-
-bool cosine_candidate_better(
-    const CosineCandidate& first, const CosineCandidate& second) {
-    return first.similarity > second.similarity
-        || (first.similarity == second.similarity
-            && first.index < second.index);
-}
-
-// With this comparator std::priority_queue keeps the worst retained candidate
-// at the top, making deterministic boundary replacement O(log k).
-struct CosineCandidateBetter {
-    bool operator()(const CosineCandidate& first,
-                    const CosineCandidate& second) const {
-        return cosine_candidate_better(first, second);
-    }
-};
-
-using CandidateHeap = std::priority_queue<CosineCandidate,
-    std::vector<CosineCandidate>, CosineCandidateBetter>;
-
 using Clock = std::chrono::steady_clock;
 
 double elapsed_seconds(const Clock::time_point& begin) {
     return std::chrono::duration<double>(Clock::now() - begin).count();
 }
 
-void retain_candidate(CandidateHeap& heap, int32_t capacity,
-                      const CosineCandidate& candidate) {
-    if (static_cast<int32_t>(heap.size()) < capacity) {
-        heap.push(candidate);
-    } else if (cosine_candidate_better(candidate, heap.top())) {
-        heap.pop();
-        heap.push(candidate);
-    }
-}
-
-struct DirectedNeighbor {
-    int32_t index = -1;
-    double similarity = 0.0;
-};
-
-bool weighted_edge_less(const WeightedEdge& first, const WeightedEdge& second) {
-    if (first.first != second.first) return first.first < second.first;
-    if (first.second != second.second) return first.second < second.second;
-    return first.weight < second.weight;
-}
+using knn_detail::DirectedNeighbor;
 
 CosineKnnBackend resolve_backend(
     const CosineKnnOptions& options, Eigen::Index dimensions) {
@@ -156,10 +102,10 @@ CosineFlatKernel resolve_flat_kernel(CosineFlatKernel requested) {
         return CosineFlatKernel::Eigen;
     }
     if (requested == CosineFlatKernel::Cblas) {
-#if !PUNKST_HAVE_CBLAS
-        throw std::invalid_argument(
-            "The CBLAS cosine k-NN kernel is not available in this build");
-#endif
+        if (!knn_cblas_available()) {
+            throw std::invalid_argument(
+                "The CBLAS cosine k-NN kernel is not available in this build");
+        }
     }
     return requested;
 }
@@ -238,159 +184,21 @@ std::vector<DirectedNeighbor> kd_tree_neighbors(
     return directed;
 }
 
-#if PUNKST_HAVE_OPENBLAS
-class ScopedOpenBlasThreads {
-public:
-    explicit ScopedOpenBlasThreads(int32_t threads)
-        : previous_(openblas_get_num_threads()) {
-        openblas_set_num_threads(threads);
+CosineKnnGraph filter_positive_cosine_graph(KnnGraph graph) {
+    size_t write = 0;
+    for (size_t read = 0; read < graph.weights.size(); ++read) {
+        if (graph.weights[read] <= 0.0) continue;
+        graph.edges[write] = graph.edges[read];
+        graph.weights[write] = graph.weights[read];
+        ++write;
     }
-    ~ScopedOpenBlasThreads() { openblas_set_num_threads(previous_); }
-private:
-    int previous_ = 1;
-};
-#endif
-
-std::vector<DirectedNeighbor> flat_neighbors(
-    const RowMajorMatrixXd& normalized, int32_t neighbors,
-    CosineFlatKernel kernel, int32_t n_threads, CosineKnnTimings& timings) {
-    constexpr int32_t query_tile = 512;
-    constexpr int32_t database_tile = 4096;
-    const int32_t n = static_cast<int32_t>(normalized.rows());
-    const int32_t dimensions = static_cast<int32_t>(normalized.cols());
-    std::vector<DirectedNeighbor> directed(
-        static_cast<size_t>(n) * static_cast<size_t>(neighbors));
-
-#if PUNKST_HAVE_OPENBLAS
-    std::unique_ptr<ScopedOpenBlasThreads> blas_threads;
-    if (kernel == CosineFlatKernel::Cblas) {
-        blas_threads = std::make_unique<ScopedOpenBlasThreads>(n_threads);
-    }
-#endif
-
-    for (int32_t query_begin = 0; query_begin < n;
-         query_begin += query_tile) {
-        const int32_t query_count = std::min(query_tile, n - query_begin);
-        std::vector<CandidateHeap> heaps(static_cast<size_t>(query_count));
-        for (int32_t database_begin = 0; database_begin < n;
-             database_begin += database_tile) {
-            const int32_t database_count = std::min(
-                database_tile, n - database_begin);
-            RowMajorMatrixXd similarities(query_count, database_count);
-            const auto query_clock = Clock::now();
-            if (kernel == CosineFlatKernel::Eigen) {
-                tbb::parallel_for(tbb::blocked_range<int32_t>(0,
-                    query_count, 32), [&](const tbb::blocked_range<int32_t>& range) {
-                    similarities.middleRows(range.begin(), range.size()).noalias() =
-                        normalized.middleRows(
-                            query_begin + range.begin(), range.size())
-                        * normalized.middleRows(
-                            database_begin, database_count).transpose();
-                });
-            } else {
-#if PUNKST_HAVE_CBLAS
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                    query_count, database_count, dimensions, 1.0,
-                    normalized.data()
-                        + static_cast<size_t>(query_begin) * dimensions,
-                    dimensions,
-                    normalized.data()
-                        + static_cast<size_t>(database_begin) * dimensions,
-                    dimensions, 0.0, similarities.data(), database_count);
-#else
-                throw std::logic_error("CBLAS kernel selected without CBLAS");
-#endif
-            }
-            timings.query_seconds += elapsed_seconds(query_clock);
-
-            const auto topk_clock = Clock::now();
-            tbb::parallel_for(tbb::blocked_range<int32_t>(0, query_count, 16),
-                [&](const tbb::blocked_range<int32_t>& range) {
-                    for (int32_t local = range.begin(); local < range.end(); ++local) {
-                        CandidateHeap& heap = heaps[static_cast<size_t>(local)];
-                        const int32_t query = query_begin + local;
-                        for (int32_t column = 0; column < database_count; ++column) {
-                            const int32_t other = database_begin + column;
-                            if (other == query) continue;
-                            retain_candidate(heap, neighbors, {other,
-                                std::clamp(similarities(local, column), -1.0, 1.0)});
-                        }
-                    }
-                });
-            timings.topk_seconds += elapsed_seconds(topk_clock);
-        }
-        tbb::parallel_for(tbb::blocked_range<int32_t>(0, query_count, 32),
-            [&](const tbb::blocked_range<int32_t>& range) {
-                for (int32_t local = range.begin(); local < range.end(); ++local) {
-                    CandidateHeap& heap = heaps[static_cast<size_t>(local)];
-                    if (static_cast<int32_t>(heap.size()) != neighbors) {
-                        throw std::runtime_error(
-                            "Flat cosine k-NN returned too few neighbors");
-                    }
-                    std::vector<CosineCandidate> ordered;
-                    ordered.reserve(static_cast<size_t>(neighbors));
-                    while (!heap.empty()) {
-                        ordered.push_back(heap.top());
-                        heap.pop();
-                    }
-                    std::sort(ordered.begin(), ordered.end(),
-                        cosine_candidate_better);
-                    const int32_t query = query_begin + local;
-                    for (int32_t position = 0; position < neighbors; ++position) {
-                        const CosineCandidate& candidate =
-                            ordered[static_cast<size_t>(position)];
-                        directed[static_cast<size_t>(query) * neighbors + position] =
-                            {candidate.index, candidate.similarity};
-                    }
-                }
-            });
-    }
-    return directed;
-}
-
-CosineKnnGraph reduce_cosine_graph(
-    const std::vector<DirectedNeighbor>& directed,
-    int32_t n, int32_t neighbors) {
-    std::vector<WeightedEdge> graph;
-    graph.reserve(directed.size());
-    for (int32_t row = 0; row < n; ++row) {
-        for (int32_t position = 0; position < neighbors; ++position) {
-            const DirectedNeighbor& neighbor = directed[
-                static_cast<size_t>(row) * neighbors + position];
-            if (neighbor.index < 0 || neighbor.index >= n
-                || neighbor.index == row) {
-                throw std::runtime_error("Invalid directed cosine neighbor");
-            }
-            if (neighbor.similarity <= 0.0) continue;
-            graph.push_back({std::min(row, neighbor.index),
-                std::max(row, neighbor.index), neighbor.similarity});
-        }
-    }
-    if (graph.empty()) {
+    graph.edges.resize(write);
+    graph.weights.resize(write);
+    if (graph.edges.empty()) {
         throw std::invalid_argument(
             "Cosine k-NN graph has no positive-similarity edges");
     }
-    tbb::parallel_sort(graph.begin(), graph.end(), weighted_edge_less);
-
-    CosineKnnGraph out;
-    out.n_nodes = n;
-    out.edges.reserve(graph.size());
-    out.weights.reserve(graph.size());
-    for (size_t position = 0; position < graph.size();) {
-        const int32_t first = graph[position].first;
-        const int32_t second = graph[position].second;
-        double weight = graph[position].weight;
-        size_t next = position + 1;
-        while (next < graph.size() && graph[next].first == first
-               && graph[next].second == second) {
-            weight = std::max(weight, graph[next].weight);
-            ++next;
-        }
-        out.edges.emplace_back(first, second);
-        out.weights.push_back(weight);
-        position = next;
-    }
-    return out;
+    return graph;
 }
 
 struct CommunityStats {
@@ -552,12 +360,7 @@ const char* cosine_knn_backend_name(CosineKnnBackend backend) {
 }
 
 const char* cosine_flat_kernel_name(CosineFlatKernel kernel) {
-    switch (kernel) {
-        case CosineFlatKernel::Auto: return "auto";
-        case CosineFlatKernel::Eigen: return "eigen";
-        case CosineFlatKernel::Cblas: return "cblas";
-    }
-    return "unknown";
+    return knn_flat_kernel_name(kernel);
 }
 
 CosineKnnBackend parse_cosine_knn_backend(const std::string& value) {
@@ -569,19 +372,11 @@ CosineKnnBackend parse_cosine_knn_backend(const std::string& value) {
 }
 
 CosineFlatKernel parse_cosine_flat_kernel(const std::string& value) {
-    if (value == "auto") return CosineFlatKernel::Auto;
-    if (value == "eigen") return CosineFlatKernel::Eigen;
-    if (value == "cblas") return CosineFlatKernel::Cblas;
-    throw std::invalid_argument(
-        "Cosine flat kernel must be auto, eigen, or cblas");
+    return parse_knn_flat_kernel(value);
 }
 
 bool cosine_knn_cblas_available() {
-#if PUNKST_HAVE_CBLAS
-    return true;
-#else
-    return false;
-#endif
+    return knn_cblas_available();
 }
 
 CosineKnnResult cosine_knn(
@@ -620,13 +415,22 @@ CosineKnnResult cosine_knn(
                 options.knn_search_epsilon, out.diagnostics.timings);
             break;
         case CosineKnnBackend::Flat:
-            directed = flat_neighbors(normalized, neighbors,
-                out.diagnostics.resolved_flat_kernel, options.n_threads,
-                out.diagnostics.timings);
+            {
+                InnerProductKnnTimings flat_timings;
+                directed = knn_detail::flat_inner_product_neighbors(
+                    normalized, neighbors,
+                    out.diagnostics.resolved_flat_kernel, options.n_threads,
+                    true, flat_timings);
+                out.diagnostics.timings.query_seconds =
+                    flat_timings.query_seconds;
+                out.diagnostics.timings.topk_seconds =
+                    flat_timings.topk_seconds;
+            }
             break;
     }
     const auto reduction_begin = Clock::now();
-    out.graph = reduce_cosine_graph(directed, n, neighbors);
+    out.graph = filter_positive_cosine_graph(
+        knn_detail::union_max_knn_graph(directed, n, neighbors));
     out.diagnostics.timings.graph_reduction_seconds =
         elapsed_seconds(reduction_begin);
     return out;

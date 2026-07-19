@@ -1,4 +1,4 @@
-#include "gamma_pois_cluster_internal.hpp"
+#include "clustering/gamma_pois_cluster_internal.hpp"
 
 #include <algorithm>
 #include <cmath>

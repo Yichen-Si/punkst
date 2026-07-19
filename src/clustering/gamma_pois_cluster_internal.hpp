@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gamma_pois_cluster.hpp"
+#include "clustering/gamma_pois_cluster.hpp"
 
 #include <cstdint>
 #include <string>

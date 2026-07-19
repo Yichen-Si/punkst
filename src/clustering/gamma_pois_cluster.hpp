@@ -6,9 +6,9 @@
 #include <vector>
 
 #include "numerical_utils.hpp"
-#include "cosine_clustering.hpp"
+#include "clustering_core/cosine_clustering.hpp"
 #include "gamma_pois_posterior_io.hpp"
-#include "low_rank_covariance.hpp"
+#include "clustering/low_rank_covariance.hpp"
 
 struct GammaPoissonLogMoments {
     Eigen::VectorXd mean;

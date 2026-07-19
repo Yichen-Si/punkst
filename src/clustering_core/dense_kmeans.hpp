@@ -1,5 +1,7 @@
 #pragma once
 
+// Reusable dense k-means utilities.
+
 #include <cstdint>
 
 #include "numerical_utils.hpp"

@@ -1,4 +1,4 @@
-#include "dense_kmeans.hpp"
+#include "clustering_core/dense_kmeans.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -1,4 +1,4 @@
-#include "low_rank_covariance.hpp"
+#include "clustering/low_rank_covariance.hpp"
 
 #include <cmath>
 #include <stdexcept>

@@ -5,8 +5,9 @@
 #include <utility>
 #include <vector>
 
-#include "dense_kmeans.hpp"
-#include "leiden.hpp"
+#include "clustering_core/dense_kmeans.hpp"
+#include "clustering_core/knn.hpp"
+#include "clustering_core/leiden.hpp"
 
 enum class CosineKnnBackend {
     Auto,
@@ -14,11 +15,7 @@ enum class CosineKnnBackend {
     Flat
 };
 
-enum class CosineFlatKernel {
-    Auto,
-    Eigen,
-    Cblas
-};
+using CosineFlatKernel = KnnFlatKernel;
 
 struct CosineKnnOptions {
     int32_t n_neighbors = 15;
@@ -57,11 +54,7 @@ struct CosineLeidenResult {
 // Canonical union-symmetrized cosine k-nearest-neighbor graph. Each edge is
 // listed once with first < second; edges are lexicographically sorted and
 // weights are positive cosine similarities.
-struct CosineKnnGraph {
-    int32_t n_nodes = 0;
-    std::vector<std::pair<int32_t, int32_t>> edges;
-    std::vector<double> weights;
-};
+using CosineKnnGraph = KnnGraph;
 
 struct CosineKnnResult {
     CosineKnnGraph graph;

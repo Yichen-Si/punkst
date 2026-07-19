@@ -1,5 +1,7 @@
 #pragma once
 
+// Low-rank-plus-diagonal covariance support for downstream clustering.
+
 #include "numerical_utils.hpp"
 
 struct LowRankDiagonalCovariance {
