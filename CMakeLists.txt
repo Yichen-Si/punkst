@@ -126,6 +126,8 @@ set(CLUSTERING_CORE_SOURCE_FILES
 )
 
 set(CLUSTERING_SOURCE_FILES
+    src/clustering/uac.hpp
+    src/clustering/uac.cpp
     src/clustering/low_rank_covariance.hpp
     src/clustering/low_rank_covariance.cpp
     src/clustering/gamma_pois_cluster.hpp
@@ -192,6 +194,7 @@ set(SOURCE_FILES
     script/fit_gampois_jc.cpp
     script/transform_gampois.cpp
     script/cluster_gampois.cpp
+    script/uac.cpp
     script/transform_gampois_jc.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
