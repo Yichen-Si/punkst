@@ -3,11 +3,13 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -35,6 +37,74 @@ struct CountInputOptions {
     int32_t weight_column = 1;
     double default_weight = 1.0;
 };
+
+struct ParticleAdaptOptions {
+    double responsibility_epsilon = 0.0;
+    double moment_ess = 0.0;
+    int32_t calibration_particles = 32;
+    int32_t minimum_particles = 32;
+    double plausible_mass = 0.95;
+    double plausible_responsibility = 0.05;
+};
+
+void add_particle_adapt_options(ParamList& pl, ParticleAdaptOptions& options) {
+    pl.add_option("particle-adapt-resp",
+          "Enable responsibility adaptation with target standard error",
+          options.responsibility_epsilon)
+      .add_option("particle-adapt-moment",
+          "Enable moment adaptation with target conditional ESS",
+          options.moment_ess)
+      .add_option("particle-adapt-calibration",
+          "Reusable calibration particles per document",
+          options.calibration_particles)
+      .add_option("particle-adapt-min",
+          "Minimum retained particles per document",
+          options.minimum_particles)
+      .add_option("particle-adapt-plausible-mass",
+          "Cumulative responsibility mass defining plausible clusters",
+          options.plausible_mass)
+      .add_option("particle-adapt-plausible-resp",
+          "Responsibility threshold defining plausible clusters",
+          options.plausible_responsibility);
+}
+
+uac::AdaptiveParticleOptions make_particle_adapt_options(
+    const ParticleAdaptOptions& input, int32_t maximum_particles) {
+    if (input.responsibility_epsilon < 0.0 || input.moment_ess < 0.0) {
+        throw std::invalid_argument(
+            "Particle adaptation targets cannot be negative");
+    }
+    uac::AdaptiveParticleOptions out;
+    const bool responsibility = input.responsibility_epsilon > 0.0;
+    const bool moment = input.moment_ess > 0.0;
+    out.enabled = responsibility || moment;
+    if (responsibility && moment) {
+        out.rule = uac::AdaptiveParticleRule::ResponsibilityMoment;
+    } else if (responsibility) {
+        out.rule = uac::AdaptiveParticleRule::ResponsibilityOnly;
+    } else if (moment) {
+        out.rule = uac::AdaptiveParticleRule::MomentOnly;
+    }
+    if (responsibility) {
+        out.responsibility_se_target = input.responsibility_epsilon;
+    }
+    if (moment) out.moment_ess_target = input.moment_ess;
+    out.calibration_particles = input.calibration_particles;
+    out.minimum_particles = input.minimum_particles;
+    out.maximum_particles = maximum_particles;
+    out.plausible_mass = input.plausible_mass;
+    out.plausible_responsibility = input.plausible_responsibility;
+    if (out.enabled && (out.calibration_particles < 2
+            || out.minimum_particles < out.calibration_particles
+            || out.maximum_particles < out.minimum_particles
+            || !(out.plausible_mass > 0.0 && out.plausible_mass <= 1.0)
+            || !(out.plausible_responsibility >= 0.0
+                && out.plausible_responsibility <= 1.0))) {
+        throw std::invalid_argument(
+            "Invalid --particle-adapt-* particle counts or thresholds");
+    }
+    return out;
+}
 
 uac::Basis read_basis(const std::string& path) {
     uac::Basis basis;
@@ -286,11 +356,21 @@ void add_count_options(ParamList& pl, CountInputOptions& options) {
 int32_t cmdUacFit(int argc, char** argv) {
     std::string center_file, basis_file, out_prefix;
     std::string handoff = "particle", proposal = "exact_fisher";
-    int32_t components = 0, particles = 256, restarts = 5;
-    int32_t max_iterations = 300, seed = 1, threads = 1;
+    std::string leiden_knn_backend = "auto";
+    int32_t components = 0, particles = 256, particle_block_size = 0;
+    int32_t cluster_covariance_rank = -1;
+    int32_t kmeans_starts = 5, leiden_starts = 0;
+    int32_t max_iterations = 300, kmeans_max_iterations = 100;
+    int32_t leiden_neighbors = 15, leiden_max_iterations = -1;
+    int32_t seed = 1, threads = 1;
     int32_t representatives = 10;
-    double tolerance = 1e-6, fisher_broadening = 1.5;
+    double objective_change_tolerance = 1e-5;
+    double responsibility_change_tolerance = 1e-3;
+    double fisher_broadening = 1.5;
+    double leiden_knn_epsilon = 0.0, leiden_resolution = 1.0;
+    bool no_covariance_shrinkage = false;
     CountInputOptions count_options;
+    ParticleAdaptOptions particle_adapt;
     ParamList pl;
     pl.add_option("in-topic-center", "Document topic point-center table", center_file, true)
       .add_option("in-model", "Feature-by-topic basis table", basis_file)
@@ -298,15 +378,37 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("handoff", "Handoff: map or particle", handoff)
       .add_option("particle-proposal", "Particle proposal: exact_fisher or sparse_empirical_fisher", proposal)
       .add_option("particles", "Particles per document", particles)
+      .add_option("particle-block-size",
+          "Documents per regenerated particle block; 0 retains all particles",
+          particle_block_size)
+      .add_option("cluster-covariance-rank",
+          "Cluster covariance rank; -1 uses dense covariance, 0 is diagonal",
+          cluster_covariance_rank)
       .add_option("fisher-broadening", "Fisher proposal covariance broadening", fisher_broadening)
       .add_option("n-clusters", "Fixed number of clusters", components, true)
-      .add_option("restarts", "Deterministic mixture restarts", restarts)
+      .add_option("kmeans-starts", "Cosine k-means++ MAP starts", kmeans_starts)
+      .add_option("leiden-starts", "Adaptive cosine-Leiden MAP starts", leiden_starts)
       .add_option("max-iter", "Maximum EM iterations", max_iterations)
-      .add_option("tol", "Relative objective convergence tolerance", tolerance)
+      .add_option("kmeans-max-iter", "Maximum Lloyd/reconciliation iterations", kmeans_max_iterations)
+      .add_option("leiden-neighbors", "Cosine k-NN neighbors for Leiden starts", leiden_neighbors)
+      .add_option("leiden-knn-backend", "Cosine k-NN backend: auto, kdtree, or flat", leiden_knn_backend)
+      .add_option("leiden-knn-epsilon", "Nanoflann search epsilon; positive values require kdtree", leiden_knn_epsilon)
+      .add_option("leiden-resolution", "Initial Leiden RBConfiguration resolution", leiden_resolution)
+      .add_option("leiden-max-iter", "Maximum Leiden passes; negative runs to convergence", leiden_max_iterations)
+      .add_option("objective-change-tol",
+          "Relative objective-change convergence threshold",
+          objective_change_tolerance)
+      .add_option("responsibility-change-tol",
+          "Mean maximum document responsibility-change threshold",
+          responsibility_change_tolerance)
+      .add_option("no-cov-shrinkage",
+          "Disable adaptive particle covariance shrinkage",
+          no_covariance_shrinkage)
       .add_option("seed", "Initialization and particle seed", seed)
       .add_option("threads", "Number of TBB worker threads", threads)
       .add_option("n-representatives", "Representatives per cluster", representatives);
     add_count_options(pl, count_options);
+    add_particle_adapt_options(pl, particle_adapt);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -315,12 +417,54 @@ int32_t cmdUacFit(int argc, char** argv) {
         options.proposal = uac::parse_proposal(proposal);
         options.n_components = components;
         options.n_particles = particles;
-        options.restarts = restarts;
+        options.adaptive_particles = make_particle_adapt_options(
+            particle_adapt, particles);
+        options.particle_block_size = particle_block_size;
+        options.cluster_covariance_rank = cluster_covariance_rank;
+        options.kmeans_starts = kmeans_starts;
+        options.leiden_starts = leiden_starts;
         options.max_iterations = max_iterations;
-        options.tolerance = tolerance;
+        options.kmeans_max_iterations = kmeans_max_iterations;
+        options.leiden_neighbors = leiden_neighbors;
+        options.leiden_knn_backend = parse_cosine_knn_backend(
+            leiden_knn_backend);
+        options.leiden_knn_epsilon = leiden_knn_epsilon;
+        options.leiden_resolution = leiden_resolution;
+        options.leiden_max_iterations = leiden_max_iterations;
+        options.objective_change_tolerance = objective_change_tolerance;
+        options.responsibility_change_tolerance =
+            responsibility_change_tolerance;
+        options.adaptive_covariance_shrinkage = !no_covariance_shrinkage;
+        options.iteration_callback = [](const uac::IterationDiagnostic& value) {
+            std::ostringstream message;
+            message << "UAC " << (value.particle ? "particle" : "MAP")
+                << " start " << value.start << " iteration "
+                << value.iteration << ": relative objective change ";
+            if (std::isfinite(value.relative_objective_change)) {
+                message << value.relative_objective_change;
+            } else {
+                message << "NA";
+            }
+            message << "; mean maximum responsibility change ";
+            if (std::isfinite(value.mean_max_responsibility_change)) {
+                message << value.mean_max_responsibility_change;
+            } else {
+                message << "NA";
+            }
+            notice("%s", message.str().c_str());
+        };
         options.seed = seed;
         options.n_threads = threads;
         options.fisher_broadening = fisher_broadening;
+        if (options.adaptive_particles.enabled
+            && options.handoff != uac::HandoffMode::Particle) {
+            throw std::invalid_argument(
+                "--particle-adapt-* requires particle handoff");
+        }
+        if (options.adaptive_particles.enabled && particle_block_size != 0) {
+            throw std::invalid_argument(
+                "--particle-adapt-* cannot use --particle-block-size");
+        }
         CenterTable centers = read_centers(center_file, options.center_floor);
         uac::Basis basis;
         uac::Basis* basis_pointer = nullptr;
@@ -372,8 +516,10 @@ int32_t cmdUacFit(int argc, char** argv) {
 int32_t cmdUacTransform(int argc, char** argv) {
     std::string state_file, center_file, basis_file, out_prefix;
     std::string proposal;
-    int32_t particles = 0, threads = 1, representatives = 10;
+    int32_t particles = 0, particle_block_size = 0;
+    int32_t threads = 1, representatives = 10;
     CountInputOptions count_options;
+    ParticleAdaptOptions particle_adapt;
     ParamList pl;
     pl.add_option("in-state", "Fitted UAC state", state_file, true)
       .add_option("in-topic-center", "Document topic point-center table", center_file, true)
@@ -383,19 +529,28 @@ int32_t cmdUacTransform(int argc, char** argv) {
           "Scoring proposal override: exact_fisher or sparse_empirical_fisher",
           proposal)
       .add_option("particles", "Scoring particle-count override", particles)
+      .add_option("particle-block-size",
+          "Documents per regenerated particle block; 0 retains all particles",
+          particle_block_size)
       .add_option("threads", "Number of TBB worker threads", threads)
       .add_option("n-representatives", "Representatives per cluster", representatives);
     add_count_options(pl, count_options);
+    add_particle_adapt_options(pl, particle_adapt);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
         uac::State state = uac::read_state(state_file);
+        const int32_t scoring_particles = particles > 0
+            ? particles : state.n_particles;
+        const uac::AdaptiveParticleOptions adaptive_particles =
+            make_particle_adapt_options(particle_adapt, scoring_particles);
         CenterTable centers = read_centers(center_file, state.center_floor);
         align_center_topics(centers, state.topics);
         uac::Dataset data;
         uac::ScoreResult score;
         if (state.handoff == uac::HandoffMode::Map) {
-            if (!proposal.empty() || particles > 0) {
+            if (!proposal.empty() || particles > 0 || particle_block_size != 0
+                || adaptive_particles.enabled) {
                 throw std::invalid_argument("Particle overrides are invalid for a MAP UAC state");
             }
             data = make_map_dataset(centers);
@@ -419,10 +574,9 @@ int32_t cmdUacTransform(int argc, char** argv) {
             data = load_particle_dataset(centers, basis, count_options, weights);
             const uac::ProposalKind scoring_proposal = proposal.empty()
                 ? state.proposal : uac::parse_proposal(proposal);
-            const int32_t scoring_particles = particles > 0
-                ? particles : state.n_particles;
             score = uac::score_particle(data, basis, state, scoring_proposal,
-                scoring_particles, threads);
+                scoring_particles, adaptive_particles, threads,
+                particle_block_size);
         }
         write_all_outputs(out_prefix, data, state, score, nullptr,
             representatives);
