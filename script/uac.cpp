@@ -47,6 +47,65 @@ struct ParticleAdaptOptions {
     double plausible_responsibility = 0.05;
 };
 
+struct ComponentScreeningCliOptions {
+    std::string mode;
+    double tail_mass = -1.0;
+    double proposal_tail_mass = -1.0;
+    int32_t minimum_components = -1;
+    int32_t maximum_components = -1;
+    int32_t audit_documents = -1;
+    double minimum_work_reduction = -1.0;
+};
+
+void add_component_screening_options(ParamList& pl,
+    ComponentScreeningCliOptions& options) {
+    pl.add_option("component-screening",
+          "Component screening: off, on, or auto", options.mode)
+      .add_option("component-tail-mass",
+          "Maximum bounded E-step responsibility mass to omit",
+          options.tail_mass)
+      .add_option("proposal-tail-mass",
+          "Maximum pilot-proxy proposal mass to omit",
+          options.proposal_tail_mass)
+      .add_option("component-minimum",
+          "Minimum active components retained per document",
+          options.minimum_components)
+      .add_option("component-maximum",
+          "Maximum components retained per document in forced-on mode; 0 is unlimited",
+          options.maximum_components)
+      .add_option("component-audit-documents",
+          "Stratified full-proposal audit documents; 0 chooses automatically",
+          options.audit_documents)
+      .add_option("component-min-work-reduction",
+          "Minimum predicted work reduction required by auto",
+          options.minimum_work_reduction);
+}
+
+uac::ComponentScreeningOptions make_component_screening_options(
+    const ComponentScreeningCliOptions& input,
+    uac::ComponentScreeningOptions out = {}) {
+    if (!input.mode.empty()) {
+        out.mode = uac::parse_component_screening_mode(input.mode);
+    }
+    if (input.tail_mass >= 0.0) out.tail_mass = input.tail_mass;
+    if (input.proposal_tail_mass >= 0.0) {
+        out.proposal_proxy_tail_mass = input.proposal_tail_mass;
+    }
+    if (input.minimum_components >= 0) {
+        out.minimum_components = input.minimum_components;
+    }
+    if (input.maximum_components >= 0) {
+        out.maximum_components = input.maximum_components;
+    }
+    if (input.audit_documents >= 0) {
+        out.audit_documents = input.audit_documents;
+    }
+    if (input.minimum_work_reduction >= 0.0) {
+        out.minimum_work_reduction = input.minimum_work_reduction;
+    }
+    return out;
+}
+
 void add_particle_adapt_options(ParamList& pl, ParticleAdaptOptions& options) {
     pl.add_option("particle-adapt-resp",
           "Enable responsibility adaptation with target standard error",
@@ -169,8 +228,13 @@ Eigen::VectorXd read_feature_weights(const std::string& path,
         || column < 1) {
         throw std::invalid_argument("Invalid UAC feature-weight options");
     }
-    Eigen::VectorXd weights = Eigen::VectorXd::Constant(features.size(),
-        default_weight);
+    if (path.empty() && default_weight == 1.0) {
+        return {};
+    }
+    Eigen::VectorXd weights = Eigen::VectorXd::Constant(
+        features.size(), default_weight);
+    int64_t non_unit = default_weight == 1.0
+        ? 0 : static_cast<int64_t>(features.size());
     if (path.empty()) return weights;
     std::unordered_map<std::string, int32_t> index;
     for (int32_t i = 0; i < static_cast<int32_t>(features.size()); ++i) {
@@ -197,6 +261,12 @@ Eigen::VectorXd read_feature_weights(const std::string& path,
             || !std::isfinite(value)) {
             throw std::runtime_error("Invalid UAC feature weight: " + token[column]);
         }
+        const double previous = weights(found->second);
+        if (previous == 1.0 && value != 1.0) {
+            ++non_unit;
+        } else if (previous != 1.0 && value == 1.0) {
+            --non_unit;
+        }
         weights(found->second) = value;
         ++overlap;
     }
@@ -205,37 +275,8 @@ Eigen::VectorXd read_feature_weights(const std::string& path,
     }
     notice("Read %d UAC feature weights for %zu model features", overlap,
         features.size());
+    if (non_unit == 0) return {};
     return weights;
-}
-
-void validate_and_weight_counts(std::vector<Document>& documents,
-    const Eigen::VectorXd& weights, Eigen::VectorXd& raw_totals,
-    Eigen::VectorXd& effective_totals) {
-    raw_totals.resize(documents.size());
-    effective_totals.resize(documents.size());
-    for (size_t d = 0; d < documents.size(); ++d) {
-        Document& document = documents[d];
-        double raw = 0.0, effective = 0.0;
-        for (size_t j = 0; j < document.ids.size(); ++j) {
-            const uint32_t feature = document.ids[j];
-            const double count = document.cnts[j];
-            if (feature >= static_cast<uint32_t>(weights.size())
-                || !std::isfinite(count) || count < 0.0) {
-                throw std::runtime_error("Invalid UAC count or feature index");
-            }
-            raw += count;
-            document.cnts[j] *= weights(feature);
-            effective += document.cnts[j];
-        }
-        if (!(effective > 0.0) || !std::isfinite(effective)) {
-            throw std::runtime_error("UAC document has zero/nonfinite effective total");
-        }
-        document.raw_ct_tot = raw;
-        document.ct_tot = effective;
-        document.counts_weighted = (weights.array() != 1.0).any();
-        raw_totals(d) = raw;
-        effective_totals(d) = effective;
-    }
 }
 
 uac::Dataset make_map_dataset(const CenterTable& centers) {
@@ -297,8 +338,11 @@ uac::Dataset load_particle_dataset(const CenterTable& centers,
         warning("Ignored %zu UAC point centers without retained count documents",
             centers.identifiers.size() - data.identifiers.size());
     }
-    validate_and_weight_counts(data.counts, feature_weights, data.raw_totals,
-        data.effective_totals);
+    const Eigen::VectorXd* weights = feature_weights.size() > 0
+        ? &feature_weights : nullptr;
+    uac::detail::prepare_counts(data.counts,
+        static_cast<int32_t>(basis.probabilities.rows()), weights,
+        data.raw_totals, data.effective_totals);
     data.coordinates = uac::ilr_transform(data.centers,
         uac::normalized_helmert(data.centers.cols()));
     return data;
@@ -334,6 +378,47 @@ void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     if (traces) uac::write_trace(prefix + ".trace.tsv", *traces);
 }
 
+void report_component_screening(const uac::ScoreResult& score) {
+    if (score.component_screening_options.mode
+            == uac::ComponentScreeningMode::Off) {
+        return;
+    }
+    notice("UAC component screening requested %s; resolved MAP=%d, proposal=%d, particle=%d",
+        uac::component_screening_mode_name(
+            score.component_screening_options.mode),
+        static_cast<int32_t>(score.map_component_screening),
+        static_cast<int32_t>(score.proposal_component_screening),
+        static_cast<int32_t>(score.particle_component_screening));
+    if (score.component_screening_options.mode
+            == uac::ComponentScreeningMode::On
+        && score.component_screening_options.maximum_components > 0) {
+        notice("UAC forced component maximum per document: %d",
+            score.component_screening_options.maximum_components);
+    }
+    notice("UAC component work: proposals %lld/%lld; E-step %lld/%lld; proposal audits %d",
+        static_cast<long long>(score.proposal_components_constructed),
+        static_cast<long long>(score.proposal_components_possible),
+        static_cast<long long>(score.evaluated_component_documents),
+        static_cast<long long>(score.possible_component_documents),
+        score.proposal_audit_documents);
+    if (score.proposal_audit_violations > 0) {
+        warning("UAC proposal screening exceeded its proxy-tail target in %d audit documents (maximum omitted full-proposal mass %.6g)",
+            score.proposal_audit_violations,
+            score.proposal_audit_maximum_omitted_mass);
+    }
+    if (score.component_bound_violations > 0) {
+        if (score.component_screening_options.mode
+                == uac::ComponentScreeningMode::On
+            && score.component_screening_options.maximum_components > 0) {
+            warning("UAC component upper bound failed numerically for %d documents; the forced component maximum was retained and their omitted-mass bound was set to one",
+                score.component_bound_violations);
+        } else {
+            warning("UAC component upper bound failed numerically for %d documents; those documents used all components",
+                score.component_bound_violations);
+        }
+    }
+}
+
 void add_count_options(ParamList& pl, CountInputOptions& options) {
     pl.add_option("in-data", "Input hex/document file", options.in_file)
       .add_option("in-meta", "Metadata for --in-data", options.meta_file)
@@ -366,11 +451,14 @@ int32_t cmdUacFit(int argc, char** argv) {
     int32_t representatives = 10;
     double objective_change_tolerance = 1e-5;
     double responsibility_change_tolerance = 1e-3;
+    double covariance_shrinkage_strength = 20.0;
     double fisher_broadening = 1.5;
     double leiden_knn_epsilon = 0.0, leiden_resolution = 1.0;
     bool no_covariance_shrinkage = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
+    ComponentScreeningCliOptions screening;
+    screening.mode = "off";
     ParamList pl;
     pl.add_option("in-topic-center", "Document topic point-center table", center_file, true)
       .add_option("in-model", "Feature-by-topic basis table", basis_file)
@@ -404,11 +492,15 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("no-cov-shrinkage",
           "Disable adaptive particle covariance shrinkage",
           no_covariance_shrinkage)
+      .add_option("cov-shrinkage-strength",
+          "Adaptive covariance shrinkage pseudocount",
+          covariance_shrinkage_strength)
       .add_option("seed", "Initialization and particle seed", seed)
       .add_option("threads", "Number of TBB worker threads", threads)
       .add_option("n-representatives", "Representatives per cluster", representatives);
     add_count_options(pl, count_options);
     add_particle_adapt_options(pl, particle_adapt);
+    add_component_screening_options(pl, screening);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -419,6 +511,8 @@ int32_t cmdUacFit(int argc, char** argv) {
         options.n_particles = particles;
         options.adaptive_particles = make_particle_adapt_options(
             particle_adapt, particles);
+        options.component_screening =
+            make_component_screening_options(screening);
         options.particle_block_size = particle_block_size;
         options.cluster_covariance_rank = cluster_covariance_rank;
         options.kmeans_starts = kmeans_starts;
@@ -435,6 +529,8 @@ int32_t cmdUacFit(int argc, char** argv) {
         options.responsibility_change_tolerance =
             responsibility_change_tolerance;
         options.adaptive_covariance_shrinkage = !no_covariance_shrinkage;
+        options.covariance_shrinkage_strength =
+            covariance_shrinkage_strength;
         options.iteration_callback = [](const uac::IterationDiagnostic& value) {
             std::ostringstream message;
             message << "UAC " << (value.particle ? "particle" : "MAP")
@@ -482,7 +578,7 @@ int32_t cmdUacFit(int argc, char** argv) {
                 count_options.weight_column, count_options.default_weight);
             data = load_particle_dataset(centers, basis, count_options,
                 feature_weights);
-            weighted_counts = (feature_weights.array() != 1.0).any()
+            weighted_counts = feature_weights.size() > 0
                 || has_fractional_counts(data.counts);
             basis_pointer = &basis;
         } else {
@@ -500,6 +596,7 @@ int32_t cmdUacFit(int argc, char** argv) {
             state.topics = centers.topics;
             state.helmert = uac::normalized_helmert(state.topics.size());
         }
+        report_component_screening(fitted.score);
         write_all_outputs(out_prefix, data, state, fitted.score,
             &fitted.traces, representatives);
         notice("UAC fitted %d clusters to %zu documents using %s handoff",
@@ -520,6 +617,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
     int32_t threads = 1, representatives = 10;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
+    ComponentScreeningCliOptions screening;
     ParamList pl;
     pl.add_option("in-state", "Fitted UAC state", state_file, true)
       .add_option("in-topic-center", "Document topic point-center table", center_file, true)
@@ -536,10 +634,14 @@ int32_t cmdUacTransform(int argc, char** argv) {
       .add_option("n-representatives", "Representatives per cluster", representatives);
     add_count_options(pl, count_options);
     add_particle_adapt_options(pl, particle_adapt);
+    add_component_screening_options(pl, screening);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
         uac::State state = uac::read_state(state_file);
+        const uac::ComponentScreeningOptions component_screening =
+            make_component_screening_options(
+                screening, state.component_screening);
         const int32_t scoring_particles = particles > 0
             ? particles : state.n_particles;
         const uac::AdaptiveParticleOptions adaptive_particles =
@@ -554,7 +656,8 @@ int32_t cmdUacTransform(int argc, char** argv) {
                 throw std::invalid_argument("Particle overrides are invalid for a MAP UAC state");
             }
             data = make_map_dataset(centers);
-            score = uac::score_map(data, state.model, threads);
+            score = uac::score_map(
+                data, state.model, threads, component_screening);
         } else {
             if (basis_file.empty()) {
                 throw std::invalid_argument("Particle UAC transform requires --in-model");
@@ -564,8 +667,8 @@ int32_t cmdUacTransform(int argc, char** argv) {
                 throw std::runtime_error("UAC basis checksum does not match fitted state");
             }
             Eigen::VectorXd weights = state.feature_weights;
-            if (weights.size() == 0) weights = Eigen::VectorXd::Ones(basis.features.size());
-            if (weights.size() != basis.probabilities.rows()) {
+            if (weights.size() > 0
+                && weights.size() != basis.probabilities.rows()) {
                 throw std::runtime_error("UAC state feature-weight dimension mismatch");
             }
             if (!count_options.feature_weight_file.empty()) {
@@ -576,8 +679,9 @@ int32_t cmdUacTransform(int argc, char** argv) {
                 ? state.proposal : uac::parse_proposal(proposal);
             score = uac::score_particle(data, basis, state, scoring_proposal,
                 scoring_particles, adaptive_particles, threads,
-                particle_block_size);
+                particle_block_size, component_screening);
         }
+        report_component_screening(score);
         write_all_outputs(out_prefix, data, state, score, nullptr,
             representatives);
         notice("UAC assigned %zu documents using a fixed %s model",

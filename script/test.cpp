@@ -1,4 +1,5 @@
 #include "clustering/uac.hpp"
+#include "clustering/low_rank_covariance.hpp"
 #include "punkst.h"
 
 #include <algorithm>
@@ -153,6 +154,40 @@ std::string read_text(const std::filesystem::path& path) {
         + path.string());
     return std::string(std::istreambuf_iterator<char>(input),
         std::istreambuf_iterator<char>());
+}
+
+void write_text(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream output(path);
+    if (!output) throw std::runtime_error("Cannot write test output: "
+        + path.string());
+    output << text;
+}
+
+std::string remove_first_record(
+    std::string text, const std::string& record) {
+    const std::string prefix = "\n" + record;
+    const size_t begin = text.find(prefix);
+    if (begin == std::string::npos) {
+        throw std::runtime_error("Cannot find test state record: " + record);
+    }
+    const size_t end = text.find('\n', begin + 1);
+    text.erase(begin, end == std::string::npos
+        ? std::string::npos : end - begin);
+    return text;
+}
+
+std::string duplicate_first_record(
+    std::string text, const std::string& record) {
+    const std::string prefix = "\n" + record;
+    const size_t begin = text.find(prefix);
+    if (begin == std::string::npos) {
+        throw std::runtime_error("Cannot find test state record: " + record);
+    }
+    const size_t end = text.find('\n', begin + 1);
+    const std::string line = text.substr(begin + 1,
+        end == std::string::npos ? std::string::npos : end - begin - 1);
+    text += line + "\n";
+    return text;
 }
 
 struct ProfileSimulation {
@@ -841,6 +876,7 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
     int32_t audit_documents, int32_t audit_particles,
     uac::ProposalKind proposal,
     const uac::AdaptiveParticleOptions& adaptive,
+    const uac::ComponentScreeningOptions& component_screening,
     const std::string& output) {
     ProfileSimulation simulation = topics == 3 && features == 60
             && components == 3
@@ -859,6 +895,7 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
     options.n_threads = threads;
     options.proposal = proposal;
     options.adaptive_particles = adaptive;
+    options.component_screening = component_screening;
     const auto begin = std::chrono::steady_clock::now();
     const uac::FitResult fit = uac::fit(simulation.data, &simulation.basis,
         options);
@@ -908,8 +945,10 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
     double oracle_entropy_mean = 0.0, entropy_cross = 0.0;
     double entropy_square = 0.0, oracle_entropy_square = 0.0;
     double hpd80 = 0.0, hpd95 = 0.0;
-    int32_t point_center_errors = 0;
+    int32_t point_center_errors = 0, intrinsic_errors = 0;
     std::vector<double> oracle_entropy_by_document(documents);
+    RowMajorMatrixXd point_oracle(documents, components);
+    RowMajorMatrixXd intrinsic_oracle(documents, components);
     for (int32_t document = 0; document < documents; ++document) {
         const double probability = fit.score.responsibilities(document,
             fitted_for_truth[simulation.labels(document)]);
@@ -931,6 +970,7 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
             (oracle_score.array() - oracle_maximum).exp().sum());
         const Eigen::VectorXd oracle_probability =
             (oracle_score.array() - oracle_normalizer).exp();
+        point_oracle.row(document) = oracle_probability.transpose();
         double oracle_entropy = 0.0;
         for (int32_t c = 0; c < components; ++c) {
             if (oracle_probability(c) > 0.0) {
@@ -945,6 +985,17 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         oracle_entropy_square += oracle_entropy * oracle_entropy;
 
         const Eigen::VectorXd truth = simulation.latent.row(document).transpose();
+        const Eigen::VectorXd intrinsic_score = gaussian_scores(
+            truth, simulation.true_means, oracle_factors,
+            oracle_logdet, nullptr);
+        intrinsic_errors += intrinsic_score.maxCoeff()
+            != intrinsic_score(simulation.labels(document));
+        const double intrinsic_maximum = intrinsic_score.maxCoeff();
+        const double intrinsic_normalizer = intrinsic_maximum + std::log(
+            (intrinsic_score.array() - intrinsic_maximum).exp().sum());
+        intrinsic_oracle.row(document) =
+            (intrinsic_score.array() - intrinsic_normalizer)
+                .exp().matrix().transpose();
         const RowMajorMatrixXd truth_row = truth.transpose();
         const Eigen::VectorXd composition =
             uac::ilr_inverse(truth_row, helmert).row(0).transpose();
@@ -1003,6 +1054,33 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
     covariance_error /= components;
     diagonal_error /= components;
     marginal_error /= components * (topics - 1);
+    RowMajorMatrixXd known_means = RowMajorMatrixXd::Zero(
+        components, topics - 1);
+    std::vector<int32_t> known_counts(components, 0);
+    for (int32_t document = 0; document < documents; ++document) {
+        const int32_t truth = simulation.labels(document);
+        known_means.row(truth) += simulation.latent.row(document);
+        ++known_counts[truth];
+    }
+    for (int32_t truth = 0; truth < components; ++truth) {
+        known_means.row(truth) /= known_counts[truth];
+    }
+    std::vector<Eigen::MatrixXd> known_covariances(components,
+        Eigen::MatrixXd::Zero(topics - 1, topics - 1));
+    for (int32_t document = 0; document < documents; ++document) {
+        const int32_t truth = simulation.labels(document);
+        const Eigen::VectorXd residual =
+            simulation.latent.row(document).transpose()
+            - known_means.row(truth).transpose();
+        known_covariances[truth].noalias() += residual * residual.transpose();
+    }
+    for (int32_t truth = 0; truth < components; ++truth) {
+        known_covariances[truth] /= known_counts[truth];
+    }
+    const uac::RestartTrace& particle_trace = fit.traces.back();
+    const auto& particle_em = particle_trace.estep_work;
+    const double particle_em_documents =
+        std::max<int64_t>(1, particle_em.document_evaluations);
     std::ostream* stream = &std::cout;
     std::ofstream file;
     if (!output.empty()) {
@@ -1026,6 +1104,126 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
                     document, fitted_for_truth[truth]);
             }
             responsibility << "\n";
+        }
+        std::ofstream oracle(output + ".oracle.tsv");
+        if (!oracle) {
+            throw std::runtime_error(
+                "Cannot write UAC profile oracle assignments: " + output);
+        }
+        oracle << "document\tlabel";
+        for (int32_t truth = 0; truth < components; ++truth) {
+            oracle << "\tpoint_p" << truth;
+        }
+        for (int32_t truth = 0; truth < components; ++truth) {
+            oracle << "\tintrinsic_p" << truth;
+        }
+        oracle << "\n" << std::setprecision(12);
+        for (int32_t document = 0; document < documents; ++document) {
+            oracle << document << "\t" << simulation.labels(document);
+            for (int32_t truth = 0; truth < components; ++truth) {
+                oracle << "\t" << point_oracle(document, truth);
+            }
+            for (int32_t truth = 0; truth < components; ++truth) {
+                oracle << "\t" << intrinsic_oracle(document, truth);
+            }
+            oracle << "\n";
+        }
+        std::ofstream component_output(output + ".components.tsv");
+        std::ofstream marginal_output(output + ".marginals.tsv");
+        if (!component_output || !marginal_output) {
+            throw std::runtime_error(
+                "Cannot write UAC profile component diagnostics: " + output);
+        }
+        component_output
+            << "truth_component\tfitted_component\ttrue_weight\tfitted_weight"
+            "\tmean_error\tcovariance_relative_frobenius_error"
+            "\tcovariance_relative_spectral_error"
+            "\tcovariance_trace_signed_relative_error"
+            "\tcovariance_logdet_error"
+            "\tmarginal_signed_relative_error_mean"
+            "\tmarginal_absolute_relative_error_mean"
+            "\tmarginal_signed_relative_error_p10"
+            "\tmarginal_signed_relative_error_median"
+            "\tmarginal_signed_relative_error_p90"
+            "\tknown_label_covariance_relative_frobenius_error"
+            "\tknown_label_marginal_absolute_relative_error_mean\n"
+            << std::setprecision(12);
+        marginal_output
+            << "truth_component\tfitted_component\tdimension\ttrue_variance"
+            "\tfitted_variance\tknown_label_variance"
+            "\tsigned_relative_error\tabsolute_relative_error"
+            "\tknown_label_signed_relative_error"
+            "\tknown_label_absolute_relative_error\n"
+            << std::setprecision(12);
+        auto quantile = [](std::vector<double> values, double probability) {
+            std::sort(values.begin(), values.end());
+            const double position = probability * (values.size() - 1);
+            const size_t lower = static_cast<size_t>(std::floor(position));
+            const size_t upper = static_cast<size_t>(std::ceil(position));
+            const double fraction = position - lower;
+            return (1.0 - fraction) * values[lower]
+                + fraction * values[upper];
+        };
+        for (int32_t truth = 0; truth < components; ++truth) {
+            const int32_t fitted = fitted_for_truth[truth];
+            const Eigen::MatrixXd covariance_difference =
+                fit.model.covariances[fitted]
+                - simulation.true_covariances[truth];
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> difference_eigen(
+                covariance_difference, Eigen::EigenvaluesOnly);
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> truth_eigen(
+                simulation.true_covariances[truth], Eigen::EigenvaluesOnly);
+            std::vector<double> signed_marginal;
+            signed_marginal.reserve(topics - 1);
+            double absolute_marginal = 0.0;
+            double known_absolute_marginal = 0.0;
+            for (int32_t dimension = 0; dimension < topics - 1; ++dimension) {
+                const double true_variance =
+                    simulation.true_covariances[truth](
+                        dimension, dimension);
+                const double fitted_variance =
+                    fit.model.covariances[fitted](dimension, dimension);
+                const double known_variance =
+                    known_covariances[truth](dimension, dimension);
+                const double signed_error =
+                    (fitted_variance - true_variance) / true_variance;
+                const double known_signed_error =
+                    (known_variance - true_variance) / true_variance;
+                signed_marginal.push_back(signed_error);
+                absolute_marginal += std::abs(signed_error);
+                known_absolute_marginal += std::abs(known_signed_error);
+                marginal_output << truth << "\t" << fitted << "\t"
+                    << dimension << "\t" << true_variance << "\t"
+                    << fitted_variance << "\t" << known_variance << "\t"
+                    << signed_error << "\t" << std::abs(signed_error) << "\t"
+                    << known_signed_error << "\t"
+                    << std::abs(known_signed_error) << "\n";
+            }
+            const double signed_mean = std::accumulate(
+                signed_marginal.begin(), signed_marginal.end(), 0.0)
+                / signed_marginal.size();
+            component_output << truth << "\t" << fitted << "\t"
+                << 1.0 / components << "\t" << fit.model.weights(fitted)
+                << "\t" << (fit.model.means.row(fitted)
+                    - simulation.true_means.row(truth)).norm()
+                << "\t" << covariance_difference.norm()
+                    / simulation.true_covariances[truth].norm()
+                << "\t" << difference_eigen.eigenvalues()
+                    .cwiseAbs().maxCoeff()
+                    / truth_eigen.eigenvalues().maxCoeff()
+                << "\t" << covariance_difference.trace()
+                    / simulation.true_covariances[truth].trace()
+                << "\t" << fitted_logdet[fitted] - oracle_logdet[truth]
+                << "\t" << signed_mean
+                << "\t" << absolute_marginal / (topics - 1)
+                << "\t" << quantile(signed_marginal, 0.10)
+                << "\t" << quantile(signed_marginal, 0.50)
+                << "\t" << quantile(signed_marginal, 0.90)
+                << "\t" << (known_covariances[truth]
+                    - simulation.true_covariances[truth]).norm()
+                    / simulation.true_covariances[truth].norm()
+                << "\t" << known_absolute_marginal / (topics - 1)
+                << "\n";
         }
         if (simulation.document_lengths.size() == documents) {
             std::ofstream diagnostics(output + ".simulation.tsv");
@@ -1102,24 +1300,45 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         "\tparticles\tadaptive"
         "\tadaptive_rule\tcalibration_particles"
         "\tess_target\tcontrast_se_target"
-        "\tmaximum_weight_target\tproposal\twall_seconds"
+        "\tmaximum_weight_target\tproposal\tcomponent_screening"
+        "\tcomponent_maximum"
+        "\tmap_screening_resolved\tproposal_screening_resolved"
+        "\tparticle_screening_resolved\twall_seconds"
         "\tparticle_generation_seconds"
         "\tsampling_seconds\tfisher_work_seconds"
         "\tproposal_component_work_seconds"
         "\tproposal_draw_density_work_seconds"
         "\tlikelihood_seconds\tscoring_seconds"
-        "\tgaussian_work_seconds\tmoment_work_seconds"
-        "\tparticle_em_objective_evaluations\tparticle_bytes"
+        "\tgaussian_work_seconds\tcomponent_bound_work_seconds"
+        "\tmoment_work_seconds"
+        "\tparticle_em_objective_evaluations"
+        "\tparticle_em_document_evaluations"
+        "\tparticle_em_evaluated_components"
+        "\tparticle_em_possible_components"
+        "\tparticle_em_mean_evaluated_components"
+        "\tparticle_em_mean_possible_components"
+        "\tparticle_em_full_document_fraction"
+        "\tparticle_em_bound_violations"
+        "\tparticle_em_gaussian_work_seconds"
+        "\tparticle_em_bound_work_seconds"
+        "\tparticle_em_moment_work_seconds\tparticle_bytes"
         "\tproposal_workspace_bytes\texpectation_accumulator_bytes"
+        "\tproposal_candidates\tproposal_possible"
+        "\tevaluated_components\tevaluated_possible"
+        "\tmean_evaluated_components"
+        "\tproposal_audit_documents\tproposal_audit_violations"
+        "\tmaximum_proposal_audit_omitted_mass"
+        "\tmaximum_bounded_omitted_mass"
         "\tmean_true_label_probability\tlog_loss"
         "\tmean_assignment_entropy\toracle_assignment_entropy"
         "\tassignment_entropy_correlation\tpoint_center_oracle_error"
+        "\tintrinsic_bayes_error"
         "\thpd80\thpd95\tcovariance_relative_error"
         "\tcovariance_diagonal_signed_relative_error"
         "\tcovariance_marginal_signed_relative_error"
         "\tcalibration_seconds\tcalibration_samples\tretained_samples"
         "\tmean_particles\ttier32\ttier64\ttier128\ttier256\n"
-        << std::setprecision(12) << documents << "\t" << features
+        << std::setprecision(17) << documents << "\t" << features
         << "\t" << topics << "\t" << components
         << "\t" << simulation.length_profile
         << "\t" << simulation.topic_identifiability
@@ -1130,7 +1349,15 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         << "\t" << adaptive.component_ess_target
         << "\t" << adaptive.contrast_se_target
         << "\t" << adaptive.maximum_weight_target << "\t"
-        << uac::proposal_name(proposal) << "\t" << wall_seconds
+        << uac::proposal_name(proposal) << "\t"
+        << uac::component_screening_mode_name(component_screening.mode)
+        << "\t" << component_screening.maximum_components
+        << "\t" << static_cast<int32_t>(fit.score.map_component_screening)
+        << "\t" << static_cast<int32_t>(
+            fit.score.proposal_component_screening)
+        << "\t" << static_cast<int32_t>(
+            fit.score.particle_component_screening)
+        << "\t" << wall_seconds
         << "\t" << fit.score.particle_generation_seconds << "\t"
         << fit.score.sampling_seconds << "\t"
         << fit.score.fisher_work_seconds << "\t"
@@ -1138,15 +1365,40 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         << fit.score.proposal_draw_density_work_seconds << "\t"
         << fit.score.likelihood_seconds << "\t" << fit.score.scoring_seconds
         << "\t" << fit.score.gaussian_seconds
+        << "\t" << fit.score.component_bound_seconds
         << "\t" << fit.score.moment_seconds
-        << "\t" << fit.traces.back().objective.size() << "\t"
+        << "\t" << particle_trace.objective.size()
+        << "\t" << particle_em.document_evaluations
+        << "\t" << particle_em.evaluated_component_documents
+        << "\t" << particle_em.possible_component_documents
+        << "\t" << particle_em.evaluated_component_documents
+            / particle_em_documents
+        << "\t" << particle_em.possible_component_documents
+            / particle_em_documents
+        << "\t" << particle_em.full_component_documents
+            / particle_em_documents
+        << "\t" << particle_em.component_bound_violations
+        << "\t" << particle_em.gaussian_seconds
+        << "\t" << particle_em.component_bound_seconds
+        << "\t" << particle_em.moment_seconds << "\t"
         << fit.score.particle_bytes << "\t"
         << fit.score.proposal_workspace_bytes << "\t"
         << fit.score.expectation_accumulator_bytes
+        << "\t" << fit.score.proposal_components_constructed
+        << "\t" << fit.score.proposal_components_possible
+        << "\t" << fit.score.evaluated_component_documents
+        << "\t" << fit.score.possible_component_documents
+        << "\t" << static_cast<double>(
+            fit.score.evaluated_component_documents) / documents
+        << "\t" << fit.score.proposal_audit_documents
+        << "\t" << fit.score.proposal_audit_violations
+        << "\t" << fit.score.proposal_audit_maximum_omitted_mass
+        << "\t" << fit.score.maximum_omitted_component_mass
         << "\t" << true_probability
         << "\t" << log_loss << "\t" << entropy_mean
         << "\t" << oracle_entropy_mean << "\t" << entropy_correlation
         << "\t" << static_cast<double>(point_center_errors) / documents
+        << "\t" << static_cast<double>(intrinsic_errors) / documents
         << "\t" << hpd80 / documents << "\t" << hpd95 / documents
         << "\t" << covariance_error << "\t" << diagonal_error
         << "\t" << marginal_error
@@ -1173,6 +1425,37 @@ void test_transforms() {
     const RowMajorMatrixXd recovered = uac::ilr_inverse(coordinate, helmert);
     require((composition - recovered).cwiseAbs().maxCoeff() < 1e-12,
         "ILR round trip differs");
+
+    Eigen::VectorXd diagonal(4);
+    diagonal << 0.7, 1.1, 0.5, 1.8;
+    RowMajorMatrixXd factor(4, 2);
+    factor << 0.2, -0.1,
+        0.4, 0.3,
+        -0.2, 0.5,
+        0.1, 0.2;
+    LowRankDiagonalSolver low_rank(diagonal, factor);
+    RowMajorMatrixXd rows(3, 4);
+    rows << 0.3, -0.7, 1.2, 0.1,
+        -0.4, 0.6, 0.2, -1.1,
+        1.0, 0.5, -0.3, 0.8;
+    const Eigen::VectorXd batched = low_rank.quadratic_rows(rows);
+    for (Eigen::Index row = 0; row < rows.rows(); ++row) {
+        require(std::abs(batched(row)
+                    - low_rank.quadratic(rows.row(row).transpose()))
+                < 1e-12,
+            "batched low-rank quadratic differs from scalar reference");
+    }
+    RowMajorMatrixXd no_factor(4, 0);
+    LowRankDiagonalSolver diagonal_only(diagonal, no_factor);
+    const Eigen::VectorXd diagonal_batched =
+        diagonal_only.quadratic_rows(rows);
+    for (Eigen::Index row = 0; row < rows.rows(); ++row) {
+        require(std::abs(diagonal_batched(row)
+                    - diagonal_only.quadratic(
+                        rows.row(row).transpose()))
+                < 1e-12,
+            "rank-zero batched quadratic differs from scalar reference");
+    }
 }
 
 void test_profile_heterogeneous_simulation() {
@@ -1332,6 +1615,81 @@ void test_fractional_likelihood_and_proposals() {
         && half_exact.log_proposal.allFinite()
         && half_exact.log_likelihood.allFinite(),
         "fractional counts produced nonfinite exact-Fisher particles");
+}
+
+void test_sparse_feature_weights() {
+    std::vector<Document> documents(1);
+    documents[0].ids = {0, 1, 2};
+    documents[0].cnts = {2.0, 3.0, 4.0};
+    Eigen::VectorXd raw, effective;
+    Eigen::VectorXd weights(3);
+    weights << 1.0, 0.0, 0.5;
+    uac::detail::prepare_counts(
+        documents, 3, &weights, raw, effective);
+    require(documents[0].counts_weighted
+            && documents[0].ids == std::vector<uint32_t>({0, 2})
+            && documents[0].cnts.size() == 2
+            && std::abs(documents[0].cnts[0] - 2.0) < 1e-12
+            && std::abs(documents[0].cnts[1] - 2.0) < 1e-12
+            && std::abs(raw(0) - 9.0) < 1e-12
+            && std::abs(effective(0) - 4.0) < 1e-12,
+        "sparse feature weighting did not compact zero-weight entries");
+
+    std::vector<Document> identity(1);
+    identity[0].ids = {0, 2};
+    identity[0].cnts = {1.5, 2.5};
+    uac::detail::prepare_counts(identity, 3, nullptr, raw, effective);
+    require(!identity[0].counts_weighted
+            && identity[0].ids.size() == 2
+            && std::abs(raw(0) - 4.0) < 1e-12
+            && std::abs(effective(0) - 4.0) < 1e-12,
+        "identity feature weighting changed sparse counts");
+
+    std::vector<Document> removed(1);
+    removed[0].ids = {1};
+    removed[0].cnts = {3.0};
+    bool rejected_zero_mass = false;
+    try {
+        uac::detail::prepare_counts(
+            removed, 3, &weights, raw, effective);
+    } catch (const std::runtime_error&) {
+        rejected_zero_mass = true;
+    }
+    require(rejected_zero_mass,
+        "zero effective document mass was not rejected");
+
+    uac::Basis basis = test_basis();
+    basis.features.push_back("zero_probability");
+    basis.probabilities.conservativeResize(7, 3);
+    basis.probabilities.row(6).setZero();
+    uac::normalize_basis(basis);
+    uac::Dataset data = test_dataset();
+    for (auto& document : data.counts) {
+        document.ids.insert(document.ids.begin(), 6);
+        document.cnts.insert(document.cnts.begin(), 0.0);
+    }
+    const Eigen::MatrixXd helmert = uac::normalized_helmert(3);
+    for (const uac::ProposalKind proposal : {
+            uac::ProposalKind::ExactFisher,
+            uac::ProposalKind::SparseEmpiricalFisher}) {
+        const uac::FisherApproximation fisher = uac::fisher_approximation(
+            data.coordinates.row(0).transpose(), data.counts[0], basis,
+            helmert, proposal);
+        require(fisher.gradient.allFinite() && fisher.information.allFinite(),
+            "zero-count zero-probability feature affected Fisher curvature");
+    }
+    uac::FitOptions pilot_options;
+    pilot_options.handoff = uac::HandoffMode::Map;
+    pilot_options.n_components = 3;
+    pilot_options.kmeans_starts = 1;
+    pilot_options.max_iterations = 40;
+    const uac::Pilot pilot =
+        uac::fit(data, nullptr, pilot_options).pilot;
+    const uac::ParticleSet particles = uac::make_particles(
+        data, basis, helmert, pilot, uac::ProposalKind::ExactFisher,
+        8, 772, 1.5, 1);
+    require(particles.log_likelihood.allFinite(),
+        "zero-count zero-probability feature affected count likelihood");
 }
 
 void test_rare_and_inactive_components() {
@@ -1658,6 +2016,23 @@ void test_fit_score_and_state(const std::string& requested_output) {
     }
     require(iteration_notices > 0 && finite_convergence_notices > 0,
         "iteration callback did not receive convergence changes");
+
+    uac::FitOptions early_convergence = options;
+    early_convergence.kmeans_starts = 1;
+    early_convergence.n_particles = 16;
+    early_convergence.max_iterations = 3;
+    early_convergence.objective_change_tolerance = 1e6;
+    early_convergence.responsibility_change_tolerance = 1e6;
+    early_convergence.iteration_callback = {};
+    const uac::FitResult shrinkage_order = uac::fit(
+        data, &basis, early_convergence);
+    const auto particle_trace = std::find_if(
+        shrinkage_order.traces.begin(), shrinkage_order.traces.end(),
+        [](const uac::RestartTrace& trace) { return trace.particle; });
+    require(particle_trace != shrinkage_order.traces.end()
+            && particle_trace->objective.size() >= 4,
+        "particle convergence occurred before an adaptive shrinkage update");
+
     require(fitted.score.responsibilities.allFinite(),
         "particle responsibilities are nonfinite");
     require((fitted.score.responsibilities.rowwise().sum().array() - 1.0)
@@ -1685,6 +2060,53 @@ void test_fit_score_and_state(const std::string& requested_output) {
         require(Eigen::LLT<Eigen::MatrixXd>(covariance).info()
             == Eigen::Success, "fitted covariance is not positive definite");
     }
+    const uac::ScoreResult exact_map = uac::score_map(
+        data, fitted.model, 2);
+    uac::ComponentScreeningOptions screening;
+    screening.mode = uac::ComponentScreeningMode::On;
+    screening.tail_mass = 0.2;
+    screening.proposal_proxy_tail_mass = 0.2;
+    screening.minimum_components = 1;
+    screening.audit_documents = 5;
+    const uac::ScoreResult screened_map = uac::score_map(
+        data, fitted.model, 2, screening);
+    require(screened_map.map_component_screening
+            && screened_map.component_bound_violations == 0
+            && screened_map.per_document_evaluated_components.size()
+                == data.identifiers.size(),
+        "bounded MAP component screening diagnostics are incomplete");
+    for (Eigen::Index d = 0; d < exact_map.responsibilities.rows(); ++d) {
+        require((screened_map.responsibilities.row(d)
+                    - exact_map.responsibilities.row(d))
+                    .cwiseAbs().maxCoeff()
+                <= screened_map.per_document_omitted_component_mass[d]
+                    + 1e-10,
+            "bounded MAP screening exceeded its omitted-mass bound");
+    }
+    uac::ComponentScreeningOptions capped_screening = screening;
+    capped_screening.maximum_components = 1;
+    const uac::ScoreResult capped_map = uac::score_map(
+        data, fitted.model, 2, capped_screening);
+    require(std::all_of(
+            capped_map.per_document_evaluated_components.begin(),
+            capped_map.per_document_evaluated_components.end(),
+            [](int32_t value) { return value > 0 && value <= 1; }),
+        "forced MAP component maximum was not respected");
+    uac::ComponentScreeningOptions auto_unlimited = screening;
+    auto_unlimited.mode = uac::ComponentScreeningMode::Auto;
+    auto_unlimited.maximum_components = 0;
+    uac::ComponentScreeningOptions auto_with_maximum = auto_unlimited;
+    auto_with_maximum.maximum_components = 1;
+    const uac::ScoreResult auto_unlimited_map = uac::score_map(
+        data, fitted.model, 2, auto_unlimited);
+    const uac::ScoreResult auto_maximum_map = uac::score_map(
+        data, fitted.model, 2, auto_with_maximum);
+    require((auto_unlimited_map.responsibilities
+                - auto_maximum_map.responsibilities)
+                .cwiseAbs().maxCoeff() < 1e-12
+            && auto_unlimited_map.per_document_evaluated_components
+                == auto_maximum_map.per_document_evaluated_components,
+        "forced component maximum affected automatic screening");
     const Eigen::VectorXd weights = Eigen::VectorXd::Ones(
         basis.probabilities.rows());
     const uac::State state = uac::make_state(fitted, &basis, options,
@@ -1694,6 +2116,54 @@ void test_fit_score_and_state(const std::string& requested_output) {
     require((rescored.responsibilities - fitted.score.responsibilities)
         .cwiseAbs().maxCoeff() < 1e-11,
         "fit and transform particle scores differ");
+    const uac::ScoreResult screened_particle = uac::score_particle(
+        data, basis, state, state.proposal, state.n_particles,
+        uac::AdaptiveParticleOptions{}, 2, 0, screening);
+    require(screened_particle.proposal_component_screening
+            && screened_particle.particle_component_screening
+            && screened_particle.component_bound_violations == 0
+            && screened_particle.maximum_omitted_component_mass
+                <= screening.tail_mass * (1.0 + 1e-8)
+            && screened_particle.proposal_components_constructed
+                <= screened_particle.proposal_components_possible
+            && screened_particle.evaluated_component_documents
+                <= screened_particle.possible_component_documents,
+        "particle component screening diagnostics or bounds are invalid");
+    require(screened_particle.per_document_omitted_component_mass.size()
+            == data.identifiers.size(),
+        "particle component screening omitted per-document bounds");
+    for (Eigen::Index d = 0; d < rescored.responsibilities.rows(); ++d) {
+        require((screened_particle.responsibilities.row(d)
+                    - rescored.responsibilities.row(d))
+                    .cwiseAbs().maxCoeff()
+                <= screened_particle.per_document_omitted_component_mass[d]
+                    + 1e-10,
+            "particle screening exceeded its omitted-mass bound");
+    }
+    const uac::ScoreResult capped_particle = uac::score_particle(
+        data, basis, state, state.proposal, state.n_particles,
+        uac::AdaptiveParticleOptions{}, 2, 0, capped_screening);
+    require(std::all_of(
+                capped_particle.per_document_proposal_components.begin(),
+                capped_particle.per_document_proposal_components.end(),
+                [](int32_t value) { return value > 0 && value <= 1; })
+            && std::all_of(
+                capped_particle.per_document_evaluated_components.begin(),
+                capped_particle.per_document_evaluated_components.end(),
+                [](int32_t value) { return value > 0 && value <= 1; }),
+        "forced proposal or particle component maximum was not respected");
+    uac::ComponentScreeningOptions invalid_maximum = screening;
+    invalid_maximum.minimum_components = 2;
+    invalid_maximum.maximum_components = 1;
+    bool rejected_invalid_maximum = false;
+    try {
+        static_cast<void>(uac::score_map(
+            data, fitted.model, 1, invalid_maximum));
+    } catch (const std::invalid_argument&) {
+        rejected_invalid_maximum = true;
+    }
+    require(rejected_invalid_maximum,
+        "component maximum below the minimum was accepted");
     for (int32_t block_size : {1, 5,
             static_cast<int32_t>(data.identifiers.size())}) {
         const uac::ScoreResult replayed = uac::score_particle(data, basis,
@@ -1702,7 +2172,15 @@ void test_fit_score_and_state(const std::string& requested_output) {
                 .cwiseAbs().maxCoeff() < 1e-11
             && replayed.particle_replay
             && replayed.particle_block_size == block_size
-            && replayed.particle_bytes <= fitted.score.particle_bytes,
+            && replayed.particle_bytes <= fitted.score.particle_bytes
+            && replayed.particle_samples
+                == static_cast<int64_t>(data.identifiers.size())
+                    * state.n_particles
+            && replayed.per_document_particles.size()
+                == data.identifiers.size()
+            && std::all_of(replayed.per_document_particles.begin(),
+                replayed.per_document_particles.end(),
+                [&](int32_t value) { return value == state.n_particles; }),
             "blockwise particle replay changed transform inference");
     }
 
@@ -1730,8 +2208,52 @@ void test_fit_score_and_state(const std::string& requested_output) {
         state_to_write.n_particles;
     state_to_write.fit_adaptive_particles.responsibility_se_target = 0.08;
     state_to_write.fit_adaptive_particles.moment_ess_target = 12.0;
+    state_to_write.component_screening = screening;
+    state_to_write.component_screening.maximum_components = 1;
+    state_to_write.fit_map_component_screening = true;
+    state_to_write.fit_proposal_component_screening = true;
+    state_to_write.fit_particle_component_screening = true;
     uac::write_state(state_path.string(), state_to_write);
     const uac::State restored = uac::read_state(state_path.string());
+    require(restored.component_screening.mode
+                == uac::ComponentScreeningMode::On
+            && restored.component_screening.minimum_components == 1
+            && restored.component_screening.maximum_components == 1
+            && restored.fit_map_component_screening
+            && restored.fit_proposal_component_screening
+            && restored.fit_particle_component_screening,
+        "component screening state metadata did not round trip");
+    const std::string valid_state_text = read_text(state_path);
+    auto require_rejected_state = [&](const std::string& text,
+                                      const std::string& description) {
+        write_text(state_path, text);
+        bool rejected = false;
+        try {
+            static_cast<void>(uac::read_state(state_path.string()));
+        } catch (const std::exception&) {
+            rejected = true;
+        }
+        require(rejected, description);
+    };
+    require_rejected_state(remove_first_record(valid_state_text, "HELMERT\t"),
+        "state reader accepted a missing Helmert row");
+    require_rejected_state(
+        remove_first_record(valid_state_text, "PILOT_COV\t"),
+        "state reader accepted a missing pilot covariance row");
+    require_rejected_state(
+        duplicate_first_record(valid_state_text, "MODEL_MEAN\t"),
+        "state reader accepted a duplicate model mean row");
+    std::string invalid_index = valid_state_text;
+    const std::string valid_index = "\nHELMERT\t0\t";
+    const size_t index_position = invalid_index.find(valid_index);
+    require(index_position != std::string::npos,
+        "test state does not contain Helmert row zero");
+    invalid_index.replace(index_position, valid_index.size(),
+        "\nHELMERT\t999\t");
+    require_rejected_state(invalid_index,
+        "state reader accepted an out-of-range Helmert row");
+    write_text(state_path, valid_state_text);
+
     require(restored.basis_checksum == state_to_write.basis_checksum
         && restored.weighted_counts
         && restored.selected_start == state.selected_start
@@ -1742,6 +2264,8 @@ void test_fit_score_and_state(const std::string& requested_output) {
         && restored.converged == state.converged
         && restored.adaptive_covariance_shrinkage
             == state_to_write.adaptive_covariance_shrinkage
+        && restored.covariance_shrinkage_strength
+            == state_to_write.covariance_shrinkage_strength
         && restored.fit_adaptive_particles.enabled
         && restored.fit_adaptive_particles.rule
             == uac::AdaptiveParticleRule::ResponsibilityMoment
@@ -1885,6 +2409,20 @@ void test_fit_score_and_state(const std::string& requested_output) {
     }
     std::filesystem::remove(v3_path);
     require(rejected_v3, "stale UAC state v3 was not rejected");
+    const std::filesystem::path v5_path =
+        std::filesystem::temp_directory_path() / "punkst_uac_v5_state.tsv";
+    {
+        std::ofstream stale(v5_path);
+        stale << "##punkst_uac_state_v5\n";
+    }
+    bool rejected_v5 = false;
+    try {
+        static_cast<void>(uac::read_state(v5_path.string()));
+    } catch (const std::exception&) {
+        rejected_v5 = true;
+    }
+    std::filesystem::remove(v5_path);
+    require(rejected_v5, "stale UAC state v5 was not rejected");
     if (requested_output.empty()) std::filesystem::remove(state_path);
 
     uac::FitOptions map_options = options;
@@ -1913,7 +2451,13 @@ int32_t test(int32_t argc, char** argv) {
     double plausible_mass = 0.95, plausible_responsibility = 0.05;
     double moment_ess_target = 16.0;
     double simulation_mean_scale = -1.0;
+    double component_tail_mass = 1e-4;
+    double proposal_tail_mass = 1e-4;
+    double component_min_work_reduction = 0.2;
+    int32_t component_minimum = 2;
+    int32_t component_maximum = 0;
     std::string proposal_name = "exact_fisher";
+    std::string component_screening_name = "off";
     std::string adaptive_rule_name = "legacy";
     std::string length_profile = "fixed";
     std::string topic_identifiability = "homogeneous";
@@ -1973,7 +2517,22 @@ int32_t test(int32_t argc, char** argv) {
           moment_ess_target)
       .add_option("proposal",
           "Profile proposal: exact_fisher or sparse_empirical_fisher",
-          proposal_name);
+          proposal_name)
+      .add_option("component-screening",
+          "Profile component screening: off, on, or auto",
+          component_screening_name)
+      .add_option("component-tail-mass",
+          "Profile bounded E-step tail mass", component_tail_mass)
+      .add_option("proposal-tail-mass",
+          "Profile proposal proxy tail mass", proposal_tail_mass)
+      .add_option("component-minimum",
+          "Profile minimum retained components", component_minimum)
+      .add_option("component-maximum",
+          "Profile forced-on maximum retained components; 0 is unlimited",
+          component_maximum)
+      .add_option("component-min-work-reduction",
+          "Profile automatic screening work-reduction threshold",
+          component_min_work_reduction);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -1997,11 +2556,24 @@ int32_t test(int32_t argc, char** argv) {
             adaptive.plausible_mass = plausible_mass;
             adaptive.plausible_responsibility = plausible_responsibility;
             adaptive.moment_ess_target = moment_ess_target;
+            uac::ComponentScreeningOptions component_screening;
+            component_screening.mode =
+                uac::parse_component_screening_mode(
+                    component_screening_name);
+            component_screening.audit_documents = audit_documents;
+            component_screening.tail_mass = component_tail_mass;
+            component_screening.proposal_proxy_tail_mass =
+                proposal_tail_mass;
+            component_screening.minimum_components = component_minimum;
+            component_screening.maximum_components = component_maximum;
+            component_screening.minimum_work_reduction =
+                component_min_work_reduction;
             run_uac_profile(documents, particles, seed, threads,
                 topics, features, components, point_center_error_target,
                 length_profile, topic_identifiability, simulation_mean_scale,
                 audit_documents, audit_particles,
-                uac::parse_proposal(proposal_name), adaptive, output);
+                uac::parse_proposal(proposal_name), adaptive,
+                component_screening, output);
             return 0;
         }
         notice("Running UAC transform tests");
@@ -2010,6 +2582,8 @@ int32_t test(int32_t argc, char** argv) {
         test_profile_heterogeneous_simulation();
         notice("Running UAC proposal tests");
         test_fractional_likelihood_and_proposals();
+        notice("Running UAC sparse feature-weight tests");
+        test_sparse_feature_weights();
         notice("Running UAC rare/inactive component tests");
         test_rare_and_inactive_components();
         notice("Running UAC mixed MAP-start tests");

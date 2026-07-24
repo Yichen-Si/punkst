@@ -114,3 +114,23 @@ double LowRankDiagonalSolver::quadratic(
     const Eigen::Ref<const Eigen::VectorXd>& value) const {
     return value.dot(solve_vector(value));
 }
+
+Eigen::VectorXd LowRankDiagonalSolver::quadratic_rows(
+    const Eigen::Ref<const RowMajorMatrixXd>& values) const {
+    if (values.cols() != inverse_diagonal_.size()) {
+        throw std::invalid_argument(
+            "Low-rank covariance row matrix dimension mismatch");
+    }
+    Eigen::VectorXd out = (
+        values.array().square().rowwise()
+            * inverse_diagonal_.transpose().array()).rowwise().sum();
+    if (inverse_diagonal_factor_.cols() > 0) {
+        const Eigen::MatrixXd projected =
+            values * inverse_diagonal_factor_;
+        const Eigen::MatrixXd solved =
+            core_llt_.solve(projected.transpose()).transpose();
+        out.array() -=
+            (projected.array() * solved.array()).rowwise().sum();
+    }
+    return out;
+}

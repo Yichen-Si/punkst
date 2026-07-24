@@ -49,15 +49,24 @@ enum class AdaptiveParticleBinding {
     MomentEss,
 };
 
+enum class ComponentScreeningMode {
+    Off,
+    On,
+    Auto,
+};
+
 const char* handoff_name(HandoffMode value);
 const char* proposal_name(ProposalKind value);
 const char* initializer_name(MapInitializer value);
 const char* adaptive_particle_rule_name(AdaptiveParticleRule value);
 const char* adaptive_particle_binding_name(AdaptiveParticleBinding value);
+const char* component_screening_mode_name(ComponentScreeningMode value);
 HandoffMode parse_handoff(const std::string& value);
 ProposalKind parse_proposal(const std::string& value);
 MapInitializer parse_initializer(const std::string& value);
 AdaptiveParticleRule parse_adaptive_particle_rule(const std::string& value);
+ComponentScreeningMode parse_component_screening_mode(
+    const std::string& value);
 
 struct Basis {
     RowMajorMatrixXd probabilities; // feature x topic
@@ -91,11 +100,17 @@ struct ParticleSet {
     RowMajorMatrixXd values; // (document * sample) x dimension
     RowMajorMatrixXd log_likelihood; // document x sample
     RowMajorMatrixXd log_proposal; // document x sample
+    std::vector<int32_t> proposal_origins; // document x sample
+    std::vector<int32_t> proposal_candidates; // document
     double sampling_seconds = 0.0;
     double likelihood_seconds = 0.0;
     double fisher_work_seconds = 0.0;
     double proposal_component_work_seconds = 0.0;
     double proposal_draw_density_work_seconds = 0.0;
+    double proposal_precision_fallback_seconds = 0.0;
+    int64_t proposal_precision_fallbacks = 0;
+    int64_t proposal_components_constructed = 0;
+    int64_t proposal_components_possible = 0;
     uint64_t proposal_workspace_bytes = 0;
 
     Eigen::Map<const Eigen::VectorXd> value(int32_t document,
@@ -107,6 +122,8 @@ struct ParticleSet {
     Eigen::Map<const Eigen::VectorXd> log_likelihood_for_document(
         int32_t document) const;
     Eigen::Map<const Eigen::VectorXd> log_proposal_for_document(
+        int32_t document) const;
+    Eigen::Map<const Eigen::VectorXi> proposal_origins_for_document(
         int32_t document) const;
 };
 
@@ -133,12 +150,22 @@ struct RaggedParticleSet {
     std::vector<double> values;
     std::vector<double> log_likelihood;
     std::vector<double> log_proposal;
+    std::vector<int32_t> proposal_origins;
+    std::vector<int32_t> proposal_candidates;
     double sampling_seconds = 0.0;
     double likelihood_seconds = 0.0;
     double calibration_seconds = 0.0;
     double fisher_work_seconds = 0.0;
     double proposal_component_work_seconds = 0.0;
     double proposal_draw_density_work_seconds = 0.0;
+    double proposal_precision_fallback_seconds = 0.0;
+    int64_t proposal_precision_fallbacks = 0;
+    double proposal_screening_seconds = 0.0;
+    int64_t proposal_components_constructed = 0;
+    int64_t proposal_components_possible = 0;
+    int32_t proposal_audit_documents = 0;
+    int32_t proposal_audit_violations = 0;
+    double proposal_audit_maximum_omitted_mass = 0.0;
     uint64_t proposal_workspace_bytes = 0;
     int64_t calibration_samples = 0;
     int64_t reused_calibration_samples = 0;
@@ -150,6 +177,8 @@ struct RaggedParticleSet {
     Eigen::Map<const Eigen::VectorXd> log_likelihood_for_document(
         int32_t document) const;
     Eigen::Map<const Eigen::VectorXd> log_proposal_for_document(
+        int32_t document) const;
+    Eigen::Map<const Eigen::VectorXi> proposal_origins_for_document(
         int32_t document) const;
 };
 
@@ -168,6 +197,16 @@ struct AdaptiveParticleOptions {
     double plausible_mass = 0.95;
     double plausible_responsibility = 0.05;
     double moment_ess_target = 16.0;
+};
+
+struct ComponentScreeningOptions {
+    ComponentScreeningMode mode = ComponentScreeningMode::Off;
+    double tail_mass = 1e-4;
+    double proposal_proxy_tail_mass = 1e-4;
+    int32_t minimum_components = 2;
+    int32_t maximum_components = 0;
+    int32_t audit_documents = 0;
+    double minimum_work_reduction = 0.20;
 };
 
 struct Model {
@@ -214,9 +253,22 @@ struct FitOptions {
     double leiden_resolution = 1.0;
     double covariance_floor = 1e-5;
     bool adaptive_covariance_shrinkage = true;
+    double covariance_shrinkage_strength = 20.0;
     double fisher_broadening = 1.5;
     AdaptiveParticleOptions adaptive_particles;
+    ComponentScreeningOptions component_screening;
     std::function<void(const IterationDiagnostic&)> iteration_callback;
+};
+
+struct EstepWorkDiagnostics {
+    double gaussian_seconds = 0.0;
+    double component_bound_seconds = 0.0;
+    double moment_seconds = 0.0;
+    int64_t document_evaluations = 0;
+    int64_t evaluated_component_documents = 0;
+    int64_t possible_component_documents = 0;
+    int64_t full_component_documents = 0;
+    int64_t component_bound_violations = 0;
 };
 
 struct RestartTrace {
@@ -234,6 +286,7 @@ struct RestartTrace {
     std::vector<double> relative_objective_change;
     std::vector<double> mean_max_responsibility_change;
     std::vector<int32_t> active_components;
+    EstepWorkDiagnostics estep_work;
 };
 
 struct ParticleDiagnostic {
@@ -257,6 +310,14 @@ struct ScoreResult {
     double fisher_work_seconds = 0.0;
     double proposal_component_work_seconds = 0.0;
     double proposal_draw_density_work_seconds = 0.0;
+    double proposal_precision_fallback_seconds = 0.0;
+    int64_t proposal_precision_fallbacks = 0;
+    double proposal_screening_seconds = 0.0;
+    int64_t proposal_components_constructed = 0;
+    int64_t proposal_components_possible = 0;
+    int32_t proposal_audit_documents = 0;
+    int32_t proposal_audit_violations = 0;
+    double proposal_audit_maximum_omitted_mass = 0.0;
     double gaussian_seconds = 0.0;
     double moment_seconds = 0.0;
     double calibration_seconds = 0.0;
@@ -269,6 +330,20 @@ struct ScoreResult {
     int64_t calibration_samples = 0;
     int64_t reused_calibration_samples = 0;
     AdaptiveParticleOptions adaptive_particle_options;
+    ComponentScreeningOptions component_screening_options;
+    bool map_component_screening = false;
+    bool proposal_component_screening = false;
+    bool particle_component_screening = false;
+    double component_bound_seconds = 0.0;
+    int64_t evaluated_component_documents = 0;
+    int64_t possible_component_documents = 0;
+    int32_t full_component_documents = 0;
+    int32_t component_bound_violations = 0;
+    double maximum_omitted_component_mass = 0.0;
+    double mean_omitted_component_mass = 0.0;
+    std::vector<int32_t> per_document_evaluated_components;
+    std::vector<double> per_document_omitted_component_mass;
+    std::vector<int32_t> per_document_proposal_components;
     std::vector<int32_t> per_document_particles;
     std::vector<AdaptiveParticleDiagnostic> adaptive_particle_diagnostics;
     bool particle_replay = false;
@@ -309,8 +384,13 @@ struct State {
     double objective_change_tolerance = 1e-5;
     double responsibility_change_tolerance = 1e-3;
     bool adaptive_covariance_shrinkage = true;
+    double covariance_shrinkage_strength = 20.0;
     double fisher_broadening = 1.5;
     AdaptiveParticleOptions fit_adaptive_particles;
+    ComponentScreeningOptions component_screening;
+    bool fit_map_component_screening = false;
+    bool fit_proposal_component_screening = false;
+    bool fit_particle_component_screening = false;
     uint64_t basis_checksum = 0;
     bool weighted_counts = false;
     std::vector<std::string> topics;
@@ -348,16 +428,19 @@ ParticleSet make_particles(const Dataset& data, const Basis& basis,
 FitResult fit(const Dataset& data, const Basis* basis,
     const FitOptions& options);
 ScoreResult score_map(const Dataset& data, const Model& model,
-    int32_t n_threads = 1);
+    int32_t n_threads = 1,
+    const ComponentScreeningOptions& component_screening = {});
 ScoreResult score_particle(const Dataset& data, const Basis& basis,
     const State& state, ProposalKind proposal, int32_t particles,
     const AdaptiveParticleOptions& adaptive_particles = {},
-    int32_t n_threads = 1, int32_t particle_block_size = 0);
+    int32_t n_threads = 1, int32_t particle_block_size = 0,
+    const ComponentScreeningOptions& component_screening = {});
 inline ScoreResult score_particle(const Dataset& data, const Basis& basis,
     const State& state, ProposalKind proposal, int32_t particles,
     int32_t n_threads, int32_t particle_block_size = 0) {
     return score_particle(data, basis, state, proposal, particles,
-        AdaptiveParticleOptions{}, n_threads, particle_block_size);
+        AdaptiveParticleOptions{}, n_threads, particle_block_size,
+        state.component_screening);
 }
 
 State make_state(const FitResult& fit, const Basis* basis,
@@ -383,6 +466,9 @@ namespace detail {
 double increased_leiden_resolution(double resolution, int32_t raw_communities,
     int32_t requested_communities);
 double midpoint_leiden_resolution(double lower, double upper);
+void prepare_counts(std::vector<Document>& documents, int32_t feature_count,
+    const Eigen::VectorXd* feature_weights, Eigen::VectorXd& raw_totals,
+    Eigen::VectorXd& effective_totals);
 
 } // namespace detail
 

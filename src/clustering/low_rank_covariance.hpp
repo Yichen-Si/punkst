@@ -24,6 +24,8 @@ public:
     Eigen::VectorXd solve_vector(const Eigen::Ref<const Eigen::VectorXd>& value) const;
     Eigen::MatrixXd solve_matrix(const Eigen::Ref<const Eigen::MatrixXd>& value) const;
     double quadratic(const Eigen::Ref<const Eigen::VectorXd>& value) const;
+    Eigen::VectorXd quadratic_rows(
+        const Eigen::Ref<const RowMajorMatrixXd>& values) const;
     double log_determinant() const { return log_determinant_; }
     const Eigen::VectorXd& inverse_diagonal() const { return inverse_diagonal_; }
     const Eigen::MatrixXd& inverse_diagonal_factor() const {
