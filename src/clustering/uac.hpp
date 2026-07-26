@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,9 +24,22 @@ enum class ProposalKind {
     SparseEmpiricalFisher,
 };
 
-enum class MapInitializer {
+enum class StartMethod {
     KMeans,
     Leiden,
+};
+
+enum class TracePhase {
+    CorrectedMomScore,
+    PointMapEm,
+    ParticleEm,
+};
+
+enum class TraceEvent {
+    CandidateScore,
+    Evaluation,
+    Terminal,
+    Failure,
 };
 
 enum class CovarianceKind {
@@ -33,18 +47,8 @@ enum class CovarianceKind {
     FactorAnalytic,
 };
 
-enum class AdaptiveParticleRule {
-    Legacy,
-    ResponsibilityOnly,
-    MomentOnly,
-    ResponsibilityMoment,
-};
-
 enum class AdaptiveParticleBinding {
     Minimum,
-    LegacyEss,
-    LegacyMaximumWeight,
-    LegacyContrast,
     Responsibility,
     MomentEss,
 };
@@ -57,14 +61,14 @@ enum class ComponentScreeningMode {
 
 const char* handoff_name(HandoffMode value);
 const char* proposal_name(ProposalKind value);
-const char* initializer_name(MapInitializer value);
-const char* adaptive_particle_rule_name(AdaptiveParticleRule value);
+const char* start_method_name(StartMethod value);
+const char* trace_phase_name(TracePhase value);
+const char* trace_event_name(TraceEvent value);
 const char* adaptive_particle_binding_name(AdaptiveParticleBinding value);
 const char* component_screening_mode_name(ComponentScreeningMode value);
 HandoffMode parse_handoff(const std::string& value);
 ProposalKind parse_proposal(const std::string& value);
-MapInitializer parse_initializer(const std::string& value);
-AdaptiveParticleRule parse_adaptive_particle_rule(const std::string& value);
+StartMethod parse_start_method(const std::string& value);
 ComponentScreeningMode parse_component_screening_mode(
     const std::string& value);
 
@@ -87,44 +91,8 @@ struct Dataset {
 struct Pilot {
     Eigen::VectorXd weights;
     RowMajorMatrixXd means;
-    std::vector<Eigen::MatrixXd> raw_covariances;
     std::vector<Eigen::MatrixXd> covariances;
     Eigen::MatrixXd pooled_covariance;
-};
-
-struct ParticleSet {
-    int32_t first_document = 0;
-    int32_t documents = 0;
-    int32_t samples = 0;
-    int32_t dimension = 0;
-    RowMajorMatrixXd values; // (document * sample) x dimension
-    RowMajorMatrixXd log_likelihood; // document x sample
-    RowMajorMatrixXd log_proposal; // document x sample
-    std::vector<int32_t> proposal_origins; // document x sample
-    std::vector<int32_t> proposal_candidates; // document
-    double sampling_seconds = 0.0;
-    double likelihood_seconds = 0.0;
-    double fisher_work_seconds = 0.0;
-    double proposal_component_work_seconds = 0.0;
-    double proposal_draw_density_work_seconds = 0.0;
-    double proposal_precision_fallback_seconds = 0.0;
-    int64_t proposal_precision_fallbacks = 0;
-    int64_t proposal_components_constructed = 0;
-    int64_t proposal_components_possible = 0;
-    uint64_t proposal_workspace_bytes = 0;
-
-    Eigen::Map<const Eigen::VectorXd> value(int32_t document,
-        int32_t sample) const;
-    double log_q(int32_t document, int32_t sample) const;
-    int32_t samples_for_document(int32_t document) const;
-    Eigen::Map<const RowMajorMatrixXd> values_for_document(
-        int32_t document) const;
-    Eigen::Map<const Eigen::VectorXd> log_likelihood_for_document(
-        int32_t document) const;
-    Eigen::Map<const Eigen::VectorXd> log_proposal_for_document(
-        int32_t document) const;
-    Eigen::Map<const Eigen::VectorXi> proposal_origins_for_document(
-        int32_t document) const;
 };
 
 struct AdaptiveParticleDiagnostic {
@@ -134,69 +102,22 @@ struct AdaptiveParticleDiagnostic {
     double maximum_responsibility_se = 0.0;
     double projected_responsibility_particles = 0.0;
     double projected_moment_particles = 0.0;
-    double plausible_maximum_weight = 0.0;
-    double half_sample_maximum_responsibility_difference = 0.0;
-    bool half_sample_top_disagreement = false;
     int32_t selected_particles = 0;
     AdaptiveParticleBinding binding = AdaptiveParticleBinding::Minimum;
 };
 
-struct RaggedParticleSet {
-    int32_t first_document = 0;
-    int32_t documents = 0;
-    int32_t dimension = 0;
-    int32_t maximum_samples = 0;
-    std::vector<int64_t> offsets;
-    std::vector<double> values;
-    std::vector<double> log_likelihood;
-    std::vector<double> log_proposal;
-    std::vector<int32_t> proposal_origins;
-    std::vector<int32_t> proposal_candidates;
-    double sampling_seconds = 0.0;
-    double likelihood_seconds = 0.0;
-    double calibration_seconds = 0.0;
-    double fisher_work_seconds = 0.0;
-    double proposal_component_work_seconds = 0.0;
-    double proposal_draw_density_work_seconds = 0.0;
-    double proposal_precision_fallback_seconds = 0.0;
-    int64_t proposal_precision_fallbacks = 0;
-    double proposal_screening_seconds = 0.0;
-    int64_t proposal_components_constructed = 0;
-    int64_t proposal_components_possible = 0;
-    int32_t proposal_audit_documents = 0;
-    int32_t proposal_audit_violations = 0;
-    double proposal_audit_maximum_omitted_mass = 0.0;
-    uint64_t proposal_workspace_bytes = 0;
-    int64_t calibration_samples = 0;
-    int64_t reused_calibration_samples = 0;
-    std::vector<AdaptiveParticleDiagnostic> adaptive_diagnostics;
-
-    int32_t samples_for_document(int32_t document) const;
-    Eigen::Map<const RowMajorMatrixXd> values_for_document(
-        int32_t document) const;
-    Eigen::Map<const Eigen::VectorXd> log_likelihood_for_document(
-        int32_t document) const;
-    Eigen::Map<const Eigen::VectorXd> log_proposal_for_document(
-        int32_t document) const;
-    Eigen::Map<const Eigen::VectorXi> proposal_origins_for_document(
-        int32_t document) const;
-};
-
 struct AdaptiveParticleOptions {
-    bool enabled = false;
-    AdaptiveParticleRule rule = AdaptiveParticleRule::Legacy;
     int32_t calibration_particles = 32;
     int32_t minimum_particles = 32;
-    int32_t maximum_particles = 256;
-    double material_mass = 0.99;
-    double material_responsibility = 0.01;
-    double component_ess_target = 32.0;
-    double contrast_se_target = 0.2;
-    double maximum_weight_target = 0.1;
-    double responsibility_se_target = 0.05;
+    std::optional<double> responsibility_se_target;
     double plausible_mass = 0.95;
     double plausible_responsibility = 0.05;
-    double moment_ess_target = 16.0;
+    std::optional<double> moment_ess_target;
+
+    bool enabled() const {
+        return responsibility_se_target.has_value()
+            || moment_ess_target.has_value();
+    }
 };
 
 struct ComponentScreeningOptions {
@@ -220,13 +141,26 @@ struct Model {
 };
 
 struct IterationDiagnostic {
-    bool particle = false;
+    TracePhase phase = TracePhase::CorrectedMomScore;
+    TraceEvent event = TraceEvent::Evaluation;
     int32_t start = 0;
-    int32_t iteration = 0;
+    int32_t completed_updates = 0;
     double relative_objective_change =
         std::numeric_limits<double>::quiet_NaN();
     double mean_max_responsibility_change =
         std::numeric_limits<double>::quiet_NaN();
+    double median_absolute_relative_variance_change =
+        std::numeric_limits<double>::quiet_NaN();
+    double mean_responsibility_entropy =
+        std::numeric_limits<double>::quiet_NaN();
+};
+
+struct ModelTraceEntry {
+    int32_t completed_updates = 0;
+    TraceEvent event = TraceEvent::Evaluation;
+    double update_shrinkage_strength =
+        std::numeric_limits<double>::quiet_NaN();
+    Model model;
 };
 
 struct FitOptions {
@@ -235,6 +169,7 @@ struct FitOptions {
     int32_t n_components = 3;
     int32_t n_particles = 256;
     int32_t particle_block_size = 0;
+    int32_t particle_em_fixed_iterations = 0;
     int32_t cluster_covariance_rank = -1;
     int32_t kmeans_starts = 5;
     int32_t leiden_starts = 0;
@@ -247,7 +182,8 @@ struct FitOptions {
     int32_t seed = 1;
     double objective_change_tolerance = 1e-5;
     double responsibility_change_tolerance = 1e-3;
-    double center_floor = 1e-12;
+    double particle_variance_change_tolerance = 0.0;
+    double initialization_ridge_precision = 0.0;
     double target_relative_floor = 1e-4;
     double leiden_knn_epsilon = 0.0;
     double leiden_resolution = 1.0;
@@ -257,6 +193,8 @@ struct FitOptions {
     double fisher_broadening = 1.5;
     AdaptiveParticleOptions adaptive_particles;
     ComponentScreeningOptions component_screening;
+    std::optional<Model> particle_initial_model;
+    bool capture_model_trace = false;
     std::function<void(const IterationDiagnostic&)> iteration_callback;
 };
 
@@ -272,20 +210,37 @@ struct EstepWorkDiagnostics {
 };
 
 struct RestartTrace {
+    HandoffMode handoff = HandoffMode::Particle;
+    TracePhase phase = TracePhase::CorrectedMomScore;
     int32_t start = 0;
-    MapInitializer initializer = MapInitializer::KMeans;
+    StartMethod start_method = StartMethod::KMeans;
     int32_t seed = 0;
     int32_t raw_communities = 0;
     int32_t reconciliation_count = 0;
     double leiden_resolution = 0.0;
     double selection_objective = -std::numeric_limits<double>::infinity();
-    bool particle = false;
+    bool selected = false;
+    bool succeeded = false;
     bool converged = false;
     bool collapsed = false;
-    std::vector<double> objective;
-    std::vector<double> relative_objective_change;
-    std::vector<double> mean_max_responsibility_change;
-    std::vector<int32_t> active_components;
+    bool fixed_em_iteration_schedule = false;
+    int32_t completed_updates = 0;
+    struct Point {
+        TraceEvent event = TraceEvent::Evaluation;
+        int32_t completed_updates = 0;
+        double objective = -std::numeric_limits<double>::infinity();
+        double relative_objective_change =
+            std::numeric_limits<double>::quiet_NaN();
+        double mean_max_responsibility_change =
+            std::numeric_limits<double>::quiet_NaN();
+        double median_absolute_relative_variance_change =
+            std::numeric_limits<double>::quiet_NaN();
+        double mean_responsibility_entropy =
+            std::numeric_limits<double>::quiet_NaN();
+        int32_t active_components = 0;
+    };
+    std::vector<Point> points;
+    std::vector<ModelTraceEntry> model_trace;
     EstepWorkDiagnostics estep_work;
 };
 
@@ -321,9 +276,9 @@ struct ScoreResult {
     double gaussian_seconds = 0.0;
     double moment_seconds = 0.0;
     double calibration_seconds = 0.0;
-    uint64_t particle_bytes = 0;
-    uint64_t proposal_workspace_bytes = 0;
-    uint64_t expectation_accumulator_bytes = 0;
+    uint64_t resident_particle_bytes = 0;
+    uint64_t estimated_peak_proposal_workspace_bytes = 0;
+    uint64_t estimated_peak_expectation_workspace_bytes = 0;
     int32_t particle_block_size = 0;
     int32_t particle_generation_passes = 0;
     int64_t particle_samples = 0;
@@ -349,6 +304,15 @@ struct ScoreResult {
     bool particle_replay = false;
 };
 
+struct ParticleScoreOptions {
+    ProposalKind proposal = ProposalKind::ExactFisher;
+    int32_t maximum_particles = 256;
+    AdaptiveParticleOptions adaptive_particles;
+    int32_t n_threads = 1;
+    int32_t particle_block_size = 0;
+    ComponentScreeningOptions component_screening;
+};
+
 struct FitResult {
     Model model;
     Pilot pilot;
@@ -356,8 +320,9 @@ struct FitResult {
     std::vector<RestartTrace> traces;
     bool converged = false;
     int32_t selected_start = -1;
-    MapInitializer selected_initializer = MapInitializer::KMeans;
+    StartMethod selected_start_method = StartMethod::KMeans;
     double selected_leiden_resolution = 0.0;
+    int64_t initialization_measurement_covariance_evaluations = 0;
 };
 
 struct State {
@@ -373,7 +338,7 @@ struct State {
     CosineKnnBackend leiden_knn_backend = CosineKnnBackend::Auto;
     int32_t leiden_max_iterations = -1;
     int32_t selected_start = -1;
-    MapInitializer selected_initializer = MapInitializer::KMeans;
+    StartMethod selected_start_method = StartMethod::KMeans;
     double selected_leiden_resolution = 0.0;
     bool converged = false;
     double center_floor = 1e-12;
@@ -383,6 +348,8 @@ struct State {
     double covariance_floor = 1e-5;
     double objective_change_tolerance = 1e-5;
     double responsibility_change_tolerance = 1e-3;
+    double particle_variance_change_tolerance = 0.0;
+    double initialization_ridge_precision = 0.0;
     bool adaptive_covariance_shrinkage = true;
     double covariance_shrinkage_strength = 20.0;
     double fisher_broadening = 1.5;
@@ -400,6 +367,15 @@ struct State {
     Model model;
 };
 
+struct StateMetadata {
+    std::vector<std::string> topics;
+    Eigen::MatrixXd helmert;
+    double center_floor = 1e-12;
+    uint64_t basis_checksum = 0;
+    Eigen::VectorXd feature_weights;
+    bool weighted_counts = false;
+};
+
 Eigen::MatrixXd normalized_helmert(int32_t topics);
 RowMajorMatrixXd ilr_transform(const Eigen::Ref<const RowMajorMatrixXd>& values,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert, double floor = 1e-12);
@@ -408,22 +384,8 @@ RowMajorMatrixXd ilr_inverse(const Eigen::Ref<const RowMajorMatrixXd>& values,
 void normalize_basis(Basis& basis);
 void normalize_centers(RowMajorMatrixXd& centers, double floor = 1e-12);
 uint64_t basis_checksum(const Basis& basis);
-
-struct FisherApproximation {
-    Eigen::VectorXd gradient;
-    Eigen::MatrixXd information;
-};
-
-FisherApproximation fisher_approximation(
-    const Eigen::Ref<const Eigen::VectorXd>& coordinate,
-    const Document& document, const Basis& basis,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
-    ProposalKind proposal);
-
-ParticleSet make_particles(const Dataset& data, const Basis& basis,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert, const Pilot& pilot,
-    ProposalKind proposal, int32_t samples, uint64_t seed,
-    double fisher_broadening = 1.5, int32_t n_threads = 1);
+double median_absolute_relative_variance_change(const Model& current,
+    const Model& previous, double covariance_floor);
 
 FitResult fit(const Dataset& data, const Basis* basis,
     const FitOptions& options);
@@ -431,21 +393,10 @@ ScoreResult score_map(const Dataset& data, const Model& model,
     int32_t n_threads = 1,
     const ComponentScreeningOptions& component_screening = {});
 ScoreResult score_particle(const Dataset& data, const Basis& basis,
-    const State& state, ProposalKind proposal, int32_t particles,
-    const AdaptiveParticleOptions& adaptive_particles = {},
-    int32_t n_threads = 1, int32_t particle_block_size = 0,
-    const ComponentScreeningOptions& component_screening = {});
-inline ScoreResult score_particle(const Dataset& data, const Basis& basis,
-    const State& state, ProposalKind proposal, int32_t particles,
-    int32_t n_threads, int32_t particle_block_size = 0) {
-    return score_particle(data, basis, state, proposal, particles,
-        AdaptiveParticleOptions{}, n_threads, particle_block_size,
-        state.component_screening);
-}
+    const State& state, const ParticleScoreOptions& options);
 
-State make_state(const FitResult& fit, const Basis* basis,
-    const FitOptions& options, const Eigen::VectorXd& feature_weights,
-    bool weighted_counts);
+State make_state(const FitResult& fit, const FitOptions& options,
+    const StateMetadata& metadata);
 void write_state(const std::string& path, const State& state);
 State read_state(const std::string& path);
 
@@ -456,6 +407,8 @@ void write_results(const std::string& path, const Dataset& data,
 void write_diagnostics(const std::string& path, const Dataset& data,
     const ScoreResult& score);
 void write_trace(const std::string& path,
+    const std::vector<RestartTrace>& traces);
+void write_model_trace(const std::string& path,
     const std::vector<RestartTrace>& traces);
 void write_separation(const std::string& path, const Model& model);
 void write_representatives(const std::string& path, const Dataset& data,

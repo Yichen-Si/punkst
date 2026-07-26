@@ -1,4 +1,4 @@
-#include "clustering/uac.hpp"
+#include "clustering/uac_internal.hpp"
 
 #include "clustering_core/cosine_clustering.hpp"
 
@@ -41,6 +41,15 @@ double logaddexp(double left, double right) {
 
 void validate_component_screening(
     const ComponentScreeningOptions& options) {
+    switch (options.mode) {
+        case ComponentScreeningMode::Off:
+        case ComponentScreeningMode::On:
+        case ComponentScreeningMode::Auto:
+            break;
+        default:
+            throw std::invalid_argument(
+                "Invalid UAC component screening mode");
+    }
     if (!(options.tail_mass > 0.0 && options.tail_mass < 1.0)
         || !(options.proposal_proxy_tail_mass > 0.0
             && options.proposal_proxy_tail_mass < 1.0)
@@ -52,6 +61,268 @@ void validate_component_screening(
         || !(options.minimum_work_reduction >= 0.0
             && options.minimum_work_reduction < 1.0)) {
         throw std::invalid_argument("Invalid UAC component screening options");
+    }
+}
+
+int32_t checked_int32(Eigen::Index value, const char* name) {
+    if (value < 0
+        || value > std::numeric_limits<int32_t>::max()) {
+        throw std::invalid_argument(
+            std::string("UAC ") + name + " exceeds int32 capacity");
+    }
+    return static_cast<int32_t>(value);
+}
+
+bool positive_definite(const Eigen::MatrixXd& covariance) {
+    return covariance.rows() > 0 && covariance.rows() == covariance.cols()
+        && covariance.allFinite()
+        && (covariance - covariance.transpose()).cwiseAbs().maxCoeff()
+            <= 1e-8
+        && Eigen::LLT<Eigen::MatrixXd>(covariance).info()
+            == Eigen::Success;
+}
+
+void validate_dataset(const Dataset& data, bool require_counts) {
+    const int32_t documents =
+        checked_int32(data.coordinates.rows(), "document count");
+    const int32_t dimension =
+        checked_int32(data.coordinates.cols(), "coordinate dimension");
+    if (documents <= 0 || dimension <= 0
+        || data.identifiers.size() != static_cast<size_t>(documents)
+        || data.centers.rows() != documents
+        || data.centers.cols() != dimension + 1
+        || !data.centers.allFinite() || !data.coordinates.allFinite()
+        || (data.centers.array() < 0.0).any()
+        || (data.centers.rowwise().sum().array() - 1.0)
+            .abs().maxCoeff() > 1e-8
+        || (data.raw_totals.size() != 0
+            && data.raw_totals.size() != documents)
+        || (data.effective_totals.size() != 0
+            && data.effective_totals.size() != documents)
+        || !data.raw_totals.allFinite()
+        || !data.effective_totals.allFinite()
+        || (data.raw_totals.array() < 0.0).any()
+        || (data.effective_totals.array() < 0.0).any()
+        || (require_counts
+            && data.counts.size() != static_cast<size_t>(documents))) {
+        throw std::invalid_argument("Invalid UAC dataset");
+    }
+    if (data.counts.empty()) return;
+    if (data.counts.size() != static_cast<size_t>(documents)) {
+        throw std::invalid_argument("UAC counts are not document-aligned");
+    }
+    for (const auto& document : data.counts) {
+        if (document.ids.size() != document.cnts.size()) {
+            throw std::invalid_argument("Invalid UAC document counts");
+        }
+        for (double count : document.cnts) {
+            if (!(count >= 0.0) || !std::isfinite(count)) {
+                throw std::invalid_argument("Invalid UAC document count");
+            }
+        }
+    }
+}
+
+void validate_basis(const Basis& basis, int32_t topics,
+    bool require_checksum = true) {
+    if (basis.probabilities.rows() <= 0
+        || basis.probabilities.cols() != topics
+        || basis.features.size()
+            != static_cast<size_t>(basis.probabilities.rows())
+        || basis.topics.size() != static_cast<size_t>(topics)
+        || !basis.probabilities.allFinite()
+        || (basis.probabilities.array() < 0.0).any()
+        || (basis.probabilities.colwise().sum().array() - 1.0)
+            .abs().maxCoeff() > 1e-8
+        || (require_checksum && basis.checksum != basis_checksum(basis))) {
+        throw std::invalid_argument("Invalid UAC basis");
+    }
+}
+
+void validate_count_features(const Dataset& data, const Basis& basis) {
+    const uint64_t features =
+        static_cast<uint64_t>(basis.probabilities.rows());
+    for (const auto& document : data.counts) {
+        for (uint32_t feature : document.ids) {
+            if (feature >= features) {
+                throw std::invalid_argument(
+                    "UAC count feature is absent from the basis");
+            }
+        }
+    }
+}
+
+void validate_model(const Model& model) {
+    const int32_t components =
+        checked_int32(model.weights.size(), "component count");
+    const int32_t dimension =
+        checked_int32(model.means.cols(), "model dimension");
+    if (components <= 0 || dimension <= 0
+        || model.means.rows() != components
+        || !model.weights.allFinite() || !model.means.allFinite()
+        || (model.weights.array() < 0.0).any()
+        || std::abs(model.weights.sum() - 1.0) > 1e-8
+        || !(model.weights.array() > 0.0).any()) {
+        throw std::invalid_argument("Invalid UAC model weights or means");
+    }
+    if (model.covariance_kind == CovarianceKind::Dense) {
+        if (model.covariances.size() != static_cast<size_t>(components)
+            || model.shrinkage_target.rows() != dimension
+            || model.shrinkage_target.cols() != dimension
+            || !positive_definite(model.shrinkage_target)) {
+            throw std::invalid_argument(
+                "Invalid UAC dense covariance structure");
+        }
+        for (const auto& covariance : model.covariances) {
+            if (covariance.rows() != dimension
+                || covariance.cols() != dimension
+                || !positive_definite(covariance)) {
+                throw std::invalid_argument(
+                    "Invalid UAC dense covariance");
+            }
+        }
+        return;
+    }
+    if (model.factor_covariances.size()
+            != static_cast<size_t>(components)
+        || model.factor_covariances.empty()) {
+        throw std::invalid_argument(
+            "Invalid UAC factor covariance structure");
+    }
+    const Eigen::Index rank =
+        model.factor_covariances.front().factor.cols();
+    auto valid_factor = [&](const LowRankDiagonalCovariance& covariance) {
+        return covariance.diagonal.size() == dimension
+            && covariance.factor.rows() == dimension
+            && covariance.factor.cols() == rank
+            && covariance.diagonal.allFinite()
+            && covariance.factor.allFinite()
+            && (covariance.diagonal.array() > 0.0).all();
+    };
+    if (!valid_factor(model.factor_shrinkage_target)) {
+        throw std::invalid_argument(
+            "Invalid UAC factor shrinkage target");
+    }
+    for (const auto& covariance : model.factor_covariances) {
+        if (!valid_factor(covariance)) {
+            throw std::invalid_argument("Invalid UAC factor covariance");
+        }
+    }
+}
+
+void validate_pilot(const Pilot& pilot, int32_t components,
+    int32_t dimension) {
+    if (pilot.weights.size() != components
+        || pilot.means.rows() != components
+        || pilot.means.cols() != dimension
+        || pilot.covariances.size() != static_cast<size_t>(components)
+        || !pilot.weights.allFinite() || !pilot.means.allFinite()
+        || (pilot.weights.array() < 0.0).any()
+        || std::abs(pilot.weights.sum() - 1.0) > 1e-8
+        || !positive_definite(pilot.pooled_covariance)) {
+        throw std::invalid_argument("Invalid UAC pilot");
+    }
+    for (const auto& covariance : pilot.covariances) {
+        if (covariance.rows() != dimension
+            || covariance.cols() != dimension
+            || !positive_definite(covariance)) {
+            throw std::invalid_argument("Invalid UAC pilot covariance");
+        }
+    }
+}
+
+void validate_adaptive_particles(const AdaptiveParticleOptions& options,
+    int32_t maximum_particles) {
+    if (options.calibration_particles < 2
+        || options.minimum_particles < options.calibration_particles
+        || (options.enabled()
+            && maximum_particles < options.minimum_particles)
+        || (options.responsibility_se_target.has_value()
+            && (!(*options.responsibility_se_target > 0.0)
+                || !std::isfinite(*options.responsibility_se_target)))
+        || (options.moment_ess_target.has_value()
+            && (!(*options.moment_ess_target > 0.0)
+                || !std::isfinite(*options.moment_ess_target)))
+        || !(options.plausible_mass > 0.0
+            && options.plausible_mass <= 1.0)
+        || !(options.plausible_responsibility >= 0.0
+            && options.plausible_responsibility <= 1.0)) {
+        throw std::invalid_argument(
+            "Invalid UAC adaptive particle options");
+    }
+}
+
+void validate_state(const State& state) {
+    validate_model(state.model);
+    const int32_t components =
+        checked_int32(state.model.weights.size(), "component count");
+    const int32_t dimension =
+        checked_int32(state.model.means.cols(), "state dimension");
+    validate_pilot(state.pilot, components, dimension);
+    validate_component_screening(state.component_screening);
+    validate_adaptive_particles(
+        state.fit_adaptive_particles, state.n_particles);
+    const int64_t total_starts =
+        static_cast<int64_t>(state.kmeans_starts) + state.leiden_starts;
+    const bool selected_kind_matches = state.selected_start_method
+            == StartMethod::KMeans
+        ? state.selected_start < state.kmeans_starts
+        : state.selected_start >= state.kmeans_starts;
+    const Eigen::MatrixXd expected_helmert =
+        normalized_helmert(dimension + 1);
+    const int32_t model_rank =
+        state.model.covariance_kind == CovarianceKind::Dense
+        ? -1 : checked_int32(
+            state.model.factor_covariances.front().factor.cols(),
+            "factor covariance rank");
+    const bool valid_handoff = state.handoff == HandoffMode::Map
+        || state.handoff == HandoffMode::Particle;
+    const bool valid_proposal = state.proposal == ProposalKind::ExactFisher
+        || state.proposal == ProposalKind::SparseEmpiricalFisher;
+    const bool valid_start_method =
+        state.selected_start_method == StartMethod::KMeans
+        || state.selected_start_method == StartMethod::Leiden;
+    const bool valid_knn_backend =
+        state.leiden_knn_backend == CosineKnnBackend::Auto
+        || state.leiden_knn_backend == CosineKnnBackend::KdTree
+        || state.leiden_knn_backend == CosineKnnBackend::Flat;
+    if (!valid_handoff || !valid_proposal || !valid_start_method
+        || !valid_knn_backend
+        || state.n_particles <= 0 || state.kmeans_starts < 0
+        || state.leiden_starts < 0 || total_starts <= 0
+        || state.kmeans_max_iterations <= 0
+        || (state.leiden_starts > 0
+            && (state.leiden_neighbors <= 0
+                || state.leiden_max_iterations == 0))
+        || state.selected_start < 0 || state.selected_start >= total_starts
+        || !selected_kind_matches
+        || !std::isfinite(state.selected_leiden_resolution)
+        || (state.selected_start_method == StartMethod::Leiden
+            && !(state.selected_leiden_resolution > 0.0))
+        || state.cluster_covariance_rank != model_rank
+        || state.topics.size() != static_cast<size_t>(dimension + 1)
+        || state.helmert.rows() != dimension
+        || state.helmert.cols() != dimension + 1
+        || !state.helmert.allFinite()
+        || (state.helmert - expected_helmert)
+            .cwiseAbs().maxCoeff() > 1e-12
+        || !(state.center_floor > 0.0)
+        || !(state.target_relative_floor > 0.0)
+        || !(state.covariance_floor > 0.0)
+        || !(state.objective_change_tolerance > 0.0)
+        || !(state.responsibility_change_tolerance > 0.0)
+        || !(state.particle_variance_change_tolerance >= 0.0)
+        || !(state.initialization_ridge_precision >= 0.0)
+        || !(state.leiden_knn_epsilon >= 0.0)
+        || !(state.leiden_resolution > 0.0)
+        || !(state.covariance_shrinkage_strength >= 0.0)
+        || !(state.fisher_broadening > 0.0)
+        || !state.feature_weights.allFinite()
+        || (state.feature_weights.array() < 0.0).any()
+        || (state.feature_weights.size() > 0 && !state.weighted_counts)
+        || (state.handoff == HandoffMode::Particle
+            && state.basis_checksum == 0)) {
+        throw std::invalid_argument("Invalid UAC state");
     }
 }
 
@@ -288,6 +559,25 @@ Eigen::MatrixXd model_covariance_dense(const Model& model,
     return model.covariance_kind == CovarianceKind::Dense
         ? model.covariances[component]
         : model.factor_covariances[component].dense();
+}
+
+void validate_particle_initial_model(const Model& model,
+    const Model& reference) {
+    validate_model(model);
+    validate_model(reference);
+    if (model.covariance_kind != reference.covariance_kind
+        || model.weights.size() != reference.weights.size()
+        || model.means.rows() != reference.means.rows()
+        || model.means.cols() != reference.means.cols()) {
+        throw std::invalid_argument(
+            "Particle initial model does not match the fitted model shape");
+    }
+    if (model.covariance_kind == CovarianceKind::FactorAnalytic
+        && model.factor_covariances.front().factor.cols()
+            != reference.factor_covariances.front().factor.cols()) {
+            throw std::invalid_argument(
+                "Particle initial model factor rank differs");
+    }
 }
 
 std::vector<double> model_eigenvalue_upper_bounds(const Model& model) {
@@ -711,6 +1001,23 @@ struct ProposalScreeningPlan {
     double maximum_audit_omitted_mass = 0.0;
 };
 
+void add_screening_metrics(ScoreResult& score,
+    const ComponentScreeningOptions& requested,
+    const ProposalScreeningPlan& proposal,
+    const ComponentScreeningOptions& particle) {
+    score.component_screening_options = requested;
+    score.proposal_component_screening = proposal.enabled;
+    score.particle_component_screening =
+        particle.mode == ComponentScreeningMode::On;
+    score.proposal_screening_seconds = proposal.planning_seconds;
+    score.proposal_audit_documents =
+        checked_int32(proposal.audit_documents.size(),
+            "proposal audit document count");
+    score.proposal_audit_violations = proposal.audit_violations;
+    score.proposal_audit_maximum_omitted_mass =
+        proposal.maximum_audit_omitted_mass;
+}
+
 double document_effective_total(const Dataset& data, int32_t document) {
     if (data.effective_totals.size() == data.coordinates.rows()) {
         return data.effective_totals(document);
@@ -915,10 +1222,11 @@ struct Expectation {
     std::vector<ParticleDiagnostic> particle_diagnostics;
     double log_likelihood = 0.0;
     double log_likelihood_upper = 0.0;
+    double responsibility_entropy_sum = 0.0;
     double gaussian_seconds = 0.0;
     double component_bound_seconds = 0.0;
     double moment_seconds = 0.0;
-    uint64_t accumulator_bytes = 0;
+    uint64_t peak_workspace_bytes = 0;
     int64_t evaluated_component_documents = 0;
     int64_t possible_component_documents = 0;
     int32_t full_component_documents = 0;
@@ -927,6 +1235,12 @@ struct Expectation {
     double maximum_omitted_component_mass = 0.0;
     std::vector<int32_t> per_document_evaluated_components;
     std::vector<double> per_document_omitted_component_mass;
+};
+
+struct ExpectationRequest {
+    bool store_responsibilities = false;
+    bool collect_diagnostics = false;
+    bool accumulate_moments = true;
 };
 
 struct ExpectationBlock {
@@ -939,6 +1253,7 @@ struct ExpectationBlock {
     std::vector<Eigen::MatrixXd> sum_yf;
     double log_likelihood = 0.0;
     double log_likelihood_upper = 0.0;
+    double responsibility_entropy_sum = 0.0;
     double component_bound_seconds = 0.0;
     int64_t evaluated_component_documents = 0;
     int64_t possible_component_documents = 0;
@@ -1007,6 +1322,8 @@ void reduce_expectation_blocks(Expectation& out,
         }
         out.log_likelihood += block.log_likelihood;
         out.log_likelihood_upper += block.log_likelihood_upper;
+        out.responsibility_entropy_sum +=
+            block.responsibility_entropy_sum;
         out.component_bound_seconds += block.component_bound_seconds;
         out.evaluated_component_documents +=
             block.evaluated_component_documents;
@@ -1038,9 +1355,11 @@ void reduce_expectation_blocks(Expectation& out,
 }
 
 Expectation empty_expectation(int32_t documents, int32_t components,
-    int32_t dimension, int32_t factor_rank = -1) {
+    int32_t dimension, int32_t factor_rank = -1,
+    bool accumulate_moments = true) {
     Expectation out;
     out.documents = documents;
+    if (!accumulate_moments) return out;
     out.membership = Eigen::VectorXd::Zero(components);
     out.first = RowMajorMatrixXd::Zero(components, dimension);
     out.second.resize(components);
@@ -1064,6 +1383,8 @@ void accumulate_expectation(Expectation& target, const Expectation& source) {
     target.first += source.first;
     target.log_likelihood += source.log_likelihood;
     target.log_likelihood_upper += source.log_likelihood_upper;
+    target.responsibility_entropy_sum +=
+        source.responsibility_entropy_sum;
     target.component_bound_seconds += source.component_bound_seconds;
     target.evaluated_component_documents +=
         source.evaluated_component_documents;
@@ -1092,7 +1413,7 @@ void accumulate_expectation(Expectation& target, const Expectation& source) {
 }
 
 Expectation map_expectation(const Dataset& data, const Model& model,
-    bool store_responsibilities = false,
+    const ExpectationRequest& request = {},
     const ComponentScreeningOptions& screening = {}) {
     validate_component_screening(screening);
     const bool screen =
@@ -1104,9 +1425,9 @@ Expectation map_expectation(const Dataset& data, const Model& model,
             == CovarianceKind::FactorAnalytic
         ? static_cast<int32_t>(model.factor_covariances.front().factor.cols())
         : -1;
-    Expectation out = empty_expectation(
-        documents, components, dimension, factor_rank);
-    if (store_responsibilities) {
+    Expectation out = empty_expectation(documents, components, dimension,
+        factor_rank, request.accumulate_moments);
+    if (request.store_responsibilities) {
         out.responsibilities.resize(documents, components);
         out.per_document_evaluated_components.resize(documents);
         out.per_document_omitted_component_mass.resize(documents);
@@ -1119,11 +1440,13 @@ Expectation map_expectation(const Dataset& data, const Model& model,
             const auto& covariance = model.factor_covariances[c];
             factor_solvers.emplace_back(
                 covariance.diagonal, covariance.factor);
-            factor_beta.push_back(factor_solvers.back().solve_matrix(
-                covariance.factor).transpose());
-            factor_conditional.push_back(
-                Eigen::MatrixXd::Identity(factor_rank, factor_rank)
-                - factor_beta.back() * covariance.factor);
+            if (request.accumulate_moments) {
+                factor_beta.push_back(factor_solvers.back().solve_matrix(
+                    covariance.factor).transpose());
+                factor_conditional.push_back(
+                    Eigen::MatrixXd::Identity(factor_rank, factor_rank)
+                    - factor_beta.back() * covariance.factor);
+            }
         }
     }
     const std::vector<DenseGaussianSolver> dense_solvers =
@@ -1149,7 +1472,8 @@ Expectation map_expectation(const Dataset& data, const Model& model,
     std::vector<ExpectationBlock> blocks;
     blocks.reserve(n_blocks);
     for (int32_t block = 0; block < n_blocks; ++block) {
-        blocks.emplace_back(components, dimension, factor_rank);
+        blocks.emplace_back(components, dimension, factor_rank,
+            request.accumulate_moments);
     }
     tbb::parallel_for(int32_t{0}, n_blocks, [&](int32_t block_index) {
         ExpectationBlock& block = blocks[block_index];
@@ -1216,13 +1540,14 @@ Expectation map_expectation(const Dataset& data, const Model& model,
                 block.maximum_omitted_component_mass,
                 selected.omitted_mass_bound);
             responsibility = (selected.score.array() - normalizer).exp();
-            if (store_responsibilities) {
+            if (request.store_responsibilities) {
                 out.responsibilities.row(d) = responsibility.transpose();
                 out.per_document_evaluated_components[d] =
                     static_cast<int32_t>(selected.evaluated.size());
                 out.per_document_omitted_component_mass[d] =
                     selected.omitted_mass_bound;
             }
+            if (!request.accumulate_moments) continue;
             for (const int32_t c : selected.evaluated) {
                 const double weight = responsibility(c);
                 if (!(weight > 0.0)) continue;
@@ -1409,10 +1734,9 @@ bool resolve_map_component_screening(const Dataset& data,
 
 template<class ParticleCollection>
 Expectation particle_expectation_impl(const ParticleCollection& particles,
-    const Model& model, bool store_responsibilities = false,
-    bool collect_diagnostics = false,
-    const ComponentScreeningOptions& screening = {},
-    bool accumulate_moments = true) {
+    const Model& model, const ExpectationRequest& request = {},
+    const ComponentScreeningOptions& screening = {}) {
+    const bool accumulate_moments = request.accumulate_moments;
     validate_component_screening(screening);
     const bool screen =
         screening.mode != ComponentScreeningMode::Off;
@@ -1437,14 +1761,14 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     } else {
         out.documents = documents;
     }
-    if (store_responsibilities) {
+    if (request.store_responsibilities) {
         out.responsibilities.resize(documents, components);
     }
-    if (store_responsibilities || collect_diagnostics) {
+    if (request.store_responsibilities || request.collect_diagnostics) {
         out.per_document_evaluated_components.resize(documents);
         out.per_document_omitted_component_mass.resize(documents);
     }
-    if (collect_diagnostics) {
+    if (request.collect_diagnostics) {
         out.particle_diagnostics.resize(documents);
     }
     std::vector<LowRankDiagonalSolver> factor_solvers;
@@ -1484,10 +1808,20 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     const int32_t block_size =
         (documents + requested_blocks - 1) / requested_blocks;
     const int32_t n_blocks = (documents + block_size - 1) / block_size;
-    out.accumulator_bytes = accumulate_moments
-        ? static_cast<uint64_t>(n_blocks)
-            * expectation_block_bytes(components, dimension, factor_rank)
-        : 0;
+    uint64_t block_workspace_values =
+        static_cast<uint64_t>(components) * maximum_samples
+        + 2 * static_cast<uint64_t>(components);
+    if (screen) {
+        block_workspace_values +=
+            static_cast<uint64_t>(maximum_samples) * dimension
+            + maximum_samples + components;
+    }
+    out.peak_workspace_bytes = static_cast<uint64_t>(n_blocks)
+        * (sizeof(double) * block_workspace_values
+            + (accumulate_moments
+                ? expectation_block_bytes(
+                    components, dimension, factor_rank)
+                : 0));
     std::vector<ExpectationBlock> blocks;
     blocks.reserve(n_blocks);
     for (int32_t block = 0; block < n_blocks; ++block) {
@@ -1596,21 +1930,22 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
             block.maximum_omitted_component_mass = std::max(
                 block.maximum_omitted_component_mass,
                 selected.omitted_mass_bound);
-            if (accumulate_moments || store_responsibilities
-                || collect_diagnostics) {
+            if (accumulate_moments || request.store_responsibilities
+                || request.collect_diagnostics) {
                 responsibility =
                     (selected.score.array() - normalizer).exp();
             }
-            if (store_responsibilities) {
+            if (request.store_responsibilities) {
                 out.responsibilities.row(d) = responsibility.transpose();
             }
-            if (store_responsibilities || collect_diagnostics) {
+            if (request.store_responsibilities
+                || request.collect_diagnostics) {
                 out.per_document_evaluated_components[d] =
                     static_cast<int32_t>(selected.evaluated.size());
                 out.per_document_omitted_component_mass[d] =
                     selected.omitted_mass_bound;
             }
-            if (collect_diagnostics) {
+            if (request.collect_diagnostics) {
                 Eigen::VectorXd log_weight(samples);
                 Eigen::VectorXd component_weight = Eigen::VectorXd::Constant(
                     components, -std::numeric_limits<double>::infinity());
@@ -1707,21 +2042,17 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
 }
 
 Expectation particle_expectation(const ParticleSet& particles,
-    const Model& model, bool store_responsibilities = false,
-    bool collect_diagnostics = false,
+    const Model& model, const ExpectationRequest& request = {},
     const ComponentScreeningOptions& screening = {}) {
     return particle_expectation_impl(
-        particles, model, store_responsibilities, collect_diagnostics,
-        screening);
+        particles, model, request, screening);
 }
 
 Expectation particle_expectation(const RaggedParticleSet& particles,
-    const Model& model, bool store_responsibilities = false,
-    bool collect_diagnostics = false,
+    const Model& model, const ExpectationRequest& request = {},
     const ComponentScreeningOptions& screening = {}) {
     return particle_expectation_impl(
-        particles, model, store_responsibilities, collect_diagnostics,
-        screening);
+        particles, model, request, screening);
 }
 
 template<class ParticleCollection>
@@ -1769,7 +2100,7 @@ bool resolve_particle_component_screening(
             particles.proposal_candidates[document];
     }
     const Expectation probe = particle_expectation_impl(
-        audit, model, false, false, enabled, false);
+        audit, model, ExpectationRequest{false, false, false}, enabled);
     if (probe.component_bound_violations > 0
         || probe.possible_component_documents == 0) {
         return false;
@@ -1782,6 +2113,155 @@ bool resolve_particle_component_screening(
     return exact_fraction <= 0.5
         && bound_fraction + exact_fraction
             <= 1.0 - requested.minimum_work_reduction;
+}
+
+struct HardPartitionMoments {
+    Eigen::VectorXi counts;
+    RowMajorMatrixXd means;
+    std::vector<Eigen::MatrixXd> scatter;
+    Eigen::MatrixXd pooled_scatter;
+};
+
+HardPartitionMoments hard_partition_moments(const Dataset& data,
+    const Eigen::Ref<const Eigen::VectorXi>& assignments,
+    int32_t components) {
+    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
+    const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
+    if (assignments.size() != documents || components <= 0) {
+        throw std::invalid_argument("Invalid UAC hard partition");
+    }
+    HardPartitionMoments out;
+    out.counts = Eigen::VectorXi::Zero(components);
+    out.means = RowMajorMatrixXd::Zero(components, dimension);
+    for (int32_t d = 0; d < documents; ++d) {
+        const int32_t component = assignments(d);
+        if (component < 0 || component >= components) {
+            throw std::invalid_argument(
+                "UAC initial partition label is out of range");
+        }
+        ++out.counts(component);
+        out.means.row(component) += data.coordinates.row(d);
+    }
+    for (int32_t c = 0; c < components; ++c) {
+        if (out.counts(c) <= 0) {
+            throw std::runtime_error(
+                "UAC initial partition produced an empty component");
+        }
+        out.means.row(c) /= out.counts(c);
+    }
+    out.scatter.assign(components,
+        Eigen::MatrixXd::Zero(dimension, dimension));
+    for (int32_t d = 0; d < documents; ++d) {
+        const int32_t component = assignments(d);
+        const Eigen::VectorXd residual =
+            data.coordinates.row(d).transpose()
+            - out.means.row(component).transpose();
+        out.scatter[component].noalias() +=
+            residual * residual.transpose();
+    }
+    out.pooled_scatter =
+        Eigen::MatrixXd::Zero(dimension, dimension);
+    for (const auto& scatter : out.scatter) {
+        out.pooled_scatter += scatter;
+    }
+    out.pooled_scatter /= documents;
+    out.pooled_scatter = 0.5
+        * (out.pooled_scatter + out.pooled_scatter.transpose());
+    return out;
+}
+
+Eigen::MatrixXd measurement_covariance(const Dataset& data,
+    const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
+    int32_t document) {
+    const FisherApproximation fisher = fisher_approximation_impl(
+        data.coordinates.row(document).transpose(), data.counts[document],
+        basis, helmert, ProposalKind::ExactFisher);
+    Eigen::MatrixXd precision =
+        fisher.information + regularizing_precision;
+    precision = 0.5 * (precision + precision.transpose());
+    Eigen::LLT<Eigen::MatrixXd> llt(precision);
+    if (llt.info() != Eigen::Success) {
+        throw std::runtime_error(
+            "UAC deconvolution measurement precision is not positive definite");
+    }
+    Eigen::MatrixXd covariance = llt.solve(
+        Eigen::MatrixXd::Identity(precision.rows(), precision.cols()));
+    covariance = 0.5 * (covariance + covariance.transpose());
+    if (!covariance.allFinite()) {
+        throw std::runtime_error(
+            "UAC deconvolution measurement covariance is nonfinite");
+    }
+    return covariance;
+}
+
+Eigen::MatrixXd shared_measurement_precision(
+    const std::vector<HardPartitionMoments>& moments,
+    double scalar_precision, double relative_floor) {
+    if (moments.empty() || !(scalar_precision >= 0.0)
+        || !std::isfinite(scalar_precision) || !(relative_floor > 0.0)) {
+        throw std::invalid_argument(
+            "Invalid UAC deconvolution regularizing precision");
+    }
+    const int32_t dimension = static_cast<int32_t>(
+        moments.front().pooled_scatter.rows());
+    if (scalar_precision > 0.0) {
+        return scalar_precision
+            * Eigen::MatrixXd::Identity(dimension, dimension);
+    }
+    Eigen::MatrixXd pooled =
+        Eigen::MatrixXd::Zero(dimension, dimension);
+    for (const auto& value : moments) {
+        if (value.pooled_scatter.rows() != dimension
+            || value.pooled_scatter.cols() != dimension) {
+            throw std::runtime_error(
+                "Incompatible UAC start scatters");
+        }
+        pooled += value.pooled_scatter;
+    }
+    pooled /= moments.size();
+    const double floor = std::max(1e-12,
+        relative_floor * pooled.trace() / dimension);
+    pooled = floor_covariance(pooled, floor);
+    Eigen::LLT<Eigen::MatrixXd> llt(pooled);
+    if (llt.info() != Eigen::Success) {
+        throw std::runtime_error(
+            "UAC shared deconvolution scatter is not positive definite");
+    }
+    return llt.solve(
+        Eigen::MatrixXd::Identity(dimension, dimension));
+}
+
+std::vector<std::vector<Eigen::MatrixXd>>
+measurement_sums_by_partition(const Dataset& data, const Basis& basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
+    const std::vector<Eigen::VectorXi>& assignments,
+    int32_t components) {
+    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
+    const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
+    std::vector<std::vector<Eigen::MatrixXd>> out(
+        assignments.size(), std::vector<Eigen::MatrixXd>(
+            components, Eigen::MatrixXd::Zero(dimension, dimension)));
+    for (const auto& assignment : assignments) {
+        if (assignment.size() != documents) {
+            throw std::invalid_argument(
+                "Invalid UAC measurement partition");
+        }
+    }
+    for (int32_t d = 0; d < documents; ++d) {
+        const Eigen::MatrixXd covariance = measurement_covariance(
+            data, basis, helmert, regularizing_precision, d);
+        for (size_t start = 0; start < assignments.size(); ++start) {
+            const int32_t component = assignments[start](d);
+            if (component < 0 || component >= components) {
+                throw std::invalid_argument(
+                    "UAC measurement partition label is out of range");
+            }
+            out[start][component] += covariance;
+        }
+    }
+    return out;
 }
 
 Model initialize_model_from_partition(const Dataset& data,
@@ -1837,6 +2317,45 @@ Model initialize_model_from_partition(const Dataset& data,
     return model;
 }
 
+Model initialize_model_from_corrected_moments(const Dataset& data,
+    const Eigen::Ref<const Eigen::VectorXi>& assignments,
+    const HardPartitionMoments& moments,
+    const std::vector<Eigen::MatrixXd>& measurement_sum,
+    double shrinkage, double covariance_floor) {
+    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
+    const int32_t components = static_cast<int32_t>(moments.counts.size());
+    const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
+    if (assignments.size() != documents
+        || moments.means.rows() != components
+        || moments.means.cols() != dimension
+        || measurement_sum.size() != static_cast<size_t>(components)
+        || !(shrinkage >= 0.0) || !(covariance_floor > 0.0)) {
+        throw std::invalid_argument(
+            "Invalid UAC corrected-moment initialization");
+    }
+    Eigen::MatrixXd corrected_target = moments.pooled_scatter;
+    for (const auto& sum : measurement_sum) {
+        corrected_target -= sum / documents;
+    }
+    corrected_target = floor_covariance(
+        corrected_target, covariance_floor);
+
+    Model model;
+    model.weights = moments.counts.cast<double>() / documents;
+    model.means = moments.means;
+    model.shrinkage_target = corrected_target;
+    model.covariances.reserve(components);
+    for (int32_t c = 0; c < components; ++c) {
+        Eigen::MatrixXd numerator =
+            moments.scatter[c] - measurement_sum[c]
+            + shrinkage * corrected_target;
+        model.covariances.push_back(floor_covariance(
+            numerator / (moments.counts(c) + shrinkage),
+            covariance_floor));
+    }
+    return model;
+}
+
 Pilot pilot_from_map(const Dataset& data, const Model& model,
     const Expectation& expectation,
     double relative_floor) {
@@ -1852,20 +2371,20 @@ Pilot pilot_from_map(const Dataset& data, const Model& model,
     Pilot out;
     out.weights = model.weights;
     out.means = model.means;
-    out.raw_covariances.assign(components,
+    std::vector<Eigen::MatrixXd> raw_covariances(components,
         Eigen::MatrixXd::Zero(dimension, dimension));
     const Eigen::VectorXd& membership = expectation.membership;
     for (int32_t c = 0; c < components; ++c) {
         const Eigen::VectorXd mean = model.means.row(c).transpose();
-        out.raw_covariances[c] = expectation.second[c]
+        raw_covariances[c] = expectation.second[c]
             - expectation.first.row(c).transpose() * mean.transpose()
             - mean * expectation.first.row(c)
             + membership(c) * mean * mean.transpose();
-        out.raw_covariances[c] = 0.5 * (out.raw_covariances[c]
-            + out.raw_covariances[c].transpose());
+        raw_covariances[c] = 0.5 * (raw_covariances[c]
+            + raw_covariances[c].transpose());
     }
     out.pooled_covariance = Eigen::MatrixXd::Zero(dimension, dimension);
-    for (const auto& scatter : out.raw_covariances) {
+    for (const auto& scatter : raw_covariances) {
         out.pooled_covariance += scatter;
     }
     const double total_membership = membership.sum();
@@ -1881,13 +2400,152 @@ Pilot pilot_from_map(const Dataset& data, const Model& model,
     const double epsilon = membership_epsilon(data.coordinates.rows());
     for (int32_t c = 0; c < components; ++c) {
         if (membership(c) > epsilon && model.weights(c) > 0.0) {
-            out.raw_covariances[c] /= membership(c);
-            out.raw_covariances[c] = 0.5 * (out.raw_covariances[c]
-                + out.raw_covariances[c].transpose());
+            raw_covariances[c] /= membership(c);
+            raw_covariances[c] = 0.5 * (raw_covariances[c]
+                + raw_covariances[c].transpose());
         } else {
-            out.raw_covariances[c] = out.pooled_covariance;
             out.covariances[c] = out.pooled_covariance;
         }
+    }
+    return out;
+}
+
+Pilot pilot_from_model(const Model& model) {
+    if (model.covariance_kind != CovarianceKind::Dense
+        || model.covariances.size()
+            != static_cast<size_t>(model.weights.size())) {
+        throw std::invalid_argument(
+            "UAC corrected-moment pilot requires dense covariance");
+    }
+    Pilot out;
+    out.weights = model.weights;
+    out.means = model.means;
+    out.covariances = model.covariances;
+    out.pooled_covariance = model.shrinkage_target;
+    return out;
+}
+
+struct DeconvolutionScore {
+    double log_likelihood = 0.0;
+    double responsibility_entropy_sum = 0.0;
+    double gaussian_seconds = 0.0;
+};
+
+std::vector<DeconvolutionScore> deconvolution_marginal_scores(
+    const Dataset& data, const Basis& basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
+    const std::vector<Model>& models) {
+    if (models.empty()) return {};
+    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
+    const int32_t components =
+        static_cast<int32_t>(models.front().weights.size());
+    const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
+    if (data.counts.size() != static_cast<size_t>(documents)
+        || regularizing_precision.rows() != dimension
+        || regularizing_precision.cols() != dimension) {
+        throw std::invalid_argument(
+            "Invalid UAC deconvolution score input");
+    }
+    for (const auto& model : models) {
+        if (model.covariance_kind != CovarianceKind::Dense
+            || model.weights.size() != components
+            || model.means.rows() != components
+            || model.means.cols() != dimension
+            || model.covariances.size()
+                != static_cast<size_t>(components)) {
+            throw std::invalid_argument(
+                "Incompatible UAC deconvolution candidate");
+        }
+    }
+    const int32_t requested_blocks = expectation_shards(
+        documents, components, dimension, -1);
+    const int32_t block_size =
+        (documents + requested_blocks - 1) / requested_blocks;
+    const int32_t n_blocks =
+        (documents + block_size - 1) / block_size;
+    std::vector<std::vector<double>> block_likelihood(
+        n_blocks, std::vector<double>(models.size(), 0.0));
+    std::vector<std::vector<double>> block_entropy(
+        n_blocks, std::vector<double>(models.size(), 0.0));
+    std::vector<double> block_seconds(n_blocks, 0.0);
+    tbb::parallel_for(int32_t{0}, n_blocks, [&](int32_t block_index) {
+        std::vector<Eigen::VectorXd> log_score(
+            models.size(), Eigen::VectorXd(components));
+        std::vector<std::vector<Eigen::LLT<Eigen::MatrixXd>>> solvers(
+            models.size(),
+            std::vector<Eigen::LLT<Eigen::MatrixXd>>(components));
+        const int32_t begin = block_index * block_size;
+        const int32_t end = std::min(documents, begin + block_size);
+        const auto work_start = std::chrono::steady_clock::now();
+        for (int32_t d = begin; d < end; ++d) {
+            const Eigen::VectorXd observed =
+                data.coordinates.row(d).transpose();
+            const Eigen::MatrixXd measurement = measurement_covariance(
+                data, basis, helmert, regularizing_precision, d);
+            for (size_t candidate = 0; candidate < models.size();
+                    ++candidate) {
+                const Model& model = models[candidate];
+                log_score[candidate].setConstant(
+                    -std::numeric_limits<double>::infinity());
+                for (int32_t c = 0; c < components; ++c) {
+                    if (!(model.weights(c) > 0.0)) continue;
+                    Eigen::MatrixXd marginal =
+                        model.covariances[c] + measurement;
+                    marginal = 0.5 * (
+                        marginal + marginal.transpose());
+                    solvers[candidate][c].compute(marginal);
+                    if (solvers[candidate][c].info()
+                            != Eigen::Success) {
+                        throw std::runtime_error(
+                            "UAC deconvolution marginal covariance is not "
+                            "positive definite");
+                    }
+                    const Eigen::MatrixXd lower =
+                        solvers[candidate][c].matrixL();
+                    const double log_determinant =
+                        2.0 * lower.diagonal().array().log().sum();
+                    const Eigen::VectorXd residual = observed
+                        - model.means.row(c).transpose();
+                    log_score[candidate](c) = std::log(model.weights(c))
+                        - 0.5 * (dimension * kLog2Pi + log_determinant
+                            + residual.dot(
+                                solvers[candidate][c].solve(residual)));
+                }
+                const double normalizer =
+                    logsumexp(log_score[candidate]);
+                if (!std::isfinite(normalizer)) {
+                    throw std::runtime_error(
+                        "UAC deconvolution has no finite component "
+                        "evidence");
+                }
+                const Eigen::VectorXd responsibility =
+                    (log_score[candidate].array() - normalizer).exp();
+                block_likelihood[block_index][candidate] += normalizer;
+                for (int32_t c = 0; c < components; ++c) {
+                    const double weight = responsibility(c);
+                    if (weight > 0.0) {
+                        block_entropy[block_index][candidate] -=
+                            weight * std::log(weight);
+                    }
+                }
+            }
+        }
+        block_seconds[block_index] = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - work_start).count();
+    });
+    std::vector<DeconvolutionScore> out(models.size());
+    const double total_seconds =
+        std::accumulate(block_seconds.begin(), block_seconds.end(), 0.0);
+    for (size_t candidate = 0; candidate < models.size(); ++candidate) {
+        for (int32_t block = 0; block < n_blocks; ++block) {
+            out[candidate].log_likelihood +=
+                block_likelihood[block][candidate];
+            out[candidate].responsibility_entropy_sum +=
+                block_entropy[block][candidate];
+        }
+        out[candidate].gaussian_seconds =
+            total_seconds / models.size();
     }
     return out;
 }
@@ -2105,14 +2763,29 @@ double mean_max_responsibility_change(
     return total / current.rows();
 }
 
-void record_iteration_diagnostic(RestartTrace& trace,
-    const FitOptions& options, int32_t iteration,
-    double relative_objective_change, double responsibility_change) {
-    trace.relative_objective_change.push_back(relative_objective_change);
-    trace.mean_max_responsibility_change.push_back(responsibility_change);
+void record_trace_point(RestartTrace& trace, const FitOptions& options,
+    TraceEvent event, int32_t completed_updates, double objective,
+    int32_t active_components,
+    double relative_objective_change, double responsibility_change,
+    double variance_change =
+        std::numeric_limits<double>::quiet_NaN(),
+    double mean_responsibility_entropy =
+        std::numeric_limits<double>::quiet_NaN()) {
+    RestartTrace::Point point;
+    point.event = event;
+    point.completed_updates = completed_updates;
+    point.objective = objective;
+    point.active_components = active_components;
+    point.relative_objective_change = relative_objective_change;
+    point.mean_max_responsibility_change = responsibility_change;
+    point.median_absolute_relative_variance_change = variance_change;
+    point.mean_responsibility_entropy = mean_responsibility_entropy;
+    trace.points.push_back(std::move(point));
     if (options.iteration_callback) {
-        options.iteration_callback({trace.particle, trace.start, iteration,
-            relative_objective_change, responsibility_change});
+        options.iteration_callback({trace.phase, event, trace.start,
+            completed_updates, relative_objective_change,
+            responsibility_change, variance_change,
+            mean_responsibility_entropy});
     }
 }
 
@@ -2137,7 +2810,8 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
     const FitOptions& options, const RestartTrace& metadata) {
     Candidate out;
     out.trace = metadata;
-    out.trace.particle = false;
+    out.trace.handoff = HandoffMode::Map;
+    out.trace.phase = TracePhase::PointMapEm;
     out.model = std::move(initial);
     ComponentScreeningOptions map_screening = options.component_screening;
     if (map_screening.mode == ComponentScreeningMode::Auto) {
@@ -2159,16 +2833,13 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
     double previous_omitted_mass = 0.0;
     bool reuse_converged_expectation = false;
     for (int32_t iteration = 0; iteration < options.max_iterations; ++iteration) {
-        Expectation expectation = map_expectation(
-            data, out.model, true, map_screening);
+        Expectation expectation = map_expectation(data, out.model,
+            ExpectationRequest{true, false, true}, map_screening);
         accumulate_estep_work(out.trace, expectation);
         const double objective = expectation.log_likelihood
             + covariance_prior(out.model, shrinkage);
         const double objective_upper = expectation.log_likelihood_upper
             + covariance_prior(out.model, shrinkage);
-        out.trace.objective.push_back(objective);
-        out.trace.active_components.push_back(
-            active_component_count(out.model));
         double relative_change = std::numeric_limits<double>::quiet_NaN();
         double responsibility_change =
             std::numeric_limits<double>::quiet_NaN();
@@ -2185,8 +2856,10 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
                 / std::max({1.0, std::abs(previous_objective_lower),
                     std::abs(previous_objective_upper)});
         }
-        record_iteration_diagnostic(out.trace, options, iteration,
-            relative_change, responsibility_change);
+        record_trace_point(out.trace, options, TraceEvent::Evaluation,
+            out.trace.completed_updates, objective,
+            active_component_count(out.model), relative_change,
+            responsibility_change);
         if (iteration > 0
             && (relative_change < options.objective_change_tolerance
                 || responsibility_change
@@ -2207,39 +2880,80 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
             out.trace.collapsed = true;
             return out;
         }
+        ++out.trace.completed_updates;
     }
     if (reuse_converged_expectation) {
         out.objective = converged_log_likelihood;
     } else {
-        const Expectation final_expectation = map_expectation(
-            data, out.model, false, map_screening);
+        const Expectation final_expectation = map_expectation(data, out.model,
+            ExpectationRequest{false, false, false}, map_screening);
         accumulate_estep_work(out.trace, final_expectation);
         out.objective = final_expectation.log_likelihood;
     }
     out.trace.selection_objective = out.objective;
-    out.trace.objective.push_back(out.objective
-        + covariance_prior(out.model, shrinkage));
-    out.trace.relative_objective_change.push_back(
+    record_trace_point(out.trace, options, TraceEvent::Terminal,
+        out.trace.completed_updates,
+        out.objective + covariance_prior(out.model, shrinkage),
+        active_component_count(out.model),
+        std::numeric_limits<double>::quiet_NaN(),
         std::numeric_limits<double>::quiet_NaN());
-    out.trace.mean_max_responsibility_change.push_back(
-        std::numeric_limits<double>::quiet_NaN());
-    out.trace.active_components.push_back(active_component_count(out.model));
+    out.trace.succeeded = true;
     return out;
+}
+
+void score_corrected_moment_candidates(
+    const Dataset& data, const Basis& basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
+    const FitOptions& options, std::vector<Candidate>& candidates) {
+    std::vector<size_t> candidate_index;
+    std::vector<Model> models;
+    for (size_t index = 0; index < candidates.size(); ++index) {
+        if (!candidates[index].trace.collapsed) {
+            candidate_index.push_back(index);
+            models.push_back(candidates[index].model);
+        }
+    }
+    const std::vector<DeconvolutionScore> scores =
+        deconvolution_marginal_scores(data, basis, helmert,
+            regularizing_precision, models);
+    for (size_t local = 0; local < scores.size(); ++local) {
+        Candidate& candidate = candidates[candidate_index[local]];
+        const DeconvolutionScore& score = scores[local];
+        candidate.trace.estep_work.gaussian_seconds +=
+            score.gaussian_seconds;
+        candidate.trace.estep_work.document_evaluations +=
+            data.coordinates.rows();
+        candidate.objective = score.log_likelihood;
+        record_trace_point(candidate.trace, options,
+            TraceEvent::CandidateScore, 0, candidate.objective,
+            active_component_count(candidate.model),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            score.responsibility_entropy_sum
+                / std::max<Eigen::Index>(1, data.coordinates.rows()));
+        candidate.trace.succeeded = true;
+        candidate.trace.selection_objective = candidate.objective;
+    }
 }
 
 Candidate fit_particle_candidate(
     const std::function<Expectation(const Model&)>& expectation_function,
-    Model initial, const FitOptions& options, const RestartTrace& map_trace) {
+    Model initial, const FitOptions& options,
+    const RestartTrace& initialization_trace) {
     Candidate out;
-    out.trace = map_trace;
-    out.trace.objective.clear();
-    out.trace.relative_objective_change.clear();
-    out.trace.mean_max_responsibility_change.clear();
-    out.trace.active_components.clear();
+    out.trace = initialization_trace;
+    out.trace.points.clear();
+    out.trace.model_trace.clear();
     out.trace.estep_work = {};
     out.trace.converged = false;
     out.trace.collapsed = false;
-    out.trace.particle = true;
+    out.trace.handoff = HandoffMode::Particle;
+    out.trace.phase = TracePhase::ParticleEm;
+    out.trace.fixed_em_iteration_schedule =
+        options.particle_em_fixed_iterations > 0;
+    out.trace.completed_updates = 0;
     out.model = std::move(initial);
     const double shrinkage = options.adaptive_covariance_shrinkage
         ? options.covariance_shrinkage_strength : 0.0;
@@ -2251,16 +2965,26 @@ Candidate fit_particle_candidate(
     double previous_objective_upper =
         -std::numeric_limits<double>::infinity();
     double previous_omitted_mass = 0.0;
+    std::optional<Model> previous_variance_model;
     bool reuse_converged_expectation = false;
     bool adaptive_update_completed = false;
-    int32_t iteration_offset = 0;
+    int32_t model_iteration = 0;
+    auto record_model = [&](bool final, double update_shrinkage_strength) {
+        if (!options.capture_model_trace) return;
+        ModelTraceEntry entry;
+        entry.completed_updates = model_iteration;
+        entry.event = final ? TraceEvent::Terminal : TraceEvent::Evaluation;
+        entry.update_shrinkage_strength = update_shrinkage_strength;
+        entry.model = out.model;
+        out.trace.model_trace.push_back(std::move(entry));
+    };
     if (options.adaptive_covariance_shrinkage) {
+        record_model(false, 0.0);
         Expectation bootstrap = expectation_function(out.model);
         accumulate_estep_work(out.trace, bootstrap);
-        out.trace.objective.push_back(bootstrap.log_likelihood);
-        out.trace.active_components.push_back(
-            active_component_count(out.model));
-        record_iteration_diagnostic(out.trace, options, 0,
+        record_trace_point(out.trace, options, TraceEvent::Evaluation,
+            out.trace.completed_updates, bootstrap.log_likelihood,
+            active_component_count(out.model),
             std::numeric_limits<double>::quiet_NaN(),
             std::numeric_limits<double>::quiet_NaN());
         previous_responsibilities = bootstrap.responsibilities;
@@ -2268,24 +2992,33 @@ Candidate fit_particle_candidate(
         previous_objective_upper = bootstrap.log_likelihood_upper;
         previous_omitted_mass =
             bootstrap.maximum_omitted_component_mass;
+        previous_variance_model = out.model;
         const ModelUpdate update = update_model(out.model, bootstrap, 0.0,
             options.covariance_floor);
         if (!update.valid) {
             out.trace.collapsed = true;
+            record_model(true,
+                std::numeric_limits<double>::quiet_NaN());
             return out;
         }
-        iteration_offset = 1;
+        ++model_iteration;
+        ++out.trace.completed_updates;
     }
-    for (int32_t iteration = 0; iteration < options.max_iterations; ++iteration) {
+    const int32_t update_budget = options.particle_em_fixed_iterations > 0
+        ? options.particle_em_fixed_iterations
+        : options.max_iterations;
+    const int32_t regular_iterations = std::max(
+        0, update_budget - out.trace.completed_updates);
+    for (int32_t iteration = 0; iteration < regular_iterations; ++iteration) {
+        record_model(false, shrinkage);
         Expectation expectation = expectation_function(out.model);
         accumulate_estep_work(out.trace, expectation);
         const double objective = expectation.log_likelihood;
         const double objective_upper = expectation.log_likelihood_upper;
-        out.trace.objective.push_back(objective);
-        out.trace.active_components.push_back(
-            active_component_count(out.model));
         double relative_change = std::numeric_limits<double>::quiet_NaN();
         double responsibility_change =
+            std::numeric_limits<double>::quiet_NaN();
+        double variance_change =
             std::numeric_limits<double>::quiet_NaN();
         if (std::isfinite(previous_objective_lower)) {
             relative_change = std::max(
@@ -2300,13 +3033,26 @@ Candidate fit_particle_candidate(
                 + expectation.maximum_omitted_component_mass
                 + previous_omitted_mass;
         }
-        record_iteration_diagnostic(out.trace, options,
-            iteration + iteration_offset, relative_change,
-            responsibility_change);
+        if (previous_variance_model.has_value()) {
+            variance_change = median_absolute_relative_variance_change(
+                out.model, *previous_variance_model,
+                options.covariance_floor);
+        }
+        record_trace_point(out.trace, options, TraceEvent::Evaluation,
+            out.trace.completed_updates, objective,
+            active_component_count(out.model), relative_change,
+            responsibility_change, variance_change);
         const bool convergence_eligible =
             !options.adaptive_covariance_shrinkage
             || adaptive_update_completed;
-        if (convergence_eligible && std::isfinite(relative_change)
+        const bool variance_converged =
+            options.particle_variance_change_tolerance == 0.0
+            || (std::isfinite(variance_change)
+                && variance_change
+                    < options.particle_variance_change_tolerance);
+        if (!out.trace.fixed_em_iteration_schedule
+            && convergence_eligible && std::isfinite(relative_change)
+            && variance_converged
             && (relative_change < options.objective_change_tolerance
                 || responsibility_change
                     < options.responsibility_change_tolerance)) {
@@ -2320,13 +3066,18 @@ Candidate fit_particle_candidate(
         previous_objective_upper = objective_upper;
         previous_omitted_mass =
             expectation.maximum_omitted_component_mass;
+        previous_variance_model = out.model;
         const ModelUpdate update = update_model(out.model, expectation,
             shrinkage, options.covariance_floor,
             options.adaptive_covariance_shrinkage);
         if (!update.valid) {
             out.trace.collapsed = true;
+            record_model(true,
+                std::numeric_limits<double>::quiet_NaN());
             return out;
         }
+        ++model_iteration;
+        ++out.trace.completed_updates;
         if (options.adaptive_covariance_shrinkage) {
             adaptive_update_completed = true;
         }
@@ -2338,12 +3089,13 @@ Candidate fit_particle_candidate(
         accumulate_estep_work(out.trace, final_expectation);
         out.objective = final_expectation.log_likelihood;
     }
-    out.trace.objective.push_back(out.objective);
-    out.trace.relative_objective_change.push_back(
+    record_trace_point(out.trace, options, TraceEvent::Terminal,
+        out.trace.completed_updates, out.objective,
+        active_component_count(out.model),
+        std::numeric_limits<double>::quiet_NaN(),
         std::numeric_limits<double>::quiet_NaN());
-    out.trace.mean_max_responsibility_change.push_back(
-        std::numeric_limits<double>::quiet_NaN());
-    out.trace.active_components.push_back(active_component_count(out.model));
+    record_model(true, std::numeric_limits<double>::quiet_NaN());
+    out.trace.succeeded = true;
     return out;
 }
 
@@ -2352,13 +3104,14 @@ ScoreResult score_particles_impl(
     const ParticleCollection& particles, const Model& model,
     const ComponentScreeningOptions& screening = {}) {
     ScoreResult out;
-    Expectation expectation = particle_expectation(
-        particles, model, true, true, screening);
+    Expectation expectation = particle_expectation(particles, model,
+        ExpectationRequest{true, true, false}, screening);
     out.responsibilities = std::move(expectation.responsibilities);
     out.particle_diagnostics = std::move(expectation.particle_diagnostics);
     out.gaussian_seconds = expectation.gaussian_seconds;
     out.moment_seconds = expectation.moment_seconds;
-    out.expectation_accumulator_bytes = expectation.accumulator_bytes;
+    out.estimated_peak_expectation_workspace_bytes =
+        expectation.peak_workspace_bytes;
     out.sampling_seconds = particles.sampling_seconds;
     out.likelihood_seconds = particles.likelihood_seconds;
     out.fisher_work_seconds = particles.fisher_work_seconds;
@@ -2370,7 +3123,8 @@ ScoreResult score_particles_impl(
         particles.proposal_precision_fallback_seconds;
     out.proposal_precision_fallbacks =
         particles.proposal_precision_fallbacks;
-    out.proposal_workspace_bytes = particles.proposal_workspace_bytes;
+    out.estimated_peak_proposal_workspace_bytes =
+        particles.proposal_workspace_bytes;
     out.component_screening_options = screening;
     out.particle_component_screening =
         screening.mode != ComponentScreeningMode::Off;
@@ -2404,8 +3158,16 @@ ScoreResult score_particles_impl(
         total_samples += samples;
     }
     out.particle_samples = total_samples;
-    out.particle_bytes = sizeof(double) * static_cast<uint64_t>(total_samples)
-        * (particles.dimension + 2);
+    out.resident_particle_bytes = sizeof(double)
+            * static_cast<uint64_t>(total_samples)
+            * (particles.dimension + 2)
+        + sizeof(int32_t) * (
+            static_cast<uint64_t>(total_samples)
+            + static_cast<uint64_t>(particles.documents));
+    if constexpr (std::is_same_v<ParticleCollection, RaggedParticleSet>) {
+        out.resident_particle_bytes += sizeof(int64_t)
+            * static_cast<uint64_t>(particles.offsets.size());
+    }
     out.particle_block_size = particles.documents;
     out.particle_generation_passes = 1;
     out.particle_replay = false;
@@ -2444,42 +3206,192 @@ double entropy(const Eigen::Ref<const Eigen::RowVectorXd>& probability) {
     return value;
 }
 
+const char* adaptive_particle_mode_name(
+    const AdaptiveParticleOptions& options) {
+    if (options.responsibility_se_target.has_value()
+        && options.moment_ess_target.has_value()) {
+        return "responsibility_moment";
+    }
+    if (options.responsibility_se_target.has_value()) {
+        return "responsibility";
+    }
+    if (options.moment_ess_target.has_value()) return "moment";
+    return "fixed";
+}
+
+double optional_target_or_zero(const std::optional<double>& value) {
+    return value.value_or(0.0);
+}
+
+int32_t parse_state_int32(const std::string& text) {
+    size_t consumed = 0;
+    long long value = 0;
+    try {
+        value = std::stoll(text, &consumed);
+    } catch (const std::exception&) {
+        throw std::runtime_error("Invalid UAC state integer: " + text);
+    }
+    if (consumed != text.size()
+        || value < std::numeric_limits<int32_t>::min()
+        || value > std::numeric_limits<int32_t>::max()) {
+        throw std::runtime_error("Invalid UAC state integer: " + text);
+    }
+    return static_cast<int32_t>(value);
+}
+
+uint64_t parse_state_uint64(const std::string& text) {
+    if (text.empty() || text.front() == '-') {
+        throw std::runtime_error(
+            "Invalid UAC state unsigned integer: " + text);
+    }
+    size_t consumed = 0;
+    unsigned long long value = 0;
+    try {
+        value = std::stoull(text, &consumed);
+    } catch (const std::exception&) {
+        throw std::runtime_error(
+            "Invalid UAC state unsigned integer: " + text);
+    }
+    if (consumed != text.size()) {
+        throw std::runtime_error(
+            "Invalid UAC state unsigned integer: " + text);
+    }
+    return static_cast<uint64_t>(value);
+}
+
+double parse_state_double(const std::string& text) {
+    size_t consumed = 0;
+    double value = 0.0;
+    try {
+        value = std::stod(text, &consumed);
+    } catch (const std::exception&) {
+        throw std::runtime_error("Invalid UAC state number: " + text);
+    }
+    if (consumed != text.size() || !std::isfinite(value)) {
+        throw std::runtime_error("Invalid UAC state number: " + text);
+    }
+    return value;
+}
+
+bool parse_state_bool(const std::string& text) {
+    if (text == "0") return false;
+    if (text == "1") return true;
+    throw std::runtime_error("Invalid UAC state boolean: " + text);
+}
+
 } // namespace
 
+double median_absolute_relative_variance_change(const Model& current,
+    const Model& previous, double covariance_floor) {
+    if (!(covariance_floor > 0.0) || !std::isfinite(covariance_floor)
+        || current.covariance_kind != previous.covariance_kind
+        || current.weights.size() != previous.weights.size()
+        || current.means.rows() != previous.means.rows()
+        || current.means.cols() != previous.means.cols()
+        || current.means.cols() <= 0) {
+        throw std::invalid_argument(
+            "Incompatible UAC models for variance convergence");
+    }
+    const size_t components = static_cast<size_t>(current.weights.size());
+    if ((current.covariance_kind == CovarianceKind::Dense
+            && (current.covariances.size() != components
+                || previous.covariances.size() != components))
+        || (current.covariance_kind == CovarianceKind::FactorAnalytic
+            && (current.factor_covariances.size() != components
+                || previous.factor_covariances.size() != components))) {
+        throw std::invalid_argument(
+            "Incomplete UAC covariance model for variance convergence");
+    }
+    std::vector<double> changes;
+    changes.reserve(static_cast<size_t>(current.weights.size()));
+    const double dimension = static_cast<double>(current.means.cols());
+    for (Eigen::Index c = 0; c < current.weights.size(); ++c) {
+        const bool current_active = current.weights(c) > 0.0;
+        const bool previous_active = previous.weights(c) > 0.0;
+        if (current_active != previous_active) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        if (!current_active) continue;
+        const Eigen::MatrixXd current_covariance =
+            model_covariance_dense(current, static_cast<int32_t>(c));
+        const Eigen::MatrixXd previous_covariance =
+            model_covariance_dense(previous, static_cast<int32_t>(c));
+        if (current_covariance.rows() != current.means.cols()
+            || current_covariance.cols() != current.means.cols()
+            || previous_covariance.rows() != previous.means.cols()
+            || previous_covariance.cols() != previous.means.cols()) {
+            throw std::invalid_argument(
+                "Invalid UAC covariance shape for variance convergence");
+        }
+        const double current_variance =
+            current_covariance.trace() / dimension;
+        const double previous_variance =
+            previous_covariance.trace() / dimension;
+        if (!std::isfinite(current_variance)
+            || !std::isfinite(previous_variance)) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        changes.push_back(std::abs(current_variance - previous_variance)
+            / std::max(previous_variance, covariance_floor));
+    }
+    if (changes.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    std::sort(changes.begin(), changes.end());
+    const size_t middle = changes.size() / 2;
+    return changes.size() % 2 == 0
+        ? 0.5 * (changes[middle - 1] + changes[middle])
+        : changes[middle];
+}
+
 const char* handoff_name(HandoffMode value) {
-    return value == HandoffMode::Map ? "map" : "particle";
+    switch (value) {
+        case HandoffMode::Map: return "map";
+        case HandoffMode::Particle: return "particle";
+    }
+    throw std::invalid_argument("Unknown UAC handoff");
 }
 
 const char* proposal_name(ProposalKind value) {
-    return value == ProposalKind::ExactFisher
-        ? "exact_fisher" : "sparse_empirical_fisher";
-}
-
-const char* initializer_name(MapInitializer value) {
-    return value == MapInitializer::KMeans ? "kmeans++" : "leiden";
-}
-
-const char* adaptive_particle_rule_name(AdaptiveParticleRule value) {
     switch (value) {
-        case AdaptiveParticleRule::Legacy: return "legacy";
-        case AdaptiveParticleRule::ResponsibilityOnly:
-            return "responsibility_only";
-        case AdaptiveParticleRule::MomentOnly:
-            return "moment_only";
-        case AdaptiveParticleRule::ResponsibilityMoment:
-            return "responsibility_moment";
+        case ProposalKind::ExactFisher: return "exact_fisher";
+        case ProposalKind::SparseEmpiricalFisher:
+            return "sparse_empirical_fisher";
     }
-    throw std::invalid_argument("Unknown adaptive particle rule");
+    throw std::invalid_argument("Unknown UAC proposal");
+}
+
+const char* start_method_name(StartMethod value) {
+    switch (value) {
+        case StartMethod::KMeans: return "kmeans++";
+        case StartMethod::Leiden: return "leiden";
+    }
+    throw std::invalid_argument("Unknown UAC start method");
+}
+
+const char* trace_phase_name(TracePhase value) {
+    switch (value) {
+        case TracePhase::CorrectedMomScore:
+            return "corrected_mom_score";
+        case TracePhase::PointMapEm: return "point_map_em";
+        case TracePhase::ParticleEm: return "particle_em";
+    }
+    throw std::invalid_argument("Unknown UAC trace phase");
+}
+
+const char* trace_event_name(TraceEvent value) {
+    switch (value) {
+        case TraceEvent::CandidateScore: return "candidate_score";
+        case TraceEvent::Evaluation: return "evaluation";
+        case TraceEvent::Terminal: return "terminal";
+        case TraceEvent::Failure: return "failure";
+    }
+    throw std::invalid_argument("Unknown UAC trace event");
 }
 
 const char* adaptive_particle_binding_name(AdaptiveParticleBinding value) {
     switch (value) {
         case AdaptiveParticleBinding::Minimum: return "minimum";
-        case AdaptiveParticleBinding::LegacyEss: return "legacy_ess";
-        case AdaptiveParticleBinding::LegacyMaximumWeight:
-            return "legacy_maximum_weight";
-        case AdaptiveParticleBinding::LegacyContrast:
-            return "legacy_contrast";
         case AdaptiveParticleBinding::Responsibility:
             return "responsibility";
         case AdaptiveParticleBinding::MomentEss: return "moment_ess";
@@ -2511,24 +3423,10 @@ ProposalKind parse_proposal(const std::string& value) {
         "UAC proposal must be exact_fisher or sparse_empirical_fisher");
 }
 
-MapInitializer parse_initializer(const std::string& value) {
-    if (value == "kmeans++") return MapInitializer::KMeans;
-    if (value == "leiden") return MapInitializer::Leiden;
-    throw std::invalid_argument("UAC initializer must be kmeans++ or leiden");
-}
-
-AdaptiveParticleRule parse_adaptive_particle_rule(const std::string& value) {
-    if (value == "legacy") return AdaptiveParticleRule::Legacy;
-    if (value == "responsibility_only") {
-        return AdaptiveParticleRule::ResponsibilityOnly;
-    }
-    if (value == "moment_only") {
-        return AdaptiveParticleRule::MomentOnly;
-    }
-    if (value == "responsibility_moment") {
-        return AdaptiveParticleRule::ResponsibilityMoment;
-    }
-    throw std::invalid_argument("Unknown adaptive particle rule: " + value);
+StartMethod parse_start_method(const std::string& value) {
+    if (value == "kmeans++") return StartMethod::KMeans;
+    if (value == "leiden") return StartMethod::Leiden;
+    throw std::invalid_argument("UAC start method must be kmeans++ or leiden");
 }
 
 ComponentScreeningMode parse_component_screening_mode(
@@ -2968,7 +3866,8 @@ AdaptiveCountResult adaptive_particle_count(
     const Eigen::Ref<const Eigen::VectorXd>& log_proposal,
     const Model& model,
     const std::vector<DenseGaussianSolver>& solvers,
-    const AdaptiveParticleOptions& options) {
+    const AdaptiveParticleOptions& options,
+    int32_t maximum_particles) {
     const int32_t samples = static_cast<int32_t>(values.rows());
     const int32_t components = static_cast<int32_t>(model.weights.size());
     if (samples < 2 || log_likelihood.size() != samples
@@ -3033,36 +3932,6 @@ AdaptiveCountResult adaptive_particle_count(
     for (const int32_t c : order) {
         tau.row(c) = (log_tilt.row(c).array() - evidence(c)).exp();
     }
-    for (const int32_t c : plausible) {
-        out.diagnostic.plausible_maximum_weight = std::max(
-            out.diagnostic.plausible_maximum_weight,
-            tau.row(c).maxCoeff());
-    }
-
-    auto subset_responsibility = [&](int32_t first, int32_t count)
-            -> Eigen::VectorXd {
-        Eigen::VectorXd subset_score = Eigen::VectorXd::Constant(components,
-            -std::numeric_limits<double>::infinity());
-        for (const int32_t c : order) {
-            Eigen::VectorXd values_for_component =
-                log_tilt.row(c).segment(first, count).transpose();
-            subset_score(c) = std::log(model.weights(c))
-                + logsumexp(values_for_component);
-        }
-        const double subset_normalizer = logsumexp(subset_score);
-        return (subset_score.array() - subset_normalizer).exp().matrix().eval();
-    };
-    const int32_t first_half = samples / 2;
-    const Eigen::VectorXd left = subset_responsibility(0, first_half);
-    const Eigen::VectorXd right = subset_responsibility(
-        first_half, samples - first_half);
-    out.diagnostic.half_sample_maximum_responsibility_difference =
-        (left - right).cwiseAbs().maxCoeff();
-    Eigen::Index left_top = 0, right_top = 0;
-    left.maxCoeff(&left_top);
-    right.maxCoeff(&right_top);
-    out.diagnostic.half_sample_top_disagreement = left_top != right_top;
-
     double required = options.minimum_particles;
     AdaptiveParticleBinding binding = AdaptiveParticleBinding::Minimum;
     auto update_required = [&](double candidate,
@@ -3072,36 +3941,7 @@ AdaptiveCountResult adaptive_particle_count(
             binding = candidate_binding;
         }
     };
-    if (options.rule == AdaptiveParticleRule::Legacy) {
-        std::vector<int32_t> material;
-        cumulative = 0.0;
-        for (size_t rank = 0; rank < order.size(); ++rank) {
-            const int32_t c = order[rank];
-            if (cumulative < options.material_mass
-                || responsibility(c) >= options.material_responsibility
-                || rank < std::min<size_t>(2, order.size())) {
-                material.push_back(c);
-            }
-            cumulative += responsibility(c);
-        }
-        for (const int32_t c : material) {
-            const double relative_ess = 1.0
-                / (samples * tau.row(c).squaredNorm());
-            update_required(options.component_ess_target
-                    / std::max(1e-12, relative_ess),
-                AdaptiveParticleBinding::LegacyEss);
-            update_required(samples * tau.row(c).maxCoeff()
-                    / options.maximum_weight_target,
-                AdaptiveParticleBinding::LegacyMaximumWeight);
-        }
-        if (order.size() >= 2) {
-            const double contrast_se = std::sqrt(samples / (samples - 1.0)
-                * (tau.row(order[0]) - tau.row(order[1])).squaredNorm());
-            update_required(samples
-                    * std::pow(contrast_se / options.contrast_se_target, 2.0),
-                AdaptiveParticleBinding::LegacyContrast);
-        }
-    } else {
+    if (options.responsibility_se_target.has_value()) {
         Eigen::RowVectorXd mixture_tau = Eigen::RowVectorXd::Zero(samples);
         for (const int32_t c : order) {
             mixture_tau += responsibility(c) * tau.row(c);
@@ -3116,27 +3956,25 @@ AdaptiveCountResult adaptive_particle_count(
         }
         out.diagnostic.projected_responsibility_particles = samples
             * std::pow(out.diagnostic.maximum_responsibility_se
-                / options.responsibility_se_target, 2.0);
-        if (options.rule != AdaptiveParticleRule::MomentOnly) {
-            update_required(out.diagnostic.projected_responsibility_particles,
-                AdaptiveParticleBinding::Responsibility);
+                / *options.responsibility_se_target, 2.0);
+        update_required(out.diagnostic.projected_responsibility_particles,
+            AdaptiveParticleBinding::Responsibility);
+    }
+    if (options.moment_ess_target.has_value()) {
+        for (const int32_t c : plausible) {
+            const double relative_ess = 1.0
+                / (samples * tau.row(c).squaredNorm());
+            out.diagnostic.projected_moment_particles = std::max(
+                out.diagnostic.projected_moment_particles,
+                *options.moment_ess_target
+                    / std::max(1e-12, relative_ess));
         }
-        if (options.rule != AdaptiveParticleRule::ResponsibilityOnly) {
-            for (const int32_t c : plausible) {
-                const double relative_ess = 1.0
-                    / (samples * tau.row(c).squaredNorm());
-                out.diagnostic.projected_moment_particles = std::max(
-                    out.diagnostic.projected_moment_particles,
-                    options.moment_ess_target
-                        / std::max(1e-12, relative_ess));
-            }
-            update_required(out.diagnostic.projected_moment_particles,
-                AdaptiveParticleBinding::MomentEss);
-        }
+        update_required(out.diagnostic.projected_moment_particles,
+            AdaptiveParticleBinding::MomentEss);
     }
     int32_t selected = options.minimum_particles;
-    while (selected < options.maximum_particles && selected < required) {
-        selected = std::min(options.maximum_particles, selected * 2);
+    while (selected < maximum_particles && selected < required) {
+        selected = std::min(maximum_particles, selected * 2);
     }
     out.particles = selected;
     out.diagnostic.selected_particles = selected;
@@ -3150,26 +3988,22 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
     ProposalKind proposal_kind, uint64_t seed, double fisher_broadening,
     int32_t n_threads, const Model& calibration_model,
     const AdaptiveParticleOptions& options,
+    int32_t maximum_particles,
     const ProposalScreeningPlan* screening_plan) {
     const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
     const int32_t dimension = static_cast<int32_t>(helmert.rows());
-    if (!options.enabled || documents <= 0
+    if (!options.enabled() || documents <= 0
         || options.calibration_particles < 2
         || options.minimum_particles <= 0
         || options.minimum_particles < options.calibration_particles
-        || options.maximum_particles < options.minimum_particles
-        || !(options.material_mass > 0.0 && options.material_mass <= 1.0)
-        || !(options.material_responsibility >= 0.0
-            && options.material_responsibility <= 1.0)
-        || !(options.component_ess_target > 0.0)
-        || !(options.contrast_se_target > 0.0)
-        || !(options.maximum_weight_target > 0.0
-            && options.maximum_weight_target <= 1.0)
-        || !(options.responsibility_se_target > 0.0)
+        || maximum_particles < options.minimum_particles
+        || (options.responsibility_se_target.has_value()
+            && !(*options.responsibility_se_target > 0.0))
         || !(options.plausible_mass > 0.0 && options.plausible_mass <= 1.0)
         || !(options.plausible_responsibility >= 0.0
             && options.plausible_responsibility <= 1.0)
-        || !(options.moment_ess_target > 0.0)) {
+        || (options.moment_ess_target.has_value()
+            && !(*options.moment_ess_target > 0.0))) {
         throw std::invalid_argument("Invalid adaptive particle options");
     }
     std::vector<DenseGaussianSolver> calibration_solvers;
@@ -3186,7 +4020,7 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
     RaggedParticleSet out;
     out.documents = documents;
     out.dimension = dimension;
-    out.maximum_samples = options.maximum_particles;
+    out.maximum_samples = maximum_particles;
     out.offsets.assign(static_cast<size_t>(documents) + 1, 0);
     out.adaptive_diagnostics.resize(documents);
     out.proposal_candidates.resize(documents);
@@ -3266,7 +4100,7 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
             const AdaptiveCountResult allocation = adaptive_particle_count(
                 calibration, calibration_log_likelihood[local],
                 calibration_log_q[local], calibration_model,
-                calibration_solvers, options);
+                calibration_solvers, options, maximum_particles);
             counts[local] = allocation.particles;
             out.adaptive_diagnostics[document] = allocation.diagnostic;
         });
@@ -3368,8 +4202,11 @@ ParticleSet make_particles(const Dataset& data, const Basis& basis,
 }
 
 uint64_t particle_set_bytes(const ParticleSet& particles) {
-    return sizeof(double) * static_cast<uint64_t>(particles.documents)
-        * particles.samples * (particles.dimension + 2);
+    const uint64_t samples = static_cast<uint64_t>(particles.documents)
+        * particles.samples;
+    return sizeof(double) * samples * (particles.dimension + 2)
+        + sizeof(int32_t) * (
+            samples + static_cast<uint64_t>(particles.documents));
 }
 
 struct ParticleReplayMetrics {
@@ -3416,7 +4253,7 @@ Expectation replay_particle_expectation(const Dataset& data,
     const Model& model, ParticleReplayMetrics& metrics,
     const ProposalScreeningPlan* proposal_screening,
     const ComponentScreeningOptions& component_screening,
-    bool store_responsibilities = false) {
+    const ExpectationRequest& request = {}) {
     const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
     const int32_t components = static_cast<int32_t>(model.weights.size());
     const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
@@ -3424,9 +4261,9 @@ Expectation replay_particle_expectation(const Dataset& data,
             == CovarianceKind::FactorAnalytic
         ? static_cast<int32_t>(model.factor_covariances.front().factor.cols())
         : -1;
-    Expectation out = empty_expectation(
-        documents, components, dimension, factor_rank);
-    if (store_responsibilities) {
+    Expectation out = empty_expectation(documents, components, dimension,
+        factor_rank, request.accumulate_moments);
+    if (request.store_responsibilities) {
         out.responsibilities.resize(documents, components);
     }
     ++metrics.passes;
@@ -3437,9 +4274,8 @@ Expectation replay_particle_expectation(const Dataset& data,
             proposal_screening, first, count);
         metrics.add(block);
         Expectation local = particle_expectation(
-            block, model, store_responsibilities, false,
-            component_screening);
-        if (store_responsibilities) {
+            block, model, request, component_screening);
+        if (request.store_responsibilities) {
             out.responsibilities.middleRows(first, count) =
                 local.responsibilities;
         }
@@ -3487,9 +4323,9 @@ ScoreResult score_particle_replay(const Dataset& data, const Basis& basis,
         out.gaussian_seconds += local.gaussian_seconds;
         out.moment_seconds += local.moment_seconds;
         out.component_bound_seconds += local.component_bound_seconds;
-        out.expectation_accumulator_bytes = std::max(
-            out.expectation_accumulator_bytes,
-            local.expectation_accumulator_bytes);
+        out.estimated_peak_expectation_workspace_bytes = std::max(
+            out.estimated_peak_expectation_workspace_bytes,
+            local.estimated_peak_expectation_workspace_bytes);
         out.evaluated_component_documents +=
             local.evaluated_component_documents;
         out.possible_component_documents +=
@@ -3524,8 +4360,9 @@ ScoreResult score_particle_replay(const Dataset& data, const Basis& basis,
         component_screening.mode != ComponentScreeningMode::Off;
     out.particle_generation_seconds = out.sampling_seconds
         + out.likelihood_seconds;
-    out.particle_bytes = metrics.peak_bytes;
-    out.proposal_workspace_bytes = metrics.proposal_workspace_bytes;
+    out.resident_particle_bytes = metrics.peak_bytes;
+    out.estimated_peak_proposal_workspace_bytes =
+        metrics.proposal_workspace_bytes;
     out.particle_samples = static_cast<int64_t>(documents) * samples;
     out.per_document_particles.assign(documents, samples);
     out.particle_block_size = block_size;
@@ -3536,6 +4373,7 @@ ScoreResult score_particle_replay(const Dataset& data, const Basis& basis,
 
 FitResult fit(const Dataset& data, const Basis* basis,
     const FitOptions& options) {
+    validate_dataset(data, options.handoff == HandoffMode::Particle);
     validate_component_screening(options.component_screening);
     const int64_t total_starts = static_cast<int64_t>(options.kmeans_starts)
         + options.leiden_starts;
@@ -3543,7 +4381,8 @@ FitResult fit(const Dataset& data, const Basis* basis,
         || options.leiden_starts < 0 || total_starts <= 0
         || options.max_iterations <= 0 || options.n_particles <= 0
         || options.particle_block_size < 0
-        || (options.adaptive_particles.enabled
+        || options.particle_em_fixed_iterations < 0
+        || (options.adaptive_particles.enabled()
             && options.particle_block_size != 0)
         || options.cluster_covariance_rank < -1
         || options.kmeans_max_iterations <= 0
@@ -3551,10 +4390,16 @@ FitResult fit(const Dataset& data, const Basis* basis,
         || data.coordinates.rows() != data.centers.rows()
         || !(options.objective_change_tolerance > 0.0)
         || !(options.responsibility_change_tolerance > 0.0)
+        || !(options.particle_variance_change_tolerance >= 0.0)
+        || !std::isfinite(options.particle_variance_change_tolerance)
+        || !(options.initialization_ridge_precision >= 0.0)
+        || !std::isfinite(options.initialization_ridge_precision)
         || !(options.target_relative_floor > 0.0)
         || !(options.covariance_floor > 0.0)
         || !(options.covariance_shrinkage_strength >= 0.0)
-        || !std::isfinite(options.covariance_shrinkage_strength)) {
+        || !std::isfinite(options.covariance_shrinkage_strength)
+        || !(options.fisher_broadening > 0.0)
+        || !std::isfinite(options.fisher_broadening)) {
         throw std::invalid_argument("Invalid UAC fit options or dataset");
     }
     if (options.leiden_starts > 0
@@ -3571,27 +4416,49 @@ FitResult fit(const Dataset& data, const Basis* basis,
         && (basis == nullptr || data.counts.size() != data.identifiers.size())) {
         throw std::invalid_argument("Particle UAC requires basis and aligned counts");
     }
+    if (basis) {
+        validate_basis(*basis,
+            checked_int32(data.centers.cols(), "topic count"));
+        validate_count_features(data, *basis);
+    }
+    validate_adaptive_particles(
+        options.adaptive_particles, options.n_particles);
+    if (options.particle_initial_model.has_value()
+        && options.handoff != HandoffMode::Particle) {
+        throw std::invalid_argument(
+            "Particle initial model requires particle handoff");
+    }
+    if (options.particle_em_fixed_iterations > 0
+        && options.handoff != HandoffMode::Particle) {
+        throw std::invalid_argument(
+            "Fixed particle EM iterations require particle handoff");
+    }
+    if (options.particle_variance_change_tolerance > 0.0
+        && options.handoff != HandoffMode::Particle) {
+        throw std::invalid_argument(
+            "Particle variance convergence requires particle handoff");
+    }
+    if (options.particle_em_fixed_iterations > 0
+        && options.particle_variance_change_tolerance > 0.0) {
+        throw std::invalid_argument(
+            "Fixed particle EM iterations cannot use convergence stopping");
+    }
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, options.n_threads));
     FitResult result;
-    std::vector<Candidate> maps;
-    maps.reserve(static_cast<size_t>(total_starts));
-    auto append_map = [&](const Eigen::VectorXi& assignments,
-                          const RestartTrace& metadata) {
-        try {
-            Model initial = initialize_model_from_partition(data, assignments,
-                options.n_components, options.adaptive_covariance_shrinkage
-                    ? options.covariance_shrinkage_strength : 0.0,
-                options.covariance_floor, options.target_relative_floor);
-            maps.push_back(fit_map_candidate(
-                data, std::move(initial), options, metadata));
-        } catch (const std::exception&) {
-            Candidate failed;
-            failed.trace = metadata;
-            failed.trace.collapsed = true;
-            maps.push_back(std::move(failed));
-        }
-        result.traces.push_back(maps.back().trace);
+    struct StartPartition {
+        Eigen::VectorXi assignments;
+        RestartTrace metadata;
+    };
+    std::vector<StartPartition> starts;
+    starts.reserve(static_cast<size_t>(total_starts));
+    auto append_start = [&](Eigen::VectorXi assignments,
+                            RestartTrace metadata) {
+        metadata.handoff = options.handoff;
+        metadata.phase = options.handoff == HandoffMode::Particle
+            ? TracePhase::CorrectedMomScore : TracePhase::PointMapEm;
+        starts.push_back({
+            std::move(assignments), std::move(metadata)});
     };
 
     int32_t global_start = 0;
@@ -3599,16 +4466,16 @@ FitResult fit(const Dataset& data, const Basis* basis,
             ++start, ++global_start) {
         RestartTrace metadata;
         metadata.start = global_start;
-        metadata.initializer = MapInitializer::KMeans;
+        metadata.start_method = StartMethod::KMeans;
         metadata.seed = map_start_seed(options.seed, global_start);
         metadata.raw_communities = options.n_components;
         DenseKMeansOptions kmeans;
         kmeans.n_clusters = options.n_components;
         kmeans.max_iterations = options.kmeans_max_iterations;
         kmeans.seed = metadata.seed;
-        const DenseKMeansResult clustering = cosine_dense_kmeans(
+        DenseKMeansResult clustering = cosine_dense_kmeans(
             data.centers, kmeans);
-        append_map(clustering.assignments, metadata);
+        append_start(std::move(clustering.assignments), metadata);
     }
 
     if (options.leiden_starts > 0) {
@@ -3625,7 +4492,7 @@ FitResult fit(const Dataset& data, const Basis* basis,
                 ++start, ++global_start) {
             RestartTrace metadata;
             metadata.start = global_start;
-            metadata.initializer = MapInitializer::Leiden;
+            metadata.start_method = StartMethod::Leiden;
             metadata.seed = map_start_seed(options.seed, global_start);
             metadata.leiden_resolution = resolution;
             LeidenOptions leiden_options;
@@ -3641,10 +4508,10 @@ FitResult fit(const Dataset& data, const Basis* basis,
             reconcile_options.n_clusters = options.n_components;
             reconcile_options.max_iterations = options.kmeans_max_iterations;
             reconcile_options.seed = metadata.seed;
-            const Eigen::VectorXi assignments = reconcile_cosine_communities(
+            Eigen::VectorXi assignments = reconcile_cosine_communities(
                 leiden.membership, leiden.n_communities,
                 options.n_components, data.centers, reconcile_options);
-            append_map(assignments, metadata);
+            append_start(std::move(assignments), metadata);
 
             if (!adapting) continue;
             if (leiden.n_communities < options.n_components) {
@@ -3663,8 +4530,69 @@ FitResult fit(const Dataset& data, const Basis* basis,
         }
     }
 
+    std::vector<Candidate> candidates;
+    candidates.reserve(static_cast<size_t>(total_starts));
+    Eigen::MatrixXd initialization_precision;
+    const Eigen::MatrixXd helmert =
+        normalized_helmert(data.centers.cols());
+    std::vector<HardPartitionMoments> partition_moments;
+    std::vector<std::vector<Eigen::MatrixXd>> measurement_sums;
+    if (options.handoff == HandoffMode::Particle) {
+        partition_moments.reserve(starts.size());
+        for (const auto& start : starts) {
+            partition_moments.push_back(hard_partition_moments(
+                data, start.assignments, options.n_components));
+        }
+        initialization_precision = shared_measurement_precision(
+            partition_moments, options.initialization_ridge_precision,
+            options.target_relative_floor);
+        std::vector<Eigen::VectorXi> assignments;
+        assignments.reserve(starts.size());
+        for (const auto& start : starts) {
+            assignments.push_back(start.assignments);
+        }
+        measurement_sums = measurement_sums_by_partition(
+            data, *basis, helmert, initialization_precision, assignments,
+            options.n_components);
+    }
+    for (size_t i = 0; i < starts.size(); ++i) {
+        const auto& start = starts[i];
+        try {
+            const double shrinkage =
+                options.adaptive_covariance_shrinkage
+                ? options.covariance_shrinkage_strength : 0.0;
+            if (options.handoff == HandoffMode::Map) {
+                Model initial = initialize_model_from_partition(
+                    data, start.assignments, options.n_components,
+                    shrinkage, options.covariance_floor,
+                    options.target_relative_floor);
+                candidates.push_back(fit_map_candidate(
+                    data, std::move(initial), options, start.metadata));
+            } else {
+                Candidate candidate;
+                candidate.trace = start.metadata;
+                candidate.model = initialize_model_from_corrected_moments(
+                    data, start.assignments, partition_moments[i],
+                    measurement_sums[i], shrinkage,
+                    options.covariance_floor);
+                candidates.push_back(std::move(candidate));
+            }
+        } catch (const std::exception&) {
+            Candidate failed;
+            failed.trace = start.metadata;
+            failed.trace.collapsed = true;
+            candidates.push_back(std::move(failed));
+        }
+    }
+    if (options.handoff == HandoffMode::Particle) {
+        score_corrected_moment_candidates(data, *basis, helmert,
+            initialization_precision, options, candidates);
+        result.initialization_measurement_covariance_evaluations =
+            2 * static_cast<int64_t>(data.coordinates.rows());
+    }
+
     Candidate* selected = nullptr;
-    for (auto& candidate : maps) {
+    for (auto& candidate : candidates) {
         if (candidate.trace.collapsed || !std::isfinite(candidate.objective)) {
             continue;
         }
@@ -3675,21 +4603,35 @@ FitResult fit(const Dataset& data, const Basis* basis,
         }
     }
     if (selected == nullptr) {
-        throw std::runtime_error("Every UAC MAP start failed numerically");
+        throw std::runtime_error(
+            "Every UAC initialization start failed numerically");
+    }
+    selected->trace.selected = true;
+    result.traces.reserve(candidates.size() + 1);
+    for (const auto& candidate : candidates) {
+        result.traces.push_back(candidate.trace);
     }
     ComponentScreeningOptions selected_map_screening =
         options.component_screening;
-    if (selected_map_screening.mode == ComponentScreeningMode::Auto) {
+    if (options.handoff == HandoffMode::Particle) {
+        selected_map_screening.mode = ComponentScreeningMode::Off;
+    } else if (selected_map_screening.mode
+            == ComponentScreeningMode::Auto) {
         const bool enabled = resolve_map_component_screening(
             data, selected->model, selected_map_screening,
             static_cast<uint64_t>(selected->trace.seed));
         apply_auto_component_screening_resolution(
             selected_map_screening, enabled);
     }
-    const Expectation selected_expectation = map_expectation(
-        data, selected->model, false, selected_map_screening);
-    result.pilot = pilot_from_map(data, selected->model,
-        selected_expectation, options.target_relative_floor);
+    if (options.handoff == HandoffMode::Map) {
+        const Expectation selected_expectation = map_expectation(
+            data, selected->model, ExpectationRequest{false, false, true},
+            selected_map_screening);
+        result.pilot = pilot_from_map(data, selected->model,
+            selected_expectation, options.target_relative_floor);
+    } else {
+        result.pilot = pilot_from_model(selected->model);
+    }
     selected->model.shrinkage_target = result.pilot.pooled_covariance;
     if (options.cluster_covariance_rank >= 0) {
         const int32_t dimension = static_cast<int32_t>(
@@ -3710,27 +4652,36 @@ FitResult fit(const Dataset& data, const Basis* basis,
                 factorize_covariance(covariance, rank,
                     options.covariance_floor));
         }
-        const double shrinkage = options.adaptive_covariance_shrinkage
-            ? options.covariance_shrinkage_strength : 0.0;
-        const double before = map_expectation(data, selected->model, false,
-            selected_map_screening)
-            .log_likelihood + covariance_prior(selected->model, shrinkage);
-        Model refined = selected->model;
-        const Expectation refinement = map_expectation(
-            data, refined, false, selected_map_screening);
-        const ModelUpdate refinement_update = update_model(refined, refinement,
-            shrinkage, options.covariance_floor);
-        if (refinement_update.valid) {
-            const double after = map_expectation(data, refined, false,
+        if (options.handoff == HandoffMode::Map) {
+            const double shrinkage =
+                options.adaptive_covariance_shrinkage
+                ? options.covariance_shrinkage_strength : 0.0;
+            const double before = map_expectation(data, selected->model,
+                ExpectationRequest{false, false, false},
                 selected_map_screening)
-                .log_likelihood + covariance_prior(refined, shrinkage);
-            if (std::isfinite(after) && after >= before) {
-                selected->model = std::move(refined);
+                .log_likelihood
+                + covariance_prior(selected->model, shrinkage);
+            Model refined = selected->model;
+            const Expectation refinement = map_expectation(data, refined,
+                ExpectationRequest{false, false, true},
+                selected_map_screening);
+            const ModelUpdate refinement_update = update_model(
+                refined, refinement, shrinkage,
+                options.covariance_floor);
+            if (refinement_update.valid) {
+                const double after = map_expectation(data, refined,
+                    ExpectationRequest{false, false, false},
+                    selected_map_screening)
+                    .log_likelihood
+                    + covariance_prior(refined, shrinkage);
+                if (std::isfinite(after) && after >= before) {
+                    selected->model = std::move(refined);
+                }
             }
         }
     }
     result.selected_start = selected->trace.start;
-    result.selected_initializer = selected->trace.initializer;
+    result.selected_start_method = selected->trace.start_method;
     result.selected_leiden_resolution = selected->trace.leiden_resolution;
 
     if (options.handoff == HandoffMode::Map) {
@@ -3740,7 +4691,12 @@ FitResult fit(const Dataset& data, const Basis* basis,
         result.converged = selected->trace.converged;
         return result;
     }
-    const Eigen::MatrixXd helmert = normalized_helmert(data.centers.cols());
+    Model particle_initial = selected->model;
+    if (options.particle_initial_model.has_value()) {
+        validate_particle_initial_model(
+            *options.particle_initial_model, selected->model);
+        particle_initial = *options.particle_initial_model;
+    }
     const PilotCache pilot_cache(result.pilot);
     const uint64_t particle_seed = static_cast<uint64_t>(options.seed) ^ 0xF604;
     const ProposalScreeningPlan proposal_screening =
@@ -3753,50 +4709,41 @@ FitResult fit(const Dataset& data, const Basis* basis,
         apply_auto_component_screening_resolution(
             particle_screening, false);
     }
-    auto add_screening_metrics = [&](ScoreResult& score) {
-        score.component_screening_options = options.component_screening;
-        score.map_component_screening =
-            selected_map_screening.mode == ComponentScreeningMode::On;
-        score.proposal_component_screening = proposal_screening.enabled;
-        score.particle_component_screening =
-            particle_screening.mode == ComponentScreeningMode::On;
-        score.proposal_screening_seconds =
-            proposal_screening.planning_seconds;
-        score.proposal_audit_documents = static_cast<int32_t>(
-            proposal_screening.audit_documents.size());
-        score.proposal_audit_violations =
-            proposal_screening.audit_violations;
-        score.proposal_audit_maximum_omitted_mass =
-            proposal_screening.maximum_audit_omitted_mass;
-    };
     Candidate particle;
     try {
-        if (options.adaptive_particles.enabled) {
+        if (options.adaptive_particles.enabled()) {
             const RaggedParticleSet particles = make_adaptive_particles(
                 data, *basis, helmert, result.pilot, pilot_cache,
                 options.proposal, particle_seed, options.fisher_broadening,
-                options.n_threads, selected->model,
-                options.adaptive_particles, &proposal_screening);
+                options.n_threads, particle_initial,
+                options.adaptive_particles, options.n_particles,
+                &proposal_screening);
             if (options.component_screening.mode
                     == ComponentScreeningMode::Auto) {
                 const bool enabled = resolve_particle_component_screening(
-                    particles, selected->model,
+                    particles, particle_initial,
                     options.component_screening,
                     proposal_screening.audit_documents);
                 apply_auto_component_screening_resolution(
                     particle_screening, enabled);
             }
             auto expectation_function = [&](const Model& model) {
-                return particle_expectation(particles, model, true, false,
+                return particle_expectation(particles, model,
+                    ExpectationRequest{true, false, true},
                     particle_screening);
             };
             particle = fit_particle_candidate(expectation_function,
-                selected->model, options, selected->trace);
+                particle_initial, options, selected->trace);
             if (!particle.trace.collapsed) {
                 const auto score_start = std::chrono::steady_clock::now();
                 result.score = score_particles(
                     particles, particle.model, particle_screening);
-                add_screening_metrics(result.score);
+                add_screening_metrics(result.score,
+                    options.component_screening, proposal_screening,
+                    particle_screening);
+                result.score.map_component_screening =
+                    selected_map_screening.mode
+                    == ComponentScreeningMode::On;
                 result.score.adaptive_particle_options =
                     options.adaptive_particles;
                 result.score.particle_generation_seconds =
@@ -3815,23 +4762,29 @@ FitResult fit(const Dataset& data, const Basis* basis,
             if (options.component_screening.mode
                     == ComponentScreeningMode::Auto) {
                 const bool enabled = resolve_particle_component_screening(
-                    particles, selected->model,
+                    particles, particle_initial,
                     options.component_screening,
                     proposal_screening.audit_documents);
                 apply_auto_component_screening_resolution(
                     particle_screening, enabled);
             }
             auto expectation_function = [&](const Model& model) {
-                return particle_expectation(particles, model, true, false,
+                return particle_expectation(particles, model,
+                    ExpectationRequest{true, false, true},
                     particle_screening);
             };
             particle = fit_particle_candidate(expectation_function,
-                selected->model, options, selected->trace);
+                particle_initial, options, selected->trace);
             if (!particle.trace.collapsed) {
                 const auto score_start = std::chrono::steady_clock::now();
                 result.score = score_particles(
                     particles, particle.model, particle_screening);
-                add_screening_metrics(result.score);
+                add_screening_metrics(result.score,
+                    options.component_screening, proposal_screening,
+                    particle_screening);
+                result.score.map_component_screening =
+                    selected_map_screening.mode
+                    == ComponentScreeningMode::On;
                 result.score.particle_generation_seconds =
                     particles.sampling_seconds + particles.likelihood_seconds;
                 result.score.scoring_seconds = std::chrono::duration<double>(
@@ -3845,10 +4798,11 @@ FitResult fit(const Dataset& data, const Basis* basis,
                     options.n_particles,
                     particle_seed, options.fisher_broadening,
                     options.n_threads, options.particle_block_size, model,
-                    metrics, &proposal_screening, particle_screening, true);
+                    metrics, &proposal_screening, particle_screening,
+                    ExpectationRequest{true, false, true});
             };
             particle = fit_particle_candidate(expectation_function,
-                selected->model, options, selected->trace);
+                particle_initial, options, selected->trace);
             if (!particle.trace.collapsed) {
                 const auto score_start = std::chrono::steady_clock::now();
                 result.score = score_particle_replay(data, *basis, helmert,
@@ -3858,20 +4812,25 @@ FitResult fit(const Dataset& data, const Basis* basis,
                     options.n_threads, options.particle_block_size,
                     particle.model, metrics, &proposal_screening,
                     particle_screening);
-                add_screening_metrics(result.score);
+                add_screening_metrics(result.score,
+                    options.component_screening, proposal_screening,
+                    particle_screening);
+                result.score.map_component_screening =
+                    selected_map_screening.mode
+                    == ComponentScreeningMode::On;
                 result.score.scoring_seconds = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - score_start).count();
             }
         }
     } catch (const std::exception& exception) {
         throw std::runtime_error(
-            "Selected UAC MAP start failed during particle EM: "
+            "Selected UAC initializer failed during particle EM: "
             + std::string(exception.what()));
     }
     result.traces.push_back(particle.trace);
     if (particle.trace.collapsed) {
         throw std::runtime_error(
-            "Selected UAC MAP start collapsed during particle EM");
+            "Selected UAC initializer collapsed during particle EM");
     }
     result.model = particle.model;
     result.converged = particle.trace.converged;
@@ -3881,6 +4840,13 @@ FitResult fit(const Dataset& data, const Basis* basis,
 ScoreResult score_map(const Dataset& data, const Model& model,
     int32_t n_threads,
     const ComponentScreeningOptions& component_screening) {
+    validate_dataset(data, false);
+    validate_model(model);
+    if (data.coordinates.cols() != model.means.cols()) {
+        throw std::invalid_argument(
+            "UAC score dataset and model dimensions differ");
+    }
+    validate_component_screening(component_screening);
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, n_threads));
     ComponentScreeningOptions resolved = component_screening;
@@ -3890,8 +4856,8 @@ ScoreResult score_map(const Dataset& data, const Model& model,
         apply_auto_component_screening_resolution(resolved, enabled);
     }
     ScoreResult out;
-    Expectation expectation = map_expectation(
-        data, model, true, resolved);
+    Expectation expectation = map_expectation(data, model,
+        ExpectationRequest{true, false, false}, resolved);
     out.responsibilities = std::move(expectation.responsibilities);
     out.component_screening_options = component_screening;
     out.map_component_screening =
@@ -3917,17 +4883,35 @@ ScoreResult score_map(const Dataset& data, const Model& model,
 }
 
 ScoreResult score_particle(const Dataset& data, const Basis& basis,
-    const State& state, ProposalKind proposal, int32_t particles,
-    const AdaptiveParticleOptions& adaptive_particles,
-    int32_t n_threads, int32_t particle_block_size,
-    const ComponentScreeningOptions& component_screening) {
+    const State& state, const ParticleScoreOptions& options) {
+    const ProposalKind proposal = options.proposal;
+    const int32_t particles = options.maximum_particles;
+    const AdaptiveParticleOptions& adaptive_particles =
+        options.adaptive_particles;
+    const int32_t n_threads = options.n_threads;
+    const int32_t particle_block_size = options.particle_block_size;
+    const ComponentScreeningOptions& component_screening =
+        options.component_screening;
+    validate_dataset(data, true);
+    validate_basis(basis,
+        checked_int32(data.centers.cols(), "topic count"));
+    validate_count_features(data, basis);
+    validate_state(state);
     validate_component_screening(component_screening);
+    validate_adaptive_particles(adaptive_particles, particles);
+    if (particles <= 0 || state.basis_checksum != basis.checksum
+        || state.helmert.rows() != data.coordinates.cols()
+        || state.helmert.cols() != data.centers.cols()
+        || state.model.means.cols() != data.coordinates.cols()) {
+        throw std::invalid_argument(
+            "Invalid UAC particle score state or dimensions");
+    }
     if (particle_block_size < 0) {
         throw std::invalid_argument("UAC particle block size cannot be negative");
     }
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, n_threads));
-    if (adaptive_particles.enabled && particle_block_size != 0) {
+    if (adaptive_particles.enabled() && particle_block_size != 0) {
         throw std::invalid_argument(
             "Adaptive particles cannot be combined with particle block replay");
     }
@@ -3943,29 +4927,13 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
         apply_auto_component_screening_resolution(
             particle_screening, false);
     }
-    auto add_screening_metrics = [&](ScoreResult& out) {
-        out.component_screening_options = component_screening;
-        out.proposal_component_screening = proposal_screening.enabled;
-        out.particle_component_screening =
-            particle_screening.mode == ComponentScreeningMode::On;
-        out.proposal_screening_seconds =
-            proposal_screening.planning_seconds;
-        out.proposal_audit_documents = static_cast<int32_t>(
-            proposal_screening.audit_documents.size());
-        out.proposal_audit_violations =
-            proposal_screening.audit_violations;
-        out.proposal_audit_maximum_omitted_mass =
-            proposal_screening.maximum_audit_omitted_mass;
-    };
-    if (adaptive_particles.enabled) {
-        AdaptiveParticleOptions configured = adaptive_particles;
-        configured.maximum_particles = particles;
+    if (adaptive_particles.enabled()) {
         const auto particle_start = std::chrono::steady_clock::now();
         const RaggedParticleSet set = make_adaptive_particles(data, basis,
             state.helmert, state.pilot, pilot_cache, proposal,
             particle_seed,
-            state.fisher_broadening, n_threads, state.model, configured,
-            &proposal_screening);
+            state.fisher_broadening, n_threads, state.model,
+            adaptive_particles, particles, &proposal_screening);
         if (component_screening.mode == ComponentScreeningMode::Auto) {
             const bool enabled = resolve_particle_component_screening(
                 set, state.model, component_screening,
@@ -3978,8 +4946,9 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
         const auto score_start = std::chrono::steady_clock::now();
         ScoreResult out = score_particles(
             set, state.model, particle_screening);
-        add_screening_metrics(out);
-        out.adaptive_particle_options = configured;
+        add_screening_metrics(out, component_screening,
+            proposal_screening, particle_screening);
+        out.adaptive_particle_options = adaptive_particles;
         out.particle_generation_seconds = particle_seconds;
         out.scoring_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - score_start).count();
@@ -3994,7 +4963,8 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
             state.fisher_broadening, n_threads, particle_block_size,
             state.model, metrics, &proposal_screening,
             particle_screening);
-        add_screening_metrics(out);
+        add_screening_metrics(out, component_screening,
+            proposal_screening, particle_screening);
         out.scoring_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - score_start).count();
         return out;
@@ -4015,16 +4985,42 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
         std::chrono::steady_clock::now() - particle_start).count();
     const auto score_start = std::chrono::steady_clock::now();
     ScoreResult out = score_particles(set, state.model, particle_screening);
-    add_screening_metrics(out);
+    add_screening_metrics(out, component_screening,
+        proposal_screening, particle_screening);
     out.particle_generation_seconds = particle_seconds;
     out.scoring_seconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - score_start).count();
     return out;
 }
 
-State make_state(const FitResult& fit_result, const Basis* basis,
-    const FitOptions& options, const Eigen::VectorXd& feature_weights,
-    bool weighted_counts) {
+State make_state(const FitResult& fit_result, const FitOptions& options,
+    const StateMetadata& metadata) {
+    validate_model(fit_result.model);
+    const int32_t components =
+        checked_int32(fit_result.model.weights.size(), "component count");
+    const int32_t dimension =
+        checked_int32(fit_result.model.means.cols(), "model dimension");
+    validate_pilot(fit_result.pilot, components, dimension);
+    const Eigen::MatrixXd expected_helmert =
+        normalized_helmert(dimension + 1);
+    if (metadata.topics.size()
+            != static_cast<size_t>(dimension + 1)
+        || metadata.helmert.rows() != dimension
+        || metadata.helmert.cols() != dimension + 1
+        || !metadata.helmert.allFinite()
+        || (metadata.helmert - expected_helmert)
+            .cwiseAbs().maxCoeff() > 1e-12
+        || !(metadata.center_floor > 0.0)
+        || !std::isfinite(metadata.center_floor)
+        || !metadata.feature_weights.allFinite()
+        || (metadata.feature_weights.array() < 0.0).any()
+        || (metadata.feature_weights.size() > 0
+            && !metadata.weighted_counts
+            && !(metadata.feature_weights.array() == 1.0).all())
+        || (options.handoff == HandoffMode::Particle
+            && metadata.basis_checksum == 0)) {
+        throw std::invalid_argument("Invalid UAC state metadata");
+    }
     State state;
     state.handoff = options.handoff;
     state.proposal = options.proposal;
@@ -4042,11 +5038,11 @@ State make_state(const FitResult& fit_result, const Basis* basis,
     state.leiden_knn_backend = options.leiden_knn_backend;
     state.leiden_max_iterations = options.leiden_max_iterations;
     state.selected_start = fit_result.selected_start;
-    state.selected_initializer = fit_result.selected_initializer;
+    state.selected_start_method = fit_result.selected_start_method;
     state.selected_leiden_resolution =
         fit_result.selected_leiden_resolution;
     state.converged = fit_result.converged;
-    state.center_floor = options.center_floor;
+    state.center_floor = metadata.center_floor;
     state.target_relative_floor = options.target_relative_floor;
     state.leiden_knn_epsilon = options.leiden_knn_epsilon;
     state.leiden_resolution = options.leiden_resolution;
@@ -4054,6 +5050,10 @@ State make_state(const FitResult& fit_result, const Basis* basis,
     state.objective_change_tolerance = options.objective_change_tolerance;
     state.responsibility_change_tolerance =
         options.responsibility_change_tolerance;
+    state.particle_variance_change_tolerance =
+        options.particle_variance_change_tolerance;
+    state.initialization_ridge_precision =
+        options.initialization_ridge_precision;
     state.adaptive_covariance_shrinkage =
         options.adaptive_covariance_shrinkage;
     state.covariance_shrinkage_strength =
@@ -4067,34 +5067,28 @@ State make_state(const FitResult& fit_result, const Basis* basis,
         fit_result.score.proposal_component_screening;
     state.fit_particle_component_screening =
         fit_result.score.particle_component_screening;
-    state.weighted_counts = weighted_counts;
-    state.feature_weights = feature_weights;
+    state.weighted_counts = metadata.weighted_counts;
+    state.feature_weights = metadata.feature_weights;
     if (state.feature_weights.size() > 0
         && (state.feature_weights.array() == 1.0).all()) {
         state.feature_weights.resize(0);
     }
     state.pilot = fit_result.pilot;
     state.model = fit_result.model;
-    if (basis) {
-        state.topics = basis->topics;
-        state.basis_checksum = basis->checksum;
-    } else {
-        state.topics.resize(fit_result.model.means.cols() + 1);
-        for (size_t i = 0; i < state.topics.size(); ++i) {
-            state.topics[i] = std::to_string(i);
-        }
-    }
-    state.helmert = normalized_helmert(state.topics.size());
+    state.topics = metadata.topics;
+    state.basis_checksum = metadata.basis_checksum;
+    state.helmert = metadata.helmert;
+    validate_state(state);
     return state;
 }
 
 void write_state(const std::string& path, const State& state) {
+    validate_state(state);
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot write UAC state: " + path);
     const int32_t components = static_cast<int32_t>(state.model.weights.size());
     const int32_t dimension = static_cast<int32_t>(state.model.means.cols());
-    out << "##punkst_uac_state_v6\n"
-        << "##initialization_contract\tmixed_map_starts\n"
+    out << "##punkst_uac_state_v10\n"
         << "##handoff\t" << handoff_name(state.handoff) << "\n"
         << "##proposal\t" << proposal_name(state.proposal) << "\n"
         << "##particles\t" << state.n_particles << "\n"
@@ -4111,8 +5105,8 @@ void write_state(const std::string& path, const State& state) {
         << "##leiden_max_iterations\t"
         << state.leiden_max_iterations << "\n"
         << "##selected_start\t" << state.selected_start << "\n"
-        << "##selected_initializer\t"
-        << initializer_name(state.selected_initializer) << "\n"
+        << "##selected_start_method\t"
+        << start_method_name(state.selected_start_method) << "\n"
         << "##converged\t" << static_cast<int32_t>(state.converged) << "\n"
         << "##components\t" << components << "\n"
         << "##dimension\t" << dimension << "\n"
@@ -4134,6 +5128,10 @@ void write_state(const std::string& path, const State& state) {
         << state.objective_change_tolerance << "\n"
         << "##responsibility_change_tolerance\t"
         << state.responsibility_change_tolerance << "\n"
+        << "##particle_variance_change_tolerance\t"
+        << state.particle_variance_change_tolerance << "\n"
+        << "##initialization_ridge_precision\t"
+        << state.initialization_ridge_precision << "\n"
         << "##covariance_shrinkage\t"
         << (state.adaptive_covariance_shrinkage
             ? "adaptive_particle" : "none") << "\n"
@@ -4164,13 +5162,13 @@ void write_state(const std::string& path, const State& state) {
         << static_cast<int32_t>(
             state.fit_particle_component_screening) << "\n"
         << "##particle_adapt_mode\t"
-        << (state.fit_adaptive_particles.enabled
-            ? adaptive_particle_rule_name(state.fit_adaptive_particles.rule)
-            : "fixed") << "\n"
+        << adaptive_particle_mode_name(state.fit_adaptive_particles) << "\n"
         << "##particle_adapt_resp\t"
-        << state.fit_adaptive_particles.responsibility_se_target << "\n"
+        << optional_target_or_zero(
+            state.fit_adaptive_particles.responsibility_se_target) << "\n"
         << "##particle_adapt_moment\t"
-        << state.fit_adaptive_particles.moment_ess_target << "\n"
+        << optional_target_or_zero(
+            state.fit_adaptive_particles.moment_ess_target) << "\n"
         << "##particle_adapt_calibration\t"
         << state.fit_adaptive_particles.calibration_particles << "\n"
         << "##particle_adapt_min\t"
@@ -4213,9 +5211,7 @@ void write_state(const std::string& path, const State& state) {
                 }
                 out << "\n";
             }
-            out << "PILOT_RAW_COV\t" << c << "\t" << r;
-            for (int32_t j = 0; j < dimension; ++j) out << "\t" << state.pilot.raw_covariances[c](r, j);
-            out << "\nPILOT_COV\t" << c << "\t" << r;
+            out << "PILOT_COV\t" << c << "\t" << r;
             for (int32_t j = 0; j < dimension; ++j) out << "\t" << state.pilot.covariances[c](r, j);
             out << "\n";
         }
@@ -4247,14 +5243,17 @@ State read_state(const std::string& path) {
     State state;
     std::string line;
     int32_t components = -1, dimension = -1;
-    bool saw_version = false, saw_proposal = false;
-    bool saw_fisher_broadening = false, saw_initialization_contract = false;
+    int32_t state_version = 0;
+    bool saw_proposal = false;
+    bool saw_fisher_broadening = false;
+    bool saw_initialization_ridge_precision = false;
     bool saw_kmeans_starts = false, saw_leiden_starts = false;
-    bool saw_selected_start = false, saw_selected_initializer = false;
+    bool saw_selected_start = false, saw_selected_start_method = false;
     bool saw_target_relative_floor = false;
     bool saw_cluster_covariance_rank = false;
     bool saw_objective_change_tolerance = false;
     bool saw_responsibility_change_tolerance = false;
+    bool saw_particle_variance_change_tolerance = false;
     bool saw_covariance_shrinkage = false;
     bool saw_covariance_shrinkage_strength = false;
     bool saw_particle_adapt_mode = false, saw_particle_adapt_resp = false;
@@ -4265,17 +5264,27 @@ State read_state(const std::string& path) {
     bool saw_particle_adapt_plausible_resp = false;
     std::unordered_map<std::string, int32_t> metadata_count;
     std::string count_likelihood;
+    std::string particle_adapt_mode;
     std::vector<std::vector<std::string>> records;
     while (std::getline(in, line)) {
         if (line.empty()) continue;
         std::vector<std::string> token = fields(line);
         if (token.empty()) continue;
-        if (token[0] == "##punkst_uac_state_v6") {
-            if (saw_version) {
+        if (state_version == 0
+            && token[0] != "##punkst_uac_state_v10") {
+            throw std::runtime_error(
+                "UAC state must begin with the v10 header");
+        }
+        if (token[0] == "##punkst_uac_state_v10") {
+            if (state_version != 0) {
                 throw std::runtime_error("Duplicate UAC state version");
             }
-            saw_version = true;
+            state_version = 10;
             continue;
+        }
+        if (token[0].rfind("##punkst_uac_state_v", 0) == 0) {
+            throw std::runtime_error(
+                "Unsupported UAC state version; only v10 is accepted");
         }
         if (token[0].rfind("##", 0) == 0) {
             if (token.size() != 2) throw std::runtime_error("Malformed UAC state metadata");
@@ -4284,76 +5293,111 @@ State read_state(const std::string& path) {
                 throw std::runtime_error(
                     "Duplicate UAC state metadata: " + key);
             }
-            if (key == "initialization_contract") {
-                saw_initialization_contract = token[1] == "mixed_map_starts";
-            }
-            else if (key == "handoff") state.handoff = parse_handoff(token[1]);
+            if (key == "handoff") state.handoff = parse_handoff(token[1]);
             else if (key == "proposal") {
                 state.proposal = parse_proposal(token[1]);
                 saw_proposal = true;
             }
-            else if (key == "particles") state.n_particles = std::stoi(token[1]);
-            else if (key == "seed") state.seed = std::stoi(token[1]);
+            else if (key == "particles") {
+                state.n_particles = parse_state_int32(token[1]);
+            }
+            else if (key == "seed") {
+                state.seed = parse_state_int32(token[1]);
+            }
             else if (key == "cluster_covariance_rank") {
-                state.cluster_covariance_rank = std::stoi(token[1]);
+                state.cluster_covariance_rank =
+                    parse_state_int32(token[1]);
                 saw_cluster_covariance_rank = true;
             }
             else if (key == "kmeans_starts") {
-                state.kmeans_starts = std::stoi(token[1]);
+                state.kmeans_starts = parse_state_int32(token[1]);
                 saw_kmeans_starts = true;
             }
             else if (key == "leiden_starts") {
-                state.leiden_starts = std::stoi(token[1]);
+                state.leiden_starts = parse_state_int32(token[1]);
                 saw_leiden_starts = true;
             }
             else if (key == "kmeans_max_iterations") {
-                state.kmeans_max_iterations = std::stoi(token[1]);
+                state.kmeans_max_iterations =
+                    parse_state_int32(token[1]);
             }
             else if (key == "leiden_neighbors") {
-                state.leiden_neighbors = std::stoi(token[1]);
+                state.leiden_neighbors = parse_state_int32(token[1]);
             }
             else if (key == "leiden_knn_backend") {
                 state.leiden_knn_backend = parse_cosine_knn_backend(token[1]);
             }
             else if (key == "leiden_max_iterations") {
-                state.leiden_max_iterations = std::stoi(token[1]);
+                state.leiden_max_iterations =
+                    parse_state_int32(token[1]);
             }
             else if (key == "selected_start") {
-                state.selected_start = std::stoi(token[1]);
+                state.selected_start = parse_state_int32(token[1]);
                 saw_selected_start = true;
             }
-            else if (key == "selected_initializer") {
-                state.selected_initializer = parse_initializer(token[1]);
-                saw_selected_initializer = true;
+            else if (key == "selected_start_method") {
+                state.selected_start_method =
+                    parse_start_method(token[1]);
+                saw_selected_start_method = true;
             }
-            else if (key == "converged") state.converged = std::stoi(token[1]) != 0;
-            else if (key == "components") components = std::stoi(token[1]);
-            else if (key == "dimension") dimension = std::stoi(token[1]);
-            else if (key == "basis_checksum") state.basis_checksum = std::stoull(token[1]);
-            else if (key == "weighted_counts") state.weighted_counts = std::stoi(token[1]) != 0;
+            else if (key == "converged") {
+                state.converged = parse_state_bool(token[1]);
+            }
+            else if (key == "components") {
+                components = parse_state_int32(token[1]);
+            }
+            else if (key == "dimension") {
+                dimension = parse_state_int32(token[1]);
+            }
+            else if (key == "basis_checksum") {
+                state.basis_checksum = parse_state_uint64(token[1]);
+            }
+            else if (key == "weighted_counts") {
+                state.weighted_counts = parse_state_bool(token[1]);
+            }
             else if (key == "count_likelihood") count_likelihood = token[1];
-            else if (key == "center_floor") state.center_floor = std::stod(token[1]);
+            else if (key == "center_floor") {
+                state.center_floor = parse_state_double(token[1]);
+            }
             else if (key == "target_relative_floor") {
-                state.target_relative_floor = std::stod(token[1]);
+                state.target_relative_floor =
+                    parse_state_double(token[1]);
                 saw_target_relative_floor = true;
             }
             else if (key == "leiden_knn_epsilon") {
-                state.leiden_knn_epsilon = std::stod(token[1]);
+                state.leiden_knn_epsilon =
+                    parse_state_double(token[1]);
             }
             else if (key == "leiden_resolution") {
-                state.leiden_resolution = std::stod(token[1]);
+                state.leiden_resolution =
+                    parse_state_double(token[1]);
             }
             else if (key == "selected_leiden_resolution") {
-                state.selected_leiden_resolution = std::stod(token[1]);
+                state.selected_leiden_resolution =
+                    parse_state_double(token[1]);
             }
-            else if (key == "covariance_floor") state.covariance_floor = std::stod(token[1]);
+            else if (key == "covariance_floor") {
+                state.covariance_floor = parse_state_double(token[1]);
+            }
             else if (key == "objective_change_tolerance") {
-                state.objective_change_tolerance = std::stod(token[1]);
+                state.objective_change_tolerance =
+                    parse_state_double(token[1]);
                 saw_objective_change_tolerance = true;
             }
             else if (key == "responsibility_change_tolerance") {
-                state.responsibility_change_tolerance = std::stod(token[1]);
+                state.responsibility_change_tolerance =
+                    parse_state_double(token[1]);
                 saw_responsibility_change_tolerance = true;
+            }
+            else if (key == "particle_variance_change_tolerance") {
+                state.particle_variance_change_tolerance =
+                    parse_state_double(token[1]);
+                saw_particle_variance_change_tolerance = true;
+            }
+            else if (key == "initialization_ridge_precision") {
+                state.initialization_ridge_precision =
+                    parse_state_double(token[1]);
+                saw_initialization_ridge_precision = true;
             }
             else if (key == "covariance_shrinkage") {
                 if (token[1] == "adaptive_particle") {
@@ -4367,7 +5411,8 @@ State read_state(const std::string& path) {
                 saw_covariance_shrinkage = true;
             }
             else if (key == "covariance_shrinkage_strength") {
-                state.covariance_shrinkage_strength = std::stod(token[1]);
+                state.covariance_shrinkage_strength =
+                    parse_state_double(token[1]);
                 if (!(state.covariance_shrinkage_strength >= 0.0)
                     || !std::isfinite(
                         state.covariance_shrinkage_strength)) {
@@ -4377,7 +5422,7 @@ State read_state(const std::string& path) {
                 saw_covariance_shrinkage_strength = true;
             }
             else if (key == "fisher_broadening") {
-                state.fisher_broadening = std::stod(token[1]);
+                state.fisher_broadening = parse_state_double(token[1]);
                 saw_fisher_broadening = true;
             }
             else if (key == "component_screening") {
@@ -4385,89 +5430,99 @@ State read_state(const std::string& path) {
                     parse_component_screening_mode(token[1]);
             }
             else if (key == "component_tail_mass") {
-                state.component_screening.tail_mass = std::stod(token[1]);
+                state.component_screening.tail_mass =
+                    parse_state_double(token[1]);
             }
             else if (key == "proposal_tail_mass") {
                 state.component_screening.proposal_proxy_tail_mass =
-                    std::stod(token[1]);
+                    parse_state_double(token[1]);
             }
             else if (key == "component_minimum") {
                 state.component_screening.minimum_components =
-                    std::stoi(token[1]);
+                    parse_state_int32(token[1]);
             }
             else if (key == "component_maximum") {
                 state.component_screening.maximum_components =
-                    std::stoi(token[1]);
+                    parse_state_int32(token[1]);
             }
             else if (key == "component_audit_documents") {
                 state.component_screening.audit_documents =
-                    std::stoi(token[1]);
+                    parse_state_int32(token[1]);
             }
             else if (key == "component_min_work_reduction") {
                 state.component_screening.minimum_work_reduction =
-                    std::stod(token[1]);
+                    parse_state_double(token[1]);
             }
             else if (key == "fit_map_component_screening") {
                 state.fit_map_component_screening =
-                    std::stoi(token[1]) != 0;
+                    parse_state_bool(token[1]);
             }
             else if (key == "fit_proposal_component_screening") {
                 state.fit_proposal_component_screening =
-                    std::stoi(token[1]) != 0;
+                    parse_state_bool(token[1]);
             }
             else if (key == "fit_particle_component_screening") {
                 state.fit_particle_component_screening =
-                    std::stoi(token[1]) != 0;
+                    parse_state_bool(token[1]);
             }
             else if (key == "particle_adapt_mode") {
-                state.fit_adaptive_particles.enabled = token[1] != "fixed";
-                if (state.fit_adaptive_particles.enabled) {
-                    state.fit_adaptive_particles.rule =
-                        parse_adaptive_particle_rule(token[1]);
+                particle_adapt_mode = token[1];
+                if (particle_adapt_mode != "fixed"
+                    && particle_adapt_mode != "responsibility"
+                    && particle_adapt_mode != "moment"
+                    && particle_adapt_mode != "responsibility_moment") {
+                    throw std::runtime_error(
+                        "Unknown UAC adaptive particle mode");
                 }
                 saw_particle_adapt_mode = true;
             }
             else if (key == "particle_adapt_resp") {
                 state.fit_adaptive_particles.responsibility_se_target =
-                    std::stod(token[1]);
+                    parse_state_double(token[1]);
                 saw_particle_adapt_resp = true;
             }
             else if (key == "particle_adapt_moment") {
                 state.fit_adaptive_particles.moment_ess_target =
-                    std::stod(token[1]);
+                    parse_state_double(token[1]);
                 saw_particle_adapt_moment = true;
             }
             else if (key == "particle_adapt_calibration") {
                 state.fit_adaptive_particles.calibration_particles =
-                    std::stoi(token[1]);
+                    parse_state_int32(token[1]);
                 saw_particle_adapt_calibration = true;
             }
             else if (key == "particle_adapt_min") {
                 state.fit_adaptive_particles.minimum_particles =
-                    std::stoi(token[1]);
+                    parse_state_int32(token[1]);
                 saw_particle_adapt_min = true;
             }
             else if (key == "particle_adapt_plausible_mass") {
                 state.fit_adaptive_particles.plausible_mass =
-                    std::stod(token[1]);
+                    parse_state_double(token[1]);
                 saw_particle_adapt_plausible_mass = true;
             }
             else if (key == "particle_adapt_plausible_resp") {
                 state.fit_adaptive_particles.plausible_responsibility =
-                    std::stod(token[1]);
+                    parse_state_double(token[1]);
                 saw_particle_adapt_plausible_resp = true;
+            }
+            else {
+                throw std::runtime_error(
+                    "Unknown UAC state metadata: " + key);
             }
             continue;
         }
         records.push_back(std::move(token));
     }
-    if (!saw_version || !saw_proposal || !saw_fisher_broadening
-        || !saw_initialization_contract || !saw_kmeans_starts
+    if (state_version == 0 || !saw_proposal || !saw_fisher_broadening
+        || !saw_kmeans_starts
         || !saw_leiden_starts || !saw_selected_start
-        || !saw_selected_initializer || !saw_target_relative_floor
+        || !saw_selected_start_method || !saw_target_relative_floor
         || !saw_cluster_covariance_rank
         || !saw_objective_change_tolerance
         || !saw_responsibility_change_tolerance
+        || !saw_particle_variance_change_tolerance
+        || !saw_initialization_ridge_precision
         || !saw_covariance_shrinkage
         || !saw_covariance_shrinkage_strength
         || !saw_particle_adapt_mode || !saw_particle_adapt_resp
@@ -4477,11 +5532,13 @@ State read_state(const std::string& path) {
         || components <= 0 || dimension <= 0) {
         throw std::runtime_error("Invalid, stale, or unsupported UAC state");
     }
-    const std::vector<std::string> required_metadata = {
-        "initialization_contract", "handoff", "proposal", "particles", "seed",
+    std::vector<std::string> required_metadata = {
+        "handoff", "initialization_ridge_precision", "proposal",
+        "particles", "seed",
         "cluster_covariance_rank", "kmeans_starts", "leiden_starts",
         "kmeans_max_iterations", "leiden_neighbors", "leiden_knn_backend",
-        "leiden_max_iterations", "selected_start", "selected_initializer",
+        "leiden_max_iterations", "selected_start",
+        "selected_start_method",
         "converged", "components", "dimension", "basis_checksum",
         "weighted_counts", "count_likelihood", "center_floor",
         "target_relative_floor", "leiden_knn_epsilon", "leiden_resolution",
@@ -4499,11 +5556,21 @@ State read_state(const std::string& path) {
         "particle_adapt_calibration", "particle_adapt_min",
         "particle_adapt_plausible_mass", "particle_adapt_plausible_resp",
     };
+    required_metadata.push_back(
+        "particle_variance_change_tolerance");
     for (const auto& key : required_metadata) {
         if (metadata_count.find(key) == metadata_count.end()) {
             throw std::runtime_error(
                 "Missing UAC state metadata: " + key);
         }
+    }
+    if (particle_adapt_mode == "fixed") {
+        state.fit_adaptive_particles.responsibility_se_target.reset();
+        state.fit_adaptive_particles.moment_ess_target.reset();
+    } else if (particle_adapt_mode == "responsibility") {
+        state.fit_adaptive_particles.moment_ess_target.reset();
+    } else if (particle_adapt_mode == "moment") {
+        state.fit_adaptive_particles.responsibility_se_target.reset();
     }
     const std::string expected_likelihood = state.weighted_counts
         ? "weighted_multinomial_kernel" : "multinomial";
@@ -4534,7 +5601,6 @@ State read_state(const std::string& path) {
     }
     state.pilot.weights = Eigen::VectorXd::Zero(components);
     state.pilot.means = RowMajorMatrixXd::Zero(components, dimension);
-    state.pilot.raw_covariances.assign(components, Eigen::MatrixXd::Zero(dimension, dimension));
     state.pilot.covariances.assign(components, Eigen::MatrixXd::Zero(dimension, dimension));
     state.pilot.pooled_covariance = Eigen::MatrixXd::Zero(dimension, dimension);
     bool saw_topics = false, saw_feature_weights = false;
@@ -4545,8 +5611,6 @@ State read_state(const std::string& path) {
     std::vector<uint8_t> saw_model_cov(
         static_cast<size_t>(components) * dimension, 0);
     std::vector<uint8_t> saw_model_factor(
-        static_cast<size_t>(components) * dimension, 0);
-    std::vector<uint8_t> saw_pilot_raw_cov(
         static_cast<size_t>(components) * dimension, 0);
     std::vector<uint8_t> saw_pilot_cov(
         static_cast<size_t>(components) * dimension, 0);
@@ -4571,7 +5635,9 @@ State read_state(const std::string& path) {
     for (const auto& token : records) {
         auto values = [&](size_t offset, Eigen::Ref<Eigen::VectorXd> target) {
             if (token.size() != offset + static_cast<size_t>(target.size())) throw std::runtime_error("Malformed UAC state row");
-            for (Eigen::Index j = 0; j < target.size(); ++j) target(j) = std::stod(token[offset + j]);
+            for (Eigen::Index j = 0; j < target.size(); ++j) {
+                target(j) = parse_state_double(token[offset + j]);
+            }
         };
         if (token[0] == "TOPICS") {
             if (saw_topics) {
@@ -4587,7 +5653,10 @@ State read_state(const std::string& path) {
             }
             saw_feature_weights = true;
             state.feature_weights.resize(token.size() - 1);
-            for (size_t j = 1; j < token.size(); ++j) state.feature_weights(j - 1) = std::stod(token[j]);
+            for (size_t j = 1; j < token.size(); ++j) {
+                state.feature_weights(j - 1) =
+                    parse_state_double(token[j]);
+            }
         } else if (token[0] == "MODEL_WEIGHTS") {
             if (saw_model_weights) {
                 throw std::runtime_error(
@@ -4607,7 +5676,7 @@ State read_state(const std::string& path) {
             if (token.size() < 2) {
                 throw std::runtime_error("Malformed UAC state HELMERT row");
             }
-            const int32_t row = std::stoi(token[1]);
+            const int32_t row = parse_state_int32(token[1]);
             check_index(row, dimension, "HELMERT");
             mark(saw_helmert[row], "HELMERT");
             Eigen::VectorXd target(dimension + 1);
@@ -4617,7 +5686,7 @@ State read_state(const std::string& path) {
             if (token.size() < 2) {
                 throw std::runtime_error("Malformed UAC state mean row");
             }
-            const int32_t c = std::stoi(token[1]);
+            const int32_t c = parse_state_int32(token[1]);
             check_index(c, components, "mean component");
             Eigen::VectorXd target(dimension);
             values(2, target);
@@ -4632,8 +5701,8 @@ State read_state(const std::string& path) {
             if (state.cluster_covariance_rank < 0 || token.size() < 3) {
                 throw std::runtime_error("Unexpected UAC MODEL_FACTOR row");
             }
-            const int32_t c = std::stoi(token[1]);
-            const int32_t row = std::stoi(token[2]);
+            const int32_t c = parse_state_int32(token[1]);
+            const int32_t row = parse_state_int32(token[2]);
             check_index(c, components, "MODEL_FACTOR component");
             check_index(row, dimension, "MODEL_FACTOR row");
             mark(saw_model_factor[
@@ -4646,7 +5715,7 @@ State read_state(const std::string& path) {
             if (state.cluster_covariance_rank < 0 || token.size() < 2) {
                 throw std::runtime_error("Unexpected UAC FA_DIAGONALS row");
             }
-            const int32_t row = std::stoi(token[1]);
+            const int32_t row = parse_state_int32(token[1]);
             check_index(row, dimension, "FA_DIAGONALS");
             mark(saw_fa_diagonals[row], "FA_DIAGONALS");
             Eigen::VectorXd target(components);
@@ -4658,7 +5727,7 @@ State read_state(const std::string& path) {
             if (state.cluster_covariance_rank < 0 || token.size() < 2) {
                 throw std::runtime_error("Unexpected UAC FA_TARGET row");
             }
-            const int32_t row = std::stoi(token[1]);
+            const int32_t row = parse_state_int32(token[1]);
             check_index(row, dimension, "FA_TARGET");
             mark(saw_fa_target[row], "FA_TARGET");
             Eigen::VectorXd target(state.cluster_covariance_rank + 1);
@@ -4668,14 +5737,15 @@ State read_state(const std::string& path) {
                 state.model.factor_shrinkage_target.factor.row(row) =
                     target.tail(state.cluster_covariance_rank).transpose();
             }
-        } else if (token[0] == "MODEL_COV" || token[0] == "PILOT_RAW_COV" || token[0] == "PILOT_COV") {
+        } else if (token[0] == "MODEL_COV"
+                || token[0] == "PILOT_COV") {
             if (token.size() < 3
                 || (token[0] == "MODEL_COV"
                     && state.cluster_covariance_rank >= 0)) {
                 throw std::runtime_error("Unexpected UAC covariance row");
             }
-            const int32_t c = std::stoi(token[1]);
-            const int32_t row = std::stoi(token[2]);
+            const int32_t c = parse_state_int32(token[1]);
+            const int32_t row = parse_state_int32(token[2]);
             check_index(c, components, "covariance component");
             check_index(row, dimension, "covariance row");
             Eigen::VectorXd target(dimension);
@@ -4684,9 +5754,6 @@ State read_state(const std::string& path) {
             if (token[0] == "MODEL_COV") {
                 mark(saw_model_cov[index], "MODEL_COV");
                 state.model.covariances[c].row(row) = target.transpose();
-            } else if (token[0] == "PILOT_RAW_COV") {
-                mark(saw_pilot_raw_cov[index], "PILOT_RAW_COV");
-                state.pilot.raw_covariances[c].row(row) = target.transpose();
             } else {
                 mark(saw_pilot_cov[index], "PILOT_COV");
                 state.pilot.covariances[c].row(row) = target.transpose();
@@ -4698,7 +5765,7 @@ State read_state(const std::string& path) {
                 throw std::runtime_error(
                     "Unexpected UAC target covariance row");
             }
-            const int32_t row = std::stoi(token[1]);
+            const int32_t row = parse_state_int32(token[1]);
             check_index(row, dimension, "target covariance row");
             Eigen::VectorXd target(dimension);
             values(2, target);
@@ -4721,8 +5788,8 @@ State read_state(const std::string& path) {
     const bool common_records_complete = saw_topics && saw_feature_weights
         && saw_model_weights && saw_pilot_weights
         && all_seen(saw_helmert) && all_seen(saw_model_mean)
-        && all_seen(saw_pilot_mean) && all_seen(saw_pilot_raw_cov)
-        && all_seen(saw_pilot_cov) && all_seen(saw_pilot_pooled);
+        && all_seen(saw_pilot_mean) && all_seen(saw_pilot_cov)
+        && all_seen(saw_pilot_pooled);
     const bool covariance_records_complete =
         state.cluster_covariance_rank < 0
         ? all_seen(saw_model_cov) && all_seen(saw_shrinkage_target)
@@ -4731,414 +5798,12 @@ State read_state(const std::string& path) {
     if (!common_records_complete || !covariance_records_complete) {
         throw std::runtime_error("Incomplete UAC state records");
     }
-    const int64_t total_starts = static_cast<int64_t>(state.kmeans_starts)
-        + state.leiden_starts;
-    const bool selected_kind_matches = state.selected_initializer
-            == MapInitializer::KMeans
-        ? state.selected_start < state.kmeans_starts
-        : state.selected_start >= state.kmeans_starts;
-    auto positive_definite = [](const Eigen::MatrixXd& covariance) {
-        return covariance.rows() > 0 && covariance.rows() == covariance.cols()
-            && covariance.allFinite()
-            && (covariance - covariance.transpose()).cwiseAbs().maxCoeff()
-                <= 1e-8
-            && Eigen::LLT<Eigen::MatrixXd>(covariance).info()
-                == Eigen::Success;
-    };
-    bool covariance_valid = true;
-    if (state.cluster_covariance_rank >= 0) {
-        covariance_valid = state.model.factor_shrinkage_target.diagonal.allFinite()
-            && state.model.factor_shrinkage_target.factor.allFinite()
-            && (state.model.factor_shrinkage_target.diagonal.array() > 0.0).all();
-        for (const auto& covariance : state.model.factor_covariances) {
-            covariance_valid = covariance_valid
-                && covariance.diagonal.allFinite()
-                && covariance.factor.allFinite()
-                && (covariance.diagonal.array() > 0.0).all();
-        }
-    } else {
-        covariance_valid = positive_definite(state.model.shrinkage_target);
-        for (const auto& covariance : state.model.covariances) {
-            covariance_valid = covariance_valid
-                && positive_definite(covariance);
-        }
-    }
-    bool pilot_valid = state.pilot.weights.allFinite()
-        && state.pilot.means.allFinite()
-        && (state.pilot.weights.array() >= 0.0).all()
-        && std::abs(state.pilot.weights.sum() - 1.0) <= 1e-8
-        && positive_definite(state.pilot.pooled_covariance);
-    for (int32_t c = 0; c < components; ++c) {
-        pilot_valid = pilot_valid
-            && state.pilot.raw_covariances[c].allFinite()
-            && positive_definite(state.pilot.covariances[c]);
-    }
-    const Eigen::MatrixXd expected_helmert =
-        normalized_helmert(dimension + 1);
-    const bool helmert_valid = state.helmert.allFinite()
-        && (state.helmert - expected_helmert).cwiseAbs().maxCoeff() <= 1e-12;
-    const bool feature_weights_valid = state.feature_weights.allFinite()
-        && (state.feature_weights.array() >= 0.0).all()
-        && (state.feature_weights.size() == 0 || state.weighted_counts);
     try {
-        validate_component_screening(state.component_screening);
+        validate_state(state);
     } catch (const std::invalid_argument&) {
         throw std::runtime_error("Incomplete UAC state");
     }
-    if (state.topics.size() != static_cast<size_t>(dimension + 1)
-        || !state.model.weights.allFinite() || !state.model.means.allFinite()
-        || (state.model.weights.array() < 0.0).any()
-        || !(state.model.weights.sum() > 0.0)
-        || std::abs(state.model.weights.sum() - 1.0) > 1e-8
-        || state.kmeans_starts < 0 || state.leiden_starts < 0
-        || total_starts <= 0 || state.selected_start < 0
-        || state.selected_start >= total_starts || !selected_kind_matches
-        || state.n_particles <= 0
-        || !(state.center_floor > 0.0)
-        || !(state.target_relative_floor > 0.0)
-        || !(state.covariance_floor > 0.0)
-        || !(state.objective_change_tolerance > 0.0)
-        || !(state.responsibility_change_tolerance > 0.0)
-        || !(state.fisher_broadening > 0.0)
-        || (state.fit_adaptive_particles.enabled
-            && (state.fit_adaptive_particles.calibration_particles < 2
-                || state.fit_adaptive_particles.minimum_particles
-                    < state.fit_adaptive_particles.calibration_particles
-                || state.n_particles
-                    < state.fit_adaptive_particles.minimum_particles
-                || !(state.fit_adaptive_particles.responsibility_se_target
-                    > 0.0)
-                || !(state.fit_adaptive_particles.moment_ess_target > 0.0)
-                || !(state.fit_adaptive_particles.plausible_mass > 0.0
-                    && state.fit_adaptive_particles.plausible_mass <= 1.0)
-                || !(state.fit_adaptive_particles.plausible_responsibility
-                        >= 0.0
-                    && state.fit_adaptive_particles.plausible_responsibility
-                        <= 1.0)))
-        || !std::isfinite(state.center_floor)
-        || !std::isfinite(state.target_relative_floor)
-        || !std::isfinite(state.covariance_floor)
-        || !std::isfinite(state.fisher_broadening)
-        || !covariance_valid || !pilot_valid || !helmert_valid
-        || !feature_weights_valid) {
-        throw std::runtime_error("Incomplete UAC state");
-    }
     return state;
-}
-
-void write_model(const std::string& path, const State& state,
-    const Eigen::VectorXd* effective_membership) {
-    std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write UAC model: " + path);
-    out << "#cluster\tactive\tweight\teffective_membership"
-        "\tmean_variance\tlog_volume";
-    for (const auto& topic : state.topics) out << "\t" << topic;
-    out << "\n" << std::scientific << std::setprecision(10);
-    RowMajorMatrixXd compositions = ilr_inverse(state.model.means, state.helmert);
-    for (Eigen::Index c = 0; c < state.model.weights.size(); ++c) {
-        const Eigen::MatrixXd covariance = model_covariance_dense(
-            state.model, c);
-        Eigen::LLT<Eigen::MatrixXd> llt(covariance);
-        const Eigen::MatrixXd lower = llt.matrixL();
-        const double log_volume = lower.diagonal().array().log().sum();
-        out << c << "\t" << static_cast<int32_t>(
-            state.model.weights(c) > 0.0) << "\t"
-            << state.model.weights(c) << "\t"
-            << (effective_membership ? (*effective_membership)(c) : -1.0)
-            << "\t" << covariance.trace() / state.model.means.cols()
-            << "\t" << log_volume;
-        for (Eigen::Index k = 0; k < compositions.cols(); ++k) out << "\t" << compositions(c, k);
-        out << "\n";
-    }
-}
-
-void write_results(const std::string& path, const Dataset& data,
-    const ScoreResult& score) {
-    std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write UAC results: " + path);
-    out << "#id\ttop_cluster\ttop_probability\tsecond_cluster\tsecond_probability\tentropy";
-    for (Eigen::Index c = 0; c < score.responsibilities.cols(); ++c) out << "\tcluster_" << c;
-    out << "\n" << std::scientific << std::setprecision(10);
-    for (Eigen::Index d = 0; d < score.responsibilities.rows(); ++d) {
-        std::vector<Eigen::Index> order(score.responsibilities.cols());
-        std::iota(order.begin(), order.end(), 0);
-        std::partial_sort(order.begin(), order.begin() + std::min<size_t>(2, order.size()), order.end(),
-            [&](Eigen::Index a, Eigen::Index b) { return score.responsibilities(d, a) > score.responsibilities(d, b); });
-        const Eigen::Index first = order[0];
-        const Eigen::Index second = order.size() > 1
-            && score.responsibilities(d, order[1]) > 0.0
-            ? order[1] : order[0];
-        out << data.identifiers[d] << "\t" << first << "\t" << score.responsibilities(d, first)
-            << "\t" << second << "\t" << score.responsibilities(d, second)
-            << "\t" << entropy(score.responsibilities.row(d));
-        for (Eigen::Index c = 0; c < score.responsibilities.cols(); ++c) out << "\t" << score.responsibilities(d, c);
-        out << "\n";
-    }
-}
-
-void write_diagnostics(const std::string& path, const Dataset& data,
-    const ScoreResult& score) {
-    std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write UAC diagnostics: " + path);
-    out << "##particle_generation_seconds\t"
-        << score.particle_generation_seconds << "\n"
-        << "##scoring_seconds\t" << score.scoring_seconds << "\n"
-        << "##particle_sampling_seconds\t" << score.sampling_seconds << "\n"
-        << "##particle_fisher_work_seconds\t"
-        << score.fisher_work_seconds << "\n"
-        << "##particle_proposal_component_work_seconds\t"
-        << score.proposal_component_work_seconds << "\n"
-        << "##particle_proposal_draw_density_work_seconds\t"
-        << score.proposal_draw_density_work_seconds << "\n"
-        << "##particle_proposal_precision_fallback_seconds\t"
-        << score.proposal_precision_fallback_seconds << "\n"
-        << "##particle_proposal_precision_fallbacks\t"
-        << score.proposal_precision_fallbacks << "\n"
-        << "##particle_likelihood_seconds\t" << score.likelihood_seconds << "\n"
-        << "##particle_calibration_seconds\t"
-        << score.calibration_seconds << "\n"
-        << "##particle_samples\t" << score.particle_samples << "\n"
-        << "##particle_calibration_samples\t"
-        << score.calibration_samples << "\n"
-        << "##particle_reused_calibration_samples\t"
-        << score.reused_calibration_samples << "\n"
-        << "##particle_adapt_mode\t"
-        << (score.adaptive_particle_options.enabled
-            ? adaptive_particle_rule_name(score.adaptive_particle_options.rule)
-            : "fixed") << "\n"
-        << "##particle_adapt_resp\t"
-        << score.adaptive_particle_options.responsibility_se_target << "\n"
-        << "##particle_adapt_moment\t"
-        << score.adaptive_particle_options.moment_ess_target << "\n"
-        << "##particle_adapt_calibration\t"
-        << score.adaptive_particle_options.calibration_particles << "\n"
-        << "##particle_adapt_min\t"
-        << score.adaptive_particle_options.minimum_particles << "\n"
-        << "##particle_adapt_plausible_mass\t"
-        << score.adaptive_particle_options.plausible_mass << "\n"
-        << "##particle_adapt_plausible_resp\t"
-        << score.adaptive_particle_options.plausible_responsibility << "\n"
-        << "##particle_estep_gaussian_seconds\t"
-        << score.gaussian_seconds << "\n"
-        << "##particle_estep_moment_seconds\t"
-        << score.moment_seconds << "\n"
-        << "##particle_bytes\t" << score.particle_bytes << "\n"
-        << "##proposal_workspace_bytes\t"
-        << score.proposal_workspace_bytes << "\n"
-        << "##expectation_accumulator_bytes\t"
-        << score.expectation_accumulator_bytes << "\n"
-        << "##particle_replay\t" << static_cast<int32_t>(
-            score.particle_replay) << "\n"
-        << "##particle_block_size\t" << score.particle_block_size << "\n"
-        << "##particle_generation_passes\t"
-        << score.particle_generation_passes << "\n"
-        << "##component_screening_requested\t"
-        << component_screening_mode_name(
-            score.component_screening_options.mode) << "\n"
-        << "##map_component_screening\t"
-        << static_cast<int32_t>(score.map_component_screening) << "\n"
-        << "##proposal_component_screening\t"
-        << static_cast<int32_t>(
-            score.proposal_component_screening) << "\n"
-        << "##particle_component_screening\t"
-        << static_cast<int32_t>(
-            score.particle_component_screening) << "\n"
-        << "##component_bound_seconds\t"
-        << score.component_bound_seconds << "\n"
-        << "##evaluated_component_documents\t"
-        << score.evaluated_component_documents << "\n"
-        << "##possible_component_documents\t"
-        << score.possible_component_documents << "\n"
-        << "##full_component_documents\t"
-        << score.full_component_documents << "\n"
-        << "##component_bound_violations\t"
-        << score.component_bound_violations << "\n"
-        << "##maximum_omitted_component_mass\t"
-        << score.maximum_omitted_component_mass << "\n"
-        << "##mean_omitted_component_mass\t"
-        << score.mean_omitted_component_mass << "\n"
-        << "##proposal_screening_seconds\t"
-        << score.proposal_screening_seconds << "\n"
-        << "##proposal_components_constructed\t"
-        << score.proposal_components_constructed << "\n"
-        << "##proposal_components_possible\t"
-        << score.proposal_components_possible << "\n"
-        << "##proposal_audit_documents\t"
-        << score.proposal_audit_documents << "\n"
-        << "##proposal_audit_violations\t"
-        << score.proposal_audit_violations << "\n"
-        << "##proposal_audit_maximum_omitted_mass\t"
-        << score.proposal_audit_maximum_omitted_mass << "\n"
-        << "#id\traw_total\teffective_total\tparticles\trelative_ess\tmaximum_weight\tlog_likelihood_range\tlog_proposal_range\thpd80_log_density_threshold\thpd95_log_density_threshold"
-        << "\tproposal_components\tevaluated_components"
-        << "\tomitted_component_mass_bound"
-        << "\tadapt_preliminary_max_resp\tadapt_preliminary_entropy"
-        << "\tadapt_plausible_components\tadapt_max_resp_se"
-        << "\tadapt_projected_resp_particles\tadapt_projected_moment_particles"
-        << "\tadapt_plausible_max_weight\tadapt_half_max_resp_difference"
-        << "\tadapt_half_top_disagreement\tadapt_binding\n"
-        << std::scientific << std::setprecision(10);
-    for (size_t d = 0; d < data.identifiers.size(); ++d) {
-        const bool particle = d < score.particle_diagnostics.size();
-        out << data.identifiers[d] << "\t"
-            << (data.raw_totals.size() ? data.raw_totals(d) : 0.0) << "\t"
-            << (data.effective_totals.size() ? data.effective_totals(d) : 0.0)
-            << "\t" << (d < score.per_document_particles.size()
-                ? score.per_document_particles[d] : 0) << "\t";
-        if (particle) {
-            const auto& value = score.particle_diagnostics[d];
-            out << value.relative_ess << "\t" << value.maximum_weight << "\t"
-                << value.log_likelihood_range << "\t"
-                << value.log_proposal_range << "\t"
-                << value.hpd80_log_density_threshold << "\t"
-                << value.hpd95_log_density_threshold;
-        } else {
-            out << "NA\tNA\tNA\tNA\tNA\tNA";
-        }
-        out << "\t"
-            << (d < score.per_document_proposal_components.size()
-                ? score.per_document_proposal_components[d] : 0)
-            << "\t"
-            << (d < score.per_document_evaluated_components.size()
-                ? score.per_document_evaluated_components[d] : 0)
-            << "\t";
-        if (d < score.per_document_omitted_component_mass.size()) {
-            out << score.per_document_omitted_component_mass[d];
-        } else {
-            out << "NA";
-        }
-        out << "\t";
-        if (d < score.adaptive_particle_diagnostics.size()) {
-            const auto& value = score.adaptive_particle_diagnostics[d];
-            out << value.preliminary_maximum_responsibility << "\t"
-                << value.preliminary_entropy << "\t"
-                << value.plausible_components << "\t"
-                << value.maximum_responsibility_se << "\t"
-                << value.projected_responsibility_particles << "\t"
-                << value.projected_moment_particles << "\t"
-                << value.plausible_maximum_weight << "\t"
-                << value.half_sample_maximum_responsibility_difference
-                << "\t" << static_cast<int32_t>(
-                    value.half_sample_top_disagreement) << "\t"
-                << adaptive_particle_binding_name(value.binding);
-        } else {
-            out << "NA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA\tNA";
-        }
-        out << "\n";
-    }
-}
-
-void write_trace(const std::string& path,
-    const std::vector<RestartTrace>& traces) {
-    std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write UAC trace: " + path);
-    out << "#handoff\tstart\tinitializer\tseed\traw_communities"
-        "\treconciliation_count\tleiden_resolution\tselection_objective"
-        "\titeration\tobjective\trelative_objective_change"
-        "\tmean_max_responsibility_change"
-        "\tactive_components\tconverged\tcollapsed\n"
-        << std::scientific << std::setprecision(12);
-    for (const auto& trace : traces) {
-        auto write_metadata = [&]() {
-            out << (trace.particle ? "particle" : "map") << "\t"
-                << trace.start << "\t" << initializer_name(trace.initializer)
-                << "\t" << trace.seed << "\t" << trace.raw_communities
-                << "\t" << trace.reconciliation_count << "\t";
-            if (trace.initializer == MapInitializer::Leiden) {
-                out << trace.leiden_resolution;
-            } else {
-                out << "NA";
-            }
-            out << "\t";
-            if (std::isfinite(trace.selection_objective)) {
-                out << trace.selection_objective;
-            } else {
-                out << "NA";
-            }
-        };
-        if (trace.objective.empty()) {
-            write_metadata();
-            out << "\t-1\tNA\tNA\tNA\t-1\t"
-                << static_cast<int32_t>(trace.converged) << "\t"
-                << static_cast<int32_t>(trace.collapsed) << "\n";
-            continue;
-        }
-        for (size_t iteration = 0; iteration < trace.objective.size(); ++iteration) {
-            write_metadata();
-            out << "\t" << iteration << "\t" << trace.objective[iteration]
-                << "\t";
-            if (iteration < trace.relative_objective_change.size()
-                && std::isfinite(
-                    trace.relative_objective_change[iteration])) {
-                out << trace.relative_objective_change[iteration];
-            } else {
-                out << "NA";
-            }
-            out << "\t";
-            if (iteration < trace.mean_max_responsibility_change.size()
-                && std::isfinite(
-                    trace.mean_max_responsibility_change[iteration])) {
-                out << trace.mean_max_responsibility_change[iteration];
-            } else {
-                out << "NA";
-            }
-            out << "\t" << (iteration < trace.active_components.size()
-                    ? trace.active_components[iteration] : -1)
-                << "\t" << static_cast<int32_t>(trace.converged)
-                << "\t" << static_cast<int32_t>(trace.collapsed) << "\n";
-        }
-    }
-}
-
-void write_separation(const std::string& path, const Model& model) {
-    std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write UAC separation: " + path);
-    out << "#cluster_a\tcluster_b\tstandardized_separation\tbhattacharyya_distance\n"
-        << std::scientific << std::setprecision(10);
-    for (Eigen::Index a = 0; a < model.weights.size(); ++a) {
-        if (!(model.weights(a) > 0.0)) continue;
-        for (Eigen::Index b = a + 1; b < model.weights.size(); ++b) {
-            if (!(model.weights(b) > 0.0)) continue;
-            const Eigen::VectorXd difference = model.means.row(a).transpose() - model.means.row(b).transpose();
-            const Eigen::MatrixXd covariance = 0.5
-                * (model_covariance_dense(model, a)
-                    + model_covariance_dense(model, b));
-            Eigen::LLT<Eigen::MatrixXd> llt(covariance);
-            const double standardized = std::sqrt(std::max(0.0, difference.dot(llt.solve(difference))));
-            const double logdet_mean = 2.0 * Eigen::MatrixXd(llt.matrixL()).diagonal().array().log().sum();
-            Eigen::LLT<Eigen::MatrixXd> llt_a(
-                model_covariance_dense(model, a)), llt_b(
-                model_covariance_dense(model, b));
-            const double logdet_a = 2.0 * Eigen::MatrixXd(llt_a.matrixL()).diagonal().array().log().sum();
-            const double logdet_b = 2.0 * Eigen::MatrixXd(llt_b.matrixL()).diagonal().array().log().sum();
-            const double bhattacharyya = 0.125 * standardized * standardized
-                + 0.5 * (logdet_mean - 0.5 * (logdet_a + logdet_b));
-            out << a << "\t" << b << "\t" << standardized << "\t" << bhattacharyya << "\n";
-        }
-    }
-}
-
-void write_representatives(const std::string& path, const Dataset& data,
-    const ScoreResult& score, int32_t n_representatives) {
-    std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write UAC representatives: " + path);
-    out << "#cluster\trank\tid\tprobability\ttop_probability\tentropy\n"
-        << std::scientific << std::setprecision(10);
-    std::vector<Eigen::Index> order(score.responsibilities.rows());
-    for (Eigen::Index c = 0; c < score.responsibilities.cols(); ++c) {
-        if (!(score.responsibilities.col(c).sum() > 0.0)) continue;
-        std::iota(order.begin(), order.end(), 0);
-        std::partial_sort(order.begin(), order.begin() + std::min<int32_t>(n_representatives, order.size()), order.end(),
-            [&](Eigen::Index a, Eigen::Index b) { return score.responsibilities(a, c) > score.responsibilities(b, c); });
-        const int32_t take = std::min<int32_t>(n_representatives, order.size());
-        for (int32_t rank = 0; rank < take; ++rank) {
-            const Eigen::Index d = order[rank];
-            out << c << "\t" << rank + 1 << "\t" << data.identifiers[d]
-                << "\t" << score.responsibilities(d, c)
-                << "\t" << score.responsibilities.row(d).maxCoeff()
-                << "\t" << entropy(score.responsibilities.row(d)) << "\n";
-        }
-    }
 }
 
 } // namespace uac

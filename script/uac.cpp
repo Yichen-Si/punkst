@@ -136,26 +136,17 @@ uac::AdaptiveParticleOptions make_particle_adapt_options(
     uac::AdaptiveParticleOptions out;
     const bool responsibility = input.responsibility_epsilon > 0.0;
     const bool moment = input.moment_ess > 0.0;
-    out.enabled = responsibility || moment;
-    if (responsibility && moment) {
-        out.rule = uac::AdaptiveParticleRule::ResponsibilityMoment;
-    } else if (responsibility) {
-        out.rule = uac::AdaptiveParticleRule::ResponsibilityOnly;
-    } else if (moment) {
-        out.rule = uac::AdaptiveParticleRule::MomentOnly;
-    }
     if (responsibility) {
         out.responsibility_se_target = input.responsibility_epsilon;
     }
     if (moment) out.moment_ess_target = input.moment_ess;
     out.calibration_particles = input.calibration_particles;
     out.minimum_particles = input.minimum_particles;
-    out.maximum_particles = maximum_particles;
     out.plausible_mass = input.plausible_mass;
     out.plausible_responsibility = input.plausible_responsibility;
-    if (out.enabled && (out.calibration_particles < 2
+    if (out.enabled() && (out.calibration_particles < 2
             || out.minimum_particles < out.calibration_particles
-            || out.maximum_particles < out.minimum_particles
+            || maximum_particles < out.minimum_particles
             || !(out.plausible_mass > 0.0 && out.plausible_mass <= 1.0)
             || !(out.plausible_responsibility >= 0.0
                 && out.plausible_responsibility <= 1.0))) {
@@ -366,7 +357,8 @@ bool has_fractional_counts(const std::vector<Document>& documents) {
 
 void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     const uac::State& state, const uac::ScoreResult& score,
-    const std::vector<uac::RestartTrace>* traces, int32_t representatives) {
+    const std::vector<uac::RestartTrace>* traces, int32_t representatives,
+    bool write_model_trace = false) {
     const Eigen::VectorXd membership = effective_membership(score.responsibilities);
     uac::write_state(prefix + ".state.tsv", state);
     uac::write_model(prefix + ".model.tsv", state, &membership);
@@ -376,6 +368,9 @@ void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     uac::write_representatives(prefix + ".representatives.tsv", data, score,
         representatives);
     if (traces) uac::write_trace(prefix + ".trace.tsv", *traces);
+    if (traces && write_model_trace) {
+        uac::write_model_trace(prefix + ".model_trace.tsv", *traces);
+    }
 }
 
 void report_component_screening(const uac::ScoreResult& score) {
@@ -439,22 +434,15 @@ void add_count_options(ParamList& pl, CountInputOptions& options) {
 } // namespace
 
 int32_t cmdUacFit(int argc, char** argv) {
-    std::string center_file, basis_file, out_prefix;
-    std::string handoff = "particle", proposal = "exact_fisher";
+    constexpr double kCenterFloor = 1e-12;
+    std::string center_file, basis_file, out_prefix, particle_initial_state;
+    std::string handoff = "particle";
+    std::string proposal = "exact_fisher";
     std::string leiden_knn_backend = "auto";
-    int32_t components = 0, particles = 256, particle_block_size = 0;
-    int32_t cluster_covariance_rank = -1;
-    int32_t kmeans_starts = 5, leiden_starts = 0;
-    int32_t max_iterations = 300, kmeans_max_iterations = 100;
-    int32_t leiden_neighbors = 15, leiden_max_iterations = -1;
-    int32_t seed = 1, threads = 1;
+    uac::FitOptions options;
+    options.n_components = 0;
     int32_t representatives = 10;
-    double objective_change_tolerance = 1e-5;
-    double responsibility_change_tolerance = 1e-3;
-    double covariance_shrinkage_strength = 20.0;
-    double fisher_broadening = 1.5;
-    double leiden_knn_epsilon = 0.0, leiden_resolution = 1.0;
-    bool no_covariance_shrinkage = false;
+    bool no_covariance_shrinkage = false, write_model_trace = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
@@ -465,38 +453,53 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("out-prefix", "Output prefix", out_prefix, true)
       .add_option("handoff", "Handoff: map or particle", handoff)
       .add_option("particle-proposal", "Particle proposal: exact_fisher or sparse_empirical_fisher", proposal)
-      .add_option("particles", "Particles per document", particles)
+      .add_option("particles", "Particles per document", options.n_particles)
       .add_option("particle-block-size",
           "Documents per regenerated particle block; 0 retains all particles",
-          particle_block_size)
+          options.particle_block_size)
+      .add_option("particle-em-fixed-iterations",
+          "Diagnostic fixed number of particle EM E/M pairs; 0 uses convergence stopping",
+          options.particle_em_fixed_iterations)
+      .add_option("init-ridge",
+          "Scalar initialization measurement regularizing precision; 0 uses shared empirical precision",
+          options.initialization_ridge_precision)
+      .add_option("particle-initial-state",
+          "State whose model initializes particle EM; the current-data initializer still supplies the pilot and proposal",
+          particle_initial_state)
+      .add_option("write-model-trace",
+          "Write particle model parameters before each E-step and at termination",
+          write_model_trace)
       .add_option("cluster-covariance-rank",
           "Cluster covariance rank; -1 uses dense covariance, 0 is diagonal",
-          cluster_covariance_rank)
-      .add_option("fisher-broadening", "Fisher proposal covariance broadening", fisher_broadening)
-      .add_option("n-clusters", "Fixed number of clusters", components, true)
-      .add_option("kmeans-starts", "Cosine k-means++ MAP starts", kmeans_starts)
-      .add_option("leiden-starts", "Adaptive cosine-Leiden MAP starts", leiden_starts)
-      .add_option("max-iter", "Maximum EM iterations", max_iterations)
-      .add_option("kmeans-max-iter", "Maximum Lloyd/reconciliation iterations", kmeans_max_iterations)
-      .add_option("leiden-neighbors", "Cosine k-NN neighbors for Leiden starts", leiden_neighbors)
+          options.cluster_covariance_rank)
+      .add_option("fisher-broadening", "Fisher proposal covariance broadening", options.fisher_broadening)
+      .add_option("n-clusters", "Fixed number of clusters", options.n_components, true)
+      .add_option("kmeans-starts", "Cosine k-means++ initialization starts", options.kmeans_starts)
+      .add_option("leiden-starts", "Adaptive cosine-Leiden initialization starts", options.leiden_starts)
+      .add_option("max-iter", "Maximum EM iterations", options.max_iterations)
+      .add_option("kmeans-max-iter", "Maximum Lloyd/reconciliation iterations", options.kmeans_max_iterations)
+      .add_option("leiden-neighbors", "Cosine k-NN neighbors for Leiden starts", options.leiden_neighbors)
       .add_option("leiden-knn-backend", "Cosine k-NN backend: auto, kdtree, or flat", leiden_knn_backend)
-      .add_option("leiden-knn-epsilon", "Nanoflann search epsilon; positive values require kdtree", leiden_knn_epsilon)
-      .add_option("leiden-resolution", "Initial Leiden RBConfiguration resolution", leiden_resolution)
-      .add_option("leiden-max-iter", "Maximum Leiden passes; negative runs to convergence", leiden_max_iterations)
+      .add_option("leiden-knn-epsilon", "Nanoflann search epsilon; positive values require kdtree", options.leiden_knn_epsilon)
+      .add_option("leiden-resolution", "Initial Leiden RBConfiguration resolution", options.leiden_resolution)
+      .add_option("leiden-max-iter", "Maximum Leiden passes; negative runs to convergence", options.leiden_max_iterations)
       .add_option("objective-change-tol",
           "Relative objective-change convergence threshold",
-          objective_change_tolerance)
+          options.objective_change_tolerance)
       .add_option("responsibility-change-tol",
           "Mean maximum document responsibility-change threshold",
-          responsibility_change_tolerance)
+          options.responsibility_change_tolerance)
+      .add_option("particle-variance-change-tol",
+          "Median component absolute relative mean-diagonal variance-change threshold; 0 disables",
+          options.particle_variance_change_tolerance)
       .add_option("no-cov-shrinkage",
           "Disable adaptive particle covariance shrinkage",
           no_covariance_shrinkage)
       .add_option("cov-shrinkage-strength",
           "Adaptive covariance shrinkage pseudocount",
-          covariance_shrinkage_strength)
-      .add_option("seed", "Initialization and particle seed", seed)
-      .add_option("threads", "Number of TBB worker threads", threads)
+          options.covariance_shrinkage_strength)
+      .add_option("seed", "Initialization and particle seed", options.seed)
+      .add_option("threads", "Number of TBB worker threads", options.n_threads)
       .add_option("n-representatives", "Representatives per cluster", representatives);
     add_count_options(pl, count_options);
     add_particle_adapt_options(pl, particle_adapt);
@@ -504,38 +507,21 @@ int32_t cmdUacFit(int argc, char** argv) {
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
-        uac::FitOptions options;
         options.handoff = uac::parse_handoff(handoff);
         options.proposal = uac::parse_proposal(proposal);
-        options.n_components = components;
-        options.n_particles = particles;
         options.adaptive_particles = make_particle_adapt_options(
-            particle_adapt, particles);
+            particle_adapt, options.n_particles);
         options.component_screening =
             make_component_screening_options(screening);
-        options.particle_block_size = particle_block_size;
-        options.cluster_covariance_rank = cluster_covariance_rank;
-        options.kmeans_starts = kmeans_starts;
-        options.leiden_starts = leiden_starts;
-        options.max_iterations = max_iterations;
-        options.kmeans_max_iterations = kmeans_max_iterations;
-        options.leiden_neighbors = leiden_neighbors;
         options.leiden_knn_backend = parse_cosine_knn_backend(
             leiden_knn_backend);
-        options.leiden_knn_epsilon = leiden_knn_epsilon;
-        options.leiden_resolution = leiden_resolution;
-        options.leiden_max_iterations = leiden_max_iterations;
-        options.objective_change_tolerance = objective_change_tolerance;
-        options.responsibility_change_tolerance =
-            responsibility_change_tolerance;
         options.adaptive_covariance_shrinkage = !no_covariance_shrinkage;
-        options.covariance_shrinkage_strength =
-            covariance_shrinkage_strength;
         options.iteration_callback = [](const uac::IterationDiagnostic& value) {
             std::ostringstream message;
-            message << "UAC " << (value.particle ? "particle" : "MAP")
-                << " start " << value.start << " iteration "
-                << value.iteration << ": relative objective change ";
+            message << "UAC " << uac::trace_phase_name(value.phase)
+                << " start " << value.start << " after "
+                << value.completed_updates
+                << " updates: relative objective change ";
             if (std::isfinite(value.relative_objective_change)) {
                 message << value.relative_objective_change;
             } else {
@@ -547,21 +533,34 @@ int32_t cmdUacFit(int argc, char** argv) {
             } else {
                 message << "NA";
             }
+            message << "; median absolute relative variance change ";
+            if (std::isfinite(
+                    value.median_absolute_relative_variance_change)) {
+                message
+                    << value.median_absolute_relative_variance_change;
+            } else {
+                message << "NA";
+            }
+            message << "; mean responsibility entropy ";
+            if (std::isfinite(value.mean_responsibility_entropy)) {
+                message << value.mean_responsibility_entropy;
+            } else {
+                message << "NA";
+            }
             notice("%s", message.str().c_str());
         };
-        options.seed = seed;
-        options.n_threads = threads;
-        options.fisher_broadening = fisher_broadening;
-        if (options.adaptive_particles.enabled
+        options.capture_model_trace = write_model_trace;
+        if (options.adaptive_particles.enabled()
             && options.handoff != uac::HandoffMode::Particle) {
             throw std::invalid_argument(
                 "--particle-adapt-* requires particle handoff");
         }
-        if (options.adaptive_particles.enabled && particle_block_size != 0) {
+        if (options.adaptive_particles.enabled()
+            && options.particle_block_size != 0) {
             throw std::invalid_argument(
                 "--particle-adapt-* cannot use --particle-block-size");
         }
-        CenterTable centers = read_centers(center_file, options.center_floor);
+        CenterTable centers = read_centers(center_file, kCenterFloor);
         uac::Basis basis;
         uac::Basis* basis_pointer = nullptr;
         Eigen::VectorXd feature_weights;
@@ -584,25 +583,51 @@ int32_t cmdUacFit(int argc, char** argv) {
         } else {
             data = make_map_dataset(centers);
             if (!basis_file.empty() || !count_options.in_file.empty()
+                || !count_options.meta_file.empty()
                 || !count_options.dge_dirs.empty()
-                || !count_options.matrices.empty()) {
-                warning("MAP UAC ignores --in-model and count inputs");
+                || !count_options.barcodes.empty()
+                || !count_options.features.empty()
+                || !count_options.matrices.empty()
+                || !count_options.dataset_ids.empty()
+                || !count_options.feature_weight_file.empty()) {
+                throw std::invalid_argument(
+                    "MAP UAC does not accept model or count inputs");
             }
         }
-        uac::FitResult fitted = uac::fit(data, basis_pointer, options);
-        uac::State state = uac::make_state(fitted, basis_pointer, options,
-            feature_weights, weighted_counts);
-        if (!basis_pointer) {
-            state.topics = centers.topics;
-            state.helmert = uac::normalized_helmert(state.topics.size());
+        if (!particle_initial_state.empty()) {
+            if (options.handoff != uac::HandoffMode::Particle) {
+                throw std::invalid_argument(
+                    "--particle-initial-state requires particle handoff");
+            }
+            const uac::State initial = uac::read_state(
+                particle_initial_state);
+            if (initial.basis_checksum != basis.checksum) {
+                throw std::invalid_argument(
+                    "Particle initial state basis checksum does not match --in-model");
+            }
+            options.particle_initial_model = initial.model;
         }
+        uac::FitResult fitted = uac::fit(data, basis_pointer, options);
+        uac::StateMetadata state_metadata;
+        state_metadata.topics = centers.topics;
+        state_metadata.helmert =
+            uac::normalized_helmert(state_metadata.topics.size());
+        state_metadata.center_floor = kCenterFloor;
+        state_metadata.basis_checksum =
+            basis_pointer ? basis.checksum : 0;
+        state_metadata.feature_weights = feature_weights;
+        state_metadata.weighted_counts = weighted_counts;
+        uac::State state = uac::make_state(
+            fitted, options, state_metadata);
         report_component_screening(fitted.score);
         write_all_outputs(out_prefix, data, state, fitted.score,
-            &fitted.traces, representatives);
+            &fitted.traces, representatives, write_model_trace);
         notice("UAC fitted %d clusters to %zu documents using %s handoff",
-            components, data.identifiers.size(), uac::handoff_name(options.handoff));
-        notice("UAC outputs written to %s.{state,model,results,diagnostics,trace,separation,representatives}.tsv",
-            out_prefix.c_str());
+            options.n_components, data.identifiers.size(),
+            uac::handoff_name(options.handoff));
+        notice("UAC outputs written to %s.{state,model,results,diagnostics,trace,separation,representatives}.tsv%s",
+            out_prefix.c_str(),
+            write_model_trace ? " and .model_trace.tsv" : "");
     } catch (const std::exception& exception) {
         std::cerr << "UAC fit failed: " << exception.what() << "\n";
         return 1;
@@ -652,7 +677,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
         uac::ScoreResult score;
         if (state.handoff == uac::HandoffMode::Map) {
             if (!proposal.empty() || particles > 0 || particle_block_size != 0
-                || adaptive_particles.enabled) {
+                || adaptive_particles.enabled()) {
                 throw std::invalid_argument("Particle overrides are invalid for a MAP UAC state");
             }
             data = make_map_dataset(centers);
@@ -677,9 +702,15 @@ int32_t cmdUacTransform(int argc, char** argv) {
             data = load_particle_dataset(centers, basis, count_options, weights);
             const uac::ProposalKind scoring_proposal = proposal.empty()
                 ? state.proposal : uac::parse_proposal(proposal);
-            score = uac::score_particle(data, basis, state, scoring_proposal,
-                scoring_particles, adaptive_particles, threads,
-                particle_block_size, component_screening);
+            uac::ParticleScoreOptions score_options;
+            score_options.proposal = scoring_proposal;
+            score_options.maximum_particles = scoring_particles;
+            score_options.adaptive_particles = adaptive_particles;
+            score_options.n_threads = threads;
+            score_options.particle_block_size = particle_block_size;
+            score_options.component_screening = component_screening;
+            score = uac::score_particle(
+                data, basis, state, score_options);
         }
         report_component_screening(score);
         write_all_outputs(out_prefix, data, state, score, nullptr,

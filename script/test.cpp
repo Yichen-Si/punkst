@@ -1,4 +1,5 @@
 #include "clustering/uac.hpp"
+#include "clustering/uac_internal.hpp"
 #include "clustering/low_rank_covariance.hpp"
 #include "punkst.h"
 
@@ -86,6 +87,27 @@ uac::Dataset test_dataset() {
     const Eigen::MatrixXd helmert = uac::normalized_helmert(topics);
     data.coordinates = uac::ilr_transform(data.centers, helmert);
     return data;
+}
+
+uac::StateMetadata test_state_metadata(int32_t dimension,
+    const uac::Basis* basis = nullptr,
+    const Eigen::VectorXd& feature_weights = Eigen::VectorXd(),
+    bool weighted_counts = false) {
+    uac::StateMetadata metadata;
+    if (basis) {
+        metadata.topics = basis->topics;
+        metadata.basis_checksum = basis->checksum;
+    } else {
+        metadata.topics.resize(static_cast<size_t>(dimension) + 1);
+        for (size_t topic = 0; topic < metadata.topics.size(); ++topic) {
+            metadata.topics[topic] = std::to_string(topic);
+        }
+    }
+    metadata.helmert =
+        uac::normalized_helmert(static_cast<int32_t>(metadata.topics.size()));
+    metadata.feature_weights = feature_weights;
+    metadata.weighted_counts = weighted_counts;
+    return metadata;
 }
 
 struct RareComponentFixture {
@@ -1264,9 +1286,6 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
                 "\tmaximum_responsibility_se"
                 "\tprojected_responsibility_particles"
                 "\tprojected_moment_particles"
-                "\tplausible_maximum_weight"
-                "\thalf_sample_maximum_responsibility_difference"
-                "\thalf_sample_top_disagreement"
                 "\tselected_particles\tbinding\n" << std::setprecision(12);
             for (int32_t document = 0; document < documents; ++document) {
                 const auto& diagnostic =
@@ -1279,10 +1298,6 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
                     << "\t" << diagnostic.maximum_responsibility_se
                     << "\t" << diagnostic.projected_responsibility_particles
                     << "\t" << diagnostic.projected_moment_particles
-                    << "\t" << diagnostic.plausible_maximum_weight
-                    << "\t" << diagnostic
-                        .half_sample_maximum_responsibility_difference
-                    << "\t" << diagnostic.half_sample_top_disagreement
                     << "\t" << diagnostic.selected_particles
                     << "\t" << uac::adaptive_particle_binding_name(
                         diagnostic.binding) << "\n";
@@ -1298,9 +1313,8 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
     *stream << "documents\tfeatures\ttopics\tcomponents"
         "\tlength_profile\ttopic_identifiability\tmean_scale"
         "\tparticles\tadaptive"
-        "\tadaptive_rule\tcalibration_particles"
-        "\tess_target\tcontrast_se_target"
-        "\tmaximum_weight_target\tproposal\tcomponent_screening"
+        "\tcalibration_particles\tresponsibility_se_target"
+        "\tmoment_ess_target\tproposal\tcomponent_screening"
         "\tcomponent_maximum"
         "\tmap_screening_resolved\tproposal_screening_resolved"
         "\tparticle_screening_resolved\twall_seconds"
@@ -1321,8 +1335,9 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         "\tparticle_em_bound_violations"
         "\tparticle_em_gaussian_work_seconds"
         "\tparticle_em_bound_work_seconds"
-        "\tparticle_em_moment_work_seconds\tparticle_bytes"
-        "\tproposal_workspace_bytes\texpectation_accumulator_bytes"
+        "\tparticle_em_moment_work_seconds\tresident_particle_bytes"
+        "\testimated_peak_proposal_workspace_bytes"
+        "\testimated_peak_expectation_workspace_bytes"
         "\tproposal_candidates\tproposal_possible"
         "\tevaluated_components\tevaluated_possible"
         "\tmean_evaluated_components"
@@ -1343,12 +1358,10 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         << "\t" << simulation.length_profile
         << "\t" << simulation.topic_identifiability
         << "\t" << simulation.mean_scale << "\t" << particles
-        << "\t" << static_cast<int32_t>(adaptive.enabled)
-        << "\t" << uac::adaptive_particle_rule_name(adaptive.rule)
+        << "\t" << static_cast<int32_t>(adaptive.enabled())
         << "\t" << adaptive.calibration_particles
-        << "\t" << adaptive.component_ess_target
-        << "\t" << adaptive.contrast_se_target
-        << "\t" << adaptive.maximum_weight_target << "\t"
+        << "\t" << adaptive.responsibility_se_target.value_or(0.0)
+        << "\t" << adaptive.moment_ess_target.value_or(0.0) << "\t"
         << uac::proposal_name(proposal) << "\t"
         << uac::component_screening_mode_name(component_screening.mode)
         << "\t" << component_screening.maximum_components
@@ -1367,7 +1380,7 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         << "\t" << fit.score.gaussian_seconds
         << "\t" << fit.score.component_bound_seconds
         << "\t" << fit.score.moment_seconds
-        << "\t" << particle_trace.objective.size()
+        << "\t" << particle_trace.points.size()
         << "\t" << particle_em.document_evaluations
         << "\t" << particle_em.evaluated_component_documents
         << "\t" << particle_em.possible_component_documents
@@ -1381,9 +1394,9 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         << "\t" << particle_em.gaussian_seconds
         << "\t" << particle_em.component_bound_seconds
         << "\t" << particle_em.moment_seconds << "\t"
-        << fit.score.particle_bytes << "\t"
-        << fit.score.proposal_workspace_bytes << "\t"
-        << fit.score.expectation_accumulator_bytes
+        << fit.score.resident_particle_bytes << "\t"
+        << fit.score.estimated_peak_proposal_workspace_bytes << "\t"
+        << fit.score.estimated_peak_expectation_workspace_bytes
         << "\t" << fit.score.proposal_components_constructed
         << "\t" << fit.score.proposal_components_possible
         << "\t" << fit.score.evaluated_component_documents
@@ -1721,10 +1734,9 @@ void test_rare_and_inactive_components() {
             < topics,
         "fit did not retain an effective component with N_c < K");
     for (const auto& trace : fitted.traces) {
-        require(trace.active_components.size() == trace.objective.size()
-            && std::all_of(trace.active_components.begin(),
-                trace.active_components.end(), [](int32_t active) {
-                    return active == components;
+        require(std::all_of(trace.points.begin(), trace.points.end(),
+                [](const uac::RestartTrace::Point& point) {
+                    return point.active_components == components;
                 }),
             "active-component trace lost the rare component");
     }
@@ -1755,11 +1767,18 @@ void test_rare_and_inactive_components() {
             .abs().maxCoeff() < 1e-12,
         "inactive component received responsibility");
 
-    uac::State state = uac::make_state(fitted, &fixture.basis, options,
-        Eigen::VectorXd::Ones(fixture.basis.probabilities.rows()), false);
+    uac::State state = uac::make_state(fitted, options,
+        test_state_metadata(fitted.model.means.cols(), &fixture.basis,
+            Eigen::VectorXd::Ones(
+                fixture.basis.probabilities.rows()), false));
     state.model = inactive;
+    uac::ParticleScoreOptions inactive_score_options;
+    inactive_score_options.proposal = state.proposal;
+    inactive_score_options.maximum_particles = 16;
+    inactive_score_options.n_threads = 2;
+    inactive_score_options.component_screening = state.component_screening;
     const uac::ScoreResult particle_score = uac::score_particle(fixture.data,
-        fixture.basis, state, state.proposal, 16, 2);
+        fixture.basis, state, inactive_score_options);
     require(particle_score.responsibilities.col(0).isZero(0.0)
         && (particle_score.responsibilities.rowwise().sum().array() - 1.0)
             .abs().maxCoeff() < 1e-12,
@@ -1780,23 +1799,27 @@ void test_rare_and_inactive_components() {
         "state round trip lost an inactive component");
     uac::State all_inactive = state;
     all_inactive.model.weights.setZero();
-    uac::write_state(state_path.string(), all_inactive);
     bool rejected_all_inactive = false;
     try {
-        static_cast<void>(uac::read_state(state_path.string()));
-    } catch (const std::runtime_error&) {
+        uac::write_state(state_path.string(), all_inactive);
+    } catch (const std::invalid_argument&) {
         rejected_all_inactive = true;
     }
     require(rejected_all_inactive,
-        "state reader accepted a model with no active components");
+        "state writer accepted a model with no active components");
     uac::write_state(state_path.string(), state);
     uac::write_model(model_path.string(), state);
     uac::write_separation(separation_path.string(), state.model);
     uac::write_representatives(representatives_path.string(), fixture.data,
         score, 2);
     uac::RestartTrace trace;
-    trace.objective = {-10.0, -9.0};
-    trace.active_components = {3, 2};
+    uac::RestartTrace::Point first_point;
+    first_point.objective = -10.0;
+    first_point.active_components = 3;
+    uac::RestartTrace::Point second_point;
+    second_point.objective = -9.0;
+    second_point.active_components = 2;
+    trace.points = {first_point, second_point};
     uac::write_trace(trace_path.string(), {trace});
     const std::string model_text = read_text(model_path);
     const std::string separation_text = read_text(separation_path);
@@ -1810,8 +1833,13 @@ void test_rare_and_inactive_components() {
         "separation summary included the inactive slot");
     require(representatives_text.find("\n0\t") == std::string::npos,
         "representative summary included the inactive slot");
-    require(trace_text.find("\tactive_components\t") != std::string::npos
-        && trace_text.find("\t2\t0\t0\n") != std::string::npos,
+    require(trace_text.find(
+                "\tmedian_absolute_relative_variance_change"
+                "\tmean_responsibility_entropy"
+                "\tactive_components\t")
+                != std::string::npos
+        && trace_text.find("\t2\t0\t0\t0\n")
+            != std::string::npos,
         "trace did not report active component counts");
     for (const auto& path : {state_path, model_path, separation_path,
             representatives_path, trace_path}) {
@@ -1819,7 +1847,7 @@ void test_rare_and_inactive_components() {
     }
 }
 
-void test_mixed_map_starts() {
+void test_mixed_starts() {
     require(std::abs(uac::detail::increased_leiden_resolution(
                 1.0, 1, 100) - 2.0) < 1e-12,
         "adaptive Leiden increase was not capped at two-fold");
@@ -1844,10 +1872,9 @@ void test_mixed_map_starts() {
     const uac::FitResult fitted = uac::fit(data, &basis, options);
     uac::FitOptions ragged_options = options;
     ragged_options.iteration_callback = {};
-    ragged_options.adaptive_particles.enabled = true;
     ragged_options.adaptive_particles.calibration_particles = 8;
     ragged_options.adaptive_particles.minimum_particles = options.n_particles;
-    ragged_options.adaptive_particles.maximum_particles = options.n_particles;
+    ragged_options.adaptive_particles.responsibility_se_target = 0.2;
     const uac::FitResult ragged = uac::fit(data, &basis, ragged_options);
     require(ragged.score.responsibilities.allFinite()
             && (ragged.score.responsibilities.rowwise().sum().array() - 1.0)
@@ -1865,11 +1892,11 @@ void test_mixed_map_starts() {
                 ragged.score.per_document_particles.end(),
                 [&](int32_t value) { return value == options.n_particles; }),
         "ragged particle path did not reuse its calibration prefix");
-    for (const uac::AdaptiveParticleRule rule : {
-            uac::AdaptiveParticleRule::ResponsibilityOnly,
-            uac::AdaptiveParticleRule::MomentOnly,
-            uac::AdaptiveParticleRule::ResponsibilityMoment}) {
-        ragged_options.adaptive_particles.rule = rule;
+    for (int32_t mode = 0; mode < 3; ++mode) {
+        ragged_options.adaptive_particles.responsibility_se_target =
+            mode == 1 ? std::optional<double>{} : std::optional<double>{0.2};
+        ragged_options.adaptive_particles.moment_ess_target =
+            mode == 0 ? std::optional<double>{} : std::optional<double>{8.0};
         const uac::FitResult adaptive = uac::fit(
             data, &basis, ragged_options);
         require(adaptive.score.responsibilities.allFinite()
@@ -1894,11 +1921,11 @@ void test_mixed_map_starts() {
     double selected_map_objective = -std::numeric_limits<double>::infinity();
     std::vector<int32_t> seeds;
     for (const auto& trace : fitted.traces) {
-        if (trace.particle) {
+        if (trace.phase == uac::TracePhase::ParticleEm) {
             ++particle_traces;
             require(trace.start == fitted.selected_start
-                    && trace.initializer == fitted.selected_initializer,
-                "particle EM did not inherit the selected MAP metadata");
+                    && trace.start_method == fitted.selected_start_method,
+                "particle EM did not inherit the selected start metadata");
         } else {
             ++map_traces;
             if (!trace.collapsed) {
@@ -1910,14 +1937,14 @@ void test_mixed_map_starts() {
             }
             seeds.push_back(trace.seed);
             if (trace.start < options.kmeans_starts) {
-                require(trace.initializer == uac::MapInitializer::KMeans,
-                    "k-means MAP start has the wrong initializer tag");
+                require(trace.start_method == uac::StartMethod::KMeans,
+                    "k-means start has the wrong initializer tag");
             } else {
-                require(trace.initializer == uac::MapInitializer::Leiden
+                require(trace.start_method == uac::StartMethod::Leiden
                         && trace.raw_communities > 0
                         && trace.reconciliation_count == std::abs(
                             trace.raw_communities - options.n_components),
-                    "Leiden MAP metadata or reconciliation count is invalid");
+                    "Leiden start metadata or reconciliation count is invalid");
             }
         }
     }
@@ -1926,7 +1953,7 @@ void test_mixed_map_starts() {
             && particle_traces == 1
             && std::adjacent_find(seeds.begin(), seeds.end()) == seeds.end()
             && selected_map_objective == best_map_objective,
-        "mixed starts did not produce distinct MAP seeds and one particle fit");
+        "mixed starts did not produce distinct seeds and one particle fit");
 
     uac::FitOptions adaptive = options;
     adaptive.handoff = uac::HandoffMode::Map;
@@ -1945,8 +1972,8 @@ void test_mixed_map_starts() {
     require(std::abs(adaptive_fit.traces[1].leiden_resolution - expected)
             < 1e-15,
         "Leiden fit did not apply the bounded adaptive schedule");
-    const uac::State adaptive_state = uac::make_state(adaptive_fit, nullptr,
-        adaptive, Eigen::VectorXd(), false);
+    const uac::State adaptive_state = uac::make_state(adaptive_fit, adaptive,
+        test_state_metadata(adaptive_fit.model.means.cols()));
     const std::filesystem::path adaptive_path =
         std::filesystem::temp_directory_path()
         / "punkst_uac_leiden_state.tsv";
@@ -1954,8 +1981,8 @@ void test_mixed_map_starts() {
     const uac::State restored_adaptive = uac::read_state(
         adaptive_path.string());
     std::filesystem::remove(adaptive_path);
-    require(restored_adaptive.selected_initializer
-            == uac::MapInitializer::Leiden
+    require(restored_adaptive.selected_start_method
+            == uac::StartMethod::Leiden
             && restored_adaptive.kmeans_starts == 0
             && restored_adaptive.leiden_starts == adaptive.leiden_starts
             && restored_adaptive.selected_leiden_resolution > 0.0,
@@ -1969,7 +1996,7 @@ void test_mixed_map_starts() {
             && (map_fit.pilot.means - map_fit.model.means).norm() < 1e-12
             && (map_fit.pilot.pooled_covariance
                 - map_fit.model.shrinkage_target).norm() < 1e-12,
-        "winning MAP fit did not define the proposal and final target");
+        "winning MAP-handoff fit did not define the proposal and final target");
 
     uac::FitOptions defaults;
     defaults.handoff = uac::HandoffMode::Map;
@@ -1977,12 +2004,163 @@ void test_mixed_map_starts() {
     defaults.max_iterations = 20;
     const uac::FitResult default_fit = uac::fit(data, nullptr, defaults);
     require(default_fit.traces.size() == 5,
-        "default initialization did not run five k-means MAP starts");
+        "default initialization did not run five k-means starts");
+}
+
+void test_noise_corrected_initialization() {
+    const uac::Basis basis = test_basis();
+    const uac::Dataset data = test_dataset();
+    uac::FitOptions options;
+    options.n_components = 3;
+    options.n_particles = 16;
+    options.kmeans_starts = 2;
+    options.max_iterations = 12;
+    options.seed = 20260725;
+    options.n_threads = 2;
+    options.capture_model_trace = true;
+    const uac::FitResult moments = uac::fit(data, &basis, options);
+    int32_t moment_starts = 0;
+    double best_score = -std::numeric_limits<double>::infinity();
+    double selected_score = -std::numeric_limits<double>::infinity();
+    for (const auto& trace : moments.traces) {
+        if (trace.phase != uac::TracePhase::CorrectedMomScore) continue;
+        ++moment_starts;
+        best_score = std::max(best_score, trace.selection_objective);
+        if (trace.start == moments.selected_start) {
+            selected_score = trace.selection_objective;
+        }
+        require(std::isfinite(trace.selection_objective)
+            && trace.points.size() == 1
+            && trace.points.front().event
+                == uac::TraceEvent::CandidateScore
+            && std::isfinite(
+                trace.points.front().mean_responsibility_entropy)
+            && trace.succeeded && !trace.converged,
+            "corrected-moment candidate score trace is incomplete");
+    }
+    require(moment_starts == options.kmeans_starts
+            && selected_score == best_score
+            && moments.initialization_measurement_covariance_evaluations
+                == 2 * data.coordinates.rows(),
+        "particle initialization did not rank all corrected-moment starts "
+        "jointly by deconvolution marginal likelihood");
+    uac::FitOptions serial_options = options;
+    serial_options.n_threads = 1;
+    serial_options.capture_model_trace = false;
+    const uac::FitResult serial_moments = uac::fit(
+        data, &basis, serial_options);
+    require((serial_moments.model.means - moments.model.means)
+                .cwiseAbs().maxCoeff() < 1e-11
+            && (serial_moments.score.responsibilities
+                - moments.score.responsibilities)
+                .cwiseAbs().maxCoeff() < 1e-11,
+        "corrected-moment initialization depends on thread count");
+
+    uac::FitOptions one_start = options;
+    one_start.kmeans_starts = 1;
+    const uac::FitResult mom = uac::fit(data, &basis, one_start);
+    const auto mom_trace = std::find_if(
+        mom.traces.begin(), mom.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::CorrectedMomScore;
+        });
+    require(mom_trace != mom.traces.end()
+            && mom_trace->points.size() == 1
+            && mom_trace->completed_updates == 0,
+        "corrected-moment candidate performed initialization EM updates");
+
+    uac::FitOptions scalar_ridge = options;
+    scalar_ridge.kmeans_starts = 1;
+    scalar_ridge.initialization_ridge_precision = 0.75;
+    const uac::FitResult ridge = uac::fit(
+        data, &basis, scalar_ridge);
+    require(ridge.model.means.allFinite()
+            && ridge.score.responsibilities.allFinite(),
+        "scalar initialization ridge produced a nonfinite fit");
+
+    uac::FitOptions factor = scalar_ridge;
+    factor.cluster_covariance_rank = 0;
+    factor.n_particles = 8;
+    factor.max_iterations = 6;
+    const uac::FitResult factor_fit = uac::fit(data, &basis, factor);
+    require(factor_fit.model.covariance_kind
+                == uac::CovarianceKind::FactorAnalytic
+            && factor_fit.model.factor_covariances.size() == 3
+            && factor_fit.pilot.covariances.size() == 3,
+        "corrected-moment winner did not hand off to factor particle EM");
+
+    uac::FitOptions map;
+    map.handoff = uac::HandoffMode::Map;
+    map.n_components = 3;
+    map.kmeans_starts = 1;
+    map.max_iterations = 20;
+    const uac::FitResult map_fit = uac::fit(data, nullptr, map);
+    require(!map_fit.traces.empty()
+            && map_fit.traces.front().phase
+                == uac::TracePhase::PointMapEm
+            && map_fit.initialization_measurement_covariance_evaluations == 0,
+        "MAP handoff did not preserve point-map initialization");
 }
 
 void test_fit_score_and_state(const std::string& requested_output) {
     const uac::Basis basis = test_basis();
     const uac::Dataset data = test_dataset();
+    uac::Model previous_variance_model;
+    previous_variance_model.covariance_kind = uac::CovarianceKind::Dense;
+    previous_variance_model.weights =
+        Eigen::VectorXd::Constant(3, 1.0 / 3.0);
+    previous_variance_model.means = RowMajorMatrixXd::Zero(3, 2);
+    previous_variance_model.covariances = {
+        Eigen::MatrixXd::Identity(2, 2),
+        2.0 * Eigen::MatrixXd::Identity(2, 2),
+        4.0 * Eigen::MatrixXd::Identity(2, 2),
+    };
+    uac::Model current_variance_model = previous_variance_model;
+    current_variance_model.covariances = {
+        1.1 * Eigen::MatrixXd::Identity(2, 2),
+        1.6 * Eigen::MatrixXd::Identity(2, 2),
+        5.2 * Eigen::MatrixXd::Identity(2, 2),
+    };
+    require(std::abs(uac::median_absolute_relative_variance_change(
+                current_variance_model, previous_variance_model, 1e-5)
+            - 0.2) < 1e-12,
+        "dense variance convergence did not take absolute values before "
+        "the component median");
+    uac::Model previous_factor_model = previous_variance_model;
+    previous_factor_model.covariance_kind =
+        uac::CovarianceKind::FactorAnalytic;
+    previous_factor_model.covariances.clear();
+    previous_factor_model.factor_covariances.resize(3);
+    uac::Model current_factor_model = current_variance_model;
+    current_factor_model.covariance_kind =
+        uac::CovarianceKind::FactorAnalytic;
+    current_factor_model.covariances.clear();
+    current_factor_model.factor_covariances.resize(3);
+    for (int32_t c = 0; c < 3; ++c) {
+        previous_factor_model.factor_covariances[c].diagonal =
+            previous_variance_model.covariances[c].diagonal();
+        previous_factor_model.factor_covariances[c].factor =
+            RowMajorMatrixXd::Zero(2, 1);
+        current_factor_model.factor_covariances[c].diagonal =
+            current_variance_model.covariances[c].diagonal();
+        current_factor_model.factor_covariances[c].factor =
+            RowMajorMatrixXd::Zero(2, 1);
+    }
+    require(std::abs(uac::median_absolute_relative_variance_change(
+                current_factor_model, previous_factor_model, 1e-5)
+            - 0.2) < 1e-12,
+        "factor-analytic variance convergence omitted the full diagonal");
+    previous_variance_model.weights(2) = 0.0;
+    current_variance_model.weights(2) = 0.0;
+    require(std::abs(uac::median_absolute_relative_variance_change(
+                current_variance_model, previous_variance_model, 1e-5)
+            - 0.15) < 1e-12,
+        "variance convergence did not exclude inactive components");
+    current_variance_model.weights(2) = 1.0 / 3.0;
+    require(!std::isfinite(uac::median_absolute_relative_variance_change(
+                current_variance_model, previous_variance_model, 1e-5)),
+        "variance convergence remained eligible after an active-set change");
+
     uac::FitOptions options;
     options.handoff = uac::HandoffMode::Particle;
     options.proposal = uac::ProposalKind::ExactFisher;
@@ -1992,29 +2170,135 @@ void test_fit_score_and_state(const std::string& requested_output) {
     options.max_iterations = 80;
     options.seed = 71;
     options.n_threads = 2;
+    options.capture_model_trace = true;
     int32_t iteration_notices = 0;
     int32_t finite_convergence_notices = 0;
+    int32_t finite_variance_notices = 0;
     options.iteration_callback = [&](const uac::IterationDiagnostic& value) {
         ++iteration_notices;
         if (std::isfinite(value.relative_objective_change)
             && std::isfinite(value.mean_max_responsibility_change)) {
             ++finite_convergence_notices;
         }
+        if (value.phase == uac::TracePhase::ParticleEm && std::isfinite(
+                value.median_absolute_relative_variance_change)) {
+            ++finite_variance_notices;
+        }
     };
     const uac::FitResult fitted = uac::fit(data, &basis, options);
+    const auto fitted_particle_trace = std::find_if(
+        fitted.traces.begin(), fitted.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
+    require(fitted_particle_trace != fitted.traces.end()
+            && fitted_particle_trace->model_trace.size() >= 2
+            && fitted_particle_trace->model_trace.front().event
+                == uac::TraceEvent::Evaluation
+            && fitted_particle_trace->model_trace.back().event
+                == uac::TraceEvent::Terminal,
+        "particle model trajectory is missing its initial or final model");
+    auto model_difference = [](const uac::Model& left,
+                               const uac::Model& right) {
+        double difference = (left.weights - right.weights)
+            .cwiseAbs().maxCoeff();
+        difference = std::max(difference,
+            (left.means - right.means).cwiseAbs().maxCoeff());
+        difference = std::max(difference,
+            (left.shrinkage_target - right.shrinkage_target)
+                .cwiseAbs().maxCoeff());
+        for (size_t c = 0; c < left.covariances.size(); ++c) {
+            difference = std::max(difference,
+                (left.covariances[c] - right.covariances[c])
+                    .cwiseAbs().maxCoeff());
+        }
+        return difference;
+    };
+    require(model_difference(fitted_particle_trace->model_trace.back().model,
+                fitted.model) < 1e-12,
+        "final model trajectory entry differs from the fitted model");
+
+    uac::FitOptions repeated_options = options;
+    repeated_options.iteration_callback = {};
+    repeated_options.particle_initial_model =
+        fitted_particle_trace->model_trace.front().model;
+    const uac::FitResult repeated = uac::fit(
+        data, &basis, repeated_options);
+    require(model_difference(repeated.model, fitted.model) < 1e-12
+            && (repeated.score.responsibilities
+                - fitted.score.responsibilities)
+                .cwiseAbs().maxCoeff() < 1e-12,
+        "explicit default particle initial model changed the fit");
+
+    uac::Model shifted_initial =
+        fitted_particle_trace->model_trace.front().model;
+    shifted_initial.means.row(0).array() += 0.05;
+    shifted_initial.covariances[0] *= 1.1;
+    repeated_options.particle_initial_model = shifted_initial;
+    const uac::FitResult shifted = uac::fit(
+        data, &basis, repeated_options);
+    const auto shifted_particle_trace = std::find_if(
+        shifted.traces.begin(), shifted.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
+    require(shifted_particle_trace != shifted.traces.end()
+            && model_difference(
+                shifted_particle_trace->model_trace.front().model,
+                shifted_initial) < 1e-12,
+        "particle initial-model override was not used");
+    require(shifted.score.particle_diagnostics.size()
+            == fitted.score.particle_diagnostics.size(),
+        "particle initial-model override changed proposal support size");
+    for (size_t d = 0; d < fitted.score.particle_diagnostics.size(); ++d) {
+        require(shifted.score.particle_diagnostics[d].log_proposal_range
+                == fitted.score.particle_diagnostics[d].log_proposal_range,
+            "particle initial-model override changed MAP proposal support");
+    }
+    uac::FitOptions invalid_initial = options;
+    invalid_initial.iteration_callback = {};
+    invalid_initial.particle_initial_model = shifted_initial;
+    invalid_initial.particle_initial_model->covariances[0].setZero();
+    bool rejected_invalid_initial = false;
+    try {
+        static_cast<void>(uac::fit(data, &basis, invalid_initial));
+    } catch (const std::invalid_argument&) {
+        rejected_invalid_initial = true;
+    }
+    require(rejected_invalid_initial,
+        "invalid particle initial covariance was accepted");
+    const std::filesystem::path model_trace_path =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_model_trace.tsv";
+    uac::write_model_trace(model_trace_path.string(), fitted.traces);
+    const std::string model_trace_text = read_text(model_trace_path);
+    std::filesystem::remove(model_trace_path);
+    require(model_trace_text.find(
+                "#handoff\tstart\tcompleted_updates\tevent")
+                == 0
+            && model_trace_text.find("\tterminal\t") != std::string::npos
+            && model_trace_text.find("\tcovariance\t")
+                != std::string::npos,
+        "written particle model trajectory is incomplete");
     for (const auto& trace : fitted.traces) {
-        require(trace.relative_objective_change.size()
-                == trace.objective.size()
-            && trace.mean_max_responsibility_change.size()
-                == trace.objective.size(),
-            "convergence diagnostic trace lengths differ");
-        for (size_t iteration = 1; iteration < trace.objective.size(); ++iteration) {
-            require(trace.objective[iteration] + 1e-7
-                >= trace.objective[iteration - 1],
-                "penalized EM objective decreased");
+        if (trace.phase == uac::TracePhase::PointMapEm) {
+            for (size_t iteration = 1;
+                    iteration < trace.points.size(); ++iteration) {
+                require(trace.points[iteration].objective + 1e-7
+                    >= trace.points[iteration - 1].objective,
+                    "penalized point-map EM objective decreased for start "
+                    + std::to_string(trace.start)
+                    + " at iteration " + std::to_string(iteration)
+                    + " (" + std::to_string(
+                        trace.points[iteration - 1].objective)
+                    + " -> " + std::to_string(
+                        trace.points[iteration].objective)
+                    + ")");
+            }
         }
     }
-    require(iteration_notices > 0 && finite_convergence_notices > 0,
+    require(iteration_notices > 0 && finite_convergence_notices > 0
+            && finite_variance_notices > 0,
         "iteration callback did not receive convergence changes");
 
     uac::FitOptions early_convergence = options;
@@ -2028,10 +2312,174 @@ void test_fit_score_and_state(const std::string& requested_output) {
         data, &basis, early_convergence);
     const auto particle_trace = std::find_if(
         shrinkage_order.traces.begin(), shrinkage_order.traces.end(),
-        [](const uac::RestartTrace& trace) { return trace.particle; });
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
     require(particle_trace != shrinkage_order.traces.end()
-            && particle_trace->objective.size() >= 4,
+            && particle_trace->points.size() >= 4
+            && particle_trace->completed_updates
+                <= early_convergence.max_iterations,
         "particle convergence occurred before an adaptive shrinkage update");
+    require(particle_trace->model_trace.size() >= 3
+            && std::abs(
+                particle_trace->points[1]
+                    .median_absolute_relative_variance_change
+                - uac::median_absolute_relative_variance_change(
+                    particle_trace->model_trace[1].model,
+                    particle_trace->model_trace[0].model,
+                    early_convergence.covariance_floor)) < 1e-12,
+        "particle variance diagnostic does not compare successive models");
+
+    uac::FitOptions variance_blocks_stop = early_convergence;
+    variance_blocks_stop.particle_variance_change_tolerance = 1e-300;
+    const uac::FitResult variance_blocks_fit = uac::fit(
+        data, &basis, variance_blocks_stop);
+    const auto variance_blocks_trace = std::find_if(
+        variance_blocks_fit.traces.begin(),
+        variance_blocks_fit.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
+    require(variance_blocks_trace != variance_blocks_fit.traces.end()
+            && !variance_blocks_trace->converged
+            && variance_blocks_trace->completed_updates == 3,
+        "particle EM stopped when only objective/responsibility converged");
+
+    uac::FitOptions variance_allows_stop = early_convergence;
+    variance_allows_stop.particle_variance_change_tolerance = 1e6;
+    const uac::FitResult variance_allows_fit = uac::fit(
+        data, &basis, variance_allows_stop);
+    const auto variance_allows_trace = std::find_if(
+        variance_allows_fit.traces.begin(),
+        variance_allows_fit.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
+    require(variance_allows_trace != variance_allows_fit.traces.end()
+            && variance_allows_trace->converged
+            && variance_allows_trace->completed_updates
+                == particle_trace->completed_updates,
+        "particle EM did not stop when variance and an existing criterion "
+        "converged");
+
+    uac::FitOptions variance_only = early_convergence;
+    variance_only.objective_change_tolerance = 1e-300;
+    variance_only.responsibility_change_tolerance = 1e-300;
+    variance_only.particle_variance_change_tolerance = 1e6;
+    const uac::FitResult variance_only_fit = uac::fit(
+        data, &basis, variance_only);
+    const auto variance_only_trace = std::find_if(
+        variance_only_fit.traces.begin(), variance_only_fit.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
+    bool nonvariance_criterion_converged = false;
+    if (variance_only_trace != variance_only_fit.traces.end()
+        && variance_only_trace->converged) {
+        for (size_t iteration = variance_only_trace->points.size();
+                iteration-- > 0;) {
+            const double objective_change =
+                variance_only_trace->points[iteration]
+                    .relative_objective_change;
+            const double responsibility_change =
+                variance_only_trace->points[iteration]
+                    .mean_max_responsibility_change;
+            if (std::isfinite(objective_change)
+                && std::isfinite(responsibility_change)) {
+                nonvariance_criterion_converged =
+                    objective_change
+                        < variance_only.objective_change_tolerance
+                    || responsibility_change
+                        < variance_only.responsibility_change_tolerance;
+                break;
+            }
+        }
+    }
+    require(variance_only_trace != variance_only_fit.traces.end()
+            && variance_only_trace->completed_updates
+                <= variance_only.max_iterations
+            && (!variance_only_trace->converged
+                || nonvariance_criterion_converged),
+        "particle EM stopped on variance convergence alone");
+
+    uac::FitOptions fixed_iterations = early_convergence;
+    fixed_iterations.particle_em_fixed_iterations = 4;
+    fixed_iterations.max_iterations = 1;
+    fixed_iterations.capture_model_trace = true;
+    const uac::FitResult fixed_iteration_fit = uac::fit(
+        data, &basis, fixed_iterations);
+    const auto fixed_trace = std::find_if(
+        fixed_iteration_fit.traces.begin(),
+        fixed_iteration_fit.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
+    require(fixed_trace != fixed_iteration_fit.traces.end()
+            && fixed_trace->fixed_em_iteration_schedule
+            && fixed_trace->completed_updates == 4
+            && !fixed_trace->converged
+            && fixed_trace->model_trace.size() == 5
+            && fixed_trace->model_trace.front().completed_updates == 0
+            && fixed_trace->model_trace.back().completed_updates == 4
+            && fixed_trace->model_trace.back().event
+                == uac::TraceEvent::Terminal,
+        "fixed particle schedule did not complete exactly four EM iterations");
+
+    uac::FitOptions fixed_without_shrinkage = fixed_iterations;
+    fixed_without_shrinkage.adaptive_covariance_shrinkage = false;
+    fixed_without_shrinkage.particle_em_fixed_iterations = 3;
+    const uac::FitResult fixed_without_shrinkage_fit = uac::fit(
+        data, &basis, fixed_without_shrinkage);
+    const auto fixed_without_shrinkage_trace = std::find_if(
+        fixed_without_shrinkage_fit.traces.begin(),
+        fixed_without_shrinkage_fit.traces.end(),
+        [](const uac::RestartTrace& trace) {
+            return trace.phase == uac::TracePhase::ParticleEm;
+        });
+    require(fixed_without_shrinkage_trace
+                != fixed_without_shrinkage_fit.traces.end()
+            && fixed_without_shrinkage_trace->completed_updates == 3
+            && fixed_without_shrinkage_trace->model_trace.size() == 4
+            && fixed_without_shrinkage_trace->model_trace.back()
+                .completed_updates
+                == 3,
+        "fixed particle schedule without shrinkage counted EM iterations incorrectly");
+
+    uac::FitOptions invalid_fixed_iterations = fixed_iterations;
+    invalid_fixed_iterations.handoff = uac::HandoffMode::Map;
+    bool rejected_map_fixed_iterations = false;
+    try {
+        static_cast<void>(uac::fit(
+            data, nullptr, invalid_fixed_iterations));
+    } catch (const std::invalid_argument&) {
+        rejected_map_fixed_iterations = true;
+    }
+    require(rejected_map_fixed_iterations,
+        "fixed particle EM iterations were accepted with MAP handoff");
+
+    uac::FitOptions invalid_map_variance = early_convergence;
+    invalid_map_variance.handoff = uac::HandoffMode::Map;
+    invalid_map_variance.particle_variance_change_tolerance = 0.1;
+    bool rejected_map_variance = false;
+    try {
+        static_cast<void>(uac::fit(data, nullptr, invalid_map_variance));
+    } catch (const std::invalid_argument&) {
+        rejected_map_variance = true;
+    }
+    require(rejected_map_variance,
+        "particle variance convergence was accepted with MAP handoff");
+
+    uac::FitOptions conflicting_particle_controls = fixed_iterations;
+    conflicting_particle_controls.particle_variance_change_tolerance = 0.1;
+    bool rejected_conflicting_particle_controls = false;
+    try {
+        static_cast<void>(uac::fit(
+            data, &basis, conflicting_particle_controls));
+    } catch (const std::invalid_argument&) {
+        rejected_conflicting_particle_controls = true;
+    }
+    require(rejected_conflicting_particle_controls,
+        "fixed particle EM iterations accepted variance convergence");
 
     require(fitted.score.responsibilities.allFinite(),
         "particle responsibilities are nonfinite");
@@ -2040,15 +2488,19 @@ void test_fit_score_and_state(const std::string& requested_output) {
         "particle responsibilities are not normalized");
     require(fitted.score.particle_diagnostics.size()
             == data.identifiers.size()
-        && fitted.score.particle_bytes == sizeof(double)
+        && fitted.score.resident_particle_bytes == sizeof(double)
             * static_cast<uint64_t>(data.identifiers.size())
-            * options.n_particles * (data.coordinates.cols() + 2),
+            * options.n_particles * (data.coordinates.cols() + 2)
+            + sizeof(int32_t)
+                * (static_cast<uint64_t>(data.identifiers.size())
+                    * options.n_particles + data.identifiers.size()),
         "particle diagnostics or memory accounting are incomplete");
     require(fitted.score.gaussian_seconds > 0.0
-            && fitted.score.moment_seconds > 0.0
-            && fitted.score.expectation_accumulator_bytes > 0
-            && fitted.score.proposal_workspace_bytes > 0,
-        "particle E-step timing or workspace diagnostics are missing");
+            && fitted.score.moment_seconds == 0.0
+            && fitted.score.estimated_peak_expectation_workspace_bytes > 0
+            && fitted.score.estimated_peak_proposal_workspace_bytes > 0,
+        "score-only particle E-step performed moment work or omitted "
+        "workspace diagnostics");
     for (const auto& diagnostic : fitted.score.particle_diagnostics) {
         require(diagnostic.relative_ess > 0.0
             && diagnostic.relative_ess <= 1.0 + 1e-12
@@ -2109,16 +2561,24 @@ void test_fit_score_and_state(const std::string& requested_output) {
         "forced component maximum affected automatic screening");
     const Eigen::VectorXd weights = Eigen::VectorXd::Ones(
         basis.probabilities.rows());
-    const uac::State state = uac::make_state(fitted, &basis, options,
-        weights, true);
+    const uac::State state = uac::make_state(fitted, options,
+        test_state_metadata(
+            fitted.model.means.cols(), &basis, weights, true));
+    uac::ParticleScoreOptions transform_options;
+    transform_options.proposal = state.proposal;
+    transform_options.maximum_particles = state.n_particles;
+    transform_options.n_threads = 1;
+    transform_options.component_screening = state.component_screening;
     const uac::ScoreResult rescored = uac::score_particle(data, basis, state,
-        state.proposal, state.n_particles, 1);
+        transform_options);
     require((rescored.responsibilities - fitted.score.responsibilities)
         .cwiseAbs().maxCoeff() < 1e-11,
         "fit and transform particle scores differ");
+    uac::ParticleScoreOptions screened_options = transform_options;
+    screened_options.n_threads = 2;
+    screened_options.component_screening = screening;
     const uac::ScoreResult screened_particle = uac::score_particle(
-        data, basis, state, state.proposal, state.n_particles,
-        uac::AdaptiveParticleOptions{}, 2, 0, screening);
+        data, basis, state, screened_options);
     require(screened_particle.proposal_component_screening
             && screened_particle.particle_component_screening
             && screened_particle.component_bound_violations == 0
@@ -2140,9 +2600,11 @@ void test_fit_score_and_state(const std::string& requested_output) {
                     + 1e-10,
             "particle screening exceeded its omitted-mass bound");
     }
+    uac::ParticleScoreOptions capped_options = transform_options;
+    capped_options.n_threads = 2;
+    capped_options.component_screening = capped_screening;
     const uac::ScoreResult capped_particle = uac::score_particle(
-        data, basis, state, state.proposal, state.n_particles,
-        uac::AdaptiveParticleOptions{}, 2, 0, capped_screening);
+        data, basis, state, capped_options);
     require(std::all_of(
                 capped_particle.per_document_proposal_components.begin(),
                 capped_particle.per_document_proposal_components.end(),
@@ -2166,13 +2628,17 @@ void test_fit_score_and_state(const std::string& requested_output) {
         "component maximum below the minimum was accepted");
     for (int32_t block_size : {1, 5,
             static_cast<int32_t>(data.identifiers.size())}) {
+        uac::ParticleScoreOptions replay_options = transform_options;
+        replay_options.n_threads = 2;
+        replay_options.particle_block_size = block_size;
         const uac::ScoreResult replayed = uac::score_particle(data, basis,
-            state, state.proposal, state.n_particles, 2, block_size);
+            state, replay_options);
         require((replayed.responsibilities - rescored.responsibilities)
                 .cwiseAbs().maxCoeff() < 1e-11
             && replayed.particle_replay
             && replayed.particle_block_size == block_size
-            && replayed.particle_bytes <= fitted.score.particle_bytes
+            && replayed.resident_particle_bytes
+                <= fitted.score.resident_particle_bytes
             && replayed.particle_samples
                 == static_cast<int64_t>(data.identifiers.size())
                     * state.n_particles
@@ -2199,13 +2665,8 @@ void test_fit_score_and_state(const std::string& requested_output) {
         ? std::filesystem::temp_directory_path() / "punkst_uac_test_state.tsv"
         : std::filesystem::path(requested_output);
     uac::State state_to_write = state;
-    state_to_write.fit_adaptive_particles.enabled = true;
-    state_to_write.fit_adaptive_particles.rule =
-        uac::AdaptiveParticleRule::ResponsibilityMoment;
     state_to_write.fit_adaptive_particles.calibration_particles = 8;
     state_to_write.fit_adaptive_particles.minimum_particles = 16;
-    state_to_write.fit_adaptive_particles.maximum_particles =
-        state_to_write.n_particles;
     state_to_write.fit_adaptive_particles.responsibility_se_target = 0.08;
     state_to_write.fit_adaptive_particles.moment_ess_target = 12.0;
     state_to_write.component_screening = screening;
@@ -2213,6 +2674,7 @@ void test_fit_score_and_state(const std::string& requested_output) {
     state_to_write.fit_map_component_screening = true;
     state_to_write.fit_proposal_component_screening = true;
     state_to_write.fit_particle_component_screening = true;
+    state_to_write.particle_variance_change_tolerance = 0.0125;
     uac::write_state(state_path.string(), state_to_write);
     const uac::State restored = uac::read_state(state_path.string());
     require(restored.component_screening.mode
@@ -2224,6 +2686,9 @@ void test_fit_score_and_state(const std::string& requested_output) {
             && restored.fit_particle_component_screening,
         "component screening state metadata did not round trip");
     const std::string valid_state_text = read_text(state_path);
+    const std::string v10_header = "##punkst_uac_state_v10";
+    require(valid_state_text.find(v10_header) == 0,
+        "written UAC state does not use version 10");
     auto require_rejected_state = [&](const std::string& text,
                                       const std::string& description) {
         write_text(state_path, text);
@@ -2235,6 +2700,13 @@ void test_fit_score_and_state(const std::string& requested_output) {
         }
         require(rejected, description);
     };
+    std::string v9_state_text = valid_state_text;
+    v9_state_text.replace(0, v10_header.size(),
+        "##punkst_uac_state_v9");
+    require_rejected_state(v9_state_text,
+        "state reader accepted a version 9 state");
+    require_rejected_state("TOPICS\tt0\tt1\tt2\n" + valid_state_text,
+        "state reader accepted records before its version header");
     require_rejected_state(remove_first_record(valid_state_text, "HELMERT\t"),
         "state reader accepted a missing Helmert row");
     require_rejected_state(
@@ -2243,6 +2715,38 @@ void test_fit_score_and_state(const std::string& requested_output) {
     require_rejected_state(
         duplicate_first_record(valid_state_text, "MODEL_MEAN\t"),
         "state reader accepted a duplicate model mean row");
+    require_rejected_state(remove_first_record(valid_state_text,
+            "##particle_variance_change_tolerance\t"),
+        "version 10 state reader accepted a missing variance tolerance");
+    require_rejected_state(remove_first_record(valid_state_text,
+            "##initialization_ridge_precision\t"),
+        "version 10 state reader accepted a missing initialization ridge");
+    require_rejected_state(valid_state_text
+            + "##unknown_metadata\t1\n",
+        "state reader accepted unknown metadata");
+    std::string invalid_boolean = valid_state_text;
+    const std::string valid_boolean = "##converged\t";
+    const size_t boolean_position = invalid_boolean.find(valid_boolean);
+    require(boolean_position != std::string::npos,
+        "test state does not contain converged metadata");
+    const size_t boolean_value = boolean_position + valid_boolean.size();
+    invalid_boolean.replace(boolean_value, 1, "2");
+    require_rejected_state(invalid_boolean,
+        "state reader accepted a non-binary boolean");
+    std::string partial_integer = valid_state_text;
+    const std::string particle_metadata = "##particles\t";
+    const size_t particle_position =
+        partial_integer.find(particle_metadata);
+    require(particle_position != std::string::npos,
+        "test state does not contain particle metadata");
+    const size_t particle_value =
+        particle_position + particle_metadata.size();
+    const size_t particle_end = partial_integer.find(
+        '\n', particle_value);
+    partial_integer.replace(particle_value,
+        particle_end - particle_value, "48junk");
+    require_rejected_state(partial_integer,
+        "state reader accepted a partially parsed integer");
     std::string invalid_index = valid_state_text;
     const std::string valid_index = "\nHELMERT\t0\t";
     const size_t index_position = invalid_index.find(valid_index);
@@ -2256,8 +2760,10 @@ void test_fit_score_and_state(const std::string& requested_output) {
 
     require(restored.basis_checksum == state_to_write.basis_checksum
         && restored.weighted_counts
+        && restored.initialization_ridge_precision
+            == state_to_write.initialization_ridge_precision
         && restored.selected_start == state.selected_start
-        && restored.selected_initializer == state.selected_initializer
+        && restored.selected_start_method == state.selected_start_method
         && restored.kmeans_starts == state.kmeans_starts
         && restored.leiden_starts == state.leiden_starts
         && restored.leiden_knn_backend == state.leiden_knn_backend
@@ -2266,9 +2772,7 @@ void test_fit_score_and_state(const std::string& requested_output) {
             == state_to_write.adaptive_covariance_shrinkage
         && restored.covariance_shrinkage_strength
             == state_to_write.covariance_shrinkage_strength
-        && restored.fit_adaptive_particles.enabled
-        && restored.fit_adaptive_particles.rule
-            == uac::AdaptiveParticleRule::ResponsibilityMoment
+        && restored.fit_adaptive_particles.enabled()
         && restored.fit_adaptive_particles.calibration_particles == 8
         && restored.fit_adaptive_particles.minimum_particles == 16
         && restored.fit_adaptive_particles.responsibility_se_target == 0.08
@@ -2277,43 +2781,97 @@ void test_fit_score_and_state(const std::string& requested_output) {
             == state_to_write.objective_change_tolerance
         && restored.responsibility_change_tolerance
             == state_to_write.responsibility_change_tolerance
+        && restored.particle_variance_change_tolerance
+            == state_to_write.particle_variance_change_tolerance
         && restored.topics == state_to_write.topics
         && (restored.model.means - state_to_write.model.means).norm() < 1e-12
         && (restored.pilot.means - state_to_write.pilot.means).norm() < 1e-12
         && (restored.pilot.pooled_covariance
             - state_to_write.pilot.pooled_covariance).norm() < 1e-12,
         "UAC state round trip differs");
-    const uac::ScoreResult restored_score = uac::score_particle(data, basis,
-        restored, restored.proposal, restored.n_particles, 2);
+    uac::ParticleScoreOptions restored_options;
+    restored_options.proposal = restored.proposal;
+    restored_options.maximum_particles = restored.n_particles;
+    restored_options.n_threads = 2;
+    restored_options.component_screening = restored.component_screening;
+    const uac::ScoreResult restored_score = uac::score_particle(
+        data, basis, restored, restored_options);
     require((restored_score.responsibilities
             - fitted.score.responsibilities).cwiseAbs().maxCoeff() < 1e-11,
         "restored mixed-start state changed particle transform scores");
     uac::AdaptiveParticleOptions transform_adaptive;
-    transform_adaptive.enabled = true;
-    transform_adaptive.rule =
-        uac::AdaptiveParticleRule::ResponsibilityOnly;
     transform_adaptive.calibration_particles = 8;
     transform_adaptive.minimum_particles = 8;
-    transform_adaptive.maximum_particles = restored.n_particles;
     transform_adaptive.responsibility_se_target = 0.2;
+    uac::ParticleScoreOptions adaptive_options = restored_options;
+    adaptive_options.adaptive_particles = transform_adaptive;
     const uac::ScoreResult adaptive_transform = uac::score_particle(data,
-        basis, restored, restored.proposal, restored.n_particles,
-        transform_adaptive, 2);
+        basis, restored, adaptive_options);
     require(adaptive_transform.responsibilities.allFinite()
-            && adaptive_transform.adaptive_particle_options.enabled
+            && adaptive_transform.adaptive_particle_options.enabled()
             && adaptive_transform.reused_calibration_samples
                 == static_cast<int64_t>(data.identifiers.size()) * 8
             && adaptive_transform.adaptive_particle_diagnostics.size()
                 == data.identifiers.size(),
         "adaptive particle transform is invalid");
 
-    const uac::ScoreResult sparse_score = uac::score_particle(data, basis,
-        state, uac::ProposalKind::SparseEmpiricalFisher,
-        state.n_particles, 2);
+    uac::ParticleScoreOptions sparse_options = transform_options;
+    sparse_options.proposal = uac::ProposalKind::SparseEmpiricalFisher;
+    sparse_options.n_threads = 2;
+    const uac::ScoreResult sparse_score = uac::score_particle(
+        data, basis, state, sparse_options);
     require(sparse_score.responsibilities.allFinite()
         && (sparse_score.responsibilities.rowwise().sum().array() - 1.0)
             .abs().maxCoeff() < 1e-10,
         "sparse empirical Fisher scoring is invalid");
+    uac::Dataset malformed_data = data;
+    malformed_data.identifiers.pop_back();
+    bool rejected_malformed_dataset = false;
+    try {
+        static_cast<void>(uac::score_map(
+            malformed_data, fitted.model));
+    } catch (const std::invalid_argument&) {
+        rejected_malformed_dataset = true;
+    }
+    require(rejected_malformed_dataset,
+        "public map scoring accepted a misaligned dataset");
+    uac::State wrong_basis_state = state;
+    ++wrong_basis_state.basis_checksum;
+    bool rejected_basis_mismatch = false;
+    try {
+        static_cast<void>(uac::score_particle(
+            data, basis, wrong_basis_state, transform_options));
+    } catch (const std::invalid_argument&) {
+        rejected_basis_mismatch = true;
+    }
+    require(rejected_basis_mismatch,
+        "public particle scoring accepted a mismatched basis checksum");
+    malformed_data = data;
+    malformed_data.counts.front().ids.front() =
+        static_cast<uint32_t>(basis.probabilities.rows());
+    bool rejected_unknown_feature = false;
+    try {
+        static_cast<void>(uac::score_particle(
+            malformed_data, basis, state, transform_options));
+    } catch (const std::invalid_argument&) {
+        rejected_unknown_feature = true;
+    }
+    require(rejected_unknown_feature,
+        "public particle scoring accepted a count absent from the basis");
+    malformed_data = data;
+    malformed_data.coordinates(0, 0) =
+        std::numeric_limits<double>::quiet_NaN();
+    uac::FitOptions malformed_fit_options = options;
+    malformed_fit_options.handoff = uac::HandoffMode::Map;
+    bool rejected_nonfinite_fit = false;
+    try {
+        static_cast<void>(uac::fit(
+            malformed_data, nullptr, malformed_fit_options));
+    } catch (const std::invalid_argument&) {
+        rejected_nonfinite_fit = true;
+    }
+    require(rejected_nonfinite_fit,
+        "public fitting accepted nonfinite coordinates");
 
     uac::FitOptions factor_options = options;
     factor_options.cluster_covariance_rank = 1;
@@ -2337,15 +2895,23 @@ void test_fit_score_and_state(const std::string& requested_output) {
                 == Eigen::Success,
             "factor-analytic covariance is not positive definite");
     }
-    const uac::State factor_state = uac::make_state(factor_fit, &basis,
-        factor_options, weights, false);
+    const uac::State factor_state = uac::make_state(
+        factor_fit, factor_options,
+        test_state_metadata(
+            factor_fit.model.means.cols(), &basis, weights, false));
     const std::filesystem::path factor_path =
         std::filesystem::temp_directory_path() / "punkst_uac_factor_state.tsv";
     uac::write_state(factor_path.string(), factor_state);
     const uac::State restored_factor = uac::read_state(factor_path.string());
-    const uac::ScoreResult restored_factor_score = uac::score_particle(data,
-        basis, restored_factor, restored_factor.proposal,
-        restored_factor.n_particles, 2, 5);
+    uac::ParticleScoreOptions factor_score_options;
+    factor_score_options.proposal = restored_factor.proposal;
+    factor_score_options.maximum_particles = restored_factor.n_particles;
+    factor_score_options.n_threads = 2;
+    factor_score_options.particle_block_size = 5;
+    factor_score_options.component_screening =
+        restored_factor.component_screening;
+    const uac::ScoreResult restored_factor_score = uac::score_particle(
+        data, basis, restored_factor, factor_score_options);
     require(restored_factor.cluster_covariance_rank
             == factor_options.cluster_covariance_rank
         && (restored_factor_score.responsibilities
@@ -2359,7 +2925,9 @@ void test_fit_score_and_state(const std::string& requested_output) {
     const uac::FitResult no_shrinkage_fit = uac::fit(
         data, &basis, no_shrinkage_options);
     const uac::State no_shrinkage_state = uac::make_state(
-        no_shrinkage_fit, &basis, no_shrinkage_options, weights, false);
+        no_shrinkage_fit, no_shrinkage_options,
+        test_state_metadata(no_shrinkage_fit.model.means.cols(), &basis,
+            weights, false));
     require(!no_shrinkage_state.adaptive_covariance_shrinkage
             && no_shrinkage_fit.score.responsibilities.allFinite(),
         "no-covariance-shrinkage mode is invalid");
@@ -2444,8 +3012,6 @@ int32_t test(int32_t argc, char** argv) {
     int32_t calibration_particles = 0, minimum_particles = 64;
     int32_t audit_documents = 0, audit_particles = 2048;
     int32_t threads = 4;
-    double ess_target = 32.0, contrast_se_target = 0.2;
-    double maximum_weight_target = 0.1;
     double point_center_error_target = 0.12;
     double responsibility_se_target = 0.05;
     double plausible_mass = 0.95, plausible_responsibility = 0.05;
@@ -2458,7 +3024,6 @@ int32_t test(int32_t argc, char** argv) {
     int32_t component_maximum = 0;
     std::string proposal_name = "exact_fisher";
     std::string component_screening_name = "off";
-    std::string adaptive_rule_name = "legacy";
     std::string length_profile = "fixed";
     std::string topic_identifiability = "homogeneous";
     ParamList pl;
@@ -2492,17 +3057,6 @@ int32_t test(int32_t argc, char** argv) {
           calibration_particles)
       .add_option("minimum-particles", "Adaptive minimum retained particles",
           minimum_particles)
-      .add_option("ess-target", "Adaptive material-component ESS target",
-          ess_target)
-      .add_option("contrast-se-target",
-          "Adaptive top-two log-evidence contrast SE target",
-          contrast_se_target)
-      .add_option("maximum-weight-target",
-          "Adaptive maximum normalized component weight target",
-          maximum_weight_target)
-      .add_option("adaptive-rule",
-          "Adaptive rule: legacy, responsibility_only, moment_only, or responsibility_moment",
-          adaptive_rule_name)
       .add_option("responsibility-se-target",
           "Adaptive absolute responsibility Monte Carlo SE target",
           responsibility_se_target)
@@ -2542,20 +3096,19 @@ int32_t test(int32_t argc, char** argv) {
         }
         if (suite == "uac-profile") {
             uac::AdaptiveParticleOptions adaptive;
-            adaptive.enabled = calibration_particles > 0;
-            adaptive.rule = uac::parse_adaptive_particle_rule(
-                adaptive_rule_name);
             adaptive.calibration_particles = calibration_particles > 0
                 ? calibration_particles : 32;
             adaptive.minimum_particles = minimum_particles;
-            adaptive.maximum_particles = particles;
-            adaptive.component_ess_target = ess_target;
-            adaptive.contrast_se_target = contrast_se_target;
-            adaptive.maximum_weight_target = maximum_weight_target;
-            adaptive.responsibility_se_target = responsibility_se_target;
+            if (calibration_particles > 0
+                && responsibility_se_target > 0.0) {
+                adaptive.responsibility_se_target =
+                    responsibility_se_target;
+            }
             adaptive.plausible_mass = plausible_mass;
             adaptive.plausible_responsibility = plausible_responsibility;
-            adaptive.moment_ess_target = moment_ess_target;
+            if (calibration_particles > 0 && moment_ess_target > 0.0) {
+                adaptive.moment_ess_target = moment_ess_target;
+            }
             uac::ComponentScreeningOptions component_screening;
             component_screening.mode =
                 uac::parse_component_screening_mode(
@@ -2586,8 +3139,10 @@ int32_t test(int32_t argc, char** argv) {
         test_sparse_feature_weights();
         notice("Running UAC rare/inactive component tests");
         test_rare_and_inactive_components();
-        notice("Running UAC mixed MAP-start tests");
-        test_mixed_map_starts();
+        notice("Running UAC mixed-start tests");
+        test_mixed_starts();
+        notice("Running noise-corrected UAC initialization tests");
+        test_noise_corrected_initialization();
         notice("Running UAC fit/state tests");
         test_fit_score_and_state(output);
         notice("Native UAC tests passed");
