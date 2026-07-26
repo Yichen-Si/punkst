@@ -57,6 +57,46 @@ struct ComponentScreeningCliOptions {
     double minimum_work_reduction = -1.0;
 };
 
+struct StreamingCliOptions {
+    std::string engine = "batch";
+    std::string counts = "source";
+    std::string cache;
+    int32_t block_documents = 64;
+    std::string particle_storage = "positions";
+    bool rebuild = false;
+};
+
+void add_streaming_options(ParamList& pl, StreamingCliOptions& options) {
+    pl.add_option("particle-engine",
+          "Particle engine: batch or stream", options.engine)
+      .add_option("stream-counts",
+          "Streaming count storage: source or memory", options.counts)
+      .add_option("stream-cache",
+          "Persistent streaming particle cache directory", options.cache)
+      .add_option("stream-block-documents",
+          "Maximum documents in each streaming worker I/O block",
+          options.block_documents)
+      .add_option("stream-particle-storage",
+          "Streaming cache representation: auto, factors, or positions",
+          options.particle_storage)
+      .add_option("stream-cache-rebuild",
+          "Rebuild the cache entry for the current inputs",
+          options.rebuild);
+}
+
+uac::StreamingOptions make_streaming_options(
+    const StreamingCliOptions& input, const std::string& out_prefix) {
+    uac::StreamingOptions out;
+    out.cache_directory = input.cache.empty()
+        ? out_prefix + ".uac-cache" : input.cache;
+    out.block_documents = input.block_documents;
+    out.count_storage = uac::parse_streaming_count_storage(input.counts);
+    out.particle_storage =
+        uac::parse_streaming_particle_storage(input.particle_storage);
+    out.rebuild_cache = input.rebuild;
+    return out;
+}
+
 void add_component_screening_options(ParamList& pl,
     ComponentScreeningCliOptions& options) {
     pl.add_option("component-screening",
@@ -359,7 +399,10 @@ void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     const uac::State& state, const uac::ScoreResult& score,
     const std::vector<uac::RestartTrace>* traces, int32_t representatives,
     bool write_model_trace = false) {
-    const Eigen::VectorXd membership = effective_membership(score.responsibilities);
+    const Eigen::VectorXd membership =
+        score.effective_membership.size() > 0
+        ? score.effective_membership
+        : effective_membership(score.responsibilities);
     uac::write_state(prefix + ".state.tsv", state);
     uac::write_model(prefix + ".model.tsv", state, &membership);
     uac::write_results(prefix + ".results.tsv", data, score);
@@ -446,6 +489,7 @@ int32_t cmdUacFit(int argc, char** argv) {
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
+    StreamingCliOptions streaming;
     screening.mode = "off";
     ParamList pl;
     pl.add_option("in-topic-center", "Document topic point-center table", center_file, true)
@@ -454,9 +498,6 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("handoff", "Handoff: map or particle", handoff)
       .add_option("particle-proposal", "Particle proposal: exact_fisher or sparse_empirical_fisher", proposal)
       .add_option("particles", "Particles per document", options.n_particles)
-      .add_option("particle-block-size",
-          "Documents per regenerated particle block; 0 retains all particles",
-          options.particle_block_size)
       .add_option("particle-em-fixed-iterations",
           "Diagnostic fixed number of particle EM E/M pairs; 0 uses convergence stopping",
           options.particle_em_fixed_iterations)
@@ -504,11 +545,16 @@ int32_t cmdUacFit(int argc, char** argv) {
     add_count_options(pl, count_options);
     add_particle_adapt_options(pl, particle_adapt);
     add_component_screening_options(pl, screening);
+    add_streaming_options(pl, streaming);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
         options.handoff = uac::parse_handoff(handoff);
         options.proposal = uac::parse_proposal(proposal);
+        options.particle_engine =
+            uac::parse_particle_engine(streaming.engine);
+        options.streaming = make_streaming_options(
+            streaming, out_prefix);
         options.adaptive_particles = make_particle_adapt_options(
             particle_adapt, options.n_particles);
         options.component_screening =
@@ -554,11 +600,6 @@ int32_t cmdUacFit(int argc, char** argv) {
             && options.handoff != uac::HandoffMode::Particle) {
             throw std::invalid_argument(
                 "--particle-adapt-* requires particle handoff");
-        }
-        if (options.adaptive_particles.enabled()
-            && options.particle_block_size != 0) {
-            throw std::invalid_argument(
-                "--particle-adapt-* cannot use --particle-block-size");
         }
         CenterTable centers = read_centers(center_file, kCenterFloor);
         uac::Basis basis;
@@ -619,6 +660,12 @@ int32_t cmdUacFit(int argc, char** argv) {
         state_metadata.weighted_counts = weighted_counts;
         uac::State state = uac::make_state(
             fitted, options, state_metadata);
+        if (options.particle_engine == uac::ParticleEngine::Stream
+            && options.streaming.count_storage
+                == uac::StreamingCountStorage::Source) {
+            data.counts.clear();
+            data.counts.shrink_to_fit();
+        }
         report_component_screening(fitted.score);
         write_all_outputs(out_prefix, data, state, fitted.score,
             &fitted.traces, representatives, write_model_trace);
@@ -638,11 +685,12 @@ int32_t cmdUacFit(int argc, char** argv) {
 int32_t cmdUacTransform(int argc, char** argv) {
     std::string state_file, center_file, basis_file, out_prefix;
     std::string proposal;
-    int32_t particles = 0, particle_block_size = 0;
+    int32_t particles = 0;
     int32_t threads = 1, representatives = 10;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
+    StreamingCliOptions streaming;
     ParamList pl;
     pl.add_option("in-state", "Fitted UAC state", state_file, true)
       .add_option("in-topic-center", "Document topic point-center table", center_file, true)
@@ -652,14 +700,12 @@ int32_t cmdUacTransform(int argc, char** argv) {
           "Scoring proposal override: exact_fisher or sparse_empirical_fisher",
           proposal)
       .add_option("particles", "Scoring particle-count override", particles)
-      .add_option("particle-block-size",
-          "Documents per regenerated particle block; 0 retains all particles",
-          particle_block_size)
       .add_option("threads", "Number of TBB worker threads", threads)
       .add_option("n-representatives", "Representatives per cluster", representatives);
     add_count_options(pl, count_options);
     add_particle_adapt_options(pl, particle_adapt);
     add_component_screening_options(pl, screening);
+    add_streaming_options(pl, streaming);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -671,12 +717,17 @@ int32_t cmdUacTransform(int argc, char** argv) {
             ? particles : state.n_particles;
         const uac::AdaptiveParticleOptions adaptive_particles =
             make_particle_adapt_options(particle_adapt, scoring_particles);
+        const uac::ParticleEngine particle_engine =
+            uac::parse_particle_engine(streaming.engine);
+        const uac::StreamingOptions streaming_options =
+            make_streaming_options(streaming, out_prefix);
         CenterTable centers = read_centers(center_file, state.center_floor);
         align_center_topics(centers, state.topics);
         uac::Dataset data;
         uac::ScoreResult score;
         if (state.handoff == uac::HandoffMode::Map) {
-            if (!proposal.empty() || particles > 0 || particle_block_size != 0
+            if (!proposal.empty() || particles > 0
+                || particle_engine != uac::ParticleEngine::Batch
                 || adaptive_particles.enabled()) {
                 throw std::invalid_argument("Particle overrides are invalid for a MAP UAC state");
             }
@@ -707,10 +758,17 @@ int32_t cmdUacTransform(int argc, char** argv) {
             score_options.maximum_particles = scoring_particles;
             score_options.adaptive_particles = adaptive_particles;
             score_options.n_threads = threads;
-            score_options.particle_block_size = particle_block_size;
+            score_options.particle_engine = particle_engine;
+            score_options.streaming = streaming_options;
             score_options.component_screening = component_screening;
             score = uac::score_particle(
                 data, basis, state, score_options);
+            if (particle_engine == uac::ParticleEngine::Stream
+                && streaming_options.count_storage
+                    == uac::StreamingCountStorage::Source) {
+                data.counts.clear();
+                data.counts.shrink_to_fit();
+            }
         }
         report_component_screening(score);
         write_all_outputs(out_prefix, data, state, score, nullptr,

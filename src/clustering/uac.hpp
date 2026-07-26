@@ -59,6 +59,22 @@ enum class ComponentScreeningMode {
     Auto,
 };
 
+enum class ParticleEngine {
+    Batch,
+    Stream,
+};
+
+enum class StreamingCountStorage {
+    Source,
+    Memory,
+};
+
+enum class StreamingParticleStorage {
+    Auto,
+    Factors,
+    Positions,
+};
+
 const char* handoff_name(HandoffMode value);
 const char* proposal_name(ProposalKind value);
 const char* start_method_name(StartMethod value);
@@ -66,10 +82,18 @@ const char* trace_phase_name(TracePhase value);
 const char* trace_event_name(TraceEvent value);
 const char* adaptive_particle_binding_name(AdaptiveParticleBinding value);
 const char* component_screening_mode_name(ComponentScreeningMode value);
+const char* particle_engine_name(ParticleEngine value);
+const char* streaming_count_storage_name(StreamingCountStorage value);
+const char* streaming_particle_storage_name(StreamingParticleStorage value);
 HandoffMode parse_handoff(const std::string& value);
 ProposalKind parse_proposal(const std::string& value);
 StartMethod parse_start_method(const std::string& value);
 ComponentScreeningMode parse_component_screening_mode(
+    const std::string& value);
+ParticleEngine parse_particle_engine(const std::string& value);
+StreamingCountStorage parse_streaming_count_storage(
+    const std::string& value);
+StreamingParticleStorage parse_streaming_particle_storage(
     const std::string& value);
 
 struct Basis {
@@ -130,6 +154,15 @@ struct ComponentScreeningOptions {
     double minimum_work_reduction = 0.20;
 };
 
+struct StreamingOptions {
+    std::string cache_directory;
+    int32_t block_documents = 64;
+    StreamingCountStorage count_storage = StreamingCountStorage::Source;
+    StreamingParticleStorage particle_storage =
+        StreamingParticleStorage::Positions;
+    bool rebuild_cache = false;
+};
+
 struct Model {
     CovarianceKind covariance_kind = CovarianceKind::Dense;
     Eigen::VectorXd weights;
@@ -166,9 +199,10 @@ struct ModelTraceEntry {
 struct FitOptions {
     HandoffMode handoff = HandoffMode::Particle;
     ProposalKind proposal = ProposalKind::ExactFisher;
+    ParticleEngine particle_engine = ParticleEngine::Batch;
+    StreamingOptions streaming;
     int32_t n_components = 3;
     int32_t n_particles = 256;
-    int32_t particle_block_size = 0;
     int32_t particle_em_fixed_iterations = 0;
     int32_t cluster_covariance_rank = -1;
     int32_t kmeans_starts = 5;
@@ -257,6 +291,10 @@ struct ParticleDiagnostic {
 
 struct ScoreResult {
     RowMajorMatrixXd responsibilities;
+    std::string responsibility_sidecar;
+    Eigen::VectorXd effective_membership;
+    int64_t scored_documents = 0;
+    int32_t scored_components = 0;
     std::vector<ParticleDiagnostic> particle_diagnostics;
     double particle_generation_seconds = 0.0;
     double scoring_seconds = 0.0;
@@ -279,7 +317,6 @@ struct ScoreResult {
     uint64_t resident_particle_bytes = 0;
     uint64_t estimated_peak_proposal_workspace_bytes = 0;
     uint64_t estimated_peak_expectation_workspace_bytes = 0;
-    int32_t particle_block_size = 0;
     int32_t particle_generation_passes = 0;
     int64_t particle_samples = 0;
     int64_t calibration_samples = 0;
@@ -301,7 +338,17 @@ struct ScoreResult {
     std::vector<int32_t> per_document_proposal_components;
     std::vector<int32_t> per_document_particles;
     std::vector<AdaptiveParticleDiagnostic> adaptive_particle_diagnostics;
-    bool particle_replay = false;
+    bool streaming = false;
+    bool streaming_cache_reused = false;
+    uint64_t streaming_cache_bytes = 0;
+    uint64_t streaming_peak_particle_bytes = 0;
+    int32_t streaming_parallel_workers = 0;
+    int32_t streaming_cache_shards = 0;
+    int32_t streaming_cache_rebuilds = 0;
+    StreamingCountStorage streaming_count_storage =
+        StreamingCountStorage::Memory;
+    StreamingParticleStorage streaming_particle_storage =
+        StreamingParticleStorage::Positions;
 };
 
 struct ParticleScoreOptions {
@@ -309,7 +356,8 @@ struct ParticleScoreOptions {
     int32_t maximum_particles = 256;
     AdaptiveParticleOptions adaptive_particles;
     int32_t n_threads = 1;
-    int32_t particle_block_size = 0;
+    ParticleEngine particle_engine = ParticleEngine::Batch;
+    StreamingOptions streaming;
     ComponentScreeningOptions component_screening;
 };
 
@@ -387,11 +435,15 @@ uint64_t basis_checksum(const Basis& basis);
 double median_absolute_relative_variance_change(const Model& current,
     const Model& previous, double covariance_floor);
 
+FitResult fit(Dataset& data, const Basis* basis,
+    const FitOptions& options);
 FitResult fit(const Dataset& data, const Basis* basis,
     const FitOptions& options);
 ScoreResult score_map(const Dataset& data, const Model& model,
     int32_t n_threads = 1,
     const ComponentScreeningOptions& component_screening = {});
+ScoreResult score_particle(Dataset& data, const Basis& basis,
+    const State& state, const ParticleScoreOptions& options);
 ScoreResult score_particle(const Dataset& data, const Basis& basis,
     const State& state, const ParticleScoreOptions& options);
 

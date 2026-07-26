@@ -3,9 +3,12 @@
 #include "clustering_core/cosine_clustering.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iomanip>
@@ -16,6 +19,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
+#include <variant>
 
 #include <tbb/global_control.h>
 #include <tbb/parallel_for.h>
@@ -1227,12 +1231,17 @@ struct Expectation {
     double component_bound_seconds = 0.0;
     double moment_seconds = 0.0;
     uint64_t peak_workspace_bytes = 0;
+    uint64_t peak_particle_bytes = 0;
+    int32_t parallel_workers = 0;
     int64_t evaluated_component_documents = 0;
     int64_t possible_component_documents = 0;
     int32_t full_component_documents = 0;
     int32_t component_bound_violations = 0;
     double omitted_component_mass_sum = 0.0;
     double maximum_omitted_component_mass = 0.0;
+    double mean_max_responsibility_change =
+        std::numeric_limits<double>::quiet_NaN();
+    bool has_responsibility_change = false;
     std::vector<int32_t> per_document_evaluated_components;
     std::vector<double> per_document_omitted_component_mass;
 };
@@ -1735,7 +1744,9 @@ bool resolve_map_component_screening(const Dataset& data,
 template<class ParticleCollection>
 Expectation particle_expectation_impl(const ParticleCollection& particles,
     const Model& model, const ExpectationRequest& request = {},
-    const ComponentScreeningOptions& screening = {}) {
+    const ComponentScreeningOptions& screening = {},
+    int32_t forced_blocks = 0,
+    ExpectationBlock* external_block = nullptr) {
     const bool accumulate_moments = request.accumulate_moments;
     validate_component_screening(screening);
     const bool screen =
@@ -1803,8 +1814,11 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
             - 0.5 * (dimension * kLog2Pi + logdet);
     }
     const int32_t possible_components = active_component_count(model);
-    const int32_t requested_blocks = expectation_shards(
-        documents, components, dimension, factor_rank);
+    const int32_t requested_blocks = external_block
+        ? 1 : forced_blocks > 0
+        ? std::min(documents, forced_blocks)
+        : expectation_shards(
+            documents, components, dimension, factor_rank);
     const int32_t block_size =
         (documents + requested_blocks - 1) / requested_blocks;
     const int32_t n_blocks = (documents + block_size - 1) / block_size;
@@ -1818,20 +1832,23 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     }
     out.peak_workspace_bytes = static_cast<uint64_t>(n_blocks)
         * (sizeof(double) * block_workspace_values
-            + (accumulate_moments
+            + (accumulate_moments && !external_block
                 ? expectation_block_bytes(
                     components, dimension, factor_rank)
                 : 0));
     std::vector<ExpectationBlock> blocks;
-    blocks.reserve(n_blocks);
-    for (int32_t block = 0; block < n_blocks; ++block) {
-        blocks.emplace_back(
-            components, dimension, factor_rank, accumulate_moments);
+    if (!external_block) {
+        blocks.reserve(n_blocks);
+        for (int32_t block = 0; block < n_blocks; ++block) {
+            blocks.emplace_back(
+                components, dimension, factor_rank, accumulate_moments);
+        }
     }
     std::atomic<int64_t> gaussian_nanoseconds{0};
     std::atomic<int64_t> moment_nanoseconds{0};
     tbb::parallel_for(int32_t{0}, n_blocks, [&](int32_t block_index) {
-        ExpectationBlock& block = blocks[block_index];
+        ExpectationBlock& block = external_block
+            ? *external_block : blocks[block_index];
         Eigen::MatrixXd log_tilt(components, maximum_samples);
         Eigen::VectorXd evidence(components);
         Eigen::VectorXd responsibility(components);
@@ -2035,7 +2052,9 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
             local_moment_nanoseconds, std::memory_order_relaxed);
         block.component_bound_seconds += local_bound_seconds;
     });
-    reduce_expectation_blocks(out, blocks);
+    if (!external_block) {
+        reduce_expectation_blocks(out, blocks);
+    }
     out.gaussian_seconds = 1e-9 * gaussian_nanoseconds.load();
     out.moment_seconds = 1e-9 * moment_nanoseconds.load();
     return out;
@@ -3027,7 +3046,12 @@ Candidate fit_particle_candidate(
                 / std::max({1.0, std::abs(previous_objective_lower),
                     std::abs(previous_objective_upper)});
         }
-        if (previous_responsibilities.size() > 0) {
+        if (expectation.has_responsibility_change) {
+            responsibility_change =
+                expectation.mean_max_responsibility_change
+                + expectation.maximum_omitted_component_mass
+                + previous_omitted_mass;
+        } else if (previous_responsibilities.size() > 0) {
             responsibility_change = mean_max_responsibility_change(
                 expectation.responsibilities, previous_responsibilities)
                 + expectation.maximum_omitted_component_mass
@@ -3168,9 +3192,7 @@ ScoreResult score_particles_impl(
         out.resident_particle_bytes += sizeof(int64_t)
             * static_cast<uint64_t>(particles.offsets.size());
     }
-    out.particle_block_size = particles.documents;
     out.particle_generation_passes = 1;
-    out.particle_replay = false;
     return out;
 }
 
@@ -3408,6 +3430,32 @@ const char* component_screening_mode_name(ComponentScreeningMode value) {
     throw std::invalid_argument("Unknown component screening mode");
 }
 
+const char* particle_engine_name(ParticleEngine value) {
+    switch (value) {
+        case ParticleEngine::Batch: return "batch";
+        case ParticleEngine::Stream: return "stream";
+    }
+    throw std::invalid_argument("Unknown UAC particle engine");
+}
+
+const char* streaming_count_storage_name(StreamingCountStorage value) {
+    switch (value) {
+        case StreamingCountStorage::Source: return "source";
+        case StreamingCountStorage::Memory: return "memory";
+    }
+    throw std::invalid_argument("Unknown UAC streaming count storage");
+}
+
+const char* streaming_particle_storage_name(
+    StreamingParticleStorage value) {
+    switch (value) {
+        case StreamingParticleStorage::Auto: return "auto";
+        case StreamingParticleStorage::Factors: return "factors";
+        case StreamingParticleStorage::Positions: return "positions";
+    }
+    throw std::invalid_argument("Unknown UAC streaming particle storage");
+}
+
 HandoffMode parse_handoff(const std::string& value) {
     if (value == "map") return HandoffMode::Map;
     if (value == "particle") return HandoffMode::Particle;
@@ -3436,6 +3484,30 @@ ComponentScreeningMode parse_component_screening_mode(
     if (value == "auto") return ComponentScreeningMode::Auto;
     throw std::invalid_argument(
         "Component screening mode must be off, on, or auto");
+}
+
+ParticleEngine parse_particle_engine(const std::string& value) {
+    if (value == "batch") return ParticleEngine::Batch;
+    if (value == "stream") return ParticleEngine::Stream;
+    throw std::invalid_argument(
+        "UAC particle engine must be batch or stream");
+}
+
+StreamingCountStorage parse_streaming_count_storage(
+    const std::string& value) {
+    if (value == "source") return StreamingCountStorage::Source;
+    if (value == "memory") return StreamingCountStorage::Memory;
+    throw std::invalid_argument(
+        "UAC stream counts must be source or memory");
+}
+
+StreamingParticleStorage parse_streaming_particle_storage(
+    const std::string& value) {
+    if (value == "auto") return StreamingParticleStorage::Auto;
+    if (value == "factors") return StreamingParticleStorage::Factors;
+    if (value == "positions") return StreamingParticleStorage::Positions;
+    throw std::invalid_argument(
+        "UAC stream particle storage must be auto, factors, or positions");
 }
 
 namespace detail {
@@ -3982,17 +4054,21 @@ AdaptiveCountResult adaptive_particle_count(
     return out;
 }
 
-RaggedParticleSet make_adaptive_particles(const Dataset& data,
+RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, uint64_t seed, double fisher_broadening,
     int32_t n_threads, const Model& calibration_model,
     const AdaptiveParticleOptions& options,
     int32_t maximum_particles,
-    const ProposalScreeningPlan* screening_plan) {
-    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
+    const ProposalScreeningPlan* screening_plan,
+    int32_t first_document, int32_t documents) {
+    const int32_t total_documents =
+        static_cast<int32_t>(data.coordinates.rows());
     const int32_t dimension = static_cast<int32_t>(helmert.rows());
-    if (!options.enabled() || documents <= 0
+    if (!options.enabled() || documents <= 0 || first_document < 0
+        || first_document > total_documents
+        || documents > total_documents - first_document
         || options.calibration_particles < 2
         || options.minimum_particles <= 0
         || options.minimum_particles < options.calibration_particles
@@ -4018,6 +4094,7 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
         }
     }
     RaggedParticleSet out;
+    out.first_document = first_document;
     out.documents = documents;
     out.dimension = dimension;
     out.maximum_samples = maximum_particles;
@@ -4056,7 +4133,8 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
         std::vector<Eigen::VectorXd> calibration_log_likelihood(size);
         const auto calibration_start = std::chrono::steady_clock::now();
         tbb::parallel_for(int32_t{0}, size, [&](int32_t local) {
-            const int32_t document = begin + local;
+            const int32_t local_document = begin + local;
+            const int32_t document = first_document + local_document;
             const Eigen::VectorXd center =
                 data.coordinates.row(document).transpose();
             const auto fisher_start = std::chrono::steady_clock::now();
@@ -4072,7 +4150,7 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
                 ? &screening_plan->candidates[document] : nullptr;
             proposals[local] = fisher_proposal(center, fisher, pilot,
                 pilot_cache, fisher_broadening, candidates);
-            out.proposal_candidates[document] =
+            out.proposal_candidates[local_document] =
                 static_cast<int32_t>(proposals[local].weights.size());
             fallback_nanoseconds.fetch_add(static_cast<int64_t>(
                 proposals[local].precision_fallback_seconds * 1e9),
@@ -4102,7 +4180,8 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
                 calibration_log_q[local], calibration_model,
                 calibration_solvers, options, maximum_particles);
             counts[local] = allocation.particles;
-            out.adaptive_diagnostics[document] = allocation.diagnostic;
+            out.adaptive_diagnostics[local_document] =
+                allocation.diagnostic;
         });
         out.calibration_seconds += std::chrono::duration<double>(
             std::chrono::steady_clock::now() - calibration_start).count();
@@ -4118,8 +4197,9 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
         out.proposal_origins.resize(total_samples);
         const auto sampling_start = std::chrono::steady_clock::now();
         tbb::parallel_for(int32_t{0}, size, [&](int32_t local) {
-            const int32_t document = begin + local;
-            const int64_t offset = out.offsets[document];
+            const int32_t local_document = begin + local;
+            const int32_t document = first_document + local_document;
+            const int64_t offset = out.offsets[local_document];
             const int32_t samples = counts[local];
             Eigen::Map<RowMajorMatrixXd> values(
                 out.values.data() + offset * dimension, samples, dimension);
@@ -4156,8 +4236,9 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
             std::chrono::steady_clock::now() - sampling_start).count();
         const auto likelihood_start = std::chrono::steady_clock::now();
         tbb::parallel_for(int32_t{0}, size, [&](int32_t local) {
-            const int32_t document = begin + local;
-            const int64_t offset = out.offsets[document];
+            const int32_t local_document = begin + local;
+            const int32_t document = first_document + local_document;
+            const int64_t offset = out.offsets[local_document];
             const int32_t samples = counts[local];
             const int32_t additional_samples = samples
                 - options.calibration_particles;
@@ -4190,6 +4271,20 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
     return out;
 }
 
+RaggedParticleSet make_adaptive_particles(const Dataset& data,
+    const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Pilot& pilot, const PilotCache& pilot_cache,
+    ProposalKind proposal_kind, uint64_t seed, double fisher_broadening,
+    int32_t n_threads, const Model& calibration_model,
+    const AdaptiveParticleOptions& options,
+    int32_t maximum_particles,
+    const ProposalScreeningPlan* screening_plan) {
+    return make_adaptive_particle_range(data, basis, helmert, pilot,
+        pilot_cache, proposal_kind, seed, fisher_broadening, n_threads,
+        calibration_model, options, maximum_particles, screening_plan, 0,
+        static_cast<int32_t>(data.coordinates.rows()));
+}
+
 ParticleSet make_particles(const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert, const Pilot& pilot,
     ProposalKind proposal_kind, int32_t samples, uint64_t seed,
@@ -4209,19 +4304,32 @@ uint64_t particle_set_bytes(const ParticleSet& particles) {
             samples + static_cast<uint64_t>(particles.documents));
 }
 
-struct ParticleReplayMetrics {
+uint64_t particle_set_bytes(const RaggedParticleSet& particles) {
+    const uint64_t samples = particles.offsets.empty()
+        ? 0 : static_cast<uint64_t>(particles.offsets.back());
+    return sizeof(double) * samples * (particles.dimension + 2)
+        + sizeof(int32_t) * (
+            samples + static_cast<uint64_t>(particles.documents))
+        + sizeof(int64_t)
+            * static_cast<uint64_t>(particles.offsets.size());
+}
+
+struct ParticleCacheMetrics {
     double sampling_seconds = 0.0;
     double likelihood_seconds = 0.0;
     double fisher_work_seconds = 0.0;
     double proposal_component_work_seconds = 0.0;
     double proposal_draw_density_work_seconds = 0.0;
     double proposal_precision_fallback_seconds = 0.0;
+    double calibration_seconds = 0.0;
     int64_t proposal_precision_fallbacks = 0;
     uint64_t peak_bytes = 0;
     uint64_t proposal_workspace_bytes = 0;
     int64_t proposal_components_constructed = 0;
     int64_t proposal_components_possible = 0;
-    int32_t passes = 0;
+    int64_t calibration_samples = 0;
+    int64_t reused_calibration_samples = 0;
+    int32_t generation_passes = 0;
 
     void add(const ParticleSet& particles) {
         sampling_seconds += particles.sampling_seconds;
@@ -4243,136 +4351,1637 @@ struct ParticleReplayMetrics {
         proposal_workspace_bytes = std::max(
             proposal_workspace_bytes, particles.proposal_workspace_bytes);
     }
+
+    void add(const RaggedParticleSet& particles) {
+        sampling_seconds += particles.sampling_seconds;
+        likelihood_seconds += particles.likelihood_seconds;
+        fisher_work_seconds += particles.fisher_work_seconds;
+        proposal_component_work_seconds +=
+            particles.proposal_component_work_seconds;
+        proposal_draw_density_work_seconds +=
+            particles.proposal_draw_density_work_seconds;
+        proposal_precision_fallback_seconds +=
+            particles.proposal_precision_fallback_seconds;
+        proposal_precision_fallbacks +=
+            particles.proposal_precision_fallbacks;
+        calibration_seconds += particles.calibration_seconds;
+        calibration_samples += particles.calibration_samples;
+        reused_calibration_samples += particles.reused_calibration_samples;
+        proposal_components_constructed +=
+            particles.proposal_components_constructed;
+        proposal_components_possible +=
+            particles.proposal_components_possible;
+        const uint64_t samples = particles.offsets.empty()
+            ? 0 : static_cast<uint64_t>(particles.offsets.back());
+        const uint64_t bytes = sizeof(double) * samples
+                * (particles.dimension + 2)
+            + sizeof(int32_t) * (
+                samples + static_cast<uint64_t>(particles.documents))
+            + sizeof(int64_t)
+                * static_cast<uint64_t>(particles.offsets.size());
+        peak_bytes = std::max(peak_bytes, bytes);
+        proposal_workspace_bytes = std::max(
+            proposal_workspace_bytes, particles.proposal_workspace_bytes);
+    }
 };
 
-Expectation replay_particle_expectation(const Dataset& data,
+constexpr uint64_t kParticleCacheMagic = 0x3148434143504341ull;
+constexpr uint32_t kParticleCacheVersion = 1;
+
+struct ParticleCacheHeader {
+    uint64_t magic = kParticleCacheMagic;
+    uint32_t version = kParticleCacheVersion;
+    uint32_t ragged = 0;
+    int32_t first_document = 0;
+    int32_t documents = 0;
+    int32_t dimension = 0;
+    int32_t samples = 0;
+    int64_t total_samples = 0;
+    uint64_t payload_checksum = 0;
+};
+
+uint64_t cache_hash_bytes(uint64_t hash, const void* data, size_t bytes) {
+    const auto* value = static_cast<const unsigned char*>(data);
+    for (size_t i = 0; i < bytes; ++i) {
+        hash ^= value[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+uint64_t cache_file_hash(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error(
+            "Cannot hash UAC cache file: " + path.string());
+    }
+    uint64_t hash = 1469598103934665603ull;
+    std::array<char, 64 * 1024> buffer;
+    while (in) {
+        in.read(buffer.data(), buffer.size());
+        const std::streamsize count = in.gcount();
+        if (count > 0) {
+            hash = cache_hash_bytes(
+                hash, buffer.data(), static_cast<size_t>(count));
+        }
+    }
+    if (!in.eof()) {
+        throw std::runtime_error(
+            "Failed hashing UAC cache file: " + path.string());
+    }
+    return hash;
+}
+
+template<class Value>
+uint64_t cache_hash_value(uint64_t hash, const Value& value) {
+    return cache_hash_bytes(hash, &value, sizeof(value));
+}
+
+template<class Value>
+void write_cache_values(std::ostream& out, const Value* values, size_t count,
+    uint64_t& checksum) {
+    if (count == 0) return;
+    const size_t bytes = sizeof(Value) * count;
+    out.write(reinterpret_cast<const char*>(values), bytes);
+    checksum = cache_hash_bytes(checksum, values, bytes);
+}
+
+template<class Value>
+void read_cache_values(std::istream& in, Value* values, size_t count,
+    uint64_t& checksum) {
+    if (count == 0) return;
+    const size_t bytes = sizeof(Value) * count;
+    in.read(reinterpret_cast<char*>(values), bytes);
+    if (!in) throw std::runtime_error("Truncated UAC particle cache shard");
+    checksum = cache_hash_bytes(checksum, values, bytes);
+}
+
+void rewrite_cache_header(const std::filesystem::path& path,
+    const ParticleCacheHeader& header) {
+    std::fstream out(path, std::ios::binary | std::ios::in | std::ios::out);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot finalize UAC particle cache shard: " + path.string());
+    }
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+}
+
+void write_particle_cache(const std::filesystem::path& path,
+    const ParticleSet& particles) {
+    ParticleCacheHeader header;
+    header.first_document = particles.first_document;
+    header.documents = particles.documents;
+    header.dimension = particles.dimension;
+    header.samples = particles.samples;
+    header.total_samples =
+        static_cast<int64_t>(particles.documents) * particles.samples;
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot create UAC particle cache shard: " + path.string());
+    }
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    uint64_t checksum = 1469598103934665603ull;
+    write_cache_values(out, particles.values.data(),
+        static_cast<size_t>(particles.values.size()), checksum);
+    write_cache_values(out, particles.log_likelihood.data(),
+        static_cast<size_t>(particles.log_likelihood.size()), checksum);
+    write_cache_values(out, particles.log_proposal.data(),
+        static_cast<size_t>(particles.log_proposal.size()), checksum);
+    write_cache_values(out, particles.proposal_origins.data(),
+        particles.proposal_origins.size(), checksum);
+    write_cache_values(out, particles.proposal_candidates.data(),
+        particles.proposal_candidates.size(), checksum);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed writing UAC particle cache shard: " + path.string());
+    }
+    out.close();
+    header.payload_checksum = checksum;
+    rewrite_cache_header(path, header);
+}
+
+void write_particle_cache(const std::filesystem::path& path,
+    const RaggedParticleSet& particles) {
+    ParticleCacheHeader header;
+    header.ragged = 1;
+    header.first_document = particles.first_document;
+    header.documents = particles.documents;
+    header.dimension = particles.dimension;
+    header.samples = particles.maximum_samples;
+    header.total_samples =
+        particles.offsets.empty() ? 0 : particles.offsets.back();
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot create UAC particle cache shard: " + path.string());
+    }
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    uint64_t checksum = 1469598103934665603ull;
+    write_cache_values(out, particles.offsets.data(),
+        particles.offsets.size(), checksum);
+    write_cache_values(out, particles.values.data(),
+        particles.values.size(), checksum);
+    write_cache_values(out, particles.log_likelihood.data(),
+        particles.log_likelihood.size(), checksum);
+    write_cache_values(out, particles.log_proposal.data(),
+        particles.log_proposal.size(), checksum);
+    write_cache_values(out, particles.proposal_origins.data(),
+        particles.proposal_origins.size(), checksum);
+    write_cache_values(out, particles.proposal_candidates.data(),
+        particles.proposal_candidates.size(), checksum);
+    write_cache_values(out, particles.adaptive_diagnostics.data(),
+        particles.adaptive_diagnostics.size(), checksum);
+    if (!out) {
+        throw std::runtime_error(
+            "Failed writing UAC particle cache shard: " + path.string());
+    }
+    out.close();
+    header.payload_checksum = checksum;
+    rewrite_cache_header(path, header);
+}
+
+DocumentProposal particle_cache_proposal(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
-    ProposalKind proposal, int32_t samples, uint64_t seed,
-    double broadening, int32_t n_threads, int32_t block_size,
-    const Model& model, ParticleReplayMetrics& metrics,
+    ProposalKind proposal_kind, double broadening,
+    const ProposalScreeningPlan* screening_plan, int32_t document) {
+    const Eigen::VectorXd center =
+        data.coordinates.row(document).transpose();
+    const FisherApproximation fisher = fisher_approximation_impl(
+        center, data.counts[document], basis, helmert, proposal_kind);
+    const std::vector<int32_t>* candidates =
+        screening_plan && screening_plan->enabled
+        ? &screening_plan->candidates[document] : nullptr;
+    return fisher_proposal(center, fisher, pilot, pilot_cache,
+        broadening, candidates);
+}
+
+template<class ParticleCollection>
+void write_factor_particle_cache(const std::filesystem::path& path,
+    const ParticleCollection& particles, const Dataset& data,
+    const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Pilot& pilot, const PilotCache& pilot_cache,
+    ProposalKind proposal_kind, uint64_t seed, double broadening,
+    const AdaptiveParticleOptions& adaptive,
+    const ProposalScreeningPlan* screening_plan) {
+    constexpr bool ragged =
+        std::is_same_v<ParticleCollection, RaggedParticleSet>;
+    ParticleCacheHeader header;
+    header.ragged = ragged ? 3 : 2;
+    header.first_document = particles.first_document;
+    header.documents = particles.documents;
+    header.dimension = particles.dimension;
+    header.samples = [&]() {
+        if constexpr (ragged) return particles.maximum_samples;
+        else return particles.samples;
+    }();
+    int64_t total_samples = 0;
+    for (int32_t d = 0; d < particles.documents; ++d) {
+        total_samples += particles.samples_for_document(d);
+    }
+    header.total_samples = total_samples;
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot create UAC factor particle cache shard: "
+            + path.string());
+    }
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    uint64_t checksum = 1469598103934665603ull;
+    for (int32_t local = 0; local < particles.documents; ++local) {
+        const int32_t document = particles.first_document + local;
+        const int32_t samples = particles.samples_for_document(local);
+        const int32_t calibration_samples = ragged
+            ? std::min(samples, adaptive.calibration_particles) : 0;
+        const DocumentProposal proposal = particle_cache_proposal(
+            data, basis, helmert, pilot, pilot_cache, proposal_kind,
+            broadening, screening_plan, document);
+        const int32_t proposal_components =
+            static_cast<int32_t>(proposal.weights.size());
+        const uint64_t document_seed = hash_string(
+            seed ^ 0x9e3779b97f4a7c15ull,
+            data.identifiers[document]);
+        const uint64_t calibration_seed = hash_string(
+            seed ^ 0x6a09e667f3bcc909ull,
+            data.identifiers[document]);
+        write_cache_values(out, &samples, 1, checksum);
+        write_cache_values(out, &calibration_samples, 1, checksum);
+        write_cache_values(out, &proposal_components, 1, checksum);
+        write_cache_values(out, &document_seed, 1, checksum);
+        write_cache_values(out, &calibration_seed, 1, checksum);
+        write_cache_values(out, &proposal.broadening, 1, checksum);
+        write_cache_values(out, proposal.component_ids.data(),
+            proposal.component_ids.size(), checksum);
+        write_cache_values(out, proposal.weights.data(),
+            proposal.weights.size(), checksum);
+        for (int32_t component = 0;
+                component < proposal_components; ++component) {
+            write_cache_values(out, proposal.means[component].data(),
+                proposal.means[component].size(), checksum);
+            write_cache_values(out,
+                proposal.precision_lower[component].data(),
+                proposal.precision_lower[component].size(), checksum);
+        }
+        RowMajorMatrixXd regenerated(samples, particles.dimension);
+        int32_t* regenerated_origins = nullptr;
+        std::vector<int32_t> origins(samples);
+        regenerated_origins = origins.data();
+        if constexpr (ragged) {
+            if (calibration_samples > 0) {
+                auto calibration_values =
+                    regenerated.topRows(calibration_samples);
+                draw_proposal_values(proposal, calibration_seed,
+                    calibration_values, regenerated_origins);
+            }
+            if (samples > calibration_samples) {
+                auto additional =
+                    regenerated.bottomRows(samples - calibration_samples);
+                draw_proposal_values(proposal, document_seed, additional,
+                    regenerated_origins + calibration_samples);
+            }
+        } else {
+            draw_proposal_values(proposal, document_seed,
+                regenerated, regenerated_origins);
+        }
+        const auto expected = particles.values_for_document(local);
+        if (expected.rows() != regenerated.rows()
+            || expected.cols() != regenerated.cols()
+            || std::memcmp(expected.data(), regenerated.data(),
+                sizeof(double) * regenerated.size()) != 0) {
+            throw std::runtime_error(
+                "UAC factor cache failed exact particle regeneration");
+        }
+        uint64_t position_checksum = cache_hash_bytes(
+            1469598103934665603ull, regenerated.data(),
+            sizeof(double) * regenerated.size());
+        write_cache_values(out, &position_checksum, 1, checksum);
+        const auto log_likelihood =
+            particles.log_likelihood_for_document(local);
+        const auto log_proposal =
+            particles.log_proposal_for_document(local);
+        write_cache_values(out, log_likelihood.data(),
+            log_likelihood.size(), checksum);
+        write_cache_values(out, log_proposal.data(),
+            log_proposal.size(), checksum);
+        if constexpr (ragged) {
+            write_cache_values(out,
+                &particles.adaptive_diagnostics[local], 1, checksum);
+        }
+    }
+    if (!out) {
+        throw std::runtime_error(
+            "Failed writing UAC factor particle cache shard: "
+            + path.string());
+    }
+    out.close();
+    header.payload_checksum = checksum;
+    rewrite_cache_header(path, header);
+}
+
+using CachedParticleShard = std::variant<ParticleSet, RaggedParticleSet>;
+
+CachedParticleShard read_particle_cache(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error(
+            "Cannot open UAC particle cache shard: " + path.string());
+    }
+    ParticleCacheHeader header;
+    in.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (!in || header.magic != kParticleCacheMagic
+        || header.version != kParticleCacheVersion
+        || header.documents <= 0 || header.dimension <= 0
+        || header.samples <= 0 || header.total_samples <= 0) {
+        throw std::runtime_error(
+            "Invalid UAC particle cache shard header: " + path.string());
+    }
+    uint64_t checksum = 1469598103934665603ull;
+    if (header.ragged == 0) {
+        if (header.total_samples !=
+                static_cast<int64_t>(header.documents) * header.samples) {
+            throw std::runtime_error(
+                "Invalid fixed UAC particle cache shape");
+        }
+        ParticleSet out;
+        out.first_document = header.first_document;
+        out.documents = header.documents;
+        out.dimension = header.dimension;
+        out.samples = header.samples;
+        out.values.resize(header.total_samples, header.dimension);
+        out.log_likelihood.resize(header.documents, header.samples);
+        out.log_proposal.resize(header.documents, header.samples);
+        out.proposal_origins.resize(header.total_samples);
+        out.proposal_candidates.resize(header.documents);
+        read_cache_values(in, out.values.data(), out.values.size(), checksum);
+        read_cache_values(in, out.log_likelihood.data(),
+            out.log_likelihood.size(), checksum);
+        read_cache_values(in, out.log_proposal.data(),
+            out.log_proposal.size(), checksum);
+        read_cache_values(in, out.proposal_origins.data(),
+            out.proposal_origins.size(), checksum);
+        read_cache_values(in, out.proposal_candidates.data(),
+            out.proposal_candidates.size(), checksum);
+        if (checksum != header.payload_checksum || in.peek() != EOF) {
+            throw std::runtime_error(
+                "UAC particle cache shard checksum mismatch: "
+                + path.string());
+        }
+        return out;
+    }
+    if (header.ragged == 2 || header.ragged == 3) {
+        const bool ragged = header.ragged == 3;
+        std::vector<int64_t> offsets(
+            static_cast<size_t>(header.documents) + 1, 0);
+        std::vector<double> values;
+        std::vector<double> log_likelihood;
+        std::vector<double> log_proposal;
+        std::vector<int32_t> origins;
+        std::vector<int32_t> proposal_candidates;
+        std::vector<AdaptiveParticleDiagnostic> adaptive_diagnostics;
+        values.reserve(static_cast<size_t>(header.total_samples)
+            * header.dimension);
+        log_likelihood.reserve(header.total_samples);
+        log_proposal.reserve(header.total_samples);
+        origins.reserve(header.total_samples);
+        proposal_candidates.reserve(header.documents);
+        if (ragged) adaptive_diagnostics.reserve(header.documents);
+        for (int32_t document = 0;
+                document < header.documents; ++document) {
+            int32_t samples = 0;
+            int32_t calibration_samples = 0;
+            int32_t proposal_components = 0;
+            uint64_t document_seed = 0;
+            uint64_t calibration_seed = 0;
+            double broadening = 0.0;
+            read_cache_values(in, &samples, 1, checksum);
+            read_cache_values(in, &calibration_samples, 1, checksum);
+            read_cache_values(in, &proposal_components, 1, checksum);
+            read_cache_values(in, &document_seed, 1, checksum);
+            read_cache_values(in, &calibration_seed, 1, checksum);
+            read_cache_values(in, &broadening, 1, checksum);
+            if (samples <= 0 || samples > header.samples
+                || calibration_samples < 0
+                || calibration_samples > samples
+                || proposal_components <= 0
+                || !(broadening > 0.0)) {
+                throw std::runtime_error(
+                    "Invalid UAC factor particle cache record");
+            }
+            DocumentProposal proposal;
+            proposal.broadening = broadening;
+            proposal.component_ids.resize(proposal_components);
+            proposal.weights.resize(proposal_components);
+            proposal.means.resize(proposal_components);
+            proposal.precision_lower.resize(proposal_components);
+            read_cache_values(in, proposal.component_ids.data(),
+                proposal.component_ids.size(), checksum);
+            read_cache_values(in, proposal.weights.data(),
+                proposal.weights.size(), checksum);
+            for (int32_t component = 0;
+                    component < proposal_components; ++component) {
+                proposal.means[component].resize(header.dimension);
+                proposal.precision_lower[component].resize(
+                    header.dimension, header.dimension);
+                read_cache_values(in, proposal.means[component].data(),
+                    proposal.means[component].size(), checksum);
+                read_cache_values(in,
+                    proposal.precision_lower[component].data(),
+                    proposal.precision_lower[component].size(), checksum);
+            }
+            uint64_t expected_position_checksum = 0;
+            read_cache_values(in, &expected_position_checksum, 1, checksum);
+            RowMajorMatrixXd regenerated(samples, header.dimension);
+            std::vector<int32_t> document_origins(samples);
+            if (ragged) {
+                if (calibration_samples > 0) {
+                    auto calibration =
+                        regenerated.topRows(calibration_samples);
+                    draw_proposal_values(proposal, calibration_seed,
+                        calibration, document_origins.data());
+                }
+                if (samples > calibration_samples) {
+                    auto additional = regenerated.bottomRows(
+                        samples - calibration_samples);
+                    draw_proposal_values(proposal, document_seed,
+                        additional,
+                        document_origins.data() + calibration_samples);
+                }
+            } else {
+                draw_proposal_values(proposal, document_seed,
+                    regenerated, document_origins.data());
+            }
+            const uint64_t actual_position_checksum = cache_hash_bytes(
+                1469598103934665603ull, regenerated.data(),
+                sizeof(double) * regenerated.size());
+            if (actual_position_checksum != expected_position_checksum) {
+                throw std::runtime_error(
+                    "UAC factor particle regeneration checksum mismatch: "
+                    + path.string());
+            }
+            values.insert(values.end(), regenerated.data(),
+                regenerated.data() + regenerated.size());
+            const size_t old_log_size = log_likelihood.size();
+            log_likelihood.resize(old_log_size + samples);
+            log_proposal.resize(old_log_size + samples);
+            read_cache_values(in, log_likelihood.data() + old_log_size,
+                samples, checksum);
+            read_cache_values(in, log_proposal.data() + old_log_size,
+                samples, checksum);
+            origins.insert(origins.end(), document_origins.begin(),
+                document_origins.end());
+            proposal_candidates.push_back(proposal_components);
+            if (ragged) {
+                AdaptiveParticleDiagnostic diagnostic;
+                read_cache_values(in, &diagnostic, 1, checksum);
+                adaptive_diagnostics.push_back(diagnostic);
+            }
+            offsets[document + 1] = offsets[document] + samples;
+        }
+        if (offsets.back() != header.total_samples
+            || checksum != header.payload_checksum || in.peek() != EOF) {
+            throw std::runtime_error(
+                "UAC factor particle cache checksum mismatch: "
+                + path.string());
+        }
+        if (ragged) {
+            RaggedParticleSet out;
+            out.first_document = header.first_document;
+            out.documents = header.documents;
+            out.dimension = header.dimension;
+            out.maximum_samples = header.samples;
+            out.offsets = std::move(offsets);
+            out.values = std::move(values);
+            out.log_likelihood = std::move(log_likelihood);
+            out.log_proposal = std::move(log_proposal);
+            out.proposal_origins = std::move(origins);
+            out.proposal_candidates =
+                std::move(proposal_candidates);
+            out.adaptive_diagnostics =
+                std::move(adaptive_diagnostics);
+            return out;
+        }
+        ParticleSet out;
+        out.first_document = header.first_document;
+        out.documents = header.documents;
+        out.dimension = header.dimension;
+        out.samples = header.samples;
+        out.values = Eigen::Map<RowMajorMatrixXd>(
+            values.data(), header.total_samples, header.dimension);
+        out.log_likelihood = Eigen::Map<RowMajorMatrixXd>(
+            log_likelihood.data(), header.documents, header.samples);
+        out.log_proposal = Eigen::Map<RowMajorMatrixXd>(
+            log_proposal.data(), header.documents, header.samples);
+        out.proposal_origins = std::move(origins);
+        out.proposal_candidates = std::move(proposal_candidates);
+        return out;
+    }
+    if (header.ragged != 1) {
+        throw std::runtime_error("Unknown UAC particle cache storage kind");
+    }
+    RaggedParticleSet out;
+    out.first_document = header.first_document;
+    out.documents = header.documents;
+    out.dimension = header.dimension;
+    out.maximum_samples = header.samples;
+    out.offsets.resize(static_cast<size_t>(header.documents) + 1);
+    out.values.resize(static_cast<size_t>(header.total_samples)
+        * header.dimension);
+    out.log_likelihood.resize(header.total_samples);
+    out.log_proposal.resize(header.total_samples);
+    out.proposal_origins.resize(header.total_samples);
+    out.proposal_candidates.resize(header.documents);
+    out.adaptive_diagnostics.resize(header.documents);
+    read_cache_values(in, out.offsets.data(), out.offsets.size(), checksum);
+    read_cache_values(in, out.values.data(), out.values.size(), checksum);
+    read_cache_values(in, out.log_likelihood.data(),
+        out.log_likelihood.size(), checksum);
+    read_cache_values(in, out.log_proposal.data(),
+        out.log_proposal.size(), checksum);
+    read_cache_values(in, out.proposal_origins.data(),
+        out.proposal_origins.size(), checksum);
+    read_cache_values(in, out.proposal_candidates.data(),
+        out.proposal_candidates.size(), checksum);
+    read_cache_values(in, out.adaptive_diagnostics.data(),
+        out.adaptive_diagnostics.size(), checksum);
+    if (out.offsets.front() != 0
+        || out.offsets.back() != header.total_samples
+        || checksum != header.payload_checksum || in.peek() != EOF) {
+        throw std::runtime_error(
+            "UAC particle cache shard checksum mismatch: " + path.string());
+    }
+    return out;
+}
+
+struct ParticleCache {
+    std::filesystem::path directory;
+    std::vector<std::filesystem::path> shards;
+    std::vector<int32_t> first_documents;
+    std::vector<int32_t> document_counts;
+    std::vector<int32_t> arithmetic_shards;
+    ParticleCacheMetrics metrics;
+    int32_t documents = 0;
+    int32_t dimension = 0;
+    bool adaptive = false;
+    bool reused = false;
+    int32_t rebuilds = 0;
+    bool auto_component_screening_enabled = false;
+    uint64_t bytes = 0;
+    StreamingParticleStorage storage = StreamingParticleStorage::Positions;
+};
+
+uint64_t particle_cache_key(const Dataset& data, const Basis& basis,
+    const Pilot& pilot, const Model& initial_model, ProposalKind proposal,
+    int32_t maximum_samples, uint64_t seed, double broadening,
+    const AdaptiveParticleOptions& adaptive,
+    const ComponentScreeningOptions& screening,
+    StreamingParticleStorage storage, int32_t block_documents) {
+    uint64_t hash = 1469598103934665603ull;
+    const char runtime[] =
+#if defined(__clang__)
+        "clang-" __clang_version__;
+#elif defined(__GNUC__)
+        "gcc-" __VERSION__;
+#else
+        "unknown-compiler";
+#endif
+    hash = cache_hash_bytes(hash, runtime, sizeof(runtime));
+    const int32_t eigen_version[] = {
+        EIGEN_WORLD_VERSION, EIGEN_MAJOR_VERSION, EIGEN_MINOR_VERSION};
+    hash = cache_hash_bytes(hash, eigen_version, sizeof(eigen_version));
+    const bool fast_math =
+#if defined(__FAST_MATH__)
+        true;
+#else
+        false;
+#endif
+    hash = cache_hash_value(hash, fast_math);
+    const bool compiled_fma =
+#if defined(__FMA__)
+        true;
+#else
+        false;
+#endif
+    hash = cache_hash_value(hash, compiled_fma);
+    hash = cache_hash_value(hash, basis.checksum);
+    hash = cache_hash_value(hash, proposal);
+    hash = cache_hash_value(hash, maximum_samples);
+    hash = cache_hash_value(hash, seed);
+    hash = cache_hash_value(hash, broadening);
+    hash = cache_hash_value(hash, storage);
+    hash = cache_hash_value(hash, block_documents);
+    hash = cache_hash_value(hash, adaptive.calibration_particles);
+    hash = cache_hash_value(hash, adaptive.minimum_particles);
+    const bool has_responsibility_target =
+        adaptive.responsibility_se_target.has_value();
+    const bool has_moment_target = adaptive.moment_ess_target.has_value();
+    hash = cache_hash_value(hash, has_responsibility_target);
+    hash = cache_hash_value(hash,
+        adaptive.responsibility_se_target.value_or(0.0));
+    hash = cache_hash_value(hash, has_moment_target);
+    hash = cache_hash_value(hash,
+        adaptive.moment_ess_target.value_or(0.0));
+    hash = cache_hash_value(hash, adaptive.plausible_mass);
+    hash = cache_hash_value(hash, adaptive.plausible_responsibility);
+    hash = cache_hash_value(hash, screening.mode);
+    hash = cache_hash_value(hash, screening.tail_mass);
+    hash = cache_hash_value(hash, screening.proposal_proxy_tail_mass);
+    hash = cache_hash_value(hash, screening.minimum_components);
+    hash = cache_hash_value(hash, screening.maximum_components);
+    hash = cache_hash_value(hash, screening.audit_documents);
+    hash = cache_hash_value(hash, screening.minimum_work_reduction);
+    for (const auto& identifier : data.identifiers) {
+        hash = cache_hash_bytes(hash, identifier.data(), identifier.size());
+        const unsigned char delimiter = 0xff;
+        hash = cache_hash_value(hash, delimiter);
+    }
+    hash = cache_hash_bytes(hash, data.coordinates.data(),
+        sizeof(double) * data.coordinates.size());
+    for (const auto& document : data.counts) {
+        const uint64_t entries = document.ids.size();
+        hash = cache_hash_value(hash, entries);
+        hash = cache_hash_bytes(hash, document.ids.data(),
+            sizeof(uint32_t) * document.ids.size());
+        hash = cache_hash_bytes(hash, document.cnts.data(),
+            sizeof(double) * document.cnts.size());
+    }
+    hash = cache_hash_bytes(hash, pilot.weights.data(),
+        sizeof(double) * pilot.weights.size());
+    hash = cache_hash_bytes(hash, pilot.means.data(),
+        sizeof(double) * pilot.means.size());
+    for (const auto& covariance : pilot.covariances) {
+        hash = cache_hash_bytes(hash, covariance.data(),
+            sizeof(double) * covariance.size());
+    }
+    hash = cache_hash_bytes(hash, pilot.pooled_covariance.data(),
+        sizeof(double) * pilot.pooled_covariance.size());
+    hash = cache_hash_bytes(hash, initial_model.weights.data(),
+        sizeof(double) * initial_model.weights.size());
+    hash = cache_hash_bytes(hash, initial_model.means.data(),
+        sizeof(double) * initial_model.means.size());
+    if (initial_model.covariance_kind == CovarianceKind::Dense) {
+        for (const auto& covariance : initial_model.covariances) {
+            hash = cache_hash_bytes(hash, covariance.data(),
+                sizeof(double) * covariance.size());
+        }
+    } else {
+        for (const auto& covariance : initial_model.factor_covariances) {
+            hash = cache_hash_bytes(hash, covariance.diagonal.data(),
+                sizeof(double) * covariance.diagonal.size());
+            hash = cache_hash_bytes(hash, covariance.factor.data(),
+                sizeof(double) * covariance.factor.size());
+        }
+    }
+    return hash;
+}
+
+std::string cache_key_text(uint64_t key) {
+    uint64_t second = key + 0x9e3779b97f4a7c15ull;
+    second = (second ^ (second >> 30)) * 0xbf58476d1ce4e5b9ull;
+    second = (second ^ (second >> 27)) * 0x94d049bb133111ebull;
+    second ^= second >> 31;
+    std::ostringstream out;
+    out << std::hex << std::setfill('0')
+        << std::setw(16) << key << std::setw(16) << second;
+    return out.str();
+}
+
+ParticleCache open_or_build_particle_cache(const Dataset& data,
+    const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Pilot& pilot, const PilotCache& pilot_cache,
+    ProposalKind proposal, int32_t maximum_samples, uint64_t seed,
+    double broadening, int32_t n_threads, const Model& initial_model,
+    const AdaptiveParticleOptions& adaptive,
     const ProposalScreeningPlan* proposal_screening,
-    const ComponentScreeningOptions& component_screening,
-    const ExpectationRequest& request = {}) {
-    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
-    const int32_t components = static_cast<int32_t>(model.weights.size());
-    const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
-    const int32_t factor_rank = model.covariance_kind
-            == CovarianceKind::FactorAnalytic
-        ? static_cast<int32_t>(model.factor_covariances.front().factor.cols())
+    const ComponentScreeningOptions& screening,
+    const StreamingOptions& options) {
+    if (options.block_documents <= 0) {
+        throw std::invalid_argument(
+            "UAC streaming block document count must be positive");
+    }
+    switch (options.count_storage) {
+        case StreamingCountStorage::Source:
+        case StreamingCountStorage::Memory:
+            break;
+        default:
+            throw std::invalid_argument(
+                "Invalid UAC streaming count storage");
+    }
+    switch (options.particle_storage) {
+        case StreamingParticleStorage::Auto:
+        case StreamingParticleStorage::Factors:
+        case StreamingParticleStorage::Positions:
+            break;
+        default:
+            throw std::invalid_argument(
+                "Invalid UAC streaming particle storage");
+    }
+    ParticleCache cache;
+    cache.documents = static_cast<int32_t>(data.coordinates.rows());
+    cache.dimension = static_cast<int32_t>(data.coordinates.cols());
+    cache.adaptive = adaptive.enabled();
+    if (options.particle_storage == StreamingParticleStorage::Auto) {
+        uint64_t factor_values = 0;
+        const int32_t active =
+            static_cast<int32_t>((pilot.weights.array() > 0.0).count());
+        for (int32_t d = 0; d < cache.documents; ++d) {
+            const int32_t proposals =
+                proposal_screening && proposal_screening->enabled
+                ? static_cast<int32_t>(
+                    proposal_screening->candidates[d].size())
+                : active;
+            factor_values += static_cast<uint64_t>(proposals)
+                * (1 + cache.dimension
+                    + static_cast<uint64_t>(cache.dimension)
+                        * cache.dimension);
+        }
+        const uint64_t position_values =
+            static_cast<uint64_t>(cache.documents)
+            * maximum_samples * cache.dimension;
+        cache.storage = factor_values <= position_values
+            ? StreamingParticleStorage::Factors
+            : StreamingParticleStorage::Positions;
+    } else {
+        cache.storage = options.particle_storage;
+    }
+    const uint64_t key = particle_cache_key(data, basis, pilot,
+        initial_model, proposal, maximum_samples, seed, broadening,
+        adaptive, screening, options.particle_storage,
+        options.block_documents);
+    const std::filesystem::path root = options.cache_directory.empty()
+        ? std::filesystem::path(".uac-cache")
+        : std::filesystem::path(options.cache_directory);
+    cache.directory = root / cache_key_text(key);
+    const int32_t factor_rank =
+        initial_model.covariance_kind == CovarianceKind::FactorAnalytic
+        ? static_cast<int32_t>(
+            initial_model.factor_covariances.front().factor.cols())
         : -1;
-    Expectation out = empty_expectation(documents, components, dimension,
-        factor_rank, request.accumulate_moments);
+    const int32_t requested_shards = expectation_shards(cache.documents,
+        static_cast<int32_t>(initial_model.weights.size()),
+        cache.dimension, factor_rank);
+    const int32_t natural_size =
+        (cache.documents + requested_shards - 1) / requested_shards;
+    // I/O shards may split an arithmetic shard. The E-step keeps one
+    // accumulator alive across those files, preserving the batch grouping.
+    for (int32_t arithmetic = 0;
+            arithmetic < requested_shards; ++arithmetic) {
+        const int32_t arithmetic_begin = arithmetic * natural_size;
+        const int32_t arithmetic_end = std::min(
+            cache.documents, arithmetic_begin + natural_size);
+        for (int32_t first = arithmetic_begin;
+                first < arithmetic_end;
+                first += options.block_documents) {
+            cache.first_documents.push_back(first);
+            cache.document_counts.push_back(std::min(
+                options.block_documents, arithmetic_end - first));
+            cache.arithmetic_shards.push_back(arithmetic);
+            std::ostringstream name;
+            name << "particles-" << std::setw(6) << std::setfill('0')
+                 << cache.shards.size() << ".bin";
+            cache.shards.push_back(cache.directory / name.str());
+        }
+    }
+    const int32_t n_shards =
+        static_cast<int32_t>(cache.shards.size());
+    const auto complete = cache.directory / "complete";
+    const auto manifest = cache.directory / "manifest.tsv";
+    auto validate_existing = [&]() {
+        if (options.rebuild_cache || !std::filesystem::exists(complete)) {
+            return false;
+        }
+        try {
+            {
+                std::ifstream marker(complete);
+                std::string version;
+                uint64_t expected_manifest_hash = 0;
+                if (!(marker >> version >> std::hex
+                        >> expected_manifest_hash)
+                    || version != "uac-particle-cache-v1"
+                    || expected_manifest_hash
+                        != cache_file_hash(manifest)) {
+                    throw std::runtime_error(
+                        "Invalid UAC particle cache completion marker");
+                }
+            }
+            {
+                std::ifstream metadata(manifest);
+                std::string label;
+                int32_t enabled = 0;
+                if (!(metadata >> label >> enabled)
+                    || label != "auto_component_screening_enabled") {
+                    throw std::runtime_error(
+                        "Invalid UAC particle cache manifest");
+                }
+                cache.auto_component_screening_enabled = enabled != 0;
+                while (metadata >> label) {
+                    if (label == "storage") {
+                        std::string value;
+                        metadata >> value;
+                        cache.storage =
+                            parse_streaming_particle_storage(value);
+                    } else if (label == "calibration_seconds"
+                            || label == "sampling_seconds"
+                            || label == "likelihood_seconds"
+                            || label == "fisher_work_seconds"
+                            || label == "proposal_component_work_seconds"
+                            || label
+                                == "proposal_draw_density_work_seconds"
+                            || label
+                                == "proposal_precision_fallback_seconds") {
+                        double ignored = 0.0;
+                        metadata >> ignored;
+                    } else if (label == "proposal_precision_fallbacks") {
+                        metadata >> cache.metrics.proposal_precision_fallbacks;
+                    } else if (label == "proposal_workspace_bytes") {
+                        metadata >> cache.metrics.proposal_workspace_bytes;
+                    } else if (label == "calibration_samples") {
+                        metadata >> cache.metrics.calibration_samples;
+                    } else if (label == "reused_calibration_samples") {
+                        metadata >> cache.metrics.reused_calibration_samples;
+                    } else {
+                        std::string ignored;
+                        metadata >> ignored;
+                    }
+                    if (!metadata) {
+                        throw std::runtime_error(
+                            "Invalid UAC particle cache manifest value");
+                    }
+                }
+            }
+            for (const auto& shard : cache.shards) {
+                const CachedParticleShard value =
+                    read_particle_cache(shard);
+                std::visit([&](const auto& particles) {
+                    cache.metrics.peak_bytes = std::max(
+                        cache.metrics.peak_bytes,
+                        particle_set_bytes(particles));
+                }, value);
+                cache.bytes += std::filesystem::file_size(shard);
+            }
+            cache.reused = true;
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+    const bool existing_entry = std::filesystem::exists(complete);
+    if (validate_existing()) return cache;
+    if (existing_entry) {
+        ++cache.rebuilds;
+    }
+
+    if (std::filesystem::exists(cache.directory)) {
+        std::filesystem::remove_all(cache.directory);
+    }
+    std::filesystem::create_directories(root);
+    const std::filesystem::path temporary =
+        cache.directory.string() + ".tmp";
+    if (std::filesystem::exists(temporary)) {
+        std::filesystem::remove_all(temporary);
+    }
+    std::filesystem::create_directories(temporary);
+    for (size_t shard = 0; shard < cache.shards.size(); ++shard) {
+        cache.shards[shard] = temporary
+            / cache.shards[shard].filename();
+    }
+    ++cache.metrics.generation_passes;
+    if (adaptive.enabled()) {
+        for (int32_t shard = 0; shard < n_shards; ++shard) {
+            const int32_t first = cache.first_documents[shard];
+            const int32_t count = cache.document_counts[shard];
+            RaggedParticleSet particles = make_adaptive_particle_range(
+                data, basis, helmert, pilot, pilot_cache, proposal, seed,
+                broadening, n_threads, initial_model, adaptive,
+                maximum_samples, proposal_screening, first, count);
+            cache.metrics.add(particles);
+            if (cache.storage == StreamingParticleStorage::Factors) {
+                write_factor_particle_cache(cache.shards[shard], particles,
+                    data, basis, helmert, pilot, pilot_cache,
+                    proposal, seed, broadening, adaptive,
+                    proposal_screening);
+            } else {
+                write_particle_cache(cache.shards[shard], particles);
+            }
+        }
+    } else {
+        for (int32_t shard = 0; shard < n_shards; ++shard) {
+            const int32_t first = cache.first_documents[shard];
+            const int32_t count = cache.document_counts[shard];
+            ParticleSet particles = make_particle_range(data, basis, helmert,
+                pilot, pilot_cache, proposal, maximum_samples, seed,
+                broadening, n_threads, proposal_screening, first, count);
+            cache.metrics.add(particles);
+            if (cache.storage == StreamingParticleStorage::Factors) {
+                write_factor_particle_cache(cache.shards[shard], particles,
+                    data, basis, helmert, pilot, pilot_cache,
+                    proposal, seed, broadening, adaptive,
+                    proposal_screening);
+            } else {
+                write_particle_cache(cache.shards[shard], particles);
+            }
+        }
+    }
+    if (screening.mode == ComponentScreeningMode::Auto) {
+        RaggedParticleSet audit;
+        audit.dimension = cache.dimension;
+        audit.offsets.push_back(0);
+        const std::vector<int32_t>& audit_documents =
+            proposal_screening
+            ? proposal_screening->audit_documents
+            : std::vector<int32_t>{};
+        for (const int32_t document : audit_documents) {
+            if (document < 0 || document >= cache.documents) {
+                throw std::runtime_error(
+                    "UAC streaming audit document is out of range");
+            }
+            if (adaptive.enabled()) {
+                const RaggedParticleSet one =
+                    make_adaptive_particle_range(data, basis, helmert,
+                        pilot, pilot_cache, proposal, seed, broadening,
+                        n_threads, initial_model, adaptive,
+                        maximum_samples, proposal_screening, document, 1);
+                const int32_t samples = one.samples_for_document(0);
+                const auto values = one.values_for_document(0);
+                audit.values.insert(audit.values.end(), values.data(),
+                    values.data() + static_cast<int64_t>(samples)
+                        * cache.dimension);
+                const auto likelihood =
+                    one.log_likelihood_for_document(0);
+                audit.log_likelihood.insert(audit.log_likelihood.end(),
+                    likelihood.data(), likelihood.data() + samples);
+                const auto log_q = one.log_proposal_for_document(0);
+                audit.log_proposal.insert(audit.log_proposal.end(),
+                    log_q.data(), log_q.data() + samples);
+                const auto origins =
+                    one.proposal_origins_for_document(0);
+                audit.proposal_origins.insert(
+                    audit.proposal_origins.end(), origins.data(),
+                    origins.data() + samples);
+                audit.proposal_candidates.push_back(
+                    one.proposal_candidates[0]);
+                audit.offsets.push_back(
+                    audit.offsets.back() + samples);
+                audit.maximum_samples =
+                    std::max(audit.maximum_samples, samples);
+            } else {
+                const ParticleSet one = make_particle_range(
+                    data, basis, helmert, pilot, pilot_cache, proposal,
+                    maximum_samples, seed, broadening, n_threads,
+                    proposal_screening, document, 1);
+                const auto values = one.values_for_document(0);
+                audit.values.insert(audit.values.end(), values.data(),
+                    values.data() + static_cast<int64_t>(maximum_samples)
+                        * cache.dimension);
+                const auto likelihood =
+                    one.log_likelihood_for_document(0);
+                audit.log_likelihood.insert(audit.log_likelihood.end(),
+                    likelihood.data(),
+                    likelihood.data() + maximum_samples);
+                const auto log_q = one.log_proposal_for_document(0);
+                audit.log_proposal.insert(audit.log_proposal.end(),
+                    log_q.data(), log_q.data() + maximum_samples);
+                const auto origins =
+                    one.proposal_origins_for_document(0);
+                audit.proposal_origins.insert(
+                    audit.proposal_origins.end(), origins.data(),
+                    origins.data() + maximum_samples);
+                audit.proposal_candidates.push_back(
+                    one.proposal_candidates[0]);
+                audit.offsets.push_back(
+                    audit.offsets.back() + maximum_samples);
+                audit.maximum_samples = maximum_samples;
+            }
+        }
+        audit.documents =
+            static_cast<int32_t>(audit_documents.size());
+        std::vector<int32_t> local_audit(audit.documents);
+        std::iota(local_audit.begin(), local_audit.end(), 0);
+        cache.auto_component_screening_enabled =
+            resolve_particle_component_screening(
+                audit, initial_model, screening, local_audit);
+    }
+    {
+        std::ofstream metadata(temporary / "manifest.tsv");
+        metadata << "auto_component_screening_enabled\t"
+            << static_cast<int32_t>(
+                cache.auto_component_screening_enabled) << "\n"
+            << "storage\t"
+            << streaming_particle_storage_name(cache.storage) << "\n"
+            << "documents\t" << cache.documents << "\n"
+            << "shards\t" << n_shards << "\n"
+            << std::setprecision(17)
+            << "calibration_seconds\t"
+            << cache.metrics.calibration_seconds << "\n"
+            << "sampling_seconds\t"
+            << cache.metrics.sampling_seconds << "\n"
+            << "likelihood_seconds\t"
+            << cache.metrics.likelihood_seconds << "\n"
+            << "fisher_work_seconds\t"
+            << cache.metrics.fisher_work_seconds << "\n"
+            << "proposal_component_work_seconds\t"
+            << cache.metrics.proposal_component_work_seconds << "\n"
+            << "proposal_draw_density_work_seconds\t"
+            << cache.metrics.proposal_draw_density_work_seconds << "\n"
+            << "proposal_precision_fallback_seconds\t"
+            << cache.metrics.proposal_precision_fallback_seconds << "\n"
+            << "proposal_precision_fallbacks\t"
+            << cache.metrics.proposal_precision_fallbacks << "\n"
+            << "proposal_workspace_bytes\t"
+            << cache.metrics.proposal_workspace_bytes << "\n"
+            << "calibration_samples\t"
+            << cache.metrics.calibration_samples << "\n"
+            << "reused_calibration_samples\t"
+            << cache.metrics.reused_calibration_samples << "\n"
+            << "rng\tstd_mt19937_64_discrete_normal_v1\n"
+            << "eigen\t" << EIGEN_WORLD_VERSION << "."
+            << EIGEN_MAJOR_VERSION << "." << EIGEN_MINOR_VERSION << "\n"
+            << "fast_math\t"
+#if defined(__FAST_MATH__)
+            << 1
+#else
+            << 0
+#endif
+            << "\n"
+            << "fma\t"
+#if defined(__FMA__)
+            << 1
+#else
+            << 0
+#endif
+            << "\n";
+        if (!metadata) {
+            throw std::runtime_error(
+                "Failed writing UAC particle cache manifest");
+        }
+    }
+    {
+        std::ofstream marker(temporary / "complete");
+        marker << "uac-particle-cache-v" << kParticleCacheVersion
+            << "\t" << std::hex
+            << cache_file_hash(temporary / "manifest.tsv") << "\n";
+        if (!marker) {
+            throw std::runtime_error(
+                "Failed writing UAC particle cache completion marker");
+        }
+    }
+    std::filesystem::rename(temporary, cache.directory);
+    cache.bytes = 0;
+    for (size_t shard = 0; shard < cache.shards.size(); ++shard) {
+        cache.shards[shard] =
+            cache.directory / cache.shards[shard].filename();
+        cache.bytes += std::filesystem::file_size(cache.shards[shard]);
+    }
+    return cache;
+}
+
+struct CachedDocumentMetadata {
+    std::vector<ParticleDiagnostic> diagnostics;
+    std::vector<int32_t> particles;
+    std::vector<int32_t> proposal_components;
+    std::vector<AdaptiveParticleDiagnostic> adaptive;
+};
+
+class CachedResponsibilityState {
+public:
+    explicit CachedResponsibilityState(
+        const std::filesystem::path& directory)
+        : previous_(directory / "responsibilities.previous.bin"),
+          current_(directory / "responsibilities.current.bin") {
+        std::error_code error;
+        std::filesystem::remove(previous_, error);
+        std::filesystem::remove(current_, error);
+    }
+
+    ~CachedResponsibilityState() {
+        std::error_code error;
+        std::filesystem::remove(previous_, error);
+        std::filesystem::remove(current_, error);
+    }
+
+    bool has_previous() const { return has_previous_; }
+    const std::filesystem::path& previous_path() const {
+        return previous_;
+    }
+    const std::filesystem::path& current_path() const {
+        return current_;
+    }
+
+    void commit() {
+        std::error_code error;
+        std::filesystem::remove(previous_, error);
+        error.clear();
+        std::filesystem::rename(current_, previous_, error);
+        if (error) {
+            throw std::runtime_error(
+                "Cannot commit streaming UAC responsibility sidecar: "
+                + error.message());
+        }
+        has_previous_ = true;
+    }
+
+private:
+    std::filesystem::path previous_;
+    std::filesystem::path current_;
+    bool has_previous_ = false;
+};
+
+std::filesystem::path responsibility_part_path(
+    const std::filesystem::path& destination, int32_t index) {
+    std::ostringstream suffix;
+    suffix << destination.string() << ".part-"
+        << std::setw(6) << std::setfill('0') << index;
+    return suffix.str();
+}
+
+void remove_responsibility_parts(
+    const std::vector<std::filesystem::path>& parts) {
+    for (const auto& path : parts) {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+    }
+}
+
+void concatenate_responsibility_parts(
+    const std::vector<std::filesystem::path>& parts,
+    const std::filesystem::path& destination) {
+    std::ofstream out(destination, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot create combined streaming UAC responsibility sidecar");
+    }
+    for (const auto& path : parts) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            throw std::runtime_error(
+                "Cannot read streaming UAC responsibility part");
+        }
+        out << in.rdbuf();
+        if (!out) {
+            throw std::runtime_error(
+                "Failed combining streaming UAC responsibility parts");
+        }
+    }
+    out.close();
+    if (!out) {
+        throw std::runtime_error(
+            "Failed finalizing streaming UAC responsibility sidecar");
+    }
+}
+
+Expectation cached_particle_expectation(const ParticleCache& cache,
+    const Model& model, const ComponentScreeningOptions& screening,
+    const ExpectationRequest& request, int32_t n_threads,
+    CachedDocumentMetadata* metadata = nullptr,
+    CachedResponsibilityState* responsibility_state = nullptr,
+    const std::filesystem::path* responsibility_spool = nullptr,
+    Eigen::VectorXd* effective_membership = nullptr) {
+    const int32_t components = static_cast<int32_t>(model.weights.size());
+    const int32_t factor_rank =
+        model.covariance_kind == CovarianceKind::FactorAnalytic
+        ? static_cast<int32_t>(
+            model.factor_covariances.front().factor.cols())
+        : -1;
+    Expectation out = empty_expectation(cache.documents, components,
+        cache.dimension, factor_rank, request.accumulate_moments);
     if (request.store_responsibilities) {
-        out.responsibilities.resize(documents, components);
+        out.responsibilities.resize(cache.documents, components);
+        out.per_document_evaluated_components.resize(cache.documents);
+        out.per_document_omitted_component_mass.resize(cache.documents);
     }
-    ++metrics.passes;
-    for (int32_t first = 0; first < documents; first += block_size) {
-        const int32_t count = std::min(block_size, documents - first);
-        ParticleSet block = make_particle_range(data, basis, helmert, pilot,
-            pilot_cache, proposal, samples, seed, broadening, n_threads,
-            proposal_screening, first, count);
-        metrics.add(block);
-        Expectation local = particle_expectation(
-            block, model, request, component_screening);
+    if (request.collect_diagnostics) {
+        out.particle_diagnostics.resize(cache.documents);
+    }
+    if (metadata) {
+        metadata->particles.resize(cache.documents);
+        metadata->proposal_components.resize(cache.documents);
+        if (cache.adaptive) metadata->adaptive.resize(cache.documents);
+    }
+    if (responsibility_state && responsibility_spool) {
+        throw std::invalid_argument(
+            "Streaming UAC expectation has two responsibility destinations");
+    }
+    const bool compare_responsibilities =
+        responsibility_state && responsibility_state->has_previous();
+    const uint64_t responsibility_bytes =
+        sizeof(double) * static_cast<uint64_t>(cache.documents)
+        * components;
+    if (compare_responsibilities
+        && (!std::filesystem::exists(
+                responsibility_state->previous_path())
+            || std::filesystem::file_size(
+                responsibility_state->previous_path())
+                != responsibility_bytes)) {
+        throw std::runtime_error(
+            "Invalid previous streaming UAC responsibility sidecar");
+    }
+
+    struct ArithmeticShard {
+        size_t begin = 0;
+        size_t end = 0;
+        int32_t first_document = 0;
+        int32_t documents = 0;
+    };
+    std::vector<ArithmeticShard> arithmetic_shards;
+    for (size_t begin = 0; begin < cache.shards.size();) {
+        const int32_t arithmetic = cache.arithmetic_shards[begin];
+        size_t end = begin + 1;
+        while (end < cache.shards.size()
+            && cache.arithmetic_shards[end] == arithmetic) {
+            ++end;
+        }
+        ArithmeticShard group;
+        group.begin = begin;
+        group.end = end;
+        group.first_document = cache.first_documents[begin];
+        for (size_t shard = begin; shard < end; ++shard) {
+            group.documents += cache.document_counts[shard];
+        }
+        arithmetic_shards.push_back(group);
+        begin = end;
+    }
+    const int32_t arithmetic_count =
+        static_cast<int32_t>(arithmetic_shards.size());
+    if (arithmetic_count <= 0) {
+        throw std::runtime_error("Streaming UAC cache has no arithmetic shards");
+    }
+    const int32_t parallel_workers =
+        std::min(std::max(1, n_threads), arithmetic_count);
+    out.parallel_workers = parallel_workers;
+
+    std::vector<ExpectationBlock> blocks;
+    blocks.reserve(arithmetic_count);
+    for (int32_t arithmetic = 0;
+            arithmetic < arithmetic_count; ++arithmetic) {
+        blocks.emplace_back(components, cache.dimension, factor_rank,
+            request.accumulate_moments);
+    }
+    std::vector<double> gaussian_seconds(arithmetic_count, 0.0);
+    std::vector<double> moment_seconds(arithmetic_count, 0.0);
+    std::vector<uint64_t> local_workspace_bytes(arithmetic_count, 0);
+    std::vector<uint64_t> local_particle_bytes(arithmetic_count, 0);
+    std::vector<double> responsibility_changes(
+        compare_responsibilities ? cache.documents : 0, 0.0);
+
+    const std::filesystem::path* part_destination = nullptr;
+    if (responsibility_state) {
+        part_destination = &responsibility_state->current_path();
+    } else if (responsibility_spool) {
+        part_destination = responsibility_spool;
+    }
+    std::vector<std::filesystem::path> responsibility_parts;
+    if (part_destination) {
+        responsibility_parts.reserve(arithmetic_count);
+        for (int32_t arithmetic = 0;
+                arithmetic < arithmetic_count; ++arithmetic) {
+            responsibility_parts.push_back(
+                responsibility_part_path(
+                    *part_destination, arithmetic));
+        }
+        remove_responsibility_parts(responsibility_parts);
+    }
+
+    try {
+        tbb::parallel_for(int32_t{0}, arithmetic_count,
+            [&](int32_t arithmetic) {
+            const ArithmeticShard& group = arithmetic_shards[arithmetic];
+            std::ofstream part;
+            if (part_destination) {
+                part.open(responsibility_parts[arithmetic],
+                    std::ios::binary | std::ios::trunc);
+                if (!part) {
+                    throw std::runtime_error(
+                        "Cannot create streaming UAC responsibility part");
+                }
+            }
+            std::ifstream previous;
+            if (compare_responsibilities) {
+                previous.open(responsibility_state->previous_path(),
+                    std::ios::binary);
+                if (!previous) {
+                    throw std::runtime_error(
+                        "Cannot read previous streaming UAC responsibilities");
+                }
+                previous.seekg(
+                    static_cast<std::streamoff>(group.first_document)
+                        * components * sizeof(double));
+                if (!previous) {
+                    throw std::runtime_error(
+                        "Cannot seek previous streaming UAC responsibilities");
+                }
+            }
+            int32_t expected_document = group.first_document;
+            for (size_t shard_index = group.begin;
+                    shard_index < group.end; ++shard_index) {
+                const CachedParticleShard shard =
+                    read_particle_cache(cache.shards[shard_index]);
+                std::visit([&](const auto& particles) {
+                    const int32_t first = particles.first_document;
+                    if (first != expected_document) {
+                        throw std::runtime_error(
+                            "Noncontiguous streaming UAC cache shard");
+                    }
+                    expected_document += particles.documents;
+                    local_particle_bytes[arithmetic] = std::max(
+                        local_particle_bytes[arithmetic],
+                        particle_set_bytes(particles));
+                    ExpectationRequest local_request = request;
+                    if (part_destination || effective_membership) {
+                        local_request.store_responsibilities = true;
+                    }
+                    Expectation local = particle_expectation_impl(
+                        particles, model, local_request, screening, 1,
+                        &blocks[arithmetic]);
+                    if (part_destination) {
+                        part.write(
+                            reinterpret_cast<const char*>(
+                                local.responsibilities.data()),
+                            sizeof(double)
+                                * local.responsibilities.size());
+                        if (!part) {
+                            throw std::runtime_error(
+                                "Failed writing streaming UAC "
+                                "responsibility part");
+                        }
+                    }
+                    if (compare_responsibilities) {
+                        Eigen::VectorXd previous_row(components);
+                        for (int32_t d = 0;
+                                d < particles.documents; ++d) {
+                            previous.read(
+                                reinterpret_cast<char*>(
+                                    previous_row.data()),
+                                sizeof(double) * components);
+                            if (!previous) {
+                                throw std::runtime_error(
+                                    "Truncated streaming UAC "
+                                    "responsibility sidecar");
+                            }
+                            responsibility_changes[first + d] =
+                                (local.responsibilities.row(d).transpose()
+                                    - previous_row)
+                                .cwiseAbs().maxCoeff();
+                        }
+                    }
+                    if (request.store_responsibilities) {
+                        out.responsibilities.middleRows(
+                            first, particles.documents) =
+                            local.responsibilities;
+                        std::copy(
+                            local.per_document_evaluated_components.begin(),
+                            local.per_document_evaluated_components.end(),
+                            out.per_document_evaluated_components.begin()
+                                + first);
+                        std::copy(
+                            local.per_document_omitted_component_mass.begin(),
+                            local.per_document_omitted_component_mass.end(),
+                            out.per_document_omitted_component_mass.begin()
+                                + first);
+                    }
+                    if (request.collect_diagnostics) {
+                        std::copy(local.particle_diagnostics.begin(),
+                            local.particle_diagnostics.end(),
+                            out.particle_diagnostics.begin() + first);
+                    }
+                    if (metadata) {
+                        for (int32_t d = 0;
+                                d < particles.documents; ++d) {
+                            metadata->particles[first + d] =
+                                particles.samples_for_document(d);
+                            metadata->proposal_components[first + d] =
+                                particles.proposal_candidates[d];
+                        }
+                        if constexpr (
+                            std::is_same_v<
+                                std::decay_t<decltype(particles)>,
+                                RaggedParticleSet>) {
+                            std::copy(
+                                particles.adaptive_diagnostics.begin(),
+                                particles.adaptive_diagnostics.end(),
+                                metadata->adaptive.begin() + first);
+                        }
+                    }
+                    gaussian_seconds[arithmetic] +=
+                        local.gaussian_seconds;
+                    moment_seconds[arithmetic] += local.moment_seconds;
+                    local_workspace_bytes[arithmetic] = std::max(
+                        local_workspace_bytes[arithmetic],
+                        local.peak_workspace_bytes);
+                }, shard);
+            }
+            if (expected_document
+                    != group.first_document + group.documents) {
+                throw std::runtime_error(
+                    "Incomplete streaming UAC arithmetic shard");
+            }
+            if (part.is_open()) {
+                part.close();
+                if (!part) {
+                    throw std::runtime_error(
+                        "Failed finalizing streaming UAC "
+                        "responsibility part");
+                }
+                const uint64_t expected_bytes =
+                    sizeof(double)
+                    * static_cast<uint64_t>(group.documents)
+                    * components;
+                if (std::filesystem::file_size(
+                        responsibility_parts[arithmetic])
+                        != expected_bytes) {
+                    throw std::runtime_error(
+                        "Invalid streaming UAC responsibility part size");
+                }
+            }
+        });
+    } catch (...) {
+        remove_responsibility_parts(responsibility_parts);
+        throw;
+    }
+
+    reduce_expectation_blocks(out, blocks);
+    out.gaussian_seconds =
+        std::accumulate(gaussian_seconds.begin(),
+            gaussian_seconds.end(), 0.0);
+    out.moment_seconds =
+        std::accumulate(moment_seconds.begin(),
+            moment_seconds.end(), 0.0);
+    const uint64_t maximum_local_workspace =
+        *std::max_element(local_workspace_bytes.begin(),
+            local_workspace_bytes.end());
+    out.peak_workspace_bytes =
+        static_cast<uint64_t>(parallel_workers)
+            * maximum_local_workspace
+        + (request.accumulate_moments
+            ? static_cast<uint64_t>(arithmetic_count)
+                * expectation_block_bytes(
+                    components, cache.dimension, factor_rank)
+            : 0);
+    std::sort(local_particle_bytes.begin(),
+        local_particle_bytes.end(), std::greater<uint64_t>());
+    out.peak_particle_bytes = std::accumulate(
+        local_particle_bytes.begin(),
+        local_particle_bytes.begin() + parallel_workers,
+        uint64_t{0});
+
+    if (compare_responsibilities) {
+        double responsibility_change_sum = 0.0;
+        for (double value : responsibility_changes) {
+            responsibility_change_sum += value;
+        }
+        out.mean_max_responsibility_change =
+            responsibility_change_sum / cache.documents;
+        out.has_responsibility_change = true;
+    }
+    if (part_destination) {
+        try {
+            concatenate_responsibility_parts(
+                responsibility_parts, *part_destination);
+        } catch (...) {
+            remove_responsibility_parts(responsibility_parts);
+            throw;
+        }
+        remove_responsibility_parts(responsibility_parts);
+    }
+    if (responsibility_state) {
+        responsibility_state->commit();
+    }
+    if (effective_membership) {
+        effective_membership->setZero(components);
         if (request.store_responsibilities) {
-            out.responsibilities.middleRows(first, count) =
-                local.responsibilities;
+            for (int32_t c = 0; c < components; ++c) {
+                for (int32_t d = 0; d < cache.documents; ++d) {
+                    (*effective_membership)(c) +=
+                        out.responsibilities(d, c);
+                }
+            }
+        } else {
+            if (!responsibility_spool) {
+                throw std::runtime_error(
+                    "Streaming UAC effective membership has no rows");
+            }
+            Eigen::VectorXd row(components);
+            for (int32_t c = 0; c < components; ++c) {
+                std::ifstream in(
+                    *responsibility_spool, std::ios::binary);
+                if (!in) {
+                    throw std::runtime_error(
+                        "Cannot read final streaming UAC responsibilities");
+                }
+                for (int32_t d = 0; d < cache.documents; ++d) {
+                    in.read(reinterpret_cast<char*>(row.data()),
+                        sizeof(double) * components);
+                    if (!in) {
+                        throw std::runtime_error(
+                            "Truncated final streaming UAC "
+                            "responsibilities");
+                    }
+                    (*effective_membership)(c) += row(c);
+                }
+            }
         }
-        accumulate_expectation(out, local);
     }
     return out;
 }
 
-ScoreResult score_particle_replay(const Dataset& data, const Basis& basis,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert, const Pilot& pilot,
-    const PilotCache& pilot_cache, ProposalKind proposal, int32_t samples,
-    uint64_t seed, double broadening,
-    int32_t n_threads, int32_t block_size, const Model& model,
-    ParticleReplayMetrics& metrics,
-    const ProposalScreeningPlan* proposal_screening,
-    const ComponentScreeningOptions& component_screening) {
-    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
+ScoreResult score_particle_cache(const ParticleCache& cache,
+    const Model& model, const ComponentScreeningOptions& screening,
+    bool materialize_responsibilities, int32_t n_threads) {
+    CachedDocumentMetadata metadata;
+    const int32_t components = static_cast<int32_t>(model.weights.size());
+    const std::filesystem::path sidecar =
+        cache.directory / "score-responsibilities.bin";
+    Eigen::VectorXd effective_membership =
+        Eigen::VectorXd::Zero(components);
+    Expectation expectation = cached_particle_expectation(cache, model,
+        screening,
+        ExpectationRequest{materialize_responsibilities, true, false},
+        n_threads,
+        &metadata, nullptr,
+        materialize_responsibilities ? nullptr : &sidecar,
+        &effective_membership);
     ScoreResult out;
-    out.responsibilities.resize(documents, model.weights.size());
-    out.particle_diagnostics.resize(documents);
-    out.per_document_evaluated_components.resize(documents);
-    out.per_document_omitted_component_mass.resize(documents);
-    out.per_document_proposal_components.resize(documents);
-    ++metrics.passes;
-    for (int32_t first = 0; first < documents; first += block_size) {
-        const int32_t count = std::min(block_size, documents - first);
-        ParticleSet block = make_particle_range(data, basis, helmert, pilot,
-            pilot_cache, proposal, samples, seed, broadening, n_threads,
-            proposal_screening, first, count);
-        metrics.add(block);
-        ScoreResult local = score_particles(
-            block, model, component_screening);
-        out.responsibilities.middleRows(first, count) =
-            local.responsibilities;
-        for (int32_t d = 0; d < count; ++d) {
-            out.particle_diagnostics[first + d] =
-                local.particle_diagnostics[d];
-            out.per_document_evaluated_components[first + d] =
-                local.per_document_evaluated_components[d];
-            out.per_document_omitted_component_mass[first + d] =
-                local.per_document_omitted_component_mass[d];
-            out.per_document_proposal_components[first + d] =
-                local.per_document_proposal_components[d];
-        }
-        out.gaussian_seconds += local.gaussian_seconds;
-        out.moment_seconds += local.moment_seconds;
-        out.component_bound_seconds += local.component_bound_seconds;
-        out.estimated_peak_expectation_workspace_bytes = std::max(
-            out.estimated_peak_expectation_workspace_bytes,
-            local.estimated_peak_expectation_workspace_bytes);
-        out.evaluated_component_documents +=
-            local.evaluated_component_documents;
-        out.possible_component_documents +=
-            local.possible_component_documents;
-        out.full_component_documents += local.full_component_documents;
-        out.component_bound_violations +=
-            local.component_bound_violations;
-        out.maximum_omitted_component_mass = std::max(
-            out.maximum_omitted_component_mass,
-            local.maximum_omitted_component_mass);
-        out.mean_omitted_component_mass +=
-            local.mean_omitted_component_mass * count;
+    out.responsibilities = std::move(expectation.responsibilities);
+    out.effective_membership = std::move(effective_membership);
+    out.scored_documents = cache.documents;
+    out.scored_components = components;
+    if (!materialize_responsibilities) {
+        out.responsibility_sidecar = sidecar.string();
     }
-    out.sampling_seconds = metrics.sampling_seconds;
-    out.likelihood_seconds = metrics.likelihood_seconds;
-    out.fisher_work_seconds = metrics.fisher_work_seconds;
+    out.particle_diagnostics =
+        std::move(expectation.particle_diagnostics);
+    out.per_document_evaluated_components =
+        std::move(expectation.per_document_evaluated_components);
+    out.per_document_omitted_component_mass =
+        std::move(expectation.per_document_omitted_component_mass);
+    out.per_document_particles = std::move(metadata.particles);
+    out.per_document_proposal_components =
+        std::move(metadata.proposal_components);
+    out.adaptive_particle_diagnostics = std::move(metadata.adaptive);
+    out.gaussian_seconds = expectation.gaussian_seconds;
+    out.moment_seconds = expectation.moment_seconds;
+    out.component_bound_seconds = expectation.component_bound_seconds;
+    out.evaluated_component_documents =
+        expectation.evaluated_component_documents;
+    out.possible_component_documents =
+        expectation.possible_component_documents;
+    out.full_component_documents = expectation.full_component_documents;
+    out.component_bound_violations =
+        expectation.component_bound_violations;
+    out.maximum_omitted_component_mass =
+        expectation.maximum_omitted_component_mass;
+    out.mean_omitted_component_mass = cache.documents > 0
+        ? expectation.omitted_component_mass_sum / cache.documents : 0.0;
+    out.estimated_peak_expectation_workspace_bytes =
+        expectation.peak_workspace_bytes;
+    out.sampling_seconds = cache.metrics.sampling_seconds;
+    out.likelihood_seconds = cache.metrics.likelihood_seconds;
+    out.fisher_work_seconds = cache.metrics.fisher_work_seconds;
     out.proposal_component_work_seconds =
-        metrics.proposal_component_work_seconds;
+        cache.metrics.proposal_component_work_seconds;
     out.proposal_draw_density_work_seconds =
-        metrics.proposal_draw_density_work_seconds;
+        cache.metrics.proposal_draw_density_work_seconds;
     out.proposal_precision_fallback_seconds =
-        metrics.proposal_precision_fallback_seconds;
+        cache.metrics.proposal_precision_fallback_seconds;
     out.proposal_precision_fallbacks =
-        metrics.proposal_precision_fallbacks;
+        cache.metrics.proposal_precision_fallbacks;
     out.proposal_components_constructed =
-        metrics.proposal_components_constructed;
+        std::accumulate(out.per_document_proposal_components.begin(),
+            out.per_document_proposal_components.end(), int64_t{0});
     out.proposal_components_possible =
-        metrics.proposal_components_possible;
-    out.mean_omitted_component_mass /= std::max(1, documents);
-    out.component_screening_options = component_screening;
-    out.particle_component_screening =
-        component_screening.mode != ComponentScreeningMode::Off;
-    out.particle_generation_seconds = out.sampling_seconds
-        + out.likelihood_seconds;
-    out.resident_particle_bytes = metrics.peak_bytes;
+        static_cast<int64_t>(cache.documents)
+        * active_component_count(model);
+    out.particle_samples = std::accumulate(
+        out.per_document_particles.begin(),
+        out.per_document_particles.end(), int64_t{0});
+    out.resident_particle_bytes = 0;
     out.estimated_peak_proposal_workspace_bytes =
-        metrics.proposal_workspace_bytes;
-    out.particle_samples = static_cast<int64_t>(documents) * samples;
-    out.per_document_particles.assign(documents, samples);
-    out.particle_block_size = block_size;
-    out.particle_generation_passes = metrics.passes;
-    out.particle_replay = true;
+        cache.metrics.proposal_workspace_bytes;
+    out.component_screening_options = screening;
+    out.particle_component_screening =
+        screening.mode != ComponentScreeningMode::Off;
+    out.particle_generation_seconds =
+        cache.metrics.calibration_seconds
+        + cache.metrics.sampling_seconds + cache.metrics.likelihood_seconds;
+    out.calibration_seconds = cache.metrics.calibration_seconds;
+    out.calibration_samples = cache.metrics.calibration_samples;
+    out.reused_calibration_samples =
+        cache.metrics.reused_calibration_samples;
+    out.particle_generation_passes = cache.metrics.generation_passes;
+    out.streaming = true;
+    out.streaming_cache_reused = cache.reused;
+    out.streaming_cache_bytes = cache.bytes;
+    out.streaming_peak_particle_bytes = std::max(
+        cache.metrics.peak_bytes, expectation.peak_particle_bytes);
+    out.streaming_parallel_workers = expectation.parallel_workers;
+    out.streaming_cache_shards =
+        static_cast<int32_t>(cache.shards.size());
+    out.streaming_cache_rebuilds = cache.rebuilds;
+    out.streaming_particle_storage = cache.storage;
     return out;
 }
 
-FitResult fit(const Dataset& data, const Basis* basis,
-    const FitOptions& options) {
+FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
+    const Basis* basis, const FitOptions& options) {
     validate_dataset(data, options.handoff == HandoffMode::Particle);
     validate_component_screening(options.component_screening);
     const int64_t total_starts = static_cast<int64_t>(options.kmeans_starts)
@@ -4380,10 +5989,8 @@ FitResult fit(const Dataset& data, const Basis* basis,
     if (options.n_components <= 0 || options.kmeans_starts < 0
         || options.leiden_starts < 0 || total_starts <= 0
         || options.max_iterations <= 0 || options.n_particles <= 0
-        || options.particle_block_size < 0
+        || options.streaming.block_documents <= 0
         || options.particle_em_fixed_iterations < 0
-        || (options.adaptive_particles.enabled()
-            && options.particle_block_size != 0)
         || options.cluster_covariance_rank < -1
         || options.kmeans_max_iterations <= 0
         || data.centers.rows() < options.n_components
@@ -4442,6 +6049,11 @@ FitResult fit(const Dataset& data, const Basis* basis,
         && options.particle_variance_change_tolerance > 0.0) {
         throw std::invalid_argument(
             "Fixed particle EM iterations cannot use convergence stopping");
+    }
+    if (options.particle_engine == ParticleEngine::Stream
+        && options.handoff != HandoffMode::Particle) {
+        throw std::invalid_argument(
+            "The UAC stream particle engine requires particle handoff");
     }
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, options.n_threads));
@@ -4711,7 +6323,58 @@ FitResult fit(const Dataset& data, const Basis* basis,
     }
     Candidate particle;
     try {
-        if (options.adaptive_particles.enabled()) {
+        if (options.particle_engine == ParticleEngine::Stream) {
+            ParticleCache cache = open_or_build_particle_cache(
+                data, *basis, helmert, result.pilot, pilot_cache,
+                options.proposal, options.n_particles, particle_seed,
+                options.fisher_broadening, options.n_threads,
+                particle_initial, options.adaptive_particles,
+                &proposal_screening, options.component_screening,
+                options.streaming);
+            if (options.streaming.count_storage
+                    == StreamingCountStorage::Source
+                && mutable_data) {
+                mutable_data->counts.clear();
+                mutable_data->counts.shrink_to_fit();
+            }
+            if (options.component_screening.mode
+                    == ComponentScreeningMode::Auto) {
+                apply_auto_component_screening_resolution(
+                    particle_screening,
+                    cache.auto_component_screening_enabled);
+            }
+            CachedResponsibilityState responsibility_state(
+                cache.directory);
+            auto expectation_function = [&](const Model& model) {
+                return cached_particle_expectation(cache, model,
+                    particle_screening,
+                    ExpectationRequest{false, false, true},
+                    options.n_threads,
+                    nullptr, &responsibility_state);
+            };
+            particle = fit_particle_candidate(expectation_function,
+                particle_initial, options, selected->trace);
+            if (!particle.trace.collapsed) {
+                const auto score_start = std::chrono::steady_clock::now();
+                result.score = score_particle_cache(
+                    cache, particle.model, particle_screening,
+                    options.streaming.count_storage
+                        == StreamingCountStorage::Memory,
+                    options.n_threads);
+                add_screening_metrics(result.score,
+                    options.component_screening, proposal_screening,
+                    particle_screening);
+                result.score.map_component_screening =
+                    selected_map_screening.mode
+                    == ComponentScreeningMode::On;
+                result.score.adaptive_particle_options =
+                    options.adaptive_particles;
+                result.score.streaming_count_storage =
+                    options.streaming.count_storage;
+                result.score.scoring_seconds = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - score_start).count();
+            }
+        } else if (options.adaptive_particles.enabled()) {
             const RaggedParticleSet particles = make_adaptive_particles(
                 data, *basis, helmert, result.pilot, pilot_cache,
                 options.proposal, particle_seed, options.fisher_broadening,
@@ -4752,7 +6415,7 @@ FitResult fit(const Dataset& data, const Basis* basis,
                 result.score.scoring_seconds = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - score_start).count();
             }
-        } else if (options.particle_block_size == 0) {
+        } else {
             const ParticleSet particles = make_particle_range(data, *basis,
                 helmert, result.pilot, pilot_cache, options.proposal,
                 options.n_particles, particle_seed,
@@ -4790,37 +6453,6 @@ FitResult fit(const Dataset& data, const Basis* basis,
                 result.score.scoring_seconds = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - score_start).count();
             }
-        } else {
-            ParticleReplayMetrics metrics;
-            auto expectation_function = [&](const Model& model) {
-                return replay_particle_expectation(data, *basis, helmert,
-                    result.pilot, pilot_cache, options.proposal,
-                    options.n_particles,
-                    particle_seed, options.fisher_broadening,
-                    options.n_threads, options.particle_block_size, model,
-                    metrics, &proposal_screening, particle_screening,
-                    ExpectationRequest{true, false, true});
-            };
-            particle = fit_particle_candidate(expectation_function,
-                particle_initial, options, selected->trace);
-            if (!particle.trace.collapsed) {
-                const auto score_start = std::chrono::steady_clock::now();
-                result.score = score_particle_replay(data, *basis, helmert,
-                    result.pilot, pilot_cache, options.proposal,
-                    options.n_particles,
-                    particle_seed, options.fisher_broadening,
-                    options.n_threads, options.particle_block_size,
-                    particle.model, metrics, &proposal_screening,
-                    particle_screening);
-                add_screening_metrics(result.score,
-                    options.component_screening, proposal_screening,
-                    particle_screening);
-                result.score.map_component_screening =
-                    selected_map_screening.mode
-                    == ComponentScreeningMode::On;
-                result.score.scoring_seconds = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - score_start).count();
-            }
         }
     } catch (const std::exception& exception) {
         throw std::runtime_error(
@@ -4835,6 +6467,16 @@ FitResult fit(const Dataset& data, const Basis* basis,
     result.model = particle.model;
     result.converged = particle.trace.converged;
     return result;
+}
+
+FitResult fit(Dataset& data, const Basis* basis,
+    const FitOptions& options) {
+    return fit_impl(data, &data, basis, options);
+}
+
+FitResult fit(const Dataset& data, const Basis* basis,
+    const FitOptions& options) {
+    return fit_impl(data, nullptr, basis, options);
 }
 
 ScoreResult score_map(const Dataset& data, const Model& model,
@@ -4882,14 +6524,14 @@ ScoreResult score_map(const Dataset& data, const Model& model,
     return out;
 }
 
-ScoreResult score_particle(const Dataset& data, const Basis& basis,
-    const State& state, const ParticleScoreOptions& options) {
+ScoreResult score_particle_impl(const Dataset& data,
+    Dataset* mutable_data, const Basis& basis, const State& state,
+    const ParticleScoreOptions& options) {
     const ProposalKind proposal = options.proposal;
     const int32_t particles = options.maximum_particles;
     const AdaptiveParticleOptions& adaptive_particles =
         options.adaptive_particles;
     const int32_t n_threads = options.n_threads;
-    const int32_t particle_block_size = options.particle_block_size;
     const ComponentScreeningOptions& component_screening =
         options.component_screening;
     validate_dataset(data, true);
@@ -4906,15 +6548,12 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
         throw std::invalid_argument(
             "Invalid UAC particle score state or dimensions");
     }
-    if (particle_block_size < 0) {
-        throw std::invalid_argument("UAC particle block size cannot be negative");
+    if (options.streaming.block_documents <= 0) {
+        throw std::invalid_argument(
+            "UAC streaming block document count must be positive");
     }
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, n_threads));
-    if (adaptive_particles.enabled() && particle_block_size != 0) {
-        throw std::invalid_argument(
-            "Adaptive particles cannot be combined with particle block replay");
-    }
     const PilotCache pilot_cache(state.pilot);
     const uint64_t particle_seed =
         static_cast<uint64_t>(state.seed) ^ 0xF604;
@@ -4926,6 +6565,37 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
     if (particle_screening.mode == ComponentScreeningMode::Auto) {
         apply_auto_component_screening_resolution(
             particle_screening, false);
+    }
+    if (options.particle_engine == ParticleEngine::Stream) {
+        ParticleCache cache = open_or_build_particle_cache(
+            data, basis, state.helmert, state.pilot, pilot_cache,
+            proposal, particles, particle_seed, state.fisher_broadening,
+            n_threads, state.model, adaptive_particles,
+            &proposal_screening, component_screening, options.streaming);
+        if (options.streaming.count_storage
+                == StreamingCountStorage::Source
+            && mutable_data) {
+            mutable_data->counts.clear();
+            mutable_data->counts.shrink_to_fit();
+        }
+        if (component_screening.mode == ComponentScreeningMode::Auto) {
+            apply_auto_component_screening_resolution(
+                particle_screening,
+                cache.auto_component_screening_enabled);
+        }
+        const auto score_start = std::chrono::steady_clock::now();
+        ScoreResult out = score_particle_cache(
+            cache, state.model, particle_screening,
+            options.streaming.count_storage
+                == StreamingCountStorage::Memory,
+            n_threads);
+        add_screening_metrics(out, component_screening,
+            proposal_screening, particle_screening);
+        out.adaptive_particle_options = adaptive_particles;
+        out.streaming_count_storage = options.streaming.count_storage;
+        out.scoring_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - score_start).count();
+        return out;
     }
     if (adaptive_particles.enabled()) {
         const auto particle_start = std::chrono::steady_clock::now();
@@ -4954,21 +6624,6 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
             std::chrono::steady_clock::now() - score_start).count();
         return out;
     }
-    if (particle_block_size > 0) {
-        ParticleReplayMetrics metrics;
-        const auto score_start = std::chrono::steady_clock::now();
-        ScoreResult out = score_particle_replay(data, basis, state.helmert,
-            state.pilot, pilot_cache, proposal, particles,
-            particle_seed,
-            state.fisher_broadening, n_threads, particle_block_size,
-            state.model, metrics, &proposal_screening,
-            particle_screening);
-        add_screening_metrics(out, component_screening,
-            proposal_screening, particle_screening);
-        out.scoring_seconds = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - score_start).count();
-        return out;
-    }
     const auto particle_start = std::chrono::steady_clock::now();
     const ParticleSet set = make_particle_range(data, basis, state.helmert,
         state.pilot, pilot_cache, proposal, particles, particle_seed,
@@ -4991,6 +6646,16 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
     out.scoring_seconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - score_start).count();
     return out;
+}
+
+ScoreResult score_particle(Dataset& data, const Basis& basis,
+    const State& state, const ParticleScoreOptions& options) {
+    return score_particle_impl(data, &data, basis, state, options);
+}
+
+ScoreResult score_particle(const Dataset& data, const Basis& basis,
+    const State& state, const ParticleScoreOptions& options) {
+    return score_particle_impl(data, nullptr, basis, state, options);
 }
 
 State make_state(const FitResult& fit_result, const FitOptions& options,

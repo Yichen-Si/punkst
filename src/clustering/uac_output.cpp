@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <numeric>
 #include <optional>
+#include <queue>
 #include <stdexcept>
 #include <vector>
 
@@ -43,6 +44,53 @@ double optional_target_or_zero(const std::optional<double>& value) {
     return value.value_or(0.0);
 }
 
+int32_t score_components(const ScoreResult& score) {
+    if (score.responsibilities.cols() > 0) {
+        return static_cast<int32_t>(score.responsibilities.cols());
+    }
+    if (!score.responsibility_sidecar.empty()
+        && score.scored_components > 0) {
+        return score.scored_components;
+    }
+    throw std::runtime_error(
+        "UAC score has neither resident nor streamed responsibilities");
+}
+
+template<class Function>
+void for_each_responsibility_row(
+    const ScoreResult& score, Function&& function) {
+    const int32_t components = score_components(score);
+    if (score.responsibilities.size() > 0) {
+        for (Eigen::Index d = 0;
+                d < score.responsibilities.rows(); ++d) {
+            function(static_cast<int64_t>(d),
+                Eigen::RowVectorXd(score.responsibilities.row(d)));
+        }
+        return;
+    }
+    std::ifstream in(score.responsibility_sidecar, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error(
+            "Cannot read UAC responsibility sidecar: "
+            + score.responsibility_sidecar);
+    }
+    Eigen::RowVectorXd row(components);
+    for (int64_t d = 0; d < score.scored_documents; ++d) {
+        in.read(reinterpret_cast<char*>(row.data()),
+            sizeof(double) * components);
+        if (!in) {
+            throw std::runtime_error(
+                "Truncated UAC responsibility sidecar");
+        }
+        function(d, row);
+    }
+    char extra = 0;
+    if (in.read(&extra, 1)) {
+        throw std::runtime_error(
+            "Oversized UAC responsibility sidecar");
+    }
+}
+
 } /* namespace */
 
 void write_model(const std::string& path, const State& state,
@@ -76,23 +124,34 @@ void write_results(const std::string& path, const Dataset& data,
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot write UAC results: " + path);
     out << "#id\ttop_cluster\ttop_probability\tsecond_cluster\tsecond_probability\tentropy";
-    for (Eigen::Index c = 0; c < score.responsibilities.cols(); ++c) out << "\tcluster_" << c;
+    const int32_t components = score_components(score);
+    for (int32_t c = 0; c < components; ++c) out << "\tcluster_" << c;
     out << "\n" << std::scientific << std::setprecision(10);
-    for (Eigen::Index d = 0; d < score.responsibilities.rows(); ++d) {
-        std::vector<Eigen::Index> order(score.responsibilities.cols());
+    for_each_responsibility_row(score,
+        [&](int64_t d, const Eigen::RowVectorXd& probability) {
+        if (d >= static_cast<int64_t>(data.identifiers.size())) {
+            throw std::runtime_error(
+                "UAC responsibility sidecar exceeds dataset");
+        }
+        std::vector<Eigen::Index> order(components);
         std::iota(order.begin(), order.end(), 0);
         std::partial_sort(order.begin(), order.begin() + std::min<size_t>(2, order.size()), order.end(),
-            [&](Eigen::Index a, Eigen::Index b) { return score.responsibilities(d, a) > score.responsibilities(d, b); });
+            [&](Eigen::Index a, Eigen::Index b) {
+                return probability(a) > probability(b);
+            });
         const Eigen::Index first = order[0];
         const Eigen::Index second = order.size() > 1
-            && score.responsibilities(d, order[1]) > 0.0
+            && probability(order[1]) > 0.0
             ? order[1] : order[0];
-        out << data.identifiers[d] << "\t" << first << "\t" << score.responsibilities(d, first)
-            << "\t" << second << "\t" << score.responsibilities(d, second)
-            << "\t" << entropy(score.responsibilities.row(d));
-        for (Eigen::Index c = 0; c < score.responsibilities.cols(); ++c) out << "\t" << score.responsibilities(d, c);
+        out << data.identifiers[d] << "\t" << first << "\t"
+            << probability(first)
+            << "\t" << second << "\t" << probability(second)
+            << "\t" << entropy(probability);
+        for (int32_t c = 0; c < components; ++c) {
+            out << "\t" << probability(c);
+        }
         out << "\n";
-    }
+    });
 }
 
 void write_diagnostics(const std::string& path, const Dataset& data,
@@ -148,11 +207,28 @@ void write_diagnostics(const std::string& path, const Dataset& data,
         << score.estimated_peak_proposal_workspace_bytes << "\n"
         << "##estimated_peak_expectation_workspace_bytes\t"
         << score.estimated_peak_expectation_workspace_bytes << "\n"
-        << "##particle_replay\t" << static_cast<int32_t>(
-            score.particle_replay) << "\n"
-        << "##particle_block_size\t" << score.particle_block_size << "\n"
         << "##particle_generation_passes\t"
         << score.particle_generation_passes << "\n"
+        << "##particle_engine\t"
+        << (score.streaming ? "stream" : "batch") << "\n"
+        << "##stream_cache_reused\t"
+        << static_cast<int32_t>(score.streaming_cache_reused) << "\n"
+        << "##stream_cache_bytes\t"
+        << score.streaming_cache_bytes << "\n"
+        << "##stream_peak_particle_bytes\t"
+        << score.streaming_peak_particle_bytes << "\n"
+        << "##stream_parallel_workers\t"
+        << score.streaming_parallel_workers << "\n"
+        << "##stream_cache_shards\t"
+        << score.streaming_cache_shards << "\n"
+        << "##stream_cache_rebuilds\t"
+        << score.streaming_cache_rebuilds << "\n"
+        << "##stream_count_storage\t"
+        << streaming_count_storage_name(
+            score.streaming_count_storage) << "\n"
+        << "##stream_particle_storage\t"
+        << streaming_particle_storage_name(
+            score.streaming_particle_storage) << "\n"
         << "##component_screening_requested\t"
         << component_screening_mode_name(
             score.component_screening_options.mode) << "\n"
@@ -422,19 +498,63 @@ void write_representatives(const std::string& path, const Dataset& data,
     if (!out) throw std::runtime_error("Cannot write UAC representatives: " + path);
     out << "#cluster\trank\tid\tprobability\ttop_probability\tentropy\n"
         << std::scientific << std::setprecision(10);
-    std::vector<Eigen::Index> order(score.responsibilities.rows());
-    for (Eigen::Index c = 0; c < score.responsibilities.cols(); ++c) {
-        if (!(score.responsibilities.col(c).sum() > 0.0)) continue;
-        std::iota(order.begin(), order.end(), 0);
-        std::partial_sort(order.begin(), order.begin() + std::min<int32_t>(n_representatives, order.size()), order.end(),
-            [&](Eigen::Index a, Eigen::Index b) { return score.responsibilities(a, c) > score.responsibilities(b, c); });
-        const int32_t take = std::min<int32_t>(n_representatives, order.size());
-        for (int32_t rank = 0; rank < take; ++rank) {
-            const Eigen::Index d = order[rank];
-            out << c << "\t" << rank + 1 << "\t" << data.identifiers[d]
-                << "\t" << score.responsibilities(d, c)
-                << "\t" << score.responsibilities.row(d).maxCoeff()
-                << "\t" << entropy(score.responsibilities.row(d)) << "\n";
+    struct Representative {
+        double probability = 0.0;
+        double top_probability = 0.0;
+        double entropy = 0.0;
+        int64_t document = 0;
+    };
+    auto less_desirable = [](const Representative& left,
+            const Representative& right) {
+        return left.probability > right.probability
+            || (left.probability == right.probability
+                && left.document < right.document);
+    };
+    const int32_t components = score_components(score);
+    std::vector<std::priority_queue<Representative,
+        std::vector<Representative>, decltype(less_desirable)>> heaps;
+    Eigen::VectorXd membership = Eigen::VectorXd::Zero(components);
+    heaps.reserve(components);
+    for (int32_t c = 0; c < components; ++c) {
+        heaps.emplace_back(less_desirable);
+    }
+    for_each_responsibility_row(score,
+        [&](int64_t d, const Eigen::RowVectorXd& probability) {
+        const double top = probability.maxCoeff();
+        const double row_entropy = entropy(probability);
+        for (int32_t c = 0; c < components; ++c) {
+            membership(c) += probability(c);
+            Representative value{
+                probability(c), top, row_entropy, d};
+            auto& heap = heaps[c];
+            heap.push(value);
+            if (static_cast<int32_t>(heap.size())
+                    > n_representatives) {
+                heap.pop();
+            }
+        }
+    });
+    for (int32_t c = 0; c < components; ++c) {
+        if (!(membership(c) > 0.0)) continue;
+        std::vector<Representative> selected;
+        while (!heaps[c].empty()) {
+            selected.push_back(heaps[c].top());
+            heaps[c].pop();
+        }
+        std::sort(selected.begin(), selected.end(),
+            [](const Representative& left,
+                    const Representative& right) {
+                return left.probability > right.probability
+                    || (left.probability == right.probability
+                        && left.document < right.document);
+            });
+        for (size_t rank = 0; rank < selected.size(); ++rank) {
+            const auto& value = selected[rank];
+            out << c << "\t" << rank + 1 << "\t"
+                << data.identifiers[value.document]
+                << "\t" << value.probability
+                << "\t" << value.top_probability
+                << "\t" << value.entropy << "\n";
         }
     }
 }

@@ -130,6 +130,8 @@ set(CLUSTERING_SOURCE_FILES
     src/clustering/uac_internal.hpp
     src/clustering/uac.cpp
     src/clustering/uac_output.cpp
+    src/clustering/uac_stream.hpp
+    src/clustering/uac_stream.cpp
     src/clustering/low_rank_covariance.hpp
     src/clustering/low_rank_covariance.cpp
     src/clustering/gamma_pois_cluster.hpp

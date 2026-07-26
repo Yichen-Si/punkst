@@ -2626,40 +2626,244 @@ void test_fit_score_and_state(const std::string& requested_output) {
     }
     require(rejected_invalid_maximum,
         "component maximum below the minimum was accepted");
-    for (int32_t block_size : {1, 5,
-            static_cast<int32_t>(data.identifiers.size())}) {
-        uac::ParticleScoreOptions replay_options = transform_options;
-        replay_options.n_threads = 2;
-        replay_options.particle_block_size = block_size;
-        const uac::ScoreResult replayed = uac::score_particle(data, basis,
-            state, replay_options);
-        require((replayed.responsibilities - rescored.responsibilities)
-                .cwiseAbs().maxCoeff() < 1e-11
-            && replayed.particle_replay
-            && replayed.particle_block_size == block_size
-            && replayed.resident_particle_bytes
-                <= fitted.score.resident_particle_bytes
-            && replayed.particle_samples
-                == static_cast<int64_t>(data.identifiers.size())
-                    * state.n_particles
-            && replayed.per_document_particles.size()
-                == data.identifiers.size()
-            && std::all_of(replayed.per_document_particles.begin(),
-                replayed.per_document_particles.end(),
-                [&](int32_t value) { return value == state.n_particles; }),
-            "blockwise particle replay changed transform inference");
+    const std::filesystem::path stream_score_cache =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_stream_score_cache";
+    std::filesystem::remove_all(stream_score_cache);
+    const uac::StreamingOptions streaming_defaults;
+    require(streaming_defaults.block_documents == 64
+            && streaming_defaults.particle_storage
+                == uac::StreamingParticleStorage::Positions,
+        "streaming resource defaults changed unexpectedly");
+    uac::ParticleScoreOptions stream_options = transform_options;
+    stream_options.n_threads = 12;
+    stream_options.particle_engine = uac::ParticleEngine::Stream;
+    stream_options.streaming.cache_directory =
+        stream_score_cache.string();
+    stream_options.streaming.block_documents = 5;
+    stream_options.streaming.particle_storage =
+        uac::StreamingParticleStorage::Positions;
+    stream_options.streaming.count_storage =
+        uac::StreamingCountStorage::Memory;
+    stream_options.streaming.rebuild_cache = true;
+    const uac::ScoreResult streamed = uac::score_particle(data, basis,
+        state, stream_options);
+    require((streamed.responsibilities - rescored.responsibilities)
+            .cwiseAbs().maxCoeff() < 1e-11
+        && streamed.streaming && !streamed.streaming_cache_reused
+        && streamed.streaming_particle_storage
+            == uac::StreamingParticleStorage::Positions
+        && streamed.streaming_parallel_workers == 12
+        && streamed.streaming_cache_shards > 0
+        && streamed.streaming_cache_bytes > 0
+        && streamed.resident_particle_bytes == 0
+        && streamed.particle_samples
+            == static_cast<int64_t>(data.identifiers.size())
+                * state.n_particles
+        && streamed.per_document_particles.size()
+            == data.identifiers.size()
+        && std::all_of(streamed.per_document_particles.begin(),
+            streamed.per_document_particles.end(),
+            [&](int32_t value) { return value == state.n_particles; }),
+        "streaming particle cache changed transform inference");
+    stream_options.streaming.rebuild_cache = false;
+    const uac::ScoreResult reused_stream = uac::score_particle(data, basis,
+        state, stream_options);
+    require(reused_stream.streaming_cache_reused
+            && (reused_stream.responsibilities
+                - streamed.responsibilities).cwiseAbs().maxCoeff() == 0.0,
+        "streaming particle cache was not reused exactly");
+    uac::ParticleScoreOptions single_thread_stream_options =
+        stream_options;
+    single_thread_stream_options.n_threads = 1;
+    const uac::ScoreResult single_thread_stream = uac::score_particle(
+        data, basis, state, single_thread_stream_options);
+    require(single_thread_stream.streaming_parallel_workers == 1
+            && streamed.streaming_peak_particle_bytes
+                >= single_thread_stream.streaming_peak_particle_bytes
+            && (single_thread_stream.responsibilities
+                - streamed.responsibilities).cwiseAbs().maxCoeff() == 0.0,
+        "streaming thread count changed particle scores or diagnostics");
+    uac::ParticleScoreOptions source_stream_options = stream_options;
+    source_stream_options.streaming.count_storage =
+        uac::StreamingCountStorage::Source;
+    uac::Dataset source_stream_data = data;
+    const uac::ScoreResult source_stream = uac::score_particle(
+        source_stream_data, basis, state, source_stream_options);
+    require(source_stream_data.counts.empty()
+            && source_stream.responsibilities.size() == 0
+            && !source_stream.responsibility_sidecar.empty()
+            && (source_stream.effective_membership
+                - streamed.responsibilities.colwise().sum().transpose())
+                .cwiseAbs().maxCoeff() == 0.0,
+        "source streaming retained or changed final responsibilities");
+    const std::filesystem::path batch_results =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_batch_results.tsv";
+    const std::filesystem::path stream_results =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_stream_results.tsv";
+    const std::filesystem::path batch_representatives =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_batch_representatives.tsv";
+    const std::filesystem::path stream_representatives =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_stream_representatives.tsv";
+    uac::write_results(batch_results.string(), data, streamed);
+    uac::write_results(stream_results.string(), data, source_stream);
+    uac::write_representatives(
+        batch_representatives.string(), data, streamed, 3);
+    uac::write_representatives(
+        stream_representatives.string(), data, source_stream, 3);
+    require(read_text(batch_results) == read_text(stream_results)
+            && read_text(batch_representatives)
+                == read_text(stream_representatives),
+        "streamed UAC result writers changed the output contract");
+    std::filesystem::remove(batch_results);
+    std::filesystem::remove(stream_results);
+    std::filesystem::remove(batch_representatives);
+    std::filesystem::remove(stream_representatives);
+    std::filesystem::path corrupt_shard;
+    for (const auto& entry :
+            std::filesystem::recursive_directory_iterator(
+                stream_score_cache)) {
+        if (entry.path().extension() == ".bin") {
+            corrupt_shard = entry.path();
+            break;
+        }
     }
+    require(!corrupt_shard.empty(),
+        "streaming particle cache did not contain a shard");
+    {
+        std::fstream corrupt(corrupt_shard,
+            std::ios::binary | std::ios::in | std::ios::out);
+        corrupt.seekg(-1, std::ios::end);
+        char byte = 0;
+        corrupt.read(&byte, 1);
+        byte ^= 0x5a;
+        corrupt.seekp(-1, std::ios::end);
+        corrupt.write(&byte, 1);
+    }
+    const uac::ScoreResult rebuilt_stream = uac::score_particle(
+        data, basis, state, stream_options);
+    require(!rebuilt_stream.streaming_cache_reused
+            && rebuilt_stream.streaming_cache_rebuilds == 1
+            && (rebuilt_stream.responsibilities
+                - streamed.responsibilities).cwiseAbs().maxCoeff() == 0.0,
+        "corrupt streaming particle cache was not rebuilt exactly");
+    std::filesystem::remove_all(stream_score_cache);
 
-    uac::FitOptions replay_options = options;
-    replay_options.particle_block_size = 5;
-    const uac::FitResult replay_fit = uac::fit(data, &basis, replay_options);
-    require((replay_fit.model.means - fitted.model.means)
-            .cwiseAbs().maxCoeff() < 1e-9
-        && (replay_fit.score.responsibilities
-            - fitted.score.responsibilities).cwiseAbs().maxCoeff() < 1e-9
-        && replay_fit.score.particle_replay
-        && replay_fit.score.particle_generation_passes > 1,
-        "blockwise particle fitting changed deterministic EM results");
+    const std::filesystem::path factor_stream_cache =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_factor_particle_cache";
+    std::filesystem::remove_all(factor_stream_cache);
+    uac::ParticleScoreOptions factor_stream_options = transform_options;
+    factor_stream_options.particle_engine =
+        uac::ParticleEngine::Stream;
+    factor_stream_options.streaming.cache_directory =
+        factor_stream_cache.string();
+    factor_stream_options.streaming.particle_storage =
+        uac::StreamingParticleStorage::Factors;
+    factor_stream_options.streaming.count_storage =
+        uac::StreamingCountStorage::Memory;
+    factor_stream_options.streaming.rebuild_cache = true;
+    factor_stream_options.n_threads = 12;
+    const uac::ScoreResult factor_stream = uac::score_particle(
+        data, basis, state, factor_stream_options);
+    require(factor_stream.streaming_particle_storage
+                == uac::StreamingParticleStorage::Factors
+            && factor_stream.streaming_parallel_workers == 12
+            && (factor_stream.responsibilities
+                - rescored.responsibilities).cwiseAbs().maxCoeff() == 0.0,
+        "factor-backed streaming cache changed particle scores");
+    std::filesystem::remove_all(factor_stream_cache);
+
+    const std::filesystem::path stream_fit_cache =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_stream_fit_cache";
+    std::filesystem::remove_all(stream_fit_cache);
+    uac::FitOptions stream_fit_options = options;
+    stream_fit_options.particle_engine = uac::ParticleEngine::Stream;
+    stream_fit_options.streaming.cache_directory =
+        stream_fit_cache.string();
+    stream_fit_options.streaming.block_documents = 5;
+    stream_fit_options.n_threads = 12;
+    stream_fit_options.streaming.count_storage =
+        uac::StreamingCountStorage::Memory;
+    stream_fit_options.streaming.rebuild_cache = true;
+    const uac::FitResult stream_fit = uac::fit(
+        data, &basis, stream_fit_options);
+    require((stream_fit.model.means - fitted.model.means)
+            .cwiseAbs().maxCoeff() == 0.0
+        && (stream_fit.score.responsibilities
+            - fitted.score.responsibilities).cwiseAbs().maxCoeff() == 0.0
+        && stream_fit.score.streaming,
+        "streaming particle fitting was not bit-exact with batch EM");
+    uac::FitOptions single_thread_stream_fit_options =
+        stream_fit_options;
+    single_thread_stream_fit_options.n_threads = 1;
+    single_thread_stream_fit_options.streaming.rebuild_cache = false;
+    const uac::FitResult single_thread_stream_fit = uac::fit(
+        data, &basis, single_thread_stream_fit_options);
+    require(single_thread_stream_fit.score.streaming_parallel_workers == 1
+            && (single_thread_stream_fit.model.means
+                - stream_fit.model.means).cwiseAbs().maxCoeff() == 0.0
+            && (single_thread_stream_fit.score.responsibilities
+                - stream_fit.score.responsibilities)
+                .cwiseAbs().maxCoeff() == 0.0,
+        "streaming fit changed across thread counts");
+    std::filesystem::remove_all(stream_fit_cache);
+
+    uac::Dataset split_data;
+    constexpr int32_t split_documents = 65;
+    split_data.identifiers.reserve(split_documents);
+    split_data.counts.reserve(split_documents);
+    split_data.centers.resize(split_documents, data.centers.cols());
+    split_data.coordinates.resize(split_documents, data.coordinates.cols());
+    split_data.raw_totals.resize(split_documents);
+    split_data.effective_totals.resize(split_documents);
+    for (int32_t d = 0; d < split_documents; ++d) {
+        const int32_t source =
+            d % static_cast<int32_t>(data.identifiers.size());
+        split_data.identifiers.push_back(
+            data.identifiers[source] + "#" + std::to_string(d));
+        split_data.counts.push_back(data.counts[source]);
+        split_data.centers.row(d) = data.centers.row(source);
+        split_data.coordinates.row(d) = data.coordinates.row(source);
+        split_data.raw_totals(d) = data.raw_totals(source);
+        split_data.effective_totals(d) =
+            data.effective_totals(source);
+    }
+    uac::FitOptions split_batch_options = options;
+    split_batch_options.kmeans_starts = 1;
+    split_batch_options.leiden_starts = 0;
+    split_batch_options.n_particles = 16;
+    split_batch_options.particle_em_fixed_iterations = 3;
+    split_batch_options.particle_engine = uac::ParticleEngine::Batch;
+    const uac::FitResult split_batch = uac::fit(
+        split_data, &basis, split_batch_options);
+    const std::filesystem::path split_cache =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_split_arithmetic_cache";
+    std::filesystem::remove_all(split_cache);
+    uac::FitOptions split_stream_options = split_batch_options;
+    split_stream_options.particle_engine = uac::ParticleEngine::Stream;
+    split_stream_options.streaming.cache_directory =
+        split_cache.string();
+    split_stream_options.streaming.block_documents = 1;
+    split_stream_options.n_threads = 12;
+    split_stream_options.streaming.count_storage =
+        uac::StreamingCountStorage::Memory;
+    split_stream_options.streaming.rebuild_cache = true;
+    const uac::FitResult split_stream = uac::fit(
+        split_data, &basis, split_stream_options);
+    require((split_stream.model.means - split_batch.model.means)
+                .cwiseAbs().maxCoeff() == 0.0
+            && (split_stream.score.responsibilities
+                - split_batch.score.responsibilities)
+                .cwiseAbs().maxCoeff() == 0.0,
+        "micro-shards changed exact batch arithmetic grouping");
+    std::filesystem::remove_all(split_cache);
 
     std::filesystem::path state_path = requested_output.empty()
         ? std::filesystem::temp_directory_path() / "punkst_uac_test_state.tsv"
@@ -2814,6 +3018,32 @@ void test_fit_score_and_state(const std::string& requested_output) {
             && adaptive_transform.adaptive_particle_diagnostics.size()
                 == data.identifiers.size(),
         "adaptive particle transform is invalid");
+    const std::filesystem::path adaptive_stream_cache =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_adaptive_stream_cache";
+    std::filesystem::remove_all(adaptive_stream_cache);
+    uac::ParticleScoreOptions adaptive_stream_options = adaptive_options;
+    adaptive_stream_options.particle_engine =
+        uac::ParticleEngine::Stream;
+    adaptive_stream_options.streaming.cache_directory =
+        adaptive_stream_cache.string();
+    adaptive_stream_options.streaming.rebuild_cache = true;
+    adaptive_stream_options.streaming.count_storage =
+        uac::StreamingCountStorage::Memory;
+    const uac::ScoreResult adaptive_stream = uac::score_particle(data,
+        basis, restored, adaptive_stream_options);
+    require(adaptive_stream.streaming
+            && adaptive_stream.per_document_particles
+                == adaptive_transform.per_document_particles
+            && adaptive_stream.adaptive_particle_diagnostics.size()
+                == data.identifiers.size()
+            && adaptive_stream.reused_calibration_samples
+                == adaptive_transform.reused_calibration_samples
+            && (adaptive_stream.responsibilities
+                - adaptive_transform.responsibilities)
+                .cwiseAbs().maxCoeff() == 0.0,
+        "adaptive streaming particle scores were not bit-exact");
+    std::filesystem::remove_all(adaptive_stream_cache);
 
     uac::ParticleScoreOptions sparse_options = transform_options;
     sparse_options.proposal = uac::ProposalKind::SparseEmpiricalFisher;
@@ -2876,7 +3106,15 @@ void test_fit_score_and_state(const std::string& requested_output) {
     uac::FitOptions factor_options = options;
     factor_options.cluster_covariance_rank = 1;
     factor_options.n_particles = 32;
-    factor_options.particle_block_size = 5;
+    factor_options.particle_engine = uac::ParticleEngine::Stream;
+    factor_options.streaming.cache_directory =
+        (std::filesystem::temp_directory_path()
+            / "punkst_uac_factor_fit_cache").string();
+    factor_options.streaming.rebuild_cache = true;
+    factor_options.streaming.count_storage =
+        uac::StreamingCountStorage::Memory;
+    std::filesystem::remove_all(
+        factor_options.streaming.cache_directory);
     const uac::FitResult factor_fit = uac::fit(
         data, &basis, factor_options);
     require(factor_fit.model.covariance_kind
@@ -2907,7 +3145,15 @@ void test_fit_score_and_state(const std::string& requested_output) {
     factor_score_options.proposal = restored_factor.proposal;
     factor_score_options.maximum_particles = restored_factor.n_particles;
     factor_score_options.n_threads = 2;
-    factor_score_options.particle_block_size = 5;
+    factor_score_options.particle_engine = uac::ParticleEngine::Stream;
+    factor_score_options.streaming.cache_directory =
+        (std::filesystem::temp_directory_path()
+            / "punkst_uac_factor_score_cache").string();
+    factor_score_options.streaming.rebuild_cache = true;
+    factor_score_options.streaming.count_storage =
+        uac::StreamingCountStorage::Memory;
+    std::filesystem::remove_all(
+        factor_score_options.streaming.cache_directory);
     factor_score_options.component_screening =
         restored_factor.component_screening;
     const uac::ScoreResult restored_factor_score = uac::score_particle(
@@ -2918,6 +3164,10 @@ void test_fit_score_and_state(const std::string& requested_output) {
             - factor_fit.score.responsibilities).cwiseAbs().maxCoeff() < 1e-10,
         "factor-analytic state round trip changed inference");
     std::filesystem::remove(factor_path);
+    std::filesystem::remove_all(
+        factor_options.streaming.cache_directory);
+    std::filesystem::remove_all(
+        factor_score_options.streaming.cache_directory);
 
     uac::FitOptions no_shrinkage_options = options;
     no_shrinkage_options.adaptive_covariance_shrinkage = false;
@@ -2935,7 +3185,7 @@ void test_fit_score_and_state(const std::string& requested_output) {
     uac::FitOptions diagonal_options = factor_options;
     diagonal_options.handoff = uac::HandoffMode::Map;
     diagonal_options.cluster_covariance_rank = 0;
-    diagonal_options.particle_block_size = 0;
+    diagonal_options.particle_engine = uac::ParticleEngine::Batch;
     const uac::FitResult diagonal_fit = uac::fit(
         data, nullptr, diagonal_options);
     require(std::all_of(diagonal_fit.model.factor_covariances.begin(),
