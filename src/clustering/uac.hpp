@@ -342,6 +342,9 @@ struct ScoreResult {
     bool streaming_cache_reused = false;
     uint64_t streaming_cache_bytes = 0;
     uint64_t streaming_peak_particle_bytes = 0;
+    uint64_t streaming_count_spool_bytes = 0;
+    uint64_t streaming_peak_count_block_bytes = 0;
+    int32_t streaming_external_count_parses = 0;
     int32_t streaming_parallel_workers = 0;
     int32_t streaming_cache_shards = 0;
     int32_t streaming_cache_rebuilds = 0;

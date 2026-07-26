@@ -1,4 +1,5 @@
 #include "clustering/uac_internal.hpp"
+#include "clustering/uac_stream.hpp"
 
 #include "clustering_core/cosine_clustering.hpp"
 
@@ -1038,7 +1039,8 @@ ProposalScreeningPlan make_proposal_screening_plan(
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& cache,
     ProposalKind proposal_kind, double broadening, uint64_t seed,
-    const ComponentScreeningOptions& options) {
+    const ComponentScreeningOptions& options,
+    const IndexedDocumentSource* count_source = nullptr) {
     validate_component_screening(options);
     ProposalScreeningPlan out;
     if (options.mode == ComponentScreeningMode::Off) return out;
@@ -1169,10 +1171,16 @@ ProposalScreeningPlan make_proposal_screening_plan(
     }
 
     for (const int32_t d : out.audit_documents) {
+        DocumentBlock count_block;
+        if (count_source) {
+            count_source->read_range(d, 1, count_block);
+        }
         const Eigen::VectorXd center =
             data.coordinates.row(d).transpose();
         const FisherApproximation fisher = fisher_approximation_impl(
-            center, data.counts[d], basis, helmert, proposal_kind);
+            center,
+            count_source ? count_block.counts.front() : data.counts[d],
+            basis, helmert, proposal_kind);
         const DocumentProposal full = fisher_proposal(
             center, fisher, pilot, cache, broadening);
         std::vector<uint8_t> retained(components, 0);
@@ -2189,13 +2197,13 @@ HardPartitionMoments hard_partition_moments(const Dataset& data,
     return out;
 }
 
-Eigen::MatrixXd measurement_covariance(const Dataset& data,
+Eigen::MatrixXd measurement_covariance(
+    const Eigen::Ref<const Eigen::VectorXd>& coordinate,
+    const Document& document,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
-    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
-    int32_t document) {
+    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision) {
     const FisherApproximation fisher = fisher_approximation_impl(
-        data.coordinates.row(document).transpose(), data.counts[document],
-        basis, helmert, ProposalKind::ExactFisher);
+        coordinate, document, basis, helmert, ProposalKind::ExactFisher);
     Eigen::MatrixXd precision =
         fisher.information + regularizing_precision;
     precision = 0.5 * (precision + precision.transpose());
@@ -2212,6 +2220,15 @@ Eigen::MatrixXd measurement_covariance(const Dataset& data,
             "UAC deconvolution measurement covariance is nonfinite");
     }
     return covariance;
+}
+
+Eigen::MatrixXd measurement_covariance(const Dataset& data,
+    const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
+    int32_t document) {
+    return measurement_covariance(
+        data.coordinates.row(document).transpose(),
+        data.counts[document], basis, helmert, regularizing_precision);
 }
 
 Eigen::MatrixXd shared_measurement_precision(
@@ -2256,7 +2273,8 @@ measurement_sums_by_partition(const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
     const std::vector<Eigen::VectorXi>& assignments,
-    int32_t components) {
+    int32_t components,
+    const IndexedDocumentSource* count_source = nullptr) {
     const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
     const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
     std::vector<std::vector<Eigen::MatrixXd>> out(
@@ -2268,16 +2286,29 @@ measurement_sums_by_partition(const Dataset& data, const Basis& basis,
                 "Invalid UAC measurement partition");
         }
     }
-    for (int32_t d = 0; d < documents; ++d) {
-        const Eigen::MatrixXd covariance = measurement_covariance(
-            data, basis, helmert, regularizing_precision, d);
-        for (size_t start = 0; start < assignments.size(); ++start) {
-            const int32_t component = assignments[start](d);
-            if (component < 0 || component >= components) {
-                throw std::invalid_argument(
-                    "UAC measurement partition label is out of range");
+    constexpr int32_t kCountBlock = 64;
+    for (int32_t first = 0; first < documents; first += kCountBlock) {
+        const int32_t count =
+            std::min(kCountBlock, documents - first);
+        DocumentBlock block;
+        if (count_source) {
+            count_source->read_range(first, count, block);
+        }
+        for (int32_t local = 0; local < count; ++local) {
+            const int32_t d = first + local;
+            const Document& document = count_source
+                ? block.counts[local] : data.counts[d];
+            const Eigen::MatrixXd covariance = measurement_covariance(
+                data.coordinates.row(d).transpose(), document,
+                basis, helmert, regularizing_precision);
+            for (size_t start = 0; start < assignments.size(); ++start) {
+                const int32_t component = assignments[start](d);
+                if (component < 0 || component >= components) {
+                    throw std::invalid_argument(
+                        "UAC measurement partition label is out of range");
+                }
+                out[start][component] += covariance;
             }
-            out[start][component] += covariance;
         }
     }
     return out;
@@ -2454,13 +2485,16 @@ std::vector<DeconvolutionScore> deconvolution_marginal_scores(
     const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
-    const std::vector<Model>& models) {
+    const std::vector<Model>& models,
+    const IndexedDocumentSource* count_source = nullptr) {
     if (models.empty()) return {};
     const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
     const int32_t components =
         static_cast<int32_t>(models.front().weights.size());
     const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
-    if (data.counts.size() != static_cast<size_t>(documents)
+    if ((!count_source
+            && data.counts.size() != static_cast<size_t>(documents))
+        || (count_source && count_source->documents() != documents)
         || regularizing_precision.rows() != dimension
         || regularizing_precision.cols() != dimension) {
         throw std::invalid_argument(
@@ -2496,12 +2530,19 @@ std::vector<DeconvolutionScore> deconvolution_marginal_scores(
             std::vector<Eigen::LLT<Eigen::MatrixXd>>(components));
         const int32_t begin = block_index * block_size;
         const int32_t end = std::min(documents, begin + block_size);
+        DocumentBlock count_block;
+        if (count_source) {
+            count_source->read_range(begin, end - begin, count_block);
+        }
         const auto work_start = std::chrono::steady_clock::now();
         for (int32_t d = begin; d < end; ++d) {
             const Eigen::VectorXd observed =
                 data.coordinates.row(d).transpose();
             const Eigen::MatrixXd measurement = measurement_covariance(
-                data, basis, helmert, regularizing_precision, d);
+                observed,
+                count_source
+                    ? count_block.counts[d - begin] : data.counts[d],
+                basis, helmert, regularizing_precision);
             for (size_t candidate = 0; candidate < models.size();
                     ++candidate) {
                 const Model& model = models[candidate];
@@ -2924,7 +2965,8 @@ void score_corrected_moment_candidates(
     const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
-    const FitOptions& options, std::vector<Candidate>& candidates) {
+    const FitOptions& options, std::vector<Candidate>& candidates,
+    const IndexedDocumentSource* count_source = nullptr) {
     std::vector<size_t> candidate_index;
     std::vector<Model> models;
     for (size_t index = 0; index < candidates.size(); ++index) {
@@ -2935,7 +2977,7 @@ void score_corrected_moment_candidates(
     }
     const std::vector<DeconvolutionScore> scores =
         deconvolution_marginal_scores(data, basis, helmert,
-            regularizing_precision, models);
+            regularizing_precision, models, count_source);
     for (size_t local = 0; local < scores.size(); ++local) {
         Candidate& candidate = candidates[candidate_index[local]];
         const DeconvolutionScore& score = scores[local];
@@ -3771,7 +3813,9 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
     ProposalKind proposal_kind, int32_t samples, uint64_t seed,
     double fisher_broadening, int32_t n_threads,
     const ProposalScreeningPlan* screening_plan, int32_t first_document,
-    int32_t documents) {
+    int32_t documents, int32_t global_first_document = -1) {
+    const int32_t global_first = global_first_document >= 0
+        ? global_first_document : first_document;
     if (samples <= 0 || data.counts.size() != data.identifiers.size()
         || data.coordinates.rows() != static_cast<Eigen::Index>(data.counts.size())
         || basis.probabilities.cols() != helmert.cols()
@@ -3783,7 +3827,7 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
         throw std::invalid_argument("Invalid UAC particle input");
     }
     ParticleSet out;
-    out.first_document = first_document;
+    out.first_document = global_first;
     out.documents = documents;
     out.samples = samples;
     out.dimension = static_cast<int32_t>(helmert.rows());
@@ -3817,6 +3861,7 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
     const auto sampling_start = std::chrono::steady_clock::now();
     tbb::parallel_for(int32_t{0}, out.documents, [&](int32_t local_document) {
         const int32_t document = first_document + local_document;
+        const int32_t global_document = global_first + local_document;
         const Eigen::VectorXd center =
             data.coordinates.row(document).transpose();
         const auto fisher_start = std::chrono::steady_clock::now();
@@ -3829,7 +3874,7 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
             std::memory_order_relaxed);
         const std::vector<int32_t>* candidates =
             screening_plan && screening_plan->enabled
-            ? &screening_plan->candidates[document] : nullptr;
+            ? &screening_plan->candidates[global_document] : nullptr;
         const DocumentProposal proposal = fisher_proposal(center, fisher,
             pilot, pilot_cache, fisher_broadening, candidates);
         out.proposal_candidates[local_document] =
@@ -4062,7 +4107,10 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
     const AdaptiveParticleOptions& options,
     int32_t maximum_particles,
     const ProposalScreeningPlan* screening_plan,
-    int32_t first_document, int32_t documents) {
+    int32_t first_document, int32_t documents,
+    int32_t global_first_document = -1) {
+    const int32_t global_first = global_first_document >= 0
+        ? global_first_document : first_document;
     const int32_t total_documents =
         static_cast<int32_t>(data.coordinates.rows());
     const int32_t dimension = static_cast<int32_t>(helmert.rows());
@@ -4094,7 +4142,7 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
         }
     }
     RaggedParticleSet out;
-    out.first_document = first_document;
+    out.first_document = global_first;
     out.documents = documents;
     out.dimension = dimension;
     out.maximum_samples = maximum_particles;
@@ -4135,6 +4183,7 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
         tbb::parallel_for(int32_t{0}, size, [&](int32_t local) {
             const int32_t local_document = begin + local;
             const int32_t document = first_document + local_document;
+            const int32_t global_document = global_first + local_document;
             const Eigen::VectorXd center =
                 data.coordinates.row(document).transpose();
             const auto fisher_start = std::chrono::steady_clock::now();
@@ -4147,7 +4196,7 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
                 std::memory_order_relaxed);
             const std::vector<int32_t>* candidates =
                 screening_plan && screening_plan->enabled
-                ? &screening_plan->candidates[document] : nullptr;
+                ? &screening_plan->candidates[global_document] : nullptr;
             proposals[local] = fisher_proposal(center, fisher, pilot,
                 pilot_cache, fisher_broadening, candidates);
             out.proposal_candidates[local_document] =
@@ -4545,14 +4594,15 @@ DocumentProposal particle_cache_proposal(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, double broadening,
-    const ProposalScreeningPlan* screening_plan, int32_t document) {
+    const ProposalScreeningPlan* screening_plan, int32_t data_document,
+    int32_t global_document) {
     const Eigen::VectorXd center =
-        data.coordinates.row(document).transpose();
+        data.coordinates.row(data_document).transpose();
     const FisherApproximation fisher = fisher_approximation_impl(
-        center, data.counts[document], basis, helmert, proposal_kind);
+        center, data.counts[data_document], basis, helmert, proposal_kind);
     const std::vector<int32_t>* candidates =
         screening_plan && screening_plan->enabled
-        ? &screening_plan->candidates[document] : nullptr;
+        ? &screening_plan->candidates[global_document] : nullptr;
     return fisher_proposal(center, fisher, pilot, pilot_cache,
         broadening, candidates);
 }
@@ -4564,7 +4614,8 @@ void write_factor_particle_cache(const std::filesystem::path& path,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, uint64_t seed, double broadening,
     const AdaptiveParticleOptions& adaptive,
-    const ProposalScreeningPlan* screening_plan) {
+    const ProposalScreeningPlan* screening_plan,
+    bool data_is_local_block = false) {
     constexpr bool ragged =
         std::is_same_v<ParticleCollection, RaggedParticleSet>;
     ParticleCacheHeader header;
@@ -4590,21 +4641,23 @@ void write_factor_particle_cache(const std::filesystem::path& path,
     out.write(reinterpret_cast<const char*>(&header), sizeof(header));
     uint64_t checksum = 1469598103934665603ull;
     for (int32_t local = 0; local < particles.documents; ++local) {
-        const int32_t document = particles.first_document + local;
+        const int32_t global_document = particles.first_document + local;
+        const int32_t data_document = data_is_local_block
+            ? local : global_document;
         const int32_t samples = particles.samples_for_document(local);
         const int32_t calibration_samples = ragged
             ? std::min(samples, adaptive.calibration_particles) : 0;
         const DocumentProposal proposal = particle_cache_proposal(
             data, basis, helmert, pilot, pilot_cache, proposal_kind,
-            broadening, screening_plan, document);
+            broadening, screening_plan, data_document, global_document);
         const int32_t proposal_components =
             static_cast<int32_t>(proposal.weights.size());
         const uint64_t document_seed = hash_string(
             seed ^ 0x9e3779b97f4a7c15ull,
-            data.identifiers[document]);
+            data.identifiers[data_document]);
         const uint64_t calibration_seed = hash_string(
             seed ^ 0x6a09e667f3bcc909ull,
-            data.identifiers[document]);
+            data.identifiers[data_document]);
         write_cache_values(out, &samples, 1, checksum);
         write_cache_values(out, &calibration_samples, 1, checksum);
         write_cache_values(out, &proposal_components, 1, checksum);
@@ -4935,7 +4988,8 @@ uint64_t particle_cache_key(const Dataset& data, const Basis& basis,
     int32_t maximum_samples, uint64_t seed, double broadening,
     const AdaptiveParticleOptions& adaptive,
     const ComponentScreeningOptions& screening,
-    StreamingParticleStorage storage, int32_t block_documents) {
+    StreamingParticleStorage storage, int32_t block_documents,
+    const IndexedDocumentSource* count_source = nullptr) {
     uint64_t hash = 1469598103934665603ull;
     const char runtime[] =
 #if defined(__clang__)
@@ -4997,13 +5051,27 @@ uint64_t particle_cache_key(const Dataset& data, const Basis& basis,
     }
     hash = cache_hash_bytes(hash, data.coordinates.data(),
         sizeof(double) * data.coordinates.size());
-    for (const auto& document : data.counts) {
-        const uint64_t entries = document.ids.size();
-        hash = cache_hash_value(hash, entries);
-        hash = cache_hash_bytes(hash, document.ids.data(),
-            sizeof(uint32_t) * document.ids.size());
-        hash = cache_hash_bytes(hash, document.cnts.data(),
-            sizeof(double) * document.cnts.size());
+    constexpr int32_t kHashBlock = 256;
+    for (int32_t first = 0;
+            first < static_cast<int32_t>(data.identifiers.size());
+            first += kHashBlock) {
+        const int32_t count = std::min<int32_t>(
+            kHashBlock,
+            static_cast<int32_t>(data.identifiers.size()) - first);
+        DocumentBlock block;
+        if (count_source) {
+            count_source->read_range(first, count, block);
+        }
+        for (int32_t local = 0; local < count; ++local) {
+            const Document& document = count_source
+                ? block.counts[local] : data.counts[first + local];
+            const uint64_t entries = document.ids.size();
+            hash = cache_hash_value(hash, entries);
+            hash = cache_hash_bytes(hash, document.ids.data(),
+                sizeof(uint32_t) * document.ids.size());
+            hash = cache_hash_bytes(hash, document.cnts.data(),
+                sizeof(double) * document.cnts.size());
+        }
     }
     hash = cache_hash_bytes(hash, pilot.weights.data(),
         sizeof(double) * pilot.weights.size());
@@ -5054,7 +5122,8 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
     const AdaptiveParticleOptions& adaptive,
     const ProposalScreeningPlan* proposal_screening,
     const ComponentScreeningOptions& screening,
-    const StreamingOptions& options) {
+    const StreamingOptions& options,
+    const IndexedDocumentSource* count_source = nullptr) {
     if (options.block_documents <= 0) {
         throw std::invalid_argument(
             "UAC streaming block document count must be positive");
@@ -5107,7 +5176,7 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
     const uint64_t key = particle_cache_key(data, basis, pilot,
         initial_model, proposal, maximum_samples, seed, broadening,
         adaptive, screening, options.particle_storage,
-        options.block_documents);
+        options.block_documents, count_source);
     const std::filesystem::path root = options.cache_directory.empty()
         ? std::filesystem::path(".uac-cache")
         : std::filesystem::path(options.cache_directory);
@@ -5245,21 +5314,38 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
         cache.shards[shard] = temporary
             / cache.shards[shard].filename();
     }
+    auto load_particle_block = [&](int32_t first, int32_t count) {
+        Dataset block;
+        DocumentBlock count_block;
+        count_source->read_range(first, count, count_block);
+        block.identifiers = std::move(count_block.identifiers);
+        block.counts = std::move(count_block.counts);
+        block.raw_totals = std::move(count_block.raw_totals);
+        block.effective_totals = std::move(count_block.effective_totals);
+        block.centers = data.centers.middleRows(first, count);
+        block.coordinates = data.coordinates.middleRows(first, count);
+        return block;
+    };
     ++cache.metrics.generation_passes;
     if (adaptive.enabled()) {
         for (int32_t shard = 0; shard < n_shards; ++shard) {
             const int32_t first = cache.first_documents[shard];
             const int32_t count = cache.document_counts[shard];
+            const Dataset block = count_source
+                ? load_particle_block(first, count) : Dataset{};
+            const Dataset& particle_data = count_source ? block : data;
+            const int32_t data_first = count_source ? 0 : first;
             RaggedParticleSet particles = make_adaptive_particle_range(
-                data, basis, helmert, pilot, pilot_cache, proposal, seed,
+                particle_data, basis, helmert, pilot, pilot_cache, proposal, seed,
                 broadening, n_threads, initial_model, adaptive,
-                maximum_samples, proposal_screening, first, count);
+                maximum_samples, proposal_screening, data_first, count,
+                first);
             cache.metrics.add(particles);
             if (cache.storage == StreamingParticleStorage::Factors) {
                 write_factor_particle_cache(cache.shards[shard], particles,
-                    data, basis, helmert, pilot, pilot_cache,
+                    particle_data, basis, helmert, pilot, pilot_cache,
                     proposal, seed, broadening, adaptive,
-                    proposal_screening);
+                    proposal_screening, count_source != nullptr);
             } else {
                 write_particle_cache(cache.shards[shard], particles);
             }
@@ -5268,15 +5354,20 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
         for (int32_t shard = 0; shard < n_shards; ++shard) {
             const int32_t first = cache.first_documents[shard];
             const int32_t count = cache.document_counts[shard];
-            ParticleSet particles = make_particle_range(data, basis, helmert,
+            const Dataset block = count_source
+                ? load_particle_block(first, count) : Dataset{};
+            const Dataset& particle_data = count_source ? block : data;
+            const int32_t data_first = count_source ? 0 : first;
+            ParticleSet particles = make_particle_range(particle_data, basis, helmert,
                 pilot, pilot_cache, proposal, maximum_samples, seed,
-                broadening, n_threads, proposal_screening, first, count);
+                broadening, n_threads, proposal_screening, data_first, count,
+                first);
             cache.metrics.add(particles);
             if (cache.storage == StreamingParticleStorage::Factors) {
                 write_factor_particle_cache(cache.shards[shard], particles,
-                    data, basis, helmert, pilot, pilot_cache,
+                    particle_data, basis, helmert, pilot, pilot_cache,
                     proposal, seed, broadening, adaptive,
-                    proposal_screening);
+                    proposal_screening, count_source != nullptr);
             } else {
                 write_particle_cache(cache.shards[shard], particles);
             }
@@ -5295,12 +5386,17 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
                 throw std::runtime_error(
                     "UAC streaming audit document is out of range");
             }
+            const Dataset block = count_source
+                ? load_particle_block(document, 1) : Dataset{};
+            const Dataset& particle_data = count_source ? block : data;
+            const int32_t data_document = count_source ? 0 : document;
             if (adaptive.enabled()) {
                 const RaggedParticleSet one =
-                    make_adaptive_particle_range(data, basis, helmert,
+                    make_adaptive_particle_range(particle_data, basis, helmert,
                         pilot, pilot_cache, proposal, seed, broadening,
                         n_threads, initial_model, adaptive,
-                        maximum_samples, proposal_screening, document, 1);
+                        maximum_samples, proposal_screening, data_document, 1,
+                        document);
                 const int32_t samples = one.samples_for_document(0);
                 const auto values = one.values_for_document(0);
                 audit.values.insert(audit.values.end(), values.data(),
@@ -5326,9 +5422,9 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
                     std::max(audit.maximum_samples, samples);
             } else {
                 const ParticleSet one = make_particle_range(
-                    data, basis, helmert, pilot, pilot_cache, proposal,
+                    particle_data, basis, helmert, pilot, pilot_cache, proposal,
                     maximum_samples, seed, broadening, n_threads,
-                    proposal_screening, document, 1);
+                    proposal_screening, data_document, 1, document);
                 const auto values = one.values_for_document(0);
                 audit.values.insert(audit.values.end(), values.data(),
                     values.data() + static_cast<int64_t>(maximum_samples)
@@ -5981,8 +6077,10 @@ ScoreResult score_particle_cache(const ParticleCache& cache,
 }
 
 FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
-    const Basis* basis, const FitOptions& options) {
-    validate_dataset(data, options.handoff == HandoffMode::Particle);
+    const Basis* basis, const FitOptions& options,
+    const IndexedDocumentSource* count_source = nullptr) {
+    validate_dataset(data,
+        options.handoff == HandoffMode::Particle && !count_source);
     validate_component_screening(options.component_screening);
     const int64_t total_starts = static_cast<int64_t>(options.kmeans_starts)
         + options.leiden_starts;
@@ -6020,13 +6118,26 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         throw std::invalid_argument("Invalid UAC Leiden start options");
     }
     if (options.handoff == HandoffMode::Particle
-        && (basis == nullptr || data.counts.size() != data.identifiers.size())) {
+        && (basis == nullptr
+            || (!count_source
+                && data.counts.size() != data.identifiers.size())
+            || (count_source
+                && count_source->documents()
+                    != static_cast<int64_t>(data.identifiers.size()))
+            || (count_source && basis
+                && count_source->features()
+                    != basis->probabilities.rows()))) {
         throw std::invalid_argument("Particle UAC requires basis and aligned counts");
+    }
+    if (count_source
+        && options.particle_engine != ParticleEngine::Stream) {
+        throw std::invalid_argument(
+            "Indexed UAC counts require the stream particle engine");
     }
     if (basis) {
         validate_basis(*basis,
             checked_int32(data.centers.cols(), "topic count"));
-        validate_count_features(data, *basis);
+        if (!count_source) validate_count_features(data, *basis);
     }
     validate_adaptive_particles(
         options.adaptive_particles, options.n_particles);
@@ -6165,7 +6276,7 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         }
         measurement_sums = measurement_sums_by_partition(
             data, *basis, helmert, initialization_precision, assignments,
-            options.n_components);
+            options.n_components, count_source);
     }
     for (size_t i = 0; i < starts.size(); ++i) {
         const auto& start = starts[i];
@@ -6198,7 +6309,7 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     }
     if (options.handoff == HandoffMode::Particle) {
         score_corrected_moment_candidates(data, *basis, helmert,
-            initialization_precision, options, candidates);
+            initialization_precision, options, candidates, count_source);
         result.initialization_measurement_covariance_evaluations =
             2 * static_cast<int64_t>(data.coordinates.rows());
     }
@@ -6314,7 +6425,7 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     const ProposalScreeningPlan proposal_screening =
         make_proposal_screening_plan(data, *basis, helmert, result.pilot,
             pilot_cache, options.proposal, options.fisher_broadening,
-            particle_seed, options.component_screening);
+            particle_seed, options.component_screening, count_source);
     ComponentScreeningOptions particle_screening =
         options.component_screening;
     if (particle_screening.mode == ComponentScreeningMode::Auto) {
@@ -6330,7 +6441,7 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                 options.fisher_broadening, options.n_threads,
                 particle_initial, options.adaptive_particles,
                 &proposal_screening, options.component_screening,
-                options.streaming);
+                options.streaming, count_source);
             if (options.streaming.count_storage
                     == StreamingCountStorage::Source
                 && mutable_data) {
@@ -6371,6 +6482,13 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                     options.adaptive_particles;
                 result.score.streaming_count_storage =
                     options.streaming.count_storage;
+                if (count_source) {
+                    result.score.streaming_count_spool_bytes =
+                        count_source->storage_bytes();
+                    result.score.streaming_peak_count_block_bytes =
+                        count_source->peak_block_bytes();
+                    result.score.streaming_external_count_parses = 1;
+                }
                 result.score.scoring_seconds = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - score_start).count();
             }
@@ -6479,6 +6597,11 @@ FitResult fit(const Dataset& data, const Basis* basis,
     return fit_impl(data, nullptr, basis, options);
 }
 
+FitResult fit_indexed(const Dataset& data, const Basis& basis,
+    IndexedDocumentSource& source, const FitOptions& options) {
+    return fit_impl(data, nullptr, &basis, options, &source);
+}
+
 ScoreResult score_map(const Dataset& data, const Model& model,
     int32_t n_threads,
     const ComponentScreeningOptions& component_screening) {
@@ -6526,7 +6649,8 @@ ScoreResult score_map(const Dataset& data, const Model& model,
 
 ScoreResult score_particle_impl(const Dataset& data,
     Dataset* mutable_data, const Basis& basis, const State& state,
-    const ParticleScoreOptions& options) {
+    const ParticleScoreOptions& options,
+    const IndexedDocumentSource* count_source = nullptr) {
     const ProposalKind proposal = options.proposal;
     const int32_t particles = options.maximum_particles;
     const AdaptiveParticleOptions& adaptive_particles =
@@ -6534,14 +6658,19 @@ ScoreResult score_particle_impl(const Dataset& data,
     const int32_t n_threads = options.n_threads;
     const ComponentScreeningOptions& component_screening =
         options.component_screening;
-    validate_dataset(data, true);
+    validate_dataset(data, !count_source);
     validate_basis(basis,
         checked_int32(data.centers.cols(), "topic count"));
-    validate_count_features(data, basis);
+    if (!count_source) validate_count_features(data, basis);
     validate_state(state);
     validate_component_screening(component_screening);
     validate_adaptive_particles(adaptive_particles, particles);
     if (particles <= 0 || state.basis_checksum != basis.checksum
+        || (count_source
+            && count_source->documents()
+                != static_cast<int64_t>(data.identifiers.size()))
+        || (count_source
+            && count_source->features() != basis.probabilities.rows())
         || state.helmert.rows() != data.coordinates.cols()
         || state.helmert.cols() != data.centers.cols()
         || state.model.means.cols() != data.coordinates.cols()) {
@@ -6552,6 +6681,11 @@ ScoreResult score_particle_impl(const Dataset& data,
         throw std::invalid_argument(
             "UAC streaming block document count must be positive");
     }
+    if (count_source
+        && options.particle_engine != ParticleEngine::Stream) {
+        throw std::invalid_argument(
+            "Indexed UAC counts require the stream particle engine");
+    }
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, n_threads));
     const PilotCache pilot_cache(state.pilot);
@@ -6560,7 +6694,7 @@ ScoreResult score_particle_impl(const Dataset& data,
     const ProposalScreeningPlan proposal_screening =
         make_proposal_screening_plan(data, basis, state.helmert, state.pilot,
             pilot_cache, proposal, state.fisher_broadening, particle_seed,
-            component_screening);
+            component_screening, count_source);
     ComponentScreeningOptions particle_screening = component_screening;
     if (particle_screening.mode == ComponentScreeningMode::Auto) {
         apply_auto_component_screening_resolution(
@@ -6571,7 +6705,8 @@ ScoreResult score_particle_impl(const Dataset& data,
             data, basis, state.helmert, state.pilot, pilot_cache,
             proposal, particles, particle_seed, state.fisher_broadening,
             n_threads, state.model, adaptive_particles,
-            &proposal_screening, component_screening, options.streaming);
+            &proposal_screening, component_screening, options.streaming,
+            count_source);
         if (options.streaming.count_storage
                 == StreamingCountStorage::Source
             && mutable_data) {
@@ -6593,6 +6728,13 @@ ScoreResult score_particle_impl(const Dataset& data,
             proposal_screening, particle_screening);
         out.adaptive_particle_options = adaptive_particles;
         out.streaming_count_storage = options.streaming.count_storage;
+        if (count_source) {
+            out.streaming_count_spool_bytes =
+                count_source->storage_bytes();
+            out.streaming_peak_count_block_bytes =
+                count_source->peak_block_bytes();
+            out.streaming_external_count_parses = 1;
+        }
         out.scoring_seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - score_start).count();
         return out;
@@ -6656,6 +6798,13 @@ ScoreResult score_particle(Dataset& data, const Basis& basis,
 ScoreResult score_particle(const Dataset& data, const Basis& basis,
     const State& state, const ParticleScoreOptions& options) {
     return score_particle_impl(data, nullptr, basis, state, options);
+}
+
+ScoreResult score_particle_indexed(const Dataset& data, const Basis& basis,
+    IndexedDocumentSource& source, const State& state,
+    const ParticleScoreOptions& options) {
+    return score_particle_impl(
+        data, nullptr, basis, state, options, &source);
 }
 
 State make_state(const FitResult& fit_result, const FitOptions& options,

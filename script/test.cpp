@@ -1,5 +1,6 @@
 #include "clustering/uac.hpp"
 #include "clustering/uac_internal.hpp"
+#include "clustering/uac_stream.hpp"
 #include "clustering/low_rank_covariance.hpp"
 #include "punkst.h"
 
@@ -2812,6 +2813,111 @@ void test_fit_score_and_state(const std::string& requested_output) {
                 - stream_fit.score.responsibilities)
                 .cwiseAbs().maxCoeff() == 0.0,
         "streaming fit changed across thread counts");
+
+    const std::filesystem::path count_spool =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_document_spool.bin";
+    std::filesystem::remove(count_spool);
+    std::filesystem::remove(count_spool.string() + ".partial");
+    uac::BinaryDocumentSpoolWriter spool_writer(
+        count_spool,
+        static_cast<int32_t>(basis.probabilities.rows()));
+    for (int32_t d = 0;
+            d < static_cast<int32_t>(data.identifiers.size()); ++d) {
+        spool_writer.append(data.identifiers[d], data.counts[d],
+            data.raw_totals(d), data.effective_totals(d));
+    }
+    std::unique_ptr<uac::IndexedDocumentSource> indexed_counts =
+        spool_writer.finish(false);
+    uac::DocumentBlock count_block;
+    indexed_counts->read_range(3, 5, count_block);
+    require(indexed_counts->documents()
+                == static_cast<int64_t>(data.identifiers.size())
+            && indexed_counts->storage_bytes() > 0
+            && indexed_counts->content_checksum() != 0
+            && count_block.first_document == 3
+            && count_block.size() == 5
+            && count_block.identifiers.front() == data.identifiers[3]
+            && count_block.counts.front().ids == data.counts[3].ids
+            && count_block.counts.front().cnts == data.counts[3].cnts
+            && count_block.raw_totals(0) == data.raw_totals(3)
+            && count_block.effective_totals(0)
+                == data.effective_totals(3),
+        "indexed document spool did not round trip exactly");
+
+    uac::Dataset indexed_data = data;
+    indexed_data.counts.clear();
+    uac::ParticleScoreOptions indexed_score_options = stream_options;
+    indexed_score_options.streaming.count_storage =
+        uac::StreamingCountStorage::Source;
+    indexed_score_options.streaming.rebuild_cache = false;
+    const uac::ScoreResult indexed_score =
+        uac::score_particle_indexed(indexed_data, basis, *indexed_counts,
+            state, indexed_score_options);
+    require(indexed_data.counts.empty()
+            && indexed_score.responsibilities.size() == 0
+            && indexed_score.streaming_external_count_parses == 1
+            && indexed_score.streaming_count_spool_bytes
+                == indexed_counts->storage_bytes()
+            && indexed_score.streaming_peak_count_block_bytes > 0
+            && (indexed_score.effective_membership
+                - streamed.responsibilities.colwise().sum().transpose())
+                .cwiseAbs().maxCoeff() == 0.0,
+        "indexed source scoring retained counts or changed inference");
+
+    uac::FitOptions indexed_fit_options = stream_fit_options;
+    indexed_fit_options.streaming.count_storage =
+        uac::StreamingCountStorage::Source;
+    indexed_fit_options.streaming.rebuild_cache = false;
+    const uac::FitResult indexed_fit = uac::fit_indexed(
+        indexed_data, basis, *indexed_counts, indexed_fit_options);
+    require(indexed_data.counts.empty()
+            && (indexed_fit.model.means - stream_fit.model.means)
+                .cwiseAbs().maxCoeff() == 0.0
+            && (indexed_fit.score.effective_membership
+                - stream_fit.score.responsibilities
+                    .colwise().sum().transpose())
+                .cwiseAbs().maxCoeff() == 0.0,
+        "indexed source initialization or particle EM changed exact fit");
+
+    indexed_counts.reset();
+    {
+        std::fstream corrupt(count_spool,
+            std::ios::binary | std::ios::in | std::ios::out);
+        corrupt.seekg(96, std::ios::beg);
+        char byte = 0;
+        corrupt.read(&byte, 1);
+        byte ^= 0x5a;
+        corrupt.seekp(96, std::ios::beg);
+        corrupt.write(&byte, 1);
+    }
+    bool rejected_corrupt_spool = false;
+    try {
+        static_cast<void>(
+            uac::open_binary_document_spool(count_spool));
+    } catch (const std::exception&) {
+        rejected_corrupt_spool = true;
+    }
+    require(rejected_corrupt_spool,
+        "indexed document spool accepted corrupt payload");
+    std::filesystem::remove(count_spool);
+    const std::filesystem::path cleanup_spool =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_document_spool_cleanup.bin";
+    std::filesystem::remove(cleanup_spool);
+    {
+        uac::BinaryDocumentSpoolWriter cleanup_writer(
+            cleanup_spool,
+            static_cast<int32_t>(basis.probabilities.rows()));
+        cleanup_writer.append(data.identifiers.front(),
+            data.counts.front(), data.raw_totals(0),
+            data.effective_totals(0));
+        const auto cleanup_source = cleanup_writer.finish();
+        require(std::filesystem::exists(cleanup_spool),
+            "temporary indexed document spool was not committed");
+    }
+    require(!std::filesystem::exists(cleanup_spool),
+        "temporary indexed document spool was not removed");
     std::filesystem::remove_all(stream_fit_cache);
 
     uac::Dataset split_data;

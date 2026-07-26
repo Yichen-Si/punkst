@@ -1,9 +1,12 @@
 #include "clustering/uac.hpp"
+#include "clustering/uac_stream.hpp"
 #include "punkst.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -379,6 +382,172 @@ uac::Dataset load_particle_dataset(const CenterTable& centers,
     return data;
 }
 
+struct IndexedParticleDataset {
+    uac::Dataset data;
+    std::unique_ptr<uac::IndexedDocumentSource> counts;
+    bool weighted_counts = false;
+};
+
+std::filesystem::path count_spool_path(
+    const std::string& cache_directory) {
+    const std::filesystem::path root = cache_directory.empty()
+        ? std::filesystem::path(".uac-cache")
+        : std::filesystem::path(cache_directory);
+    std::filesystem::create_directories(root);
+    const auto stamp = std::chrono::steady_clock::now()
+        .time_since_epoch().count();
+    for (int32_t attempt = 0; attempt < 1000; ++attempt) {
+        const auto path = root / (".counts-"
+            + std::to_string(stamp) + "-" + std::to_string(attempt)
+            + ".bin");
+        if (!std::filesystem::exists(path)
+            && !std::filesystem::exists(path.string() + ".partial")) {
+            return path;
+        }
+    }
+    throw std::runtime_error(
+        "Cannot allocate a unique UAC count spool path");
+}
+
+IndexedParticleDataset load_indexed_particle_dataset(
+    const CenterTable& centers, const uac::Basis& basis,
+    const CountInputOptions& options,
+    const Eigen::VectorXd& feature_weights,
+    const std::string& cache_directory) {
+    HexReader reader;
+    std::unique_ptr<DGEReader10X> dge;
+    const bool use_10x = initHexOrDgeInput(reader, dge,
+        options.in_file, options.meta_file, options.dge_dirs,
+        options.barcodes, options.features, options.matrices,
+        options.dataset_ids, options.keep_barcodes);
+    if (use_10x) {
+        const int32_t overlap =
+            dge->setFeatureIndexRemap(basis.features, false);
+        if (overlap == 0) {
+            throw std::runtime_error(
+                "No count features overlap the UAC basis");
+        }
+    } else {
+        std::vector<std::string> model_features = basis.features;
+        reader.setFeatureIndexRemap(model_features, false);
+    }
+
+    std::unordered_map<std::string, int32_t> center_index;
+    center_index.reserve(centers.identifiers.size());
+    for (int32_t d = 0;
+            d < static_cast<int32_t>(centers.identifiers.size()); ++d) {
+        center_index[centers.identifiers[d]] = d;
+    }
+    const std::filesystem::path spool_path =
+        count_spool_path(cache_directory);
+    uac::BinaryDocumentSpoolWriter writer(
+        spool_path,
+        static_cast<int32_t>(basis.probabilities.rows()));
+    IndexedParticleDataset out;
+    std::vector<int32_t> center_rows;
+    std::vector<double> raw_totals, effective_totals;
+    std::unordered_set<std::string> count_seen;
+    const Eigen::VectorXd* weights = feature_weights.size() > 0
+        ? &feature_weights : nullptr;
+
+    auto retain = [&](Document document, std::string identifier) {
+        const double input_raw_total = document.get_raw_sum();
+        if (input_raw_total < options.min_count) return;
+        if (identifier.empty()) {
+            identifier = std::to_string(out.data.identifiers.size());
+        }
+        if (!count_seen.insert(identifier).second) {
+            throw std::runtime_error(
+                "Duplicate UAC count identifier: " + identifier);
+        }
+        const auto center = center_index.find(identifier);
+        if (center == center_index.end()) {
+            throw std::runtime_error(
+                "UAC count document has no point center: " + identifier);
+        }
+        if (!out.weighted_counts) {
+            for (const double count : document.cnts) {
+                if (std::abs(count - std::round(count)) > 1e-10
+                        * std::max(1.0, std::abs(count))) {
+                    out.weighted_counts = true;
+                    break;
+                }
+            }
+        }
+        std::vector<Document> one;
+        one.push_back(std::move(document));
+        Eigen::VectorXd raw, effective;
+        uac::detail::prepare_counts(one,
+            static_cast<int32_t>(basis.probabilities.rows()),
+            weights, raw, effective);
+        writer.append(identifier, one.front(), raw(0), effective(0));
+        out.data.identifiers.push_back(std::move(identifier));
+        center_rows.push_back(center->second);
+        raw_totals.push_back(raw(0));
+        effective_totals.push_back(effective(0));
+    };
+
+    if (use_10x) {
+        Document document;
+        int32_t barcode_index = -1;
+        std::string identifier;
+        while (dge->next(document, &barcode_index, &identifier)) {
+            if (barcode_index >= 0) retain(document, identifier);
+        }
+        dge->resetStream();
+    } else {
+        std::ifstream input(options.in_file);
+        if (!input) {
+            throw std::runtime_error(
+                "Cannot open UAC count input: " + options.in_file);
+        }
+        std::string line;
+        int32_t retained = 0;
+        while (std::getline(input, line)) {
+            Document document;
+            std::string identifier;
+            if (reader.parseLine(
+                    document, identifier, line, options.modal, false) < 0) {
+                throw std::runtime_error(
+                    "Error parsing UAC count row: " + line);
+            }
+            const size_t before = out.data.identifiers.size();
+            retain(std::move(document), std::move(identifier));
+            if (out.data.identifiers.size() != before) {
+                ++retained;
+                if (options.debug > 0 && retained >= options.debug) break;
+            }
+        }
+    }
+    if (out.data.identifiers.empty()) {
+        throw std::runtime_error(
+            "No UAC count documents were loaded");
+    }
+    if (out.data.identifiers.size() < centers.identifiers.size()) {
+        warning("Ignored %zu UAC point centers without retained count documents",
+            centers.identifiers.size() - out.data.identifiers.size());
+    }
+    out.data.centers.resize(
+        out.data.identifiers.size(), centers.values.cols());
+    out.data.raw_totals.resize(out.data.identifiers.size());
+    out.data.effective_totals.resize(out.data.identifiers.size());
+    for (int32_t d = 0;
+            d < static_cast<int32_t>(out.data.identifiers.size()); ++d) {
+        out.data.centers.row(d) = centers.values.row(center_rows[d]);
+        out.data.raw_totals(d) = raw_totals[d];
+        out.data.effective_totals(d) = effective_totals[d];
+    }
+    out.data.coordinates = uac::ilr_transform(out.data.centers,
+        uac::normalized_helmert(out.data.centers.cols()));
+    out.counts = writer.finish();
+    out.weighted_counts =
+        out.weighted_counts || feature_weights.size() > 0;
+    notice("Spool-indexed %zu UAC count documents in %llu bytes",
+        out.data.identifiers.size(),
+        static_cast<unsigned long long>(out.counts->storage_bytes()));
+    return out;
+}
+
 Eigen::VectorXd effective_membership(const RowMajorMatrixXd& probability) {
     return probability.colwise().sum();
 }
@@ -606,6 +775,7 @@ int32_t cmdUacFit(int argc, char** argv) {
         uac::Basis* basis_pointer = nullptr;
         Eigen::VectorXd feature_weights;
         uac::Dataset data;
+        std::unique_ptr<uac::IndexedDocumentSource> indexed_counts;
         bool weighted_counts = false;
         if (options.handoff == uac::HandoffMode::Particle) {
             if (basis_file.empty()) {
@@ -616,10 +786,24 @@ int32_t cmdUacFit(int argc, char** argv) {
             feature_weights = read_feature_weights(
                 count_options.feature_weight_file, basis.features,
                 count_options.weight_column, count_options.default_weight);
-            data = load_particle_dataset(centers, basis, count_options,
-                feature_weights);
-            weighted_counts = feature_weights.size() > 0
-                || has_fractional_counts(data.counts);
+            const bool indexed_source =
+                options.particle_engine == uac::ParticleEngine::Stream
+                && options.streaming.count_storage
+                    == uac::StreamingCountStorage::Source;
+            if (indexed_source) {
+                IndexedParticleDataset indexed =
+                    load_indexed_particle_dataset(
+                        centers, basis, count_options, feature_weights,
+                        options.streaming.cache_directory);
+                data = std::move(indexed.data);
+                indexed_counts = std::move(indexed.counts);
+                weighted_counts = indexed.weighted_counts;
+            } else {
+                data = load_particle_dataset(centers, basis, count_options,
+                    feature_weights);
+                weighted_counts = feature_weights.size() > 0
+                    || has_fractional_counts(data.counts);
+            }
             basis_pointer = &basis;
         } else {
             data = make_map_dataset(centers);
@@ -648,7 +832,9 @@ int32_t cmdUacFit(int argc, char** argv) {
             }
             options.particle_initial_model = initial.model;
         }
-        uac::FitResult fitted = uac::fit(data, basis_pointer, options);
+        uac::FitResult fitted = indexed_counts
+            ? uac::fit_indexed(data, basis, *indexed_counts, options)
+            : uac::fit(data, basis_pointer, options);
         uac::StateMetadata state_metadata;
         state_metadata.topics = centers.topics;
         state_metadata.helmert =
@@ -660,12 +846,6 @@ int32_t cmdUacFit(int argc, char** argv) {
         state_metadata.weighted_counts = weighted_counts;
         uac::State state = uac::make_state(
             fitted, options, state_metadata);
-        if (options.particle_engine == uac::ParticleEngine::Stream
-            && options.streaming.count_storage
-                == uac::StreamingCountStorage::Source) {
-            data.counts.clear();
-            data.counts.shrink_to_fit();
-        }
         report_component_screening(fitted.score);
         write_all_outputs(out_prefix, data, state, fitted.score,
             &fitted.traces, representatives, write_model_trace);
@@ -750,7 +930,6 @@ int32_t cmdUacTransform(int argc, char** argv) {
             if (!count_options.feature_weight_file.empty()) {
                 warning("Particle transform uses feature weights stored in the UAC state; --feature-weights is ignored");
             }
-            data = load_particle_dataset(centers, basis, count_options, weights);
             const uac::ProposalKind scoring_proposal = proposal.empty()
                 ? state.proposal : uac::parse_proposal(proposal);
             uac::ParticleScoreOptions score_options;
@@ -761,13 +940,23 @@ int32_t cmdUacTransform(int argc, char** argv) {
             score_options.particle_engine = particle_engine;
             score_options.streaming = streaming_options;
             score_options.component_screening = component_screening;
-            score = uac::score_particle(
-                data, basis, state, score_options);
-            if (particle_engine == uac::ParticleEngine::Stream
+            const bool indexed_source =
+                particle_engine == uac::ParticleEngine::Stream
                 && streaming_options.count_storage
-                    == uac::StreamingCountStorage::Source) {
-                data.counts.clear();
-                data.counts.shrink_to_fit();
+                    == uac::StreamingCountStorage::Source;
+            if (indexed_source) {
+                IndexedParticleDataset indexed =
+                    load_indexed_particle_dataset(
+                        centers, basis, count_options, weights,
+                        streaming_options.cache_directory);
+                data = std::move(indexed.data);
+                score = uac::score_particle_indexed(
+                    data, basis, *indexed.counts, state, score_options);
+            } else {
+                data = load_particle_dataset(
+                    centers, basis, count_options, weights);
+                score = uac::score_particle(
+                    data, basis, state, score_options);
             }
         }
         report_component_screening(score);
