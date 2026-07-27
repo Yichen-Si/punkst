@@ -54,6 +54,8 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     bool transform = false;
     bool skipPosterior = false;
     bool randomizeOutput = false;
+    bool pseudobulkAllFeatures = false;
+    bool computeResiduals = false;
     int32_t posteriorDispersionRank = 0;
     bool sort_topics = false;
     TrainingCountCacheCliOptions count_cache_options;
@@ -62,10 +64,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     int32_t maxIter = 100;
     double mDelta = 1e-3;
     int32_t nTopics = 0;
-    double betaShape = 0.3;
+    double betaShape = -1.0;
     double xiShape = 0.3;
     double xiMean = -1.0;
-    double thetaShape = 1.0;
     double thetaConcentration = 1.0;
     double nuShape = 1.0;
     double nuRate = -1.0;
@@ -83,6 +84,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("transform", "Transform data to topic space after training", transform)
       .add_option("skip-posterior", "Skip local Gamma posterior output during --transform", skipPosterior)
       .add_option("randomize-output", "Randomize transform output for downstream streaming clustering", randomizeOutput)
+      .add_option("pseudobulk-all-features", "Include all retained input features in transform pseudobulk output", pseudobulkAllFeatures)
+      .add_option("residuals", "Compute residual-based transform summaries", computeResiduals)
+      .add_option("feature-residuals", "Compute residual-based transform summaries", computeResiduals)
       .add_option("posterior-dispersion-rank", "Rank of optional dispersion covariance sidecar", posteriorDispersionRank)
       .add_option("sort-topics", "Sort topics by decreasing usage after training", sort_topics);
 
@@ -116,15 +120,14 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("max-iter", "Max iterations per doc", maxIter)
       .add_option("mean-change-tol", "Convergence tolerance per doc", mDelta)
       .add_option("n-topics", "Number of topics", nTopics)
-      .add_option("beta-shape", "Gamma shape a for beta_wr", betaShape)
+      .add_option("beta-shape", "Gamma shape a for beta_wr; default max(1/K, 0.01)", betaShape)
       .add_option("xi-shape", "Gamma shape a0 for xi_w", xiShape)
       .add_option("xi-mean", "Prior mean b0 for xi_w; default derives from size factor and vocabulary", xiMean)
-      .add_option("theta-shape", "Gamma shape s0 for theta_dr under --eb-shrinkage", thetaShape)
-      .add_option("theta-concentration", "Total symmetric theta concentration; used without --eb-shrinkage", thetaConcentration)
+      .add_option("theta-concentration", "Total theta concentration alpha", thetaConcentration)
       .add_option("nu-shape", "Gamma shape e0 for nu_r; only used with --eb-shrinkage", nuShape)
-      .add_option("nu-rate", "Gamma rate f0 for nu_r; default derives from size factor; only used with --eb-shrinkage", nuRate)
+      .add_option("nu-rate", "Gamma rate f0 for nu_r; default e0/alpha; only used with --eb-shrinkage", nuRate)
       .add_option("eb-shrinkage", "Activate asymmetric empirical-Bayes topic-rate nu_r; default uses the symmetric theta concentration prior", ebShrinkage)
-      .add_option("nu-max", "Positive cap on E[nu_r] under --eb-shrinkage; default 0.1*size-factor", nuMax)
+      .add_option("nu-max", "Positive cap on E[nu_r] under --eb-shrinkage; default 10*alpha", nuMax)
       .add_option("size-factor", "Corpus mean document length nbar; required when full feature counts are unavailable", sizeFactor);
 
     pl.add_option("dispersion-init-epochs", "Poisson warmup epochs before estimating dispersion", dispersionInitEpochs)
@@ -152,20 +155,8 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         error("--randomize-output requires --transform");
     }
     const bool nuMaxProvided = pl.was_provided("nu-max");
-    const bool thetaShapeProvided = pl.was_provided("theta-shape");
-    const bool thetaConcentrationProvided = pl.was_provided("theta-concentration");
-    if (thetaShapeProvided && !ebShrinkage) {
-        error("--theta-shape requires --eb-shrinkage");
-    }
-    if (thetaConcentrationProvided && ebShrinkage) {
-        error("--theta-concentration cannot be used with --eb-shrinkage");
-    }
-    const double activeThetaParameter = ebShrinkage
-        ? thetaShape : thetaConcentration;
-    if (!std::isfinite(activeThetaParameter) || activeThetaParameter <= 0.0) {
-        error(ebShrinkage
-            ? "--theta-shape must be positive and finite"
-            : "--theta-concentration must be positive and finite");
+    if (!std::isfinite(thetaConcentration) || thetaConcentration <= 0.0) {
+        error("--theta-concentration must be positive and finite");
     }
     if (nuMaxProvided && !ebShrinkage) {
         error("--nu-max requires --eb-shrinkage");
@@ -241,12 +232,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     }
 
     const double resolvedSizeFactor = gp->resolveSizeFactor(sizeFactor);
-    if (xiMean <= 0.0) {
-        xiMean = static_cast<double>(std::max(1, gp->nFeatures())) / resolvedSizeFactor;
-    }
     notice("Using size factor nbar = %.6g", resolvedSizeFactor);
     if (ebShrinkage && !nuMaxProvided) {
-        nuMax = 0.1 * resolvedSizeFactor;
+        nuMax = 10.0 * thetaConcentration;
     }
     if (ebShrinkage) {
         if (!std::isfinite(nuMax) || nuMax <= 0.0) {
@@ -256,7 +244,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
             nuMax);
     }
     gp->initialize(nTopics, seed, nThreads, verbose, betaShape, xiShape, xiMean,
-        thetaShape, thetaConcentration, nuShape, nuRate, kappa, tau0,
+        thetaConcentration, nuShape, nuRate, kappa, tau0,
         gp->nUnits(), resolvedSizeFactor,
         !ebShrinkage, nuMax, maxIter, mDelta);
     if (icolDispersion >= 0) {
@@ -361,6 +349,8 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         append_arg(args, "--posterior-dispersion-rank", posteriorDispersionRank);
         if (skipPosterior) args.push_back("--skip-posterior");
         if (randomizeOutput) args.push_back("--randomize-output");
+        if (pseudobulkAllFeatures) args.push_back("--pseudobulk-all-features");
+        if (computeResiduals) args.push_back("--residuals");
         std::vector<char*> cargs;
         cargs.reserve(args.size());
         for (auto& arg : args) cargs.push_back(arg.data());

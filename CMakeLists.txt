@@ -197,11 +197,9 @@ set(SOURCE_FILES
     script/tiles2rois.cpp
     script/fit_lda.cpp
     script/fit_gampois.cpp
-    script/fit_gampois_jc.cpp
     script/transform_gampois.cpp
     script/cluster_gampois.cpp
     script/uac.cpp
-    script/transform_gampois_jc.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp

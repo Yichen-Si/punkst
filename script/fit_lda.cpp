@@ -63,6 +63,7 @@ int32_t runDelegatedTransform(const std::string& modelFile,
         int32_t modal,
         int32_t debugN,
         bool computeResiduals,
+        bool pseudobulkAllFeatures,
         int32_t topkOnly) {
     std::vector<std::string> args;
     args.reserve(32);
@@ -107,6 +108,9 @@ int32_t runDelegatedTransform(const std::string& modelFile,
     if (computeResiduals) {
         appendFlag(args, "residuals");
     }
+    if (pseudobulkAllFeatures) {
+        appendFlag(args, "pseudobulk-all-features");
+    }
     if (topkOnly > 0) {
         appendOption(args, "topk-only", topkOnly);
     }
@@ -136,6 +140,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double defaultWeight = -1.0;
     bool transform = false;
     bool computeResiduals = false;
+    bool pseudobulk_all_features = false;
     bool sort_topics = false;
     bool reproducible_init = false;
     TrainingCountCacheCliOptions count_cache_options;
@@ -165,6 +170,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("sort-topics", "Sort topics by weight after training", sort_topics)
       .add_option("residuals", "Compute residual-based transform summaries in .unit_meta.tsv", computeResiduals)
       .add_option("feature-residuals", "Compute residual-based transform summaries in .unit_meta.tsv", computeResiduals)
+      .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
 
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
@@ -424,7 +430,11 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             return runDelegatedTransform(transformModel, outPrefix, inFile, metaFile,
                 dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
                 include_ftr_regex, exclude_ftr_regex, defaultWeight, icolWeight,
-                maxIter, mDelta, nThreads, modal, debug_, computeResiduals, topk_only);
+                maxIter, mDelta, nThreads, modal, debug_, computeResiduals,
+                pseudobulk_all_features, topk_only);
+        }
+        if (pseudobulk_all_features) {
+            error("--pseudobulk-all-features is not supported by the background-enabled legacy transform");
         }
         if (computeResiduals || topk_only > 0) {
             warning("Keeping legacy transform output because background-enabled LDA does not yet support delegated residual/top-k transform");

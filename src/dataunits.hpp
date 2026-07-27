@@ -416,6 +416,7 @@ public:
         const std::string& exclude_ftr_regex = "");
     void setFeatureSums(const std::vector<double>& sums, bool read_full = true);
     void setWeights(const std::string& weightFile, double defaultWeight_ = 1.0, int32_t icolWeight = 1);
+    void clearFeatureWeights();
     bool hasFeatureWeights() const { return weightFeatures; }
     void applyWeights(Document& doc) const;
     double rawCountFor(uint32_t feature, double count, bool countWeighted) const;

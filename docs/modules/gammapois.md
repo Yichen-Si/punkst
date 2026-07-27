@@ -17,18 +17,19 @@ n_{dw} \sim \mathrm{Poisson}\left(c_d \epsilon_{dw} \sum_r \theta_{dr}\beta_{wr}
 \qquad c_d = n_d / \bar n,
 \]
 
-where \(n_d\) is the total count in unit \(d\), and \(\bar n\) is the corpus mean unit size. The exposure \(c_d\) carries unit size, so the latent topic intensity \(\theta_d\) is on a common corpus scale.
-Per-feature dispersion $\epsilon_{dw}$ is optional, see [Per-feature dispersion](#per-feature-dispersion).
+where \(n_d\) is the total count in unit \(d\), and \(\bar n\) is the corpus
+mean unit size. The exposure \(c_d\) carries unit size, so the latent topic
+intensity \(\theta_d\) is on a common corpus scale.
 
 The topic loadings use a feature-specific degree correction:
 
 \[
 \xi_w \sim \mathrm{Gamma}(a_0, a_0 / b_0), \qquad
-\beta_{wr} \mid \xi_w \sim \mathrm{Gamma}(a, \xi_w).
+\beta_{wr} \mid \xi_w \sim \mathrm{Gamma}(a, a\xi_w).
 \]
 
 Here \(\xi_w\) is an inverse feature-activity rate. Frequent features tend to
-have smaller \(\xi_w\), which allows large baseline loadings without making those
+have smaller \(\xi_w\), and \(E[\beta_{wr}\mid\xi_w]=1/\xi_w\), which allows large baseline loadings without making those
 features define a content-specific topic by themselves.
 
 By default, document-topic intensities use a symmetric mean-one prior:
@@ -43,11 +44,64 @@ of the normalized Dirichlet topic mixture. Smaller values produce sparser
 document mixtures and larger values produce more even mixtures. The total mass
 has variance \(1/\alpha\).
 
+For output, the fitted beta means are normalized to topic-word distributions:
+
+\[
+b_r = \sum_w E[\beta_{wr}], \qquad
+\hat\beta_{wr} = E[\beta_{wr}] / b_r.
+\]
+
+Per-unit transform output reports normalized token-unit topic intensities:
+
+\[
+\hat\theta_{dr} \propto E[\theta_{dr}] b_r, \qquad \sum_r \hat\theta_{dr}=1.
+\]
+
+Option per-feature dispersion is represented by a mean-one, unit-and-feature-specific
+rate multiplier:
+
+\[
+\epsilon_{dw}\mid\tau_w \sim \mathrm{Gamma}(\tau_w,\tau_w),
+\qquad E[\epsilon_{dw}]=1,\qquad
+\operatorname{Var}(\epsilon_{dw})=1/\tau_w.
+\]
+
+Writing
+\(\mu_{dw}=c_d\sum_r\theta_{dr}\beta_{wr}\), integrating out
+\(\epsilon_{dw}\) gives the NB2 mean-variance relationship
+
+\[
+E[n_{dw}\mid\theta,\beta]=\mu_{dw},\qquad
+\operatorname{Var}(n_{dw}\mid\theta,\beta)
+=\mu_{dw}+\mu_{dw}^2/\tau_w.
+\]
+
+Thus \(\epsilon_{dw}\) is a local random effect, while the positive
+feature-level parameter \(\tau_w\) controls its dispersion. Smaller
+\(\tau_w\) allows more residual variation for feature \(w\);
+\(\tau_w\to\infty\) fixes \(\epsilon_{dw}=1\) and recovers the Poisson model.
+During variational inference, an observed cell has
+
+\[
+q(\epsilon_{dw})=
+\mathrm{Gamma}\left(
+  \tau_w+n_{dw},
+  \tau_w+c_d\sum_r E[\theta_{dr}]E[\beta_{wr}]
+\right).
+\]
+
+The implementation applies this correction only to nonzero observed cells and
+treats \(\epsilon_{dw}=1\) for zero cells. This preserves sparse computation but
+is an observed-cell dispersion approximation rather than a fully dense
+negative-binomial likelihood. See
+[Per-feature dispersion](#per-feature-dispersion) for supplying or estimating
+\(\tau_w\).
+
 Optional empirical-Bayes topic popularity replaces that prior when
 `--eb-shrinkage` is enabled:
 \[
 \nu_r \sim \mathrm{Gamma}(e_0, f_0), \qquad
-\theta_{dr} \mid \nu_r \sim \mathrm{Gamma}(s_0, \nu_r).
+\theta_{dr} \mid \nu_r \sim \mathrm{Gamma}(\alpha/K, \nu_r).
 \]
 
 The global rate \(\nu_r\) is an inverse topic-popularity parameter and is absent
@@ -56,20 +110,7 @@ empirical-Bayes behavior, in which
 \(\nu_r\) is fitted from corpus-wide topic usage and shrinks each unit toward
 the corpus-mean topic intensity. For big $K$ and small $n_d$, this prior can
 suppress rare topics. The positive `--nu-max` cap bounds its influence and
-defaults to `0.1 * size-factor`.
-
-For output, the fitted beta means are normalized to topic-word distributions:
-
-\[
-b_r = \sum_w E[\beta_{wr}], \qquad
-\hat\phi_{wr} = E[\beta_{wr}] / b_r.
-\]
-
-Per-unit transform output reports normalized token-unit topic intensities:
-
-\[
-\hat\theta_{dr} \propto E[\theta_{dr}] b_r, \qquad \sum_r \hat\theta_{dr}=1.
-\]
+defaults to \(10\alpha\).
 
 ## Input formats
 
@@ -157,7 +198,7 @@ Default weight for model features missing from `--features` when feature
 weighting is active. Default: `-1`, which drops missing features.
 
 Fitting and transform can use weighted counts. Pseudobulk output remains on the
-original count scale.
+original count scale, including for features assigned weight zero.
 
 ### Per-feature dispersion
 
@@ -239,25 +280,22 @@ Standard execution controls. `--debug` limits the number of units processed.
 ### Model hyperparameters
 
 `--beta-shape`
-Shape \(a\) for \(\beta_{wr}\). Default: `0.3`. Smaller values encourage
+Shape \(a\) for \(\beta_{wr}\). The default is
+\(\max(1/K,0.01)\), which keeps the prior weak as the number of topics grows
+without allowing extremely small Gamma shapes. Smaller values encourage
 spikier topic-word profiles.
 
 `--xi-shape`
-Shape \(a_0\) for the feature degree-correction prior. Default: `0.3`.
+Shape \(a_0\) in the prior of \(\xi_w\). Default: `0.3`.
 
 `--xi-mean`
-Prior mean \(b_0\) for \(\xi_w\). Since \(\xi_w\) is an inverse feature-activity
-rate, larger values shrink beta loadings downward. If omitted, the default is
-derived from vocabulary size and `--size-factor`.
+Mean \(b_0\) in the prior of \(\xi_w\). By default this is derived as
+\(V/\bar n\), placing \(\beta\) on the count scale.
 
 `--theta-concentration`
-Total symmetric concentration \(\alpha\), used only without `--eb-shrinkage`.
-The prior is \(\mathrm{Gamma}(\alpha/K,\alpha)\), with unit expected total
-topic intensity. Default: `1`.
-
-`--theta-shape`
-Per-topic Gamma shape \(s_0\), used only with `--eb-shrinkage`. Default: `1`.
-Explicitly supplying the theta option for the other mode is an error.
+Total concentration \(\alpha\), used in both prior modes. The symmetric prior is
+\(\mathrm{Gamma}(\alpha/K,\alpha)\); with `--eb-shrinkage`, the shape remains
+\(\alpha/K\) and the fitted \(\nu_r\) replaces the fixed rate. Default: `1`.
 
 `--eb-shrinkage`
 Activate the asymmetric empirical-Bayes topic rate \(\nu_r\). The default uses
@@ -268,13 +306,13 @@ the fitted asymmetric behavior described in the Model section.
 `--nu-max`
 Cap on \(E[\nu_r]\), effective only with `--eb-shrinkage`. Bounds the
 rare-topic suppression by projecting the fitted Gamma posterior rate so that
-its mean does not exceed the cap. Default: `0.1 * size-factor`; an explicitly
-supplied value must be positive and finite.
+its mean does not exceed the cap. Default: \(10\alpha\); an explicitly supplied
+value must be positive and finite.
 
 `--nu-shape`, `--nu-rate`
 Shape \(e_0\) and rate \(f_0\) for the global topic-rate prior, used only with
-`--eb-shrinkage`. If `--nu-rate` is omitted, it is derived from `--theta-shape`,
-`--n-topics`, and `--size-factor`.
+`--eb-shrinkage`. If `--nu-rate` is omitted, it is set to
+\(f_0=e_0/\alpha\).
 
 ### Other fitting options
 
@@ -284,6 +322,10 @@ Sort topics by fitted corpus usage before writing outputs.
 `--transform`
 Transform the input units after fitting and write `{prefix}.results.tsv` and
 `{prefix}.pseudobulk.tsv`.
+
+`--residuals`, `--feature-residuals`
+With `--transform`, also write LDA-compatible per-unit and per-feature residual
+statistics. The two option names are aliases.
 
 `--skip-posterior`
 With `--transform`, suppress the local Gamma shape/rate output. Posterior output
@@ -329,6 +371,13 @@ Minimum total count per unit to keep. Default: `20`.
 `--features`, `--min-count-per-feature`
 Optional feature list and feature filtering.
 
+`--pseudobulk-all-features`
+Include every retained input feature in `{prefix}.pseudobulk.tsv`, including
+features absent from the fitted state. These extra features do not participate
+in inference, posterior calculation, dispersion, or `--min-count`; their raw
+counts are accumulated using the inferred model-feature topic proportions.
+Without this option, pseudobulk contains only model features.
+
 `--include-feature-regex`, `--exclude-feature-regex`
 Regex-based feature filtering.
 
@@ -337,6 +386,10 @@ Feature weighting options.
 
 `--max-iter`, `--mean-change-tol`
 Per-unit local inference controls.
+
+`--residuals`, `--feature-residuals`
+Write `{prefix}.unit_stats.tsv` and `{prefix}.feature_residuals.tsv`. The two
+option names are aliases.
 
 `--skip-posterior`, `--posterior-dispersion-rank`
 The local Gamma posterior is written by default. Suppress it with
@@ -358,170 +411,19 @@ indices.
 `--threads`, `--seed`, `--verbose`, `--debug`
 Execution controls.
 
-## `gamma-pois-cluster-fit`
-
-Fits an uncertainty-aware Gaussian mixture to a local posterior handoff. The
-fitted first-stage Gamma posterior enters the mixture likelihood as per-unit
-measurement uncertainty, so units with noisier topic estimates are
-down-weighted during centroid estimation.
-
-### Required
-
-`--in-state`
-Input Gamma-Poisson topic state written by `gamma-pois-fit`.
-
-`--in-posterior`
-Input `{prefix}.posterior.tsv` local posterior written by transform.
-
-`--out-prefix`
-Output prefix.
-
-### Common options
-
-`--in-posterior-dispersion`
-Optional `{prefix}.posterior-dispersion.bin` sidecar. Supplying it activates the
-compressed correlated document uncertainty; otherwise mean-field diagonal
-uncertainty is used.
-
-`--n-clusters-max`
-Number of mixture components. Default: `10`.
-
-`--coordinate-model`
-Document coordinates used by the mixture: `l2` (default) uses L2-normalized
-posterior mean topic intensities; `power-ilr` uses boundary-robust powered
-compositions in a fixed Helmert basis.
-
-For `power-ilr`, `--power-ilr-lambda` sets the exponent (default `0.5`),
-`--posterior-coordinate-samples` selects 8, 16, 32, or 64 deterministic Gamma
-draws per unit (default `16`), `--coordinate-cov-rank` controls the retained
-document-uncertainty rank (default `min(8,K-1)`), and `--coordinate-seed`
-controls the counter-based sampler. These settings are stored in the cluster
-state and automatically reused by `gamma-pois-cluster-transform`.
-
-Until structured covariance updates are validated for this geometry,
-power-ILR defaults to diagonal intrinsic cluster covariance when
-`--cluster-covariance-rank` is left automatic. An explicitly requested
-positive rank is experimental. Batch fitting compares it with the final
-diagonal warmup model and records `diagonal-fallback` in the state if the
-structured update lowers predictive likelihood.
-
-All coordinate models use the same plain cosine geometry on posterior mean
-topic intensities for k-means++ or Leiden initialization. This isolates the
-mixture coordinate and uncertainty model from the initializer.
-
-`--initializer leiden` constructs a cosine k-nearest-neighbor graph before
-community detection. Rows are L2-normalized even though topic intensities are
-compositions: a fixed L1 norm does not imply a fixed L2 norm, and Euclidean
-distance between normalized rows is exactly equivalent to cosine similarity.
-`--leiden-neighbors` defaults to `15`.
-
-`--leiden-knn-backend` selects `auto` (default), `kdtree`, or `flat`.
-Exact search remains automatic: positive `--leiden-knn-epsilon` selects the
-nanoflann kd-tree; otherwise `auto` uses the kd-tree through 16 dimensions and
-tiled exact flat search above 16 dimensions. The flat path never constructs a
-full pairwise matrix and uses Eigen multiplication. A positive epsilon is
-rejected by non-kd-tree backends. The requested and resolved backends are
-stored in the cluster state for reproducibility.
-
-`--min-cluster-size`
-Minimum absolute expected membership for a component to be reported active.
-Default: `5`. Filtering active flags never renormalizes responsibilities.
-
-`--candidate-components`
-Candidate components evaluated for each unit. Default: `0`, scoring all components. When the number of components (`--n-clusters-max`) is large, this option bounds per-unit work.
-
-`--n-representatives`
-Representative units written per active cluster. Default: `10`.
-
-`--dirichlet-concentration`
-Symmetric total concentration for the variational Dirichlet mixture weights.
-Default: `1`.
-
-### Optimizer
-
-`--optimizer`
-`svi` (default) runs in-memory stochastic VI; `batch` runs deterministic full-data EM.
-
-The default initialization uses deterministic k-means++ followed by Lloyd
-refinement (`--kmeans-max-iter`, default `20`). Leiden is selected explicitly
-with `--initializer leiden`. EM updates means and covariance from exact
-conditional latent Gaussian moments, so document uncertainty is not subtracted
-a second time.
-
-Batch convergence requires stable ELBO, soft responsibilities, and top
-assignments for a configurable number of consecutive iterations. `--tol`
-(default `1e-5`) controls relative ELBO change; `--tol-resp-p90` (default
-`0.01`) the 90th-percentile per-document responsibility max-abs (L∞) change;
-`--tol-top-change` (default `1e-3`) the fraction of changed top assignments; and
-`--convergence-patience` (default `3`) the required consecutive stable
-iterations. `--max-iter` (default `50`) caps final fixed-covariance iterations.
-
-SVI options: `--minibatch-size` (default `1024`), `--n-epochs` (default `30`),
-`--svi-eval-size` (fixed validation subset, default `4096`), `--refine-max-iter`
-(deterministic EM refinement after SVI, default `20`), and the learning-rate
-schedule `--svi-kappa` / `--svi-tau0`. Candidate truncation (opt-in, exact by
-default) is controlled by `--candidate-components` (`0` scores all components),
-`--candidate-dim`, `--candidate-refresh-epochs`, `--candidate-search`
-(`auto`, `linear`, or `kdtree`), and `--prune-patience` for component dormancy.
-
-### Cluster covariance
-
-`--cluster-covariance-rank`
-Shared-orientation cluster covariance rank plus a component-specific diagonal.
-Default: `-1`, which selects `min(5, K-1)`; `0` selects the diagonal special
-case. Structured fitting performs a diagonal warmup, alternates component
-covariance projections with damped shared-orientation updates, then freezes the
-orientation for the final convergence phase. Controlled by
-`--diagonal-warmup-iter` (default `5`), `--orientation-update-interval`
-(default `1`), `--orientation-max-updates` (default `5`),
-`--orientation-patience`, `--orientation-step`, and `--tol-orientation`.
-
-`--covariance-accumulation`
-`auto` (default) uses dense conditional covariance accumulation when the topic
-count is at most 48 and compact diagonal/projected contractions above 48.
-Override with `dense` or `compact`. Dense mode uses `O(CK^2)` accumulator
-memory; compact mode uses `O(CK+Cq^2)` plus a pooled orientation sketch.
-
-Likelihoods, log determinants, and conditional moments use Woodbury operations
-on the combined document and cluster factors. The E-step runs over fixed,
-contiguous document shards using `--threads`; shard accumulators are reduced in
-a fixed order for deterministic repetition with the same thread count.
-
-The implementation loads all posterior means and uncertainty into memory
-(`O(DK(1+h))` storage), including for SVI. `--variance-floor` and
-`--low-rank-variance-floor` keep covariance parameters positive.
-
-### Outputs
-
-The command writes `{prefix}.state.tsv`, `{prefix}.model.tsv`,
-`{prefix}.results.tsv`, `{prefix}.separation.tsv`, and
-`{prefix}.representatives.tsv`. Results contain full responsibilities over every
-component slot, top memberships, and membership entropy; the model reports
-component mass, intrinsic variance and volume, and original-topic composition
-profiles; separation reports pairwise standardized and Bhattacharyya distances.
-
-## `gamma-pois-cluster-transform`
-
-Assigns new units to a fitted cluster state without refitting. Required options
-are `--in-state`, `--in-cluster-state`, `--in-posterior`, and `--out-prefix`;
-supply `--in-posterior-dispersion` to match the uncertainty contract of the fit.
-It consumes the same first-stage posterior handoff as fitting, applies the
-persisted basis and mixture model, and writes `{prefix}.results.tsv`.
 
 ## Outputs
 
 `{prefix}.model.tsv`
-Feature-by-topic matrix containing \(\hat\phi_{wr}\), the normalized topic-word
-distributions. Floating-point values in Gamma-Poisson TSV outputs use
-scientific notation with four digits after the decimal point. The pseudobulk
-matrix retains its existing fixed three-decimal format.
+Feature-by-topic matrix containing \(\hat\beta_{wr}\), the normalized topic-word
+distributions.
 
 `{prefix}.state.tsv`
 Full Gamma-Poisson variational state. This file is required by
 `gamma-pois-transform`.
 
 `{prefix}.features.tsv`
-Written for 10X fitting when `--features` is not supplied.
+Written only when `--features` is not supplied and the input is in 10X MEX format.
 
 When `--transform` is used during fitting, or when running
 `gamma-pois-transform`, the transform outputs are:
@@ -534,7 +436,36 @@ identifier column is `#barcode`.
 `{prefix}.pseudobulk.tsv`
 Feature-by-topic pseudobulk counts. Entry `(w, r)` is
 \(\sum_d \hat\theta_{dr} n_{dw}\), where \(\hat\theta_d\) is the normalized
-topic vector written to `{prefix}.results.tsv`.
+topic vector written to `{prefix}.results.tsv` and \(n_{dw}\) is the raw input
+count, independent of any feature weight. With `--pseudobulk-all-features`, the
+rows cover all retained input features; otherwise they cover model features.
+
+`{prefix}.unit_stats.tsv`
+Written when `--residuals` or `--feature-residuals` is enabled. It contains the
+LDA-compatible columns `total_count`, `residual`, `cosine_sim`, `entropy`,
+`sh_lcr`, and `sh_q`. For fitted marginal means
+
+\[
+\mu_{dw}=c_d\sum_r E[\theta_{dr}]E[\beta_{wr}],
+\]
+
+`residual` is \(\sum_w|n_{dw}-\mu_{dw}|\), and `cosine_sim` compares the
+observed and fitted feature vectors. `total_count` is the raw model-overlap
+count before feature weights; residual calculations use the effective weighted
+counts when feature weights are active. The entropy summaries use the
+normalized topic intensities and cosine similarity among normalized topic
+profiles.
+
+When feature dispersion is enabled, the same marginal mean is used because
+\(E[\epsilon_{dw}]=1\). Dispersion affects these statistics indirectly through
+the inferred theta posterior; the fitted mean is not multiplied by the
+observation-conditioned \(E[\epsilon_{dw}\mid n_{dw}]\).
+
+`{prefix}.feature_residuals.tsv`
+Written with the unit statistics. It contains `Feature`, `AbsDiff`, and
+`AbsDiffPerCount`, where `AbsDiff` is
+\(\sum_d|n_{dw}-\mu_{dw}|\). Rows cover model features only, including when
+`--pseudobulk-all-features` is enabled.
 
 `{prefix}.posterior.tsv`
 Written by default unless `--skip-posterior` is used. Contains the unit identifiers, row index,

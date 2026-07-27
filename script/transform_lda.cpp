@@ -1,4 +1,5 @@
 #include "topic_svb.hpp"
+#include "transform_pseudobulk.hpp"
 
 #include <fstream>
 #include <iomanip>
@@ -30,6 +31,9 @@ struct TransformBatch {
         return docs.size();
     }
 };
+
+using transform_pseudobulk::Mode;
+using transform_pseudobulk::SpecialBatch;
 
 void writeUnitIdHeader(std::ostream& out, bool use_10x, const std::string& info_header) {
     if (use_10x) {
@@ -128,46 +132,42 @@ class TransformBatchProcessor {
 public:
     TransformBatchProcessor(LDA4Hex& lda_, std::ofstream& resultsStream_,
             std::ofstream* unitMetaStream_, RowMajorMatrixXd& pseudobulk_,
+            MatrixXd& specialPseudobulk_, Mode pseudobulkMode_,
             ResidualState* residualState_, int32_t topkOnly_,
             int32_t nThreads_)
         : lda(lda_),
           resultsStream(resultsStream_),
           unitMetaStream(unitMetaStream_),
           pseudobulk(pseudobulk_),
+          specialPseudobulk(specialPseudobulk_),
+          pseudobulkMode(pseudobulkMode_),
           residualState(residualState_),
           topkOnly(topkOnly_),
           threadHint(std::max<int32_t>(1, nThreads_)),
           M(lda_.nFeatures()),
-          K(lda_.getNumTopics()) {}
+          K(lda_.getNumTopics()) {
+        if (pseudobulkMode == Mode::Standard) {
+            standardTls = std::make_unique<StandardTls>([this] {
+                return StandardLocalAgg(M, K, residualState != nullptr);
+            });
+        } else if (residualState != nullptr) {
+            residualTls = std::make_unique<ResidualTls>([this] {
+                return ResidualLocalAgg(M);
+            });
+        }
+    }
 
     void process(TransformBatch& batch) {
         if (batch.empty()) {
             return;
         }
+        if (pseudobulkMode != Mode::Standard) {
+            error("%s: standard batch used with a special pseudobulk mode", __func__);
+        }
 
         const size_t N = batch.size();
         RowMajorMatrixXd doc_topic = lda.do_transform(DocumentView(batch.docs));
         writeTopicRows(batch.ids, doc_topic);
-
-        struct LocalAgg {
-            RowMajorMatrixXd pseudobulk;
-            bool withResiduals;
-            VectorXd featureResiduals;
-            VectorXd featureTotals;
-
-            LocalAgg(int32_t M, int32_t K, bool withResiduals_)
-                : pseudobulk(RowMajorMatrixXd::Zero(M, K)),
-                  withResiduals(withResiduals_) {
-                if (withResiduals) {
-                    featureResiduals = VectorXd::Zero(M);
-                    featureTotals = VectorXd::Zero(M);
-                }
-            }
-        };
-
-        tbb::enumerable_thread_specific<LocalAgg> tls([&] {
-            return LocalAgg(M, K, residualState != nullptr);
-        });
 
         VectorXd unitResiduals;
         VectorXd unitCosineSim;
@@ -187,7 +187,7 @@ public:
         const size_t grainsize = std::max<size_t>(1, N / (2 * static_cast<size_t>(threadHint)));
         tbb::parallel_for(tbb::blocked_range<size_t>(0, N, grainsize),
             [&](const tbb::blocked_range<size_t>& range) {
-                auto& local = tls.local();
+                auto& local = standardTls->local();
                 RowVectorXd expected = RowVectorXd::Zero(M);
 
                 for (size_t idx = range.begin(); idx < range.end(); ++idx) {
@@ -238,21 +238,128 @@ public:
                 }
             });
 
-        for (auto& local : tls) {
-            pseudobulk += local.pseudobulk;
-            if (residualState != nullptr) {
-                residualState->featureResiduals += local.featureResiduals;
-                residualState->featureTotals += local.featureTotals;
-            }
-        }
-
         if (unitMetaStream != nullptr) {
-            writeUnitMetaRows(batch, unitResiduals, unitCosineSim,
+            writeUnitMetaRows(batch.docs, batch.ids, unitResiduals, unitCosineSim,
                 unitEntropy, unitSensitiveEntropyLCR, unitSensitiveEntropyQ);
         }
     }
 
+    void process(SpecialBatch& batch) {
+        if (batch.empty()) {
+            return;
+        }
+        if (pseudobulkMode == Mode::Standard) {
+            error("%s: special batch used with standard pseudobulk mode", __func__);
+        }
+
+        const size_t N = batch.size();
+        RowMajorMatrixXd doc_topic = lda.do_transform(DocumentView(batch.modelDocs));
+        writeTopicRows(batch.ids, doc_topic);
+        transform_pseudobulk::accumulate(
+            specialPseudobulk, batch, doc_topic, pseudobulkMode);
+
+        if (residualState == nullptr) {
+            return;
+        }
+
+        VectorXd unitResiduals = VectorXd::Zero(N);
+        VectorXd unitCosineSim = VectorXd::Zero(N);
+        const ThetaEntropyStats thetaStats =
+            computeThetaEntropyStats(doc_topic, residualState->topicSimilarity);
+
+        const size_t grainsize = std::max<size_t>(1, N / (2 * static_cast<size_t>(threadHint)));
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, N, grainsize),
+            [&](const tbb::blocked_range<size_t>& range) {
+                auto& local = residualTls->local();
+                RowVectorXd expected = RowVectorXd::Zero(M);
+
+                for (size_t idx = range.begin(); idx < range.end(); ++idx) {
+                    const int32_t i = static_cast<int32_t>(idx);
+                    Document& doc = batch.modelDocs[idx];
+                    const double weighted_total = doc.get_sum();
+                    for (size_t j = 0; j < doc.ids.size(); ++j) {
+                        local.featureTotals(doc.ids[j]) += doc.cnts[j];
+                    }
+
+                    expected = doc_topic.row(i) * residualState->betaNorm;
+                    expected *= weighted_total;
+                    local.featureResiduals += expected.transpose();
+
+                    double cosine_sim = 0.0;
+                    double observed_norm_sq = 0.0;
+                    const double expected_norm_sq = expected.squaredNorm();
+                    double doc_residual = expected.sum();
+                    for (size_t j = 0; j < doc.ids.size(); ++j) {
+                        const uint32_t m = doc.ids[j];
+                        const double observed = doc.cnts[j];
+                        const double estimate = expected(m);
+                        const double residual = std::abs(estimate - observed) - estimate;
+                        local.featureResiduals(m) += residual;
+                        doc_residual += residual;
+                        cosine_sim += estimate * observed;
+                        observed_norm_sq += observed * observed;
+                    }
+                    if (expected_norm_sq > 0.0 && observed_norm_sq > 0.0) {
+                        cosine_sim /= std::sqrt(expected_norm_sq * observed_norm_sq);
+                    } else {
+                        cosine_sim = 0.0;
+                    }
+                    unitResiduals(idx) = doc_residual;
+                    unitCosineSim(idx) = cosine_sim;
+                }
+            });
+
+        if (unitMetaStream != nullptr) {
+            writeUnitMetaRows(batch.modelDocs, batch.ids,
+                unitResiduals, unitCosineSim,
+                thetaStats.entropy, thetaStats.sh_lcr, thetaStats.sh_q);
+        }
+    }
+
+    void finalize() {
+        if (pseudobulkMode == Mode::Standard) {
+            for (auto& local : *standardTls) {
+                pseudobulk += local.pseudobulk;
+                if (residualState != nullptr) {
+                    residualState->featureResiduals += local.featureResiduals;
+                    residualState->featureTotals += local.featureTotals;
+                }
+            }
+        } else if (residualState != nullptr) {
+            for (auto& local : *residualTls) {
+                residualState->featureResiduals += local.featureResiduals;
+                residualState->featureTotals += local.featureTotals;
+            }
+        }
+    }
+
 private:
+    struct StandardLocalAgg {
+        RowMajorMatrixXd pseudobulk;
+        VectorXd featureResiduals;
+        VectorXd featureTotals;
+
+        StandardLocalAgg(int32_t M, int32_t K, bool withResiduals)
+            : pseudobulk(RowMajorMatrixXd::Zero(M, K)) {
+            if (withResiduals) {
+                featureResiduals = VectorXd::Zero(M);
+                featureTotals = VectorXd::Zero(M);
+            }
+        }
+    };
+
+    struct ResidualLocalAgg {
+        VectorXd featureResiduals;
+        VectorXd featureTotals;
+
+        explicit ResidualLocalAgg(int32_t M)
+            : featureResiduals(VectorXd::Zero(M)),
+              featureTotals(VectorXd::Zero(M)) {}
+    };
+
+    using StandardTls = tbb::enumerable_thread_specific<StandardLocalAgg>;
+    using ResidualTls = tbb::enumerable_thread_specific<ResidualLocalAgg>;
+
     void writeTopicRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
         if (topkOnly > 0) {
             writeTopKRows(ids, doc_topic);
@@ -300,14 +407,15 @@ private:
         }
     }
 
-    void writeUnitMetaRows(const TransformBatch& batch, const VectorXd& unitResiduals,
+    void writeUnitMetaRows(const std::vector<Document>& docs,
+            const std::vector<std::string>& ids, const VectorXd& unitResiduals,
             const VectorXd& unitCosineSim, const VectorXd& unitEntropy,
             const VectorXd& unitSensitiveEntropyLCR, const VectorXd& unitSensitiveEntropyQ) {
-        for (size_t i = 0; i < batch.size(); ++i) {
-            if (!batch.ids[i].empty()) {
-                *unitMetaStream << batch.ids[i] << "\t";
+        for (size_t i = 0; i < docs.size(); ++i) {
+            if (!ids[i].empty()) {
+                *unitMetaStream << ids[i] << "\t";
             }
-            *unitMetaStream << rawTotalCount(batch.docs[i])
+            *unitMetaStream << rawTotalCount(docs[i])
                 << "\t" << std::setprecision(2) << unitResiduals(i)
                 << "\t" << std::setprecision(4) << unitCosineSim(i)
                 << "\t" << std::setprecision(4) << unitEntropy(i)
@@ -320,12 +428,59 @@ private:
     std::ofstream& resultsStream;
     std::ofstream* unitMetaStream;
     RowMajorMatrixXd& pseudobulk;
+    MatrixXd& specialPseudobulk;
+    Mode pseudobulkMode;
     ResidualState* residualState;
     int32_t topkOnly;
     int32_t threadHint;
     int32_t M;
     int32_t K;
+    std::unique_ptr<StandardTls> standardTls;
+    std::unique_ptr<ResidualTls> residualTls;
 };
+
+bool readSpecialHexMinibatch(std::ifstream& input, HexReader& rawReader,
+        LDA4Hex& lda, SpecialBatch& batch, Mode mode,
+        const std::vector<int32_t>& inputToModel, int32_t modal,
+        int32_t batchSize, int32_t maxUnits, int32_t minCount) {
+    batch.clear();
+    const int32_t target = std::min(batchSize, maxUnits);
+    std::string line;
+    while (static_cast<int32_t>(batch.size()) < target) {
+        if (!std::getline(input, line)) {
+            return false;
+        }
+        Document rawDoc;
+        std::string id;
+        if (rawReader.parseLine(rawDoc, id, line, modal, false) < 0) {
+            error("%s: error parsing input line", __func__);
+        }
+        transform_pseudobulk::appendDocument(std::move(rawDoc), std::move(id),
+            batch, mode, inputToModel, lda, minCount);
+    }
+    return true;
+}
+
+bool readSpecialDgeMinibatch(DGEReader10X& dge, LDA4Hex& lda,
+        SpecialBatch& batch, Mode mode,
+        const std::vector<int32_t>& inputToModel, int32_t batchSize,
+        int32_t maxUnits, int32_t minCount) {
+    batch.clear();
+    const int32_t target = std::min(batchSize, maxUnits);
+    while (static_cast<int32_t>(batch.size()) < target) {
+        Document rawDoc;
+        int32_t unitIndex = -1;
+        if (!dge.next(rawDoc, &unitIndex, nullptr)) {
+            return false;
+        }
+        if (unitIndex < 0) {
+            continue;
+        }
+        transform_pseudobulk::appendDocument(std::move(rawDoc),
+            dge.getUnitId(unitIndex), batch, mode, inputToModel, lda, minCount);
+    }
+    return true;
+}
 
 } // namespace
 
@@ -349,6 +504,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     bool computeResiduals = false;
     bool sorted_by_barcode = false;
     bool keep_barcodes = false;
+    bool pseudobulk_all_features = false;
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
@@ -382,6 +538,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("mean-change-tol", "Convergence tolerance per document", mDelta)
       .add_option("feature-residuals", "Compute per-feature and per-unit residuals (backward compatibility)", computeResiduals)
       .add_option("residuals", "Compute per-feature and per-unit residuals", computeResiduals)
+      .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
 
     try {
@@ -437,6 +594,16 @@ int32_t cmdLDATransform(int argc, char** argv) {
         }
     }
 
+    const Mode pseudobulkMode =
+        transform_pseudobulk::selectMode(pseudobulk_all_features, weights_active);
+    std::unique_ptr<HexReader> rawReader;
+    std::vector<std::string> retainedInputFeatures;
+    if (pseudobulkMode != Mode::Standard) {
+        rawReader = std::make_unique<HexReader>(reader);
+        rawReader->clearFeatureWeights();
+        retainedInputFeatures = rawReader->features;
+    }
+
     std::string info_header;
     if (!use_10x) {
         reader.getInfoHeaderStr(info_header);
@@ -448,12 +615,30 @@ int32_t cmdLDATransform(int argc, char** argv) {
 
     const int32_t M = lda.nFeatures();
     const int32_t K = lda.getNumTopics();
+    const std::vector<std::string> modelFeatureNames = lda.getFeatureNames();
     if (topk_only > 0 && topk_only > K-1) {
         warning("--topk-only is >= the number of topics (%d); writing all topics", K);
         topk_only = -1;
     }
 
-    RowMajorMatrixXd pseudobulk = RowMajorMatrixXd::Zero(M, K);
+    std::vector<std::string> pseudobulkFeatureNames = modelFeatureNames;
+    std::vector<int32_t> inputToModel;
+    if (pseudobulkMode == Mode::WeightedModel) {
+        rawReader->setFeatureIndexRemap(pseudobulkFeatureNames, false);
+    } else if (pseudobulkMode == Mode::AllFeatures) {
+        pseudobulkFeatureNames = retainedInputFeatures;
+        inputToModel = transform_pseudobulk::mapInputFeaturesToModel(
+            pseudobulkFeatureNames, modelFeatureNames);
+    }
+
+    RowMajorMatrixXd pseudobulk;
+    MatrixXd specialPseudobulk;
+    if (pseudobulkMode == Mode::Standard) {
+        pseudobulk = RowMajorMatrixXd::Zero(M, K);
+    } else {
+        specialPseudobulk = MatrixXd::Zero(
+            static_cast<int32_t>(pseudobulkFeatureNames.size()), K);
+    }
     std::unique_ptr<ResidualState> residualState;
     if (computeResiduals) {
         residualState = std::make_unique<ResidualState>(lda.get_model_matrix());
@@ -471,7 +656,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
 
     TransformBatchProcessor processor(lda, outputs.results,
         computeResiduals ? &outputs.unitStats : nullptr,
-        pseudobulk, residualState.get(), topk_only, nThreads);
+        pseudobulk, specialPseudobulk, pseudobulkMode,
+        residualState.get(), topk_only, nThreads);
 
     bool fileopen = true;
     int32_t processed = 0;
@@ -479,71 +665,136 @@ int32_t cmdLDATransform(int argc, char** argv) {
     TransformBatch batch;
     const int32_t minCountInt = minCount > 0 ? static_cast<int32_t>(std::ceil(minCount)) : 0;
 
-    if (use_10x) {
-        DGEReader10X& dge = *dge_ptr;
-        const std::vector<std::string> model_features = lda.getFeatureNames();
-        int32_t n_overlap = dge.setFeatureIndexRemap(model_features, false);
-        if (n_overlap == 0) {
-            error("No overlapping features found between 10X input and model metadata");
-        }
+    if (pseudobulkMode == Mode::Standard) {
+        if (use_10x) {
+            DGEReader10X& dge = *dge_ptr;
+            const std::vector<std::string> model_features = lda.getFeatureNames();
+            int32_t n_overlap = dge.setFeatureIndexRemap(model_features, false);
+            if (n_overlap == 0) {
+                error("No overlapping features found between 10X input and model metadata");
+            }
 
-        std::vector<int32_t> barcode_idx;
+            std::vector<int32_t> barcode_idx;
 
-        if (sorted_by_barcode) {
+            if (sorted_by_barcode) {
+                while (fileopen && processed < maxUnits) {
+                    batch.clear();
+                    const int32_t remaining = maxUnits - processed;
+                    fileopen = dge.readMinibatch(batch.docs, barcode_idx, batchSize, remaining, minCountInt);
+                    if (batch.empty()) {
+                        break;
+                    }
+                    applyWeights(batch.docs, lda);
+                    assignBarcodeIds(dge, barcode_idx, batch.ids);
+                    processor.process(batch);
+                    processed += static_cast<int32_t>(batch.size());
+                }
+            } else {
+                std::vector<Document> all_docs;
+                std::vector<int32_t> all_barcode_idx;
+                dge.readAll(all_docs, all_barcode_idx, minCountInt);
+                applyWeights(all_docs, lda);
+                std::vector<std::string> all_ids;
+                assignBarcodeIds(dge, all_barcode_idx, all_ids);
+                size_t cursor = 0;
+                while (cursor < all_docs.size() && processed < maxUnits) {
+                    batch.clear();
+                    const int32_t remaining = maxUnits - processed;
+                    size_t take = std::min(static_cast<size_t>(batchSize), all_docs.size() - cursor);
+                    if (take > static_cast<size_t>(remaining)) {
+                        take = static_cast<size_t>(remaining);
+                    }
+                    batch.docs.insert(batch.docs.end(),
+                        std::make_move_iterator(all_docs.begin() + cursor),
+                        std::make_move_iterator(all_docs.begin() + cursor + take));
+                    batch.ids.insert(batch.ids.end(),
+                        std::make_move_iterator(all_ids.begin() + cursor),
+                        std::make_move_iterator(all_ids.begin() + cursor + take));
+                    cursor += take;
+                    if (batch.empty()) {
+                        break;
+                    }
+                    processor.process(batch);
+                    processed += static_cast<int32_t>(batch.size());
+                }
+            }
+        } else {
+            std::ifstream inFileStream(inFile);
+            if (!inFileStream) error("Error opening input file: %s", inFile.c_str());
             while (fileopen && processed < maxUnits) {
                 batch.clear();
                 const int32_t remaining = maxUnits - processed;
-                fileopen = dge.readMinibatch(batch.docs, barcode_idx, batchSize, remaining, minCountInt);
-                if (batch.empty()) {
-                    break;
-                }
-                applyWeights(batch.docs, lda);
-                assignBarcodeIds(dge, barcode_idx, batch.ids);
+                fileopen = lda.readMinibatch(inFileStream, batch.docs, batch.ids, batchSize, minCountInt, remaining);
+                if (batch.empty()) break;
                 processor.process(batch);
                 processed += static_cast<int32_t>(batch.size());
             }
-        } else {
-            std::vector<Document> all_docs;
-            std::vector<int32_t> all_barcode_idx;
-            dge.readAll(all_docs, all_barcode_idx, minCountInt);
-            applyWeights(all_docs, lda);
-            std::vector<std::string> all_ids;
-            assignBarcodeIds(dge, all_barcode_idx, all_ids);
-            size_t cursor = 0;
-            while (cursor < all_docs.size() && processed < maxUnits) {
-                batch.clear();
-                const int32_t remaining = maxUnits - processed;
-                size_t take = std::min(static_cast<size_t>(batchSize), all_docs.size() - cursor);
-                if (take > static_cast<size_t>(remaining)) {
-                    take = static_cast<size_t>(remaining);
-                }
-                batch.docs.insert(batch.docs.end(),
-                    std::make_move_iterator(all_docs.begin() + cursor),
-                    std::make_move_iterator(all_docs.begin() + cursor + take));
-                batch.ids.insert(batch.ids.end(),
-                    std::make_move_iterator(all_ids.begin() + cursor),
-                    std::make_move_iterator(all_ids.begin() + cursor + take));
-                cursor += take;
-                if (batch.empty()) {
-                    break;
-                }
-                processor.process(batch);
-                processed += static_cast<int32_t>(batch.size());
-            }
+            inFileStream.close();
         }
     } else {
-        std::ifstream inFileStream(inFile);
-        if (!inFileStream) error("Error opening input file: %s", inFile.c_str());
-        while (fileopen && processed < maxUnits) {
-            batch.clear();
-            const int32_t remaining = maxUnits - processed;
-            fileopen = lda.readMinibatch(inFileStream, batch.docs, batch.ids, batchSize, minCountInt, remaining);
-            if (batch.empty()) break;
-            processor.process(batch);
-            processed += static_cast<int32_t>(batch.size());
+        SpecialBatch specialBatch;
+        if (use_10x) {
+            DGEReader10X& dge = *dge_ptr;
+            const std::vector<std::string>& readFeatures = pseudobulkFeatureNames;
+            int32_t n_overlap = dge.setFeatureIndexRemap(readFeatures, false);
+            if (n_overlap == 0) {
+                error("No retained input features overlap with 10X input");
+            }
+
+            if (sorted_by_barcode) {
+                while (fileopen && processed < maxUnits) {
+                    const int32_t remaining = maxUnits - processed;
+                    fileopen = readSpecialDgeMinibatch(dge, lda, specialBatch,
+                        pseudobulkMode, inputToModel, batchSize, remaining,
+                        minCountInt);
+                    if (specialBatch.empty()) {
+                        break;
+                    }
+                    processor.process(specialBatch);
+                    processed += static_cast<int32_t>(specialBatch.size());
+                }
+            } else {
+                std::vector<Document> allRawDocs;
+                std::vector<int32_t> allUnitIndices;
+                dge.readAll(allRawDocs, allUnitIndices, 0);
+                size_t cursor = 0;
+                while (cursor < allRawDocs.size() && processed < maxUnits) {
+                    specialBatch.clear();
+                    const int32_t target = std::min(batchSize, maxUnits - processed);
+                    while (cursor < allRawDocs.size() &&
+                            static_cast<int32_t>(specialBatch.size()) < target) {
+                        const int32_t unitIndex = allUnitIndices[cursor];
+                        transform_pseudobulk::appendDocument(
+                            std::move(allRawDocs[cursor]), dge.getUnitId(unitIndex),
+                            specialBatch, pseudobulkMode, inputToModel, lda,
+                            minCountInt);
+                        ++cursor;
+                    }
+                    if (specialBatch.empty()) {
+                        continue;
+                    }
+                    processor.process(specialBatch);
+                    processed += static_cast<int32_t>(specialBatch.size());
+                }
+            }
+        } else {
+            std::ifstream inFileStream(inFile);
+            if (!inFileStream) error("Error opening input file: %s", inFile.c_str());
+            while (fileopen && processed < maxUnits) {
+                const int32_t remaining = maxUnits - processed;
+                fileopen = readSpecialHexMinibatch(inFileStream, *rawReader,
+                    lda, specialBatch, pseudobulkMode, inputToModel, modal,
+                    batchSize, remaining, minCountInt);
+                if (specialBatch.empty()) {
+                    break;
+                }
+                processor.process(specialBatch);
+                processed += static_cast<int32_t>(specialBatch.size());
+            }
+            inFileStream.close();
         }
-        inFileStream.close();
     }
+    processor.finalize();
     outputs.results.close();
     notice("Transformation results written to %s", outputs.resultsPath.c_str());
     if (computeResiduals) {
@@ -557,11 +808,13 @@ int32_t cmdLDATransform(int argc, char** argv) {
     outFileStream << "Feature\t";
     lda.writeModelHeader(outFileStream);
     outFileStream << std::fixed << std::setprecision(3);
-    const std::vector<std::string> featureNames = lda.getFeatureNames();
-    for (int32_t i = 0; i < M; ++i) {
-        outFileStream << featureNames[i];
-        for (int32_t k = 0; k < pseudobulk.cols(); ++k) {
-            outFileStream << "\t" << pseudobulk(i, k);
+    for (int32_t i = 0; i < static_cast<int32_t>(pseudobulkFeatureNames.size()); ++i) {
+        outFileStream << pseudobulkFeatureNames[i];
+        for (int32_t k = 0; k < K; ++k) {
+            const double value = pseudobulkMode == Mode::Standard
+                ? pseudobulk(i, k)
+                : specialPseudobulk(i, k);
+            outFileStream << "\t" << value;
         }
         outFileStream << "\n";
     }
@@ -577,7 +830,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
         const double total = residualState->featureTotals[i];
         const double diff = residualState->featureResiduals(i);
         const double ratio = total > 0.0 ? diff / total : 0.0;
-        outFileStream << featureNames[i]
+        outFileStream << modelFeatureNames[i]
             << "\t" << std::fixed << std::setprecision(3) << diff
             << "\t" << std::fixed << std::setprecision(6) << ratio << "\n";
     }

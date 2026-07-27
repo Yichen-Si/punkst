@@ -887,6 +887,15 @@ void HexReader::applyWeights(Document& doc) const {
     doc.counts_weighted = true;
 }
 
+void HexReader::clearFeatureWeights() {
+    weightFeatures = false;
+    weights.clear();
+    defaultWeight = 1.0;
+    if (!feature_sums_raw.empty()) {
+        feature_sums = feature_sums_raw;
+    }
+}
+
 double HexReader::rawCountFor(uint32_t feature, double count, bool countWeighted) const {
     if (!weightFeatures || !countWeighted) {
         return count;

@@ -35,7 +35,7 @@ For 10X input, the data are loaded into memory. When multiple datasets are provi
 
 If `--dataset-id` is omitted, dataset IDs default to `1`, `2`, `3`, ... in input order.
 
-## `lda4hex` / `topic-model`
+## `topic-model`
 
 ### Required
 
@@ -72,6 +72,7 @@ Negative and non-finite weights are ignored with a warning; zero weights are all
 Default weight for model/prior features missing from `--features` when feature weighting is active. Default: `-1`, which drops missing model/prior features. Set this to a non-negative value, such as `0`, to keep missing model/prior features and fill their weights.
 
 Model fitting and transform use the weighted counts. Pseudobulk output remains on the original count scale.
+The topic proportions used by pseudobulk still come from the weighted transform, so weights can affect pseudobulk indirectly through those proportions.
 When `--prior-scale-rel` is used with feature weights, the prior is scaled relative to weighted feature totals, so continued fitting or transform should use the same feature weights.
 
 For 10X input, the feature-selection behavior is:
@@ -189,6 +190,9 @@ Alias for `--residuals`.
 `--topk-only <int>`
 For the plain LDA path, write only the top-k topic indices and probabilities to `{prefix}.results.tsv`.
 
+`--pseudobulk-all-features`
+For the plain LDA path, include every retained input feature in `{prefix}.pseudobulk.tsv`, including features absent from the model. Existing feature count and regex filters still apply. Transformation, residuals, and unit filtering continue to use only model-overlapping features.
+
 ### Main outputs
 
 `{prefix}.model.tsv`
@@ -205,7 +209,7 @@ When `--transform` is used:
 - plain LDA without background delegates to `lda-transform`
 - background-enabled LDA keeps the older transform path
 
-For the delegated plain-LDA path used by `lda4hex --transform`, the transform stage keeps all non-empty units by using `--min-count 1`.
+For the delegated plain-LDA path used by `topic-model --transform`, the transform stage keeps all non-empty units by using `--min-count 1`.
 
 For the plain LDA path, transform outputs are:
 
@@ -279,12 +283,16 @@ Alias for `--residuals`.
 `--topk-only <int>`
 Write sparse top-k output to `{prefix}.results.tsv`. The value must be a positive integer.
 
+`--pseudobulk-all-features`
+Include every retained input feature in `{prefix}.pseudobulk.tsv`, including features absent from the model. Counts are accumulated on the raw scale as `raw_count * topic_proportion`; extra features do not participate in transformation, residuals, unit totals, or `--min-count`.
+
 ### Outputs
 
 `{prefix}.results.tsv`
 Per-unit topic proportions, or top-k topic indices/probabilities when `--topk-only` is used.
 
 `{prefix}.pseudobulk.tsv`
+Contains model-overlapping features by default, or all retained input features with `--pseudobulk-all-features`. Feature weights are never applied directly to pseudobulk counts.
 
 `{prefix}.unit_stats.tsv`
 Written only when `--residuals` is enabled.
