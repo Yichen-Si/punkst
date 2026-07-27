@@ -1,4 +1,5 @@
 #include "gamma_pois_topic.hpp"
+#include "count_cache_options.hpp"
 
 #include <cmath>
 #include <climits>
@@ -55,6 +56,7 @@ int32_t cmdGammaPoisJointFit(int argc, char** argv) {
     bool transform = false;
     bool sort_topics = false;
     bool sort_clusters = false;
+    TrainingCountCacheCliOptions count_cache_options;
 
     double kappa = 0.7, tau0 = 10.0;
     int32_t maxIter = 100;
@@ -103,6 +105,7 @@ int32_t cmdGammaPoisJointFit(int argc, char** argv) {
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("debug", "If >0, only process this many units", debug_)
       .add_option("verbose", "Verbose level", verbose);
+    add_training_count_cache_options(pl, count_cache_options);
 
     pl.add_option("kappa", "Learning decay rate", kappa)
       .add_option("tau0", "Learning offset", tau0)
@@ -134,6 +137,8 @@ int32_t cmdGammaPoisJointFit(int argc, char** argv) {
 
     if (batchSize <= 0) batchSize = 512;
     if (nEpochs <= 0) nEpochs = 1;
+    validate_training_count_cache_options(
+        count_cache_options.mode, count_cache_options.memory_budget);
     if (nTopics <= 0) error("--n-topics must be greater than 0");
     if (nClusters <= 0) error("--n-clusters must be greater than 0");
     if (clusterWarmupEpochs < 0) clusterWarmupEpochs = 0;
@@ -194,6 +199,10 @@ int32_t cmdGammaPoisJointFit(int argc, char** argv) {
             effectiveWarmupEpochs);
     }
     bool clusters_seeded = false;
+    const int32_t count_passes =
+        nEpochs + (effectiveWarmupEpochs > 0 ? 1 : 0);
+    TrainingCountCache count_cache(count_cache_options,
+        use_10x, count_passes, gp->nFeatures());
     if (effectiveWarmupEpochs > 0) {
         gp->setClusterWarmup(true);
         notice("Cluster warmup enabled for %d epoch(s); chi is held uniform and cluster globals are frozen",
@@ -203,8 +212,19 @@ int32_t cmdGammaPoisJointFit(int argc, char** argv) {
     for (int epoch = 0; epoch < nEpochs; ++epoch) {
         if (!clusters_seeded && epoch == effectiveWarmupEpochs) {
             if (effectiveWarmupEpochs > 0) {
-                gp->initializeClustersFromTrainingData(inFile, use_10x, minCountTrain,
-                    maxUnits, clusterPriorStart);
+                if (count_cache.resident_batches()) {
+                    gp->initializeClustersFromTrainingData(
+                        *count_cache.resident_batches(), maxUnits,
+                        clusterPriorStart);
+                } else if (count_cache.source()) {
+                    gp->initializeClustersFromTrainingData(
+                        *count_cache.source(), maxUnits,
+                        clusterPriorStart);
+                } else {
+                    gp->initializeClustersFromTrainingData(inFile,
+                        use_10x, minCountTrain, maxUnits,
+                        clusterPriorStart);
+                }
                 clusters_seeded = true;
                 notice("Cluster warmup complete; initialized clusters from document topic embeddings");
             } else {
@@ -234,6 +254,16 @@ int32_t cmdGammaPoisJointFit(int argc, char** argv) {
         int32_t n = 0;
         if (use_10x) {
             n = gp->trainOnline10X(batchSize, maxUnits, seed + epoch);
+        } else if (epoch == 0 && count_cache.enabled()) {
+            n = gp->trainOnline(inFile, batchSize, minCountTrain,
+                maxUnits, count_cache.sink());
+            count_cache.finish();
+        } else if (count_cache.resident_batches()) {
+            n = gp->trainOnline(
+                *count_cache.resident_batches(), batchSize, maxUnits);
+        } else if (count_cache.source()) {
+            n = gp->trainOnline(
+                *count_cache.source(), batchSize, maxUnits);
         } else {
             n = gp->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
         }

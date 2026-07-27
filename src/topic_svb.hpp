@@ -1,6 +1,7 @@
 #include "punkst.h"
 #include "lda.hpp"
 #include "hdp.hpp"
+#include "document_spool.hpp"
 #include <memory>
 #include <regex>
 
@@ -30,7 +31,14 @@ public:
 
     virtual ~TopicModelWrapper() = default;
 
-    int32_t trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits = INT32_MAX);
+    int32_t trainOnline(const std::string& inFile, int32_t _bsize,
+        int32_t _minCountTrain, int32_t maxUnits = INT32_MAX,
+        uac::DocumentBatchSink* cacheSink = nullptr);
+    int32_t trainOnline(uac::DocumentBlockSource& source,
+        int32_t _bsize, int32_t maxUnits = INT32_MAX);
+    int32_t trainOnline(
+        const std::vector<std::vector<Document>>& residentBatches,
+        int32_t _bsize, int32_t maxUnits = INT32_MAX);
     void prepare10XCache(DGEReader10X& dge, int32_t _minCountTrain, bool force = false);
     int32_t trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed);
     void fitAndWriteToFile10X(DGEReader10X& dge, const std::string& outPrefix, int32_t _bsize);

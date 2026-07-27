@@ -1,4 +1,5 @@
 #include "topic_svb.hpp"
+#include "count_cache_options.hpp"
 
 #include <filesystem>
 
@@ -30,6 +31,7 @@ int32_t cmdHDPSVI(int argc, char** argv) {
     std::string topk_colname = "topK";
     std::string topp_colname = "topP";
     bool drop_random_key = false;
+    TrainingCountCacheCliOptions count_cache_options;
 
     double kappa = 0.7, tau0 = 10.0;
     double eta = -1.0;
@@ -74,6 +76,7 @@ int32_t cmdHDPSVI(int argc, char** argv) {
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("debug", "If >0, only process this many units", debug_)
       .add_option("verbose", "Verbose level", verbose);
+    add_training_count_cache_options(pl, count_cache_options);
 
     pl.add_option("kappa", "Learning decay rate", kappa)
       .add_option("tau0", "Learning offset", tau0)
@@ -103,6 +106,8 @@ int32_t cmdHDPSVI(int argc, char** argv) {
     if (nEpochs <= 0) {
         nEpochs = 1;
     }
+    validate_training_count_cache_options(
+        count_cache_options.mode, count_cache_options.memory_budget);
     if (seed <= 0) {
         seed = std::random_device{}();
     }
@@ -216,10 +221,22 @@ int32_t cmdHDPSVI(int argc, char** argv) {
 
     notice("Starting model training....");
     const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
+    TrainingCountCache count_cache(count_cache_options,
+        use_10x, nEpochs, hdp4hex->nFeatures());
     for (int epoch = 0; epoch < nEpochs; ++epoch) {
         int32_t n = 0;
         if (use_10x) {
             n = hdp4hex->trainOnline10X(batchSize, maxUnits, seed + epoch);
+        } else if (epoch == 0 && count_cache.enabled()) {
+            n = hdp4hex->trainOnline(inFile, batchSize,
+                minCountTrain, maxUnits, count_cache.sink());
+            count_cache.finish();
+        } else if (count_cache.resident_batches()) {
+            n = hdp4hex->trainOnline(
+                *count_cache.resident_batches(), batchSize, maxUnits);
+        } else if (count_cache.source()) {
+            n = hdp4hex->trainOnline(
+                *count_cache.source(), batchSize, maxUnits);
         } else {
             n = hdp4hex->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
         }

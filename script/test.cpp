@@ -3,6 +3,7 @@
 #include "clustering/uac_stream.hpp"
 #include "clustering/low_rank_covariance.hpp"
 #include "punkst.h"
+#include "count_cache_options.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2844,6 +2845,126 @@ void test_fit_score_and_state(const std::string& requested_output) {
             && count_block.effective_totals(0)
                 == data.effective_totals(3),
         "indexed document spool did not round trip exactly");
+    indexed_counts->reset();
+    uac::DocumentBlock sequential_first;
+    uac::DocumentBlock sequential_second;
+    require(indexed_counts->next(sequential_first, 4)
+            && indexed_counts->next(sequential_second, 4)
+            && sequential_first.first_document == 0
+            && sequential_second.first_document == 4
+            && sequential_first.counts.front().ids
+                == data.counts.front().ids,
+        "indexed document spool sequential reads were invalid");
+    indexed_counts->reset();
+    uac::DocumentBlock sequential_replay;
+    require(indexed_counts->next(sequential_replay, 4)
+            && sequential_replay.first_document == 0
+            && sequential_replay.counts.front().cnts
+                == sequential_first.counts.front().cnts,
+        "indexed document spool reset did not replay the first block");
+
+    const std::filesystem::path sequential_count_spool =
+        std::filesystem::temp_directory_path()
+        / "punkst_sequential_document_spool.bin";
+    std::filesystem::remove(sequential_count_spool);
+    std::filesystem::remove(
+        sequential_count_spool.string() + ".partial");
+    uac::BinaryDocumentSpoolWriter sequential_spool_writer(
+        sequential_count_spool,
+        static_cast<int32_t>(basis.probabilities.rows()),
+        uac::DocumentSpoolMode::Sequential);
+    for (int32_t d = 0;
+            d < static_cast<int32_t>(data.identifiers.size()); ++d) {
+        sequential_spool_writer.append(
+            data.identifiers[d], data.counts[d],
+            data.raw_totals(d), data.effective_totals(d));
+    }
+    std::unique_ptr<uac::DocumentBlockSource> sequential_counts =
+        sequential_spool_writer.finish_sequential(false);
+    require(dynamic_cast<uac::IndexedDocumentSource*>(
+                sequential_counts.get()) == nullptr
+            && sequential_counts->documents()
+                == static_cast<int64_t>(data.identifiers.size())
+            && sequential_counts->storage_bytes()
+                + sizeof(uint64_t) * (data.identifiers.size() + 1)
+                == indexed_counts->storage_bytes()
+            && sequential_counts->content_checksum()
+                == indexed_counts->content_checksum(),
+        "sequential document spool retained a random-access index");
+    int64_t sequential_documents = 0;
+    while (sequential_counts->next(count_block, 4)) {
+        for (int32_t d = 0; d < count_block.size(); ++d) {
+            const int64_t expected = count_block.first_document + d;
+            require(count_block.identifiers[d]
+                        == data.identifiers[expected]
+                    && count_block.counts[d].ids
+                        == data.counts[expected].ids
+                    && count_block.counts[d].cnts
+                        == data.counts[expected].cnts,
+                "sequential document spool changed a record");
+        }
+        sequential_documents += count_block.size();
+    }
+    sequential_counts->reset();
+    require(sequential_documents
+                == static_cast<int64_t>(data.identifiers.size())
+            && sequential_counts->next(count_block, 4)
+            && count_block.first_document == 0
+            && count_block.identifiers.front()
+                == data.identifiers.front(),
+        "sequential document spool did not reset and replay");
+    sequential_counts.reset();
+    std::filesystem::remove(sequential_count_spool);
+
+    require(parse_training_count_cache_memory_budget("1K") == 1024
+            && parse_training_count_cache_memory_budget("2m")
+                == 2ull * 1024ull * 1024ull,
+        "training count cache memory budget parsing failed");
+    TrainingCountCacheCliOptions resident_cache_options;
+    resident_cache_options.mode = "auto";
+    resident_cache_options.memory_budget = "1M";
+    resident_cache_options.temp_dir =
+        std::filesystem::temp_directory_path().string();
+    TrainingCountCache resident_cache(resident_cache_options,
+        false, 2, static_cast<int32_t>(basis.probabilities.rows()));
+    std::vector<Document> resident_batch = data.counts;
+    resident_cache.capture(resident_batch);
+    resident_cache.finish();
+    require(resident_cache.enabled()
+            && resident_batch.empty()
+            && resident_cache.resident_batches()
+            && !resident_cache.source()
+            && resident_cache.resident_batches()->size() == 1
+            && resident_cache.resident_batches()->front().size()
+                == data.counts.size()
+            && resident_cache.resident_bytes()
+                <= parse_training_count_cache_memory_budget("1M"),
+        "small automatic training count cache was not kept resident");
+
+    TrainingCountCacheCliOptions spilled_cache_options =
+        resident_cache_options;
+    spilled_cache_options.memory_budget = "1";
+    TrainingCountCache spilled_cache(spilled_cache_options,
+        false, 2, static_cast<int32_t>(basis.probabilities.rows()));
+    std::vector<Document> spilled_batch = data.counts;
+    spilled_cache.capture(spilled_batch);
+    spilled_cache.finish();
+    require(spilled_cache.enabled()
+            && !spilled_cache.resident_batches()
+            && spilled_cache.source(),
+        "automatic training count cache did not spill at two passes");
+    spilled_cache.source()->reset();
+    require(spilled_cache.source()->next(count_block, 7)
+            && count_block.size() == 7
+            && count_block.identifiers.front() == "0"
+            && count_block.counts.front().ids
+                == data.counts.front().ids,
+        "spilled training count cache changed document order or counts");
+
+    TrainingCountCache one_pass_cache(resident_cache_options,
+        false, 1, static_cast<int32_t>(basis.probabilities.rows()));
+    require(!one_pass_cache.enabled(),
+        "automatic training count cache activated for one pass");
 
     uac::Dataset indexed_data = data;
     indexed_data.counts.clear();

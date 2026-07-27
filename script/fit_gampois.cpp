@@ -1,4 +1,5 @@
 #include "gamma_pois_topic.hpp"
+#include "count_cache_options.hpp"
 
 #include <climits>
 #include <cmath>
@@ -55,6 +56,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     bool randomizeOutput = false;
     int32_t posteriorDispersionRank = 0;
     bool sort_topics = false;
+    TrainingCountCacheCliOptions count_cache_options;
 
     double kappa = 0.7, tau0 = 10.0;
     int32_t maxIter = 100;
@@ -107,6 +109,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("debug", "If >0, only process this many units", debug_)
       .add_option("verbose", "Verbose level", verbose);
+    add_training_count_cache_options(pl, count_cache_options);
 
     pl.add_option("kappa", "Learning decay rate", kappa)
       .add_option("tau0", "Learning offset", tau0)
@@ -142,6 +145,8 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
 
     if (batchSize <= 0) batchSize = 512;
     if (nEpochs <= 0) nEpochs = 1;
+    validate_training_count_cache_options(
+        count_cache_options.mode, count_cache_options.memory_budget);
     if (nTopics <= 0) error("--n-topics must be greater than 0");
     if (randomizeOutput && !transform) {
         error("--randomize-output requires --transform");
@@ -261,11 +266,25 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     }
 
     const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
+    const int32_t count_passes =
+        nEpochs + (estimateDispersion ? 1 : 0);
+    TrainingCountCache count_cache(count_cache_options,
+        use_10x, count_passes, gp->nFeatures());
     notice("Starting Gamma-Poisson model training....");
     for (int epoch = 0; epoch < nEpochs; ++epoch) {
         int32_t n = 0;
         if (use_10x) {
             n = gp->trainOnline10X(batchSize, maxUnits, seed + epoch);
+        } else if (epoch == 0 && count_cache.enabled()) {
+            n = gp->trainOnline(inFile, batchSize, minCountTrain,
+                maxUnits, count_cache.sink());
+            count_cache.finish();
+        } else if (count_cache.resident_batches()) {
+            n = gp->trainOnline(
+                *count_cache.resident_batches(), batchSize, maxUnits);
+        } else if (count_cache.source()) {
+            n = gp->trainOnline(
+                *count_cache.source(), batchSize, maxUnits);
         } else {
             n = gp->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
         }
@@ -278,10 +297,22 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
             options.loess_span = dispersionLoessSpan;
             options.delta_min = dispersionDeltaMin;
             options.delta_max = dispersionDeltaMax;
-            GammaPoissonDispersionResult dispersion = use_10x
-                ? gp->estimateFeatureDispersion10X(options, batchSize, maxUnits)
-                : gp->estimateFeatureDispersion(options, inFile, batchSize,
-                    minCountTrain, maxUnits);
+            GammaPoissonDispersionResult dispersion = [&]() {
+                if (use_10x) {
+                    return gp->estimateFeatureDispersion10X(
+                        options, batchSize, maxUnits);
+                }
+                if (count_cache.resident_batches()) {
+                    return gp->estimateFeatureDispersion(options,
+                        *count_cache.resident_batches(), maxUnits);
+                }
+                if (count_cache.source()) {
+                    return gp->estimateFeatureDispersion(options,
+                        *count_cache.source(), batchSize, maxUnits);
+                }
+                return gp->estimateFeatureDispersion(options, inFile,
+                    batchSize, minCountTrain, maxUnits);
+            }();
             const std::string outDispersion = outPrefix + ".dispersion.tsv";
             write_gamma_poisson_dispersion_diagnostics(outDispersion,
                 gp->getFeatureNames(), dispersion);

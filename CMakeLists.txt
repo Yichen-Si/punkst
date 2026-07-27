@@ -167,6 +167,7 @@ set(SOURCE_FILES
     src/tiles2bins.cpp
     src/dataunits.hpp
     src/dataunits.cpp
+    src/document_spool.hpp
     src/lda.hpp
     src/lda.cpp
     src/lda_svb.cpp
@@ -189,6 +190,7 @@ set(SOURCE_FILES
     script/preprocess_options.hpp
     script/factor_eval_common.hpp
     script/factor_eval_common.cpp
+    script/count_cache_options.hpp
     script/pts2tiles.cpp
     script/pts2tiles_binary.cpp
     script/tiles2hex.cpp

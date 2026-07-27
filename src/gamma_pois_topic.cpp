@@ -1288,7 +1288,57 @@ void GammaPoissonTopicJointC::initialize_clusters_from_documents(DocumentView do
     } else {
         tbb::parallel_for(0, n_docs, [&](int32_t d) { infer_doc(d); });
     }
+    initialize_clusters_from_embeddings(embed, raw_theta, init_gamma);
+}
 
+void GammaPoissonTopicJointC::initialize_clusters_from_batches(
+    const std::vector<std::vector<Document>>& batches,
+    int32_t max_documents, double init_gamma) {
+    int64_t available = 0;
+    for (const std::vector<Document>& batch : batches) {
+        available += batch.size();
+    }
+    const int64_t limit = max_documents > 0
+        ? std::min<int64_t>(available, max_documents) : available;
+    if (limit <= 0 || limit > std::numeric_limits<int32_t>::max()) {
+        error("%s: invalid resident document count", __func__);
+    }
+    const int32_t n_docs = static_cast<int32_t>(limit);
+    RowMajorMatrixXd embed(n_docs, n_topics_);
+    RowMajorMatrixXd raw_theta(n_docs, n_topics_);
+    int32_t first = 0;
+    for (const std::vector<Document>& batch : batches) {
+        const int32_t count = std::min<int32_t>(
+            static_cast<int32_t>(batch.size()), n_docs - first);
+        if (count <= 0) break;
+        auto infer_doc = [&](int32_t local) {
+            VectorXd theta_shape, theta_rate, elog_theta;
+            infer_document_theta(theta_shape, theta_rate, elog_theta,
+                batch[local], true);
+            raw_theta.row(first + local) =
+                (theta_shape.array()
+                    / theta_rate.array().max(1e-12))
+                    .matrix().transpose();
+            embed.row(first + local) =
+                normalized_theta_hat(theta_shape, theta_rate);
+        };
+        if (nThreads_ == 1) {
+            for (int32_t local = 0; local < count; ++local) {
+                infer_doc(local);
+            }
+        } else {
+            tbb::parallel_for(0, count,
+                [&](int32_t local) { infer_doc(local); });
+        }
+        first += count;
+    }
+    initialize_clusters_from_embeddings(embed, raw_theta, init_gamma);
+}
+
+void GammaPoissonTopicJointC::initialize_clusters_from_embeddings(
+    const RowMajorMatrixXd& embed,
+    const RowMajorMatrixXd& raw_theta, double init_gamma) {
+    const int32_t n_docs = static_cast<int32_t>(embed.rows());
     RowMajorMatrixXd centers(n_clusters_, n_topics_);
     std::vector<int32_t> assignments(n_docs, 0);
     std::vector<double> min_dist(n_docs, std::numeric_limits<double>::infinity());
@@ -1786,6 +1836,57 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     return result;
 }
 
+GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
+    const GammaPoissonDispersionOptions& options,
+    uac::DocumentBlockSource& source,
+    int32_t batchSize_, int32_t maxUnits) {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    GammaPoissonDispersionEstimator estimator(M_, options);
+    source.reset();
+    uac::DocumentBlock block;
+    int32_t processed = 0;
+    while (processed < maxUnits && source.next(block, batchSize_)) {
+        if (block.counts.empty()) break;
+        if (maxUnits != INT32_MAX
+            && static_cast<int32_t>(block.counts.size())
+                > maxUnits - processed) {
+            block.counts.resize(maxUnits - processed);
+        }
+        estimator.accumulate(*model_, DocumentView(block.counts));
+        processed += static_cast<int32_t>(block.counts.size());
+    }
+    GammaPoissonDispersionResult result = estimator.finish();
+    model_->set_feature_dispersion(result.tau);
+    return result;
+}
+
+GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
+    const GammaPoissonDispersionOptions& options,
+    const std::vector<std::vector<Document>>& batches,
+    int32_t maxUnits) {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    GammaPoissonDispersionEstimator estimator(M_, options);
+    int32_t processed = 0;
+    for (const std::vector<Document>& batch : batches) {
+        if (processed >= maxUnits) break;
+        const int32_t take = maxUnits == INT32_MAX
+            ? static_cast<int32_t>(batch.size())
+            : std::min<int32_t>(
+                static_cast<int32_t>(batch.size()), maxUnits - processed);
+        if (take <= 0) break;
+        estimator.accumulate(
+            *model_, DocumentView(batch.data(), take));
+        processed += take;
+    }
+    GammaPoissonDispersionResult result = estimator.finish();
+    model_->set_feature_dispersion(result.tau);
+    return result;
+}
+
 GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion10X(
     const GammaPoissonDispersionOptions& options, int32_t batchSize_, int32_t maxUnits) {
     if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
@@ -2054,6 +2155,40 @@ void GammaPoissonJointC4Hex::initializeClustersFromTrainingData(const std::strin
         }
     }
     model_->initialize_clusters_from_documents(DocumentView(docs), initGamma);
+}
+
+void GammaPoissonJointC4Hex::initializeClustersFromTrainingData(
+    uac::DocumentBlockSource& source,
+    int32_t maxUnits, double initGamma) {
+    if (!initialized || !model_) {
+        error("%s: GammaPoissonJointC4Hex is not initialized", __func__);
+    }
+    std::vector<Document> docs;
+    source.reset();
+    uac::DocumentBlock block;
+    while (static_cast<int32_t>(docs.size()) < maxUnits
+        && source.next(block, 1024)) {
+        size_t take = block.counts.size();
+        if (maxUnits != INT32_MAX) {
+            take = std::min(take,
+                static_cast<size_t>(maxUnits)
+                    - docs.size());
+        }
+        for (size_t d = 0; d < take; ++d) {
+            docs.push_back(std::move(block.counts[d]));
+        }
+    }
+    model_->initialize_clusters_from_documents(DocumentView(docs), initGamma);
+}
+
+void GammaPoissonJointC4Hex::initializeClustersFromTrainingData(
+    const std::vector<std::vector<Document>>& batches,
+    int32_t maxUnits, double initGamma) {
+    if (!initialized || !model_) {
+        error("%s: GammaPoissonJointC4Hex is not initialized", __func__);
+    }
+    model_->initialize_clusters_from_batches(
+        batches, maxUnits, initGamma);
 }
 
 const RowMajorMatrixXd& GammaPoissonJointC4Hex::get_model_matrix() const {

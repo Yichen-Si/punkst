@@ -1,4 +1,5 @@
 #include "topic_svb.hpp"
+#include "count_cache_options.hpp"
 
 #include <filesystem>
 #include <sstream>
@@ -137,6 +138,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     bool computeResiduals = false;
     bool sort_topics = false;
     bool reproducible_init = false;
+    TrainingCountCacheCliOptions count_cache_options;
 
     double kappa = 0.7, tau0 = 10.0;
     double alpha = -1.0, eta = -1.0;
@@ -186,6 +188,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("debug", "If >0, only process this many units", debug_)
       .add_option("verbose", "Verbose level", verbose);
+    add_training_count_cache_options(pl, count_cache_options);
 
     pl.add_option("kappa", "Learning decay rate", kappa)
       .add_option("tau0", "Learning offset", tau0)
@@ -224,6 +227,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     if (nEpochs <= 0) {
         nEpochs = 1;
     }
+    validate_training_count_cache_options(
+        count_cache_options.mode, count_cache_options.memory_budget);
     if (topk_only == 0) {
         error("--topk-only must be a positive integer");
     }
@@ -378,10 +383,22 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
 
         notice("Starting model training....");
         const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
+        TrainingCountCache count_cache(count_cache_options,
+            use_10x, nEpochs, lda4hex->nFeatures());
         for (int epoch = 0; epoch < nEpochs; ++epoch) {
             int32_t n = 0;
             if (use_10x) {
                 n = lda4hex->trainOnline10X(batchSize, maxUnits, seed + epoch);
+            } else if (epoch == 0 && count_cache.enabled()) {
+                n = lda4hex->trainOnline(inFile, batchSize,
+                    minCountTrain, maxUnits, count_cache.sink());
+                count_cache.finish();
+            } else if (count_cache.resident_batches()) {
+                n = lda4hex->trainOnline(
+                    *count_cache.resident_batches(), batchSize, maxUnits);
+            } else if (count_cache.source()) {
+                n = lda4hex->trainOnline(
+                    *count_cache.source(), batchSize, maxUnits);
             } else {
                 n = lda4hex->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
             }

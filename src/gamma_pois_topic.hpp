@@ -187,6 +187,9 @@ public:
     void set_cluster_temperature(double temperature);
     void set_effective_cluster_prior(double gamma);
     void initialize_clusters_from_documents(DocumentView docs, double init_gamma);
+    void initialize_clusters_from_batches(
+        const std::vector<std::vector<Document>>& batches,
+        int32_t max_documents, double init_gamma);
     void partial_fit(const std::vector<Document>& docs);
     RowMajorMatrixXd transform(DocumentView docs);
     RowMajorMatrixXd transform_clusters(DocumentView docs);
@@ -201,6 +204,9 @@ private:
     void infer_document_theta(VectorXd& theta_shape, VectorXd& theta_rate,
         VectorXd& elog_theta, const Document& doc, bool force_uniform_chi = false) const;
     RowVectorXd normalized_chi_hat(const VectorXd& chi) const;
+    void initialize_clusters_from_embeddings(
+        const RowMajorMatrixXd& embed,
+        const RowMajorMatrixXd& raw_theta, double init_gamma);
     void init_cluster_state();
     void read_state(const std::string& stateFile);
     double expected_nu(int32_t c, int32_t k) const {
@@ -237,6 +243,14 @@ public:
     GammaPoissonDispersionResult estimateFeatureDispersion(
         const GammaPoissonDispersionOptions& options, const std::string& inFile,
         int32_t batchSize, int32_t minCountTrain, int32_t maxUnits);
+    GammaPoissonDispersionResult estimateFeatureDispersion(
+        const GammaPoissonDispersionOptions& options,
+        uac::DocumentBlockSource& source,
+        int32_t batchSize, int32_t maxUnits);
+    GammaPoissonDispersionResult estimateFeatureDispersion(
+        const GammaPoissonDispersionOptions& options,
+        const std::vector<std::vector<Document>>& batches,
+        int32_t maxUnits);
     GammaPoissonDispersionResult estimateFeatureDispersion10X(
         const GammaPoissonDispersionOptions& options, int32_t batchSize, int32_t maxUnits);
     void initialize_transform(const std::string& stateFile, int32_t seed,
@@ -292,6 +306,12 @@ public:
     void setEffectiveClusterPrior(double gamma);
     void initializeClustersFromTrainingData(const std::string& inFile,
         bool use10x, int32_t minCountTrain, int32_t maxUnits, double initGamma);
+    void initializeClustersFromTrainingData(
+        uac::DocumentBlockSource& source,
+        int32_t maxUnits, double initGamma);
+    void initializeClustersFromTrainingData(
+        const std::vector<std::vector<Document>>& batches,
+        int32_t maxUnits, double initGamma);
     void getUnitHeaderCols(std::vector<std::string>& outCols) override;
     void getClusterHeaderCols(std::vector<std::string>& outCols);
     const RowMajorMatrixXd& get_model_matrix() const override;

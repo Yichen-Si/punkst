@@ -98,7 +98,9 @@ void writeTopicVectorWithTopK(std::ostream& os,
 
 } // namespace
 
-int32_t TopicModelWrapper::trainOnline(const std::string& inFile, int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits) {
+int32_t TopicModelWrapper::trainOnline(const std::string& inFile,
+    int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits,
+    uac::DocumentBatchSink* cacheSink) {
     if (!initialized) error("Model must be initialized before training");
     batchSize = _bsize;
     minCountTrain = _minCountTrain;
@@ -111,9 +113,12 @@ int32_t TopicModelWrapper::trainOnline(const std::string& inFile, int32_t _bsize
         fileopen = readMinibatch(inFileStream);
         if (minibatch.empty()) break;
 
+        const int32_t documents =
+            static_cast<int32_t>(minibatch.size());
         do_partial_fit(minibatch); // Virtual dispatch to derived class
+        if (cacheSink) cacheSink->capture(minibatch);
 
-        ntot += minibatch.size();
+        ntot += documents;
         if (ntot >= maxUnits) {
             break;
         }
@@ -123,6 +128,49 @@ int32_t TopicModelWrapper::trainOnline(const std::string& inFile, int32_t _bsize
         }
     }
     inFileStream.close();
+    return ntot;
+}
+
+int32_t TopicModelWrapper::trainOnline(
+    const std::vector<std::vector<Document>>& residentBatches,
+    int32_t _bsize, int32_t maxUnits) {
+    if (!initialized) error("Model must be initialized before training");
+    batchSize = _bsize;
+    ntot = 0;
+    int32_t b = 0;
+    for (const std::vector<Document>& batch : residentBatches) {
+        if (batch.empty()) continue;
+        do_partial_fit(batch);
+        ntot += static_cast<int32_t>(batch.size());
+        if (ntot >= maxUnits) break;
+        ++b;
+        if (verbose_ > 0 && (b % verbose_ == 0)) {
+            printTopicAbundance();
+        }
+    }
+    return ntot;
+}
+
+int32_t TopicModelWrapper::trainOnline(
+    uac::DocumentBlockSource& source, int32_t _bsize,
+    int32_t maxUnits) {
+    if (!initialized) error("Model must be initialized before training");
+    batchSize = _bsize;
+    ntot = 0;
+    source.reset();
+    int32_t b = 0;
+    uac::DocumentBlock block;
+    while (source.next(block, batchSize)) {
+        if (block.counts.empty()) break;
+        minibatch = std::move(block.counts);
+        do_partial_fit(minibatch);
+        ntot += static_cast<int32_t>(minibatch.size());
+        if (ntot >= maxUnits) break;
+        ++b;
+        if (verbose_ > 0 && (b % verbose_ == 0)) {
+            printTopicAbundance();
+        }
+    }
     return ntot;
 }
 

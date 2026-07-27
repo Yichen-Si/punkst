@@ -93,6 +93,24 @@ Number of topics.
 `--n-epochs`
 Number of training passes. Default: `1`.
 
+`--count-cache`
+Cache for repeated custom sparse-text training passes:
+`off`, `on`, or `auto` (default). `auto` caches when at least two full count
+passes are planned. The first pass remains in memory when it fits
+`--count-cache-memory-budget`; otherwise it spills to a sequential temporary
+file without a random-access index. The 10X path already keeps remapped
+documents in memory and does not use this cache.
+
+`--count-cache-memory-budget`
+Maximum memory used for retained parsed count data. Integer byte values and
+`K`, `M`, or `G` suffixes are accepted. Default: `1G`. A value of `0` forces
+sequential temporary storage whenever the count cache is active.
+
+`--temp-dir`
+Parent directory for the temporary count cache. The system temporary
+directory is used when omitted. No directory is created for a resident cache;
+temporary files are removed when fitting finishes.
+
 `--minibatch-size`
 Minibatch size. Default: `512`.
 
