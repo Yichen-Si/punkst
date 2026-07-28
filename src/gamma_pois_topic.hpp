@@ -134,6 +134,9 @@ public:
     void set_feature_dispersion(const std::vector<double>& tau);
     bool has_feature_dispersion() const { return has_dispersion_; }
     const VectorXd& get_topic_capacity() const { return topic_capacity_; }
+    const MatrixXd& get_expected_beta() const { return e_beta_; }
+    const MatrixXd& get_beta_allocation_kernel() const { return beta_kernel_; }
+    const VectorXd& get_feature_dispersion() const { return tau_; }
     void expected_observed_counts(const Document& doc, std::vector<double>& means) const;
     void write_state(const std::string& outFile, const std::vector<std::string>& featureNames);
     static std::vector<std::string> read_state_feature_names(const std::string& stateFile);
@@ -246,6 +249,9 @@ public:
         uint64_t seed, GammaPoissonDispersionApproximation& out) const;
     bool hasFeatureDispersion() const;
     const VectorXd& getTopicCapacity() const;
+    const MatrixXd& getExpectedBeta() const;
+    const MatrixXd& getBetaAllocationKernel() const;
+    const VectorXd& getFeatureDispersion() const;
     void getTopicAbundance(std::vector<double>& topic_weights) override;
     void get_topic_abundance(std::vector<double>& topic_weights);
 

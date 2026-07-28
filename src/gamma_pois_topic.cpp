@@ -1470,6 +1470,27 @@ const VectorXd& GammaPoisson4Hex::getTopicCapacity() const {
     return model_->get_topic_capacity();
 }
 
+const MatrixXd& GammaPoisson4Hex::getExpectedBeta() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_expected_beta();
+}
+
+const MatrixXd& GammaPoisson4Hex::getBetaAllocationKernel() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_beta_allocation_kernel();
+}
+
+const VectorXd& GammaPoisson4Hex::getFeatureDispersion() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_feature_dispersion();
+}
+
 void GammaPoisson4Hex::getTopicAbundance(std::vector<double>& topic_weights) {
     get_topic_abundance(topic_weights);
 }

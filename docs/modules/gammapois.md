@@ -327,6 +327,11 @@ Transform the input units after fitting and write `{prefix}.results.tsv` and
 With `--transform`, also write LDA-compatible per-unit and per-feature residual
 statistics. The two option names are aliases.
 
+`--feature-diagnostics-cheap`
+With residual output, skip the temporary spool used for exact gain-adjusted
+positive-cell residual and Pull statistics. The remaining feature diagnostics
+are still computed.
+
 `--skip-posterior`
 With `--transform`, suppress the local Gamma shape/rate output. Posterior output
 is enabled by default and is separate from the normalized topic probabilities
@@ -390,6 +395,11 @@ Per-unit local inference controls.
 `--residuals`, `--feature-residuals`
 Write `{prefix}.unit_stats.tsv` and `{prefix}.feature_residuals.tsv`. The two
 option names are aliases.
+
+`--feature-diagnostics-cheap`
+With residual output, omit the two feature diagnostics that require retaining
+positive-cell information until corpus-wide feature gains are known. Their
+output columns are omitted.
 
 `--skip-posterior`, `--posterior-dispersion-rank`
 The local Gamma posterior is written by default. Suppress it with
@@ -462,10 +472,40 @@ the inferred theta posterior; the fitted mean is not multiplied by the
 observation-conditioned \(E[\epsilon_{dw}\mid n_{dw}]\).
 
 `{prefix}.feature_residuals.tsv`
-Written with the unit statistics. It contains `Feature`, `AbsDiff`, and
-`AbsDiffPerCount`, where `AbsDiff` is
-\(\sum_d|n_{dw}-\mu_{dw}|\). Rows cover model features only, including when
-`--pseudobulk-all-features` is enabled.
+Written with the unit statistics. Rows cover model features only, including
+when `--pseudobulk-all-features` is enabled. Counts and diagnostics use the
+effective weighted counts when feature weights are active.
+
+The first columns preserve the previous output:
+
+- `Feature`: feature name.
+- `AbsDiff`: \(\sum_d|n_{dw}-\mu_{dw}|\).
+- `AbsDiffPerCount`: `AbsDiff / count`, or zero when `count` is zero.
+
+The additional columns are:
+
+| Column | Definition |
+|---|---|
+| `count` | \(N_w=\sum_d n_{dw}\) |
+| `n_units` | Number of units with \(n_{dw}>0\) |
+| `log2_gain` | \(\log_2(N_w/M_w)\), where \(M_w=\sum_d\mu_{dw}\) |
+| `marginal_deviance` | Poisson deviance explained by the total abundance shift |
+| `conditional_deviance` | Remaining document-level Poisson deviance after applying the feature gain |
+| `topic_deviance` | Deviation between observed soft topic allocations and gain-adjusted expected topic counts |
+| `topic_leverage` | Count-weighted total-variation distance between the feature allocation and the unit topic mixture |
+| `gain_adjusted_absdiff_per_count` | Positive-cell gain-adjusted absolute residual \(R_w\) |
+| `pull` | Gain-adjusted absolute residual weighted by topic total variation |
+| `cook_score` | Diagonal quadratic deletion-influence approximation, including the factorized zero-cell baseline |
+
+The marginal mean \(\mu_{dw}\) is used for abundance and deviance diagnostics
+even when feature dispersion is enabled. The observation-conditioned
+\(E[\epsilon_{dw}]\) enters only the positive-cell Cook correction.
+
+Exact `gain_adjusted_absdiff_per_count` and `pull` require a bounded temporary
+spool because their corpus-wide gain is unavailable during streaming
+transformation. `--feature-diagnostics-cheap` disables that spool and writes
+neither of these two columns. Features with zero observed count have
+`log2_gain=-inf`; normalized leverage and Pull fields are `NA`.
 
 `{prefix}.posterior.tsv`
 Written by default unless `--skip-posterior` is used. Contains the unit identifiers, row index,

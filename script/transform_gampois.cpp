@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -75,25 +77,138 @@ int64_t rawTotalCount(const Document& doc) {
     return static_cast<int64_t>(std::llround(rawTotal));
 }
 
+struct PullRecord {
+    uint32_t feature = 0;
+    double observed = 0.0;
+    double mean = 0.0;
+    double totalVariation = 0.0;
+};
+
+class PullSpool {
+public:
+    explicit PullSpool(bool enabled) : enabled_(enabled) {
+        if (enabled_) {
+            file_ = std::tmpfile();
+            if (!file_) {
+                error("Unable to create temporary feature diagnostic spool; "
+                    "use --feature-diagnostics-cheap to disable spool-dependent statistics");
+            }
+        }
+    }
+
+    ~PullSpool() {
+        if (file_) {
+            std::fclose(file_);
+        }
+    }
+
+    PullSpool(const PullSpool&) = delete;
+    PullSpool& operator=(const PullSpool&) = delete;
+
+    bool enabled() const {
+        return enabled_;
+    }
+
+    void append(const std::vector<PullRecord>& records) {
+        if (!enabled_ || records.empty()) return;
+        if (std::fwrite(records.data(), sizeof(PullRecord), records.size(), file_)
+                != records.size()) {
+            error("Error writing temporary feature diagnostic spool");
+        }
+    }
+
+    void accumulate(const VectorXd& gain, VectorXd& adjustedResidual,
+            VectorXd& pull) {
+        if (!enabled_) return;
+        if (std::fflush(file_) != 0 || std::fseek(file_, 0, SEEK_SET) != 0) {
+            error("Error rewinding temporary feature diagnostic spool");
+        }
+        std::vector<PullRecord> buffer(4096);
+        while (true) {
+            const size_t n = std::fread(
+                buffer.data(), sizeof(PullRecord), buffer.size(), file_);
+            for (size_t i = 0; i < n; ++i) {
+                const PullRecord& record = buffer[i];
+                if (record.feature >= static_cast<uint32_t>(gain.size())) {
+                    error("Invalid feature index in temporary diagnostic spool");
+                }
+                const double a = gain(record.feature);
+                if (!std::isfinite(a) || a < 0.0) continue;
+                const double difference =
+                    std::abs(record.observed - a * record.mean);
+                adjustedResidual(record.feature) += difference;
+                pull(record.feature) +=
+                    difference * record.totalVariation;
+            }
+            if (n < buffer.size()) {
+                if (std::ferror(file_)) {
+                    error("Error reading temporary feature diagnostic spool");
+                }
+                break;
+            }
+        }
+    }
+
+private:
+    bool enabled_ = false;
+    std::FILE* file_ = nullptr;
+};
+
 struct ResidualState {
     const RowMajorMatrixXd& topicProfiles;
+    const MatrixXd& expectedBeta;
+    const MatrixXd& betaAllocationKernel;
+    const VectorXd& featureDispersion;
+    const VectorXd& topicCapacity;
+    bool hasDispersion;
     MatrixXd profileGram;
     MatrixXd topicSimilarity;
+    MatrixXd allocatedTopicCounts;
     VectorXd featureCorrections;
     VectorXd featureTotals;
-    VectorXd topicIntensityTotals;
+    VectorXd topicExposureTotals;
+    VectorXd conditionalLogTerms;
+    VectorXd leverageNumerators;
+    VectorXd cookCorrections;
+    VectorXd cookBaseline;
+    std::vector<int64_t> featureUnits;
+    PullSpool pullSpool;
 
-    explicit ResidualState(const RowMajorMatrixXd& profiles)
-        : topicProfiles(profiles),
-          profileGram(profiles * profiles.transpose()),
-          topicSimilarity(MatrixXd::Zero(profiles.rows(), profiles.rows())),
-          featureCorrections(VectorXd::Zero(profiles.cols())),
-          featureTotals(VectorXd::Zero(profiles.cols())),
-          topicIntensityTotals(VectorXd::Zero(profiles.rows())) {
+    VectorXd predictedTotals;
+    VectorXd log2Gain;
+    VectorXd marginalDeviance;
+    VectorXd conditionalDeviance;
+    VectorXd topicDeviance;
+    VectorXd topicLeverage;
+    VectorXd adjustedResidualPerCount;
+    VectorXd pull;
+    VectorXd cookScore;
+
+    ResidualState(GammaPoisson4Hex& gp, bool cheapDiagnostics)
+        : topicProfiles(gp.get_model_matrix()),
+          expectedBeta(gp.getExpectedBeta()),
+          betaAllocationKernel(gp.getBetaAllocationKernel()),
+          featureDispersion(gp.getFeatureDispersion()),
+          topicCapacity(gp.getTopicCapacity()),
+          hasDispersion(gp.hasFeatureDispersion()),
+          profileGram(topicProfiles * topicProfiles.transpose()),
+          topicSimilarity(MatrixXd::Zero(
+              topicProfiles.rows(), topicProfiles.rows())),
+          allocatedTopicCounts(MatrixXd::Zero(
+              topicProfiles.rows(), topicProfiles.cols())),
+          featureCorrections(VectorXd::Zero(topicProfiles.cols())),
+          featureTotals(VectorXd::Zero(topicProfiles.cols())),
+          topicExposureTotals(VectorXd::Zero(topicProfiles.rows())),
+          conditionalLogTerms(VectorXd::Zero(topicProfiles.cols())),
+          leverageNumerators(VectorXd::Zero(topicProfiles.cols())),
+          cookCorrections(VectorXd::Zero(topicProfiles.cols())),
+          cookBaseline(VectorXd::Zero(topicProfiles.rows())),
+          featureUnits(static_cast<size_t>(topicProfiles.cols()), 0),
+          pullSpool(!cheapDiagnostics) {
         VectorXd norms = profileGram.diagonal().array().max(0.0).sqrt();
-        for (int32_t k = 0; k < profiles.rows(); ++k) {
+        for (int32_t k = 0; k < topicProfiles.rows(); ++k) {
             topicSimilarity(k, k) = 1.0;
-            for (int32_t l = k + 1; l < profiles.rows(); ++l) {
+            for (int32_t l = k + 1; l < topicProfiles.rows(); ++l) {
                 const double denom = norms(k) * norms(l);
                 const double similarity = denom > 0.0
                     ? std::clamp(profileGram(k, l) / denom, 0.0, 1.0)
@@ -138,7 +253,7 @@ public:
           M(gp_.nFeatures()), K(gp_.getNumTopics()) {
         if (residualState) {
             residualTls = std::make_unique<ResidualTls>([this] {
-                return ResidualLocalAgg(M, K);
+                return ResidualLocalAgg(K);
             });
         }
     }
@@ -186,25 +301,108 @@ public:
     void finalizeResiduals() {
         if (!residualState) return;
         for (auto& local : *residualTls) {
-            residualState->featureCorrections += local.featureCorrections;
-            residualState->featureTotals += local.featureTotals;
-            residualState->topicIntensityTotals += local.topicIntensityTotals;
+            residualState->topicExposureTotals += local.topicExposureTotals;
+            residualState->cookBaseline += local.cookBaseline;
         }
+        residualState->predictedTotals.noalias() =
+            residualState->expectedBeta.transpose()
+            * residualState->topicExposureTotals;
         residualState->featureCorrections.noalias() +=
-            residualState->topicProfiles.transpose()
-            * residualState->topicIntensityTotals;
+            residualState->predictedTotals;
+
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        residualState->log2Gain = VectorXd::Constant(M, nan);
+        residualState->marginalDeviance = VectorXd::Constant(M, nan);
+        residualState->conditionalDeviance = VectorXd::Constant(M, nan);
+        residualState->topicDeviance = VectorXd::Constant(M, nan);
+        residualState->topicLeverage = VectorXd::Constant(M, nan);
+        residualState->adjustedResidualPerCount =
+            VectorXd::Constant(M, nan);
+        residualState->pull = VectorXd::Constant(M, nan);
+        residualState->cookScore =
+            residualState->expectedBeta.array().square().matrix().transpose()
+            * residualState->cookBaseline;
+        residualState->cookScore += residualState->cookCorrections;
+        residualState->cookScore =
+            0.5 * residualState->cookScore.cwiseMax(0.0);
+
+        VectorXd gain = VectorXd::Constant(M, nan);
+        for (int32_t w = 0; w < M; ++w) {
+            const double observed = residualState->featureTotals(w);
+            const double predicted = residualState->predictedTotals(w);
+            if (!std::isfinite(observed) || observed < 0.0
+                    || !std::isfinite(predicted) || predicted <= 1e-300) {
+                continue;
+            }
+            gain(w) = observed / predicted;
+            if (observed == 0.0) {
+                residualState->log2Gain(w) =
+                    -std::numeric_limits<double>::infinity();
+                residualState->marginalDeviance(w) = 2.0 * predicted;
+                residualState->conditionalDeviance(w) = 0.0;
+                residualState->topicDeviance(w) = 0.0;
+                continue;
+            }
+
+            residualState->log2Gain(w) = std::log2(gain(w));
+            residualState->marginalDeviance(w) = std::max(0.0,
+                2.0 * (observed * std::log(observed / predicted)
+                    - (observed - predicted)));
+            residualState->conditionalDeviance(w) = std::max(0.0,
+                2.0 * (residualState->conditionalLogTerms(w)
+                    - observed * std::log(gain(w))));
+            double topicDeviance = 0.0;
+            for (int32_t k = 0; k < K; ++k) {
+                const double allocated =
+                    residualState->allocatedTopicCounts(k, w);
+                if (allocated <= 0.0) continue;
+                const double expected = gain(w)
+                    * residualState->expectedBeta(k, w)
+                    * residualState->topicExposureTotals(k);
+                if (expected <= 0.0 || !std::isfinite(expected)) {
+                    topicDeviance =
+                        std::numeric_limits<double>::infinity();
+                    break;
+                }
+                topicDeviance +=
+                    2.0 * allocated * std::log(allocated / expected);
+            }
+            residualState->topicDeviance(w) =
+                std::max(0.0, topicDeviance);
+            residualState->topicLeverage(w) =
+                residualState->leverageNumerators(w) / observed;
+        }
+
+        VectorXd adjustedNumerator = VectorXd::Zero(M);
+        VectorXd pullNumerator = VectorXd::Zero(M);
+        residualState->pullSpool.accumulate(
+            gain, adjustedNumerator, pullNumerator);
+        if (residualState->pullSpool.enabled()) {
+            for (int32_t w = 0; w < M; ++w) {
+                const double observed = residualState->featureTotals(w);
+                if (observed > 0.0 && std::isfinite(gain(w))) {
+                    residualState->adjustedResidualPerCount(w) =
+                        adjustedNumerator(w) / observed;
+                    residualState->pull(w) =
+                        pullNumerator(w) / observed;
+                }
+            }
+        }
     }
 
 private:
     struct ResidualLocalAgg {
-        VectorXd featureCorrections;
-        VectorXd featureTotals;
-        VectorXd topicIntensityTotals;
+        VectorXd topicExposureTotals;
+        VectorXd cookBaseline;
 
-        ResidualLocalAgg(int32_t nFeatures, int32_t nTopics)
-            : featureCorrections(VectorXd::Zero(nFeatures)),
-              featureTotals(VectorXd::Zero(nFeatures)),
-              topicIntensityTotals(VectorXd::Zero(nTopics)) {}
+        explicit ResidualLocalAgg(int32_t nTopics)
+            : topicExposureTotals(VectorXd::Zero(nTopics)),
+              cookBaseline(VectorXd::Zero(nTopics)) {}
+    };
+
+    struct CellRef {
+        uint32_t document = 0;
+        uint32_t offset = 0;
     };
 
     using ResidualTls =
@@ -258,12 +456,22 @@ private:
         const std::vector<GammaPoissonDocumentPosterior>& posteriors) {
         if (!residualState) return;
         const int32_t nDocs = static_cast<int32_t>(docs.size());
+        std::vector<size_t> documentOffsets(
+            static_cast<size_t>(nDocs) + 1, 0);
+        for (int32_t d = 0; d < nDocs; ++d) {
+            documentOffsets[static_cast<size_t>(d) + 1] =
+                documentOffsets[static_cast<size_t>(d)]
+                + docs[static_cast<size_t>(d)].ids.size();
+        }
+        const size_t nCells = documentOffsets.back();
+        std::vector<double> expectedCells(nCells, 0.0);
+        RowMajorMatrixXd thetaMean(nDocs, K);
+        RowMajorMatrixXd thetaKernel(nDocs, K);
         VectorXd unitResidual = VectorXd::Zero(nDocs);
         VectorXd unitCosine = VectorXd::Zero(nDocs);
         const ThetaEntropyStats entropyStats =
             computeThetaEntropyStats(
                 docTopic, residualState->topicSimilarity);
-        const VectorXd& capacity = gp.getTopicCapacity();
         const size_t grainSize = std::max<size_t>(
             1, docs.size() / (2 * static_cast<size_t>(threadHint)));
 
@@ -276,11 +484,33 @@ private:
                     const Document& doc = docs[i];
                     const GammaPoissonDocumentPosterior& posterior =
                         posteriors[i];
-                    intensity = posterior.shape.array()
-                        / posterior.rate.array().max(1e-12);
-                    intensity.array() *= capacity.array();
+                    thetaMean.row(static_cast<int32_t>(i)) =
+                        (posterior.shape.array()
+                        / posterior.rate.array().max(1e-12)).matrix().transpose();
+                    double maxLog = -std::numeric_limits<double>::infinity();
+                    for (int32_t k = 0; k < K; ++k) {
+                        const double value = psi(posterior.shape(k))
+                            - std::log(std::max(posterior.rate(k), 1e-12));
+                        thetaKernel(static_cast<int32_t>(i), k) = value;
+                        maxLog = std::max(maxLog, value);
+                    }
+                    for (int32_t k = 0; k < K; ++k) {
+                        thetaKernel(static_cast<int32_t>(i), k) = std::exp(
+                            thetaKernel(static_cast<int32_t>(i), k) - maxLog);
+                    }
+                    intensity = thetaMean.row(
+                        static_cast<int32_t>(i)).transpose();
+                    local.topicExposureTotals.noalias() +=
+                        posterior.exposure * intensity;
+                    for (int32_t k = 0; k < K; ++k) {
+                        local.cookBaseline(k) +=
+                            posterior.exposure * posterior.exposure
+                            * intensity(k) * intensity(k)
+                            / std::max(posterior.shape(k), 1e-12);
+                    }
+                    intensity.array() *=
+                        residualState->topicCapacity.array();
                     intensity *= posterior.exposure;
-                    local.topicIntensityTotals += intensity;
 
                     double residual = intensity.sum();
                     double dotProduct = 0.0;
@@ -293,13 +523,12 @@ private:
                         const double observed = doc.cnts[j];
                         const double expected = intensity.dot(
                             residualState->topicProfiles.col(w));
+                        expectedCells[documentOffsets[i] + j] = expected;
                         const double correction =
                             std::abs(expected - observed) - expected;
                         residual += correction;
                         dotProduct += expected * observed;
                         observedNormSq += observed * observed;
-                        local.featureCorrections(w) += correction;
-                        local.featureTotals(w) += observed;
                     }
                     if (expectedNormSq > 0.0 && observedNormSq > 0.0) {
                         unitCosine(static_cast<int32_t>(i)) =
@@ -310,6 +539,147 @@ private:
                         std::max(0.0, residual);
                 }
             });
+
+        std::vector<size_t> featureOffsets(
+            static_cast<size_t>(M) + 1, 0);
+        for (const Document& doc : docs) {
+            for (uint32_t w : doc.ids) {
+                if (w >= static_cast<uint32_t>(M)) {
+                    error("%s: feature index %u is out of range", __func__, w);
+                }
+                ++featureOffsets[static_cast<size_t>(w) + 1];
+            }
+        }
+        for (int32_t w = 0; w < M; ++w) {
+            featureOffsets[static_cast<size_t>(w) + 1] +=
+                featureOffsets[static_cast<size_t>(w)];
+        }
+        std::vector<size_t> featureCursor = featureOffsets;
+        std::vector<CellRef> cellsByFeature(nCells);
+        for (int32_t d = 0; d < nDocs; ++d) {
+            const Document& doc = docs[static_cast<size_t>(d)];
+            for (size_t j = 0; j < doc.ids.size(); ++j) {
+                const uint32_t w = doc.ids[j];
+                cellsByFeature[featureCursor[w]++] = {
+                    static_cast<uint32_t>(d), static_cast<uint32_t>(j)};
+            }
+        }
+
+        std::vector<PullRecord> batchPullRecords;
+        if (residualState->pullSpool.enabled()) {
+            batchPullRecords.resize(nCells);
+        }
+        const size_t featureGrain = std::max<size_t>(
+            1, static_cast<size_t>(M)
+                / (2 * static_cast<size_t>(threadHint)));
+        tbb::parallel_for(tbb::blocked_range<size_t>(
+                0, static_cast<size_t>(M), featureGrain),
+            [&](const tbb::blocked_range<size_t>& range) {
+                VectorXd allocation(K);
+                VectorXd assigned = VectorXd::Zero(K);
+                for (size_t w0 = range.begin(); w0 < range.end(); ++w0) {
+                    const int32_t w = static_cast<int32_t>(w0);
+                    double correction = 0.0;
+                    double total = 0.0;
+                    double conditionalLogTerm = 0.0;
+                    double leverage = 0.0;
+                    double cookCorrection = 0.0;
+                    int64_t units = 0;
+                    assigned.setZero();
+
+                    for (size_t p = featureOffsets[w0];
+                            p < featureOffsets[w0 + 1]; ++p) {
+                        const CellRef ref = cellsByFeature[p];
+                        const size_t d = ref.document;
+                        const size_t j = ref.offset;
+                        const Document& doc = docs[d];
+                        const GammaPoissonDocumentPosterior& posterior =
+                            posteriors[d];
+                        const double observed = doc.cnts[j];
+                        const double expected =
+                            expectedCells[documentOffsets[d] + j];
+                        correction +=
+                            std::abs(expected - observed) - expected;
+                        total += observed;
+                        if (observed <= 0.0) continue;
+                        if (!std::isfinite(expected) || expected <= 0.0) {
+                            error("%s: non-positive fitted mean for feature %d",
+                                __func__, w);
+                        }
+                        ++units;
+                        conditionalLogTerm +=
+                            observed * (std::log(observed)
+                                - std::log(expected));
+
+                        allocation =
+                            thetaKernel.row(static_cast<int32_t>(d))
+                                .transpose().array()
+                            * residualState->betaAllocationKernel.col(w).array();
+                        const double allocationTotal = allocation.sum();
+                        if (!std::isfinite(allocationTotal)
+                                || allocationTotal <= 0.0) {
+                            error("%s: invalid topic allocation for feature %d",
+                                __func__, w);
+                        }
+                        allocation /= allocationTotal;
+                        assigned.noalias() += observed * allocation;
+                        const double totalVariation = 0.5
+                            * (allocation
+                                - docTopic.row(static_cast<int32_t>(d))
+                                    .transpose()).cwiseAbs().sum();
+                        leverage += observed * totalVariation;
+
+                        double epsilon = 1.0;
+                        if (residualState->hasDispersion) {
+                            const double tau =
+                                residualState->featureDispersion(w);
+                            epsilon = (tau + observed)
+                                / std::max(tau + expected, 1e-12);
+                        }
+                        for (int32_t k = 0; k < K; ++k) {
+                            const double theta =
+                                thetaMean(static_cast<int32_t>(d), k);
+                            const double baseline = posterior.exposure
+                                * theta * residualState->expectedBeta(k, w);
+                            const double actual = observed * allocation(k)
+                                - epsilon * baseline;
+                            cookCorrection +=
+                                (actual * actual - baseline * baseline)
+                                / std::max(posterior.shape(k), 1e-12);
+                        }
+
+                        if (residualState->pullSpool.enabled()) {
+                            PullRecord& record =
+                                batchPullRecords[documentOffsets[d] + j];
+                            record.feature = static_cast<uint32_t>(w);
+                            record.observed = observed;
+                            record.mean = expected;
+                            record.totalVariation = totalVariation;
+                        }
+                    }
+
+                    residualState->featureCorrections(w) += correction;
+                    residualState->featureTotals(w) += total;
+                    residualState->conditionalLogTerms(w) +=
+                        conditionalLogTerm;
+                    residualState->leverageNumerators(w) += leverage;
+                    residualState->cookCorrections(w) += cookCorrection;
+                    residualState->featureUnits[w0] += units;
+                    residualState->allocatedTopicCounts.col(w).noalias() +=
+                        assigned;
+                }
+            });
+
+        if (residualState->pullSpool.enabled()) {
+            std::vector<PullRecord> positiveRecords;
+            positiveRecords.reserve(nCells);
+            for (const PullRecord& record : batchPullRecords) {
+                if (record.mean > 0.0) {
+                    positiveRecords.push_back(record);
+                }
+            }
+            residualState->pullSpool.append(positiveRecords);
+        }
 
         for (int32_t i = 0; i < nDocs; ++i) {
             if (!ids[i].empty()) {
@@ -409,6 +779,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     bool randomize_output = false;
     bool pseudobulk_all_features = false;
     bool compute_residuals = false;
+    bool cheap_feature_diagnostics = false;
     int32_t posterior_dispersion_rank = 0;
 
     ParamList pl;
@@ -446,7 +817,8 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
       .add_option("mean-change-tol", "Convergence tolerance per document", mDelta)
       .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("feature-residuals", "Compute per-feature and per-unit residuals (backward compatibility)", compute_residuals)
-      .add_option("residuals", "Compute per-feature and per-unit residuals", compute_residuals);
+      .add_option("residuals", "Compute per-feature and per-unit residuals", compute_residuals)
+      .add_option("feature-diagnostics-cheap", "Skip spool-dependent gain-adjusted feature residual and Pull diagnostics", cheap_feature_diagnostics);
 
     try {
         pl.readArgs(argc, argv);
@@ -461,6 +833,9 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     if (seed <= 0) seed = std::random_device{}();
     if (randomize_output && sorted_by_barcode) {
         error("--randomize-output and --sorted-by-barcode are mutually exclusive");
+    }
+    if (cheap_feature_diagnostics && !compute_residuals) {
+        error("--feature-diagnostics-cheap requires --residuals");
     }
     std::mt19937 output_random_engine(static_cast<uint32_t>(seed));
     const bool weights_active = !featureFile.empty() && icolWeight >= 0;
@@ -536,7 +911,8 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     std::unique_ptr<std::ofstream> unitStats;
     if (compute_residuals) {
         residualState =
-            std::make_unique<ResidualState>(gp.get_model_matrix());
+            std::make_unique<ResidualState>(
+                gp, cheap_feature_diagnostics);
         const std::string unitStatsPath =
             outPrefix + ".unit_stats.tsv";
         unitStats = std::make_unique<std::ofstream>(unitStatsPath);
@@ -842,7 +1218,23 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
                 featureResidualPath.c_str());
         }
         featureResidualOut
-            << "Feature\tAbsDiff\tAbsDiffPerCount\n";
+            << "Feature\tAbsDiff\tAbsDiffPerCount"
+            << "\tcount\tn_units\tlog2_gain"
+            << "\tmarginal_deviance\tconditional_deviance"
+            << "\ttopic_deviance\ttopic_leverage"
+            << (cheap_feature_diagnostics
+                ? "\tcook_score\n"
+                : "\tgain_adjusted_absdiff_per_count\tpull\tcook_score\n");
+        auto writeDiagnostic = [&](double value) {
+            if (std::isnan(value)) {
+                featureResidualOut << "NA";
+            } else if (std::isinf(value)) {
+                featureResidualOut << (value < 0.0 ? "-inf" : "inf");
+            } else {
+                featureResidualOut << std::scientific
+                    << std::setprecision(8) << value;
+            }
+        };
         for (int32_t w = 0; w < M; ++w) {
             const double total = residualState->featureTotals(w);
             const double difference = std::max(
@@ -852,7 +1244,29 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
             featureResidualOut << modelFeatures[w]
                 << "\t" << std::fixed << std::setprecision(3)
                 << difference
-                << "\t" << std::setprecision(6) << ratio << "\n";
+                << "\t" << std::setprecision(6) << ratio
+                << "\t" << std::setprecision(6) << total
+                << "\t" << residualState->featureUnits[
+                    static_cast<size_t>(w)] << "\t";
+            writeDiagnostic(residualState->log2Gain(w));
+            featureResidualOut << "\t";
+            writeDiagnostic(residualState->marginalDeviance(w));
+            featureResidualOut << "\t";
+            writeDiagnostic(residualState->conditionalDeviance(w));
+            featureResidualOut << "\t";
+            writeDiagnostic(residualState->topicDeviance(w));
+            featureResidualOut << "\t";
+            writeDiagnostic(residualState->topicLeverage(w));
+            if (!cheap_feature_diagnostics) {
+                featureResidualOut << "\t";
+                writeDiagnostic(
+                    residualState->adjustedResidualPerCount(w));
+                featureResidualOut << "\t";
+                writeDiagnostic(residualState->pull(w));
+            }
+            featureResidualOut << "\t";
+            writeDiagnostic(residualState->cookScore(w));
+            featureResidualOut << "\n";
         }
         featureResidualOut.close();
         notice("Per-feature residuals written to %s",

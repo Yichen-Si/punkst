@@ -56,6 +56,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     bool randomizeOutput = false;
     bool pseudobulkAllFeatures = false;
     bool computeResiduals = false;
+    bool cheapFeatureDiagnostics = false;
     int32_t posteriorDispersionRank = 0;
     bool sort_topics = false;
     TrainingCountCacheCliOptions count_cache_options;
@@ -87,6 +88,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("pseudobulk-all-features", "Include all retained input features in transform pseudobulk output", pseudobulkAllFeatures)
       .add_option("residuals", "Compute residual-based transform summaries", computeResiduals)
       .add_option("feature-residuals", "Compute residual-based transform summaries", computeResiduals)
+      .add_option("feature-diagnostics-cheap", "Skip spool-dependent gain-adjusted feature residual and Pull diagnostics", cheapFeatureDiagnostics)
       .add_option("posterior-dispersion-rank", "Rank of optional dispersion covariance sidecar", posteriorDispersionRank)
       .add_option("sort-topics", "Sort topics by decreasing usage after training", sort_topics);
 
@@ -153,6 +155,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     if (nTopics <= 0) error("--n-topics must be greater than 0");
     if (randomizeOutput && !transform) {
         error("--randomize-output requires --transform");
+    }
+    if (cheapFeatureDiagnostics && !computeResiduals) {
+        error("--feature-diagnostics-cheap requires --residuals");
     }
     const bool nuMaxProvided = pl.was_provided("nu-max");
     if (!std::isfinite(thetaConcentration) || thetaConcentration <= 0.0) {
@@ -351,6 +356,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         if (randomizeOutput) args.push_back("--randomize-output");
         if (pseudobulkAllFeatures) args.push_back("--pseudobulk-all-features");
         if (computeResiduals) args.push_back("--residuals");
+        if (cheapFeatureDiagnostics) args.push_back("--feature-diagnostics-cheap");
         std::vector<char*> cargs;
         cargs.reserve(args.size());
         for (auto& arg : args) cargs.push_back(arg.data());
