@@ -1,4 +1,5 @@
 #include "clustering/uac.hpp"
+#include "clustering/uac_common_internal.hpp"
 #include "clustering/uac_stream.hpp"
 #include "punkst.h"
 
@@ -567,14 +568,14 @@ bool has_fractional_counts(const std::vector<Document>& documents) {
 void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     const uac::State& state, const uac::ScoreResult& score,
     const std::vector<uac::RestartTrace>* traces, int32_t representatives,
-    bool write_model_trace = false) {
+    bool write_model_trace = false, int32_t top_c = -1) {
     const Eigen::VectorXd membership =
         score.effective_membership.size() > 0
         ? score.effective_membership
         : effective_membership(score.responsibilities);
     uac::write_state(prefix + ".state.tsv", state);
     uac::write_model(prefix + ".model.tsv", state, &membership);
-    uac::write_results(prefix + ".results.tsv", data, score);
+    uac::write_results(prefix + ".results.tsv", data, score, top_c);
     uac::write_diagnostics(prefix + ".diagnostics.tsv", data, score);
     uac::write_separation(prefix + ".separation.tsv", state.model);
     uac::write_representatives(prefix + ".representatives.tsv", data, score,
@@ -590,24 +591,27 @@ void report_component_screening(const uac::ScoreResult& score) {
             == uac::ComponentScreeningMode::Off) {
         return;
     }
-    notice("UAC component screening requested %s; resolved MAP=%d, proposal=%d, particle=%d",
+    notice("UAC component screening requested %s; resolved MAP=%d, proposal=%d, particle=%d, terminal=%d",
         uac::component_screening_mode_name(
             score.component_screening_options.mode),
         static_cast<int32_t>(score.map_component_screening),
         static_cast<int32_t>(score.proposal_component_screening),
-        static_cast<int32_t>(score.particle_component_screening));
+        static_cast<int32_t>(score.particle_component_screening),
+        static_cast<int32_t>(score.terminal_component_screening));
     if (score.component_screening_options.mode
             == uac::ComponentScreeningMode::On
         && score.component_screening_options.maximum_components > 0) {
         notice("UAC forced component maximum per document: %d",
             score.component_screening_options.maximum_components);
     }
-    notice("UAC component work: proposals %lld/%lld; E-step %lld/%lld; proposal audits %d",
+    notice("UAC component work: proposals %lld/%lld; E-step %lld/%lld; proposal audits %d documents covering %d/%d represented components",
         static_cast<long long>(score.proposal_components_constructed),
         static_cast<long long>(score.proposal_components_possible),
         static_cast<long long>(score.evaluated_component_documents),
         static_cast<long long>(score.possible_component_documents),
-        score.proposal_audit_documents);
+        score.proposal_audit_documents,
+        score.proposal_audit_covered_components,
+        score.proposal_audit_represented_components);
     if (score.proposal_audit_violations > 0) {
         warning("UAC proposal screening exceeded its proxy-tail target in %d audit documents (maximum omitted full-proposal mass %.6g)",
             score.proposal_audit_violations,
@@ -654,6 +658,7 @@ int32_t cmdUacFit(int argc, char** argv) {
     uac::FitOptions options;
     options.n_components = 0;
     int32_t representatives = 10;
+    int32_t top_c = -1;
     bool no_covariance_shrinkage = false, write_model_trace = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
@@ -679,6 +684,12 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("write-model-trace",
           "Write particle model parameters before each E-step and at termination",
           write_model_trace)
+      .add_option("exact-final-score",
+          "Evaluate every active component in the terminal scoring pass",
+          options.exact_final_score)
+      .add_option("top-c",
+          "Responsibility pairs in results; 0 writes the legacy dense table, omitted defaults to 5 for screened terminal scores",
+          top_c)
       .add_option("cluster-covariance-rank",
           "Cluster covariance rank; -1 uses dense covariance, 0 is diagonal",
           options.cluster_covariance_rank)
@@ -718,6 +729,9 @@ int32_t cmdUacFit(int argc, char** argv) {
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
+        if (top_c < -1) {
+            throw std::invalid_argument("--top-c must be nonnegative");
+        }
         options.handoff = uac::parse_handoff(handoff);
         options.proposal = uac::parse_proposal(proposal);
         options.particle_engine =
@@ -848,7 +862,7 @@ int32_t cmdUacFit(int argc, char** argv) {
             fitted, options, state_metadata);
         report_component_screening(fitted.score);
         write_all_outputs(out_prefix, data, state, fitted.score,
-            &fitted.traces, representatives, write_model_trace);
+            &fitted.traces, representatives, write_model_trace, top_c);
         notice("UAC fitted %d clusters to %zu documents using %s handoff",
             options.n_components, data.identifiers.size(),
             uac::handoff_name(options.handoff));
@@ -867,6 +881,8 @@ int32_t cmdUacTransform(int argc, char** argv) {
     std::string proposal;
     int32_t particles = 0;
     int32_t threads = 1, representatives = 10;
+    int32_t top_c = -1;
+    bool exact_final_score = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
@@ -881,7 +897,13 @@ int32_t cmdUacTransform(int argc, char** argv) {
           proposal)
       .add_option("particles", "Scoring particle-count override", particles)
       .add_option("threads", "Number of TBB worker threads", threads)
-      .add_option("n-representatives", "Representatives per cluster", representatives);
+      .add_option("n-representatives", "Representatives per cluster", representatives)
+      .add_option("exact-final-score",
+          "Evaluate every active component in the terminal scoring pass",
+          exact_final_score)
+      .add_option("top-c",
+          "Responsibility pairs in results; 0 writes the legacy dense table, omitted defaults to 5 for screened terminal scores",
+          top_c);
     add_count_options(pl, count_options);
     add_particle_adapt_options(pl, particle_adapt);
     add_component_screening_options(pl, screening);
@@ -889,10 +911,20 @@ int32_t cmdUacTransform(int argc, char** argv) {
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
+        if (top_c < -1) {
+            throw std::invalid_argument("--top-c must be nonnegative");
+        }
         uac::State state = uac::read_state(state_file);
         const uac::ComponentScreeningOptions component_screening =
             make_component_screening_options(
                 screening, state.component_screening);
+        uac::ComponentScreeningOptions terminal_screening =
+            component_screening;
+        if (exact_final_score) {
+            terminal_screening.mode =
+                uac::ComponentScreeningMode::Off;
+            terminal_screening.maximum_components = 0;
+        }
         const int32_t scoring_particles = particles > 0
             ? particles : state.n_particles;
         const uac::AdaptiveParticleOptions adaptive_particles =
@@ -913,7 +945,9 @@ int32_t cmdUacTransform(int argc, char** argv) {
             }
             data = make_map_dataset(centers);
             score = uac::score_map(
-                data, state.model, threads, component_screening);
+                data, state.model, threads, terminal_screening);
+            score.component_screening_options = component_screening;
+            score.exact_final_score = exact_final_score;
         } else {
             if (basis_file.empty()) {
                 throw std::invalid_argument("Particle UAC transform requires --in-model");
@@ -940,6 +974,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
             score_options.particle_engine = particle_engine;
             score_options.streaming = streaming_options;
             score_options.component_screening = component_screening;
+            score_options.exact_final_score = exact_final_score;
             const bool indexed_source =
                 particle_engine == uac::ParticleEngine::Stream
                 && streaming_options.count_storage
@@ -961,7 +996,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
         }
         report_component_screening(score);
         write_all_outputs(out_prefix, data, state, score, nullptr,
-            representatives);
+            representatives, false, top_c);
         notice("UAC assigned %zu documents using a fixed %s model",
             data.identifiers.size(), uac::handoff_name(state.handoff));
     } catch (const std::exception& exception) {

@@ -8,11 +8,16 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace uac {
+
+namespace detail {
+class ScoreTemporaryStorage;
+}
 
 enum class HandoffMode {
     Map,
@@ -228,6 +233,7 @@ struct FitOptions {
     AdaptiveParticleOptions adaptive_particles;
     ComponentScreeningOptions component_screening;
     std::optional<Model> particle_initial_model;
+    bool exact_final_score = false;
     bool capture_model_trace = false;
     std::function<void(const IterationDiagnostic&)> iteration_callback;
 };
@@ -297,6 +303,7 @@ struct ScoreResult {
     int32_t scored_components = 0;
     std::vector<ParticleDiagnostic> particle_diagnostics;
     double particle_generation_seconds = 0.0;
+    double initialization_seconds = 0.0;
     double scoring_seconds = 0.0;
     double sampling_seconds = 0.0;
     double likelihood_seconds = 0.0;
@@ -309,6 +316,8 @@ struct ScoreResult {
     int64_t proposal_components_constructed = 0;
     int64_t proposal_components_possible = 0;
     int32_t proposal_audit_documents = 0;
+    int32_t proposal_audit_represented_components = 0;
+    int32_t proposal_audit_covered_components = 0;
     int32_t proposal_audit_violations = 0;
     double proposal_audit_maximum_omitted_mass = 0.0;
     double gaussian_seconds = 0.0;
@@ -326,6 +335,8 @@ struct ScoreResult {
     bool map_component_screening = false;
     bool proposal_component_screening = false;
     bool particle_component_screening = false;
+    bool terminal_component_screening = false;
+    bool exact_final_score = false;
     double component_bound_seconds = 0.0;
     int64_t evaluated_component_documents = 0;
     int64_t possible_component_documents = 0;
@@ -352,6 +363,9 @@ struct ScoreResult {
         StreamingCountStorage::Memory;
     StreamingParticleStorage streaming_particle_storage =
         StreamingParticleStorage::Positions;
+    // Keeps streamed responsibility artifacts alive for as long as any copy
+    // of this result may still be consumed by an output writer.
+    std::shared_ptr<detail::ScoreTemporaryStorage> temporary_storage;
 };
 
 struct ParticleScoreOptions {
@@ -362,6 +376,7 @@ struct ParticleScoreOptions {
     ParticleEngine particle_engine = ParticleEngine::Batch;
     StreamingOptions streaming;
     ComponentScreeningOptions component_screening;
+    bool exact_final_score = false;
 };
 
 struct FitResult {
@@ -458,7 +473,7 @@ State read_state(const std::string& path);
 void write_model(const std::string& path, const State& state,
     const Eigen::VectorXd* effective_membership = nullptr);
 void write_results(const std::string& path, const Dataset& data,
-    const ScoreResult& score);
+    const ScoreResult& score, int32_t top_c = -1);
 void write_diagnostics(const std::string& path, const Dataset& data,
     const ScoreResult& score);
 void write_trace(const std::string& path,
@@ -468,16 +483,5 @@ void write_model_trace(const std::string& path,
 void write_separation(const std::string& path, const Model& model);
 void write_representatives(const std::string& path, const Dataset& data,
     const ScoreResult& score, int32_t n_representatives = 10);
-
-namespace detail {
-
-double increased_leiden_resolution(double resolution, int32_t raw_communities,
-    int32_t requested_communities);
-double midpoint_leiden_resolution(double lower, double upper);
-void prepare_counts(std::vector<Document>& documents, int32_t feature_count,
-    const Eigen::VectorXd* feature_weights, Eigen::VectorXd& raw_totals,
-    Eigen::VectorXd& effective_totals);
-
-} // namespace detail
 
 } // namespace uac

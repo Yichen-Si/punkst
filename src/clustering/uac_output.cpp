@@ -1,4 +1,5 @@
-#include "clustering/uac.hpp"
+
+#include "clustering/uac_common_internal.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,11 +14,7 @@
 namespace uac {
 namespace {
 
-Eigen::MatrixXd model_covariance_dense(const Model& model, int32_t component) {
-    return model.covariance_kind == CovarianceKind::Dense
-        ? model.covariances[component]
-        : model.factor_covariances[component].dense();
-}
+
 
 double entropy(const Eigen::Ref<const Eigen::RowVectorXd>& probability) {
     double value = 0.0;
@@ -29,20 +26,9 @@ double entropy(const Eigen::Ref<const Eigen::RowVectorXd>& probability) {
     return value;
 }
 
-const char* adaptive_particle_mode_name(
-    const AdaptiveParticleOptions& options) {
-    if (options.responsibility_se_target.has_value()
-        && options.moment_ess_target.has_value()) {
-        return "both";
-    }
-    if (options.responsibility_se_target.has_value()) return "resp";
-    if (options.moment_ess_target.has_value()) return "moment";
-    return "off";
-}
 
-double optional_target_or_zero(const std::optional<double>& value) {
-    return value.value_or(0.0);
-}
+
+
 
 int32_t score_components(const ScoreResult& score) {
     if (score.responsibilities.cols() > 0) {
@@ -103,7 +89,7 @@ void write_model(const std::string& path, const State& state,
     out << "\n" << std::scientific << std::setprecision(10);
     RowMajorMatrixXd compositions = ilr_inverse(state.model.means, state.helmert);
     for (Eigen::Index c = 0; c < state.model.weights.size(); ++c) {
-        const Eigen::MatrixXd covariance = model_covariance_dense(
+        const Eigen::MatrixXd covariance = detail::model_covariance_dense(
             state.model, c);
         Eigen::LLT<Eigen::MatrixXd> llt(covariance);
         const Eigen::MatrixXd lower = llt.matrixL();
@@ -120,11 +106,66 @@ void write_model(const std::string& path, const State& state,
 }
 
 void write_results(const std::string& path, const Dataset& data,
-    const ScoreResult& score) {
+    const ScoreResult& score, int32_t top_c) {
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot write UAC results: " + path);
-    out << "#id\ttop_cluster\ttop_probability\tsecond_cluster\tsecond_probability\tentropy";
     const int32_t components = score_components(score);
+    if (top_c < -1) {
+        throw std::invalid_argument(
+            "UAC top-C output count cannot be negative");
+    }
+    const int32_t resolved_top_c = top_c < 0
+        ? (score.terminal_component_screening ? 5 : 0)
+        : top_c;
+    if (resolved_top_c > 0) {
+        out << "#id";
+        for (int32_t rank = 1; rank <= resolved_top_c; ++rank) {
+            out << "\tC" << rank << "\tP" << rank;
+        }
+        out << "\ttop_c_mass\tomitted_component_mass_bound\tentropy\n"
+            << std::scientific << std::setprecision(10);
+        for_each_responsibility_row(score,
+            [&](int64_t d, const Eigen::RowVectorXd& probability) {
+            if (d >= static_cast<int64_t>(data.identifiers.size())) {
+                throw std::runtime_error(
+                    "UAC responsibility sidecar exceeds dataset");
+            }
+            std::vector<Eigen::Index> order(components);
+            std::iota(order.begin(), order.end(), 0);
+            const int32_t available =
+                std::min(resolved_top_c, components);
+            std::partial_sort(order.begin(), order.begin() + available,
+                order.end(), [&](Eigen::Index left, Eigen::Index right) {
+                    return probability(left) == probability(right)
+                        ? left < right
+                        : probability(left) > probability(right);
+                });
+            out << data.identifiers[d];
+            double retained_mass = 0.0;
+            for (int32_t rank = 0; rank < resolved_top_c; ++rank) {
+                if (rank < available
+                    && probability(order[rank]) > 0.0) {
+                    retained_mass += probability(order[rank]);
+                    out << "\t" << order[rank]
+                        << "\t" << probability(order[rank]);
+                } else {
+                    out << "\tNA\tNA";
+                }
+            }
+            out << "\t" << retained_mass << "\t";
+            if (d < static_cast<int64_t>(
+                    score.per_document_omitted_component_mass.size())) {
+                out << score.per_document_omitted_component_mass[d];
+            } else if (!score.terminal_component_screening) {
+                out << 0.0;
+            } else {
+                out << "NA";
+            }
+            out << "\t" << entropy(probability) << "\n";
+        });
+        return;
+    }
+    out << "#id\ttop_cluster\ttop_probability\tsecond_cluster\tsecond_probability\tentropy";
     for (int32_t c = 0; c < components; ++c) out << "\tcluster_" << c;
     out << "\n" << std::scientific << std::setprecision(10);
     for_each_responsibility_row(score,
@@ -158,7 +199,9 @@ void write_diagnostics(const std::string& path, const Dataset& data,
     const ScoreResult& score) {
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot write UAC diagnostics: " + path);
-    out << "##particle_generation_seconds\t"
+    out << "##initialization_seconds\t"
+        << score.initialization_seconds << "\n"
+        << "##particle_generation_seconds\t"
         << score.particle_generation_seconds << "\n"
         << "##scoring_seconds\t" << score.scoring_seconds << "\n"
         << "##particle_sampling_seconds\t" << score.sampling_seconds << "\n"
@@ -181,13 +224,13 @@ void write_diagnostics(const std::string& path, const Dataset& data,
         << "##particle_reused_calibration_samples\t"
         << score.reused_calibration_samples << "\n"
         << "##particle_adapt_mode\t"
-        << adaptive_particle_mode_name(score.adaptive_particle_options)
+        << detail::adaptive_particle_mode_name(score.adaptive_particle_options)
         << "\n"
         << "##particle_adapt_resp\t"
-        << optional_target_or_zero(
+        << detail::optional_target_or_zero(
             score.adaptive_particle_options.responsibility_se_target) << "\n"
         << "##particle_adapt_moment\t"
-        << optional_target_or_zero(
+        << detail::optional_target_or_zero(
             score.adaptive_particle_options.moment_ess_target) << "\n"
         << "##particle_adapt_calibration\t"
         << score.adaptive_particle_options.calibration_particles << "\n"
@@ -246,6 +289,11 @@ void write_diagnostics(const std::string& path, const Dataset& data,
         << "##particle_component_screening\t"
         << static_cast<int32_t>(
             score.particle_component_screening) << "\n"
+        << "##terminal_component_screening\t"
+        << static_cast<int32_t>(
+            score.terminal_component_screening) << "\n"
+        << "##exact_final_score\t"
+        << static_cast<int32_t>(score.exact_final_score) << "\n"
         << "##component_bound_seconds\t"
         << score.component_bound_seconds << "\n"
         << "##evaluated_component_documents\t"
@@ -268,6 +316,10 @@ void write_diagnostics(const std::string& path, const Dataset& data,
         << score.proposal_components_possible << "\n"
         << "##proposal_audit_documents\t"
         << score.proposal_audit_documents << "\n"
+        << "##proposal_audit_represented_components\t"
+        << score.proposal_audit_represented_components << "\n"
+        << "##proposal_audit_covered_components\t"
+        << score.proposal_audit_covered_components << "\n"
         << "##proposal_audit_violations\t"
         << score.proposal_audit_violations << "\n"
         << "##proposal_audit_maximum_omitted_mass\t"
@@ -445,7 +497,7 @@ void write_model_trace(const std::string& path,
                         << model.means(c, j) << "\n";
                 }
                 const Eigen::MatrixXd covariance =
-                    model_covariance_dense(model, static_cast<int32_t>(c));
+                    detail::model_covariance_dense(model, static_cast<int32_t>(c));
                 for (Eigen::Index r = 0; r < covariance.rows(); ++r) {
                     for (Eigen::Index j = 0; j < covariance.cols(); ++j) {
                         write_prefix();
@@ -481,14 +533,14 @@ void write_separation(const std::string& path, const Model& model) {
             if (!(model.weights(b) > 0.0)) continue;
             const Eigen::VectorXd difference = model.means.row(a).transpose() - model.means.row(b).transpose();
             const Eigen::MatrixXd covariance = 0.5
-                * (model_covariance_dense(model, a)
-                    + model_covariance_dense(model, b));
+                * (detail::model_covariance_dense(model, a)
+                    + detail::model_covariance_dense(model, b));
             Eigen::LLT<Eigen::MatrixXd> llt(covariance);
             const double standardized = std::sqrt(std::max(0.0, difference.dot(llt.solve(difference))));
             const double logdet_mean = 2.0 * Eigen::MatrixXd(llt.matrixL()).diagonal().array().log().sum();
             Eigen::LLT<Eigen::MatrixXd> llt_a(
-                model_covariance_dense(model, a)), llt_b(
-                model_covariance_dense(model, b));
+                detail::model_covariance_dense(model, a)), llt_b(
+                detail::model_covariance_dense(model, b));
             const double logdet_a = 2.0 * Eigen::MatrixXd(llt_a.matrixL()).diagonal().array().log().sum();
             const double logdet_b = 2.0 * Eigen::MatrixXd(llt_b.matrixL()).diagonal().array().log().sum();
             const double bhattacharyya = 0.125 * standardized * standardized

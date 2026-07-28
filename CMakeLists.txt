@@ -128,7 +128,24 @@ set(CLUSTERING_CORE_SOURCE_FILES
 set(CLUSTERING_SOURCE_FILES
     src/clustering/uac.hpp
     src/clustering/uac_internal.hpp
-    src/clustering/uac.cpp
+    src/clustering/uac_common_internal.hpp
+    src/clustering/uac_common.cpp
+    src/clustering/uac_screening_internal.hpp
+    src/clustering/uac_proposal_internal.hpp
+    src/clustering/uac_proposal.cpp
+    src/clustering/uac_particles_internal.hpp
+    src/clustering/uac_particles.cpp
+    src/clustering/uac_expectation_internal.hpp
+    src/clustering/uac_expectation.cpp
+    src/clustering/uac_initialization_internal.hpp
+    src/clustering/uac_initialization.cpp
+    src/clustering/uac_candidate.cpp
+    src/clustering/uac_cache_internal.hpp
+    src/clustering/uac_particle_cache.cpp
+    src/clustering/uac_cached_expectation.cpp
+    src/clustering/uac_fit.cpp
+    src/clustering/uac_core.cpp
+    src/clustering/uac_state.cpp
     src/clustering/uac_output.cpp
     src/clustering/uac_stream.hpp
     src/clustering/uac_stream.cpp

@@ -8,10 +8,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -30,6 +32,43 @@ void require(bool condition, const std::string& message) {
 
 std::string read_text(const std::filesystem::path& path);
 void write_text(const std::filesystem::path& path, const std::string& text);
+
+class CountingIndexedDocumentSource final
+    : public uac::IndexedDocumentSource {
+public:
+    explicit CountingIndexedDocumentSource(
+        uac::IndexedDocumentSource& source)
+        : source_(source) {}
+
+    int64_t documents() const override { return source_.documents(); }
+    int64_t features() const override { return source_.features(); }
+    uint64_t storage_bytes() const override {
+        return source_.storage_bytes();
+    }
+    uint64_t content_checksum() const override {
+        return source_.content_checksum();
+    }
+    uint64_t peak_block_bytes() const override {
+        return source_.peak_block_bytes();
+    }
+    void reset() override { source_.reset(); }
+    bool next(uac::DocumentBlock& block,
+        int32_t maximum_documents) override {
+        ++next_calls;
+        return source_.next(block, maximum_documents);
+    }
+    void read_range(int64_t first_document, int32_t documents,
+        uac::DocumentBlock& block) const override {
+        ++read_range_calls;
+        source_.read_range(first_document, documents, block);
+    }
+
+    mutable int32_t read_range_calls = 0;
+    int32_t next_calls = 0;
+
+private:
+    uac::IndexedDocumentSource& source_;
+};
 
 class TestGammaPoissonTopicModel : public GammaPoissonTopicModel {
 public:
@@ -774,9 +813,9 @@ ProfileSimulation profile_simulation_large(int32_t documents, int32_t topics,
     double point_center_error_target, const std::string& length_profile,
     const std::string& topic_identifiability, double supplied_mean_scale) {
     if (documents < 300 || topics < 3 || features < topics
-        || components < 2 || components > topics) {
+        || components < 2) {
         throw std::invalid_argument(
-            "Large UAC profile requires D>=300, K>=3, V>=K, and 2<=C<=K");
+            "Large UAC profile requires D>=300, K>=3, V>=K, and C>=2");
     }
     const int32_t dimension = topics - 1;
     if (length_profile != "fixed" && length_profile != "stratified") {
@@ -839,8 +878,17 @@ ProfileSimulation profile_simulation_large(int32_t documents, int32_t topics,
         * Eigen::MatrixXd::Identity(dimension, dimension);
     RowMajorMatrixXd template_mean = RowMajorMatrixXd::Zero(
         components, dimension);
-    template_mean.leftCols(components - 1) =
-        uac::normalized_helmert(components).transpose();
+    if (components <= topics) {
+        template_mean.leftCols(components - 1) =
+            uac::normalized_helmert(components).transpose();
+    } else {
+        for (int32_t component = 0; component < components; ++component) {
+            for (int32_t j = 0; j < dimension; ++j) {
+                template_mean(component, j) = normal(engine);
+            }
+        }
+        template_mean.rowwise() -= template_mean.colwise().mean();
+    }
     for (int32_t component = 0; component < components; ++component) {
         template_mean.row(component).normalize();
     }
@@ -1735,6 +1783,7 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         "\tcomponent_maximum"
         "\tmap_screening_resolved\tproposal_screening_resolved"
         "\tparticle_screening_resolved\twall_seconds"
+        "\tinitialization_seconds"
         "\tparticle_generation_seconds"
         "\tsampling_seconds\tfisher_work_seconds"
         "\tproposal_component_work_seconds"
@@ -1758,7 +1807,10 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         "\tproposal_candidates\tproposal_possible"
         "\tevaluated_components\tevaluated_possible"
         "\tmean_evaluated_components"
-        "\tproposal_audit_documents\tproposal_audit_violations"
+        "\tproposal_audit_documents"
+        "\tproposal_audit_represented_components"
+        "\tproposal_audit_covered_components"
+        "\tproposal_audit_violations"
         "\tmaximum_proposal_audit_omitted_mass"
         "\tmaximum_bounded_omitted_mass"
         "\tmean_true_label_probability\tlog_loss"
@@ -1788,6 +1840,7 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         << "\t" << static_cast<int32_t>(
             fit.score.particle_component_screening)
         << "\t" << wall_seconds
+        << "\t" << fit.score.initialization_seconds
         << "\t" << fit.score.particle_generation_seconds << "\t"
         << fit.score.sampling_seconds << "\t"
         << fit.score.fisher_work_seconds << "\t"
@@ -1821,6 +1874,8 @@ void run_uac_profile(int32_t documents, int32_t particles, int32_t seed,
         << "\t" << static_cast<double>(
             fit.score.evaluated_component_documents) / documents
         << "\t" << fit.score.proposal_audit_documents
+        << "\t" << fit.score.proposal_audit_represented_components
+        << "\t" << fit.score.proposal_audit_covered_components
         << "\t" << fit.score.proposal_audit_violations
         << "\t" << fit.score.proposal_audit_maximum_omitted_mass
         << "\t" << fit.score.maximum_omitted_component_mass
@@ -2473,6 +2528,49 @@ void test_noise_corrected_initialization() {
                 .cwiseAbs().maxCoeff() < 1e-11,
         "corrected-moment initialization depends on thread count");
 
+    uac::FitOptions sparse_options = options;
+    sparse_options.proposal =
+        uac::ProposalKind::SparseEmpiricalFisher;
+    const uac::FitResult sparse_moments = uac::fit(
+        data, &basis, sparse_options);
+    std::vector<double> exact_objectives;
+    std::vector<double> sparse_objectives;
+    for (const auto& trace : moments.traces) {
+        if (trace.phase == uac::TracePhase::CorrectedMomScore) {
+            exact_objectives.push_back(trace.selection_objective);
+        }
+    }
+    for (const auto& trace : sparse_moments.traces) {
+        if (trace.phase == uac::TracePhase::CorrectedMomScore) {
+            sparse_objectives.push_back(trace.selection_objective);
+        }
+    }
+    bool proposal_changed_initialization = false;
+    if (exact_objectives.size() == sparse_objectives.size()) {
+        for (size_t i = 0; i < exact_objectives.size(); ++i) {
+            proposal_changed_initialization |= std::abs(
+                exact_objectives[i] - sparse_objectives[i]) > 1e-10;
+        }
+    }
+    require(exact_objectives.size()
+                == static_cast<size_t>(options.kmeans_starts)
+            && sparse_objectives.size() == exact_objectives.size()
+            && proposal_changed_initialization
+            && sparse_moments.initialization_measurement_covariance_evaluations
+                == 2 * data.coordinates.rows(),
+        "sparse empirical Fisher was not used throughout particle "
+        "initialization");
+    sparse_options.n_threads = 1;
+    sparse_options.capture_model_trace = false;
+    const uac::FitResult sparse_serial = uac::fit(
+        data, &basis, sparse_options);
+    require((sparse_serial.model.means - sparse_moments.model.means)
+                .cwiseAbs().maxCoeff() < 1e-11
+            && (sparse_serial.score.responsibilities
+                - sparse_moments.score.responsibilities)
+                .cwiseAbs().maxCoeff() < 1e-11,
+        "sparse corrected-moment initialization depends on thread count");
+
     uac::FitOptions one_start = options;
     one_start.kmeans_starts = 1;
     const uac::FitResult mom = uac::fit(data, &basis, one_start);
@@ -2839,7 +2937,9 @@ void test_fit_score_and_state(const std::string& requested_output) {
             && fixed_trace->model_trace.front().completed_updates == 0
             && fixed_trace->model_trace.back().completed_updates == 4
             && fixed_trace->model_trace.back().event
-                == uac::TraceEvent::Terminal,
+                == uac::TraceEvent::Terminal
+            && fixed_trace->estep_work.document_evaluations
+                == static_cast<int64_t>(data.identifiers.size()) * 5,
         "fixed particle schedule did not complete exactly four EM iterations");
 
     uac::FitOptions fixed_without_shrinkage = fixed_iterations;
@@ -2914,6 +3014,7 @@ void test_fit_score_and_state(const std::string& requested_output) {
         "particle diagnostics or memory accounting are incomplete");
     require(fitted.score.gaussian_seconds > 0.0
             && fitted.score.moment_seconds == 0.0
+            && fitted.score.initialization_seconds > 0.0
             && fitted.score.estimated_peak_expectation_workspace_bytes > 0
             && fitted.score.estimated_peak_proposal_workspace_bytes > 0,
         "score-only particle E-step performed moment work or omitted "
@@ -2991,6 +3092,57 @@ void test_fit_score_and_state(const std::string& requested_output) {
     require((rescored.responsibilities - fitted.score.responsibilities)
         .cwiseAbs().maxCoeff() < 1e-11,
         "fit and transform particle scores differ");
+    uac::State weighted_state = state;
+    weighted_state.feature_weights.resize(basis.probabilities.rows());
+    weighted_state.feature_weights <<
+        1.0, 0.5, 1.0, 0.25, 1.0, 0.75;
+    weighted_state.weighted_counts = true;
+    uac::Dataset automatically_weighted = data;
+    const uac::ScoreResult automatic_weight_score =
+        uac::score_particle(automatically_weighted, basis,
+            weighted_state, transform_options);
+    require(std::all_of(automatically_weighted.counts.begin(),
+                automatically_weighted.counts.end(),
+                [](const Document& document) {
+                    return document.counts_weighted;
+                }),
+        "mutable particle scoring did not apply fitted feature weights");
+    uac::Dataset manually_weighted = data;
+    uac::detail::prepare_counts(manually_weighted.counts,
+        static_cast<int32_t>(basis.probabilities.rows()),
+        &weighted_state.feature_weights, manually_weighted.raw_totals,
+        manually_weighted.effective_totals);
+    const uac::ScoreResult manual_weight_score =
+        uac::score_particle(manually_weighted, basis,
+            weighted_state, transform_options);
+    const uac::Dataset const_raw_weight_data = data;
+    const uac::ScoreResult const_weight_score =
+        uac::score_particle(const_raw_weight_data, basis,
+            weighted_state, transform_options);
+    require((automatic_weight_score.responsibilities
+                - manual_weight_score.responsibilities)
+                .cwiseAbs().maxCoeff() == 0.0
+            && (const_weight_score.responsibilities
+                - manual_weight_score.responsibilities)
+                .cwiseAbs().maxCoeff() == 0.0
+            && std::none_of(const_raw_weight_data.counts.begin(),
+                const_raw_weight_data.counts.end(),
+                [](const Document& document) {
+                    return document.counts_weighted;
+                }),
+        "automatic state feature weighting changed scores or const input");
+    uac::Dataset mixed_weight_data = data;
+    mixed_weight_data.counts.front().counts_weighted = true;
+    bool rejected_mixed_weighting = false;
+    try {
+        static_cast<void>(uac::score_particle(
+            mixed_weight_data, basis, weighted_state,
+            transform_options));
+    } catch (const std::invalid_argument&) {
+        rejected_mixed_weighting = true;
+    }
+    require(rejected_mixed_weighting,
+        "particle scoring accepted mixed raw and preweighted counts");
     uac::ParticleScoreOptions screened_options = transform_options;
     screened_options.n_threads = 2;
     screened_options.component_screening = screening;
@@ -2998,6 +3150,11 @@ void test_fit_score_and_state(const std::string& requested_output) {
         data, basis, state, screened_options);
     require(screened_particle.proposal_component_screening
             && screened_particle.particle_component_screening
+            && screened_particle.terminal_component_screening
+            && screened_particle.proposal_audit_covered_components
+                == screened_particle
+                    .proposal_audit_represented_components
+            && screened_particle.proposal_audit_violations == 0
             && screened_particle.component_bound_violations == 0
             && screened_particle.maximum_omitted_component_mass
                 <= screening.tail_mass * (1.0 + 1e-8)
@@ -3017,20 +3174,59 @@ void test_fit_score_and_state(const std::string& requested_output) {
                     + 1e-10,
             "particle screening exceeded its omitted-mass bound");
     }
+    uac::ParticleScoreOptions exact_final_options = screened_options;
+    exact_final_options.exact_final_score = true;
+    const uac::ScoreResult exact_final_particle = uac::score_particle(
+        data, basis, state, exact_final_options);
+    require(exact_final_particle.exact_final_score
+            && exact_final_particle.particle_component_screening
+            && !exact_final_particle.terminal_component_screening
+            && exact_final_particle.evaluated_component_documents
+                == exact_final_particle.possible_component_documents
+            && exact_final_particle.maximum_omitted_component_mass == 0.0,
+        "exact terminal scoring did not preserve iterative screening "
+        "while evaluating all final components");
+    uac::FitOptions screened_fit_options = options;
+    screened_fit_options.component_screening = screening;
+    const uac::FitResult screened_fit = uac::fit(
+        data, &basis, screened_fit_options);
+    screened_fit_options.exact_final_score = true;
+    const uac::FitResult exact_final_fit = uac::fit(
+        data, &basis, screened_fit_options);
+    bool exact_final_covariances_unchanged = true;
+    for (size_t c = 0; c < screened_fit.model.covariances.size(); ++c) {
+        exact_final_covariances_unchanged &=
+            (screened_fit.model.covariances[c]
+                - exact_final_fit.model.covariances[c])
+                .cwiseAbs().maxCoeff() == 0.0;
+    }
+    require((screened_fit.model.means - exact_final_fit.model.means)
+                .cwiseAbs().maxCoeff() == 0.0
+            && (screened_fit.model.weights
+                - exact_final_fit.model.weights)
+                .cwiseAbs().maxCoeff() == 0.0
+            && exact_final_covariances_unchanged
+            && screened_fit.score.terminal_component_screening
+            && !exact_final_fit.score.terminal_component_screening
+            && exact_final_fit.score.exact_final_score,
+        "exact terminal fit scoring changed screened EM parameters");
+
     uac::ParticleScoreOptions capped_options = transform_options;
     capped_options.n_threads = 2;
     capped_options.component_screening = capped_screening;
     const uac::ScoreResult capped_particle = uac::score_particle(
         data, basis, state, capped_options);
     require(std::all_of(
-                capped_particle.per_document_proposal_components.begin(),
-                capped_particle.per_document_proposal_components.end(),
-                [](int32_t value) { return value > 0 && value <= 1; })
-            && std::all_of(
                 capped_particle.per_document_evaluated_components.begin(),
                 capped_particle.per_document_evaluated_components.end(),
                 [](int32_t value) { return value > 0 && value <= 1; }),
-        "forced proposal or particle component maximum was not respected");
+        "forced particle component maximum was not respected");
+    if (capped_particle.proposal_audit_violations > 0) {
+        require(!capped_particle.proposal_component_screening
+                && capped_particle.proposal_components_constructed
+                    == capped_particle.proposal_components_possible,
+            "proposal screening ignored a failed strict audit");
+    }
     uac::ComponentScreeningOptions invalid_maximum = screening;
     invalid_maximum.minimum_components = 2;
     invalid_maximum.maximum_components = 1;
@@ -3090,6 +3286,34 @@ void test_fit_score_and_state(const std::string& requested_output) {
             && (reused_stream.responsibilities
                 - streamed.responsibilities).cwiseAbs().maxCoeff() == 0.0,
         "streaming particle cache was not reused exactly");
+    const std::filesystem::path concurrent_stream_cache =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_concurrent_particle_cache";
+    std::filesystem::remove_all(concurrent_stream_cache);
+    uac::ParticleScoreOptions concurrent_stream_options =
+        stream_options;
+    concurrent_stream_options.n_threads = 2;
+    concurrent_stream_options.streaming.cache_directory =
+        concurrent_stream_cache.string();
+    auto concurrent_score = [&]() {
+        return uac::score_particle(data, basis, state,
+            concurrent_stream_options);
+    };
+    std::future<uac::ScoreResult> concurrent_first =
+        std::async(std::launch::async, concurrent_score);
+    std::future<uac::ScoreResult> concurrent_second =
+        std::async(std::launch::async, concurrent_score);
+    const uac::ScoreResult concurrent_first_score =
+        concurrent_first.get();
+    const uac::ScoreResult concurrent_second_score =
+        concurrent_second.get();
+    require(concurrent_first_score.streaming_cache_reused
+                != concurrent_second_score.streaming_cache_reused
+            && (concurrent_first_score.responsibilities
+                - concurrent_second_score.responsibilities)
+                .cwiseAbs().maxCoeff() == 0.0,
+        "concurrent streaming cache construction collided or changed scores");
+    std::filesystem::remove_all(concurrent_stream_cache);
     uac::ParticleScoreOptions single_thread_stream_options =
         stream_options;
     single_thread_stream_options.n_threads = 1;
@@ -3114,6 +3338,40 @@ void test_fit_score_and_state(const std::string& requested_output) {
                 - streamed.responsibilities.colwise().sum().transpose())
                 .cwiseAbs().maxCoeff() == 0.0,
         "source streaming retained or changed final responsibilities");
+    for (const auto& entry :
+            std::filesystem::directory_iterator(stream_score_cache)) {
+        const std::string name = entry.path().filename().string();
+        if (!entry.is_directory() || name.size() != 32
+            || !std::all_of(name.begin(), name.end(),
+                [](unsigned char value) {
+                    return std::isxdigit(value) != 0;
+                })) {
+            continue;
+        }
+        require(!std::filesystem::exists(
+                    entry.path() / "responsibilities.previous.bin")
+                && !std::filesystem::exists(
+                    entry.path() / "responsibilities.current.bin")
+                && !std::filesystem::exists(
+                    entry.path() / "score-responsibilities.bin"),
+            "immutable particle cache contains mutable responsibilities");
+    }
+    std::filesystem::path lifetime_sidecar;
+    std::filesystem::path lifetime_directory;
+    {
+        uac::Dataset lifetime_data = data;
+        uac::ScoreResult owner = uac::score_particle(
+            lifetime_data, basis, state, source_stream_options);
+        lifetime_sidecar = owner.responsibility_sidecar;
+        lifetime_directory = lifetime_sidecar.parent_path();
+        uac::ScoreResult retained = owner;
+        owner = {};
+        require(std::filesystem::exists(lifetime_sidecar),
+            "copied score result did not retain its responsibility sidecar");
+        retained = {};
+        require(!std::filesystem::exists(lifetime_directory),
+            "last score result did not remove its temporary directory");
+    }
     const std::filesystem::path batch_results =
         std::filesystem::temp_directory_path()
         / "punkst_uac_batch_results.tsv";
@@ -3126,13 +3384,35 @@ void test_fit_score_and_state(const std::string& requested_output) {
     const std::filesystem::path stream_representatives =
         std::filesystem::temp_directory_path()
         / "punkst_uac_stream_representatives.tsv";
+    const std::filesystem::path batch_top_results =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_batch_top_results.tsv";
+    const std::filesystem::path stream_top_results =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_stream_top_results.tsv";
+    const std::filesystem::path default_top_results =
+        std::filesystem::temp_directory_path()
+        / "punkst_uac_default_top_results.tsv";
     uac::write_results(batch_results.string(), data, streamed);
     uac::write_results(stream_results.string(), data, source_stream);
+    uac::write_results(batch_top_results.string(), data, streamed, 5);
+    uac::write_results(stream_top_results.string(), data, source_stream, 5);
+    uac::ScoreResult screened_output = streamed;
+    screened_output.terminal_component_screening = true;
+    uac::write_results(
+        default_top_results.string(), data, screened_output);
     uac::write_representatives(
         batch_representatives.string(), data, streamed, 3);
     uac::write_representatives(
         stream_representatives.string(), data, source_stream, 3);
+    const std::string top_results = read_text(batch_top_results);
     require(read_text(batch_results) == read_text(stream_results)
+            && top_results == read_text(stream_top_results)
+            && top_results == read_text(default_top_results)
+            && top_results.rfind(
+                "#id\tC1\tP1\tC2\tP2\tC3\tP3\tC4\tP4\tC5\tP5"
+                "\ttop_c_mass\tomitted_component_mass_bound\tentropy\n",
+                0) == 0
             && read_text(batch_representatives)
                 == read_text(stream_representatives),
         "streamed UAC result writers changed the output contract");
@@ -3140,6 +3420,9 @@ void test_fit_score_and_state(const std::string& requested_output) {
     std::filesystem::remove(stream_results);
     std::filesystem::remove(batch_representatives);
     std::filesystem::remove(stream_representatives);
+    std::filesystem::remove(batch_top_results);
+    std::filesystem::remove(stream_top_results);
+    std::filesystem::remove(default_top_results);
     std::filesystem::path corrupt_shard;
     for (const auto& entry :
             std::filesystem::recursive_directory_iterator(
@@ -3400,6 +3683,41 @@ void test_fit_score_and_state(const std::string& requested_output) {
                 - streamed.responsibilities.colwise().sum().transpose())
                 .cwiseAbs().maxCoeff() == 0.0,
         "indexed source scoring retained counts or changed inference");
+    CountingIndexedDocumentSource counted_indexed_source(
+        *indexed_counts);
+    const uac::ScoreResult counted_reuse_score =
+        uac::score_particle_indexed(indexed_data, basis,
+            counted_indexed_source, state, indexed_score_options);
+    require(counted_reuse_score.streaming_cache_reused
+            && counted_indexed_source.read_range_calls == 0
+            && counted_indexed_source.next_calls == 0
+            && (counted_reuse_score.effective_membership
+                - indexed_score.effective_membership)
+                .cwiseAbs().maxCoeff() == 0.0,
+        "indexed cache reuse reread counts or changed inference");
+    uac::Dataset misaligned_indexed_data = indexed_data;
+    misaligned_indexed_data.identifiers.front() += "_mismatch";
+    indexed_score_options.streaming.rebuild_cache = true;
+    bool rejected_misaligned_indexed_source = false;
+    try {
+        static_cast<void>(uac::score_particle_indexed(
+            misaligned_indexed_data, basis, *indexed_counts,
+            state, indexed_score_options));
+    } catch (const std::exception&) {
+        rejected_misaligned_indexed_source = true;
+    }
+    bool rejected_raw_weighted_indexed_source = false;
+    try {
+        static_cast<void>(uac::score_particle_indexed(
+            indexed_data, basis, *indexed_counts,
+            weighted_state, indexed_score_options));
+    } catch (const std::invalid_argument&) {
+        rejected_raw_weighted_indexed_source = true;
+    }
+    require(rejected_misaligned_indexed_source
+            && rejected_raw_weighted_indexed_source,
+        "indexed scoring accepted misaligned identifiers or raw weighted input");
+    indexed_score_options.streaming.rebuild_cache = false;
 
     uac::FitOptions indexed_fit_options = stream_fit_options;
     indexed_fit_options.streaming.count_storage =
@@ -3707,6 +4025,27 @@ void test_fit_score_and_state(const std::string& requested_output) {
     }
     require(rejected_malformed_dataset,
         "public map scoring accepted a misaligned dataset");
+    malformed_data = data;
+    malformed_data.identifiers[1] = malformed_data.identifiers[0];
+    bool rejected_duplicate_identifier = false;
+    try {
+        static_cast<void>(uac::score_map(
+            malformed_data, fitted.model));
+    } catch (const std::invalid_argument&) {
+        rejected_duplicate_identifier = true;
+    }
+    malformed_data = data;
+    malformed_data.identifiers.front().clear();
+    bool rejected_empty_identifier = false;
+    try {
+        static_cast<void>(uac::score_map(
+            malformed_data, fitted.model));
+    } catch (const std::invalid_argument&) {
+        rejected_empty_identifier = true;
+    }
+    require(rejected_duplicate_identifier
+            && rejected_empty_identifier,
+        "public scoring accepted duplicate or empty document identifiers");
     uac::State wrong_basis_state = state;
     ++wrong_basis_state.basis_checksum;
     bool rejected_basis_mismatch = false;
