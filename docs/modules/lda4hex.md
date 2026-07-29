@@ -5,6 +5,32 @@ This document describes the current behavior of:
 - `punkst topic-model`
 - `punkst lda-transform`
 
+## Example usage
+
+Fit a 24-topic model from custom sparse input and transform the same units:
+
+```bash
+punkst topic-model \
+  --in-data sample.units.tsv --in-meta sample.meta.json \
+  --out-prefix sample.lda --residuals --transform \
+  --n-topics 24 --n-epochs 3 \
+  --threads 4 --seed 1
+```
+
+Apply the fitted model to another dataset:
+
+```bash
+punkst lda-transform \
+  --in-data new.units.tsv --in-meta new.meta.json \
+  --in-model sample.lda.model.tsv \
+  --out-prefix new.lda --residuals \
+  --threads 4 --seed 1
+```
+
+For 10X MEX input, replace `--in-data` and `--in-meta` with one or more
+`--in-dge-dir` values, or provide matching `--in-barcodes`, `--in-features`,
+and `--in-matrix` lists.
+
 ## Input formats
 
 ### Custom sparse text input
@@ -84,6 +110,18 @@ For 10X input, the feature-selection behavior is:
 
 With multiple 10X datasets, the starting 10X feature list in steps 1 and 3 is the intersection across all datasets.
 
+### Transform after fitting
+
+`--transform`
+Transform the input units after fitting.
+
+`topic-model --transform`
+delegates to `lda-transform`. The shared inference, filtering, weighting,
+diagnostic, top-k, and pseudobulk controls are documented once under
+[Transform options](#transform-options); their behavior is the same when
+invoked through `topic-model`. The delegated transform keeps every non-empty
+unit by setting `--min-count 1`.
+
 ### LDA fitting options
 
 `--n-topics`
@@ -156,7 +194,7 @@ Use the prior model to transform the data without fitting. Implies `--transform`
 `--sort-topics`
 Sort learned topics by abundance before writing the model.
 
-### Optional background model
+<!-- ### Optional background model
 
 `--fit-background`
 Fit an additional background profile together with the LDA factors.
@@ -174,24 +212,8 @@ Keep the background profile fixed during training.
 Beta prior parameters for the background fraction.
 
 `--warm-start-epochs`
-Warm-start the topic model before enabling the background.
+Warm-start the topic model before enabling the background. -->
 
-### Transform-related options
-
-`--transform`
-Transform the input units after fitting.
-
-`--residuals`
-For the plain LDA path, also write residual-based summaries and feature residuals.
-
-`--feature-residuals`
-Alias for `--residuals`.
-
-`--topk-only <int>`
-For the plain LDA path, write only the top-k topic indices and probabilities to `{prefix}.results.tsv`.
-
-`--pseudobulk-all-features`
-For the plain LDA path, include every retained input feature in `{prefix}.pseudobulk.tsv`, including features absent from the model. Existing feature count and regex filters still apply. Transformation, residuals, and unit filtering continue to use only model-overlapping features.
 
 ### Main outputs
 
@@ -201,17 +223,10 @@ Feature-by-topic model matrix.
 `{prefix}.features.tsv`
 Written for 10X fitting when `--features` is not supplied.
 
-`{prefix}.background.tsv`
-Written when `--fit-background` is used.
+<!-- `{prefix}.background.tsv`
+Written when `--fit-background` is used. -->
 
-When `--transform` is used:
-
-- plain LDA without background delegates to `lda-transform`
-- background-enabled LDA keeps the older transform path
-
-For the delegated plain-LDA path used by `topic-model --transform`, the transform stage keeps all non-empty units by using `--min-count 1`.
-
-For the plain LDA path, transform outputs are:
+Transform outputs are:
 
 `{prefix}.results.tsv`
 Topic proportions per unit. By default this contains all topics. With `--topk-only k`, it instead contains columns `K1..Kk` and `P1..Pk`.
@@ -224,15 +239,64 @@ Written when `--residuals` is enabled. Current columns are:
 
 - `total_count`
 - `residual`
-- `cosine_sim`
 - `entropy`
+
+With `--unit-diagnostics-similarity`, the file also contains:
+
+- `cosine_sim`
 - `sh_lcr`
 - `sh_q`
 
 `{prefix}.feature_residuals.tsv`
 Written when `--residuals` is enabled.
 
-The `entropy`, `sh_lcr`, and `sh_q` summaries are computed from each unit's topic proportions, treating them as a probability distribution over topics. Topic similarity is defined by cosine similarity among the row-normalized topic-word profiles.
+The first columns are `Feature`, `absDiff`, and `absDiffRate`, followed by:
+
+| Column | Definition |
+|---|---|
+| `totCount` | Effective observed feature count |
+| `nUnits` | Number of units with a positive effective count |
+| `log2Gain` | \(\log_2(N_w/M_w)\), observed versus predicted corpus abundance |
+| `marginalDev` | Deviance attributable to the corpus-wide abundance shift |
+| `conditionalDev` | Remaining document-level deviance after abundance adjustment |
+| `factorDrift` | Drift between variationally allocated and expected topic counts |
+| `deletionTV` | Count-weighted positive-cell one-step deletion effect on the unit topic mixture |
+| `adjAbsDiffRate` | Positive-cell absolute residual after abundance adjustment |
+| `pull` | Gain-adjusted residual weighted by topic-allocation distance |
+
+For fitted probabilities \(p_{dw}\), diagnostics use
+\(\mu_{dw}=n_dp_{dw}\). Since both observed and predicted counts sum to
+\(n_d\), the linear terms in the corresponding Poisson deviance cancel within
+each unit. The summed fixed-model Poisson deviance therefore equals the LDA
+multinomial deviance, and its per-feature marginal and conditional components
+provide a nonnegative decomposition. The gain remains a descriptive transfer
+statistic because feature gains cannot vary independently while preserving
+topic normalization.
+
+For a positive cell, `deletionTV` subtracts its current variational topic
+allocation from the local assignment sufficient statistics:
+
+\[
+\gamma^{(-w)}_{dk}=\max\{0,\gamma_{dk}-n_{dw}\varphi_{dwk}\}.
+\]
+
+After normalizing \(\gamma_d^{(-w)}\) as for the reported topic proportions,
+let \(J_{dw}^{+}=\operatorname{TV}(\hat\theta_d^{(-w)},\hat\theta_d)\).
+The output is
+
+\[
+\operatorname{deletionTV}_w
+=\frac{1}{N_w}\sum_{d:n_{dw}>0}n_{dw}J_{dw}^{+}.
+\]
+
+If deletion removes all assignment mass, the deleted mixture is the symmetric
+prior mixture. This is a one-step positive-cell diagnostic, not a fully
+reconverged leave-one-feature-out fit, and it excludes zero-cell effects.
+
+`entropy` is computed from each unit's topic proportions, treating them as a
+probability distribution over topics. The opt-in `sh_lcr` and `sh_q`
+statistics additionally use cosine similarity among row-normalized topic-word
+profiles.
 
 For custom sparse input, carried-over metadata columns from `header_info` appear before the transform outputs. For 10X input, the leading identifier column is `#barcode`. With a single 10X dataset it keeps the original barcode/identifier form; with multiple 10X datasets it is written as `<dataset_id>:<barcode>`.
 
@@ -252,33 +316,54 @@ Either:
 - `--in-data` and `--in-meta`
 - or one or more `--in-dge-dir`, or matching repeated `--in-barcodes` + `--in-features` + `--in-matrix`
 
-### Optional
+### Transform options
+
+These options also govern the delegated plain-LDA transform started by
+`topic-model --transform`, where applicable.
+
+#### Input processing and inference
 
 `--minibatch-size`
+Minibatch size. Default: `512`.
 
 `--modal`
+Modality index for multi-modal custom input.
 
 `--threads`, `--seed`, `--verbose`, `--debug`
 
-`--features`, `--min-count-per-feature`
+`--features`, `--min-count-per-feature`, `--include-feature-regex`,
+`--exclude-feature-regex`
+Define and filter the transform feature space as described under
+[Feature selection and weighting](#feature-selection-and-weighting).
 
 `--min-count`
 Minimum total count per unit to keep. Default: `20`.
 
 `--icol-weight`, `--default-weight`
-
-`--include-feature-regex`, `--exclude-feature-regex`
+Apply feature weights as described under
+[Feature selection and weighting](#feature-selection-and-weighting).
 
 `--max-iter`, `--mean-change-tol`
 
 `--sorted-by-barcode`
 Use streaming mode for 10X input sorted by barcode. With multiple datasets, streaming follows dataset order first, then barcode order within each dataset.
 
+#### Diagnostic and output controls
+
 `--residuals`
 Write `{prefix}.unit_stats.tsv` and `{prefix}.feature_residuals.tsv`.
 
 `--feature-residuals`
 Alias for `--residuals`.
+
+`--feature-diagnostics-cheap`
+With `--residuals`, omit the spool-dependent
+`adjAbsDiffRate` and `pull` feature columns.
+
+`--unit-diagnostics-similarity`
+With `--residuals`, add `cosine_sim`, `sh_lcr`, and `sh_q` to
+`{prefix}.unit_stats.tsv`. These statistics require quadratic work in the
+number of topics and are disabled by default.
 
 `--topk-only <int>`
 Write sparse top-k output to `{prefix}.results.tsv`. The value must be a positive integer.
@@ -295,9 +380,15 @@ Per-unit topic proportions, or top-k topic indices/probabilities when `--topk-on
 Contains model-overlapping features by default, or all retained input features with `--pseudobulk-all-features`. Feature weights are never applied directly to pseudobulk counts.
 
 `{prefix}.unit_stats.tsv`
-Written only when `--residuals` is enabled.
+Written only when `--residuals` is enabled. Its default columns are
+`total_count`, `residual`, and `entropy`; `--unit-diagnostics-similarity`
+adds `cosine_sim`, `sh_lcr`, and `sh_q`.
 
 `{prefix}.feature_residuals.tsv`
-Written only when `--residuals` is enabled.
+Written only when `--residuals` is enabled. It contains the support,
+abundance-shift, deviance, topic-drift, deletion, and Pull diagnostics
+described above. Rows cover model-overlapping features only, including with
+`--pseudobulk-all-features`. Feature diagnostics use effective weighted
+counts when feature weights are active.
 
 In `{prefix}.unit_stats.tsv`, `total_count` is the raw total count after feature remap and filtering but before feature weights are applied.

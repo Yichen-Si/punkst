@@ -1,5 +1,4 @@
 #include "gamma_pois_topic.hpp"
-#include "gamma_pois_posterior_io.hpp"
 #include "transform_pseudobulk.hpp"
 
 #include <algorithm>
@@ -14,6 +13,8 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <tbb/blocked_range.h>
 #include <tbb/enumerable_thread_specific.h>
@@ -155,12 +156,11 @@ private:
 };
 
 struct ResidualState {
-    const RowMajorMatrixXd& topicProfiles;
     const MatrixXd& expectedBeta;
     const MatrixXd& betaAllocationKernel;
-    const VectorXd& featureDispersion;
     const VectorXd& topicCapacity;
-    bool hasDispersion;
+    const VectorXd& featureDispersion;
+    bool hasFeatureDispersion;
     MatrixXd profileGram;
     MatrixXd topicSimilarity;
     MatrixXd allocatedTopicCounts;
@@ -168,9 +168,7 @@ struct ResidualState {
     VectorXd featureTotals;
     VectorXd topicExposureTotals;
     VectorXd conditionalLogTerms;
-    VectorXd leverageNumerators;
-    VectorXd cookCorrections;
-    VectorXd cookBaseline;
+    VectorXd deletionNumerators;
     std::vector<int64_t> featureUnits;
     PullSpool pullSpool;
 
@@ -179,36 +177,37 @@ struct ResidualState {
     VectorXd marginalDeviance;
     VectorXd conditionalDeviance;
     VectorXd topicDeviance;
-    VectorXd topicLeverage;
+    VectorXd deletionTV;
     VectorXd adjustedResidualPerCount;
     VectorXd pull;
-    VectorXd cookScore;
 
-    ResidualState(GammaPoisson4Hex& gp, bool cheapDiagnostics)
-        : topicProfiles(gp.get_model_matrix()),
-          expectedBeta(gp.getExpectedBeta()),
+    ResidualState(GammaPoisson4Hex& gp, bool cheapDiagnostics,
+            bool similarityDiagnostics)
+        : expectedBeta(gp.getExpectedBeta()),
           betaAllocationKernel(gp.getBetaAllocationKernel()),
-          featureDispersion(gp.getFeatureDispersion()),
           topicCapacity(gp.getTopicCapacity()),
-          hasDispersion(gp.hasFeatureDispersion()),
-          profileGram(topicProfiles * topicProfiles.transpose()),
-          topicSimilarity(MatrixXd::Zero(
-              topicProfiles.rows(), topicProfiles.rows())),
+          featureDispersion(gp.getFeatureDispersion()),
+          hasFeatureDispersion(gp.hasFeatureDispersion()),
           allocatedTopicCounts(MatrixXd::Zero(
-              topicProfiles.rows(), topicProfiles.cols())),
-          featureCorrections(VectorXd::Zero(topicProfiles.cols())),
-          featureTotals(VectorXd::Zero(topicProfiles.cols())),
-          topicExposureTotals(VectorXd::Zero(topicProfiles.rows())),
-          conditionalLogTerms(VectorXd::Zero(topicProfiles.cols())),
-          leverageNumerators(VectorXd::Zero(topicProfiles.cols())),
-          cookCorrections(VectorXd::Zero(topicProfiles.cols())),
-          cookBaseline(VectorXd::Zero(topicProfiles.rows())),
-          featureUnits(static_cast<size_t>(topicProfiles.cols()), 0),
+              expectedBeta.rows(), expectedBeta.cols())),
+          featureCorrections(VectorXd::Zero(expectedBeta.cols())),
+          featureTotals(VectorXd::Zero(expectedBeta.cols())),
+          topicExposureTotals(VectorXd::Zero(expectedBeta.rows())),
+          conditionalLogTerms(VectorXd::Zero(expectedBeta.cols())),
+          deletionNumerators(VectorXd::Zero(expectedBeta.cols())),
+          featureUnits(static_cast<size_t>(expectedBeta.cols()), 0),
           pullSpool(!cheapDiagnostics) {
+        if (!similarityDiagnostics) {
+            return;
+        }
+        profileGram.noalias() =
+            expectedBeta * expectedBeta.transpose();
+        topicSimilarity = MatrixXd::Zero(
+            expectedBeta.rows(), expectedBeta.rows());
         VectorXd norms = profileGram.diagonal().array().max(0.0).sqrt();
-        for (int32_t k = 0; k < topicProfiles.rows(); ++k) {
+        for (int32_t k = 0; k < expectedBeta.rows(); ++k) {
             topicSimilarity(k, k) = 1.0;
-            for (int32_t l = k + 1; l < topicProfiles.rows(); ++l) {
+            for (int32_t l = k + 1; l < expectedBeta.rows(); ++l) {
                 const double denom = norms(k) * norms(l);
                 const double similarity = denom > 0.0
                     ? std::clamp(profileGram(k, l) / denom, 0.0, 1.0)
@@ -242,14 +241,13 @@ public:
     GammaPoisTransformBatchProcessor(GammaPoisson4Hex& gp_,
         std::ostream& results_, RowMajorMatrixXd& pseudobulk_,
         MatrixXd& specialPseudobulk_, Mode pseudobulkMode_,
-        std::ostream* posterior_, GammaPoissonDispersionWriter* dispersion_,
-        uint64_t state_checksum_, std::ostream* unitStats_,
-        ResidualState* residualState_, int32_t nThreads_)
+        std::ostream* unitStats_, ResidualState* residualState_,
+        bool similarityDiagnostics_, int32_t nThreads_)
         : gp(gp_), results(results_), pseudobulk(pseudobulk_),
           specialPseudobulk(specialPseudobulk_), pseudobulkMode(pseudobulkMode_),
-          posterior(posterior_), dispersion(dispersion_),
-          state_checksum(state_checksum_), unitStats(unitStats_),
-          residualState(residualState_), threadHint(std::max(1, nThreads_)),
+          unitStats(unitStats_), residualState(residualState_),
+          similarityDiagnostics(similarityDiagnostics_),
+          threadHint(std::max(1, nThreads_)),
           M(gp_.nFeatures()), K(gp_.getNumTopics()) {
         if (residualState) {
             residualTls = std::make_unique<ResidualTls>([this] {
@@ -264,9 +262,13 @@ public:
         }
         RowMajorMatrixXd doc_topic;
         std::vector<GammaPoissonDocumentPosterior> posteriors;
-        gp.transformWithPosteriors(DocumentView(batch.docs), doc_topic, posteriors);
+        if (residualState) {
+            gp.transformWithPosteriors(
+                DocumentView(batch.docs), doc_topic, posteriors);
+        } else {
+            doc_topic = gp.transformMeans(DocumentView(batch.docs));
+        }
         writeTopicRows(batch.ids, doc_topic);
-        writePosteriorRows(batch.docs, batch.ids, posteriors);
         processResiduals(batch.docs, batch.ids, doc_topic, posteriors);
         for (size_t i = 0; i < batch.docs.size(); ++i) {
             const Document& doc = batch.docs[i];
@@ -289,10 +291,13 @@ public:
         }
         RowMajorMatrixXd doc_topic;
         std::vector<GammaPoissonDocumentPosterior> posteriors;
-        gp.transformWithPosteriors(
-            DocumentView(batch.modelDocs), doc_topic, posteriors);
+        if (residualState) {
+            gp.transformWithPosteriors(
+                DocumentView(batch.modelDocs), doc_topic, posteriors);
+        } else {
+            doc_topic = gp.transformMeans(DocumentView(batch.modelDocs));
+        }
         writeTopicRows(batch.ids, doc_topic);
-        writePosteriorRows(batch.modelDocs, batch.ids, posteriors);
         processResiduals(batch.modelDocs, batch.ids, doc_topic, posteriors);
         transform_pseudobulk::accumulate(
             specialPseudobulk, batch, doc_topic, pseudobulkMode);
@@ -302,7 +307,6 @@ public:
         if (!residualState) return;
         for (auto& local : *residualTls) {
             residualState->topicExposureTotals += local.topicExposureTotals;
-            residualState->cookBaseline += local.cookBaseline;
         }
         residualState->predictedTotals.noalias() =
             residualState->expectedBeta.transpose()
@@ -315,16 +319,10 @@ public:
         residualState->marginalDeviance = VectorXd::Constant(M, nan);
         residualState->conditionalDeviance = VectorXd::Constant(M, nan);
         residualState->topicDeviance = VectorXd::Constant(M, nan);
-        residualState->topicLeverage = VectorXd::Constant(M, nan);
+        residualState->deletionTV = VectorXd::Constant(M, nan);
         residualState->adjustedResidualPerCount =
             VectorXd::Constant(M, nan);
         residualState->pull = VectorXd::Constant(M, nan);
-        residualState->cookScore =
-            residualState->expectedBeta.array().square().matrix().transpose()
-            * residualState->cookBaseline;
-        residualState->cookScore += residualState->cookCorrections;
-        residualState->cookScore =
-            0.5 * residualState->cookScore.cwiseMax(0.0);
 
         VectorXd gain = VectorXd::Constant(M, nan);
         for (int32_t w = 0; w < M; ++w) {
@@ -369,8 +367,8 @@ public:
             }
             residualState->topicDeviance(w) =
                 std::max(0.0, topicDeviance);
-            residualState->topicLeverage(w) =
-                residualState->leverageNumerators(w) / observed;
+            residualState->deletionTV(w) =
+                residualState->deletionNumerators(w) / observed;
         }
 
         VectorXd adjustedNumerator = VectorXd::Zero(M);
@@ -393,11 +391,10 @@ public:
 private:
     struct ResidualLocalAgg {
         VectorXd topicExposureTotals;
-        VectorXd cookBaseline;
+        RowVectorXd denseExpected;
 
         explicit ResidualLocalAgg(int32_t nTopics)
-            : topicExposureTotals(VectorXd::Zero(nTopics)),
-              cookBaseline(VectorXd::Zero(nTopics)) {}
+            : topicExposureTotals(VectorXd::Zero(nTopics)) {}
     };
 
     struct CellRef {
@@ -422,34 +419,6 @@ private:
         }
     }
 
-    void writePosteriorRows(const std::vector<Document>& docs,
-        const std::vector<std::string>& ids,
-        const std::vector<GammaPoissonDocumentPosterior>& posteriors) {
-        if (!posterior) return;
-        for (size_t i = 0; i < posteriors.size(); ++i) {
-            if (!ids[i].empty()) {
-                *posterior << ids[i] << "\t";
-            }
-            const GammaPoissonDocumentPosterior& local = posteriors[i];
-            *posterior << row_index << "\t" << local.exposure;
-            for (int32_t k = 0; k < K; ++k) {
-                *posterior << "\t" << local.shape(k);
-            }
-            for (int32_t k = 0; k < K; ++k) {
-                *posterior << "\t" << local.rate(k);
-            }
-            *posterior << "\n";
-
-            if (dispersion) {
-                GammaPoissonDispersionApproximation approximation;
-                gp.dispersionCovarianceApproximation(docs[i], local,
-                    dispersion->rank(), state_checksum ^ row_index, approximation);
-                dispersion->append(approximation);
-            }
-            ++row_index;
-        }
-    }
-
     void processResiduals(const std::vector<Document>& docs,
         const std::vector<std::string>& ids,
         const RowMajorMatrixXd& docTopic,
@@ -465,28 +434,68 @@ private:
         }
         const size_t nCells = documentOffsets.back();
         std::vector<double> expectedCells(nCells, 0.0);
-        RowMajorMatrixXd thetaMean(nDocs, K);
         RowMajorMatrixXd thetaKernel(nDocs, K);
         VectorXd unitResidual = VectorXd::Zero(nDocs);
-        VectorXd unitCosine = VectorXd::Zero(nDocs);
-        const ThetaEntropyStats entropyStats =
-            computeThetaEntropyStats(
-                docTopic, residualState->topicSimilarity);
+        VectorXd unitCosine;
+        VectorXd unitEntropy = VectorXd::Zero(nDocs);
+        ThetaEntropyStats similarityEntropy;
+        RowMajorMatrixXd expectedTopicWeights;
+        VectorXd expectedNormSq;
         const size_t grainSize = std::max<size_t>(
             1, docs.size() / (2 * static_cast<size_t>(threadHint)));
+        if (similarityDiagnostics) {
+            unitCosine = VectorXd::Zero(nDocs);
+            similarityEntropy = computeThetaEntropyStats(
+                docTopic, residualState->topicSimilarity);
+            unitEntropy = similarityEntropy.entropy;
+            expectedTopicWeights.resize(nDocs, K);
+            tbb::parallel_for(tbb::blocked_range<size_t>(
+                    0, docs.size(), grainSize),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t i = range.begin(); i < range.end(); ++i) {
+                        const GammaPoissonDocumentPosterior& posterior =
+                            posteriors[i];
+                        expectedTopicWeights.row(
+                            static_cast<int32_t>(i)) =
+                            posterior.exposure
+                            * (posterior.shape.array()
+                                / posterior.rate.array().max(1e-12))
+                                .matrix().transpose();
+                    }
+                });
+            expectedNormSq = rowQuadraticForms(
+                expectedTopicWeights, residualState->profileGram);
+        }
 
         tbb::parallel_for(tbb::blocked_range<size_t>(
                 0, docs.size(), grainSize),
             [&](const tbb::blocked_range<size_t>& range) {
                 ResidualLocalAgg& local = residualTls->local();
-                VectorXd intensity(K);
+                VectorXd exposureTheta(K);
                 for (size_t i = range.begin(); i < range.end(); ++i) {
                     const Document& doc = docs[i];
                     const GammaPoissonDocumentPosterior& posterior =
                         posteriors[i];
-                    thetaMean.row(static_cast<int32_t>(i)) =
-                        (posterior.shape.array()
-                        / posterior.rate.array().max(1e-12)).matrix().transpose();
+                    if (similarityDiagnostics) {
+                        exposureTheta =
+                            expectedTopicWeights.row(
+                                static_cast<int32_t>(i)).transpose();
+                    } else {
+                        exposureTheta =
+                            posterior.exposure
+                            * (posterior.shape.array()
+                                / posterior.rate.array().max(1e-12)).matrix();
+                        double entropy = 0.0;
+                        for (int32_t k = 0; k < K; ++k) {
+                            const double probability =
+                                docTopic(static_cast<int32_t>(i), k);
+                            if (probability > 0.0) {
+                                entropy -= probability
+                                    * std::log(probability);
+                            }
+                        }
+                        unitEntropy(static_cast<int32_t>(i)) = entropy;
+                    }
                     double maxLog = -std::numeric_limits<double>::infinity();
                     for (int32_t k = 0; k < K; ++k) {
                         const double value = psi(posterior.shape(k))
@@ -498,42 +507,51 @@ private:
                         thetaKernel(static_cast<int32_t>(i), k) = std::exp(
                             thetaKernel(static_cast<int32_t>(i), k) - maxLog);
                     }
-                    intensity = thetaMean.row(
-                        static_cast<int32_t>(i)).transpose();
                     local.topicExposureTotals.noalias() +=
-                        posterior.exposure * intensity;
-                    for (int32_t k = 0; k < K; ++k) {
-                        local.cookBaseline(k) +=
-                            posterior.exposure * posterior.exposure
-                            * intensity(k) * intensity(k)
-                            / std::max(posterior.shape(k), 1e-12);
-                    }
-                    intensity.array() *=
-                        residualState->topicCapacity.array();
-                    intensity *= posterior.exposure;
+                        exposureTheta;
 
-                    double residual = intensity.sum();
+                    double residual =
+                        exposureTheta.dot(residualState->topicCapacity);
                     double dotProduct = 0.0;
                     double observedNormSq = 0.0;
-                    const double expectedNormSq = std::max(
-                        0.0, intensity.dot(
-                            residualState->profileGram * intensity));
+                    size_t positiveCells = 0;
+                    for (double count : doc.cnts) {
+                        positiveCells += count > 0.0;
+                    }
+                    const bool sparsePrediction =
+                        3.0 * static_cast<double>(positiveCells + K) < M;
+                    if (!sparsePrediction) {
+                        if (local.denseExpected.size() != M) {
+                            local.denseExpected.resize(M);
+                        }
+                        local.denseExpected.noalias() =
+                            exposureTheta.transpose()
+                            * residualState->expectedBeta;
+                    }
                     for (size_t j = 0; j < doc.ids.size(); ++j) {
                         const uint32_t w = doc.ids[j];
                         const double observed = doc.cnts[j];
-                        const double expected = intensity.dot(
-                            residualState->topicProfiles.col(w));
+                        const double expected = sparsePrediction
+                            ? exposureTheta.dot(
+                                residualState->expectedBeta.col(w))
+                            : local.denseExpected(w);
                         expectedCells[documentOffsets[i] + j] = expected;
                         const double correction =
                             std::abs(expected - observed) - expected;
                         residual += correction;
-                        dotProduct += expected * observed;
-                        observedNormSq += observed * observed;
+                        if (similarityDiagnostics) {
+                            dotProduct += expected * observed;
+                            observedNormSq += observed * observed;
+                        }
                     }
-                    if (expectedNormSq > 0.0 && observedNormSq > 0.0) {
+                    if (similarityDiagnostics
+                            && expectedNormSq(static_cast<int32_t>(i)) > 0.0
+                            && observedNormSq > 0.0) {
                         unitCosine(static_cast<int32_t>(i)) =
                             dotProduct
-                            / std::sqrt(expectedNormSq * observedNormSq);
+                            / std::sqrt(
+                                expectedNormSq(static_cast<int32_t>(i))
+                                * observedNormSq);
                     }
                     unitResidual(static_cast<int32_t>(i)) =
                         std::max(0.0, residual);
@@ -576,14 +594,17 @@ private:
                 0, static_cast<size_t>(M), featureGrain),
             [&](const tbb::blocked_range<size_t>& range) {
                 VectorXd allocation(K);
+                VectorXd deletedTopic(K);
                 VectorXd assigned = VectorXd::Zero(K);
                 for (size_t w0 = range.begin(); w0 < range.end(); ++w0) {
+                    if (featureOffsets[w0] == featureOffsets[w0 + 1]) {
+                        continue;
+                    }
                     const int32_t w = static_cast<int32_t>(w0);
                     double correction = 0.0;
                     double total = 0.0;
                     double conditionalLogTerm = 0.0;
-                    double leverage = 0.0;
-                    double cookCorrection = 0.0;
+                    double deletionNumerator = 0.0;
                     int64_t units = 0;
                     assigned.setZero();
 
@@ -623,32 +644,51 @@ private:
                         }
                         allocation /= allocationTotal;
                         assigned.noalias() += observed * allocation;
-                        const double totalVariation = 0.5
-                            * (allocation
-                                - docTopic.row(static_cast<int32_t>(d))
-                                    .transpose()).cwiseAbs().sum();
-                        leverage += observed * totalVariation;
 
                         double epsilon = 1.0;
-                        if (residualState->hasDispersion) {
+                        if (residualState->hasFeatureDispersion) {
                             const double tau =
                                 residualState->featureDispersion(w);
                             epsilon = (tau + observed)
                                 / std::max(tau + expected, 1e-12);
                         }
+                        double deletedTotal = 0.0;
                         for (int32_t k = 0; k < K; ++k) {
-                            const double theta =
-                                thetaMean(static_cast<int32_t>(d), k);
-                            const double baseline = posterior.exposure
-                                * theta * residualState->expectedBeta(k, w);
-                            const double actual = observed * allocation(k)
-                                - epsilon * baseline;
-                            cookCorrection +=
-                                (actual * actual - baseline * baseline)
-                                / std::max(posterior.shape(k), 1e-12);
+                            const double deletedShape =
+                                posterior.shape(k)
+                                - observed * allocation(k);
+                            const double deletedRate =
+                                posterior.rate(k)
+                                - posterior.exposure * epsilon
+                                    * residualState->expectedBeta(k, w);
+                            if (!std::isfinite(deletedShape)
+                                    || deletedShape <= 0.0
+                                    || !std::isfinite(deletedRate)
+                                    || deletedRate <= 0.0) {
+                                error("%s: invalid one-step deletion "
+                                    "posterior for feature %d", __func__, w);
+                            }
+                            deletedTopic(k) =
+                                deletedShape / deletedRate
+                                * residualState->topicCapacity(k);
+                            deletedTotal += deletedTopic(k);
                         }
+                        if (!std::isfinite(deletedTotal)
+                                || deletedTotal <= 0.0) {
+                            error("%s: invalid one-step deletion topic "
+                                "total for feature %d", __func__, w);
+                        }
+                        deletedTopic /= deletedTotal;
+                        deletionNumerator += observed * 0.5
+                            * (deletedTopic
+                                - docTopic.row(static_cast<int32_t>(d))
+                                    .transpose()).cwiseAbs().sum();
 
                         if (residualState->pullSpool.enabled()) {
+                            const double totalVariation = 0.5
+                                * (allocation
+                                    - docTopic.row(static_cast<int32_t>(d))
+                                        .transpose()).cwiseAbs().sum();
                             PullRecord& record =
                                 batchPullRecords[documentOffsets[d] + j];
                             record.feature = static_cast<uint32_t>(w);
@@ -662,8 +702,8 @@ private:
                     residualState->featureTotals(w) += total;
                     residualState->conditionalLogTerms(w) +=
                         conditionalLogTerm;
-                    residualState->leverageNumerators(w) += leverage;
-                    residualState->cookCorrections(w) += cookCorrection;
+                    residualState->deletionNumerators(w) +=
+                        deletionNumerator;
                     residualState->featureUnits[w0] += units;
                     residualState->allocatedTopicCounts.col(w).noalias() +=
                         assigned;
@@ -687,11 +727,14 @@ private:
             }
             *unitStats << rawTotalCount(docs[i])
                 << "\t" << std::setprecision(2) << unitResidual(i)
-                << "\t" << std::setprecision(4) << unitCosine(i)
-                << "\t" << std::setprecision(4)
-                << entropyStats.entropy(i)
-                << "\t" << entropyStats.sh_lcr(i)
-                << "\t" << entropyStats.sh_q(i) << "\n";
+                << "\t" << std::setprecision(4) << unitEntropy(i);
+            if (similarityDiagnostics) {
+                *unitStats
+                    << "\t" << std::setprecision(4) << unitCosine(i)
+                    << "\t" << similarityEntropy.sh_lcr(i)
+                    << "\t" << similarityEntropy.sh_q(i);
+            }
+            *unitStats << "\n";
         }
     }
 
@@ -700,14 +743,11 @@ private:
     RowMajorMatrixXd& pseudobulk;
     MatrixXd& specialPseudobulk;
     Mode pseudobulkMode;
-    std::ostream* posterior;
-    GammaPoissonDispersionWriter* dispersion;
-    uint64_t state_checksum;
     std::ostream* unitStats;
     ResidualState* residualState;
+    bool similarityDiagnostics;
     int32_t threadHint;
     std::unique_ptr<ResidualTls> residualTls;
-    uint64_t row_index = 0;
     int32_t M;
     int32_t K;
 };
@@ -775,12 +815,18 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     double mDelta = 1e-3;
     bool sorted_by_barcode = false;
     bool keep_barcodes = false;
-    bool skip_posterior = false;
     bool randomize_output = false;
     bool pseudobulk_all_features = false;
     bool compute_residuals = false;
     bool cheap_feature_diagnostics = false;
-    int32_t posterior_dispersion_rank = 0;
+    bool unit_similarity_diagnostics = false;
+    bool full_model = false;
+    bool use_stored_dispersion = false;
+    int32_t dispersion_min_positive = 10;
+    int32_t dispersion_mu_bins = 32;
+    double dispersion_loess_span = 0.3;
+    double dispersion_delta_min = 1e-8;
+    double dispersion_delta_max = 1e4;
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
@@ -793,9 +839,8 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
       .add_option("seed", "Random seed", seed)
       .add_option("verbose", "Verbose level", verbose)
       .add_option("debug", "If >0, only process this many units", debug_)
-      .add_option("skip-posterior", "Skip local Gamma posterior output", skip_posterior)
-      .add_option("randomize-output", "Randomize document output order for downstream streaming clustering", randomize_output)
-      .add_option("posterior-dispersion-rank", "Rank of optional dispersion covariance sidecar; 0 keeps only the diagonal, <0 disables it", posterior_dispersion_rank);
+      .add_option("randomize-output", "Randomize document output order", randomize_output)
+      .add_option("use-stored-dispersion", "Use dispersion from the fitted state instead of estimating it in the transform data", use_stored_dispersion);
 
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
@@ -815,10 +860,18 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
 
     pl.add_option("max-iter", "Max iterations per document", maxIter)
       .add_option("mean-change-tol", "Convergence tolerance per document", mDelta)
+      .add_option("full-model", "Use every fitted model feature, treating missing input features as measured zeros", full_model)
       .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("feature-residuals", "Compute per-feature and per-unit residuals (backward compatibility)", compute_residuals)
       .add_option("residuals", "Compute per-feature and per-unit residuals", compute_residuals)
-      .add_option("feature-diagnostics-cheap", "Skip spool-dependent gain-adjusted feature residual and Pull diagnostics", cheap_feature_diagnostics);
+      .add_option("feature-diagnostics-cheap", "Skip spool-dependent gain-adjusted feature residual and Pull diagnostics", cheap_feature_diagnostics)
+      .add_option("unit-diagnostics-similarity", "Add cosine and similarity-adjusted entropy unit diagnostics", unit_similarity_diagnostics);
+
+    pl.add_option("dispersion-loess-span", "LOESS span for transform-data dispersion estimation", dispersion_loess_span)
+      .add_option("dispersion-min-positive", "Minimum positive cells for a raw transform-data dispersion estimate", dispersion_min_positive)
+      .add_option("dispersion-mu-bins", "Log-mean bins per feature during transform-data dispersion estimation", dispersion_mu_bins)
+      .add_option("dispersion-delta-min", "Lower bound for estimated inverse dispersion", dispersion_delta_min)
+      .add_option("dispersion-delta-max", "Upper bound for estimated inverse dispersion", dispersion_delta_max);
 
     try {
         pl.readArgs(argc, argv);
@@ -837,18 +890,48 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     if (cheap_feature_diagnostics && !compute_residuals) {
         error("--feature-diagnostics-cheap requires --residuals");
     }
+    if (unit_similarity_diagnostics && !compute_residuals) {
+        error("--unit-diagnostics-similarity requires --residuals");
+    }
+    if (dispersion_min_positive < 1 || dispersion_mu_bins < 1
+        || !std::isfinite(dispersion_loess_span)
+        || dispersion_loess_span <= 0.0 || dispersion_loess_span > 1.0
+        || !std::isfinite(dispersion_delta_min)
+        || !std::isfinite(dispersion_delta_max)
+        || dispersion_delta_min <= 0.0
+        || dispersion_delta_max < dispersion_delta_min) {
+        error("Invalid transform dispersion estimation options");
+    }
     std::mt19937 output_random_engine(static_cast<uint32_t>(seed));
-    const bool weights_active = !featureFile.empty() && icolWeight >= 0;
+    const bool transform_weights_provided =
+        !featureFile.empty() && icolWeight >= 0;
+    if (full_model && transform_weights_provided) {
+        error("--full-model cannot be combined with transform-time feature weights; "
+            "the fitted state weights are used");
+    }
     if (defaultWeight < 0.0) defaultWeight = -1.0;
 
-    const std::vector<std::string> modelFeatures =
-        GammaPoissonTopicModel::read_state_feature_names(stateFile);
+    std::unique_ptr<GammaPoissonTopicModel> loadedModel =
+        GammaPoissonTopicModel::load_state_deferred(
+            stateFile, seed, nThreads, verbose);
+    const std::vector<std::string>& stateFeatureNames =
+        loadedModel->get_feature_names();
+    const bool stateWeightsActive =
+        loadedModel->feature_weights_active();
+    const std::vector<double>& stateFeatureWeights =
+        loadedModel->get_feature_weight();
     HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
     const bool use_10x = initHexOrDgeInput(reader, dge_ptr, inFile, metaFile,
         dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, keep_barcodes);
-    if (!featureFile.empty()) {
-        if (weights_active) {
+    if (full_model && !featureFile.empty()) {
+        reader.readFeatureTotals(featureFile);
+        if (minCountFeature != 1 || !include_ftr_regex.empty()
+            || !exclude_ftr_regex.empty()) {
+            warning("--full-model ignores transform feature filtering options");
+        }
+    } else if (!featureFile.empty()) {
+        if (transform_weights_provided) {
             reader.setFeatureFilterAndWeights(featureFile, minCountFeature,
                 include_ftr_regex, exclude_ftr_regex, icolWeight, defaultWeight,
                 defaultWeight >= 0.0);
@@ -857,6 +940,80 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
         }
     }
 
+    std::vector<int32_t> keptModelFeatures;
+    std::vector<std::string> modelFeatures = stateFeatureNames;
+    const bool orderedFullPanel =
+        reader.features == stateFeatureNames;
+    bool allModelFeaturesPresent = full_model || orderedFullPanel;
+    if (!allModelFeaturesPresent) {
+        std::unordered_set<std::string> inputFeatureSet(
+            reader.features.begin(), reader.features.end());
+        allModelFeaturesPresent = std::all_of(
+            stateFeatureNames.begin(), stateFeatureNames.end(),
+            [&](const std::string& feature) {
+                return inputFeatureSet.find(feature) != inputFeatureSet.end();
+            });
+    }
+    const bool orderedFullUnweightedFastPath =
+        !transform_weights_provided
+        && orderedFullPanel
+        && !stateWeightsActive;
+    if (!orderedFullUnweightedFastPath) {
+        std::unordered_map<std::string, int32_t> stateFeatureIndex;
+        stateFeatureIndex.reserve(stateFeatureNames.size());
+        for (int32_t w = 0;
+                w < static_cast<int32_t>(stateFeatureNames.size()); ++w) {
+            const bool inserted =
+                stateFeatureIndex.emplace(stateFeatureNames[w], w).second;
+            if (!inserted) {
+                error("Duplicate feature %s in Gamma-Poisson state",
+                    stateFeatureNames[w].c_str());
+            }
+        }
+        const std::vector<double> requestedWeights =
+            reader.getFeatureWeights();
+        std::vector<double> storedInputWeights(reader.features.size(), 1.0);
+        std::vector<char> measuredStateFeature(stateFeatureNames.size(), 0);
+        for (size_t i = 0; i < reader.features.size(); ++i) {
+            const auto found = stateFeatureIndex.find(reader.features[i]);
+            if (found == stateFeatureIndex.end()) continue;
+            const int32_t w = found->second;
+            measuredStateFeature[w] = 1;
+            storedInputWeights[i] = stateWeightsActive
+                ? stateFeatureWeights[w] : 1.0;
+            if (transform_weights_provided) {
+                const double scale = std::max(
+                    {1.0, std::abs(requestedWeights[i]),
+                        std::abs(storedInputWeights[i])});
+                if (std::abs(requestedWeights[i] - storedInputWeights[i])
+                        > 1e-12 * scale) {
+                    error("Transform feature weight for %s (%.17g) conflicts with "
+                        "the fitted state weight (%.17g)",
+                        reader.features[i].c_str(), requestedWeights[i],
+                        storedInputWeights[i]);
+                }
+            }
+        }
+        if (!transform_weights_provided) {
+            reader.setFeatureWeights(storedInputWeights);
+        }
+        keptModelFeatures.reserve(stateFeatureNames.size());
+        modelFeatures.clear();
+        modelFeatures.reserve(stateFeatureNames.size());
+        for (int32_t w = 0;
+                w < static_cast<int32_t>(stateFeatureNames.size()); ++w) {
+            if (allModelFeaturesPresent || measuredStateFeature[w]) {
+                keptModelFeatures.push_back(w);
+                modelFeatures.push_back(stateFeatureNames[w]);
+            }
+        }
+        if (keptModelFeatures.empty()) {
+            error("No overlapping measured features found between input and "
+                "Gamma-Poisson state");
+        }
+    }
+
+    const bool weights_active = reader.hasFeatureWeights();
     const Mode pseudobulkMode =
         transform_pseudobulk::selectMode(pseudobulk_all_features, weights_active);
     std::unique_ptr<HexReader> rawReader;
@@ -866,8 +1023,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
         rawReader->clearFeatureWeights();
         retainedInputFeatures = rawReader->features;
     }
-    std::vector<std::string> modelFeaturesMutable = modelFeatures;
-    reader.setFeatureIndexRemap(modelFeaturesMutable, false);
+    reader.setFeatureIndexRemap(modelFeatures, false);
 
     std::string info_header;
     if (!use_10x) {
@@ -875,7 +1031,8 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     }
 
     GammaPoisson4Hex gp(reader, modal, verbose);
-    gp.initialize_transform(stateFile, seed, nThreads, verbose, maxIter, mDelta);
+    gp.initialize_transform(std::move(loadedModel), maxIter, mDelta,
+        keptModelFeatures);
 
     const int32_t M = gp.nFeatures();
     const int32_t K = gp.getNumTopics();
@@ -898,6 +1055,43 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
             static_cast<int32_t>(pseudobulkFeatureNames.size()), K);
     }
 
+    const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
+    const int32_t minCountInt =
+        minCount > 0 ? static_cast<int32_t>(std::ceil(minCount)) : 0;
+    if (!use_stored_dispersion) {
+        GammaPoissonDispersionOptions options;
+        options.min_positive = dispersion_min_positive;
+        options.mu_bins = dispersion_mu_bins;
+        options.loess_span = dispersion_loess_span;
+        options.delta_min = dispersion_delta_min;
+        options.delta_max = dispersion_delta_max;
+        gp.clearFeatureDispersion();
+        GammaPoissonDispersionResult estimated;
+        if (use_10x) {
+            DGEReader10X& dge = *dge_ptr;
+            const int32_t overlap =
+                dge.setFeatureIndexRemap(modelFeatures, false);
+            if (overlap == 0) {
+                error("No measured model features overlap with 10X input");
+            }
+            estimated = gp.estimateFeatureDispersion10X(options, dge,
+                batchSize, minCountInt, maxUnits);
+        } else {
+            estimated = gp.estimateFeatureDispersion(options, inFile,
+                batchSize, minCountInt, maxUnits);
+        }
+        const std::string dispersionPath = outPrefix + ".dispersion.tsv";
+        write_gamma_poisson_dispersion_diagnostics(
+            dispersionPath, gp.getFeatureNames(), estimated);
+        notice("Estimated transform-data dispersion from %d documents; "
+            "diagnostics written to %s",
+            estimated.n_documents, dispersionPath.c_str());
+    } else {
+        notice(gp.hasFeatureDispersion()
+            ? "Using per-feature dispersion stored in the fitted state"
+            : "Using the stored Poisson model (state has no feature dispersion)");
+    }
+
     const std::string resultsPath = outPrefix + ".results.tsv";
     std::ofstream results(resultsPath);
     if (!results) {
@@ -912,7 +1106,8 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     if (compute_residuals) {
         residualState =
             std::make_unique<ResidualState>(
-                gp, cheap_feature_diagnostics);
+                gp, cheap_feature_diagnostics,
+                unit_similarity_diagnostics);
         const std::string unitStatsPath =
             outPrefix + ".unit_stats.tsv";
         unitStats = std::make_unique<std::ofstream>(unitStatsPath);
@@ -921,61 +1116,19 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
                 unitStatsPath.c_str());
         }
         writeUnitIdHeader(*unitStats, use_10x, info_header);
-        *unitStats
-            << "total_count\tresidual\tcosine_sim\tentropy\tsh_lcr\tsh_q\n"
-            << std::fixed;
-    }
-
-    const uint64_t stateChecksum = gamma_poisson_state_checksum(stateFile);
-    std::unique_ptr<std::ofstream> posterior;
-    std::unique_ptr<GammaPoissonDispersionWriter> dispersion;
-    if (!skip_posterior) {
-        const GammaPoissonArtifactId posteriorId =
-            generate_gamma_poisson_artifact_id();
-        GammaPoissonArtifactId sidecarId;
-        if (gp.hasFeatureDispersion() && posterior_dispersion_rank >= 0) {
-            const int32_t actualRank = std::min(posterior_dispersion_rank, K);
-            sidecarId = generate_gamma_poisson_artifact_id();
-            dispersion = std::make_unique<GammaPoissonDispersionWriter>(
-                outPrefix + ".posterior-dispersion.bin", K, actualRank,
-                stateChecksum, sidecarId);
+        *unitStats << "total_count\tresidual\tentropy";
+        if (unit_similarity_diagnostics) {
+            *unitStats << "\tcosine_sim\tsh_lcr\tsh_q";
         }
-        const std::string posteriorPath = outPrefix + ".posterior.tsv";
-        posterior = std::make_unique<std::ofstream>(posteriorPath);
-        if (!*posterior) {
-            error("Error opening output file: %s for writing", posteriorPath.c_str());
-        }
-        *posterior << "##punkst_gamma_pois_posterior_v2\n";
-        *posterior << "##n_topics\t" << K << "\n";
-        *posterior << "##state_checksum\t" << stateChecksum << "\n";
-        *posterior << "##artifact_id\t"
-            << gamma_poisson_artifact_id_string(posteriorId) << "\n";
-        *posterior << "##row_order\t" << (randomize_output ? "randomized" : "input") << "\n";
-        if (!sidecarId.empty()) {
-            *posterior << "##dispersion_sidecar_id\t"
-                << gamma_poisson_artifact_id_string(sidecarId) << "\n";
-        }
-        writeUnitIdHeader(*posterior, use_10x, info_header);
-        *posterior << "gp_row\tgp_exposure";
-        const auto& topicNames = gp.get_topic_names();
-        for (int32_t k = 0; k < K; ++k) {
-            *posterior << "\tgp_shape_" << topicNames[k];
-        }
-        for (int32_t k = 0; k < K; ++k) {
-            *posterior << "\tgp_rate_" << topicNames[k];
-        }
-        *posterior << "\n" << std::scientific << std::setprecision(4);
-        notice("Gamma-Poisson local posterior will be written to %s", posteriorPath.c_str());
+        *unitStats << "\n" << std::fixed;
     }
 
     GammaPoisTransformBatchProcessor processor(gp, results, pseudobulk,
         specialPseudobulk, pseudobulkMode,
-        posterior.get(), dispersion.get(), stateChecksum,
-        unitStats.get(), residualState.get(), nThreads);
+        unitStats.get(), residualState.get(),
+        unit_similarity_diagnostics, nThreads);
     bool fileopen = true;
     int32_t processed = 0;
-    const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
-    const int32_t minCountInt = minCount > 0 ? static_cast<int32_t>(std::ceil(minCount)) : 0;
     TransformBatch batch;
 
     if (pseudobulkMode == Mode::Standard) {
@@ -1178,8 +1331,6 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     }
     processor.finalizeResiduals();
     results.close();
-    if (posterior) posterior->close();
-    if (dispersion) dispersion->close();
     if (unitStats) {
         unitStats->close();
         notice("Per-unit residuals written to %s",
@@ -1218,13 +1369,13 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
                 featureResidualPath.c_str());
         }
         featureResidualOut
-            << "Feature\tAbsDiff\tAbsDiffPerCount"
-            << "\tcount\tn_units\tlog2_gain"
-            << "\tmarginal_deviance\tconditional_deviance"
-            << "\ttopic_deviance\ttopic_leverage"
+            << "Feature\tabsDiff\tabsDiffRate"
+            << "\ttotCount\tnUnits\tlog2Gain"
+            << "\tmarginalDev\tconditionalDev"
+            << "\tfactorDrift\tdeletionTV"
             << (cheap_feature_diagnostics
-                ? "\tcook_score\n"
-                : "\tgain_adjusted_absdiff_per_count\tpull\tcook_score\n");
+                ? "\n"
+                : "\tadjAbsDiffRate\tpull\n");
         auto writeDiagnostic = [&](double value) {
             if (std::isnan(value)) {
                 featureResidualOut << "NA";
@@ -1232,7 +1383,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
                 featureResidualOut << (value < 0.0 ? "-inf" : "inf");
             } else {
                 featureResidualOut << std::scientific
-                    << std::setprecision(8) << value;
+                    << std::setprecision(4) << value;
             }
         };
         for (int32_t w = 0; w < M; ++w) {
@@ -1245,7 +1396,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
                 << "\t" << std::fixed << std::setprecision(3)
                 << difference
                 << "\t" << std::setprecision(6) << ratio
-                << "\t" << std::setprecision(6) << total
+                << "\t" << std::llround(total)
                 << "\t" << residualState->featureUnits[
                     static_cast<size_t>(w)] << "\t";
             writeDiagnostic(residualState->log2Gain(w));
@@ -1256,7 +1407,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
             featureResidualOut << "\t";
             writeDiagnostic(residualState->topicDeviance(w));
             featureResidualOut << "\t";
-            writeDiagnostic(residualState->topicLeverage(w));
+            writeDiagnostic(residualState->deletionTV(w));
             if (!cheap_feature_diagnostics) {
                 featureResidualOut << "\t";
                 writeDiagnostic(
@@ -1264,8 +1415,6 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
                 featureResidualOut << "\t";
                 writeDiagnostic(residualState->pull(w));
             }
-            featureResidualOut << "\t";
-            writeDiagnostic(residualState->cookScore(w));
             featureResidualOut << "\n";
         }
         featureResidualOut.close();

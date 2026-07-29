@@ -30,9 +30,11 @@ struct GammaPoissonDocumentPosterior {
     double exposure = 0.0;
 };
 
-struct GammaPoissonDispersionApproximation {
-    VectorXd residual_diagonal;
-    RowMajorMatrixXd factor;
+struct GammaPoissonStateFeatureInfo {
+    std::vector<std::string> names;
+    std::vector<double> training_count;
+    bool feature_weights_active = false;
+    std::vector<double> feature_weight;
 };
 
 class GammaPoissonTopicBase {
@@ -52,12 +54,20 @@ public:
     double get_size_factor() const { return size_factor_; }
     const std::vector<std::string>& get_topic_names();
     const std::vector<std::string>& get_feature_names() const { return feature_names_; }
+    const std::vector<double>& get_training_count() const {
+        return training_count_;
+    }
+    bool feature_weights_active() const { return feature_weights_active_; }
+    const std::vector<double>& get_feature_weight() const {
+        return feature_weight_;
+    }
     const RowMajorMatrixXd& get_model();
     RowMajorMatrixXd copy_model();
     void get_topic_abundance(std::vector<double>& weights) const;
     void sort_topics();
     void set_svb_parameters(int32_t max_iter, double tol);
     void set_nthreads(int32_t nThreads);
+    void prepare_inference_cache();
     void write_model(const std::string& outFile, const std::vector<std::string>& featureNames);
 
 protected:
@@ -94,12 +104,16 @@ protected:
     MatrixXd beta_kernel_; // centered exp(E[log beta]) by feature
     RowMajorMatrixXd model_phi_;
     bool model_cache_dirty_ = true;
+    bool inference_cache_ready_ = false;
     VectorXd topic_capacity_; // K, \sum_w E[\beta_{kw}]
     VectorXd xi_shape_; // W
     VectorXd xi_rate_;
     VectorXd topic_usage_;
     std::vector<std::string> topic_names_;
     std::vector<std::string> feature_names_;
+    std::vector<double> training_count_;
+    bool feature_weights_active_ = false;
+    std::vector<double> feature_weight_;
     std::mt19937 random_engine_;
     std::unique_ptr<tbb::global_control> tbb_ctrl_;
 };
@@ -118,6 +132,9 @@ public:
 
     explicit GammaPoissonTopicModel(const std::string& stateFile,
         int seed = std::random_device{}(), int32_t nThreads = 0, int32_t verbose = 0);
+    static std::unique_ptr<GammaPoissonTopicModel> load_state_deferred(
+        const std::string& stateFile, int seed = std::random_device{}(),
+        int32_t nThreads = 0, int32_t verbose = 0);
 
     void partial_fit(const std::vector<Document>& docs);
     RowMajorMatrixXd transform(DocumentView docs);
@@ -127,11 +144,12 @@ public:
         GammaPoissonDocumentPosterior& posterior) const;
     RowVectorXd normalized_topic_mean(
         const GammaPoissonDocumentPosterior& posterior) const;
-    void dispersion_covariance_approximation(const Document& doc,
-        const GammaPoissonDocumentPosterior& posterior, int32_t rank,
-        uint64_t seed, GammaPoissonDispersionApproximation& out) const;
     void sort_topics();
     void set_feature_dispersion(const std::vector<double>& tau);
+    void clear_feature_dispersion();
+    void set_training_calibration(const std::vector<double>& feature_counts,
+        const std::vector<double>& feature_weights, bool weights_active);
+    double restrict_features(const std::vector<int32_t>& kept_features);
     bool has_feature_dispersion() const { return has_dispersion_; }
     const VectorXd& get_topic_capacity() const { return topic_capacity_; }
     const MatrixXd& get_expected_beta() const { return e_beta_; }
@@ -140,8 +158,13 @@ public:
     void expected_observed_counts(const Document& doc, std::vector<double>& means) const;
     void write_state(const std::string& outFile, const std::vector<std::string>& featureNames);
     static std::vector<std::string> read_state_feature_names(const std::string& stateFile);
+    static GammaPoissonStateFeatureInfo read_state_feature_info(
+        const std::string& stateFile);
 
 private:
+    GammaPoissonTopicModel(const std::string& stateFile, int seed,
+        int32_t nThreads, int32_t verbose, bool defer_cache);
+
     struct LocalWorkspace {
         MatrixXd beta_kernel;
         MatrixXd beta_mean;
@@ -216,6 +239,7 @@ public:
         int32_t totalDocCount, double sizeFactor, bool symmetricNu, double nuMax,
         int32_t maxIter, double mDelta);
     void setFeatureDispersion(const std::vector<double>& tau);
+    void clearFeatureDispersion();
     GammaPoissonDispersionResult estimateFeatureDispersion(
         const GammaPoissonDispersionOptions& options, const std::string& inFile,
         int32_t batchSize, int32_t minCountTrain, int32_t maxUnits);
@@ -229,8 +253,12 @@ public:
         int32_t maxUnits);
     GammaPoissonDispersionResult estimateFeatureDispersion10X(
         const GammaPoissonDispersionOptions& options, int32_t batchSize, int32_t maxUnits);
-    void initialize_transform(const std::string& stateFile, int32_t seed,
-        int32_t nThreads, int32_t verbose, int32_t maxIter, double mDelta);
+    GammaPoissonDispersionResult estimateFeatureDispersion10X(
+        const GammaPoissonDispersionOptions& options, DGEReader10X& dge,
+        int32_t batchSize, int32_t minCount, int32_t maxUnits);
+    void initialize_transform(std::unique_ptr<GammaPoissonTopicModel> model,
+        int32_t maxIter, double mDelta,
+        const std::vector<int32_t>& keptFeatures = {});
     double resolveSizeFactor(double requested) const;
     void writeModelToFile(const std::string& outFile);
     void writeStateToFile(const std::string& outFile);
@@ -242,11 +270,9 @@ public:
     const std::vector<std::string>& get_topic_names() override;
     void do_partial_fit(const std::vector<Document>& batch) override;
     MatrixXd do_transform(DocumentView batch) override;
+    RowMajorMatrixXd transformMeans(DocumentView batch) const;
     void transformWithPosteriors(DocumentView batch, RowMajorMatrixXd& topics,
         std::vector<GammaPoissonDocumentPosterior>& posteriors) const;
-    void dispersionCovarianceApproximation(const Document& doc,
-        const GammaPoissonDocumentPosterior& posterior, int32_t rank,
-        uint64_t seed, GammaPoissonDispersionApproximation& out) const;
     bool hasFeatureDispersion() const;
     const VectorXd& getTopicCapacity() const;
     const MatrixXd& getExpectedBeta() const;

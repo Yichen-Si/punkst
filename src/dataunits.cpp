@@ -896,6 +896,40 @@ void HexReader::clearFeatureWeights() {
     }
 }
 
+std::vector<double> HexReader::getFeatureWeights() const {
+    if (!weightFeatures) {
+        return std::vector<double>(static_cast<size_t>(nFeatures), 1.0);
+    }
+    if (weights.size() != static_cast<size_t>(nFeatures)) {
+        error("%s: feature weight vector has %zu values but reader has %d features",
+            __func__, weights.size(), nFeatures);
+    }
+    return weights;
+}
+
+void HexReader::setFeatureWeights(const std::vector<double>& featureWeights) {
+    if (featureWeights.size() != static_cast<size_t>(nFeatures)) {
+        error("%s: input weights size (%zu) does not match nFeatures (%d)",
+            __func__, featureWeights.size(), nFeatures);
+    }
+    bool any_nonunit = false;
+    for (double weight : featureWeights) {
+        if (!std::isfinite(weight) || weight < 0.0) {
+            error("%s: feature weights must be non-negative and finite", __func__);
+        }
+        any_nonunit = any_nonunit || weight != 1.0;
+    }
+    weights = featureWeights;
+    weightFeatures = any_nonunit;
+    defaultWeight = 1.0;
+    if (readFullSums && feature_sums_raw.size() == weights.size()) {
+        feature_sums.resize(weights.size());
+        for (size_t i = 0; i < weights.size(); ++i) {
+            feature_sums[i] = feature_sums_raw[i] * weights[i];
+        }
+    }
+}
+
 double HexReader::rawCountFor(uint32_t feature, double count, bool countWeighted) const {
     if (!weightFeatures || !countWeighted) {
         return count;
@@ -923,6 +957,56 @@ void HexReader::setFeatureSums(const std::vector<double>& sums, bool read_full) 
     }
     readFullSums = read_full;
     accumulate_sums = false;
+}
+
+void HexReader::readFeatureTotals(
+    const std::string& featureFile, bool require_all) {
+    std::unordered_map<std::string, size_t> feature_index;
+    feature_index.reserve(features.size());
+    for (size_t i = 0; i < features.size(); ++i) {
+        if (!feature_index.emplace(features[i], i).second) {
+            error("%s: duplicate current feature name: %s",
+                __func__, features[i].c_str());
+        }
+    }
+    TextLineReader input(featureFile);
+    std::vector<double> sums(features.size(), 0.0);
+    std::vector<uint8_t> seen(features.size(), 0);
+    std::vector<std::string> tokens;
+    std::string line;
+    int32_t overlap = 0;
+    while (input.getline(line)) {
+        std::string_view stripped = strip_str(line);
+        if (stripped.empty() || stripped.front() == '#') continue;
+        split(tokens, "\t ", stripped, UINT_MAX, true, true, true);
+        if (tokens.empty()) continue;
+        const auto found = feature_index.find(tokens[0]);
+        if (found == feature_index.end()) continue;
+        const size_t idx = found->second;
+        if (seen[idx]) {
+            error("%s: duplicate feature %s in %s",
+                __func__, tokens[0].c_str(), featureFile.c_str());
+        }
+        double count = -1.0;
+        if (tokens.size() <= 1 || !str2double(tokens[1], count)
+            || !std::isfinite(count) || count < 0.0) {
+            error("%s: feature %s in %s requires a non-negative total count "
+                "in column 1", __func__, tokens[0].c_str(), featureFile.c_str());
+        }
+        sums[idx] = count;
+        seen[idx] = 1;
+        ++overlap;
+    }
+    if (overlap == 0) {
+        error("%s: no feature totals in %s overlap the input feature dictionary",
+            __func__, featureFile.c_str());
+    }
+    const bool complete = overlap == nFeatures;
+    if (require_all && !complete) {
+        error("%s: %s provides totals for %d of %d input features",
+            __func__, featureFile.c_str(), overlap, nFeatures);
+    }
+    setFeatureSums(sums, complete);
 }
 
 int32_t HexReader::readAll(std::vector<Document>& docs, std::vector<std::string>& info, const std::string &inFile, int32_t minCount, bool add2sums, int32_t limit, int32_t modal) {

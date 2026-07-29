@@ -15,6 +15,8 @@
 #include "Eigen/Core"
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 using RowMajorMatrixXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 template<typename Scalar>
@@ -465,10 +467,13 @@ Eigen::MatrixXd pairwiseCosineSimilarityRows(const Eigen::MatrixBase<Derived>& X
 
 template <typename Derived>
 ThetaEntropyStats computeThetaEntropyStats(const Eigen::MatrixBase<Derived>& theta,
-                                           const Eigen::MatrixXd& similarity)
+        const Eigen::MatrixXd& similarity, Eigen::Index blockRows = 64)
 {
     if (theta.cols() != similarity.rows() || similarity.rows() != similarity.cols()) {
         throw std::invalid_argument("theta/similarity dimensions do not match");
+    }
+    if (blockRows <= 0) {
+        throw std::invalid_argument("entropy block size must be positive");
     }
 
     const Eigen::Index N = theta.rows();
@@ -478,31 +483,70 @@ ThetaEntropyStats computeThetaEntropyStats(const Eigen::MatrixBase<Derived>& the
     stats.sh_lcr = Eigen::VectorXd::Zero(N);
     stats.sh_q = Eigen::VectorXd::Zero(N);
 
-    for (Eigen::Index i = 0; i < N; ++i) {
-        const double thetaSum = theta.row(i).sum();
-        if (thetaSum <= 0.0) {
-            continue;
-        }
-        const Eigen::RowVectorXd prob = theta.row(i) / thetaSum;
-        const Eigen::RowVectorXd ztheta = prob * similarity;
-        double entropy = 0.0;
-        double shLcr = 0.0;
-        double thetaZtheta = 0.0;
-        for (Eigen::Index k = 0; k < K; ++k) {
-            const double pk = prob(k);
-            if (pk <= 0.0) {
-                continue;
+    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, N, blockRows),
+        [&](const tbb::blocked_range<Eigen::Index>& range) {
+            const Eigen::Index nRows = range.end() - range.begin();
+            RowMajorMatrixXd projected(nRows, K);
+            projected.noalias() =
+                theta.middleRows(range.begin(), nRows) * similarity;
+            for (Eigen::Index local = 0; local < nRows; ++local) {
+                const Eigen::Index i = range.begin() + local;
+                const double thetaSum = theta.row(i).sum();
+                if (thetaSum <= 0.0) {
+                    continue;
+                }
+                const double inverseSum = 1.0 / thetaSum;
+                double entropy = 0.0;
+                double shLcr = 0.0;
+                double thetaZtheta = 0.0;
+                for (Eigen::Index k = 0; k < K; ++k) {
+                    const double pk = theta(i, k) * inverseSum;
+                    if (pk <= 0.0) {
+                        continue;
+                    }
+                    const double rawZk =
+                        projected(local, k) * inverseSum;
+                    const double zk = std::max(
+                        rawZk,
+                        std::numeric_limits<double>::min());
+                    entropy -= pk * std::log(pk);
+                    shLcr -= pk * std::log(zk);
+                    thetaZtheta += pk * rawZk;
+                }
+                stats.entropy(i) = entropy;
+                stats.sh_lcr(i) = shLcr;
+                stats.sh_q(i) = 1.0 - thetaZtheta;
             }
-            entropy -= pk * std::log(pk);
-            const double zk = std::max(ztheta(k), std::numeric_limits<double>::min());
-            shLcr -= pk * std::log(zk);
-            thetaZtheta += pk * ztheta(k);
-        }
-        stats.entropy(i) = entropy;
-        stats.sh_lcr(i) = shLcr;
-        stats.sh_q(i) = 1.0 - thetaZtheta;
-    }
+        });
     return stats;
+}
+
+template <typename Derived>
+Eigen::VectorXd rowQuadraticForms(const Eigen::MatrixBase<Derived>& values,
+        const Eigen::MatrixXd& gram, Eigen::Index blockRows = 64)
+{
+    if (values.cols() != gram.rows() || gram.rows() != gram.cols()) {
+        throw std::invalid_argument("values/Gram dimensions do not match");
+    }
+    if (blockRows <= 0) {
+        throw std::invalid_argument("quadratic-form block size must be positive");
+    }
+
+    const Eigen::Index N = values.rows();
+    const Eigen::Index K = values.cols();
+    Eigen::VectorXd out = Eigen::VectorXd::Zero(N);
+    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, N, blockRows),
+        [&](const tbb::blocked_range<Eigen::Index>& range) {
+            const Eigen::Index nRows = range.end() - range.begin();
+            RowMajorMatrixXd projected(nRows, K);
+            projected.noalias() =
+                values.middleRows(range.begin(), nRows) * gram;
+            for (Eigen::Index local = 0; local < nRows; ++local) {
+                const Eigen::Index i = range.begin() + local;
+                out(i) = projected.row(local).dot(values.row(i));
+            }
+        });
+    return out;
 }
 
 

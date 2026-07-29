@@ -151,14 +151,6 @@ set(CLUSTERING_SOURCE_FILES
     src/clustering/uac_stream.cpp
     src/clustering/low_rank_covariance.hpp
     src/clustering/low_rank_covariance.cpp
-    src/clustering/gamma_pois_cluster.hpp
-    src/clustering/gamma_pois_cluster.cpp
-    src/clustering/gamma_pois_cluster_internal.hpp
-    src/clustering/gamma_pois_cluster_candidates.cpp
-    src/clustering/gamma_pois_cluster_expectation.cpp
-    src/clustering/gamma_pois_cluster_covariance.cpp
-    src/clustering/gamma_pois_cluster_fit.cpp
-    src/clustering/gamma_pois_cluster_svi.cpp
 )
 
 set(SOURCE_FILES
@@ -195,8 +187,6 @@ set(SOURCE_FILES
     src/gamma_pois_dispersion.cpp
     ${CLUSTERING_CORE_SOURCE_FILES}
     ${CLUSTERING_SOURCE_FILES}
-    src/gamma_pois_posterior_io.hpp
-    src/gamma_pois_posterior_io.cpp
     src/hdp.hpp
     src/hdp.cpp
     src/topic_svb.hpp
@@ -215,7 +205,6 @@ set(SOURCE_FILES
     script/fit_lda.cpp
     script/fit_gampois.cpp
     script/transform_gampois.cpp
-    script/cluster_gampois.cpp
     script/uac.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp

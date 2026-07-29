@@ -3,6 +3,7 @@
 #include "clustering/uac_stream.hpp"
 #include "clustering/low_rank_covariance.hpp"
 #include "gamma_pois_topic.hpp"
+#include "lda.hpp"
 #include "punkst.h"
 #include "count_cache_options.hpp"
 
@@ -23,6 +24,8 @@
 #include <string>
 
 int32_t cmdGammaPoisTransform(int argc, char** argv);
+int32_t cmdGammaPoisFit(int argc, char** argv);
+int32_t cmdLDATransform(int argc, char** argv);
 
 namespace {
 
@@ -186,9 +189,16 @@ std::vector<double> state_record(
     throw std::runtime_error("Missing Gamma-Poisson state record: " + name);
 }
 
+bool is_four_decimal_scientific(const std::string& value) {
+    const size_t decimal = value.find('.');
+    const size_t exponent = value.find_first_of("eE");
+    return decimal != std::string::npos
+        && exponent == decimal + 5;
+}
+
 void test_gamma_poisson_parameterization() {
     constexpr int32_t topics = 7;
-    constexpr int32_t features = 11;
+    constexpr int32_t features = 32;
     constexpr int32_t documents = 100;
     constexpr double mean_count = 250.0;
     constexpr double beta_shape = 0.3;
@@ -298,7 +308,7 @@ void test_gamma_poisson_parameterization() {
         false, -1.0, &feature_sums);
     const std::filesystem::path state_path =
         std::filesystem::temp_directory_path()
-        / "punkst_gamma_pois_v3_test.state.tsv";
+        / "punkst_gamma_pois_v4_test.state.tsv";
     std::vector<std::string> feature_names(features);
     for (int32_t w = 0; w < features; ++w) {
         feature_names[w] = "feature_" + std::to_string(w);
@@ -307,8 +317,11 @@ void test_gamma_poisson_parameterization() {
         std::vector<double>(features, 4.0));
     eb_model.write_state(state_path.string(), feature_names);
     const std::string state = read_text(state_path);
-    require(state.rfind("#punkst_gamma_pois_state_v3\n", 0) == 0,
-        "Gamma-Poisson did not write state v3");
+    require(state.rfind("#punkst_gamma_pois_state_v4\n", 0) == 0,
+        "Gamma-Poisson did not write state v4");
+    require(state.find("#feature_weights_active\t0\n") != std::string::npos
+            && state.find("\tfeature_weight") == std::string::npos,
+        "Unweighted Gamma-Poisson state stored a feature-weight column");
     const std::vector<double> nu_shape_values =
         state_record(state, "nu_shape");
     const std::vector<double> nu_rate_values =
@@ -330,13 +343,45 @@ void test_gamma_poisson_parameterization() {
         state_path.string(), 23, 1, 0);
     require(reloaded.get_n_topics() == topics
         && reloaded.get_n_features() == features,
-        "Gamma-Poisson v3 state did not round-trip");
+        "Gamma-Poisson v4 state did not round-trip");
+    TestGammaPoissonTopicModel subset_model(
+        state_path.string(), 24, 1, 0);
+    const std::vector<int32_t> subset_features{0, 2, 5, 8};
+    const MatrixXd full_beta_mean = subset_model.beta_means();
+    const std::vector<double> full_training_count =
+        subset_model.get_training_count();
+    const double full_size_factor = subset_model.get_size_factor();
+    double expected_panel_count = 0.0;
+    const double full_training_total = std::accumulate(
+        full_training_count.begin(), full_training_count.end(), 0.0);
+    VectorXd expected_subset_capacity = VectorXd::Zero(topics);
+    for (int32_t w : subset_features) {
+        expected_panel_count += full_training_count[w];
+        expected_subset_capacity += full_beta_mean.col(w);
+    }
+    const double expected_panel_fraction =
+        expected_panel_count / full_training_total;
+    const double restricted_fraction =
+        subset_model.restrict_features(subset_features);
+    require(std::abs(restricted_fraction - expected_panel_fraction) <= 1e-12
+            && std::abs(subset_model.get_size_factor()
+                    - full_size_factor * expected_panel_fraction) <= 1e-10,
+        "Gamma-Poisson subset model has an incorrect exposure calibration");
+    require(subset_model.get_n_features()
+            == static_cast<int32_t>(subset_features.size())
+            && (subset_model.topic_capacities()
+                    - expected_subset_capacity).cwiseAbs().maxCoeff() <= 1e-10,
+        "Gamma-Poisson subset model retained full-panel topic capacity");
+    require(subset_model.get_feature_dispersion().size()
+            == static_cast<int32_t>(subset_features.size()),
+        "Gamma-Poisson subset model did not slice feature dispersion");
     adaptive_prior_model.set_nthreads(2);
     adaptive_prior_floor_model.set_nthreads(2);
     model.set_nthreads(2);
     extreme_model.set_nthreads(2);
     eb_model.set_nthreads(2);
     reloaded.set_nthreads(2);
+    subset_model.set_nthreads(2);
 
     const std::filesystem::path input_path =
         std::filesystem::temp_directory_path()
@@ -347,8 +392,11 @@ void test_gamma_poisson_parameterization() {
     const std::filesystem::path output_prefix =
         std::filesystem::temp_directory_path()
         / "punkst_gamma_pois_residual_test";
+    std::filesystem::remove(output_prefix.string() + ".posterior.tsv");
+    std::filesystem::remove(
+        output_prefix.string() + ".posterior-dispersion.bin");
     write_text(input_path,
-        "doc_0\t3\t9\t0 4\t2 3\t5 2\n"
+        "doc_0\t4\t10\t0 4\t2 3\t5 2\t8 1\n"
         "doc_1\t2\t11\t1 5\t7 6\n");
     std::ostringstream metadata;
     metadata << "{\"n_units\":2,\"n_modalities\":1,\"n_features\":"
@@ -362,6 +410,56 @@ void test_gamma_poisson_parameterization() {
     metadata << "}}";
     write_text(metadata_path, metadata.str());
 
+    const std::filesystem::path fit_feature_path =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_fit_totals_test.features.tsv";
+    const std::filesystem::path fit_output_prefix =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_fit_totals_test";
+    std::vector<double> fit_feature_counts(features, 0.0);
+    fit_feature_counts[0] = 4.0;
+    fit_feature_counts[1] = 5.0;
+    fit_feature_counts[2] = 3.0;
+    fit_feature_counts[5] = 2.0;
+    fit_feature_counts[7] = 6.0;
+    fit_feature_counts[8] = 1.0;
+    std::ostringstream fit_features;
+    for (int32_t w = 0; w < features; ++w) {
+        fit_features << feature_names[w] << "\t"
+            << fit_feature_counts[w] << "\n";
+    }
+    write_text(fit_feature_path, fit_features.str());
+    std::vector<std::string> fit_args{
+        "gamma-pois-fit",
+        "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(),
+        "--features", fit_feature_path.string(),
+        "--min-count-per-feature", "0",
+        "--out-prefix", fit_output_prefix.string(),
+        "--n-topics", "2",
+        "--n-epochs", "1",
+        "--min-count-train", "1",
+        "--threads", "1",
+        "--seed", "47",
+    };
+    std::vector<char*> fit_argv;
+    for (std::string& argument : fit_args) {
+        fit_argv.push_back(argument.data());
+    }
+    require(cmdGammaPoisFit(
+            static_cast<int32_t>(fit_argv.size()), fit_argv.data()) == 0,
+        "Custom Gamma-Poisson fit with feature totals failed");
+    const std::string fitted_state_path =
+        fit_output_prefix.string() + ".state.tsv";
+    const GammaPoissonStateFeatureInfo fitted_state_info =
+        GammaPoissonTopicModel::read_state_feature_info(fitted_state_path);
+    TestGammaPoissonTopicModel fitted_state_model(
+        fitted_state_path, 48, 1, 0);
+    require(fitted_state_info.training_count == fit_feature_counts
+            && !fitted_state_info.feature_weights_active
+            && std::abs(fitted_state_model.get_size_factor() - 10.5) <= 1e-12,
+        "Custom Gamma-Poisson fit did not store raw totals and used size factor");
+
     std::vector<std::string> transform_args{
         "gamma-pois-transform",
         "--in-data", input_path.string(),
@@ -369,10 +467,12 @@ void test_gamma_poisson_parameterization() {
         "--in-state", state_path.string(),
         "--out-prefix", output_prefix.string(),
         "--min-count", "1",
-        "--minibatch-size", "2",
+        "--minibatch-size", "1",
         "--threads", "2",
-        "--skip-posterior",
+        "--seed", "43",
+        "--use-stored-dispersion",
         "--residuals",
+        "--unit-diagnostics-similarity",
     };
     std::vector<char*> transform_argv;
     for (std::string& argument : transform_args) {
@@ -382,11 +482,163 @@ void test_gamma_poisson_parameterization() {
             static_cast<int32_t>(transform_argv.size()),
             transform_argv.data()) == 0,
         "Gamma-Poisson residual transform failed");
+    require(!std::filesystem::exists(
+                output_prefix.string() + ".posterior.tsv")
+            && !std::filesystem::exists(
+                output_prefix.string() + ".posterior-dispersion.bin"),
+        "Gamma-Poisson transform wrote a removed posterior artifact");
+
+    const std::filesystem::path subset_feature_path =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_subset_test.features.tsv";
+    const std::filesystem::path subset_output_prefix =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_subset_test";
+    std::ostringstream subset_features_stream;
+    for (int32_t w : subset_features) {
+        subset_features_stream << feature_names[w] << "\t100\n";
+    }
+    write_text(subset_feature_path, subset_features_stream.str());
+    std::vector<std::string> subset_transform_args{
+        "gamma-pois-transform",
+        "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(),
+        "--in-state", state_path.string(),
+        "--out-prefix", subset_output_prefix.string(),
+        "--features", subset_feature_path.string(),
+        "--min-count", "1",
+        "--threads", "2",
+        "--use-stored-dispersion",
+    };
+    std::vector<char*> subset_transform_argv;
+    for (std::string& argument : subset_transform_args) {
+        subset_transform_argv.push_back(argument.data());
+    }
+    require(cmdGammaPoisTransform(
+            static_cast<int32_t>(subset_transform_argv.size()),
+            subset_transform_argv.data()) == 0,
+        "Gamma-Poisson partial-panel transform failed");
+    std::istringstream subset_pseudobulk(read_text(
+        subset_output_prefix.string() + ".pseudobulk.tsv"));
+    std::string subset_row;
+    require(static_cast<bool>(std::getline(subset_pseudobulk, subset_row)),
+        "Gamma-Poisson partial-panel pseudobulk header is missing");
+    for (int32_t w : subset_features) {
+        require(static_cast<bool>(std::getline(subset_pseudobulk, subset_row))
+                && subset_row.rfind(feature_names[w] + "\t", 0) == 0,
+            "Gamma-Poisson partial-panel pseudobulk has incorrect features");
+    }
+    require(!std::getline(subset_pseudobulk, subset_row),
+        "Gamma-Poisson partial-panel pseudobulk retained unmeasured features");
+
+    const std::filesystem::path full_model_output_prefix =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_full_model_test";
+    std::vector<std::string> full_model_args{
+        "gamma-pois-transform",
+        "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(),
+        "--in-state", state_path.string(),
+        "--out-prefix", full_model_output_prefix.string(),
+        "--features", subset_feature_path.string(),
+        "--full-model",
+        "--min-count", "1",
+        "--threads", "2",
+        "--seed", "43",
+        "--use-stored-dispersion",
+    };
+    std::vector<char*> full_model_argv;
+    for (std::string& argument : full_model_args) {
+        full_model_argv.push_back(argument.data());
+    }
+    require(cmdGammaPoisTransform(
+            static_cast<int32_t>(full_model_argv.size()),
+            full_model_argv.data()) == 0,
+        "Gamma-Poisson explicit full-model transform failed");
+    require(read_text(output_prefix.string() + ".results.tsv")
+            == read_text(full_model_output_prefix.string() + ".results.tsv")
+            && read_text(output_prefix.string() + ".pseudobulk.tsv")
+            == read_text(full_model_output_prefix.string() + ".pseudobulk.tsv"),
+        "--full-model unexpectedly filtered the model with --features");
+
+    const std::filesystem::path reordered_input_path =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_reordered_test.units.tsv";
+    const std::filesystem::path reordered_metadata_path =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_reordered_test.meta.json";
+    const std::filesystem::path reordered_output_prefix =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_reordered_test";
+    write_text(reordered_input_path,
+        "doc_0\t4\t10\t31 4\t29 3\t26 2\t23 1\n"
+        "doc_1\t2\t11\t30 5\t24 6\n");
+    std::ostringstream reordered_metadata;
+    reordered_metadata
+        << "{\"n_units\":2,\"n_modalities\":1,\"n_features\":"
+        << features
+        << ",\"offset_data\":1,\"header_info\":[\"document\"],"
+        << "\"dictionary\":{";
+    for (int32_t w = 0; w < features; ++w) {
+        if (w > 0) reordered_metadata << ",";
+        reordered_metadata << "\"feature_" << w << "\":"
+            << features - 1 - w;
+    }
+    reordered_metadata << "}}";
+    write_text(reordered_metadata_path, reordered_metadata.str());
+    std::vector<std::string> reordered_args{
+        "gamma-pois-transform",
+        "--in-data", reordered_input_path.string(),
+        "--in-meta", reordered_metadata_path.string(),
+        "--in-state", state_path.string(),
+        "--out-prefix", reordered_output_prefix.string(),
+        "--min-count", "1",
+        "--threads", "2",
+        "--seed", "43",
+        "--use-stored-dispersion",
+    };
+    std::vector<char*> reordered_argv;
+    for (std::string& argument : reordered_args) {
+        reordered_argv.push_back(argument.data());
+    }
+    require(cmdGammaPoisTransform(
+            static_cast<int32_t>(reordered_argv.size()),
+            reordered_argv.data()) == 0,
+        "Gamma-Poisson reordered full-panel transform failed");
+    require(read_text(output_prefix.string() + ".results.tsv")
+            == read_text(reordered_output_prefix.string() + ".results.tsv")
+            && read_text(output_prefix.string() + ".pseudobulk.tsv")
+            == read_text(reordered_output_prefix.string() + ".pseudobulk.tsv"),
+        "Gamma-Poisson full-panel detection depends on input feature order");
+
+    const std::filesystem::path estimated_output_prefix =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_transform_dispersion_test";
+    std::vector<std::string> estimated_transform_args{
+        "gamma-pois-transform",
+        "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(),
+        "--in-state", state_path.string(),
+        "--out-prefix", estimated_output_prefix.string(),
+        "--min-count", "1",
+        "--dispersion-min-positive", "1",
+        "--threads", "2",
+    };
+    std::vector<char*> estimated_transform_argv;
+    for (std::string& argument : estimated_transform_args) {
+        estimated_transform_argv.push_back(argument.data());
+    }
+    require(cmdGammaPoisTransform(
+            static_cast<int32_t>(estimated_transform_argv.size()),
+            estimated_transform_argv.data()) == 0
+            && std::filesystem::exists(
+                estimated_output_prefix.string() + ".dispersion.tsv"),
+        "Gamma-Poisson transform-data dispersion estimation failed");
 
     std::vector<Document> residual_docs(2);
-    residual_docs[0].ids = {0, 2, 5};
-    residual_docs[0].cnts = {4.0, 3.0, 2.0};
-    residual_docs[0].raw_ct_tot = residual_docs[0].ct_tot = 9.0;
+    residual_docs[0].ids = {0, 2, 5, 8};
+    residual_docs[0].cnts = {4.0, 3.0, 2.0, 1.0};
+    residual_docs[0].raw_ct_tot = residual_docs[0].ct_tot = 10.0;
     residual_docs[1].ids = {1, 7};
     residual_docs[1].cnts = {5.0, 6.0};
     residual_docs[1].raw_ct_tot = residual_docs[1].ct_tot = 11.0;
@@ -409,6 +661,7 @@ void test_gamma_poisson_parameterization() {
     observed(0, 0) = 4.0;
     observed(0, 2) = 3.0;
     observed(0, 5) = 2.0;
+    observed(0, 8) = 1.0;
     observed(1, 1) = 5.0;
     observed(1, 7) = 6.0;
 
@@ -417,7 +670,7 @@ void test_gamma_poisson_parameterization() {
     std::string row;
     std::getline(unit_stats, row);
     require(row.find(
-            "total_count\tresidual\tcosine_sim\tentropy\tsh_lcr\tsh_q")
+            "total_count\tresidual\tentropy\tcosine_sim\tsh_lcr\tsh_q")
             != std::string::npos,
         "Gamma-Poisson unit residual header is incorrect");
     for (int32_t d = 0; d < 2; ++d) {
@@ -434,7 +687,7 @@ void test_gamma_poisson_parameterization() {
             / (expected.row(d).norm() * observed.row(d).norm());
         require(std::abs(std::stod(fields[2]) - dense_residual) < 0.011,
             "Gamma-Poisson unit residual differs from dense reference");
-        require(std::abs(std::stod(fields[3]) - dense_cosine) < 1.1e-4,
+        require(std::abs(std::stod(fields[4]) - dense_cosine) < 1.1e-4,
             "Gamma-Poisson cosine similarity differs from dense reference");
     }
 
@@ -442,23 +695,21 @@ void test_gamma_poisson_parameterization() {
         output_prefix.string() + ".feature_residuals.tsv"));
     std::getline(feature_stats, row);
     const std::string feature_stats_header =
-        "Feature\tAbsDiff\tAbsDiffPerCount\tcount\tn_units\tlog2_gain"
-        "\tmarginal_deviance\tconditional_deviance\ttopic_deviance"
-        "\ttopic_leverage\tgain_adjusted_absdiff_per_count\tpull\tcook_score";
+        "Feature\tabsDiff\tabsDiffRate\ttotCount\tnUnits\tlog2Gain"
+        "\tmarginalDev\tconditionalDev\tfactorDrift"
+        "\tdeletionTV\tadjAbsDiffRate\tpull";
     require(row == feature_stats_header,
         "Gamma-Poisson feature residual header is incorrect");
     const RowVectorXd dense_feature_residual =
         (expected - observed).cwiseAbs().colwise().sum();
     const MatrixXd& beta_mean = reloaded.beta_means();
     VectorXd topic_exposure = VectorXd::Zero(topics);
-    VectorXd cook_baseline = VectorXd::Zero(topics);
     MatrixXd allocated = MatrixXd::Zero(topics, features);
     VectorXd counts = VectorXd::Zero(features);
     VectorXd conditional_log_terms = VectorXd::Zero(features);
-    VectorXd leverage_numerators = VectorXd::Zero(features);
+    VectorXd deletion_numerators = VectorXd::Zero(features);
     VectorXd adjusted_numerators = VectorXd::Zero(features);
     VectorXd pull_numerators = VectorXd::Zero(features);
-    VectorXd cook_corrections = VectorXd::Zero(features);
     std::vector<int64_t> positive_units(features, 0);
     for (int32_t d = 0; d < 2; ++d) {
         const GammaPoissonDocumentPosterior& posterior =
@@ -467,10 +718,6 @@ void test_gamma_poisson_parameterization() {
             posterior.shape.array()
             / posterior.rate.array().max(1e-12);
         topic_exposure.noalias() += posterior.exposure * theta;
-        cook_baseline.array() +=
-            posterior.exposure * posterior.exposure
-            * theta.array().square()
-            / posterior.shape.array().max(1e-12);
         for (size_t j = 0; j < residual_docs[d].ids.size(); ++j) {
             const int32_t w =
                 static_cast<int32_t>(residual_docs[d].ids[j]);
@@ -493,22 +740,23 @@ void test_gamma_poisson_parameterization() {
                 (log_allocation.array() - max_log).exp();
             allocation /= allocation.sum();
             allocated.col(w).noalias() += count * allocation;
-            const double tv = 0.5
-                * (allocation
+            VectorXd deleted_topic(topics);
+            const double tau = reloaded.get_feature_dispersion()(w);
+            const double epsilon =
+                (tau + count) / (tau + mu);
+            for (int32_t k = 0; k < topics; ++k) {
+                deleted_topic(k) =
+                    (posterior.shape(k) - count * allocation(k))
+                    / (posterior.rate(k)
+                        - posterior.exposure * epsilon
+                            * beta_mean(k, w))
+                    * reloaded.topic_capacities()(k);
+            }
+            deleted_topic /= deleted_topic.sum();
+            deletion_numerators(w) += count * 0.5
+                * (deleted_topic
                     - topic_probabilities.row(d).transpose())
                     .cwiseAbs().sum();
-            leverage_numerators(w) += count * tv;
-
-            const double epsilon = (4.0 + count) / (4.0 + mu);
-            for (int32_t k = 0; k < topics; ++k) {
-                const double baseline = posterior.exposure
-                    * theta(k) * beta_mean(k, w);
-                const double actual =
-                    count * allocation(k) - epsilon * baseline;
-                cook_corrections(w) +=
-                    (actual * actual - baseline * baseline)
-                    / posterior.shape(k);
-            }
         }
     }
     const VectorXd predicted = beta_mean.transpose() * topic_exposure;
@@ -540,34 +788,35 @@ void test_gamma_poisson_parameterization() {
             pull_numerators(w) += difference * tv;
         }
     }
-    const VectorXd cook_scores = 0.5
-        * (beta_mean.array().square().matrix().transpose()
-            * cook_baseline + cook_corrections).cwiseMax(0.0);
-
     std::vector<std::vector<std::string>> full_feature_rows;
     for (int32_t w = 0; w < features; ++w) {
         require(static_cast<bool>(std::getline(feature_stats, row)),
             "Gamma-Poisson feature residual row is missing");
         std::vector<std::string> fields;
         split(fields, "\t", row);
-        require(fields.size() == 13
+        require(fields.size() == 12
             && fields[0] == feature_names[w],
             "Gamma-Poisson feature residual row is malformed");
+        for (size_t j = 5; j < fields.size(); ++j) {
+            if (fields[j] == "NA" || fields[j] == "-inf"
+                    || fields[j] == "inf") {
+                continue;
+            }
+            require(is_four_decimal_scientific(fields[j]),
+                "Gamma-Poisson diagnostic is not formatted as %.4e");
+        }
         full_feature_rows.push_back(fields);
         require(std::abs(std::stod(fields[1])
                 - dense_feature_residual(w)) < 0.0011,
             "Gamma-Poisson feature residual differs from dense reference");
-        require(std::abs(std::stod(fields[3]) - counts(w)) < 1e-6
+        require(fields[3] == std::to_string(std::llround(counts(w)))
                 && std::stoll(fields[4]) == positive_units[w],
             "Gamma-Poisson feature support differs from dense reference");
-        const double cook_reference = cook_scores(w);
-        require(std::abs(std::stod(fields[12]) - cook_reference)
-                < 1e-7 * std::max(1.0, cook_reference),
-            "Gamma-Poisson Cook score differs from dense reference");
         if (counts(w) == 0.0) {
             require(fields[5] == "-inf"
                     && std::abs(std::stod(fields[6])
-                        - 2.0 * predicted(w)) < 1e-7
+                        - 2.0 * predicted(w))
+                        < 6e-5 * std::max(1.0, 2.0 * predicted(w))
                     && std::stod(fields[7]) == 0.0
                     && std::stod(fields[8]) == 0.0
                     && fields[9] == "NA"
@@ -591,18 +840,23 @@ void test_gamma_poisson_parameterization() {
                 topic_deviance += 2.0 * a * std::log(a / e);
             }
         }
-        require(std::abs(std::stod(fields[5]) - std::log2(gains(w))) < 1e-7
-                && std::abs(std::stod(fields[6]) - marginal) < 1e-7
-                && std::abs(std::stod(fields[7]) - conditional) < 1e-7
-                && std::abs(std::stod(fields[8]) - topic_deviance) < 1e-7,
+        require(std::abs(std::stod(fields[5]) - std::log2(gains(w)))
+                    < 6e-5 * std::max(1.0, std::abs(std::log2(gains(w))))
+                && std::abs(std::stod(fields[6]) - marginal)
+                    < 6e-5 * std::max(1.0, std::abs(marginal))
+                && std::abs(std::stod(fields[7]) - conditional)
+                    < 6e-5 * std::max(1.0, std::abs(conditional))
+                && std::abs(std::stod(fields[8]) - topic_deviance)
+                    < 6e-5 * std::max(1.0, std::abs(topic_deviance)),
             "Gamma-Poisson deviance diagnostics differ from dense reference");
         require(std::abs(std::stod(fields[9])
-                    - leverage_numerators(w) / counts(w)) < 1e-8
+                    - deletion_numerators(w) / counts(w)) < 6e-5
                 && std::abs(std::stod(fields[10])
-                    - adjusted_numerators(w) / counts(w)) < 1e-8
+                    - adjusted_numerators(w) / counts(w)) < 6e-5
                 && std::abs(std::stod(fields[11])
-                    - pull_numerators(w) / counts(w)) < 1e-8,
-            "Gamma-Poisson leverage or Pull differs from dense reference");
+                    - pull_numerators(w) / counts(w)) < 6e-5,
+            "Gamma-Poisson deletion influence or Pull differs "
+            "from dense reference");
     }
 
     const std::filesystem::path cheap_output_prefix =
@@ -622,9 +876,9 @@ void test_gamma_poisson_parameterization() {
         cheap_output_prefix.string() + ".feature_residuals.tsv"));
     std::getline(cheap_feature_stats, row);
     const std::string cheap_feature_stats_header =
-        "Feature\tAbsDiff\tAbsDiffPerCount\tcount\tn_units\tlog2_gain"
-        "\tmarginal_deviance\tconditional_deviance\ttopic_deviance"
-        "\ttopic_leverage\tcook_score";
+        "Feature\tabsDiff\tabsDiffRate\ttotCount\tnUnits\tlog2Gain"
+        "\tmarginalDev\tconditionalDev\tfactorDrift"
+        "\tdeletionTV";
     require(row == cheap_feature_stats_header,
         "Gamma-Poisson cheap feature residual header changed");
     for (int32_t w = 0; w < features; ++w) {
@@ -632,11 +886,10 @@ void test_gamma_poisson_parameterization() {
             "Gamma-Poisson cheap feature residual row is missing");
         std::vector<std::string> fields;
         split(fields, "\t", row);
-        require(fields.size() == 11,
+        require(fields.size() == 10,
             "Gamma-Poisson cheap feature residual row is malformed");
         for (size_t j = 0; j < fields.size(); ++j) {
-            const size_t full_index = j < 10 ? j : 12;
-            require(fields[j] == full_feature_rows[w][full_index],
+            require(fields[j] == full_feature_rows[w][j],
                 "Gamma-Poisson cheap diagnostics changed a cheap field");
         }
     }
@@ -648,11 +901,22 @@ void test_gamma_poisson_parameterization() {
         std::filesystem::temp_directory_path()
         / "punkst_gamma_pois_residual_weighted_test";
     std::ostringstream weights;
+    std::vector<double> stored_weights(features, 1.0);
     for (int32_t w = 0; w < features; ++w) {
         const double weight = w == 0 ? 0.5 : (w == 1 ? 2.0 : 1.0);
+        stored_weights[w] = weight;
         weights << feature_names[w] << "\t100\t" << weight << "\n";
     }
     write_text(weight_path, weights.str());
+    eb_model.set_training_calibration(
+        feature_sums, stored_weights, true);
+    eb_model.write_state(state_path.string(), feature_names);
+    const GammaPoissonStateFeatureInfo weighted_state_info =
+        GammaPoissonTopicModel::read_state_feature_info(state_path.string());
+    require(weighted_state_info.feature_weights_active
+            && weighted_state_info.feature_weight == stored_weights
+            && weighted_state_info.training_count == feature_sums,
+        "Weighted Gamma-Poisson state did not preserve counts and weights");
     std::vector<std::string> weighted_args{
         "gamma-pois-transform",
         "--in-data", input_path.string(),
@@ -664,7 +928,8 @@ void test_gamma_poisson_parameterization() {
         "--min-count", "1",
         "--minibatch-size", "2",
         "--threads", "2",
-        "--skip-posterior",
+        "--seed", "37",
+        "--use-stored-dispersion",
         "--residuals",
         "--feature-diagnostics-cheap",
     };
@@ -676,6 +941,44 @@ void test_gamma_poisson_parameterization() {
             static_cast<int32_t>(weighted_argv.size()),
             weighted_argv.data()) == 0,
         "Gamma-Poisson weighted residual transform failed");
+    std::istringstream weighted_unit_stats(read_text(
+        weighted_output_prefix.string() + ".unit_stats.tsv"));
+    std::getline(weighted_unit_stats, row);
+    require(row.find("total_count\tresidual\tentropy")
+                != std::string::npos
+            && row.find("cosine_sim") == std::string::npos
+            && row.find("sh_lcr") == std::string::npos
+            && row.find("sh_q") == std::string::npos,
+        "Gamma-Poisson default unit diagnostics include similarity fields");
+    const std::filesystem::path stored_weight_output_prefix =
+        std::filesystem::temp_directory_path()
+        / "punkst_gamma_pois_residual_stored_weight_test";
+    std::vector<std::string> stored_weight_args{
+        "gamma-pois-transform",
+        "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(),
+        "--in-state", state_path.string(),
+        "--out-prefix", stored_weight_output_prefix.string(),
+        "--min-count", "1",
+        "--minibatch-size", "2",
+        "--threads", "2",
+        "--seed", "37",
+        "--use-stored-dispersion",
+    };
+    std::vector<char*> stored_weight_argv;
+    for (std::string& argument : stored_weight_args) {
+        stored_weight_argv.push_back(argument.data());
+    }
+    require(cmdGammaPoisTransform(
+            static_cast<int32_t>(stored_weight_argv.size()),
+            stored_weight_argv.data()) == 0,
+        "Gamma-Poisson stored feature-weight transform failed");
+    require(read_text(weighted_output_prefix.string() + ".results.tsv")
+            == read_text(stored_weight_output_prefix.string() + ".results.tsv")
+            && read_text(weighted_output_prefix.string() + ".pseudobulk.tsv")
+            == read_text(stored_weight_output_prefix.string()
+                + ".pseudobulk.tsv"),
+        "Stored Gamma-Poisson feature weights do not reproduce explicit weights");
     std::istringstream weighted_feature_stats(read_text(
         weighted_output_prefix.string() + ".feature_residuals.tsv"));
     std::getline(weighted_feature_stats, row);
@@ -688,18 +991,43 @@ void test_gamma_poisson_parameterization() {
         split(fields, "\t", row);
         const double expected_count = counts(w)
             * (w == 0 ? 0.5 : (w == 1 ? 2.0 : 1.0));
-        require(fields.size() == 11
-                && std::abs(std::stod(fields[3]) - expected_count) < 1e-6,
+        require(fields.size() == 10
+                && fields[3]
+                    == std::to_string(std::llround(expected_count)),
             "Gamma-Poisson diagnostics did not use effective weighted counts");
     }
 
     std::filesystem::remove(input_path);
     std::filesystem::remove(metadata_path);
+    std::filesystem::remove(fit_feature_path);
+    std::filesystem::remove(fit_output_prefix.string() + ".model.tsv");
+    std::filesystem::remove(fitted_state_path);
     std::filesystem::remove(output_prefix.string() + ".results.tsv");
     std::filesystem::remove(output_prefix.string() + ".pseudobulk.tsv");
     std::filesystem::remove(output_prefix.string() + ".unit_stats.tsv");
     std::filesystem::remove(
         output_prefix.string() + ".feature_residuals.tsv");
+    std::filesystem::remove(subset_feature_path);
+    std::filesystem::remove(
+        subset_output_prefix.string() + ".results.tsv");
+    std::filesystem::remove(
+        subset_output_prefix.string() + ".pseudobulk.tsv");
+    std::filesystem::remove(
+        full_model_output_prefix.string() + ".results.tsv");
+    std::filesystem::remove(
+        full_model_output_prefix.string() + ".pseudobulk.tsv");
+    std::filesystem::remove(reordered_input_path);
+    std::filesystem::remove(reordered_metadata_path);
+    std::filesystem::remove(
+        reordered_output_prefix.string() + ".results.tsv");
+    std::filesystem::remove(
+        reordered_output_prefix.string() + ".pseudobulk.tsv");
+    std::filesystem::remove(
+        estimated_output_prefix.string() + ".results.tsv");
+    std::filesystem::remove(
+        estimated_output_prefix.string() + ".pseudobulk.tsv");
+    std::filesystem::remove(
+        estimated_output_prefix.string() + ".dispersion.tsv");
     std::filesystem::remove(cheap_output_prefix.string() + ".results.tsv");
     std::filesystem::remove(cheap_output_prefix.string() + ".pseudobulk.tsv");
     std::filesystem::remove(cheap_output_prefix.string() + ".unit_stats.tsv");
@@ -714,12 +1042,16 @@ void test_gamma_poisson_parameterization() {
         weighted_output_prefix.string() + ".unit_stats.tsv");
     std::filesystem::remove(
         weighted_output_prefix.string() + ".feature_residuals.tsv");
+    std::filesystem::remove(
+        stored_weight_output_prefix.string() + ".results.tsv");
+    std::filesystem::remove(
+        stored_weight_output_prefix.string() + ".pseudobulk.tsv");
     std::filesystem::remove(state_path);
 
     const std::filesystem::path stale_path =
         std::filesystem::temp_directory_path()
-        / "punkst_gamma_pois_v2_test.state.tsv";
-    write_text(stale_path, "#punkst_gamma_pois_state_v2\n");
+        / "punkst_gamma_pois_v3_test.state.tsv";
+    write_text(stale_path, "#punkst_gamma_pois_state_v3\n");
     bool rejected_stale_state = false;
     try {
         static_cast<void>(
@@ -731,7 +1063,377 @@ void test_gamma_poisson_parameterization() {
     }
     std::filesystem::remove(stale_path);
     require(rejected_stale_state,
-        "Gamma-Poisson v2 state was not rejected with refit guidance");
+        "Gamma-Poisson v3 state was not rejected with refit guidance");
+}
+
+void test_lda_feature_diagnostics() {
+    constexpr int32_t topics = 2;
+    constexpr int32_t features = 16;
+    constexpr int32_t seed = 31;
+    const std::filesystem::path base =
+        std::filesystem::temp_directory_path()
+        / "punkst_lda_feature_diagnostics_test";
+    const std::filesystem::path modelPath =
+        base.string() + ".model.tsv";
+    const std::filesystem::path inputPath =
+        base.string() + ".units.tsv";
+    const std::filesystem::path metadataPath =
+        base.string() + ".meta.json";
+    const std::filesystem::path fullPrefix =
+        base.string() + ".full";
+    const std::filesystem::path cheapPrefix =
+        base.string() + ".cheap";
+    const std::filesystem::path weightedPrefix =
+        base.string() + ".weighted";
+    const std::filesystem::path weightPath =
+        base.string() + ".features.tsv";
+
+    RowMajorMatrixXd lambda =
+        RowMajorMatrixXd::Constant(topics, features, 0.5);
+    lambda(0, 0) = 8.0;
+    lambda(0, 1) = 2.0;
+    lambda(0, 2) = 1.0;
+    lambda(1, 0) = 1.0;
+    lambda(1, 1) = 2.0;
+    lambda(1, 2) = 7.0;
+    std::ostringstream modelText;
+    modelText << "Feature\tTopic0\tTopic1\n";
+    for (int32_t w = 0; w < features; ++w) {
+        modelText << "feature_" << w << '\t'
+                  << lambda(0, w) << '\t' << lambda(1, w) << '\n';
+    }
+    write_text(modelPath, modelText.str());
+    write_text(inputPath,
+        "doc_0\t4\t10\t0 6\t1 2\t2 1\t3 1\n"
+        "doc_1\t2\t8\t1 1\t2 7\n"
+        "doc_2\t2\t3\t0 1\t2 2\n");
+    std::ostringstream metadataText;
+    metadataText
+        << "{\"n_units\":3,\"n_modalities\":1,\"n_features\":"
+        << features
+        << ",\"offset_data\":1,\"header_info\":[\"document\"],"
+           "\"dictionary\":{";
+    for (int32_t w = 0; w < features; ++w) {
+        if (w > 0) metadataText << ',';
+        metadataText << "\"feature_" << w << "\":" << w;
+    }
+    metadataText << "}}";
+    write_text(metadataPath, metadataText.str());
+
+    auto runTransform = [&](const std::filesystem::path& prefix, bool cheap,
+            int32_t threads = 1, bool weighted = false,
+            bool similarityDiagnostics = false) {
+        std::vector<std::string> args{
+            "lda-transform",
+            "--in-data", inputPath.string(),
+            "--in-meta", metadataPath.string(),
+            "--in-model", modelPath.string(),
+            "--out-prefix", prefix.string(),
+            "--min-count", "1",
+            "--minibatch-size", "2",
+            "--threads", std::to_string(threads),
+            "--seed", std::to_string(seed),
+            "--max-iter", "200",
+            "--mean-change-tol", "1e-10",
+            "--residuals",
+        };
+        if (cheap) {
+            args.push_back("--feature-diagnostics-cheap");
+        }
+        if (similarityDiagnostics) {
+            args.push_back("--unit-diagnostics-similarity");
+        }
+        if (weighted) {
+            args.push_back("--features");
+            args.push_back(weightPath.string());
+            args.push_back("--icol-weight");
+            args.push_back("2");
+        }
+        std::vector<char*> argv;
+        for (std::string& argument : args) {
+            argv.push_back(argument.data());
+        }
+        require(cmdLDATransform(
+                static_cast<int32_t>(argv.size()), argv.data()) == 0,
+            "LDA feature diagnostic transform failed");
+    };
+    runTransform(fullPrefix, false, 1, false, true);
+
+    std::vector<Document> docs(3);
+    docs[0].ids = {0, 1, 2, 3};
+    docs[0].cnts = {6.0, 2.0, 1.0, 1.0};
+    docs[0].raw_ct_tot = docs[0].ct_tot = 10.0;
+    docs[1].ids = {1, 2};
+    docs[1].cnts = {1.0, 7.0};
+    docs[1].raw_ct_tot = docs[1].ct_tot = 8.0;
+    docs[2].ids = {0, 2};
+    docs[2].cnts = {1.0, 2.0};
+    docs[2].raw_ct_tot = docs[2].ct_tot = 3.0;
+
+    RowMajorMatrixXd gamma;
+    double alpha = 0.0;
+    {
+        RowMajorMatrixXd referenceLambda = lambda;
+        LatentDirichletAllocation reference(
+            referenceLambda, seed, 1, 0, InferenceType::SVB);
+        reference.set_svb_parameters(200, 1e-10);
+        gamma = reference.transform_gamma(DocumentView(docs));
+        alpha = reference.get_doc_topic_prior();
+    }
+    RowMajorMatrixXd theta = gamma;
+    for (int32_t d = 0; d < theta.rows(); ++d) {
+        theta.row(d) /= theta.row(d).sum();
+    }
+    const RowMajorMatrixXd beta = rowNormalize(lambda);
+    const MatrixXd betaKernel = dirichlet_expectation_2d(lambda);
+    RowMajorMatrixXd observed =
+        RowMajorMatrixXd::Zero(docs.size(), features);
+    RowMajorMatrixXd expected(docs.size(), features);
+    MatrixXd allocated = MatrixXd::Zero(topics, features);
+    VectorXd counts = VectorXd::Zero(features);
+    VectorXd conditionalLogTerms = VectorXd::Zero(features);
+    VectorXd deletionNumerators = VectorXd::Zero(features);
+    VectorXd adjustedNumerators = VectorXd::Zero(features);
+    VectorXd pullNumerators = VectorXd::Zero(features);
+    VectorXd topicExposure = VectorXd::Zero(topics);
+    std::vector<int64_t> positiveUnits(features, 0);
+    std::vector<std::vector<VectorXd>> allocations(docs.size());
+    for (int32_t d = 0; d < static_cast<int32_t>(docs.size()); ++d) {
+        const double total = docs[d].get_sum();
+        expected.row(d) = total * theta.row(d) * beta;
+        topicExposure.noalias() += total * theta.row(d).transpose();
+        VectorXd thetaKernel(topics);
+        for (int32_t k = 0; k < topics; ++k) {
+            thetaKernel(k) = std::exp(psi(gamma(d, k) + alpha));
+        }
+        allocations[d].resize(docs[d].ids.size());
+        for (size_t j = 0; j < docs[d].ids.size(); ++j) {
+            const int32_t w = static_cast<int32_t>(docs[d].ids[j]);
+            const double count = docs[d].cnts[j];
+            observed(d, w) = count;
+            counts(w) += count;
+            ++positiveUnits[w];
+            conditionalLogTerms(w) += count
+                * (std::log(count) - std::log(expected(d, w)));
+            VectorXd allocation =
+                thetaKernel.array() * betaKernel.col(w).array();
+            allocation /= allocation.sum();
+            allocations[d][j] = allocation;
+            allocated.col(w).noalias() += count * allocation;
+            VectorXd deletedTopic =
+                gamma.row(d).transpose() - count * allocation;
+            deletedTopic = deletedTopic.cwiseMax(0.0);
+            const double deletedTotal = deletedTopic.sum();
+            if (deletedTotal > 0.0) {
+                deletedTopic /= deletedTotal;
+            } else {
+                deletedTopic.setConstant(
+                    1.0 / static_cast<double>(topics));
+            }
+            deletionNumerators(w) += count * 0.5
+                * (deletedTopic - theta.row(d).transpose())
+                    .cwiseAbs().sum();
+        }
+    }
+    const VectorXd predicted = beta.transpose() * topicExposure;
+    const VectorXd gain = counts.array() / predicted.array();
+    for (int32_t d = 0; d < static_cast<int32_t>(docs.size()); ++d) {
+        for (size_t j = 0; j < docs[d].ids.size(); ++j) {
+            const int32_t w = static_cast<int32_t>(docs[d].ids[j]);
+            const double difference = std::abs(
+                docs[d].cnts[j] - gain(w) * expected(d, w));
+            const double tv = 0.5
+                * (allocations[d][j] - theta.row(d).transpose())
+                    .cwiseAbs().sum();
+            adjustedNumerators(w) += difference;
+            pullNumerators(w) += difference * tv;
+        }
+    }
+
+    std::istringstream unitStats(read_text(
+        fullPrefix.string() + ".unit_stats.tsv"));
+    const MatrixXd topicSimilarity =
+        pairwiseCosineSimilarityRows(beta);
+    std::string row;
+    std::getline(unitStats, row);
+    require(row.find(
+            "total_count\tresidual\tentropy\tcosine_sim\tsh_lcr\tsh_q")
+            != std::string::npos,
+        "LDA unit residual header is incorrect");
+    for (int32_t d = 0; d < static_cast<int32_t>(docs.size()); ++d) {
+        require(static_cast<bool>(std::getline(unitStats, row)),
+            "LDA unit residual row is missing");
+        std::vector<std::string> fields;
+        split(fields, "\t", row);
+        const double residual =
+            (expected.row(d) - observed.row(d)).cwiseAbs().sum();
+        const double cosine = expected.row(d).dot(observed.row(d))
+            / (expected.row(d).norm() * observed.row(d).norm());
+        const RowVectorXd ztheta =
+            theta.row(d) * topicSimilarity;
+        double entropy = 0.0;
+        double shLcr = 0.0;
+        double thetaZtheta = 0.0;
+        for (int32_t k = 0; k < topics; ++k) {
+            const double probability = theta(d, k);
+            if (probability <= 0.0) continue;
+            entropy -= probability * std::log(probability);
+            shLcr -= probability * std::log(std::max(
+                ztheta(k), std::numeric_limits<double>::min()));
+            thetaZtheta += probability * ztheta(k);
+        }
+        require(fields.size() == 7
+                && std::abs(std::stod(fields[2]) - residual) < 0.011
+                && std::abs(std::stod(fields[3]) - entropy) < 1.1e-4
+                && std::abs(std::stod(fields[4]) - cosine) < 1.1e-4
+                && std::abs(std::stod(fields[5]) - shLcr) < 1.1e-4
+                && std::abs(std::stod(fields[6])
+                    - (1.0 - thetaZtheta)) < 1.1e-4,
+            "LDA unit residual differs from dense reference");
+    }
+    std::istringstream featureStats(read_text(
+        fullPrefix.string() + ".feature_residuals.tsv"));
+    std::getline(featureStats, row);
+    require(row ==
+        "Feature\tabsDiff\tabsDiffRate\ttotCount\tnUnits\tlog2Gain"
+        "\tmarginalDev\tconditionalDev\tfactorDrift"
+        "\tdeletionTV\tadjAbsDiffRate\tpull",
+        "LDA feature diagnostic header is incorrect");
+    const RowVectorXd denseAbsDiff =
+        (expected - observed).cwiseAbs().colwise().sum();
+    std::vector<std::vector<std::string>> fullRows;
+    for (int32_t w = 0; w < features; ++w) {
+        require(static_cast<bool>(std::getline(featureStats, row)),
+            "LDA feature diagnostic row is missing");
+        std::vector<std::string> fields;
+        split(fields, "\t", row);
+        require(fields.size() == 12
+                && fields[0] == "feature_" + std::to_string(w),
+            "LDA feature diagnostic row is malformed");
+        for (size_t j = 5; j < fields.size(); ++j) {
+            if (fields[j] == "NA" || fields[j] == "-inf"
+                    || fields[j] == "inf") {
+                continue;
+            }
+            require(is_four_decimal_scientific(fields[j]),
+                "LDA diagnostic is not formatted as %.4e");
+        }
+        fullRows.push_back(fields);
+        require(std::abs(std::stod(fields[1]) - denseAbsDiff(w)) < 0.0011,
+            "LDA feature residual differs from dense reference");
+        require(fields[3] == std::to_string(std::llround(counts(w)))
+                && std::stoll(fields[4]) == positiveUnits[w],
+            "LDA feature support differs from dense reference");
+        if (counts(w) == 0.0) {
+            require(fields[5] == "-inf"
+                    && std::abs(std::stod(fields[6])
+                        - 2.0 * predicted(w))
+                        < 6e-5 * std::max(1.0, 2.0 * predicted(w))
+                    && std::stod(fields[7]) == 0.0
+                    && std::stod(fields[8]) == 0.0
+                    && fields[9] == "NA"
+                    && fields[10] == "NA"
+                    && fields[11] == "NA",
+                "LDA zero-support diagnostics are incorrect");
+            continue;
+        }
+        const double marginal = 2.0
+            * (counts(w) * std::log(counts(w) / predicted(w))
+                - (counts(w) - predicted(w)));
+        const double conditional = 2.0
+            * (conditionalLogTerms(w) - counts(w) * std::log(gain(w)));
+        double topicDeviance = 0.0;
+        for (int32_t k = 0; k < topics; ++k) {
+            if (allocated(k, w) <= 0.0) continue;
+            const double topicExpected =
+                gain(w) * beta(k, w) * topicExposure(k);
+            topicDeviance += 2.0 * allocated(k, w)
+                * std::log(allocated(k, w) / topicExpected);
+        }
+        const std::array<double, 7> references{
+            std::log2(gain(w)),
+            marginal,
+            conditional,
+            std::max(0.0, topicDeviance),
+            deletionNumerators(w) / counts(w),
+            adjustedNumerators(w) / counts(w),
+            pullNumerators(w) / counts(w),
+        };
+        for (size_t j = 0; j < references.size(); ++j) {
+            require(std::abs(std::stod(fields[j + 5]) - references[j])
+                    < 6e-5 * std::max(1.0, std::abs(references[j])),
+                "LDA feature diagnostic differs from dense reference");
+        }
+    }
+
+    runTransform(cheapPrefix, true);
+    std::istringstream cheapUnitStats(read_text(
+        cheapPrefix.string() + ".unit_stats.tsv"));
+    std::getline(cheapUnitStats, row);
+    require(row.find("total_count\tresidual\tentropy")
+                != std::string::npos
+            && row.find("cosine_sim") == std::string::npos
+            && row.find("sh_lcr") == std::string::npos
+            && row.find("sh_q") == std::string::npos,
+        "LDA default unit diagnostics include similarity fields");
+    std::istringstream cheapStats(read_text(
+        cheapPrefix.string() + ".feature_residuals.tsv"));
+    std::getline(cheapStats, row);
+    require(row ==
+        "Feature\tabsDiff\tabsDiffRate\ttotCount\tnUnits\tlog2Gain"
+        "\tmarginalDev\tconditionalDev\tfactorDrift\tdeletionTV",
+        "LDA cheap feature diagnostic header is incorrect");
+    for (int32_t w = 0; w < features; ++w) {
+        require(static_cast<bool>(std::getline(cheapStats, row)),
+            "LDA cheap feature diagnostic row is missing");
+        std::vector<std::string> fields;
+        split(fields, "\t", row);
+        require(fields.size() == 10,
+            "LDA cheap feature diagnostic row has wrong width");
+        for (size_t j = 0; j < fields.size(); ++j) {
+            require(fields[j] == fullRows[w][j],
+                "LDA cheap diagnostics differ from full diagnostics");
+        }
+    }
+
+    std::ostringstream weightText;
+    for (int32_t w = 0; w < features; ++w) {
+        const double weight = w == 0 ? 0.5 : (w == 1 ? 2.0 : 1.0);
+        weightText << "feature_" << w << "\t10\t" << weight << '\n';
+    }
+    write_text(weightPath, weightText.str());
+    runTransform(weightedPrefix, true, 2, true);
+    std::istringstream weightedStats(read_text(
+        weightedPrefix.string() + ".feature_residuals.tsv"));
+    std::getline(weightedStats, row);
+    VectorXd weightedCounts = VectorXd::Zero(features);
+    weightedCounts(0) = 3.5;
+    weightedCounts(1) = 6.0;
+    weightedCounts(2) = 10.0;
+    weightedCounts(3) = 1.0;
+    for (int32_t w = 0; w < features; ++w) {
+        require(static_cast<bool>(std::getline(weightedStats, row)),
+            "LDA weighted feature diagnostic row is missing");
+        std::vector<std::string> fields;
+        split(fields, "\t", row);
+        require(fields.size() == 10
+                && fields[3]
+                    == std::to_string(std::llround(weightedCounts[w])),
+            "LDA diagnostics did not use effective weighted counts");
+    }
+
+    for (const std::filesystem::path& prefix :
+            {fullPrefix, cheapPrefix, weightedPrefix}) {
+        std::filesystem::remove(prefix.string() + ".results.tsv");
+        std::filesystem::remove(prefix.string() + ".pseudobulk.tsv");
+        std::filesystem::remove(prefix.string() + ".unit_stats.tsv");
+        std::filesystem::remove(
+            prefix.string() + ".feature_residuals.tsv");
+    }
+    std::filesystem::remove(modelPath);
+    std::filesystem::remove(inputPath);
+    std::filesystem::remove(metadataPath);
+    std::filesystem::remove(weightPath);
 }
 
 uac::Basis test_basis() {
@@ -4617,6 +5319,8 @@ int32_t test(int32_t argc, char** argv) {
         }
         notice("Running Gamma-Poisson parameterization tests");
         test_gamma_poisson_parameterization();
+        notice("Running LDA feature diagnostic tests");
+        test_lda_feature_diagnostics();
         notice("Running UAC transform tests");
         test_transforms();
         notice("Running heterogeneous UAC simulation tests");

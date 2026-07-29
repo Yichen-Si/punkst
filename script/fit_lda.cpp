@@ -63,6 +63,8 @@ int32_t runDelegatedTransform(const std::string& modelFile,
         int32_t modal,
         int32_t debugN,
         bool computeResiduals,
+        bool cheapFeatureDiagnostics,
+        bool unitSimilarityDiagnostics,
         bool pseudobulkAllFeatures,
         int32_t topkOnly) {
     std::vector<std::string> args;
@@ -108,6 +110,12 @@ int32_t runDelegatedTransform(const std::string& modelFile,
     if (computeResiduals) {
         appendFlag(args, "residuals");
     }
+    if (cheapFeatureDiagnostics) {
+        appendFlag(args, "feature-diagnostics-cheap");
+    }
+    if (unitSimilarityDiagnostics) {
+        appendFlag(args, "unit-diagnostics-similarity");
+    }
     if (pseudobulkAllFeatures) {
         appendFlag(args, "pseudobulk-all-features");
     }
@@ -140,6 +148,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double defaultWeight = -1.0;
     bool transform = false;
     bool computeResiduals = false;
+    bool cheapFeatureDiagnostics = false;
+    bool unitSimilarityDiagnostics = false;
     bool pseudobulk_all_features = false;
     bool sort_topics = false;
     bool reproducible_init = false;
@@ -170,6 +180,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("sort-topics", "Sort topics by weight after training", sort_topics)
       .add_option("residuals", "Compute residual-based transform summaries in .unit_meta.tsv", computeResiduals)
       .add_option("feature-residuals", "Compute residual-based transform summaries in .unit_meta.tsv", computeResiduals)
+      .add_option("feature-diagnostics-cheap", "Skip spool-dependent gain-adjusted feature residual and Pull diagnostics", cheapFeatureDiagnostics)
+      .add_option("unit-diagnostics-similarity", "Add cosine and similarity-adjusted entropy unit diagnostics", unitSimilarityDiagnostics)
       .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
 
@@ -237,6 +249,12 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         count_cache_options.mode, count_cache_options.memory_budget);
     if (topk_only == 0) {
         error("--topk-only must be a positive integer");
+    }
+    if (cheapFeatureDiagnostics && !computeResiduals) {
+        error("--feature-diagnostics-cheap requires --residuals");
+    }
+    if (unitSimilarityDiagnostics && !computeResiduals) {
+        error("--unit-diagnostics-similarity requires --residuals");
     }
     if (seed <= 0) {
         seed = std::random_device{}();
@@ -431,6 +449,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
                 dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
                 include_ftr_regex, exclude_ftr_regex, defaultWeight, icolWeight,
                 maxIter, mDelta, nThreads, modal, debug_, computeResiduals,
+                cheapFeatureDiagnostics, unitSimilarityDiagnostics,
                 pseudobulk_all_features, topk_only);
         }
         if (pseudobulk_all_features) {

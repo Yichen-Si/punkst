@@ -4,8 +4,10 @@
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
+#include <cstdio>
 #include <iterator>
 #include <cmath>
+#include <limits>
 #include <numeric>
 
 #include <tbb/blocked_range.h>
@@ -91,19 +93,141 @@ void applyWeights(std::vector<Document>& docs, LDA4Hex& lda) {
     }
 }
 
+struct PullRecord {
+    uint32_t feature = 0;
+    double observed = 0.0;
+    double mean = 0.0;
+    double totalVariation = 0.0;
+};
+
+class PullSpool {
+public:
+    explicit PullSpool(bool enabled) : enabled_(enabled) {
+        if (enabled_) {
+            file_ = std::tmpfile();
+            if (!file_) {
+                error("Unable to create temporary feature diagnostic spool; "
+                    "use --feature-diagnostics-cheap to disable spool-dependent statistics");
+            }
+        }
+    }
+
+    ~PullSpool() {
+        if (file_) {
+            std::fclose(file_);
+        }
+    }
+
+    PullSpool(const PullSpool&) = delete;
+    PullSpool& operator=(const PullSpool&) = delete;
+
+    bool enabled() const {
+        return enabled_;
+    }
+
+    void append(const std::vector<PullRecord>& records) {
+        if (!enabled_ || records.empty()) return;
+        if (std::fwrite(records.data(), sizeof(PullRecord), records.size(), file_)
+                != records.size()) {
+            error("Error writing temporary feature diagnostic spool");
+        }
+    }
+
+    void accumulate(const VectorXd& gain, VectorXd& adjustedResidual,
+            VectorXd& pull) {
+        if (!enabled_) return;
+        if (std::fflush(file_) != 0 || std::fseek(file_, 0, SEEK_SET) != 0) {
+            error("Error rewinding temporary feature diagnostic spool");
+        }
+        std::vector<PullRecord> buffer(4096);
+        while (true) {
+            const size_t n = std::fread(
+                buffer.data(), sizeof(PullRecord), buffer.size(), file_);
+            for (size_t i = 0; i < n; ++i) {
+                const PullRecord& record = buffer[i];
+                if (record.feature >= static_cast<uint32_t>(gain.size())) {
+                    error("Invalid feature index in temporary diagnostic spool");
+                }
+                const double a = gain(record.feature);
+                if (!std::isfinite(a) || a < 0.0) continue;
+                const double difference =
+                    std::abs(record.observed - a * record.mean);
+                adjustedResidual(record.feature) += difference;
+                pull(record.feature) +=
+                    difference * record.totalVariation;
+            }
+            if (n < buffer.size()) {
+                if (std::ferror(file_)) {
+                    error("Error reading temporary feature diagnostic spool");
+                }
+                break;
+            }
+        }
+    }
+
+private:
+    bool enabled_ = false;
+    std::FILE* file_ = nullptr;
+};
+
 struct ResidualState {
-    RowMajorMatrixXd betaNorm;
+    RowMajorMatrixXd betaNormRow;
+    MatrixXd betaNormCol;
+    MatrixXd betaAllocationKernel;
+    MatrixXd profileGram;
     MatrixXd topicSimilarity;
+    MatrixXd allocatedTopicCounts;
     VectorXd featureResiduals;
     VectorXd featureTotals;
+    VectorXd topicExposureTotals;
+    VectorXd conditionalLogTerms;
+    VectorXd deletionNumerators;
+    std::vector<int64_t> featureUnits;
+    PullSpool pullSpool;
 
-    ResidualState() = default;
+    VectorXd predictedTotals;
+    VectorXd log2Gain;
+    VectorXd marginalDeviance;
+    VectorXd conditionalDeviance;
+    VectorXd topicDeviance;
+    VectorXd deletionTV;
+    VectorXd adjustedResidualPerCount;
+    VectorXd pull;
 
-    explicit ResidualState(const RowMajorMatrixXd& model)
-        : betaNorm(rowNormalize(model)),
-          topicSimilarity(pairwiseCosineSimilarityRows(betaNorm)),
+    ResidualState(const RowMajorMatrixXd& model, bool cheapDiagnostics,
+            bool similarityDiagnostics)
+        : betaNormRow(rowNormalize(model)),
+          betaNormCol(betaNormRow),
+          betaAllocationKernel(dirichlet_expectation_2d(model)),
+          allocatedTopicCounts(MatrixXd::Zero(model.rows(), model.cols())),
           featureResiduals(VectorXd::Zero(model.cols())),
-          featureTotals(VectorXd::Zero(model.cols())) {}
+          featureTotals(VectorXd::Zero(model.cols())),
+          topicExposureTotals(VectorXd::Zero(model.rows())),
+          conditionalLogTerms(VectorXd::Zero(model.cols())),
+          deletionNumerators(VectorXd::Zero(model.cols())),
+          featureUnits(static_cast<size_t>(model.cols()), 0),
+          pullSpool(!cheapDiagnostics) {
+        if (!similarityDiagnostics) {
+            return;
+        }
+        profileGram.noalias() =
+            betaNormRow * betaNormRow.transpose();
+        topicSimilarity = MatrixXd::Zero(model.rows(), model.rows());
+        const VectorXd norms =
+            profileGram.diagonal().array().max(0.0).sqrt();
+        for (int32_t k = 0; k < model.rows(); ++k) {
+            topicSimilarity(k, k) = 1.0;
+            for (int32_t l = k + 1; l < model.rows(); ++l) {
+                const double denominator = norms(k) * norms(l);
+                const double similarity = denominator > 0.0
+                    ? std::clamp(
+                        profileGram(k, l) / denominator, 0.0, 1.0)
+                    : 0.0;
+                topicSimilarity(k, l) = similarity;
+                topicSimilarity(l, k) = similarity;
+            }
+        }
+    }
 };
 
 struct TransformOutputs {
@@ -134,7 +258,7 @@ public:
             std::ofstream* unitMetaStream_, RowMajorMatrixXd& pseudobulk_,
             MatrixXd& specialPseudobulk_, Mode pseudobulkMode_,
             ResidualState* residualState_, int32_t topkOnly_,
-            int32_t nThreads_)
+            bool similarityDiagnostics_, int32_t nThreads_)
         : lda(lda_),
           resultsStream(resultsStream_),
           unitMetaStream(unitMetaStream_),
@@ -143,16 +267,18 @@ public:
           pseudobulkMode(pseudobulkMode_),
           residualState(residualState_),
           topkOnly(topkOnly_),
+          similarityDiagnostics(similarityDiagnostics_),
           threadHint(std::max<int32_t>(1, nThreads_)),
           M(lda_.nFeatures()),
           K(lda_.getNumTopics()) {
         if (pseudobulkMode == Mode::Standard) {
             standardTls = std::make_unique<StandardTls>([this] {
-                return StandardLocalAgg(M, K, residualState != nullptr);
+                return StandardLocalAgg(M, K);
             });
-        } else if (residualState != nullptr) {
+        }
+        if (residualState != nullptr) {
             residualTls = std::make_unique<ResidualTls>([this] {
-                return ResidualLocalAgg(M);
+                return ResidualLocalAgg(K);
             });
         }
     }
@@ -165,36 +291,20 @@ public:
             error("%s: standard batch used with a special pseudobulk mode", __func__);
         }
 
-        const size_t N = batch.size();
-        RowMajorMatrixXd doc_topic = lda.do_transform(DocumentView(batch.docs));
+        RowMajorMatrixXd gamma;
+        RowMajorMatrixXd doc_topic =
+            inferTopics(DocumentView(batch.docs), gamma);
         writeTopicRows(batch.ids, doc_topic);
 
-        VectorXd unitResiduals;
-        VectorXd unitCosineSim;
-        VectorXd unitEntropy;
-        VectorXd unitSensitiveEntropyLCR;
-        VectorXd unitSensitiveEntropyQ;
-        if (residualState != nullptr) {
-            unitResiduals = VectorXd::Zero(N);
-            unitCosineSim = VectorXd::Zero(N);
-            const ThetaEntropyStats thetaStats =
-                computeThetaEntropyStats(doc_topic, residualState->topicSimilarity);
-            unitEntropy = thetaStats.entropy;
-            unitSensitiveEntropyLCR = thetaStats.sh_lcr;
-            unitSensitiveEntropyQ = thetaStats.sh_q;
-        }
-
-        const size_t grainsize = std::max<size_t>(1, N / (2 * static_cast<size_t>(threadHint)));
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, N, grainsize),
+        const size_t grainSize = std::max<size_t>(
+            1, batch.size() / (2 * static_cast<size_t>(threadHint)));
+        tbb::parallel_for(tbb::blocked_range<size_t>(
+                0, batch.size(), grainSize),
             [&](const tbb::blocked_range<size_t>& range) {
                 auto& local = standardTls->local();
-                RowVectorXd expected = RowVectorXd::Zero(M);
-
                 for (size_t idx = range.begin(); idx < range.end(); ++idx) {
                     const int32_t i = static_cast<int32_t>(idx);
-                    Document& doc = batch.docs[idx];
-                    const double weighted_total = doc.get_sum();
-
+                    const Document& doc = batch.docs[idx];
                     for (size_t j = 0; j < doc.ids.size(); ++j) {
                         const uint32_t m = doc.ids[j];
                         const double cnt = doc.cnts[j];
@@ -202,46 +312,11 @@ public:
                         for (int32_t k = 0; k < K; ++k) {
                             local.pseudobulk(m, k) += raw_count * doc_topic(i, k);
                         }
-                        if (residualState != nullptr) {
-                            local.featureTotals(m) += cnt;
-                        }
                     }
-                    if (residualState == nullptr) {
-                        continue;
-                    }
-
-                    expected = doc_topic.row(i) * residualState->betaNorm;
-                    expected *= weighted_total;
-                    local.featureResiduals += expected.transpose();
-
-                    double cosine_sim = 0.0;
-                    double observed_norm_sq = 0.0;
-                    double expected_norm_sq = expected.squaredNorm();
-                    double doc_residual = expected.sum();
-                    for (size_t j = 0; j < doc.ids.size(); ++j) {
-                        const uint32_t m = doc.ids[j];
-                        const double observed = doc.cnts[j];
-                        const double estimate = expected(m);
-                        const double residual = std::abs(estimate - observed) - estimate;
-                        local.featureResiduals(m) += residual;
-                        doc_residual += residual;
-                        cosine_sim += estimate * observed;
-                        observed_norm_sq += observed * observed;
-                    }
-                    if (expected_norm_sq > 0.0 && observed_norm_sq > 0.0) {
-                        cosine_sim /= std::sqrt(expected_norm_sq * observed_norm_sq);
-                    } else {
-                        cosine_sim = 0.0;
-                    }
-                    unitResiduals(idx) = doc_residual;
-                    unitCosineSim(idx) = cosine_sim;
                 }
             });
 
-        if (unitMetaStream != nullptr) {
-            writeUnitMetaRows(batch.docs, batch.ids, unitResiduals, unitCosineSim,
-                unitEntropy, unitSensitiveEntropyLCR, unitSensitiveEntropyQ);
-        }
+        processResiduals(batch.docs, batch.ids, doc_topic, gamma);
     }
 
     void process(SpecialBatch& batch) {
@@ -252,113 +327,432 @@ public:
             error("%s: special batch used with standard pseudobulk mode", __func__);
         }
 
-        const size_t N = batch.size();
-        RowMajorMatrixXd doc_topic = lda.do_transform(DocumentView(batch.modelDocs));
+        RowMajorMatrixXd gamma;
+        RowMajorMatrixXd doc_topic =
+            inferTopics(DocumentView(batch.modelDocs), gamma);
         writeTopicRows(batch.ids, doc_topic);
         transform_pseudobulk::accumulate(
             specialPseudobulk, batch, doc_topic, pseudobulkMode);
-
-        if (residualState == nullptr) {
-            return;
-        }
-
-        VectorXd unitResiduals = VectorXd::Zero(N);
-        VectorXd unitCosineSim = VectorXd::Zero(N);
-        const ThetaEntropyStats thetaStats =
-            computeThetaEntropyStats(doc_topic, residualState->topicSimilarity);
-
-        const size_t grainsize = std::max<size_t>(1, N / (2 * static_cast<size_t>(threadHint)));
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, N, grainsize),
-            [&](const tbb::blocked_range<size_t>& range) {
-                auto& local = residualTls->local();
-                RowVectorXd expected = RowVectorXd::Zero(M);
-
-                for (size_t idx = range.begin(); idx < range.end(); ++idx) {
-                    const int32_t i = static_cast<int32_t>(idx);
-                    Document& doc = batch.modelDocs[idx];
-                    const double weighted_total = doc.get_sum();
-                    for (size_t j = 0; j < doc.ids.size(); ++j) {
-                        local.featureTotals(doc.ids[j]) += doc.cnts[j];
-                    }
-
-                    expected = doc_topic.row(i) * residualState->betaNorm;
-                    expected *= weighted_total;
-                    local.featureResiduals += expected.transpose();
-
-                    double cosine_sim = 0.0;
-                    double observed_norm_sq = 0.0;
-                    const double expected_norm_sq = expected.squaredNorm();
-                    double doc_residual = expected.sum();
-                    for (size_t j = 0; j < doc.ids.size(); ++j) {
-                        const uint32_t m = doc.ids[j];
-                        const double observed = doc.cnts[j];
-                        const double estimate = expected(m);
-                        const double residual = std::abs(estimate - observed) - estimate;
-                        local.featureResiduals(m) += residual;
-                        doc_residual += residual;
-                        cosine_sim += estimate * observed;
-                        observed_norm_sq += observed * observed;
-                    }
-                    if (expected_norm_sq > 0.0 && observed_norm_sq > 0.0) {
-                        cosine_sim /= std::sqrt(expected_norm_sq * observed_norm_sq);
-                    } else {
-                        cosine_sim = 0.0;
-                    }
-                    unitResiduals(idx) = doc_residual;
-                    unitCosineSim(idx) = cosine_sim;
-                }
-            });
-
-        if (unitMetaStream != nullptr) {
-            writeUnitMetaRows(batch.modelDocs, batch.ids,
-                unitResiduals, unitCosineSim,
-                thetaStats.entropy, thetaStats.sh_lcr, thetaStats.sh_q);
-        }
+        processResiduals(batch.modelDocs, batch.ids, doc_topic, gamma);
     }
 
     void finalize() {
         if (pseudobulkMode == Mode::Standard) {
             for (auto& local : *standardTls) {
                 pseudobulk += local.pseudobulk;
-                if (residualState != nullptr) {
-                    residualState->featureResiduals += local.featureResiduals;
-                    residualState->featureTotals += local.featureTotals;
-                }
             }
-        } else if (residualState != nullptr) {
+        }
+        if (residualState != nullptr) {
             for (auto& local : *residualTls) {
-                residualState->featureResiduals += local.featureResiduals;
-                residualState->featureTotals += local.featureTotals;
+                residualState->topicExposureTotals +=
+                    local.topicExposureTotals;
             }
+            finalizeResiduals();
         }
     }
 
 private:
     struct StandardLocalAgg {
         RowMajorMatrixXd pseudobulk;
-        VectorXd featureResiduals;
-        VectorXd featureTotals;
 
-        StandardLocalAgg(int32_t M, int32_t K, bool withResiduals)
-            : pseudobulk(RowMajorMatrixXd::Zero(M, K)) {
-            if (withResiduals) {
-                featureResiduals = VectorXd::Zero(M);
-                featureTotals = VectorXd::Zero(M);
-            }
-        }
+        StandardLocalAgg(int32_t M, int32_t K)
+            : pseudobulk(RowMajorMatrixXd::Zero(M, K)) {}
     };
 
     struct ResidualLocalAgg {
-        VectorXd featureResiduals;
-        VectorXd featureTotals;
+        VectorXd topicExposureTotals;
+        RowVectorXd denseExpected;
 
-        explicit ResidualLocalAgg(int32_t M)
-            : featureResiduals(VectorXd::Zero(M)),
-              featureTotals(VectorXd::Zero(M)) {}
+        explicit ResidualLocalAgg(int32_t K)
+            : topicExposureTotals(VectorXd::Zero(K)) {}
+    };
+
+    struct CellRef {
+        uint32_t document = 0;
+        uint32_t offset = 0;
     };
 
     using StandardTls = tbb::enumerable_thread_specific<StandardLocalAgg>;
     using ResidualTls = tbb::enumerable_thread_specific<ResidualLocalAgg>;
+
+    RowMajorMatrixXd inferTopics(
+            DocumentView docs, RowMajorMatrixXd& gamma) {
+        if (residualState == nullptr) {
+            return lda.do_transform(docs);
+        }
+        gamma = lda.do_transform_gamma(docs);
+        RowMajorMatrixXd topics = gamma;
+        for (int32_t d = 0; d < topics.rows(); ++d) {
+            const double total = topics.row(d).sum();
+            if (total > 0.0 && std::isfinite(total)) {
+                topics.row(d) /= total;
+            } else {
+                topics.row(d).setConstant(
+                    1.0 / static_cast<double>(K));
+            }
+        }
+        return topics;
+    }
+
+    void processResiduals(const std::vector<Document>& docs,
+            const std::vector<std::string>& ids,
+            const RowMajorMatrixXd& docTopic,
+            const RowMajorMatrixXd& gamma) {
+        if (!residualState) return;
+        const int32_t nDocs = static_cast<int32_t>(docs.size());
+        std::vector<size_t> documentOffsets(
+            static_cast<size_t>(nDocs) + 1, 0);
+        for (int32_t d = 0; d < nDocs; ++d) {
+            documentOffsets[static_cast<size_t>(d) + 1] =
+                documentOffsets[static_cast<size_t>(d)]
+                + docs[static_cast<size_t>(d)].ids.size();
+        }
+        const size_t nCells = documentOffsets.back();
+        std::vector<double> expectedCells(nCells, 0.0);
+        RowMajorMatrixXd thetaKernel(nDocs, K);
+        VectorXd unitResidual = VectorXd::Zero(nDocs);
+        VectorXd unitCosine;
+        VectorXd unitEntropy = VectorXd::Zero(nDocs);
+        ThetaEntropyStats similarityEntropy;
+        VectorXd expectedNormSq;
+        const double alpha = lda.get_doc_topic_prior();
+        const size_t grainSize = std::max<size_t>(
+            1, docs.size() / (2 * static_cast<size_t>(threadHint)));
+        VectorXd documentTotals;
+        if (similarityDiagnostics) {
+            unitCosine = VectorXd::Zero(nDocs);
+            documentTotals.resize(nDocs);
+            tbb::parallel_for(tbb::blocked_range<size_t>(
+                    0, docs.size(), grainSize),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t d = range.begin(); d < range.end(); ++d) {
+                        documentTotals(static_cast<int32_t>(d)) =
+                            std::accumulate(
+                                docs[d].cnts.begin(), docs[d].cnts.end(), 0.0);
+                    }
+                });
+            similarityEntropy = computeThetaEntropyStats(
+                docTopic, residualState->topicSimilarity);
+            unitEntropy = similarityEntropy.entropy;
+            RowMajorMatrixXd expectedTopicWeights = docTopic;
+            for (int32_t d = 0; d < nDocs; ++d) {
+                expectedTopicWeights.row(d) *= documentTotals(d);
+            }
+            expectedNormSq = rowQuadraticForms(
+                expectedTopicWeights, residualState->profileGram);
+        }
+
+        tbb::parallel_for(tbb::blocked_range<size_t>(
+                0, docs.size(), grainSize),
+            [&](const tbb::blocked_range<size_t>& range) {
+                ResidualLocalAgg& local = residualTls->local();
+                for (size_t d = range.begin(); d < range.end(); ++d) {
+                    const Document& doc = docs[d];
+                    const double documentTotal = similarityDiagnostics
+                        ? documentTotals(static_cast<int32_t>(d))
+                        : std::accumulate(
+                            doc.cnts.begin(), doc.cnts.end(), 0.0);
+                    local.topicExposureTotals.noalias() +=
+                        documentTotal
+                        * docTopic.row(static_cast<int32_t>(d)).transpose();
+
+                    double maxLog = -std::numeric_limits<double>::infinity();
+                    for (int32_t k = 0; k < K; ++k) {
+                        const double value = psi(std::max(
+                            gamma(static_cast<int32_t>(d), k) + alpha,
+                            1e-12));
+                        thetaKernel(static_cast<int32_t>(d), k) = value;
+                        maxLog = std::max(maxLog, value);
+                    }
+                    for (int32_t k = 0; k < K; ++k) {
+                        thetaKernel(static_cast<int32_t>(d), k) = std::exp(
+                            thetaKernel(static_cast<int32_t>(d), k) - maxLog);
+                    }
+
+                    const VectorXd theta =
+                        docTopic.row(static_cast<int32_t>(d)).transpose();
+                    if (!similarityDiagnostics) {
+                        double entropy = 0.0;
+                        for (int32_t k = 0; k < K; ++k) {
+                            const double probability = theta(k);
+                            if (probability > 0.0) {
+                                entropy -= probability
+                                    * std::log(probability);
+                            }
+                        }
+                        unitEntropy(static_cast<int32_t>(d)) = entropy;
+                    }
+                    double residual = documentTotal;
+                    double dotProduct = 0.0;
+                    double observedNormSq = 0.0;
+                    size_t positiveCells = 0;
+                    for (double count : doc.cnts) {
+                        positiveCells += count > 0.0;
+                    }
+                    const bool sparsePrediction =
+                        3.0 * static_cast<double>(positiveCells + K) < M;
+                    if (!sparsePrediction) {
+                        if (local.denseExpected.size() != M) {
+                            local.denseExpected.resize(M);
+                        }
+                        local.denseExpected.noalias() =
+                            docTopic.row(static_cast<int32_t>(d))
+                            * residualState->betaNormRow;
+                        local.denseExpected *= documentTotal;
+                    }
+                    for (size_t j = 0; j < doc.ids.size(); ++j) {
+                        const uint32_t w = doc.ids[j];
+                        const double observed = doc.cnts[j];
+                        const double expected = sparsePrediction
+                            ? documentTotal * theta.dot(
+                                residualState->betaNormCol.col(w))
+                            : local.denseExpected(w);
+                        expectedCells[documentOffsets[d] + j] = expected;
+                        residual += std::abs(expected - observed) - expected;
+                        if (similarityDiagnostics) {
+                            dotProduct += expected * observed;
+                            observedNormSq += observed * observed;
+                        }
+                    }
+                    if (similarityDiagnostics
+                            && expectedNormSq(static_cast<int32_t>(d)) > 0.0
+                            && observedNormSq > 0.0) {
+                        unitCosine(static_cast<int32_t>(d)) =
+                            dotProduct
+                            / std::sqrt(
+                                expectedNormSq(static_cast<int32_t>(d))
+                                * observedNormSq);
+                    }
+                    unitResidual(static_cast<int32_t>(d)) =
+                        std::max(0.0, residual);
+                }
+            });
+
+        std::vector<size_t> featureOffsets(
+            static_cast<size_t>(M) + 1, 0);
+        for (const Document& doc : docs) {
+            for (uint32_t w : doc.ids) {
+                if (w >= static_cast<uint32_t>(M)) {
+                    error("%s: feature index %u is out of range", __func__, w);
+                }
+                ++featureOffsets[static_cast<size_t>(w) + 1];
+            }
+        }
+        for (int32_t w = 0; w < M; ++w) {
+            featureOffsets[static_cast<size_t>(w) + 1] +=
+                featureOffsets[static_cast<size_t>(w)];
+        }
+        std::vector<size_t> featureCursor = featureOffsets;
+        std::vector<CellRef> cellsByFeature(nCells);
+        for (int32_t d = 0; d < nDocs; ++d) {
+            const Document& doc = docs[static_cast<size_t>(d)];
+            for (size_t j = 0; j < doc.ids.size(); ++j) {
+                const uint32_t w = doc.ids[j];
+                cellsByFeature[featureCursor[w]++] = {
+                    static_cast<uint32_t>(d), static_cast<uint32_t>(j)};
+            }
+        }
+
+        std::vector<PullRecord> batchPullRecords;
+        if (residualState->pullSpool.enabled()) {
+            batchPullRecords.resize(nCells);
+        }
+        const size_t featureGrain = std::max<size_t>(
+            1, static_cast<size_t>(M)
+                / (2 * static_cast<size_t>(threadHint)));
+        tbb::parallel_for(tbb::blocked_range<size_t>(
+                0, static_cast<size_t>(M), featureGrain),
+            [&](const tbb::blocked_range<size_t>& range) {
+                VectorXd allocation(K);
+                VectorXd deletedTopic(K);
+                VectorXd assigned = VectorXd::Zero(K);
+                for (size_t w0 = range.begin(); w0 < range.end(); ++w0) {
+                    if (featureOffsets[w0] == featureOffsets[w0 + 1]) {
+                        continue;
+                    }
+                    const int32_t w = static_cast<int32_t>(w0);
+                    double correction = 0.0;
+                    double total = 0.0;
+                    double conditionalLogTerm = 0.0;
+                    double deletionNumerator = 0.0;
+                    int64_t units = 0;
+                    assigned.setZero();
+
+                    for (size_t p = featureOffsets[w0];
+                            p < featureOffsets[w0 + 1]; ++p) {
+                        const CellRef ref = cellsByFeature[p];
+                        const size_t d = ref.document;
+                        const size_t j = ref.offset;
+                        const Document& doc = docs[d];
+                        const double observed = doc.cnts[j];
+                        const double expected =
+                            expectedCells[documentOffsets[d] + j];
+                        correction +=
+                            std::abs(expected - observed) - expected;
+                        total += observed;
+                        if (observed <= 0.0) continue;
+                        if (!std::isfinite(expected) || expected <= 0.0) {
+                            error("%s: non-positive fitted mean for feature %d",
+                                __func__, w);
+                        }
+                        ++units;
+                        conditionalLogTerm +=
+                            observed * (std::log(observed)
+                                - std::log(expected));
+
+                        allocation =
+                            thetaKernel.row(static_cast<int32_t>(d))
+                                .transpose().array()
+                            * residualState->betaAllocationKernel.col(w).array();
+                        const double allocationTotal = allocation.sum();
+                        if (!std::isfinite(allocationTotal)
+                                || allocationTotal <= 0.0) {
+                            error("%s: invalid topic allocation for feature %d",
+                                __func__, w);
+                        }
+                        allocation /= allocationTotal;
+                        assigned.noalias() += observed * allocation;
+
+                        double deletedTotal = 0.0;
+                        for (int32_t k = 0; k < K; ++k) {
+                            deletedTopic(k) = std::max(0.0,
+                                gamma(static_cast<int32_t>(d), k)
+                                - observed * allocation(k));
+                            deletedTotal += deletedTopic(k);
+                        }
+                        if (deletedTotal > 0.0
+                                && std::isfinite(deletedTotal)) {
+                            deletedTopic /= deletedTotal;
+                        } else {
+                            deletedTopic.setConstant(
+                                1.0 / static_cast<double>(K));
+                        }
+                        deletionNumerator += observed * 0.5
+                            * (deletedTopic
+                                - docTopic.row(static_cast<int32_t>(d))
+                                    .transpose()).cwiseAbs().sum();
+
+                        if (residualState->pullSpool.enabled()) {
+                            const double totalVariation = 0.5
+                                * (allocation
+                                    - docTopic.row(static_cast<int32_t>(d))
+                                        .transpose()).cwiseAbs().sum();
+                            PullRecord& record =
+                                batchPullRecords[documentOffsets[d] + j];
+                            record.feature = static_cast<uint32_t>(w);
+                            record.observed = observed;
+                            record.mean = expected;
+                            record.totalVariation = totalVariation;
+                        }
+                    }
+
+                    residualState->featureResiduals(w) += correction;
+                    residualState->featureTotals(w) += total;
+                    residualState->conditionalLogTerms(w) +=
+                        conditionalLogTerm;
+                    residualState->deletionNumerators(w) +=
+                        deletionNumerator;
+                    residualState->featureUnits[w0] += units;
+                    residualState->allocatedTopicCounts.col(w).noalias() +=
+                        assigned;
+                }
+            });
+
+        if (residualState->pullSpool.enabled()) {
+            std::vector<PullRecord> positiveRecords;
+            positiveRecords.reserve(nCells);
+            for (const PullRecord& record : batchPullRecords) {
+                if (record.mean > 0.0) {
+                    positiveRecords.push_back(record);
+                }
+            }
+            residualState->pullSpool.append(positiveRecords);
+        }
+
+        writeUnitMetaRows(docs, ids, unitResidual, unitCosine,
+            unitEntropy, similarityEntropy.sh_lcr, similarityEntropy.sh_q);
+    }
+
+    void finalizeResiduals() {
+        residualState->predictedTotals.noalias() =
+            residualState->betaNormRow.transpose()
+            * residualState->topicExposureTotals;
+        residualState->featureResiduals.noalias() +=
+            residualState->predictedTotals;
+
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        residualState->log2Gain = VectorXd::Constant(M, nan);
+        residualState->marginalDeviance = VectorXd::Constant(M, nan);
+        residualState->conditionalDeviance = VectorXd::Constant(M, nan);
+        residualState->topicDeviance = VectorXd::Constant(M, nan);
+        residualState->deletionTV = VectorXd::Constant(M, nan);
+        residualState->adjustedResidualPerCount =
+            VectorXd::Constant(M, nan);
+        residualState->pull = VectorXd::Constant(M, nan);
+
+        VectorXd gain = VectorXd::Constant(M, nan);
+        for (int32_t w = 0; w < M; ++w) {
+            const double observed = residualState->featureTotals(w);
+            const double predicted = residualState->predictedTotals(w);
+            if (!std::isfinite(observed) || observed < 0.0
+                    || !std::isfinite(predicted) || predicted <= 1e-300) {
+                continue;
+            }
+            gain(w) = observed / predicted;
+            if (observed == 0.0) {
+                residualState->log2Gain(w) =
+                    -std::numeric_limits<double>::infinity();
+                residualState->marginalDeviance(w) = 2.0 * predicted;
+                residualState->conditionalDeviance(w) = 0.0;
+                residualState->topicDeviance(w) = 0.0;
+                continue;
+            }
+
+            residualState->log2Gain(w) = std::log2(gain(w));
+            residualState->marginalDeviance(w) = std::max(0.0,
+                2.0 * (observed * std::log(observed / predicted)
+                    - (observed - predicted)));
+            residualState->conditionalDeviance(w) = std::max(0.0,
+                2.0 * (residualState->conditionalLogTerms(w)
+                    - observed * std::log(gain(w))));
+            double topicDeviance = 0.0;
+            for (int32_t k = 0; k < K; ++k) {
+                const double allocated =
+                    residualState->allocatedTopicCounts(k, w);
+                if (allocated <= 0.0) continue;
+                const double expected = gain(w)
+                    * residualState->betaNormCol(k, w)
+                    * residualState->topicExposureTotals(k);
+                if (expected <= 0.0 || !std::isfinite(expected)) {
+                    topicDeviance =
+                        std::numeric_limits<double>::infinity();
+                    break;
+                }
+                topicDeviance +=
+                    2.0 * allocated * std::log(allocated / expected);
+            }
+            residualState->topicDeviance(w) =
+                std::max(0.0, topicDeviance);
+            residualState->deletionTV(w) =
+                residualState->deletionNumerators(w) / observed;
+        }
+
+        VectorXd adjustedNumerator = VectorXd::Zero(M);
+        VectorXd pullNumerator = VectorXd::Zero(M);
+        residualState->pullSpool.accumulate(
+            gain, adjustedNumerator, pullNumerator);
+        if (residualState->pullSpool.enabled()) {
+            for (int32_t w = 0; w < M; ++w) {
+                const double observed = residualState->featureTotals(w);
+                if (observed > 0.0 && std::isfinite(gain(w))) {
+                    residualState->adjustedResidualPerCount(w) =
+                        adjustedNumerator(w) / observed;
+                    residualState->pull(w) =
+                        pullNumerator(w) / observed;
+                }
+            }
+        }
+    }
 
     void writeTopicRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
         if (topkOnly > 0) {
@@ -417,10 +811,16 @@ private:
             }
             *unitMetaStream << rawTotalCount(docs[i])
                 << "\t" << std::setprecision(2) << unitResiduals(i)
-                << "\t" << std::setprecision(4) << unitCosineSim(i)
-                << "\t" << std::setprecision(4) << unitEntropy(i)
-                << "\t" << std::setprecision(4) << unitSensitiveEntropyLCR(i)
-                << "\t" << std::setprecision(4) << unitSensitiveEntropyQ(i) << "\n";
+                << "\t" << std::setprecision(4) << unitEntropy(i);
+            if (similarityDiagnostics) {
+                *unitMetaStream
+                    << "\t" << std::setprecision(4) << unitCosineSim(i)
+                    << "\t" << std::setprecision(4)
+                    << unitSensitiveEntropyLCR(i)
+                    << "\t" << std::setprecision(4)
+                    << unitSensitiveEntropyQ(i);
+            }
+            *unitMetaStream << "\n";
         }
     }
 
@@ -432,6 +832,7 @@ private:
     Mode pseudobulkMode;
     ResidualState* residualState;
     int32_t topkOnly;
+    bool similarityDiagnostics;
     int32_t threadHint;
     int32_t M;
     int32_t K;
@@ -502,6 +903,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
     double mDelta = 1e-3;
     int32_t topk_only = -1;
     bool computeResiduals = false;
+    bool cheap_feature_diagnostics = false;
+    bool unit_similarity_diagnostics = false;
     bool sorted_by_barcode = false;
     bool keep_barcodes = false;
     bool pseudobulk_all_features = false;
@@ -538,6 +941,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("mean-change-tol", "Convergence tolerance per document", mDelta)
       .add_option("feature-residuals", "Compute per-feature and per-unit residuals (backward compatibility)", computeResiduals)
       .add_option("residuals", "Compute per-feature and per-unit residuals", computeResiduals)
+      .add_option("feature-diagnostics-cheap", "Skip spool-dependent gain-adjusted feature residual and Pull diagnostics", cheap_feature_diagnostics)
+      .add_option("unit-diagnostics-similarity", "Add cosine and similarity-adjusted entropy unit diagnostics", unit_similarity_diagnostics)
       .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
 
@@ -556,6 +961,12 @@ int32_t cmdLDATransform(int argc, char** argv) {
     }
     if (topk_only == 0) {
         error("--topk-only must be a positive integer");
+    }
+    if (cheap_feature_diagnostics && !computeResiduals) {
+        error("--feature-diagnostics-cheap requires --residuals");
+    }
+    if (unit_similarity_diagnostics && !computeResiduals) {
+        error("--unit-diagnostics-similarity requires --residuals");
     }
     if (seed <= 0) {
         seed = std::random_device{}();
@@ -641,7 +1052,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
     }
     std::unique_ptr<ResidualState> residualState;
     if (computeResiduals) {
-        residualState = std::make_unique<ResidualState>(lda.get_model_matrix());
+        residualState = std::make_unique<ResidualState>(
+            lda.get_model_matrix(), cheap_feature_diagnostics,
+            unit_similarity_diagnostics);
     }
 
     TransformOutputs outputs(outPrefix, computeResiduals);
@@ -650,14 +1063,19 @@ int32_t cmdLDATransform(int argc, char** argv) {
     outputs.results << std::fixed << std::setprecision(4);
     if (computeResiduals) {
         writeUnitIdHeader(outputs.unitStats, use_10x, info_header);
-        outputs.unitStats << "total_count\tresidual\tcosine_sim\tentropy\tsh_lcr\tsh_q\n";
+        outputs.unitStats << "total_count\tresidual\tentropy";
+        if (unit_similarity_diagnostics) {
+            outputs.unitStats << "\tcosine_sim\tsh_lcr\tsh_q";
+        }
+        outputs.unitStats << "\n";
         outputs.unitStats << std::fixed;
     }
 
     TransformBatchProcessor processor(lda, outputs.results,
         computeResiduals ? &outputs.unitStats : nullptr,
         pseudobulk, specialPseudobulk, pseudobulkMode,
-        residualState.get(), topk_only, nThreads);
+        residualState.get(), topk_only,
+        unit_similarity_diagnostics, nThreads);
 
     bool fileopen = true;
     int32_t processed = 0;
@@ -825,14 +1243,52 @@ int32_t cmdLDATransform(int argc, char** argv) {
     outFile = outPrefix + ".feature_residuals.tsv";
     outFileStream.open(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
-    outFileStream << "Feature\tAbsDiff\tAbsDiffPerCount\n";
+    outFileStream
+        << "Feature\tabsDiff\tabsDiffRate"
+        << "\ttotCount\tnUnits\tlog2Gain"
+        << "\tmarginalDev\tconditionalDev"
+        << "\tfactorDrift\tdeletionTV"
+        << (cheap_feature_diagnostics
+            ? "\n"
+            : "\tadjAbsDiffRate\tpull\n");
+    auto writeDiagnostic = [&](double value) {
+        if (std::isnan(value)) {
+            outFileStream << "NA";
+        } else if (std::isinf(value)) {
+            outFileStream << (value < 0.0 ? "-inf" : "inf");
+        } else {
+            outFileStream << std::scientific
+                << std::setprecision(4) << value;
+        }
+    };
     for (int32_t i = 0; i < M; ++i) {
         const double total = residualState->featureTotals[i];
-        const double diff = residualState->featureResiduals(i);
+        const double diff = std::max(
+            0.0, residualState->featureResiduals(i));
         const double ratio = total > 0.0 ? diff / total : 0.0;
         outFileStream << modelFeatureNames[i]
             << "\t" << std::fixed << std::setprecision(3) << diff
-            << "\t" << std::fixed << std::setprecision(6) << ratio << "\n";
+            << "\t" << std::fixed << std::setprecision(6) << ratio
+            << "\t" << std::llround(total)
+            << "\t" << residualState->featureUnits[
+                static_cast<size_t>(i)] << "\t";
+        writeDiagnostic(residualState->log2Gain(i));
+        outFileStream << "\t";
+        writeDiagnostic(residualState->marginalDeviance(i));
+        outFileStream << "\t";
+        writeDiagnostic(residualState->conditionalDeviance(i));
+        outFileStream << "\t";
+        writeDiagnostic(residualState->topicDeviance(i));
+        outFileStream << "\t";
+        writeDiagnostic(residualState->deletionTV(i));
+        if (!cheap_feature_diagnostics) {
+            outFileStream << "\t";
+            writeDiagnostic(
+                residualState->adjustedResidualPerCount(i));
+            outFileStream << "\t";
+            writeDiagnostic(residualState->pull(i));
+        }
+        outFileStream << "\n";
     }
     outFileStream.close();
     notice("Per-feature residuals written to %s", outFile.c_str());

@@ -7,6 +7,29 @@
 
 The command accepts either the custom sparse text (from `tiles2hex`) or the 10X MEX format as input, similar to `topic-model` / `lda-transform`.
 
+## Example usage
+
+```bash
+punkst gamma-pois-fit \
+  --in-data hex_12.txt --in-meta hex_12.json \
+  --features features_with_totals.tsv \
+  --n-topics 12 --n-epochs 4 --size-factor 1000 \
+  --minibatch-size 256 --min-count-train 20 \
+  --estimate-dispersion --dispersion-init-epochs 2 \
+  --out-prefix gp_h12_k12 --residuals \
+  --transform --threads 4 --seed 1
+```
+
+Project another dataset with the fitted state:
+
+```bash
+punkst gamma-pois-transform \
+  --in-data new_hex_12.txt --in-meta new_hex_12.json \
+  --in-state gp_h12_k12.state.tsv \
+  --out-prefix new_gp_h12_k12 --residuals \
+  --min-count 20 --threads 4
+```
+
 ## Model
 
 For each unit or document \(d\), feature \(w\), and topic \(r\), the observed
@@ -117,6 +140,8 @@ defaults to \(10\alpha\).
 **Custom sparse text input**
 
 Use `--in-data` with the sparse unit-by-feature file produced by `tiles2hex`, and `--in-meta` with its metadata JSON.
+Fitting also requires `--features` with feature names in column 0 and
+non-negative total counts in column 1.
 
 **10X MEX input**
 
@@ -129,30 +154,6 @@ You can also use:
 For 10X input, the matrix is loaded into memory. If `--features` is not
 supplied during fitting, `{prefix}.features.tsv` is written with the final
 feature names and total counts.
-
-## Example usage
-
-Fit a 12-topic model and transform the same units:
-
-```bash
-punkst gamma-pois-fit \
-  --in-data hex_12.txt --in-meta hex_12.json \
-  --n-topics 12 --n-epochs 4 --size-factor 1000 \
-  --minibatch-size 256 --min-count-train 20 \
-  --estimate-dispersion --dispersion-init-epochs 2 \
-  --out-prefix gp_h12_k12 \
-  --transform --threads 4 --seed 1
-```
-
-Project another dataset with the fitted state:
-
-```bash
-punkst gamma-pois-transform \
-  --in-data new_hex_12.txt --in-meta new_hex_12.json \
-  --in-state gp_h12_k12.state.tsv \
-  --out-prefix new_gp_h12_k12 \
-  --min-count 20 --threads 4
-```
 
 ## `gamma-pois-fit`
 
@@ -171,17 +172,16 @@ Number of topics.
 
 `--size-factor`
 Corpus mean unit size \(\bar n\). If omitted, the command uses
-`sum(feature totals) / number of units` when full feature totals are available.
-If full feature totals are unavailable, `--size-factor` is required.
-
-For custom sparse input without a feature-total file, a practical choice is the
-mean total count per unit in the input file.
+`sum(effective feature totals) / number of units`. For weighted fitting, an
+effective total is the supplied raw total multiplied by its feature weight.
 
 ### Feature selection and weighting
 
 `--features`
-Optional feature list used to define or filter the feature space. If the second
-column contains total counts, those counts can be used to compute the average total count per unit in the dataset (otherwise, provide `--size-factor`).
+Feature list used to define or filter the feature space. For custom sparse-text
+fitting this option is required, and column 1 must contain a non-negative total
+count for every retained feature. For 10X input it remains optional because
+totals are read from the matrix.
 
 `--min-count-per-feature`
 Minimum feature total count. Default: `1`.
@@ -199,6 +199,10 @@ weighting is active. Default: `-1`, which drops missing features.
 
 Fitting and transform can use weighted counts. Pseudobulk output remains on the
 original count scale, including for features assigned weight zero.
+The state records whether weighting was active. Fitted weights are stored only
+when that flag is active and are automatically reused by
+`gamma-pois-transform`. Transform-time weights are accepted only when they
+match the stored values for overlapping model features.
 
 ### Per-feature dispersion
 
@@ -332,19 +336,12 @@ With residual output, skip the temporary spool used for exact gain-adjusted
 positive-cell residual and Pull statistics. The remaining feature diagnostics
 are still computed.
 
-`--skip-posterior`
-With `--transform`, suppress the local Gamma shape/rate output. Posterior output
-is enabled by default and is separate from the normalized topic probabilities
-in `{prefix}.results.tsv`.
-
-`--posterior-dispersion-rank`
-Rank of the optional compressed dispersion covariance sidecar. The default is
-`0`, retaining only its diagonal; a positive value retains off-diagonal factors
-and a negative value disables the sidecar.
+`--unit-diagnostics-similarity`
+With residual output, add the quadratic-cost per-unit similarity statistics
+described under `gamma-pois-transform`.
 
 `--randomize-output`
-Randomize document order before writing row-aligned transform outputs. Use this
-when preparing posterior input for future opt-in streaming clustering.
+Randomize document order before writing transform outputs.
 
 ## `gamma-pois-transform`
 
@@ -361,9 +358,24 @@ Output prefix.
 `gamma-pois-transform` requires the state file, not just `{prefix}.model.tsv`.
 The model TSV stores only normalized topic-word distributions for inspection. The state file contains the posterior parameters needed for exact projection.
 
-When the fit used per-feature dispersion, transform automatically reads its
-stored \(\tau_w\) vector from the state file. It deliberately has no
-transform-time dispersion input, so projection remains consistent with fitting.
+Without `--full-model`, transform compares input and model feature names as
+sets. If every model feature is present, it uses the complete model in model
+feature order, regardless of input order or extra input features. Otherwise,
+the measured panel is the intersection of the fitted state, the declared input
+feature dictionary, and any transform feature filter. Features outside that
+panel are treated as unmeasured, not observed zeros. Transform slices the
+fitted beta posterior without renormalizing it, recomputes topic capacities on
+the measured panel, and scales the training size-factor reference by the
+panel's share of effective training counts. Consequently, normalized topic
+output is panel-dependent.
+
+By default transform first infers topics under Poisson, estimates test-data
+dispersion for the measured panel, and then repeats inference with those
+estimates. This adds one input pass and writes `{prefix}.dispersion.tsv`.
+Use `--use-stored-dispersion` for an in-sample projection or when the fitted
+dispersion should be preserved. If the state has no stored dispersion, that
+option preserves the Poisson model. `gamma-pois-fit --transform` enables it
+automatically.
 
 ### Optional
 
@@ -376,6 +388,13 @@ Minimum total count per unit to keep. Default: `20`.
 `--features`, `--min-count-per-feature`
 Optional feature list and feature filtering.
 
+`--full-model`
+Explicitly use every fitted model feature, treating model features absent from
+the input dictionary as measured zeros. When this flag is active, `--features`
+is read only for its total-count column and does not filter the transform
+panel. Transform-time `--icol-weight` is not allowed; fitted state weights are
+used.
+
 `--pseudobulk-all-features`
 Include every retained input feature in `{prefix}.pseudobulk.tsv`, including
 features absent from the fitted state. These extra features do not participate
@@ -387,7 +406,17 @@ Without this option, pseudobulk contains only model features.
 Regex-based feature filtering.
 
 `--icol-weight`, `--default-weight`
-Feature weighting options.
+Feature weighting options. Fitted weights are applied automatically; explicitly
+provided values must agree with the state for model features.
+
+`--use-stored-dispersion`
+Skip transform-data dispersion estimation and use the state dispersion. A
+state without dispersion remains Poisson.
+
+`--dispersion-loess-span`, `--dispersion-min-positive`,
+`--dispersion-mu-bins`, `--dispersion-delta-min`,
+`--dispersion-delta-max`
+Control the default transform-data dispersion estimator.
 
 `--max-iter`, `--mean-change-tol`
 Per-unit local inference controls.
@@ -401,15 +430,13 @@ With residual output, omit the two feature diagnostics that require retaining
 positive-cell information until corpus-wide feature gains are known. Their
 output columns are omitted.
 
-`--skip-posterior`, `--posterior-dispersion-rank`
-The local Gamma posterior is written by default. Suppress it with
-`--skip-posterior`; when the fitted state contains feature dispersion, control
-its optional covariance correction with `--posterior-dispersion-rank`.
+`--unit-diagnostics-similarity`
+With residual output, add `cosine_sim`, `sh_lcr`, and `sh_q` to the per-unit
+table. These statistics require quadratic work in the number of topics and
+are disabled by default.
 
 `--randomize-output`
-Randomize document order before writing results, posterior rows, and the
-dispersion sidecar. Posterior metadata records whether order is `input` or
-`randomized`.
+Randomize document order before writing transform results.
 
 `--sorted-by-barcode`
 For 10X input sorted by barcode, use streaming mode.
@@ -430,7 +457,10 @@ distributions.
 
 `{prefix}.state.tsv`
 Full Gamma-Poisson variational state. This file is required by
-`gamma-pois-transform`.
+`gamma-pois-transform`. State v4 stores the fitted size factor, raw
+per-feature training totals, and a feature-weight activation flag. The
+per-feature weight column is present only when weighting was active. Older
+state versions are rejected and must be refitted.
 
 `{prefix}.features.tsv`
 Written only when `--features` is not supplied and the input is in 10X MEX format.
@@ -451,20 +481,21 @@ count, independent of any feature weight. With `--pseudobulk-all-features`, the
 rows cover all retained input features; otherwise they cover model features.
 
 `{prefix}.unit_stats.tsv`
-Written when `--residuals` or `--feature-residuals` is enabled. It contains the
-LDA-compatible columns `total_count`, `residual`, `cosine_sim`, `entropy`,
+Written when `--residuals` or `--feature-residuals` is enabled. Its default
+columns are `total_count`, `residual`, and `entropy`.
+`--unit-diagnostics-similarity` adds the LDA-compatible columns `cosine_sim`,
 `sh_lcr`, and `sh_q`. For fitted marginal means
 
 \[
 \mu_{dw}=c_d\sum_r E[\theta_{dr}]E[\beta_{wr}],
 \]
 
-`residual` is \(\sum_w|n_{dw}-\mu_{dw}|\), and `cosine_sim` compares the
-observed and fitted feature vectors. `total_count` is the raw model-overlap
+`residual` is \(\sum_w|n_{dw}-\mu_{dw}|\). The optional `cosine_sim` compares
+the observed and fitted feature vectors. `total_count` is the raw model-overlap
 count before feature weights; residual calculations use the effective weighted
-counts when feature weights are active. The entropy summaries use the
-normalized topic intensities and cosine similarity among normalized topic
-profiles.
+counts when feature weights are active. Ordinary `entropy` uses normalized
+topic intensities; the optional `sh_lcr` and `sh_q` also use cosine similarity
+among normalized topic profiles.
 
 When feature dispersion is enabled, the same marginal mean is used because
 \(E[\epsilon_{dw}]=1\). Dispersion affects these statistics indirectly through
@@ -476,45 +507,58 @@ Written with the unit statistics. Rows cover model features only, including
 when `--pseudobulk-all-features` is enabled. Counts and diagnostics use the
 effective weighted counts when feature weights are active.
 
-The first columns preserve the previous output:
+The first columns are:
 
 - `Feature`: feature name.
-- `AbsDiff`: \(\sum_d|n_{dw}-\mu_{dw}|\).
-- `AbsDiffPerCount`: `AbsDiff / count`, or zero when `count` is zero.
+- `absDiff`: \(\sum_d|n_{dw}-\mu_{dw}|\).
+- `absDiffRate`: `absDiff / totCount`, or zero when `totCount` is zero.
 
 The additional columns are:
 
 | Column | Definition |
 |---|---|
-| `count` | \(N_w=\sum_d n_{dw}\) |
-| `n_units` | Number of units with \(n_{dw}>0\) |
-| `log2_gain` | \(\log_2(N_w/M_w)\), where \(M_w=\sum_d\mu_{dw}\) |
-| `marginal_deviance` | Poisson deviance explained by the total abundance shift |
-| `conditional_deviance` | Remaining document-level Poisson deviance after applying the feature gain |
-| `topic_deviance` | Deviation between observed soft topic allocations and gain-adjusted expected topic counts |
-| `topic_leverage` | Count-weighted total-variation distance between the feature allocation and the unit topic mixture |
-| `gain_adjusted_absdiff_per_count` | Positive-cell gain-adjusted absolute residual \(R_w\) |
+| `totCount` | \(N_w=\sum_d n_{dw}\) |
+| `nUnits` | Number of units with \(n_{dw}>0\) |
+| `log2Gain` | \(\log_2(N_w/M_w)\), where \(M_w=\sum_d\mu_{dw}\) |
+| `marginalDev` | Poisson deviance explained by the total abundance shift |
+| `conditionalDev` | Remaining document-level Poisson deviance after applying the feature gain |
+| `factorDrift` | Deviation between observed soft topic allocations and gain-adjusted expected topic counts |
+| `deletionTV` | Count-weighted positive-cell one-step deletion effect on the unit topic mixture |
+| `adjAbsDiffRate` | Positive-cell gain-adjusted absolute residual \(R_w\) |
 | `pull` | Gain-adjusted absolute residual weighted by topic total variation |
-| `cook_score` | Diagonal quadratic deletion-influence approximation, including the factorized zero-cell baseline |
 
 The marginal mean \(\mu_{dw}\) is used for abundance and deviance diagnostics
-even when feature dispersion is enabled. The observation-conditioned
-\(E[\epsilon_{dw}]\) enters only the positive-cell Cook correction.
+even when feature dispersion is enabled.
 
-Exact `gain_adjusted_absdiff_per_count` and `pull` require a bounded temporary
+For a positive cell, one-step deletion holds its variational allocation and
+dispersion mean fixed and updates the document topic intensity to
+
+\[
+\theta^{(-w)}_{dk}
+=\frac{s^\theta_{dk}-n_{dw}\varphi_{dwk}}
+{r^\theta_{dk}-c_d\bar\epsilon_{dw}E[\beta_{kw}]}.
+\]
+
+After applying topic capacities and normalizing as for the reported unit topic
+mixture, let
+
+\[
+J_{dw}^{+}=\operatorname{TV}
+\left(\hat\theta_d^{(-w)},\hat\theta_d\right).
+\]
+
+\[
+\operatorname{deletionTV}_w
+=\frac{1}{N_w}\sum_{d:n_{dw}>0}n_{dw}J_{dw}^{+}.
+\]
+
+This is the next coordinate update, not a fully reconverged leave-one-feature-
+out fit, and it excludes effects from deleting zero cells. With feature
+dispersion, \(\bar\epsilon_{dw}=(\tau_w+n_{dw})/(\tau_w+\mu_{dw})\);
+otherwise it is one.
+
+Exact `adjAbsDiffRate` and `pull` require a bounded temporary
 spool because their corpus-wide gain is unavailable during streaming
 transformation. `--feature-diagnostics-cheap` disables that spool and writes
 neither of these two columns. Features with zero observed count have
-`log2_gain=-inf`; normalized leverage and Pull fields are `NA`.
-
-`{prefix}.posterior.tsv`
-Written by default unless `--skip-posterior` is used. Contains the unit identifiers, row index,
-exposure, and round-trip-precision Gamma shape and rate for every topic. Metadata
-records the format version, topic count, and checksum of the matching state
-file. Rows have the same order as `{prefix}.results.tsv`.
-
-`{prefix}.posterior-dispersion.bin`
-Written by default when the state contains feature dispersion and
-`--posterior-dispersion-rank` is nonnegative. This versioned, row-aligned binary
-sidecar stores a float32 diagonal-plus-low-rank approximation to the optional
-dispersion-induced log-topic covariance correction.
+`log2Gain=-inf`; `deletionTV` and Pull fields are `NA`.
