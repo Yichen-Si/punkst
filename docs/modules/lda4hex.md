@@ -256,7 +256,7 @@ The first columns are `Feature`, `absDiff`, and `absDiffRate`, followed by:
 |---|---|
 | `totCount` | Effective observed feature count |
 | `nUnits` | Number of units with a positive effective count |
-| `log2Gain` | \(\log_2(N_w/M_w)\), observed versus predicted corpus abundance |
+| `log2Gain` | $\log_2(N_w/M_w)$, observed versus predicted corpus abundance |
 | `marginalDev` | Deviance attributable to the corpus-wide abundance shift |
 | `conditionalDev` | Remaining document-level deviance after abundance adjustment |
 | `factorDrift` | Drift between variationally allocated and expected topic counts |
@@ -264,9 +264,9 @@ The first columns are `Feature`, `absDiff`, and `absDiffRate`, followed by:
 | `adjAbsDiffRate` | Positive-cell absolute residual after abundance adjustment |
 | `pull` | Gain-adjusted residual weighted by topic-allocation distance |
 
-For fitted probabilities \(p_{dw}\), diagnostics use
-\(\mu_{dw}=n_dp_{dw}\). Since both observed and predicted counts sum to
-\(n_d\), the linear terms in the corresponding Poisson deviance cancel within
+For fitted probabilities $p_{dw}$, diagnostics use
+$\mu_{dw}=n_dp_{dw}$. Since both observed and predicted counts sum to
+$n_d$, the linear terms in the corresponding Poisson deviance cancel within
 each unit. The summed fixed-model Poisson deviance therefore equals the LDA
 multinomial deviance, and its per-feature marginal and conditional components
 provide a nonnegative decomposition. The gain remains a descriptive transfer
@@ -276,18 +276,18 @@ topic normalization.
 For a positive cell, `deletionTV` subtracts its current variational topic
 allocation from the local assignment sufficient statistics:
 
-\[
+$$
 \gamma^{(-w)}_{dk}=\max\{0,\gamma_{dk}-n_{dw}\varphi_{dwk}\}.
-\]
+$$
 
-After normalizing \(\gamma_d^{(-w)}\) as for the reported topic proportions,
-let \(J_{dw}^{+}=\operatorname{TV}(\hat\theta_d^{(-w)},\hat\theta_d)\).
+After normalizing $\gamma_d^{(-w)}$ as for the reported topic proportions,
+let $J_{dw}^{+}=\operatorname{TV}(\hat\theta_d^{(-w)},\hat\theta_d)$.
 The output is
 
-\[
+$$
 \operatorname{deletionTV}_w
 =\frac{1}{N_w}\sum_{d:n_{dw}>0}n_{dw}J_{dw}^{+}.
-\]
+$$
 
 If deletion removes all assignment mass, the deleted mixture is the symmetric
 prior mixture. This is a one-step positive-cell diagnostic, not a fully
