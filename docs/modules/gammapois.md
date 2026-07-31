@@ -86,7 +86,7 @@ rate multiplier:
 $$
 \epsilon_{dw}\mid\tau_w \sim \mathrm{Gamma}(\tau_w,\tau_w),
 \qquad E[\epsilon_{dw}]=1,\qquad
-\operatorname{Var}(\epsilon_{dw})=1/\tau_w.
+\text{Var}(\epsilon_{dw})=1/\tau_w.
 $$
 
 Writing
@@ -95,7 +95,7 @@ $\epsilon_{dw}$ gives the NB2 mean-variance relationship
 
 $$
 E[n_{dw}\mid\theta,\beta]=\mu_{dw},\qquad
-\operatorname{Var}(n_{dw}\mid\theta,\beta)
+\text{Var}(n_{dw}\mid\theta,\beta)
 =\mu_{dw}+\mu_{dw}^2/\tau_w.
 $$
 
@@ -211,7 +211,7 @@ supplied from the `--features` file with `--icol-dispersion`, whose value is the
 positive NB size $\tau_w$:
 
 $$
-\operatorname{Var}(n_{dw}\mid\text{topics})=
+\text{Var}(n_{dw}\mid\text{topics})=
 \mu_{dw}+\mu_{dw}^2/\tau_w.
 $$
 
@@ -507,25 +507,25 @@ Written with the unit statistics. Rows cover model features only, including
 when `--pseudobulk-all-features` is enabled. Counts and diagnostics use the
 effective weighted counts when feature weights are active.
 
-The first columns are:
-
-- `Feature`: feature name.
-- `absDiff`: $\sum_d|n_{dw}-\mu_{dw}|$.
-- `absDiffRate`: `absDiff / totCount`, or zero when `totCount` is zero.
-
-The additional columns are:
+The columns are:
 
 | Column | Definition |
 |---|---|
+| `Feature` | Feature name |
+| `absDiff` | $\sum_d\|n_{dw}-\mu_{dw}\|$ |
+| `absDiffRate` | `absDiff / totCount`, or `0` when `totCount` is `0` |
 | `totCount` | $N_w=\sum_d n_{dw}$ |
 | `nUnits` | Number of units with $n_{dw}>0$ |
 | `log2Gain` | $\log_2(N_w/M_w)$, where $M_w=\sum_d\mu_{dw}$ |
 | `marginalDev` | Poisson deviance explained by the total abundance shift |
-| `conditionalDev` | Remaining document-level Poisson deviance after applying the feature gain |
-| `factorDrift` | Deviation between observed soft topic allocations and gain-adjusted expected topic counts |
-| `deletionTV` | Count-weighted positive-cell one-step deletion effect on the unit topic mixture |
-| `adjAbsDiffRate` | Positive-cell gain-adjusted absolute residual $R_w$ |
-| `pull` | Gain-adjusted absolute residual weighted by topic total variation |
+| `conditionalDev` | Remaining Poisson deviance after applying the global magnitude adjustment |
+| `factorDrift` | Deviation between observed topic profile and gain-adjusted expected profile |
+| `deletionTV` | One-step deletion effect on the unit topic mixture |
+| `topicInformation` | Model-only topic specificity of the feature |
+| `cofeatureCorroboration` | Mean positive topic-overlap lift against other positive features in the same unit |
+| `cofeatureConflict` | Mean negative topic-overlap lift against other positive features in the same unit |
+| `adjAbsDiffRate` | Gain-adjusted absolute residual |
+| `pull` | Leverage weighted by gain-adjusted absolute residual |
 
 The marginal mean $\mu_{dw}$ is used for abundance and deviance diagnostics
 even when feature dispersion is enabled.
@@ -543,12 +543,12 @@ After applying topic capacities and normalizing as for the reported unit topic
 mixture, let
 
 $$
-J_{dw}^{+}=\operatorname{TV}
+J_{dw}^{+}=\text{TV}
 \left(\hat\theta_d^{(-w)},\hat\theta_d\right).
 $$
 
 $$
-\operatorname{deletionTV}_w
+\text{deletionTV}_w
 =\frac{1}{N_w}\sum_{d:n_{dw}>0}n_{dw}J_{dw}^{+}.
 $$
 
@@ -557,8 +557,49 @@ out fit, and it excludes effects from deleting zero cells. With feature
 dispersion, $\bar\epsilon_{dw}=(\tau_w+n_{dw})/(\tau_w+\mu_{dw})$;
 otherwise it is one.
 
+The cofeature diagnostics assess whether a feature's model-implied topic
+direction agrees with the other positive features in the same unit, without
+using the inferred unit mixture. Let
+
+$$
+b_{kw}=\frac{E[\beta_{kw}]}{\sum_vE[\beta_{kv}]}
+$$
+
+and let \(\pi_k\) be the normalized fitted topic abundance stored in the model
+state. The topic signature and model-only information of feature \(w\) are
+
+$$
+r_{wk}=\frac{\pi_kb_{kw}}{\sum_\ell\pi_\ell b_{\ell w}},
+\qquad
+I_w=\sum_k r_{wk}\log\frac{r_{wk}}{\pi_k}.
+$$
+
+`topicInformation` is \(I_w\). Let \(L_d\) be the number of distinct model
+features with positive effective count in unit \(d\). For \(L_d>1\), define
+
+$$
+\bar r_{d,-w,k}
+=\frac{1}{L_d-1}\sum_{\substack{v:n_{dv}>0\\v\ne w}}r_{vk},
+\qquad
+A_{dw}=\log\left(\sum_k
+\frac{r_{wk}\bar r_{d,-w,k}}{\pi_k}\right).
+$$
+
+`cofeatureCorroboration` averages \(\max(A_{dw},0)\), and
+`cofeatureConflict` averages \(\max(-A_{dw},0)\), once per eligible unit
+rather than once per count. Both averages are `NA` when there are no eligible
+units, including when an observed feature only occurs without a positive
+cofeature.
+
+These are model-relative screening statistics. A high corroboration score
+means agreement under the fitted topic vocabulary, not that a feature is
+necessarily useful or biologically correct. Conversely, conflict can reflect
+a real secondary signal or model misspecification rather than noise.
+
 Exact `adjAbsDiffRate` and `pull` require a bounded temporary
 spool because their corpus-wide gain is unavailable during streaming
 transformation. `--feature-diagnostics-cheap` disables that spool and writes
 neither of these two columns. Features with zero observed count have
-`log2Gain=-inf`; `deletionTV` and Pull fields are `NA`.
+`log2Gain=-inf`; deletion, contextual cofeature, and Pull fields are `NA`.
+`topicInformation` remains defined because it depends only on the fitted
+model.

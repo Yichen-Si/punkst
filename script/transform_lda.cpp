@@ -1,10 +1,9 @@
 #include "topic_svb.hpp"
-#include "transform_pseudobulk.hpp"
+#include "transform_helper.hpp"
 
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
-#include <cstdio>
 #include <iterator>
 #include <cmath>
 #include <limits>
@@ -16,37 +15,16 @@
 
 namespace {
 
-struct TransformBatch {
-    std::vector<Document> docs;
-    std::vector<std::string> ids;
-
-    void clear() {
-        docs.clear();
-        ids.clear();
-    }
-
-    bool empty() const {
-        return docs.empty();
-    }
-
-    size_t size() const {
-        return docs.size();
-    }
-};
-
 using transform_pseudobulk::Mode;
 using transform_pseudobulk::SpecialBatch;
-
-void writeUnitIdHeader(std::ostream& out, bool use_10x, const std::string& info_header) {
-    if (use_10x) {
-        out << "#barcode\t";
-        return;
-    }
-    out << "#";
-    if (!info_header.empty()) {
-        out << info_header << "\t";
-    }
-}
+using transform_helpers::TransformBatch;
+using transform_helpers::applyWeights;
+using transform_helpers::assignBarcodeIds;
+using transform_helpers::readSpecialDgeMinibatch;
+using transform_helpers::readSpecialHexMinibatch;
+using transform_helpers::writeUnitIdHeader;
+using feature_diagnostics::PullRecord;
+using feature_diagnostics::ResidualLocalAgg;
 
 void writeResultHeader(std::ostream& out, LDA4Hex& lda, int32_t topkOnly) {
     if (topkOnly < 0) {
@@ -68,164 +46,25 @@ void writeResultHeader(std::ostream& out, LDA4Hex& lda, int32_t topkOnly) {
     out << "\n";
 }
 
-int64_t rawTotalCount(const Document& doc) {
-    const double raw_total = doc.raw_ct_tot >= 0.0
-        ? doc.raw_ct_tot
-        : std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
-    return static_cast<int64_t>(std::llround(raw_total));
-}
-
-void assignBarcodeIds(const DGEReader10X& dge, const std::vector<int32_t>& barcode_idx, std::vector<std::string>& ids) {
-    ids.clear();
-    ids.reserve(barcode_idx.size());
-    for (auto idx : barcode_idx) {
-        if (idx >= 0 && idx < static_cast<int32_t>(dge.barcodes.size())) {
-            ids.push_back(dge.barcodes[idx]);
-        } else {
-            ids.push_back(std::to_string(idx));
-        }
-    }
-}
-
-void applyWeights(std::vector<Document>& docs, LDA4Hex& lda) {
-    for (auto& doc : docs) {
-        lda.applyWeights(doc);
-    }
-}
-
-struct PullRecord {
-    uint32_t feature = 0;
-    double observed = 0.0;
-    double mean = 0.0;
-    double totalVariation = 0.0;
-};
-
-class PullSpool {
-public:
-    explicit PullSpool(bool enabled) : enabled_(enabled) {
-        if (enabled_) {
-            file_ = std::tmpfile();
-            if (!file_) {
-                error("Unable to create temporary feature diagnostic spool; "
-                    "use --feature-diagnostics-cheap to disable spool-dependent statistics");
-            }
-        }
-    }
-
-    ~PullSpool() {
-        if (file_) {
-            std::fclose(file_);
-        }
-    }
-
-    PullSpool(const PullSpool&) = delete;
-    PullSpool& operator=(const PullSpool&) = delete;
-
-    bool enabled() const {
-        return enabled_;
-    }
-
-    void append(const std::vector<PullRecord>& records) {
-        if (!enabled_ || records.empty()) return;
-        if (std::fwrite(records.data(), sizeof(PullRecord), records.size(), file_)
-                != records.size()) {
-            error("Error writing temporary feature diagnostic spool");
-        }
-    }
-
-    void accumulate(const VectorXd& gain, VectorXd& adjustedResidual,
-            VectorXd& pull) {
-        if (!enabled_) return;
-        if (std::fflush(file_) != 0 || std::fseek(file_, 0, SEEK_SET) != 0) {
-            error("Error rewinding temporary feature diagnostic spool");
-        }
-        std::vector<PullRecord> buffer(4096);
-        while (true) {
-            const size_t n = std::fread(
-                buffer.data(), sizeof(PullRecord), buffer.size(), file_);
-            for (size_t i = 0; i < n; ++i) {
-                const PullRecord& record = buffer[i];
-                if (record.feature >= static_cast<uint32_t>(gain.size())) {
-                    error("Invalid feature index in temporary diagnostic spool");
-                }
-                const double a = gain(record.feature);
-                if (!std::isfinite(a) || a < 0.0) continue;
-                const double difference =
-                    std::abs(record.observed - a * record.mean);
-                adjustedResidual(record.feature) += difference;
-                pull(record.feature) +=
-                    difference * record.totalVariation;
-            }
-            if (n < buffer.size()) {
-                if (std::ferror(file_)) {
-                    error("Error reading temporary feature diagnostic spool");
-                }
-                break;
-            }
-        }
-    }
-
-private:
-    bool enabled_ = false;
-    std::FILE* file_ = nullptr;
-};
-
-struct ResidualState {
+struct ResidualState : feature_diagnostics::FeatureResidualState {
     RowMajorMatrixXd betaNormRow;
     MatrixXd betaNormCol;
     MatrixXd betaAllocationKernel;
-    MatrixXd profileGram;
-    MatrixXd topicSimilarity;
-    MatrixXd allocatedTopicCounts;
-    VectorXd featureResiduals;
-    VectorXd featureTotals;
-    VectorXd topicExposureTotals;
-    VectorXd conditionalLogTerms;
-    VectorXd deletionNumerators;
-    std::vector<int64_t> featureUnits;
-    PullSpool pullSpool;
-
-    VectorXd predictedTotals;
-    VectorXd log2Gain;
-    VectorXd marginalDeviance;
-    VectorXd conditionalDeviance;
-    VectorXd topicDeviance;
-    VectorXd deletionTV;
-    VectorXd adjustedResidualPerCount;
-    VectorXd pull;
 
     ResidualState(const RowMajorMatrixXd& model, bool cheapDiagnostics,
             bool similarityDiagnostics)
-        : betaNormRow(rowNormalize(model)),
+        : FeatureResidualState(
+              static_cast<int32_t>(model.rows()),
+              static_cast<int32_t>(model.cols()),
+              feature_diagnostics::make_cofeature_model(
+                  model, model.rowwise().sum()),
+              cheapDiagnostics),
+          betaNormRow(rowNormalize(model)),
           betaNormCol(betaNormRow),
-          betaAllocationKernel(dirichlet_expectation_2d(model)),
-          allocatedTopicCounts(MatrixXd::Zero(model.rows(), model.cols())),
-          featureResiduals(VectorXd::Zero(model.cols())),
-          featureTotals(VectorXd::Zero(model.cols())),
-          topicExposureTotals(VectorXd::Zero(model.rows())),
-          conditionalLogTerms(VectorXd::Zero(model.cols())),
-          deletionNumerators(VectorXd::Zero(model.cols())),
-          featureUnits(static_cast<size_t>(model.cols()), 0),
-          pullSpool(!cheapDiagnostics) {
-        if (!similarityDiagnostics) {
-            return;
-        }
-        profileGram.noalias() =
-            betaNormRow * betaNormRow.transpose();
-        topicSimilarity = MatrixXd::Zero(model.rows(), model.rows());
-        const VectorXd norms =
-            profileGram.diagonal().array().max(0.0).sqrt();
-        for (int32_t k = 0; k < model.rows(); ++k) {
-            topicSimilarity(k, k) = 1.0;
-            for (int32_t l = k + 1; l < model.rows(); ++l) {
-                const double denominator = norms(k) * norms(l);
-                const double similarity = denominator > 0.0
-                    ? std::clamp(
-                        profileGram(k, l) / denominator, 0.0, 1.0)
-                    : 0.0;
-                topicSimilarity(k, l) = similarity;
-                topicSimilarity(l, k) = similarity;
-            }
+          betaAllocationKernel(dirichlet_expectation_2d(model)) {
+        if (similarityDiagnostics) {
+            feature_diagnostics::initialize_topic_similarity(
+                *this, betaNormRow);
         }
     }
 };
@@ -359,19 +198,6 @@ private:
             : pseudobulk(RowMajorMatrixXd::Zero(M, K)) {}
     };
 
-    struct ResidualLocalAgg {
-        VectorXd topicExposureTotals;
-        RowVectorXd denseExpected;
-
-        explicit ResidualLocalAgg(int32_t K)
-            : topicExposureTotals(VectorXd::Zero(K)) {}
-    };
-
-    struct CellRef {
-        uint32_t document = 0;
-        uint32_t offset = 0;
-    };
-
     using StandardTls = tbb::enumerable_thread_specific<StandardLocalAgg>;
     using ResidualTls = tbb::enumerable_thread_specific<ResidualLocalAgg>;
 
@@ -400,15 +226,13 @@ private:
             const RowMajorMatrixXd& gamma) {
         if (!residualState) return;
         const int32_t nDocs = static_cast<int32_t>(docs.size());
-        std::vector<size_t> documentOffsets(
-            static_cast<size_t>(nDocs) + 1, 0);
-        for (int32_t d = 0; d < nDocs; ++d) {
-            documentOffsets[static_cast<size_t>(d) + 1] =
-                documentOffsets[static_cast<size_t>(d)]
-                + docs[static_cast<size_t>(d)].ids.size();
-        }
+        const std::vector<size_t> documentOffsets =
+            feature_diagnostics::make_document_offsets(docs);
         const size_t nCells = documentOffsets.back();
         std::vector<double> expectedCells(nCells, 0.0);
+        const feature_diagnostics::CofeatureBatchContext cofeatureContext =
+            feature_diagnostics::make_cofeature_batch_context(
+                docs, residualState->cofeatureModel, threadHint);
         RowMajorMatrixXd thetaKernel(nDocs, K);
         VectorXd unitResidual = VectorXd::Zero(nDocs);
         VectorXd unitCosine;
@@ -528,30 +352,8 @@ private:
                 }
             });
 
-        std::vector<size_t> featureOffsets(
-            static_cast<size_t>(M) + 1, 0);
-        for (const Document& doc : docs) {
-            for (uint32_t w : doc.ids) {
-                if (w >= static_cast<uint32_t>(M)) {
-                    error("%s: feature index %u is out of range", __func__, w);
-                }
-                ++featureOffsets[static_cast<size_t>(w) + 1];
-            }
-        }
-        for (int32_t w = 0; w < M; ++w) {
-            featureOffsets[static_cast<size_t>(w) + 1] +=
-                featureOffsets[static_cast<size_t>(w)];
-        }
-        std::vector<size_t> featureCursor = featureOffsets;
-        std::vector<CellRef> cellsByFeature(nCells);
-        for (int32_t d = 0; d < nDocs; ++d) {
-            const Document& doc = docs[static_cast<size_t>(d)];
-            for (size_t j = 0; j < doc.ids.size(); ++j) {
-                const uint32_t w = doc.ids[j];
-                cellsByFeature[featureCursor[w]++] = {
-                    static_cast<uint32_t>(d), static_cast<uint32_t>(j)};
-            }
-        }
+        const feature_diagnostics::FeatureCellIndex featureIndex =
+            feature_diagnostics::make_feature_cell_index(docs, M, nCells);
 
         std::vector<PullRecord> batchPullRecords;
         if (residualState->pullSpool.enabled()) {
@@ -567,7 +369,8 @@ private:
                 VectorXd deletedTopic(K);
                 VectorXd assigned = VectorXd::Zero(K);
                 for (size_t w0 = range.begin(); w0 < range.end(); ++w0) {
-                    if (featureOffsets[w0] == featureOffsets[w0 + 1]) {
+                    if (featureIndex.featureOffsets[w0]
+                            == featureIndex.featureOffsets[w0 + 1]) {
                         continue;
                     }
                     const int32_t w = static_cast<int32_t>(w0);
@@ -575,12 +378,14 @@ private:
                     double total = 0.0;
                     double conditionalLogTerm = 0.0;
                     double deletionNumerator = 0.0;
+                    feature_diagnostics::CofeatureLiftSums cofeatureSums;
                     int64_t units = 0;
                     assigned.setZero();
 
-                    for (size_t p = featureOffsets[w0];
-                            p < featureOffsets[w0 + 1]; ++p) {
-                        const CellRef ref = cellsByFeature[p];
+                    for (size_t p = featureIndex.featureOffsets[w0];
+                            p < featureIndex.featureOffsets[w0 + 1]; ++p) {
+                        const feature_diagnostics::CellRef ref =
+                            featureIndex.cellsByFeature[p];
                         const size_t d = ref.document;
                         const size_t j = ref.offset;
                         const Document& doc = docs[d];
@@ -599,6 +404,9 @@ private:
                         conditionalLogTerm +=
                             observed * (std::log(observed)
                                 - std::log(expected));
+                        feature_diagnostics::accumulate_cofeature_lift(
+                            residualState->cofeatureModel, cofeatureContext,
+                            d, w, cofeatureSums);
 
                         allocation =
                             thetaKernel.row(static_cast<int32_t>(d))
@@ -627,10 +435,17 @@ private:
                             deletedTopic.setConstant(
                                 1.0 / static_cast<double>(K));
                         }
-                        deletionNumerator += observed * 0.5
-                            * (deletedTopic
-                                - docTopic.row(static_cast<int32_t>(d))
-                                    .transpose()).cwiseAbs().sum();
+                        double deletionVariation = 0.0;
+                        for (int32_t k = 0; k < K; ++k) {
+                            const double deletedProbability =
+                                deletedTopic(k);
+                            deletionVariation += std::abs(
+                                deletedProbability
+                                - docTopic(static_cast<int32_t>(d), k));
+                        }
+                        deletionVariation *= 0.5;
+                        deletionNumerator +=
+                            observed * deletionVariation;
 
                         if (residualState->pullSpool.enabled()) {
                             const double totalVariation = 0.5
@@ -646,12 +461,18 @@ private:
                         }
                     }
 
-                    residualState->featureResiduals(w) += correction;
+                    residualState->featureCorrections(w) += correction;
                     residualState->featureTotals(w) += total;
                     residualState->conditionalLogTerms(w) +=
                         conditionalLogTerm;
                     residualState->deletionNumerators(w) +=
                         deletionNumerator;
+                    residualState->cofeatureCorroborationSums(w) +=
+                        cofeatureSums.corroboration;
+                    residualState->cofeatureConflictSums(w) +=
+                        cofeatureSums.conflict;
+                    residualState->cofeatureContextUnits[w0] +=
+                        cofeatureSums.contextUnits;
                     residualState->featureUnits[w0] += units;
                     residualState->allocatedTopicCounts.col(w).noalias() +=
                         assigned;
@@ -669,89 +490,16 @@ private:
             residualState->pullSpool.append(positiveRecords);
         }
 
-        writeUnitMetaRows(docs, ids, unitResidual, unitCosine,
-            unitEntropy, similarityEntropy.sh_lcr, similarityEntropy.sh_q);
+        transform_helpers::writeUnitStatsRows(
+            *unitMetaStream, docs, ids, unitResidual, unitCosine,
+            unitEntropy, similarityEntropy.sh_lcr, similarityEntropy.sh_q,
+            similarityDiagnostics);
     }
 
     void finalizeResiduals() {
-        residualState->predictedTotals.noalias() =
-            residualState->betaNormRow.transpose()
-            * residualState->topicExposureTotals;
-        residualState->featureResiduals.noalias() +=
-            residualState->predictedTotals;
-
-        const double nan = std::numeric_limits<double>::quiet_NaN();
-        residualState->log2Gain = VectorXd::Constant(M, nan);
-        residualState->marginalDeviance = VectorXd::Constant(M, nan);
-        residualState->conditionalDeviance = VectorXd::Constant(M, nan);
-        residualState->topicDeviance = VectorXd::Constant(M, nan);
-        residualState->deletionTV = VectorXd::Constant(M, nan);
-        residualState->adjustedResidualPerCount =
-            VectorXd::Constant(M, nan);
-        residualState->pull = VectorXd::Constant(M, nan);
-
-        VectorXd gain = VectorXd::Constant(M, nan);
-        for (int32_t w = 0; w < M; ++w) {
-            const double observed = residualState->featureTotals(w);
-            const double predicted = residualState->predictedTotals(w);
-            if (!std::isfinite(observed) || observed < 0.0
-                    || !std::isfinite(predicted) || predicted <= 1e-300) {
-                continue;
-            }
-            gain(w) = observed / predicted;
-            if (observed == 0.0) {
-                residualState->log2Gain(w) =
-                    -std::numeric_limits<double>::infinity();
-                residualState->marginalDeviance(w) = 2.0 * predicted;
-                residualState->conditionalDeviance(w) = 0.0;
-                residualState->topicDeviance(w) = 0.0;
-                continue;
-            }
-
-            residualState->log2Gain(w) = std::log2(gain(w));
-            residualState->marginalDeviance(w) = std::max(0.0,
-                2.0 * (observed * std::log(observed / predicted)
-                    - (observed - predicted)));
-            residualState->conditionalDeviance(w) = std::max(0.0,
-                2.0 * (residualState->conditionalLogTerms(w)
-                    - observed * std::log(gain(w))));
-            double topicDeviance = 0.0;
-            for (int32_t k = 0; k < K; ++k) {
-                const double allocated =
-                    residualState->allocatedTopicCounts(k, w);
-                if (allocated <= 0.0) continue;
-                const double expected = gain(w)
-                    * residualState->betaNormCol(k, w)
-                    * residualState->topicExposureTotals(k);
-                if (expected <= 0.0 || !std::isfinite(expected)) {
-                    topicDeviance =
-                        std::numeric_limits<double>::infinity();
-                    break;
-                }
-                topicDeviance +=
-                    2.0 * allocated * std::log(allocated / expected);
-            }
-            residualState->topicDeviance(w) =
-                std::max(0.0, topicDeviance);
-            residualState->deletionTV(w) =
-                residualState->deletionNumerators(w) / observed;
-        }
-
-        VectorXd adjustedNumerator = VectorXd::Zero(M);
-        VectorXd pullNumerator = VectorXd::Zero(M);
-        residualState->pullSpool.accumulate(
-            gain, adjustedNumerator, pullNumerator);
-        if (residualState->pullSpool.enabled()) {
-            for (int32_t w = 0; w < M; ++w) {
-                const double observed = residualState->featureTotals(w);
-                if (observed > 0.0 && std::isfinite(gain(w))) {
-                    residualState->adjustedResidualPerCount(w) =
-                        adjustedNumerator(w) / observed;
-                    residualState->pull(w) =
-                        pullNumerator(w) / observed;
-                }
-            }
-        }
+        feature_diagnostics::finalize_feature_residuals(
+            *residualState, residualState->betaNormRow,
+            residualState->betaNormCol);
     }
 
     void writeTopicRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
@@ -759,16 +507,7 @@ private:
             writeTopKRows(ids, doc_topic);
             return;
         }
-        for (size_t i = 0; i < ids.size(); ++i) {
-            if (!ids[i].empty()) {
-                resultsStream << ids[i] << "\t";
-            }
-            resultsStream << doc_topic(i, 0);
-            for (int32_t k = 1; k < K; ++k) {
-                resultsStream << "\t" << doc_topic(i, k);
-            }
-            resultsStream << "\n";
-        }
+        transform_helpers::writeTopicRows(resultsStream, ids, doc_topic);
     }
 
     void writeTopKRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
@@ -801,29 +540,6 @@ private:
         }
     }
 
-    void writeUnitMetaRows(const std::vector<Document>& docs,
-            const std::vector<std::string>& ids, const VectorXd& unitResiduals,
-            const VectorXd& unitCosineSim, const VectorXd& unitEntropy,
-            const VectorXd& unitSensitiveEntropyLCR, const VectorXd& unitSensitiveEntropyQ) {
-        for (size_t i = 0; i < docs.size(); ++i) {
-            if (!ids[i].empty()) {
-                *unitMetaStream << ids[i] << "\t";
-            }
-            *unitMetaStream << rawTotalCount(docs[i])
-                << "\t" << std::setprecision(2) << unitResiduals(i)
-                << "\t" << std::setprecision(4) << unitEntropy(i);
-            if (similarityDiagnostics) {
-                *unitMetaStream
-                    << "\t" << std::setprecision(4) << unitCosineSim(i)
-                    << "\t" << std::setprecision(4)
-                    << unitSensitiveEntropyLCR(i)
-                    << "\t" << std::setprecision(4)
-                    << unitSensitiveEntropyQ(i);
-            }
-            *unitMetaStream << "\n";
-        }
-    }
-
     LDA4Hex& lda;
     std::ofstream& resultsStream;
     std::ofstream* unitMetaStream;
@@ -839,49 +555,6 @@ private:
     std::unique_ptr<StandardTls> standardTls;
     std::unique_ptr<ResidualTls> residualTls;
 };
-
-bool readSpecialHexMinibatch(std::ifstream& input, HexReader& rawReader,
-        LDA4Hex& lda, SpecialBatch& batch, Mode mode,
-        const std::vector<int32_t>& inputToModel, int32_t modal,
-        int32_t batchSize, int32_t maxUnits, int32_t minCount) {
-    batch.clear();
-    const int32_t target = std::min(batchSize, maxUnits);
-    std::string line;
-    while (static_cast<int32_t>(batch.size()) < target) {
-        if (!std::getline(input, line)) {
-            return false;
-        }
-        Document rawDoc;
-        std::string id;
-        if (rawReader.parseLine(rawDoc, id, line, modal, false) < 0) {
-            error("%s: error parsing input line", __func__);
-        }
-        transform_pseudobulk::appendDocument(std::move(rawDoc), std::move(id),
-            batch, mode, inputToModel, lda, minCount);
-    }
-    return true;
-}
-
-bool readSpecialDgeMinibatch(DGEReader10X& dge, LDA4Hex& lda,
-        SpecialBatch& batch, Mode mode,
-        const std::vector<int32_t>& inputToModel, int32_t batchSize,
-        int32_t maxUnits, int32_t minCount) {
-    batch.clear();
-    const int32_t target = std::min(batchSize, maxUnits);
-    while (static_cast<int32_t>(batch.size()) < target) {
-        Document rawDoc;
-        int32_t unitIndex = -1;
-        if (!dge.next(rawDoc, &unitIndex, nullptr)) {
-            return false;
-        }
-        if (unitIndex < 0) {
-            continue;
-        }
-        transform_pseudobulk::appendDocument(std::move(rawDoc),
-            dge.getUnitId(unitIndex), batch, mode, inputToModel, lda, minCount);
-    }
-    return true;
-}
 
 } // namespace
 
@@ -1225,17 +898,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
     outFileStream << "Feature\t";
     lda.writeModelHeader(outFileStream);
-    outFileStream << std::fixed << std::setprecision(3);
-    for (int32_t i = 0; i < static_cast<int32_t>(pseudobulkFeatureNames.size()); ++i) {
-        outFileStream << pseudobulkFeatureNames[i];
-        for (int32_t k = 0; k < K; ++k) {
-            const double value = pseudobulkMode == Mode::Standard
-                ? pseudobulk(i, k)
-                : specialPseudobulk(i, k);
-            outFileStream << "\t" << value;
-        }
-        outFileStream << "\n";
-    }
+    transform_helpers::writePseudobulkRows(
+        outFileStream, pseudobulkFeatureNames, pseudobulk,
+        specialPseudobulk, pseudobulkMode, K);
     outFileStream.close();
     notice("Pseudobulk counts written to %s", outFile.c_str());
 
@@ -1243,53 +908,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
     outFile = outPrefix + ".feature_residuals.tsv";
     outFileStream.open(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
-    outFileStream
-        << "Feature\tabsDiff\tabsDiffRate"
-        << "\ttotCount\tnUnits\tlog2Gain"
-        << "\tmarginalDev\tconditionalDev"
-        << "\tfactorDrift\tdeletionTV"
-        << (cheap_feature_diagnostics
-            ? "\n"
-            : "\tadjAbsDiffRate\tpull\n");
-    auto writeDiagnostic = [&](double value) {
-        if (std::isnan(value)) {
-            outFileStream << "NA";
-        } else if (std::isinf(value)) {
-            outFileStream << (value < 0.0 ? "-inf" : "inf");
-        } else {
-            outFileStream << std::scientific
-                << std::setprecision(4) << value;
-        }
-    };
-    for (int32_t i = 0; i < M; ++i) {
-        const double total = residualState->featureTotals[i];
-        const double diff = std::max(
-            0.0, residualState->featureResiduals(i));
-        const double ratio = total > 0.0 ? diff / total : 0.0;
-        outFileStream << modelFeatureNames[i]
-            << "\t" << std::fixed << std::setprecision(3) << diff
-            << "\t" << std::fixed << std::setprecision(6) << ratio
-            << "\t" << std::llround(total)
-            << "\t" << residualState->featureUnits[
-                static_cast<size_t>(i)] << "\t";
-        writeDiagnostic(residualState->log2Gain(i));
-        outFileStream << "\t";
-        writeDiagnostic(residualState->marginalDeviance(i));
-        outFileStream << "\t";
-        writeDiagnostic(residualState->conditionalDeviance(i));
-        outFileStream << "\t";
-        writeDiagnostic(residualState->topicDeviance(i));
-        outFileStream << "\t";
-        writeDiagnostic(residualState->deletionTV(i));
-        if (!cheap_feature_diagnostics) {
-            outFileStream << "\t";
-            writeDiagnostic(
-                residualState->adjustedResidualPerCount(i));
-            outFileStream << "\t";
-            writeDiagnostic(residualState->pull(i));
-        }
-        outFileStream << "\n";
-    }
+    feature_diagnostics::write_feature_residuals(
+        outFileStream, modelFeatureNames, *residualState,
+        cheap_feature_diagnostics);
     outFileStream.close();
     notice("Per-feature residuals written to %s", outFile.c_str());
 

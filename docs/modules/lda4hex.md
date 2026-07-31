@@ -250,19 +250,25 @@ With `--unit-diagnostics-similarity`, the file also contains:
 `{prefix}.feature_residuals.tsv`
 Written when `--residuals` is enabled.
 
-The first columns are `Feature`, `absDiff`, and `absDiffRate`, followed by:
+The columns are:
 
 | Column | Definition |
 |---|---|
-| `totCount` | Effective observed feature count |
-| `nUnits` | Number of units with a positive effective count |
-| `log2Gain` | $\log_2(N_w/M_w)$, observed versus predicted corpus abundance |
-| `marginalDev` | Deviance attributable to the corpus-wide abundance shift |
-| `conditionalDev` | Remaining document-level deviance after abundance adjustment |
-| `factorDrift` | Drift between variationally allocated and expected topic counts |
-| `deletionTV` | Count-weighted positive-cell one-step deletion effect on the unit topic mixture |
-| `adjAbsDiffRate` | Positive-cell absolute residual after abundance adjustment |
-| `pull` | Gain-adjusted residual weighted by topic-allocation distance |
+| `Feature` | Feature name |
+| `absDiff` | $\sum_d\|n_{dw}-\mu_{dw}\|$ |
+| `absDiffRate` | `absDiff / totCount`, or `0` when `totCount` is `0` |
+| `totCount` | $N_w=\sum_d n_{dw}$ |
+| `nUnits` | Number of units with $n_{dw}>0$ |
+| `log2Gain` | $\log_2(N_w/M_w)$, where $M_w=\sum_d\mu_{dw}$ |
+| `marginalDev` | Poisson deviance explained by the total abundance shift |
+| `conditionalDev` | Remaining Poisson deviance after applying the global magnitude adjustment |
+| `factorDrift` | Deviation between observed topic profile and gain-adjusted expected profile |
+| `deletionTV` | One-step deletion effect on the unit topic mixture |
+| `topicInformation` | Model-only topic specificity of the feature |
+| `cofeatureCorroboration` | Mean positive topic-overlap lift against other positive features in the same unit |
+| `cofeatureConflict` | Mean negative topic-overlap lift against other positive features in the same unit |
+| `adjAbsDiffRate` | Gain-adjusted absolute residual |
+| `pull` | Leverage weighted by gain-adjusted absolute residual |
 
 For fitted probabilities $p_{dw}$, diagnostics use
 $\mu_{dw}=n_dp_{dw}$. Since both observed and predicted counts sum to
@@ -281,17 +287,57 @@ $$
 $$
 
 After normalizing $\gamma_d^{(-w)}$ as for the reported topic proportions,
-let $J_{dw}^{+}=\operatorname{TV}(\hat\theta_d^{(-w)},\hat\theta_d)$.
+let $J_{dw}^{+}=\text{TV}(\hat\theta_d^{(-w)},\hat\theta_d)$.
 The output is
 
 $$
-\operatorname{deletionTV}_w
+\text{deletionTV}_w
 =\frac{1}{N_w}\sum_{d:n_{dw}>0}n_{dw}J_{dw}^{+}.
 $$
 
 If deletion removes all assignment mass, the deleted mixture is the symmetric
 prior mixture. This is a one-step positive-cell diagnostic, not a fully
 reconverged leave-one-feature-out fit, and it excludes zero-cell effects.
+
+The cofeature diagnostics assess whether a feature's model-implied topic
+direction agrees with the other positive features in the same unit, without
+using the inferred unit mixture. Define
+
+$$
+b_{kw}=\frac{\lambda_{kw}}{\sum_v\lambda_{kv}},\qquad
+\pi_k=\frac{\sum_v\lambda_{kv}}{\sum_{\ell,v}\lambda_{\ell v}},
+$$
+
+and the topic signature and model-only information of feature \(w\):
+
+$$
+r_{wk}=\frac{\pi_kb_{kw}}{\sum_\ell\pi_\ell b_{\ell w}},
+\qquad
+I_w=\sum_k r_{wk}\log\frac{r_{wk}}{\pi_k}.
+$$
+
+`topicInformation` is \(I_w\). Let \(L_d\) be the number of distinct model
+features with positive effective count in unit \(d\). For \(L_d>1\), the
+presence-weighted signature of the other features and the log overlap lift are
+
+$$
+\bar r_{d,-w,k}
+=\frac{1}{L_d-1}\sum_{\substack{v:n_{dv}>0\\v\ne w}}r_{vk},
+\qquad
+A_{dw}=\log\left(\sum_k
+\frac{r_{wk}\bar r_{d,-w,k}}{\pi_k}\right).
+$$
+
+`cofeatureCorroboration` averages \(\max(A_{dw},0)\), and
+`cofeatureConflict` averages \(\max(-A_{dw},0)\), once per eligible unit
+rather than once per count. Both averages are `NA` when there are no eligible
+units, including when an observed feature only occurs without a positive
+cofeature.
+
+These are model-relative screening statistics. A high corroboration score
+means agreement under the fitted topic vocabulary, not that a feature is
+necessarily useful or biologically correct. Conversely, conflict can reflect
+a real secondary signal or model misspecification rather than noise.
 
 `entropy` is computed from each unit's topic proportions, treating them as a
 probability distribution over topics. The opt-in `sh_lcr` and `sh_q`
