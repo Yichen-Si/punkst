@@ -424,10 +424,12 @@ struct State {
     bool fit_map_component_screening = false;
     bool fit_proposal_component_screening = false;
     bool fit_particle_component_screening = false;
+    // Canonical full basis in persisted states; runtime basis in scoring copies.
     uint64_t basis_checksum = 0;
     bool weighted_counts = false;
     std::vector<std::string> topics;
     Eigen::MatrixXd helmert;
+    // Full model order in persisted states; runtime panel order in scoring copies.
     Eigen::VectorXd feature_weights;
     Pilot pilot;
     Model model;
@@ -437,8 +439,8 @@ struct StateMetadata {
     std::vector<std::string> topics;
     Eigen::MatrixXd helmert;
     double center_floor = 1e-12;
-    uint64_t basis_checksum = 0;
-    Eigen::VectorXd feature_weights;
+    uint64_t basis_checksum = 0; // canonical full basis
+    Eigen::VectorXd feature_weights; // canonical full model order
     bool weighted_counts = false;
 };
 

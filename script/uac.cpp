@@ -37,9 +37,31 @@ struct CountInputOptions {
     int32_t modal = 0;
     int32_t min_count = 1;
     int32_t debug = 0;
+    int32_t identifier_column = 0;
+    std::string feature_panel_file;
+    bool full_model = false;
     std::string feature_weight_file;
     int32_t weight_column = 1;
     double default_weight = 1.0;
+};
+
+struct CountInput {
+    HexReader reader;
+    std::unique_ptr<DGEReader10X> dge;
+    bool use_10x = false;
+};
+
+struct PreparedBasis {
+    std::unique_ptr<uac::Basis> restricted;
+    std::vector<int32_t> canonical_rows;
+
+    const uac::Basis& get(const uac::Basis& canonical) const {
+        return restricted ? *restricted : canonical;
+    }
+
+    bool is_full() const {
+        return !restricted;
+    }
 };
 
 struct ParticleAdaptOptions {
@@ -219,41 +241,259 @@ uac::Basis read_basis(const std::string& path) {
     return basis;
 }
 
-CenterTable read_centers(const std::string& path, double floor) {
+CenterTable read_centers(const std::string& path, double floor,
+    int32_t identifier_column,
+    const std::vector<std::string>* expected_topics = nullptr) {
+    if (identifier_column < 0) {
+        throw std::invalid_argument("--unit-icol-id must be nonnegative");
+    }
+    TextLineReader reader(path);
+    std::string line;
+    while (reader.getline(line) && line.empty()) {}
+    if (line.empty()) {
+        throw std::runtime_error("UAC topic-center table is empty: " + path);
+    }
+    const std::vector<std::string> header =
+        split_delimited(strip_leading_hash(line), '\t');
+    if (identifier_column >= static_cast<int32_t>(header.size())) {
+        throw std::runtime_error(
+            "--unit-icol-id is outside the topic-center table");
+    }
+    std::unordered_map<std::string, int32_t> header_index;
+    for (int32_t i = 0; i < static_cast<int32_t>(header.size()); ++i) {
+        if (header[i].empty()
+            || !header_index.emplace(header[i], i).second) {
+            throw std::runtime_error(
+                "Empty or duplicate UAC topic-center header: " + header[i]);
+        }
+        if (header[i] == "Background") {
+            throw std::runtime_error(
+                "Background-enabled LDA output is not a UAC topic center");
+        }
+    }
+    UnitFactorResultReadOptions factor_options;
+    factor_options.xColName.clear();
+    factor_options.yColName.clear();
+    factor_options.topKColName.clear();
+    factor_options.topPColName.clear();
+    factor_options.requireFactorValues = false;
+    const UnitFactorResultHeader factor_header =
+        parse_unit_factor_result_header(header, factor_options);
+    if (factor_header.hasTopPairs()) {
+        throw std::runtime_error(
+            "LDA K/P top-k output is not a dense UAC topic center");
+    }
+
+    std::vector<int32_t> topic_columns;
     CenterTable table;
-    read_matrix_from_file(path, table.values, &table.identifiers,
-        &table.topics);
+    if (expected_topics) {
+        table.topics = *expected_topics;
+        topic_columns.reserve(expected_topics->size());
+        for (const auto& topic : *expected_topics) {
+            const auto found = header_index.find(topic);
+            if (found == header_index.end()) {
+                throw std::runtime_error(
+                    "UAC topic-center table is missing topic: " + topic);
+            }
+            topic_columns.push_back(found->second);
+        }
+    } else {
+        if (factor_header.factorCols.empty()) {
+            throw std::runtime_error(
+                "MAP UAC topic columns must have trailing headers 0..K-1");
+        }
+        topic_columns.reserve(factor_header.factorCols.size());
+        table.topics.reserve(factor_header.factorCols.size());
+        const int32_t first_topic = static_cast<int32_t>(header.size()
+            - factor_header.factorCols.size());
+        for (size_t i = 0; i < factor_header.factorCols.size(); ++i) {
+            const int32_t column = factor_header.factorCols[i].second;
+            if (column != first_topic + static_cast<int32_t>(i)) {
+                throw std::runtime_error(
+                    "MAP UAC topic columns must be the trailing 0..K-1 block");
+            }
+            topic_columns.push_back(column);
+            table.topics.push_back(header[column]);
+        }
+    }
+    if (topic_columns.size() < 2
+        || std::find(topic_columns.begin(), topic_columns.end(),
+            identifier_column) != topic_columns.end()) {
+        throw std::runtime_error(
+            "--unit-icol-id must select a non-topic column");
+    }
+
+    std::vector<double> values;
     std::unordered_set<std::string> seen;
-    for (const auto& name : table.identifiers) {
-        if (name.empty() || !seen.insert(name).second) {
+    uint64_t input_row = 1;
+    while (reader.getline(line)) {
+        ++input_row;
+        if (line.empty() || is_comment_line(line)) continue;
+        const std::vector<std::string> fields =
+            split_delimited(line, '\t');
+        if (fields.size() != header.size()) {
+            throw std::runtime_error(
+                "UAC topic-center row has the wrong column count at line "
+                + std::to_string(input_row));
+        }
+        const std::string& identifier = fields[identifier_column];
+        if (identifier.empty() || !seen.insert(identifier).second) {
             throw std::runtime_error("Empty or duplicate UAC center identifier: "
-                + name);
+                + identifier);
+        }
+        table.identifiers.push_back(identifier);
+        for (const int32_t column : topic_columns) {
+            double value = 0.0;
+            if (!str2double(fields[column], value) || value < 0.0
+                || !std::isfinite(value)) {
+                throw std::runtime_error(
+                    "Invalid UAC topic probability at line "
+                    + std::to_string(input_row));
+            }
+            values.push_back(value);
+        }
+    }
+    if (table.identifiers.empty()) {
+        throw std::runtime_error("UAC topic-center table has no data rows");
+    }
+    table.values.resize(table.identifiers.size(), topic_columns.size());
+    for (Eigen::Index row = 0; row < table.values.rows(); ++row) {
+        for (Eigen::Index column = 0;
+                column < table.values.cols(); ++column) {
+            table.values(row, column) = values[
+                static_cast<size_t>(row * table.values.cols() + column)];
         }
     }
     uac::normalize_centers(table.values, floor);
     return table;
 }
 
-void align_center_topics(CenterTable& centers,
-    const std::vector<std::string>& expected) {
-    if (centers.topics == expected) return;
-    std::unordered_map<std::string, int32_t> index;
-    for (int32_t i = 0; i < static_cast<int32_t>(centers.topics.size()); ++i) {
-        index[centers.topics[i]] = i;
+CountInput initialize_count_input(const CountInputOptions& options) {
+    CountInput input;
+    input.use_10x = initHexOrDgeInput(input.reader, input.dge,
+        options.in_file, options.meta_file, options.dge_dirs,
+        options.barcodes, options.features, options.matrices,
+        options.dataset_ids, options.keep_barcodes);
+    if (!input.use_10x
+        && (options.identifier_column < 0
+            || options.identifier_column >= input.reader.getOffset())) {
+        throw std::invalid_argument(
+            "--count-icol-id must select a custom-input metadata column");
     }
-    if (index.size() != expected.size()) {
-        throw std::runtime_error("UAC center topic names do not match the model");
-    }
-    RowMajorMatrixXd reordered(centers.values.rows(), expected.size());
-    for (int32_t topic = 0; topic < static_cast<int32_t>(expected.size()); ++topic) {
-        auto found = index.find(expected[topic]);
-        if (found == index.end()) {
-            throw std::runtime_error("UAC center is missing topic: " + expected[topic]);
+    return input;
+}
+
+std::vector<std::string> read_feature_panel(const std::string& path) {
+    TextLineReader reader(path);
+    std::string line;
+    std::vector<std::string> panel;
+    std::unordered_set<std::string> seen;
+    while (reader.getline(line)) {
+        if (line.empty() || is_comment_line(line)) continue;
+        std::vector<std::string> fields;
+        split(fields, "\t ", line);
+        if (fields.empty() || fields[0].empty()
+            || !seen.insert(fields[0]).second) {
+            throw std::runtime_error(
+                "Empty or duplicate feature in UAC panel: "
+                + (fields.empty() ? std::string() : fields[0]));
         }
-        reordered.col(topic) = centers.values.col(found->second);
+        panel.push_back(std::move(fields[0]));
     }
-    centers.values = std::move(reordered);
-    centers.topics = expected;
+    if (panel.empty()) {
+        throw std::runtime_error("UAC feature panel is empty: " + path);
+    }
+    return panel;
+}
+
+PreparedBasis prepare_runtime_basis(const uac::Basis& canonical,
+    const CountInput& input, const CountInputOptions& options) {
+    if (options.full_model && !options.feature_panel_file.empty()) {
+        throw std::invalid_argument(
+            "--full-model and --feature-panel are mutually exclusive");
+    }
+    if (options.full_model
+        || (options.feature_panel_file.empty()
+            && input.reader.features == canonical.features)) {
+        return {};
+    }
+    std::unordered_set<std::string> measured;
+    if (!options.feature_panel_file.empty()) {
+        const std::vector<std::string> panel =
+            read_feature_panel(options.feature_panel_file);
+        std::unordered_set<std::string> model_features(
+            canonical.features.begin(), canonical.features.end());
+        for (const auto& feature : panel) {
+            if (model_features.find(feature) == model_features.end()) {
+                throw std::runtime_error(
+                    "UAC feature panel contains a feature absent from the model: "
+                    + feature);
+            }
+            measured.insert(feature);
+        }
+    } else {
+        measured.insert(input.reader.features.begin(),
+            input.reader.features.end());
+    }
+
+    PreparedBasis out;
+    out.canonical_rows.reserve(canonical.features.size());
+    for (int32_t row = 0;
+            row < static_cast<int32_t>(canonical.features.size()); ++row) {
+        if (measured.find(canonical.features[row]) != measured.end()) {
+            out.canonical_rows.push_back(row);
+        }
+    }
+    if (out.canonical_rows.empty()) {
+        throw std::runtime_error(
+            "No measured count features overlap the UAC model");
+    }
+    if (out.canonical_rows.size() == canonical.features.size()) {
+        out.canonical_rows.clear();
+        return out;
+    }
+    out.restricted = std::make_unique<uac::Basis>();
+    uac::Basis& restricted = *out.restricted;
+    restricted.probabilities.resize(
+        out.canonical_rows.size(), canonical.probabilities.cols());
+    restricted.features.reserve(out.canonical_rows.size());
+    restricted.topics = canonical.topics;
+    for (size_t row = 0; row < out.canonical_rows.size(); ++row) {
+        const int32_t source = out.canonical_rows[row];
+        restricted.probabilities.row(row) =
+            canonical.probabilities.row(source);
+        restricted.features.push_back(canonical.features[source]);
+    }
+    uac::normalize_basis(restricted);
+    notice("Conditioned UAC basis on %zu of %zu model features",
+        restricted.features.size(), canonical.features.size());
+    return out;
+}
+
+Eigen::VectorXd project_feature_weights(
+    const Eigen::VectorXd& canonical_weights,
+    const PreparedBasis& prepared) {
+    if (canonical_weights.size() == 0 || prepared.is_full()) {
+        return canonical_weights;
+    }
+    Eigen::VectorXd projected(prepared.canonical_rows.size());
+    for (size_t row = 0; row < prepared.canonical_rows.size(); ++row) {
+        projected(row) = canonical_weights(prepared.canonical_rows[row]);
+    }
+    if ((projected.array() == 1.0).all()) return {};
+    return projected;
+}
+
+std::string select_count_identifier(
+    const std::string& metadata, int32_t column) {
+    const std::vector<std::string> fields =
+        split_delimited(metadata, '\t');
+    if (column < 0 || column >= static_cast<int32_t>(fields.size())
+        || fields[column].empty()) {
+        throw std::runtime_error(
+            "Empty or invalid custom-count identifier column");
+    }
+    return fields[column];
 }
 
 Eigen::VectorXd read_feature_weights(const std::string& path,
@@ -324,32 +564,39 @@ uac::Dataset make_map_dataset(const CenterTable& centers) {
     return data;
 }
 
+void configure_count_features(
+    CountInput& input, const uac::Basis& basis) {
+    if (input.use_10x) {
+        const int32_t overlap =
+            input.dge->setFeatureIndexRemap(basis.features, false);
+        if (overlap == 0) {
+            throw std::runtime_error(
+                "No count features overlap the UAC runtime basis");
+        }
+    } else {
+        std::vector<std::string> features = basis.features;
+        input.reader.setFeatureIndexRemap(features, false);
+    }
+}
+
 uac::Dataset load_particle_dataset(const CenterTable& centers,
     const uac::Basis& basis, const CountInputOptions& options,
+    CountInput& input,
     const Eigen::VectorXd& feature_weights) {
-    HexReader reader;
-    std::unique_ptr<DGEReader10X> dge;
-    const bool use_10x = initHexOrDgeInput(reader, dge,
-        options.in_file, options.meta_file, options.dge_dirs,
-        options.barcodes, options.features, options.matrices,
-        options.dataset_ids, options.keep_barcodes);
     std::vector<Document> documents;
     std::vector<std::string> identifiers;
-    if (use_10x) {
-        const int32_t overlap = dge->setFeatureIndexRemap(basis.features, false);
-        if (overlap == 0) throw std::runtime_error("No count features overlap the UAC basis");
-        dge->readAll(documents, identifiers, options.min_count);
+    if (input.use_10x) {
+        input.dge->readAll(documents, identifiers, options.min_count);
     } else {
-        std::vector<std::string> model_features = basis.features;
-        reader.setFeatureIndexRemap(model_features, false);
-        reader.readAll(documents, identifiers, options.in_file,
+        input.reader.readAll(documents, identifiers, options.in_file,
             options.min_count, false,
             options.debug > 0 ? options.debug : INT_MAX, options.modal);
+        for (auto& identifier : identifiers) {
+            identifier = select_count_identifier(
+                identifier, options.identifier_column);
+        }
     }
     if (documents.empty()) throw std::runtime_error("No UAC count documents were loaded");
-    for (size_t d = 0; d < identifiers.size(); ++d) {
-        if (identifiers[d].empty()) identifiers[d] = std::to_string(d);
-    }
     std::unordered_map<std::string, int32_t> center_index;
     for (int32_t d = 0; d < static_cast<int32_t>(centers.identifiers.size()); ++d) {
         center_index[centers.identifiers[d]] = d;
@@ -413,26 +660,9 @@ std::filesystem::path count_spool_path(
 IndexedParticleDataset load_indexed_particle_dataset(
     const CenterTable& centers, const uac::Basis& basis,
     const CountInputOptions& options,
+    CountInput& input,
     const Eigen::VectorXd& feature_weights,
     const std::string& cache_directory) {
-    HexReader reader;
-    std::unique_ptr<DGEReader10X> dge;
-    const bool use_10x = initHexOrDgeInput(reader, dge,
-        options.in_file, options.meta_file, options.dge_dirs,
-        options.barcodes, options.features, options.matrices,
-        options.dataset_ids, options.keep_barcodes);
-    if (use_10x) {
-        const int32_t overlap =
-            dge->setFeatureIndexRemap(basis.features, false);
-        if (overlap == 0) {
-            throw std::runtime_error(
-                "No count features overlap the UAC basis");
-        }
-    } else {
-        std::vector<std::string> model_features = basis.features;
-        reader.setFeatureIndexRemap(model_features, false);
-    }
-
     std::unordered_map<std::string, int32_t> center_index;
     center_index.reserve(centers.identifiers.size());
     for (int32_t d = 0;
@@ -455,7 +685,7 @@ IndexedParticleDataset load_indexed_particle_dataset(
         const double input_raw_total = document.get_raw_sum();
         if (input_raw_total < options.min_count) return;
         if (identifier.empty()) {
-            identifier = std::to_string(out.data.identifiers.size());
+            throw std::runtime_error("Empty UAC count identifier");
         }
         if (!count_seen.insert(identifier).second) {
             throw std::runtime_error(
@@ -488,30 +718,32 @@ IndexedParticleDataset load_indexed_particle_dataset(
         effective_totals.push_back(effective(0));
     };
 
-    if (use_10x) {
+    if (input.use_10x) {
         Document document;
         int32_t barcode_index = -1;
         std::string identifier;
-        while (dge->next(document, &barcode_index, &identifier)) {
+        while (input.dge->next(document, &barcode_index, &identifier)) {
             if (barcode_index >= 0) retain(document, identifier);
         }
-        dge->resetStream();
+        input.dge->resetStream();
     } else {
-        std::ifstream input(options.in_file);
-        if (!input) {
+        std::ifstream stream(options.in_file);
+        if (!stream) {
             throw std::runtime_error(
                 "Cannot open UAC count input: " + options.in_file);
         }
         std::string line;
         int32_t retained = 0;
-        while (std::getline(input, line)) {
+        while (std::getline(stream, line)) {
             Document document;
             std::string identifier;
-            if (reader.parseLine(
+            if (input.reader.parseLine(
                     document, identifier, line, options.modal, false) < 0) {
                 throw std::runtime_error(
                     "Error parsing UAC count row: " + line);
             }
+            identifier = select_count_identifier(
+                identifier, options.identifier_column);
             const size_t before = out.data.identifiers.size();
             retain(std::move(document), std::move(identifier));
             if (out.data.identifiers.size() != before) {
@@ -642,6 +874,15 @@ void add_count_options(ParamList& pl, CountInputOptions& options) {
       .add_option("modal", "Modality for text input", options.modal)
       .add_option("min-count", "Minimum raw count for retaining a document", options.min_count)
       .add_option("debug", "If positive, retain at most this many text documents", options.debug)
+      .add_option("count-icol-id",
+          "0-based custom-input metadata column used as the unit identifier",
+          options.identifier_column)
+      .add_option("feature-panel",
+          "Exact measured feature panel, one feature name per row",
+          options.feature_panel_file)
+      .add_option("full-model",
+          "Treat every model feature as measured, including absent input features",
+          options.full_model)
       .add_option("feature-weights", "Optional feature-name/weight table", options.feature_weight_file)
       .add_option("icol-weight", "0-based weight column in --feature-weights", options.weight_column)
       .add_option("default-weight", "Weight for model features absent from the weight table", options.default_weight);
@@ -659,6 +900,7 @@ int32_t cmdUacFit(int argc, char** argv) {
     options.n_components = 0;
     int32_t representatives = 10;
     int32_t top_c = -1;
+    int32_t unit_identifier_column = 0;
     bool no_covariance_shrinkage = false, write_model_trace = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
@@ -669,6 +911,9 @@ int32_t cmdUacFit(int argc, char** argv) {
     pl.add_option("in-topic-center", "Document topic point-center table", center_file, true)
       .add_option("in-model", "Feature-by-topic basis table", basis_file)
       .add_option("out-prefix", "Output prefix", out_prefix, true)
+      .add_option("unit-icol-id",
+          "0-based topic-result column used as the unit identifier",
+          unit_identifier_column)
       .add_option("handoff", "Handoff: map or particle", handoff)
       .add_option("particle-proposal", "Particle proposal: exact_fisher or sparse_empirical_fisher", proposal)
       .add_option("particles", "Particles per document", options.n_particles)
@@ -784,10 +1029,12 @@ int32_t cmdUacFit(int argc, char** argv) {
             throw std::invalid_argument(
                 "--particle-adapt-* requires particle handoff");
         }
-        CenterTable centers = read_centers(center_file, kCenterFloor);
-        uac::Basis basis;
-        uac::Basis* basis_pointer = nullptr;
-        Eigen::VectorXd feature_weights;
+        CenterTable centers;
+        uac::Basis canonical_basis;
+        PreparedBasis prepared_basis;
+        const uac::Basis* basis_pointer = nullptr;
+        Eigen::VectorXd canonical_feature_weights;
+        Eigen::VectorXd runtime_feature_weights;
         uac::Dataset data;
         std::unique_ptr<uac::IndexedDocumentSource> indexed_counts;
         bool weighted_counts = false;
@@ -795,11 +1042,20 @@ int32_t cmdUacFit(int argc, char** argv) {
             if (basis_file.empty()) {
                 throw std::invalid_argument("Particle UAC requires --in-model");
             }
-            basis = read_basis(basis_file);
-            align_center_topics(centers, basis.topics);
-            feature_weights = read_feature_weights(
-                count_options.feature_weight_file, basis.features,
+            canonical_basis = read_basis(basis_file);
+            centers = read_centers(center_file, kCenterFloor,
+                unit_identifier_column, &canonical_basis.topics);
+            CountInput count_input = initialize_count_input(count_options);
+            prepared_basis = prepare_runtime_basis(
+                canonical_basis, count_input, count_options);
+            const uac::Basis& runtime_basis =
+                prepared_basis.get(canonical_basis);
+            configure_count_features(count_input, runtime_basis);
+            canonical_feature_weights = read_feature_weights(
+                count_options.feature_weight_file, canonical_basis.features,
                 count_options.weight_column, count_options.default_weight);
+            runtime_feature_weights = project_feature_weights(
+                canonical_feature_weights, prepared_basis);
             const bool indexed_source =
                 options.particle_engine == uac::ParticleEngine::Stream
                 && options.streaming.count_storage
@@ -807,19 +1063,24 @@ int32_t cmdUacFit(int argc, char** argv) {
             if (indexed_source) {
                 IndexedParticleDataset indexed =
                     load_indexed_particle_dataset(
-                        centers, basis, count_options, feature_weights,
+                        centers, runtime_basis, count_options, count_input,
+                        runtime_feature_weights,
                         options.streaming.cache_directory);
                 data = std::move(indexed.data);
                 indexed_counts = std::move(indexed.counts);
                 weighted_counts = indexed.weighted_counts;
             } else {
-                data = load_particle_dataset(centers, basis, count_options,
-                    feature_weights);
-                weighted_counts = feature_weights.size() > 0
+                data = load_particle_dataset(centers, runtime_basis,
+                    count_options, count_input, runtime_feature_weights);
+                weighted_counts = canonical_feature_weights.size() > 0
                     || has_fractional_counts(data.counts);
             }
-            basis_pointer = &basis;
+            weighted_counts = weighted_counts
+                || canonical_feature_weights.size() > 0;
+            basis_pointer = &runtime_basis;
         } else {
+            centers = read_centers(center_file, kCenterFloor,
+                unit_identifier_column);
             data = make_map_dataset(centers);
             if (!basis_file.empty() || !count_options.in_file.empty()
                 || !count_options.meta_file.empty()
@@ -828,7 +1089,9 @@ int32_t cmdUacFit(int argc, char** argv) {
                 || !count_options.features.empty()
                 || !count_options.matrices.empty()
                 || !count_options.dataset_ids.empty()
-                || !count_options.feature_weight_file.empty()) {
+                || !count_options.feature_weight_file.empty()
+                || !count_options.feature_panel_file.empty()
+                || count_options.full_model) {
                 throw std::invalid_argument(
                     "MAP UAC does not accept model or count inputs");
             }
@@ -840,14 +1103,14 @@ int32_t cmdUacFit(int argc, char** argv) {
             }
             const uac::State initial = uac::read_state(
                 particle_initial_state);
-            if (initial.basis_checksum != basis.checksum) {
+            if (initial.basis_checksum != canonical_basis.checksum) {
                 throw std::invalid_argument(
                     "Particle initial state basis checksum does not match --in-model");
             }
             options.particle_initial_model = initial.model;
         }
         uac::FitResult fitted = indexed_counts
-            ? uac::fit_indexed(data, basis, *indexed_counts, options)
+            ? uac::fit_indexed(data, *basis_pointer, *indexed_counts, options)
             : uac::fit(data, basis_pointer, options);
         uac::StateMetadata state_metadata;
         state_metadata.topics = centers.topics;
@@ -855,8 +1118,8 @@ int32_t cmdUacFit(int argc, char** argv) {
             uac::normalized_helmert(state_metadata.topics.size());
         state_metadata.center_floor = kCenterFloor;
         state_metadata.basis_checksum =
-            basis_pointer ? basis.checksum : 0;
-        state_metadata.feature_weights = feature_weights;
+            basis_pointer ? canonical_basis.checksum : 0;
+        state_metadata.feature_weights = canonical_feature_weights;
         state_metadata.weighted_counts = weighted_counts;
         uac::State state = uac::make_state(
             fitted, options, state_metadata);
@@ -882,6 +1145,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
     int32_t particles = 0;
     int32_t threads = 1, representatives = 10;
     int32_t top_c = -1;
+    int32_t unit_identifier_column = 0;
     bool exact_final_score = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
@@ -892,6 +1156,9 @@ int32_t cmdUacTransform(int argc, char** argv) {
       .add_option("in-topic-center", "Document topic point-center table", center_file, true)
       .add_option("in-model", "Feature-by-topic basis table", basis_file)
       .add_option("out-prefix", "Output prefix", out_prefix, true)
+      .add_option("unit-icol-id",
+          "0-based topic-result column used as the unit identifier",
+          unit_identifier_column)
       .add_option("particle-proposal",
           "Scoring proposal override: exact_fisher or sparse_empirical_fisher",
           proposal)
@@ -933,8 +1200,8 @@ int32_t cmdUacTransform(int argc, char** argv) {
             uac::parse_particle_engine(streaming.engine);
         const uac::StreamingOptions streaming_options =
             make_streaming_options(streaming, out_prefix);
-        CenterTable centers = read_centers(center_file, state.center_floor);
-        align_center_topics(centers, state.topics);
+        CenterTable centers = read_centers(center_file, state.center_floor,
+            unit_identifier_column, &state.topics);
         uac::Dataset data;
         uac::ScoreResult score;
         if (state.handoff == uac::HandoffMode::Map) {
@@ -952,17 +1219,37 @@ int32_t cmdUacTransform(int argc, char** argv) {
             if (basis_file.empty()) {
                 throw std::invalid_argument("Particle UAC transform requires --in-model");
             }
-            uac::Basis basis = read_basis(basis_file);
-            if (basis.checksum != state.basis_checksum) {
+            uac::Basis canonical_basis = read_basis(basis_file);
+            if (canonical_basis.checksum != state.basis_checksum) {
                 throw std::runtime_error("UAC basis checksum does not match fitted state");
             }
-            Eigen::VectorXd weights = state.feature_weights;
-            if (weights.size() > 0
-                && weights.size() != basis.probabilities.rows()) {
+            if (canonical_basis.topics != state.topics) {
+                throw std::runtime_error(
+                    "UAC basis topics do not match fitted state");
+            }
+            if (state.feature_weights.size() > 0
+                && state.feature_weights.size()
+                    != canonical_basis.probabilities.rows()) {
                 throw std::runtime_error("UAC state feature-weight dimension mismatch");
             }
             if (!count_options.feature_weight_file.empty()) {
                 warning("Particle transform uses feature weights stored in the UAC state; --feature-weights is ignored");
+            }
+            CountInput count_input = initialize_count_input(count_options);
+            PreparedBasis prepared_basis = prepare_runtime_basis(
+                canonical_basis, count_input, count_options);
+            const uac::Basis& runtime_basis =
+                prepared_basis.get(canonical_basis);
+            configure_count_features(count_input, runtime_basis);
+            Eigen::VectorXd runtime_weights = project_feature_weights(
+                state.feature_weights, prepared_basis);
+            uac::State runtime_state;
+            const uac::State* scoring_state = &state;
+            if (!prepared_basis.is_full()) {
+                runtime_state = state;
+                runtime_state.basis_checksum = runtime_basis.checksum;
+                runtime_state.feature_weights = runtime_weights;
+                scoring_state = &runtime_state;
             }
             const uac::ProposalKind scoring_proposal = proposal.empty()
                 ? state.proposal : uac::parse_proposal(proposal);
@@ -982,16 +1269,19 @@ int32_t cmdUacTransform(int argc, char** argv) {
             if (indexed_source) {
                 IndexedParticleDataset indexed =
                     load_indexed_particle_dataset(
-                        centers, basis, count_options, weights,
+                        centers, runtime_basis, count_options, count_input,
+                        runtime_weights,
                         streaming_options.cache_directory);
                 data = std::move(indexed.data);
                 score = uac::score_particle_indexed(
-                    data, basis, *indexed.counts, state, score_options);
+                    data, runtime_basis, *indexed.counts,
+                    *scoring_state, score_options);
             } else {
                 data = load_particle_dataset(
-                    centers, basis, count_options, weights);
+                    centers, runtime_basis, count_options, count_input,
+                    runtime_weights);
                 score = uac::score_particle(
-                    data, basis, state, score_options);
+                    data, runtime_basis, *scoring_state, score_options);
             }
         }
         report_component_screening(score);

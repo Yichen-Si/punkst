@@ -190,7 +190,7 @@ void write_state(const std::string& path, const State& state) {
     if (!out) throw std::runtime_error("Cannot write UAC state: " + path);
     const int32_t components = static_cast<int32_t>(state.model.weights.size());
     const int32_t dimension = static_cast<int32_t>(state.model.means.cols());
-    out << "##punkst_uac_state_v10\n"
+    out << "##punkst_uac_state_v11\n"
         << "##handoff\t" << handoff_name(state.handoff) << "\n"
         << "##proposal\t" << proposal_name(state.proposal) << "\n"
         << "##particles\t" << state.n_particles << "\n"
@@ -212,7 +212,7 @@ void write_state(const std::string& path, const State& state) {
         << "##converged\t" << static_cast<int32_t>(state.converged) << "\n"
         << "##components\t" << components << "\n"
         << "##dimension\t" << dimension << "\n"
-        << "##basis_checksum\t" << state.basis_checksum << "\n"
+        << "##canonical_basis_checksum\t" << state.basis_checksum << "\n"
         << "##weighted_counts\t" << static_cast<int32_t>(state.weighted_counts) << "\n"
         << "##count_likelihood\t"
         << (state.weighted_counts ? "weighted_multinomial_kernel" : "multinomial")
@@ -374,20 +374,20 @@ State read_state(const std::string& path) {
         std::vector<std::string> token = fields(line);
         if (token.empty()) continue;
         if (state_version == 0
-            && token[0] != "##punkst_uac_state_v10") {
+            && token[0] != "##punkst_uac_state_v11") {
             throw std::runtime_error(
-                "UAC state must begin with the v10 header");
+                "UAC state must begin with the v11 header");
         }
-        if (token[0] == "##punkst_uac_state_v10") {
+        if (token[0] == "##punkst_uac_state_v11") {
             if (state_version != 0) {
                 throw std::runtime_error("Duplicate UAC state version");
             }
-            state_version = 10;
+            state_version = 11;
             continue;
         }
         if (token[0].rfind("##punkst_uac_state_v", 0) == 0) {
             throw std::runtime_error(
-                "Unsupported UAC state version; only v10 is accepted");
+                "Unsupported UAC state version; only v11 is accepted");
         }
         if (token[0].rfind("##", 0) == 0) {
             if (token.size() != 2) throw std::runtime_error("Malformed UAC state metadata");
@@ -452,7 +452,7 @@ State read_state(const std::string& path) {
             else if (key == "dimension") {
                 dimension = parse_state_int32(token[1]);
             }
-            else if (key == "basis_checksum") {
+            else if (key == "canonical_basis_checksum") {
                 state.basis_checksum = parse_state_uint64(token[1]);
             }
             else if (key == "weighted_counts") {
@@ -642,7 +642,8 @@ State read_state(const std::string& path) {
         "kmeans_max_iterations", "leiden_neighbors", "leiden_knn_backend",
         "leiden_max_iterations", "selected_start",
         "selected_start_method",
-        "converged", "components", "dimension", "basis_checksum",
+        "converged", "components", "dimension",
+        "canonical_basis_checksum",
         "weighted_counts", "count_likelihood", "center_floor",
         "target_relative_floor", "leiden_knn_epsilon", "leiden_resolution",
         "selected_leiden_resolution", "covariance_floor",
