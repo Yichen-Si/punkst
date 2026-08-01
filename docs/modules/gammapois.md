@@ -255,9 +255,10 @@ Maximum memory used for retained parsed count data. Integer byte values and
 sequential temporary storage whenever the count cache is active.
 
 `--temp-dir`
-Parent directory for the temporary count cache. The system temporary
-directory is used when omitted. No directory is created for a resident cache;
-temporary files are removed when fitting finishes.
+Parent directory for the temporary count cache and any delegated transform
+diagnostic spool. The system temporary directory is used when omitted. No
+directory is created for a resident cache; temporary files are removed when
+their operation finishes.
 
 `--minibatch-size`
 Minibatch size. Default: `512`.
@@ -334,7 +335,8 @@ statistics. The two option names are aliases.
 `--feature-diagnostics-cheap`
 With residual output, skip the temporary spool used for exact gain-adjusted
 positive-cell residual and Pull statistics. The remaining feature diagnostics
-are still computed.
+are still computed. This option has no effect when the fitting command
+transforms its training data, because that path is already spool-free.
 
 `--unit-diagnostics-similarity`
 With residual output, add the quadratic-cost per-unit similarity statistics
@@ -421,6 +423,12 @@ Control the default transform-data dispersion estimator.
 `--max-iter`, `--mean-change-tol`
 Per-unit local inference controls.
 
+`--temp-dir`
+Parent directory for temporary diagnostic files. The system temporary
+directory is used when omitted, and scoped temporary files are removed when
+the transform finishes. A diagnostic directory is created only when
+`--residuals` requires transform-data prevalence.
+
 `--residuals`, `--feature-residuals`
 Write `{prefix}.unit_stats.tsv` and `{prefix}.feature_residuals.tsv`. The two
 option names are aliases.
@@ -429,6 +437,12 @@ option names are aliases.
 With residual output, omit the two feature diagnostics that require retaining
 positive-cell information until corpus-wide feature gains are known. Their
 output columns are omitted.
+
+`--use-training-prevalence`
+With residual output, use fitted training prevalence, accumulate raw-residual
+Pull inline, and omit `adjAbsDiffRate`. Fitting commands set this automatically
+when transforming the data they just fitted; standalone transforms leave it
+off by default.
 
 `--unit-diagnostics-similarity`
 With residual output, add `cosine_sim`, `sh_lcr`, and `sh_q` to the per-unit
@@ -504,102 +518,9 @@ observation-conditioned $E[\epsilon_{dw}\mid n_{dw}]$.
 
 `{prefix}.feature_residuals.tsv`
 Written with the unit statistics. Rows cover model features only, including
-when `--pseudobulk-all-features` is enabled. Counts and diagnostics use the
+when `--pseudobulk-all-features` is enabled. Counts and diagnostics use
 effective weighted counts when feature weights are active.
 
-The columns are:
-
-| Column | Definition |
-|---|---|
-| `Feature` | Feature name |
-| `absDiff` | $\sum_d\|n_{dw}-\mu_{dw}\|$ |
-| `absDiffRate` | `absDiff / totCount`, or `0` when `totCount` is `0` |
-| `totCount` | $N_w=\sum_d n_{dw}$ |
-| `nUnits` | Number of units with $n_{dw}>0$ |
-| `log2Gain` | $\log_2(N_w/M_w)$, where $M_w=\sum_d\mu_{dw}$ |
-| `marginalDev` | Poisson deviance explained by the total abundance shift |
-| `conditionalDev` | Remaining Poisson deviance after applying the global magnitude adjustment |
-| `factorDrift` | Deviation between observed topic profile and gain-adjusted expected profile |
-| `deletionTV` | One-step deletion effect on the unit topic mixture |
-| `topicInformation` | Model-only topic specificity of the feature |
-| `cofeatureCorroboration` | Mean positive topic-overlap lift against other positive features in the same unit |
-| `cofeatureConflict` | Mean negative topic-overlap lift against other positive features in the same unit |
-| `adjAbsDiffRate` | Gain-adjusted absolute residual |
-| `pull` | Leverage weighted by gain-adjusted absolute residual |
-
-The marginal mean $\mu_{dw}$ is used for abundance and deviance diagnostics
-even when feature dispersion is enabled.
-
-For a positive cell, one-step deletion holds its variational allocation and
-dispersion mean fixed and updates the document topic intensity to
-
-$$
-\theta^{(-w)}_{dk}
-=\frac{s^\theta_{dk}-n_{dw}\varphi_{dwk}}
-{r^\theta_{dk}-c_d\bar\epsilon_{dw}E[\beta_{kw}]}.
-$$
-
-After applying topic capacities and normalizing as for the reported unit topic
-mixture, let
-
-$$
-J_{dw}^{+}=\text{TV}
-\left(\hat\theta_d^{(-w)},\hat\theta_d\right).
-$$
-
-$$
-\text{deletionTV}_w
-=\frac{1}{N_w}\sum_{d:n_{dw}>0}n_{dw}J_{dw}^{+}.
-$$
-
-This is the next coordinate update, not a fully reconverged leave-one-feature-
-out fit, and it excludes effects from deleting zero cells. With feature
-dispersion, $\bar\epsilon_{dw}=(\tau_w+n_{dw})/(\tau_w+\mu_{dw})$;
-otherwise it is one.
-
-The cofeature diagnostics assess whether a feature's model-implied topic
-direction agrees with the other positive features in the same unit, without
-using the inferred unit mixture. Let
-
-$$
-b_{kw}=\frac{E[\beta_{kw}]}{\sum_vE[\beta_{kv}]}
-$$
-
-and let \(\pi_k\) be the normalized fitted topic abundance stored in the model
-state. The topic signature and model-only information of feature \(w\) are
-
-$$
-r_{wk}=\frac{\pi_kb_{kw}}{\sum_\ell\pi_\ell b_{\ell w}},
-\qquad
-I_w=\sum_k r_{wk}\log\frac{r_{wk}}{\pi_k}.
-$$
-
-`topicInformation` is \(I_w\). Let \(L_d\) be the number of distinct model
-features with positive effective count in unit \(d\). For \(L_d>1\), define
-
-$$
-\bar r_{d,-w,k}
-=\frac{1}{L_d-1}\sum_{\substack{v:n_{dv}>0\\v\ne w}}r_{vk},
-\qquad
-A_{dw}=\log\left(\sum_k
-\frac{r_{wk}\bar r_{d,-w,k}}{\pi_k}\right).
-$$
-
-`cofeatureCorroboration` averages \(\max(A_{dw},0)\), and
-`cofeatureConflict` averages \(\max(-A_{dw},0)\), once per eligible unit
-rather than once per count. Both averages are `NA` when there are no eligible
-units, including when an observed feature only occurs without a positive
-cofeature.
-
-These are model-relative screening statistics. A high corroboration score
-means agreement under the fitted topic vocabulary, not that a feature is
-necessarily useful or biologically correct. Conversely, conflict can reflect
-a real secondary signal or model misspecification rather than noise.
-
-Exact `adjAbsDiffRate` and `pull` require a bounded temporary
-spool because their corpus-wide gain is unavailable during streaming
-transformation. `--feature-diagnostics-cheap` disables that spool and writes
-neither of these two columns. Features with zero observed count have
-`log2Gain=-inf`; deletion, contextual cofeature, and Pull fields are `NA`.
-`topicInformation` remains defined because it depends only on the fitted
-model.
+See [Per-feature diagnostics for topic models](feature_eval.md) for the
+complete column schema, formulas, interpretation, Gamma–Poisson
+specialization, and computational behavior.

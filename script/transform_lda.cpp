@@ -52,13 +52,16 @@ struct ResidualState : feature_diagnostics::FeatureResidualState {
     MatrixXd betaAllocationKernel;
 
     ResidualState(const RowMajorMatrixXd& model, bool cheapDiagnostics,
-            bool similarityDiagnostics)
+            bool similarityDiagnostics, bool useTrainingPrevalence,
+            const std::string& tempDir)
         : FeatureResidualState(
               static_cast<int32_t>(model.rows()),
               static_cast<int32_t>(model.cols()),
-              feature_diagnostics::make_cofeature_model(
-                  model, model.rowwise().sum()),
-              cheapDiagnostics),
+              useTrainingPrevalence
+                  ? feature_diagnostics::make_cofeature_model(
+                      model, model.rowwise().sum())
+                  : feature_diagnostics::CofeatureModel{},
+              cheapDiagnostics, useTrainingPrevalence, tempDir),
           betaNormRow(rowNormalize(model)),
           betaNormCol(betaNormRow),
           betaAllocationKernel(dirichlet_expectation_2d(model)) {
@@ -230,9 +233,12 @@ private:
             feature_diagnostics::make_document_offsets(docs);
         const size_t nCells = documentOffsets.back();
         std::vector<double> expectedCells(nCells, 0.0);
-        const feature_diagnostics::CofeatureBatchContext cofeatureContext =
-            feature_diagnostics::make_cofeature_batch_context(
-                docs, residualState->cofeatureModel, threadHint);
+        feature_diagnostics::CofeatureBatchContext cofeatureContext;
+        if (residualState->useTrainingPrevalence) {
+            cofeatureContext =
+                feature_diagnostics::make_cofeature_batch_context(
+                    docs, residualState->cofeatureModel, threadHint);
+        }
         RowMajorMatrixXd thetaKernel(nDocs, K);
         VectorXd unitResidual = VectorXd::Zero(nDocs);
         VectorXd unitCosine;
@@ -356,7 +362,7 @@ private:
             feature_diagnostics::make_feature_cell_index(docs, M, nCells);
 
         std::vector<PullRecord> batchPullRecords;
-        if (residualState->pullSpool.enabled()) {
+        if (residualState->diagnosticSpool.storesPullRecords()) {
             batchPullRecords.resize(nCells);
         }
         const size_t featureGrain = std::max<size_t>(
@@ -404,9 +410,11 @@ private:
                         conditionalLogTerm +=
                             observed * (std::log(observed)
                                 - std::log(expected));
-                        feature_diagnostics::accumulate_cofeature_lift(
-                            residualState->cofeatureModel, cofeatureContext,
-                            d, w, cofeatureSums);
+                        if (residualState->useTrainingPrevalence) {
+                            feature_diagnostics::accumulate_cofeature_lift(
+                                residualState->cofeatureModel,
+                                cofeatureContext, d, w, cofeatureSums);
+                        }
 
                         allocation =
                             thetaKernel.row(static_cast<int32_t>(d))
@@ -444,20 +452,26 @@ private:
                                 - docTopic(static_cast<int32_t>(d), k));
                         }
                         deletionVariation *= 0.5;
-                        deletionNumerator +=
-                            observed * deletionVariation;
+                        deletionNumerator += deletionVariation;
 
-                        if (residualState->pullSpool.enabled()) {
+                        if (residualState->useTrainingPrevalence
+                                || residualState->diagnosticSpool
+                                    .storesPullRecords()) {
                             const double totalVariation = 0.5
-                                * (allocation
-                                    - docTopic.row(static_cast<int32_t>(d))
-                                        .transpose()).cwiseAbs().sum();
-                            PullRecord& record =
-                                batchPullRecords[documentOffsets[d] + j];
-                            record.feature = static_cast<uint32_t>(w);
-                            record.observed = observed;
-                            record.mean = expected;
-                            record.totalVariation = totalVariation;
+                                * (allocation - deletedTopic)
+                                    .cwiseAbs().sum();
+                            if (residualState->useTrainingPrevalence) {
+                                residualState->pullNumerators(w) +=
+                                    std::abs(observed - expected)
+                                    * totalVariation;
+                            } else {
+                                PullRecord& record = batchPullRecords[
+                                    documentOffsets[d] + j];
+                                record.feature = static_cast<uint32_t>(w);
+                                record.observed = observed;
+                                record.mean = expected;
+                                record.totalVariation = totalVariation;
+                            }
                         }
                     }
 
@@ -479,16 +493,8 @@ private:
                 }
             });
 
-        if (residualState->pullSpool.enabled()) {
-            std::vector<PullRecord> positiveRecords;
-            positiveRecords.reserve(nCells);
-            for (const PullRecord& record : batchPullRecords) {
-                if (record.mean > 0.0) {
-                    positiveRecords.push_back(record);
-                }
-            }
-            residualState->pullSpool.append(positiveRecords);
-        }
+        residualState->diagnosticSpool.append(
+            docs, documentOffsets, batchPullRecords);
 
         transform_helpers::writeUnitStatsRows(
             *unitMetaStream, docs, ids, unitResidual, unitCosine,
@@ -499,7 +505,8 @@ private:
     void finalizeResiduals() {
         feature_diagnostics::finalize_feature_residuals(
             *residualState, residualState->betaNormRow,
-            residualState->betaNormCol);
+            residualState->betaNormCol,
+            residualState->topicExposureTotals, threadHint);
     }
 
     void writeTopicRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
@@ -559,7 +566,7 @@ private:
 } // namespace
 
 int32_t cmdLDATransform(int argc, char** argv) {
-    std::string inFile, metaFile, modelFile, outPrefix, featureFile;
+    std::string inFile, metaFile, modelFile, outPrefix, featureFile, temp_dir;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
@@ -577,6 +584,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     int32_t topk_only = -1;
     bool computeResiduals = false;
     bool cheap_feature_diagnostics = false;
+    bool use_training_prevalence = false;
     bool unit_similarity_diagnostics = false;
     bool sorted_by_barcode = false;
     bool keep_barcodes = false;
@@ -590,6 +598,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("minibatch-size", "Minibatch size", batchSize)
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("threads", "Number of threads", nThreads)
+      .add_option("temp-dir", "Directory to store temporary files", temp_dir)
       .add_option("seed", "Random seed", seed)
       .add_option("verbose", "Verbose level", verbose)
       .add_option("debug", "If >0, only process this many units", debug_);
@@ -615,6 +624,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("feature-residuals", "Compute per-feature and per-unit residuals (backward compatibility)", computeResiduals)
       .add_option("residuals", "Compute per-feature and per-unit residuals", computeResiduals)
       .add_option("feature-diagnostics-cheap", "Skip spool-dependent gain-adjusted feature residual and Pull diagnostics", cheap_feature_diagnostics)
+      .add_option("use-training-prevalence", "Use fitted training prevalence for feature diagnostics", use_training_prevalence)
       .add_option("unit-diagnostics-similarity", "Add cosine and similarity-adjusted entropy unit diagnostics", unit_similarity_diagnostics)
       .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
@@ -637,6 +647,14 @@ int32_t cmdLDATransform(int argc, char** argv) {
     }
     if (cheap_feature_diagnostics && !computeResiduals) {
         error("--feature-diagnostics-cheap requires --residuals");
+    }
+    if (use_training_prevalence && !computeResiduals) {
+        error("--use-training-prevalence requires --residuals");
+    }
+    if (use_training_prevalence && cheap_feature_diagnostics) {
+        warning("--feature-diagnostics-cheap has no effect with "
+            "--use-training-prevalence");
+        cheap_feature_diagnostics = false;
     }
     if (unit_similarity_diagnostics && !computeResiduals) {
         error("--unit-diagnostics-similarity requires --residuals");
@@ -727,7 +745,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
     if (computeResiduals) {
         residualState = std::make_unique<ResidualState>(
             lda.get_model_matrix(), cheap_feature_diagnostics,
-            unit_similarity_diagnostics);
+            unit_similarity_diagnostics, use_training_prevalence,
+            temp_dir);
     }
 
     TransformOutputs outputs(outPrefix, computeResiduals);
@@ -909,8 +928,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     outFileStream.open(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
     feature_diagnostics::write_feature_residuals(
-        outFileStream, modelFeatureNames, *residualState,
-        cheap_feature_diagnostics);
+        outFileStream, modelFeatureNames, *residualState);
     outFileStream.close();
     notice("Per-feature residuals written to %s", outFile.c_str());
 

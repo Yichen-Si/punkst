@@ -350,6 +350,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         append_arg(args, "--minibatch-size", batchSize);
         append_arg(args, "--modal", modal);
         append_arg(args, "--threads", nThreads);
+        append_arg(args, "--temp-dir", count_cache_options.temp_dir);
         append_arg(args, "--seed", seed);
         append_arg(args, "--debug", debug_);
         append_arg(args, "--verbose", verbose);
@@ -365,8 +366,14 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         args.push_back("--use-stored-dispersion");
         if (randomizeOutput) args.push_back("--randomize-output");
         if (pseudobulkAllFeatures) args.push_back("--pseudobulk-all-features");
-        if (computeResiduals) args.push_back("--residuals");
-        if (cheapFeatureDiagnostics) args.push_back("--feature-diagnostics-cheap");
+        if (computeResiduals) {
+            args.push_back("--residuals");
+            args.push_back("--use-training-prevalence");
+            if (cheapFeatureDiagnostics) {
+                warning("--feature-diagnostics-cheap has no effect when "
+                    "transforming fitted training data");
+            }
+        }
         if (unitSimilarityDiagnostics) {
             args.push_back("--unit-diagnostics-similarity");
         }

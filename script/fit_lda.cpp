@@ -62,8 +62,10 @@ int32_t runDelegatedTransform(const std::string& modelFile,
         int32_t nThreads,
         int32_t modal,
         int32_t debugN,
+        const std::string& tempDir,
         bool computeResiduals,
         bool cheapFeatureDiagnostics,
+        bool useTrainingPrevalence,
         bool unitSimilarityDiagnostics,
         bool pseudobulkAllFeatures,
         int32_t topkOnly) {
@@ -74,6 +76,9 @@ int32_t runDelegatedTransform(const std::string& modelFile,
     appendOption(args, "out-prefix", outPrefix);
     appendOption(args, "min-count", 1);
     appendOption(args, "threads", nThreads);
+    if (!tempDir.empty()) {
+        appendOption(args, "temp-dir", tempDir);
+    }
     appendOption(args, "modal", modal);
     appendOption(args, "max-iter", maxIter);
     appendOption(args, "mean-change-tol", meanChangeTol);
@@ -109,9 +114,15 @@ int32_t runDelegatedTransform(const std::string& modelFile,
     }
     if (computeResiduals) {
         appendFlag(args, "residuals");
+        if (useTrainingPrevalence) {
+            appendFlag(args, "use-training-prevalence");
+        }
     }
-    if (cheapFeatureDiagnostics) {
+    if (cheapFeatureDiagnostics && !useTrainingPrevalence) {
         appendFlag(args, "feature-diagnostics-cheap");
+    } else if (cheapFeatureDiagnostics && useTrainingPrevalence) {
+        warning("--feature-diagnostics-cheap has no effect when "
+            "transforming fitted training data");
     }
     if (unitSimilarityDiagnostics) {
         appendFlag(args, "unit-diagnostics-similarity");
@@ -448,8 +459,10 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             return runDelegatedTransform(transformModel, outPrefix, inFile, metaFile,
                 dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
                 include_ftr_regex, exclude_ftr_regex, defaultWeight, icolWeight,
-                maxIter, mDelta, nThreads, modal, debug_, computeResiduals,
-                cheapFeatureDiagnostics, unitSimilarityDiagnostics,
+                maxIter, mDelta, nThreads, modal, debug_,
+                count_cache_options.temp_dir, computeResiduals,
+                cheapFeatureDiagnostics, !projection_only,
+                unitSimilarityDiagnostics,
                 pseudobulk_all_features, topk_only);
         }
         if (pseudobulk_all_features) {

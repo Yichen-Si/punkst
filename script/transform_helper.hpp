@@ -3,6 +3,7 @@
 #include "dataunits.hpp"
 #include "error.hpp"
 #include "numerical_utils.hpp"
+#include "utils_sys.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -215,77 +216,6 @@ struct PullRecord {
     double totalVariation = 0.0;
 };
 
-class PullSpool {
-public:
-    explicit PullSpool(bool enabled) : enabled_(enabled) {
-        if (enabled_) {
-            file_ = std::tmpfile();
-            if (!file_) {
-                error("Unable to create temporary feature diagnostic spool; "
-                    "use --feature-diagnostics-cheap to disable "
-                    "spool-dependent statistics");
-            }
-        }
-    }
-
-    ~PullSpool() {
-        if (file_) {
-            std::fclose(file_);
-        }
-    }
-
-    PullSpool(const PullSpool&) = delete;
-    PullSpool& operator=(const PullSpool&) = delete;
-
-    bool enabled() const {
-        return enabled_;
-    }
-
-    void append(const std::vector<PullRecord>& records) {
-        if (!enabled_ || records.empty()) return;
-        if (std::fwrite(records.data(), sizeof(PullRecord), records.size(),
-                file_) != records.size()) {
-            error("Error writing temporary feature diagnostic spool");
-        }
-    }
-
-    void accumulate(const VectorXd& gain, VectorXd& adjustedResidual,
-            VectorXd& pull) {
-        if (!enabled_) return;
-        if (std::fflush(file_) != 0 || std::fseek(file_, 0, SEEK_SET) != 0) {
-            error("Error rewinding temporary feature diagnostic spool");
-        }
-        std::vector<PullRecord> buffer(4096);
-        while (true) {
-            const size_t n = std::fread(
-                buffer.data(), sizeof(PullRecord), buffer.size(), file_);
-            for (size_t i = 0; i < n; ++i) {
-                const PullRecord& record = buffer[i];
-                if (record.feature >= static_cast<uint32_t>(gain.size())) {
-                    error("Invalid feature index in temporary diagnostic spool");
-                }
-                const double a = gain(record.feature);
-                if (!std::isfinite(a) || a < 0.0) continue;
-                const double difference =
-                    std::abs(record.observed - a * record.mean);
-                adjustedResidual(record.feature) += difference;
-                pull(record.feature) +=
-                    difference * record.totalVariation;
-            }
-            if (n < buffer.size()) {
-                if (std::ferror(file_)) {
-                    error("Error reading temporary feature diagnostic spool");
-                }
-                break;
-            }
-        }
-    }
-
-private:
-    bool enabled_ = false;
-    std::FILE* file_ = nullptr;
-};
-
 struct ResidualLocalAgg {
     VectorXd topicExposureTotals;
     RowVectorXd denseExpected;
@@ -398,6 +328,209 @@ inline void accumulate_cofeature_lift(
     }
 }
 
+class DiagnosticSpool {
+public:
+    DiagnosticSpool(bool useTrainingPrevalence, bool cheapDiagnostics,
+            const std::string& tempDir)
+        : enabled_(!useTrainingPrevalence),
+          storesPullRecords_(!useTrainingPrevalence && !cheapDiagnostics) {
+        if (enabled_) {
+            const std::filesystem::path parent = tempDir.empty()
+                ? std::filesystem::temp_directory_path()
+                : std::filesystem::path(tempDir);
+            tempDirectory_.init(parent);
+            const std::filesystem::path spoolPath =
+                tempDirectory_.path / "feature_diagnostics.bin";
+            file_ = std::fopen(spoolPath.c_str(), "w+b");
+            if (!file_) {
+                error("Unable to create temporary feature diagnostic spool: %s",
+                    spoolPath.c_str());
+            }
+        }
+    }
+
+    ~DiagnosticSpool() {
+        if (file_) {
+            std::fclose(file_);
+        }
+    }
+
+    DiagnosticSpool(const DiagnosticSpool&) = delete;
+    DiagnosticSpool& operator=(const DiagnosticSpool&) = delete;
+
+    bool enabled() const {
+        return enabled_;
+    }
+
+    bool storesPullRecords() const {
+        return storesPullRecords_;
+    }
+
+    void append(const std::vector<Document>& docs,
+            const std::vector<size_t>& documentOffsets,
+            const std::vector<PullRecord>& pullRecords) {
+        if (!enabled_) return;
+        if (documentOffsets.size() != docs.size() + 1) {
+            error("Invalid document offsets for feature diagnostic spool");
+        }
+        if (storesPullRecords_
+                && pullRecords.size() != documentOffsets.back()) {
+            error("Pull records do not align with feature diagnostic documents");
+        }
+        for (size_t d = 0; d < docs.size(); ++d) {
+            const Document& doc = docs[d];
+            uint32_t positive = 0;
+            for (double count : doc.cnts) {
+                positive += count > 0.0;
+            }
+            if (positive == 0 || (!storesPullRecords_ && positive <= 1)) {
+                continue;
+            }
+            write(&positive, sizeof(positive), 1);
+            for (size_t j = 0; j < doc.ids.size(); ++j) {
+                if (doc.cnts[j] <= 0.0) continue;
+                if (storesPullRecords_) {
+                    const PullRecord& record =
+                        pullRecords[documentOffsets[d] + j];
+                    if (record.feature != doc.ids[j]
+                            || !std::isfinite(record.mean)
+                            || record.mean <= 0.0) {
+                        error("Invalid pull record in feature diagnostic spool");
+                    }
+                    write(&record, sizeof(record), 1);
+                } else {
+                    const uint32_t feature = doc.ids[j];
+                    write(&feature, sizeof(feature), 1);
+                }
+            }
+        }
+    }
+
+    void accumulate(const CofeatureModel& model, const VectorXd& gain,
+            VectorXd& cofeatureCorroborationSums,
+            VectorXd& cofeatureConflictSums,
+            std::vector<int64_t>& cofeatureContextUnits,
+            VectorXd& adjustedResidual, VectorXd& pull,
+            int32_t threadHint) {
+        if (!enabled_) return;
+        if (std::fflush(file_) != 0 || std::fseek(file_, 0, SEEK_SET) != 0) {
+            error("Error rewinding temporary feature diagnostic spool");
+        }
+        const int32_t features = static_cast<int32_t>(gain.size());
+        constexpr size_t maxDocuments = 1024;
+        while (true) {
+            std::vector<Document> docs;
+            std::vector<PullRecord> records;
+            docs.reserve(maxDocuments);
+            bool reachedEnd = false;
+            while (docs.size() < maxDocuments) {
+                uint32_t positive = 0;
+                const size_t n = std::fread(
+                    &positive, sizeof(positive), 1, file_);
+                if (n == 0) {
+                    if (std::ferror(file_)) {
+                        error("Error reading temporary feature diagnostic spool");
+                    }
+                    reachedEnd = true;
+                    break;
+                }
+                if (positive == 0) {
+                    error("Invalid empty document in feature diagnostic spool");
+                }
+                Document doc;
+                doc.ids.resize(positive);
+                doc.cnts.assign(positive, 1.0);
+                if (storesPullRecords_) {
+                    const size_t begin = records.size();
+                    records.resize(begin + positive);
+                    if (std::fread(records.data() + begin, sizeof(PullRecord),
+                            positive, file_) != positive) {
+                        error("Truncated pull records in feature diagnostic spool");
+                    }
+                    for (uint32_t j = 0; j < positive; ++j) {
+                        doc.ids[j] = records[begin + j].feature;
+                    }
+                } else if (std::fread(doc.ids.data(), sizeof(uint32_t),
+                        positive, file_) != positive) {
+                    error("Truncated feature context in diagnostic spool");
+                }
+                for (uint32_t feature : doc.ids) {
+                    if (feature >= static_cast<uint32_t>(features)) {
+                        error("Feature index out of range in diagnostic spool");
+                    }
+                }
+                docs.push_back(std::move(doc));
+            }
+            if (docs.empty()) break;
+
+            const std::vector<size_t> documentOffsets =
+                make_document_offsets(docs);
+            const CofeatureBatchContext context =
+                make_cofeature_batch_context(
+                    docs, model, std::max(1, threadHint));
+            const FeatureCellIndex featureIndex =
+                make_feature_cell_index(
+                    docs, features, documentOffsets.back());
+            const size_t grain = std::max<size_t>(1,
+                static_cast<size_t>(features)
+                    / (2 * static_cast<size_t>(std::max(1, threadHint))));
+            tbb::parallel_for(tbb::blocked_range<size_t>(
+                    0, static_cast<size_t>(features), grain),
+                [&](const tbb::blocked_range<size_t>& range) {
+                    for (size_t w0 = range.begin(); w0 < range.end(); ++w0) {
+                        CofeatureLiftSums cofeatureSums;
+                        double adjusted = 0.0;
+                        double pullSum = 0.0;
+                        for (size_t p = featureIndex.featureOffsets[w0];
+                                p < featureIndex.featureOffsets[w0 + 1]; ++p) {
+                            const CellRef ref = featureIndex.cellsByFeature[p];
+                            accumulate_cofeature_lift(model, context,
+                                ref.document, static_cast<int32_t>(w0),
+                                cofeatureSums);
+                            if (storesPullRecords_) {
+                                const PullRecord& record = records[
+                                    documentOffsets[ref.document] + ref.offset];
+                                const double a = gain(static_cast<int32_t>(w0));
+                                if (std::isfinite(a) && a >= 0.0) {
+                                    const double difference = std::abs(
+                                        record.observed - a * record.mean);
+                                    adjusted += difference;
+                                    pullSum += difference
+                                        * record.totalVariation;
+                                }
+                            }
+                        }
+                        cofeatureCorroborationSums(
+                            static_cast<int32_t>(w0)) +=
+                            cofeatureSums.corroboration;
+                        cofeatureConflictSums(static_cast<int32_t>(w0)) +=
+                            cofeatureSums.conflict;
+                        cofeatureContextUnits[w0] +=
+                            cofeatureSums.contextUnits;
+                        if (storesPullRecords_) {
+                            adjustedResidual(static_cast<int32_t>(w0)) +=
+                                adjusted;
+                            pull(static_cast<int32_t>(w0)) += pullSum;
+                        }
+                    }
+                });
+            if (reachedEnd) break;
+        }
+    }
+
+private:
+    void write(const void* data, size_t width, size_t count) {
+        if (std::fwrite(data, width, count, file_) != count) {
+            error("Error writing temporary feature diagnostic spool");
+        }
+    }
+
+    bool enabled_ = false;
+    bool storesPullRecords_ = false;
+    ScopedTempDir tempDirectory_;
+    std::FILE* file_ = nullptr;
+};
+
 struct FeatureResidualState {
     CofeatureModel cofeatureModel;
     MatrixXd profileGram;
@@ -412,7 +545,10 @@ struct FeatureResidualState {
     VectorXd cofeatureConflictSums;
     std::vector<int64_t> cofeatureContextUnits;
     std::vector<int64_t> featureUnits;
-    PullSpool pullSpool;
+    VectorXd pullNumerators;
+    bool useTrainingPrevalence;
+    bool cheapDiagnostics;
+    DiagnosticSpool diagnosticSpool;
 
     VectorXd predictedTotals;
     VectorXd log2Gain;
@@ -426,7 +562,8 @@ struct FeatureResidualState {
     VectorXd pull;
 
     FeatureResidualState(int32_t topics, int32_t features,
-            CofeatureModel model, bool cheapDiagnostics)
+            CofeatureModel model, bool cheapDiagnostics_,
+            bool useTrainingPrevalence_, const std::string& tempDir)
         : cofeatureModel(std::move(model)),
           allocatedTopicCounts(MatrixXd::Zero(topics, features)),
           featureCorrections(VectorXd::Zero(features)),
@@ -438,7 +575,11 @@ struct FeatureResidualState {
           cofeatureConflictSums(VectorXd::Zero(features)),
           cofeatureContextUnits(static_cast<size_t>(features), 0),
           featureUnits(static_cast<size_t>(features), 0),
-          pullSpool(!cheapDiagnostics) {}
+          pullNumerators(VectorXd::Zero(features)),
+          useTrainingPrevalence(useTrainingPrevalence_),
+          cheapDiagnostics(cheapDiagnostics_),
+          diagnosticSpool(
+              useTrainingPrevalence_, cheapDiagnostics_, tempDir) {}
 };
 
 template <typename Derived>
@@ -468,7 +609,8 @@ inline void initialize_topic_similarity(
 template <typename PredictionDerived, typename FactorDerived>
 inline void finalize_feature_residuals(FeatureResidualState& state,
         const Eigen::MatrixBase<PredictionDerived>& predictionTopicFeature,
-        const Eigen::MatrixBase<FactorDerived>& factorTopicFeature) {
+        const Eigen::MatrixBase<FactorDerived>& factorTopicFeature,
+        const VectorXd& transformTopicReference, int32_t threadHint) {
     const int32_t topics =
         static_cast<int32_t>(factorTopicFeature.rows());
     const int32_t features =
@@ -529,8 +671,27 @@ inline void finalize_feature_residuals(FeatureResidualState& state,
                 2.0 * allocated * std::log(allocated / expected);
         }
         state.topicDeviance(feature) = std::max(0.0, topicDeviance);
-        state.deletionTV(feature) =
-            state.deletionNumerators(feature) / observed;
+        const int64_t expressingUnits =
+            state.featureUnits[static_cast<size_t>(feature)];
+        if (expressingUnits > 0) {
+            state.deletionTV(feature) = state.deletionNumerators(feature)
+                / static_cast<double>(expressingUnits);
+        }
+    }
+
+    VectorXd adjustedNumerator = VectorXd::Zero(features);
+    VectorXd pullNumerator = VectorXd::Zero(features);
+    if (!state.useTrainingPrevalence) {
+        state.cofeatureModel = make_cofeature_model(
+            factorTopicFeature, transformTopicReference);
+        state.diagnosticSpool.accumulate(
+            state.cofeatureModel, gain,
+            state.cofeatureCorroborationSums,
+            state.cofeatureConflictSums,
+            state.cofeatureContextUnits,
+            adjustedNumerator, pullNumerator, threadHint);
+    }
+    for (int32_t feature = 0; feature < features; ++feature) {
         const int64_t contextUnits =
             state.cofeatureContextUnits[static_cast<size_t>(feature)];
         if (contextUnits > 0) {
@@ -542,11 +703,15 @@ inline void finalize_feature_residuals(FeatureResidualState& state,
                 / static_cast<double>(contextUnits);
         }
     }
-
-    VectorXd adjustedNumerator = VectorXd::Zero(features);
-    VectorXd pullNumerator = VectorXd::Zero(features);
-    state.pullSpool.accumulate(gain, adjustedNumerator, pullNumerator);
-    if (state.pullSpool.enabled()) {
+    if (state.useTrainingPrevalence) {
+        for (int32_t feature = 0; feature < features; ++feature) {
+            const double observed = state.featureTotals(feature);
+            if (observed > 0.0) {
+                state.pull(feature) =
+                    state.pullNumerators(feature) / observed;
+            }
+        }
+    } else if (state.diagnosticSpool.storesPullRecords()) {
         for (int32_t feature = 0; feature < features; ++feature) {
             const double observed = state.featureTotals(feature);
             if (observed > 0.0 && std::isfinite(gain(feature))) {
@@ -571,15 +736,20 @@ inline void write_diagnostic(std::ostream& out, double value) {
 
 inline void write_feature_residuals(std::ostream& out,
         const std::vector<std::string>& featureNames,
-        const FeatureResidualState& state, bool cheapDiagnostics) {
+        const FeatureResidualState& state) {
     out << "Feature\tabsDiff\tabsDiffRate"
         << "\ttotCount\tnUnits\tlog2Gain"
         << "\tmarginalDev\tconditionalDev"
         << "\tfactorDrift\tdeletionTV"
         << "\ttopicInformation"
         << "\tcofeatureCorroboration"
-        << "\tcofeatureConflict"
-        << (cheapDiagnostics ? "\n" : "\tadjAbsDiffRate\tpull\n");
+        << "\tcofeatureConflict";
+    if (state.useTrainingPrevalence) {
+        out << "\tpull\n";
+    } else {
+        out << (state.cheapDiagnostics
+            ? "\n" : "\tadjAbsDiffRate\tpull\n");
+    }
     for (int32_t feature = 0;
             feature < static_cast<int32_t>(featureNames.size()); ++feature) {
         const double total = state.featureTotals(feature);
@@ -607,7 +777,10 @@ inline void write_feature_residuals(std::ostream& out,
         write_diagnostic(out, state.cofeatureCorroboration(feature));
         out << "\t";
         write_diagnostic(out, state.cofeatureConflict(feature));
-        if (!cheapDiagnostics) {
+        if (state.useTrainingPrevalence) {
+            out << "\t";
+            write_diagnostic(out, state.pull(feature));
+        } else if (!state.cheapDiagnostics) {
             out << "\t";
             write_diagnostic(out, state.adjustedResidualPerCount(feature));
             out << "\t";

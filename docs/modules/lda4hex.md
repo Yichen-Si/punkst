@@ -146,9 +146,10 @@ Maximum memory used for retained parsed count data. Integer byte values and
 sequential temporary storage whenever the count cache is active.
 
 `--temp-dir`
-Parent directory for the temporary count cache. The system temporary
-directory is used when omitted. No directory is created for a resident cache;
-temporary files are removed when fitting finishes.
+Parent directory for the temporary count cache and any delegated transform
+diagnostic spool. The system temporary directory is used when omitted. No
+directory is created for a resident cache; temporary files are removed when
+their operation finishes.
 
 `--minibatch-size`
 Minibatch size. Default: `512`.
@@ -248,96 +249,10 @@ With `--unit-diagnostics-similarity`, the file also contains:
 - `sh_q`
 
 `{prefix}.feature_residuals.tsv`
-Written when `--residuals` is enabled.
-
-The columns are:
-
-| Column | Definition |
-|---|---|
-| `Feature` | Feature name |
-| `absDiff` | $\sum_d\|n_{dw}-\mu_{dw}\|$ |
-| `absDiffRate` | `absDiff / totCount`, or `0` when `totCount` is `0` |
-| `totCount` | $N_w=\sum_d n_{dw}$ |
-| `nUnits` | Number of units with $n_{dw}>0$ |
-| `log2Gain` | $\log_2(N_w/M_w)$, where $M_w=\sum_d\mu_{dw}$ |
-| `marginalDev` | Poisson deviance explained by the total abundance shift |
-| `conditionalDev` | Remaining Poisson deviance after applying the global magnitude adjustment |
-| `factorDrift` | Deviation between observed topic profile and gain-adjusted expected profile |
-| `deletionTV` | One-step deletion effect on the unit topic mixture |
-| `topicInformation` | Model-only topic specificity of the feature |
-| `cofeatureCorroboration` | Mean positive topic-overlap lift against other positive features in the same unit |
-| `cofeatureConflict` | Mean negative topic-overlap lift against other positive features in the same unit |
-| `adjAbsDiffRate` | Gain-adjusted absolute residual |
-| `pull` | Leverage weighted by gain-adjusted absolute residual |
-
-For fitted probabilities $p_{dw}$, diagnostics use
-$\mu_{dw}=n_dp_{dw}$. Since both observed and predicted counts sum to
-$n_d$, the linear terms in the corresponding Poisson deviance cancel within
-each unit. The summed fixed-model Poisson deviance therefore equals the LDA
-multinomial deviance, and its per-feature marginal and conditional components
-provide a nonnegative decomposition. The gain remains a descriptive transfer
-statistic because feature gains cannot vary independently while preserving
-topic normalization.
-
-For a positive cell, `deletionTV` subtracts its current variational topic
-allocation from the local assignment sufficient statistics:
-
-$$
-\gamma^{(-w)}_{dk}=\max\{0,\gamma_{dk}-n_{dw}\varphi_{dwk}\}.
-$$
-
-After normalizing $\gamma_d^{(-w)}$ as for the reported topic proportions,
-let $J_{dw}^{+}=\text{TV}(\hat\theta_d^{(-w)},\hat\theta_d)$.
-The output is
-
-$$
-\text{deletionTV}_w
-=\frac{1}{N_w}\sum_{d:n_{dw}>0}n_{dw}J_{dw}^{+}.
-$$
-
-If deletion removes all assignment mass, the deleted mixture is the symmetric
-prior mixture. This is a one-step positive-cell diagnostic, not a fully
-reconverged leave-one-feature-out fit, and it excludes zero-cell effects.
-
-The cofeature diagnostics assess whether a feature's model-implied topic
-direction agrees with the other positive features in the same unit, without
-using the inferred unit mixture. Define
-
-$$
-b_{kw}=\frac{\lambda_{kw}}{\sum_v\lambda_{kv}},\qquad
-\pi_k=\frac{\sum_v\lambda_{kv}}{\sum_{\ell,v}\lambda_{\ell v}},
-$$
-
-and the topic signature and model-only information of feature \(w\):
-
-$$
-r_{wk}=\frac{\pi_kb_{kw}}{\sum_\ell\pi_\ell b_{\ell w}},
-\qquad
-I_w=\sum_k r_{wk}\log\frac{r_{wk}}{\pi_k}.
-$$
-
-`topicInformation` is \(I_w\). Let \(L_d\) be the number of distinct model
-features with positive effective count in unit \(d\). For \(L_d>1\), the
-presence-weighted signature of the other features and the log overlap lift are
-
-$$
-\bar r_{d,-w,k}
-=\frac{1}{L_d-1}\sum_{\substack{v:n_{dv}>0\\v\ne w}}r_{vk},
-\qquad
-A_{dw}=\log\left(\sum_k
-\frac{r_{wk}\bar r_{d,-w,k}}{\pi_k}\right).
-$$
-
-`cofeatureCorroboration` averages \(\max(A_{dw},0)\), and
-`cofeatureConflict` averages \(\max(-A_{dw},0)\), once per eligible unit
-rather than once per count. Both averages are `NA` when there are no eligible
-units, including when an observed feature only occurs without a positive
-cofeature.
-
-These are model-relative screening statistics. A high corroboration score
-means agreement under the fitted topic vocabulary, not that a feature is
-necessarily useful or biologically correct. Conversely, conflict can reflect
-a real secondary signal or model misspecification rather than noise.
+Written when `--residuals` is enabled. See
+[Per-feature diagnostics for topic models](feature_eval.md) for the complete
+column schema, formulas, interpretation, LDA specialization, and computational
+behavior.
 
 `entropy` is computed from each unit's topic proportions, treating them as a
 probability distribution over topics. The opt-in `sh_lcr` and `sh_q`
@@ -396,6 +311,12 @@ Use streaming mode for 10X input sorted by barcode. With multiple datasets, stre
 
 #### Diagnostic and output controls
 
+`--temp-dir`
+Parent directory for temporary diagnostic files. The system temporary
+directory is used when omitted, and scoped temporary files are removed when
+the transform finishes. A diagnostic directory is created only when
+`--residuals` requires transform-data prevalence.
+
 `--residuals`
 Write `{prefix}.unit_stats.tsv` and `{prefix}.feature_residuals.tsv`.
 
@@ -404,7 +325,15 @@ Alias for `--residuals`.
 
 `--feature-diagnostics-cheap`
 With `--residuals`, omit the spool-dependent
-`adjAbsDiffRate` and `pull` feature columns.
+`adjAbsDiffRate` and `pull` feature columns. This option has no effect when a
+fitting command transforms the model's training data, because that path is
+already spool-free and always emits raw-residual `pull`.
+
+`--use-training-prevalence`
+With `--residuals`, use fitted training prevalence, accumulate raw-residual
+Pull inline, and omit `adjAbsDiffRate`. Fitting commands set this automatically
+after fitting the transformed data; standalone and projection-only transforms
+leave it off by default.
 
 `--unit-diagnostics-similarity`
 With `--residuals`, add `cosine_sim`, `sh_lcr`, and `sh_q` to
@@ -433,8 +362,9 @@ adds `cosine_sim`, `sh_lcr`, and `sh_q`.
 `{prefix}.feature_residuals.tsv`
 Written only when `--residuals` is enabled. It contains the support,
 abundance-shift, deviance, topic-drift, deletion, and Pull diagnostics
-described above. Rows cover model-overlapping features only, including with
-`--pseudobulk-all-features`. Feature diagnostics use effective weighted
-counts when feature weights are active.
+defined in [Per-feature diagnostics for topic models](feature_eval.md). Rows
+cover model-overlapping features only, including with
+`--pseudobulk-all-features`. Feature diagnostics use effective weighted counts
+when feature weights are active.
 
 In `{prefix}.unit_stats.tsv`, `total_count` is the raw total count after feature remap and filtering but before feature weights are applied.
