@@ -4,6 +4,25 @@ This page defines the per-feature diagnostics written to
 `{prefix}.feature_residuals.tsv` when `--residuals` is enabled for LDA or the
 Gamma–Poisson topic model.
 
+## Interactive visualization
+
+The repository includes
+[`ext/py/feature_residuals_viz.py`](../../ext/py/feature_residuals_viz.py) for
+exploring a `*.feature_residuals.tsv` file as linked, configurable scatter
+plots with marginal histograms, global filters, percentile-colored hover
+details, and box/lasso selection:
+
+```bash
+python3 ext/py/feature_residuals_viz.py \
+  --input results.feature_residuals.tsv \
+  --output results.feature_residuals.html
+```
+
+Open the generated HTML file in a web browser. If `--output` is omitted, the
+script replaces the input file's `.tsv` suffix with `.html`; `--title` can set
+a custom page title. The generator itself uses only the Python standard
+library, while the generated page loads Plotly from its CDN.
+
 ## Model overview
 
 A topic model represents each unit as a mixture of $K$ topics and each topic
