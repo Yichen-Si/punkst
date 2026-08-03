@@ -278,6 +278,8 @@ public:
     const MatrixXd& getExpectedBeta() const;
     const MatrixXd& getBetaAllocationKernel() const;
     const VectorXd& getFeatureDispersion() const;
+    bool featureWeightsActive() const;
+    const std::vector<double>& getFeatureWeights() const;
     void getTopicAbundance(std::vector<double>& topic_weights) override;
     void get_topic_abundance(std::vector<double>& topic_weights);
 

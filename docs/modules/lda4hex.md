@@ -364,7 +364,11 @@ Written only when `--residuals` is enabled. It contains the support,
 abundance-shift, deviance, topic-drift, deletion, and Pull diagnostics
 defined in [Per-feature diagnostics for topic models](feature_eval.md). Rows
 cover model-overlapping features only, including with
-`--pseudobulk-all-features`. Feature diagnostics use effective weighted counts
-when feature weights are active.
+`--pseudobulk-all-features`. Most feature diagnostics use effective weighted
+counts when feature weights are active. The multinomial variance fields
+`F_w`, `Qa_w`, `Q0_w`, `EVES_w`, `TVES_w`, and `U_w` instead use raw integer
+counts and raw model-panel totals; feature weights affect them only indirectly
+through the inferred topic proportions.
 
-In `{prefix}.unit_stats.tsv`, `total_count` is the raw total count after feature remap and filtering but before feature weights are applied.
+In `{prefix}.unit_stats.tsv`, `total_count` is the raw total count after feature
+remapping and filtering but before feature weights are applied.

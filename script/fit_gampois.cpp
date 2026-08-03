@@ -48,8 +48,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     int32_t icolDispersion = -1;
     bool estimateDispersion = false;
     int32_t dispersionInitEpochs = 1;
-    int32_t dispersionMinPositive = 10;
-    int32_t dispersionMuBins = 32;
+    std::string dispersionEstimator = "factorial";
     double defaultWeight = -1.0;
     bool transform = false;
     bool randomizeOutput = false;
@@ -72,6 +71,8 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     double nuRate = -1.0;
     double sizeFactor = -1.0;
     double dispersionLoessSpan = 0.3;
+    double dispersionMinInformation = 8.0;
+    double dispersionOutlierSd = 2.0;
     double dispersionDeltaMin = 1e-8;
     double dispersionDeltaMax = 1e4;
     bool ebShrinkage = false;
@@ -131,11 +132,12 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("size-factor", "Corpus mean document length nbar; defaults to the effective feature total divided by document count", sizeFactor);
 
     pl.add_option("dispersion-init-epochs", "Poisson warmup epochs before estimating dispersion", dispersionInitEpochs)
+      .add_option("dispersion-estimator", "All-cell moment estimator: factorial or residual", dispersionEstimator)
       .add_option("dispersion-loess-span", "LOESS span for the dispersion abundance trend", dispersionLoessSpan)
-      .add_option("dispersion-min-positive", "Minimum positive cells for a raw dispersion estimate", dispersionMinPositive)
-      .add_option("dispersion-mu-bins", "Log-mean bins per feature during dispersion estimation", dispersionMuBins)
-      .add_option("dispersion-delta-min", "Lower bound for estimated inverse dispersion", dispersionDeltaMin)
-      .add_option("dispersion-delta-max", "Upper bound for estimated inverse dispersion", dispersionDeltaMax);
+      .add_option("dispersion-min-information", "Minimum adjusted squared-mean information Q for a raw dispersion estimate", dispersionMinInformation)
+      .add_option("dispersion-outlier-sd", "Standard-deviation threshold for retaining high-dispersion outliers", dispersionOutlierSd)
+      .add_option("dispersion-delta-min", "Lower bound for estimated NB2 dispersion phi", dispersionDeltaMin)
+      .add_option("dispersion-delta-max", "Upper bound for estimated NB2 dispersion phi", dispersionDeltaMax);
 
     try {
         pl.readArgs(argc, argv);
@@ -179,7 +181,12 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     if (estimateDispersion && (dispersionInitEpochs < 1 || dispersionInitEpochs >= nEpochs)) {
         error("--dispersion-init-epochs must be at least 1 and smaller than --n-epochs");
     }
-    if (estimateDispersion && (dispersionMinPositive < 1 || dispersionMuBins < 1
+    if (dispersionEstimator != "factorial" && dispersionEstimator != "residual") {
+        error("--dispersion-estimator must be factorial or residual");
+    }
+    if (estimateDispersion && (!std::isfinite(dispersionMinInformation)
+        || dispersionMinInformation <= 0.0 || !std::isfinite(dispersionOutlierSd)
+        || dispersionOutlierSd < 0.0
         || !std::isfinite(dispersionLoessSpan) || dispersionLoessSpan <= 0.0
         || dispersionLoessSpan > 1.0
         || dispersionDeltaMin <= 0.0 || dispersionDeltaMax < dispersionDeltaMin
@@ -296,11 +303,15 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         gp->printTopicAbundance();
         if (estimateDispersion && epoch + 1 == dispersionInitEpochs) {
             GammaPoissonDispersionOptions options;
-            options.min_positive = dispersionMinPositive;
-            options.mu_bins = dispersionMuBins;
+            options.estimator = dispersionEstimator == "factorial"
+                ? GammaPoissonDispersionEstimatorKind::Factorial
+                : GammaPoissonDispersionEstimatorKind::Residual;
+            options.min_information = dispersionMinInformation;
+            options.outlier_sd = dispersionOutlierSd;
             options.loess_span = dispersionLoessSpan;
             options.delta_min = dispersionDeltaMin;
             options.delta_max = dispersionDeltaMax;
+            options.adjust_marginal_gain = false;
             GammaPoissonDispersionResult dispersion = [&]() {
                 if (use_10x) {
                     return gp->estimateFeatureDispersion10X(
@@ -364,11 +375,11 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
         append_arg(args, "--max-iter", maxIter);
         append_arg(args, "--mean-change-tol", mDelta);
         args.push_back("--use-stored-dispersion");
+        args.push_back("--use-training-prevalence");
         if (randomizeOutput) args.push_back("--randomize-output");
         if (pseudobulkAllFeatures) args.push_back("--pseudobulk-all-features");
         if (computeResiduals) {
             args.push_back("--residuals");
-            args.push_back("--use-training-prevalence");
             if (cheapFeatureDiagnostics) {
                 warning("--feature-diagnostics-cheap has no effect when "
                     "transforming fitted training data");

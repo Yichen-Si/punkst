@@ -1460,7 +1460,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     const GammaPoissonDispersionOptions& options, const std::string& inFile,
     int32_t batchSize_, int32_t minCountTrain_, int32_t maxUnits) {
     if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    GammaPoissonDispersionEstimator estimator(M_, options);
+    GammaPoissonDispersionEstimator estimator(*model_, options);
     std::ifstream in(inFile);
     if (!in) error("%s: Error opening input file: %s", __func__, inFile.c_str());
     std::vector<Document> docs;
@@ -1470,7 +1470,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
         const int32_t remaining = maxUnits == INT32_MAX ? INT32_MAX : maxUnits - processed;
         const bool more = readMinibatch(in, docs, ids, batchSize_, minCountTrain_, remaining);
         if (!docs.empty()) {
-            estimator.accumulate(*model_, DocumentView(docs));
+            estimator.accumulate(DocumentView(docs));
             processed += static_cast<int32_t>(docs.size());
         }
         if (!more || docs.empty()) break;
@@ -1487,7 +1487,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     if (!initialized || !model_) {
         error("%s: GammaPoisson4Hex is not initialized", __func__);
     }
-    GammaPoissonDispersionEstimator estimator(M_, options);
+    GammaPoissonDispersionEstimator estimator(*model_, options);
     source.reset();
     uac::DocumentBlock block;
     int32_t processed = 0;
@@ -1498,7 +1498,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
                 > maxUnits - processed) {
             block.counts.resize(maxUnits - processed);
         }
-        estimator.accumulate(*model_, DocumentView(block.counts));
+        estimator.accumulate(DocumentView(block.counts));
         processed += static_cast<int32_t>(block.counts.size());
     }
     GammaPoissonDispersionResult result = estimator.finish();
@@ -1513,7 +1513,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     if (!initialized || !model_) {
         error("%s: GammaPoisson4Hex is not initialized", __func__);
     }
-    GammaPoissonDispersionEstimator estimator(M_, options);
+    GammaPoissonDispersionEstimator estimator(*model_, options);
     int32_t processed = 0;
     for (const std::vector<Document>& batch : batches) {
         if (processed >= maxUnits) break;
@@ -1522,8 +1522,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
             : std::min<int32_t>(
                 static_cast<int32_t>(batch.size()), maxUnits - processed);
         if (take <= 0) break;
-        estimator.accumulate(
-            *model_, DocumentView(batch.data(), take));
+        estimator.accumulate(DocumentView(batch.data(), take));
         processed += take;
     }
     GammaPoissonDispersionResult result = estimator.finish();
@@ -1535,20 +1534,20 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion10X(
     const GammaPoissonDispersionOptions& options, int32_t batchSize_, int32_t maxUnits) {
     if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
     if (!dge_cache_ready_) error("%s: 10X cache is not initialized", __func__);
-    GammaPoissonDispersionEstimator estimator(M_, options);
+    GammaPoissonDispersionEstimator estimator(*model_, options);
     int32_t processed = 0;
     std::vector<Document> docs;
     for (int32_t idx : dge_train_idx_cache_) {
         if (processed + static_cast<int32_t>(docs.size()) >= maxUnits) break;
         docs.push_back(dge_docs_cache_[idx]);
         if (static_cast<int32_t>(docs.size()) >= batchSize_) {
-            estimator.accumulate(*model_, DocumentView(docs));
+            estimator.accumulate(DocumentView(docs));
             processed += static_cast<int32_t>(docs.size());
             docs.clear();
         }
     }
     if (!docs.empty() && processed < maxUnits) {
-        estimator.accumulate(*model_, DocumentView(docs));
+        estimator.accumulate(DocumentView(docs));
         processed += static_cast<int32_t>(docs.size());
     }
     GammaPoissonDispersionResult result = estimator.finish();
@@ -1562,7 +1561,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion10X(
     if (!initialized || !model_) {
         error("%s: GammaPoisson4Hex is not initialized", __func__);
     }
-    GammaPoissonDispersionEstimator estimator(M_, options);
+    GammaPoissonDispersionEstimator estimator(*model_, options);
     dge.resetStream();
     std::vector<Document> docs;
     std::vector<int32_t> unit_indices;
@@ -1575,7 +1574,7 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion10X(
             docs, unit_indices, batchSize_, remaining, minCount);
         if (!docs.empty()) {
             for (Document& doc : docs) applyWeights(doc);
-            estimator.accumulate(*model_, DocumentView(docs));
+            estimator.accumulate(DocumentView(docs));
             processed += static_cast<int32_t>(docs.size());
         }
         if (docs.empty()) break;
@@ -1729,6 +1728,17 @@ const VectorXd& GammaPoisson4Hex::getFeatureDispersion() const {
         error("%s: GammaPoisson4Hex is not initialized", __func__);
     }
     return model_->get_feature_dispersion();
+}
+
+bool GammaPoisson4Hex::featureWeightsActive() const {
+    return model_ && model_->feature_weights_active();
+}
+
+const std::vector<double>& GammaPoisson4Hex::getFeatureWeights() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_feature_weight();
 }
 
 void GammaPoisson4Hex::getTopicAbundance(std::vector<double>& topic_weights) {

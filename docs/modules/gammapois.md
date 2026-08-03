@@ -221,20 +221,19 @@ positive finite value in that column.
 
 Alternatively, `--estimate-dispersion` fits $\tau_w$ after a Poisson warmup.
 It is mutually exclusive with `--icol-dispersion`. The estimator uses fitted
-topic means on observed cells, a positive-truncated NB2 residual moment, a
-direct all-feature log-mean LOESS trend, and shrinkage for rare features.
+topic posterior moments over all units, a robust abundance trend, and
+empirical-Bayes shrinkage. `--dispersion-estimator factorial` is the default;
+`residual` selects the comparison residual-moment estimator.
 
-When `--estimate-dispersion` is active, the output includes a separate `{prefix}.dispersion.tsv` with columns `Feature`,
-`n_positive`, `phi_raw`, `phi_shrunk`, `tau`, and `status`, where `phi_raw` is
-$\widehat{\phi}_w \;=\; \frac{1}{n^{+}_w}\sum_{d:\,n_{dw}>0}\frac{(n_{dw}-\hat\mu_{dw})^2 - \hat\mu_{dw}}{\hat\mu_{dw}^2}$, `tau = 1 / phi_shrunk`. Status codes are `-2` for too few positive documents,
-`-1` for a raw estimate clamped at the lower bound, `0` for an estimated value,
-and `1` for a raw estimate clamped at the upper bound.
+When `--estimate-dispersion` is active, `{prefix}.dispersion.tsv` records the
+raw moment estimate, uncertainty, trend, shrunk estimate, and diagnostics.
+See [Dispersion estimation procedure](#dispersion-estimation-procedure).
 
 `--dispersion-init-epochs` controls the number of initial Poisson epochs
 (default `1`); it must be smaller than `--n-epochs`. The remaining tuning
-options are `--dispersion-loess-span`, `--dispersion-min-positive`,
-`--dispersion-mu-bins`, `--dispersion-delta-min`,
-and `--dispersion-delta-max`.
+options are `--dispersion-estimator`, `--dispersion-loess-span`,
+`--dispersion-min-information`, `--dispersion-outlier-sd`,
+`--dispersion-delta-min`, and `--dispersion-delta-max`.
 
 ### SVI options
 
@@ -415,9 +414,9 @@ provided values must agree with the state for model features.
 Skip transform-data dispersion estimation and use the state dispersion. A
 state without dispersion remains Poisson.
 
-`--dispersion-loess-span`, `--dispersion-min-positive`,
-`--dispersion-mu-bins`, `--dispersion-delta-min`,
-`--dispersion-delta-max`
+`--dispersion-estimator`, `--dispersion-loess-span`,
+`--dispersion-min-information`, `--dispersion-outlier-sd`,
+`--dispersion-delta-min`, `--dispersion-delta-max`
 Control the default transform-data dispersion estimator.
 
 `--max-iter`, `--mean-change-tol`
@@ -439,10 +438,12 @@ positive-cell information until corpus-wide feature gains are known. Their
 output columns are omitted.
 
 `--use-training-prevalence`
-With residual output, use fitted training prevalence, accumulate raw-residual
-Pull inline, and omit `adjAbsDiffRate`. Fitting commands set this automatically
-when transforming the data they just fitted; standalone transforms leave it
-off by default.
+Treat the input as the fitted training data. For residual output this uses
+fitted training prevalence, accumulates raw-residual Pull inline, and omits
+`adjAbsDiffRate`. For transform-data dispersion it also disables marginal-gain
+calibration and fixes $a_w=1$. Fitting commands set training behavior for their
+internal dispersion pass and set this flag when transforming the data they
+just fitted; standalone transforms leave it off by default.
 
 `--unit-diagnostics-similarity`
 With residual output, add `cosine_sim`, `sh_lcr`, and `sh_q` to the per-unit
@@ -518,9 +519,96 @@ observation-conditioned $E[\epsilon_{dw}\mid n_{dw}]$.
 
 `{prefix}.feature_residuals.tsv`
 Written with the unit statistics. Rows cover model features only, including
-when `--pseudobulk-all-features` is enabled. Counts and diagnostics use
-effective weighted counts when feature weights are active.
+when `--pseudobulk-all-features` is enabled. The ordinary residual diagnostics
+use effective weighted counts when feature weights are active. The variance
+columns `F_w`, `Qa_w`, `Q0_w`, `EVES_w`, and `TVES_w` instead use the raw-count
+scale; see the linked page for positive- and zero-weight behavior.
 
 See [Per-feature diagnostics for topic models](feature_eval.md) for the
 complete column schema, formulas, interpretation, Gamma–Poisson
 specialization, and computational behavior.
+
+## Dispersion estimation procedure
+
+Dispersion is estimated after fitting a warmup model without $\epsilon_{dw}$.
+
+Write $\bar\beta_{kw}=E[\beta_{kw}]$, $z_{dk}=c_dE[\theta_{dk}], \ v_{dk}=c_d^2\operatorname{Var}(\theta_{dk})$.
+
+Let $S=\sum_dz_d$, $C=\sum_dz_dz_d^T$, and $V_k=\sum_dv_{dk}$, compute
+
+$$
+M_w=\bar\beta_w^TS,\qquad
+Q_w^{\rm mean}=\bar\beta_w^TC\bar\beta_w,\qquad
+Q_w=Q_w^{\rm mean}+\sum_kV_k\bar\beta_{kw}^2.
+$$
+
+Thus $M_w=\sum_d\mu_{dw}$ and $Q_w$ corrects
+$\sum_d\mu_{dw}^2$ for theta-posterior uncertainty. Beta-posterior uncertainty
+is not included.
+
+When feature weights are active, warmup dispersion is estimated on the raw
+count scale. For a positive fitted weight $s_w$, the estimator uses
+$y_{dw}=n_{dw}/s_w$, $\mu^{\rm raw}_{dw}=\mu_{dw}/s_w$,
+$M_w^{\rm raw}=M_w/s_w$, and $Q_w^{\rm raw}=Q_w/s_w^2$. On training data
+$a_w=1$. On test data,
+$a_w=N_w^{\rm raw}/M_w^{\rm raw}$ and
+$Q_w^a=a_w^2Q_w^{\rm raw}$; `--use-training-prevalence` selects the training
+rule. A zero-weight feature has no recoverable raw fitted mean during warmup,
+so its raw estimate and uncertainty diagnostics are `NA`; it receives
+$\phi_{\min}$, $\tau=1/\phi_{\min}$, and status `-2`.
+
+This posterior-corrected warmup $Q_w$ is intentionally different from the
+squared posterior-mean moment used for the final-model `Qa_w`, `EVES_w`, and
+`TVES_w` feature diagnostics. See
+[Final-model variance decomposition](feature_eval.md#final-model-variance-decomposition).
+
+The default factorial estimator is
+
+$$
+\widehat\phi_w^{\rm fac}
+=\frac{\sum_dy_{dw}(y_{dw}-1)}{Q_w^a}-1.
+$$
+
+**Shrinkage**
+
+Raw estimates for features with $Q_w^a$ at least `--dispersion-min-information` are fitted on the natural $\phi$ scale against $\log(a_wM_w/D)$ using inverse-variance weighted local quadratic LOESS. The local coordinate is scaled by its neighborhood radius; rank-deficient quadratic fits fall back to a local linear fit and then to a weighted mean.
+The prior variance is
+
+$$
+\sigma^2=\max\left\{\phi_{\min}^2,
+ [1.4826\operatorname{MAD}(\widehat\phi-\phi^{\rm trend})]^2
+ -\operatorname{mean}(\operatorname{se}_w^2)\right\},
+$$
+
+and regular empirical-Bayes shrinkage is
+
+$$
+\phi_w^{\rm shrunk}=
+\frac{\widehat\phi_w/\operatorname{se}_w^2
++\phi_w^{\rm trend}/\sigma^2}
+{1/\operatorname{se}_w^2+1/\sigma^2}.
+$$
+
+A positive raw value more than `--dispersion-outlier-sd` combined standard
+deviations above the trend is retained instead of shrunk. Features with low $Q_w^a$ use the trend directly.
+
+The result is bounded by `--dispersion-delta-min` and `--dispersion-delta-max`, then stored as $\tau_w=1/\phi_w^{\rm shrunk}$.
+
+The raw factorial estimate and $Q_w$ use all units exactly. To preserve sparse
+execution, the $\sum\mu_{dw}^3$ and $\sum\mu_{dw}^4$ correction terms in
+`se_phi` are accumulated only for units with a positive observed count. Thus
+`se_phi` is an analytic sparse approximation; it can understate the omitted
+high-order contribution when many zero-count units have non-negligible fitted
+means. This approximation affects LOESS weights and shrinkage, not
+`phi_raw` itself.
+
+**Output**
+
+The diagnostic columns are `Feature`, `n_positive`, `Q_w`, `a_w`, `phi_raw`,
+`se_phi`, `phi_trend`, `phi_shrunk`, `tau`, `status`, and `max_influence`.
+`max_influence` is the largest
+$\max(n_{dw}(n_{dw}-1),0)$ divided by its feature total. Status is `-2` for
+trend-only insufficient information, `-1` for a regular estimate at the lower
+bound, `0` for a regular estimate, `1` for a regular estimate at the upper
+bound, `2` for a retained high-dispersion outlier, and `3` for a retained
+outlier at the upper bound.

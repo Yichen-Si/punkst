@@ -41,6 +41,8 @@ $$
 | $q$ | Converged variational posterior used for local inference |
 | $n_{dw}$ | Effective observed count after any feature weighting |
 | $n_d=\sum_w n_{dw}$ | Effective LDA unit total |
+| $y_{dw}$ | Raw count before feature weighting |
+| $r_d=\sum_w y_{dw}$ | Raw LDA total over model-panel features |
 | $c_d$ | Gamma–Poisson exposure; equal to $n_d$ in the LDA representation |
 | $\bar\theta_{dk}$ | Posterior mean local topic intensity or proportion |
 | $\bar\beta_{kw}$ | Fitted topic-feature factor used in the marginal mean |
@@ -50,7 +52,7 @@ $$
 | $\hat\theta_d$ | Normalized topic proportions reported for unit $d$ in $\Delta^{K-1}$ |
 | $\hat\beta_{kw}=\bar\beta_{kw}/b_k$ | Normalized topic profile in $\Delta^{M-1}$ |
 | $N_w=\sum_d n_{dw}$ | Observed corpus total for feature $w$ |
-| $U_w=\|\{d:n_{dw}>0\}\|$ | Number of evaluated units expressing feature $w$ |
+| $D_w^+=\|\{d:n_{dw}>0\}\|$ | Number of evaluated units expressing feature $w$ |
 | $S_k=\sum_d c_d\bar\theta_{dk}$ | Evaluated-corpus topic exposure |
 | $M_w=\sum_d\mu_{dw}$ | Predicted corpus total for feature $w$ |
 | $\pi_k$ | Topic prevalence in the evaluated corpus |
@@ -70,26 +72,178 @@ $\bar\epsilon_{dw}=E_q[\epsilon_{dw}]$ denotes the observation-conditioned
 dispersion mean for a positive cell. Unrepresented zero entries use
 $\bar\epsilon_{dw}=1$ under the sparse approximation.
 
-## Corpus totals and sparse zero-entry accounting
+## Corpus totals and marginal feature gain (`log2Gain`)
 
-The predicted feature total can be computed without visiting every zero entry:
-
+The predicted feature total is
 $$
 M_w=\sum_d\mu_{dw}=\sum_k\bar\beta_{kw}S_k.
 $$
 
-## Marginal feature gain (`log2Gain`)
-
-The diagnostic-only feature multiplier is
-
-$$
-\widehat a_w=\frac{N_w}{M_w}.
-$$
+The diagnostic-only feature multiplier is $\widehat a_w=\frac{N_w}{M_w}.$
 
 `log2Gain` is $\log_2\widehat a_w$. On new test data it measures the
 feature-wide abundance shift required to match the evaluated corpus. On
 training data it remains a marginal calibration diagnostic, but it is not
 used to weight training-mode `pull`.
+
+## Variance decomposition
+
+Both models report statistics based on variance decomposition. For Gamma–Poisson the dispersion terms are estimated based on the final model, distinct from the dispersion estimated in the warmup stage.
+
+### Gamma–Poisson moments `F_w, Q0_w, Qa_w`
+
+Moments are reported on the raw-count scale even if feature weighting is
+active. Let $s_w$ be the feature weight. For $s_w>0$, the effective
+inference count and fitted factor are converted back by
+
+$$
+y_{dw}=n_{dw}/s_w,\qquad
+\bar\beta^{\rm raw}_{kw}=\bar\beta_{kw}/s_w.
+$$
+
+The exposure $c_d$ and posterior topic intensity $\bar\theta_d$ are retained
+from inference on the effective weighted data. In the formulas below,
+$N_w=\sum_dy_{dw}$, $F_w=\sum_dy_{dw}(y_{dw}-1)$ uses the raw counts $y_{dw}$, and $\bar\beta_w$ denotes the
+raw-scale factor $\bar\beta_w^{\rm raw}$ when weights are active.
+
+Let
+
+$$
+z_d=c_d\bar\theta_d,\qquad
+S=\sum_dz_d,\qquad
+C=\sum_dz_dz_d^T,
+$$
+
+and define the exposure totals $C_1=\sum_dc_d,\ C_2=\sum_dc_d^2.$
+
+For feature $w$, the gain-adjusted model-based, and depth-only second moments are
+
+$$
+Q_w^a=\widehat a_w^2 \sum_d E_{q}[\sum_k\mu_{dwk}]^2 =\widehat a_w^2\bar\beta_w^TC\bar\beta_w,
+$$
+$$
+Q_w^0=\sum_d (\mu^0_{dw})^2 =\sum_d(r_d\cdot\frac{N_w}{N_{\text{total}}})^2=\left(\frac{N_w}{C_1}\right)^2C_2.
+$$
+
+The diagnostic raw dispersions can therefore be reconstructed as
+
+$$
+\widehat\phi_w=\frac{F_w}{Q_w^a}-1,
+\qquad
+\widehat\phi_w^0=\frac{F_w}{Q_w^0}-1.
+$$
+
+These moments use the squared posterior-mean prediction. They do not add the
+theta-posterior variance correction used by the warmup dispersion estimator.
+The marginal multiplier $\widehat a_w=N_w/M_w$ is applied on both training and
+test data so the topic and depth-only means have the same feature total. Thus
+`--use-training-prevalence` does not change this decomposition.
+
+For features with $s_w=0$, the fitted model has no raw-scale feature mean to divide back to.
+Raw sidecars still provide $F_w$ and $N_w$, so `F_w` and the exposure-based
+`Q0_w` are reported, while `Qa_w`, `EVES_w`, and `TVES_w` are `NA`.
+
+### LDA multinomial moments `F_w, Q0_w, Qa_w`
+
+LDA conditions on each raw model-panel total count $r_d$. Let $\hat\theta_d$ be the reported topic proportions,
+$\hat\beta_w$ the column of the row-normalized topic profiles, and
+
+$$
+S_n=\sum_dr_d\hat\theta_d, \qquad
+C_{n(n-1)}=\sum_dr_d(r_d-1) \hat\theta_d\hat\theta_d^T.
+$$
+
+Using raw counts even when feature weights were used for inference, define
+$$
+M_w=\hat\beta_w^TS_n,
+\qquad
+\widehat a_w=\frac{N_w}{M_w},
+$$
+
+$$
+Q_w^a=(\widehat a_w)^2 \hat\beta_w^TC_{n(n-1)}\hat\beta_w,\qquad
+Q_w^0=\left(\frac{N_w}{N}\right)^2 \sum_dr_d(r_d-1).
+$$
+
+Consequently $F_w/Q_w^a-1$ is a multinomial second-moment lack-of-fit
+statistic, not a fitted LDA dispersion parameter.
+
+### Excess variance explained by structure (`EVES_w`)
+
+The excess factorial moment relative to the depth-only Poisson null decomposes:
+
+$$
+F_w-Q_w^0=(F_w-Q_w^a) + (Q_w^a-Q_w^0).
+$$
+
+Because $E[y(y-1)]=\mu^2$ under Poisson, and $Q_w^0=\sum_d(\mu^0_{dw})^2$ where $\mu^0_{dw}$ is the expectation under the null model with no structure,
+
+$$
+E[F_w-Q_w^0]=\sum_d (\text{Var}(y_{dw}) + \mu_{dw}^2 - \mu_{dw})-\sum_d(\mu_{dw}^0)^2$$
+$$
+=\sum_d (\text{Var}(y_{dw}) - \mu_{dw}) + \sum_d (\mu_{dw}^2-(\mu_{dw}^0)^2)
+$$
+$$
+=\sum_d (\text{Var}(y_{dw}) - \mu_{dw}) + D \cdot (\text{Var}(\mu_{dw}) - \text{Var}(\mu_{dw}^0))
+$$
+
+The last equality holds because $\text{Var}(\mu_{dw})=\frac{1}{D}\sum_d(\mu_{dw}-\mu_w)^2=\frac{1}{D}\sum_d\mu_{dw}^2-\mu_w^2$, where $\mu_w=\frac{1}{D}\sum_d \mu_{dw}=\frac{1}{D}\sum_d \mu_{dw}^0=N_w/D$.
+
+The first term is the excess variance compared with a Poisson model, and the second term is the difference of the variance of the fitted means.
+
+The reported fraction is
+
+$$
+\operatorname{EVES}_w =\frac{Q_w^a-Q_w^0}{F_w-Q_w^0}.
+$$
+
+`EVES_w` is `NA` when $F_w-Q_w^0\le0$. Values below zero or above one expose topic under-explanation or a negative raw residual-dispersion estimate.
+
+### Total variance explained by structure (`TVES_w`)
+
+TVES differs from EVES in that it includes the Poisson sampling variance in the denominator.
+
+Let
+$\mathcal D_+=\{d:c_d>0\}$ and $D_+=|\mathcal D_+|$, and sum
+
+$$
+\widetilde C=\sum_{d\in\mathcal D_+}\bar\theta_d\bar\theta_d^T,
+\quad
+\widetilde S=\sum_{d\in\mathcal D_+}\bar\theta_d,
+\quad
+\widetilde S^-=\sum_{d\in\mathcal D_+}\frac{\bar\theta_d}{c_d}.
+$$
+
+Then
+
+$$
+\widetilde Q_w^a
+=\widehat a_w^2\bar\beta_w^T\widetilde C\bar\beta_w,
+\qquad
+\widetilde M_w^a
+=\widehat a_w\bar\beta_w^T\widetilde S,
+$$
+
+$$
+\widetilde V_w
+=\widetilde Q_w^a-\frac{(\widetilde M_w^a)^2}{D_+},
+\qquad
+\widetilde P_w
+=\widehat a_w\bar\beta_w^T\widetilde S^-.
+$$
+
+Because NB2 dispersion cannot be negative, TVES uses
+$\widehat\phi_w^+=\max(\widehat\phi_w,0)$:
+
+$$
+\operatorname{TVES}_w
+=\frac{\widetilde V_w}
+{\widetilde V_w+\widetilde P_w
++\widehat\phi_w^+\widetilde Q_w^a}.
+$$
+
+This is the fraction of per-exposure variance attributable to structured
+topic variation and is suitable as a bounded feature weight. `TVES_w` is `NA` when no positive-exposure unit or a valid positive denominator is available.
 
 ## Marginal Poisson deviance (`marginalDev`)
 
@@ -193,7 +347,7 @@ For either model, define
 $$
 J_{dw}^{+}
 =\text{TV}(\hat\theta_d^{(-w)},\hat\theta_d), \qquad \text{deletionTV}_w
-=\frac{1}{U_w}\sum_{d:n_{dw}>0}J_{dw}^{+}.
+=\frac{1}{D_w^+}\sum_{d:n_{dw}>0}J_{dw}^{+}.
 $$
 
 Thus every unit expressing the feature contributes equally, regardless of its
@@ -235,7 +389,7 @@ This is not a fully leave-one-out statistic: $\mu_{dw}$,
 $\widehat a_w$, and $\varphi_{dw}$ still come from inference with all
 features, while $\hat\theta_d^{(-w)}$ is only a one-step deletion update.
 
-## Corpus-relative specificity and cofeature agreement
+## Specificity and cofeature agreement
 
 The topic prevalence used by standalone transforms is estimated from all
 retained evaluated units:
@@ -329,6 +483,12 @@ misspecification.
 | `cofeatureConflict` | Mean negative cofeature log-overlap lift |
 | `adjAbsDiffRate` | Positive-count gain-adjusted absolute residual rate |
 | `pull` | Residual-weighted deleted-background directional leverage |
+| `F_w` | Final-model observed factorial moment $F_w$ |
+| `Qa_w` | Gain-adjusted topic second moment $Q_w^a$ |
+| `Q0_w` | Depth-only second moment $Q_w^0$ |
+| `EVES_w` | Excess variance explained by structure |
+| `TVES_w` | Total variance explained by structure, including the sampling variance in the denominator |
+| `U_w` | LDA posterior-topic uncertainty on the scale of $Q_w^a$ |
 
 The exact schema depends on the diagnostic mode:
 
@@ -352,6 +512,7 @@ is absent.
 | `deletionTV` | $O(K\text{nnz})$ | $O(V)$ | No |
 | `topicInformation` and cofeature agreement | $O(KV+K\text{nnz})$ | $O(KV+BK)$ plus a compact transform-time presence spool | No |
 | `pull` | $O(K\text{nnz})$ | $O(V)$ for training; the transform spool for full diagnostics | No |
+| Variance decomposition | $O(DK^2+VK^2)$ | $O(BK+K^2+V)$ plus aligned raw-count sidecars | Yes |
 
 For standalone transforms, prevalence is unavailable until all units have
 been processed, so the implementation writes a compact spool beneath

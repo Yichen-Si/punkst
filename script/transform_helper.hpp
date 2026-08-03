@@ -14,6 +14,7 @@
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <ostream>
 #include <random>
 #include <string>
@@ -214,14 +215,6 @@ struct PullRecord {
     double observed = 0.0;
     double mean = 0.0;
     double totalVariation = 0.0;
-};
-
-struct ResidualLocalAgg {
-    VectorXd topicExposureTotals;
-    RowVectorXd denseExpected;
-
-    explicit ResidualLocalAgg(int32_t topics)
-        : topicExposureTotals(VectorXd::Zero(topics)) {}
 };
 
 struct CellRef {
@@ -582,6 +575,84 @@ struct FeatureResidualState {
               useTrainingPrevalence_, cheapDiagnostics_, tempDir) {}
 };
 
+struct FeatureVarianceDiagnostics {
+    VectorXd factorialMoment;
+    VectorXd adjustedTopicSecondMoment;
+    VectorXd depthSecondMoment;
+    VectorXd excessVarianceExplainedByStructure;
+    VectorXd totalVarianceExplainedByStructure;
+    std::optional<VectorXd> uncertainty;
+
+    explicit FeatureVarianceDiagnostics(
+            int32_t features, bool writeUncertainty_ = false)
+        : factorialMoment(VectorXd::Zero(features)),
+          adjustedTopicSecondMoment(VectorXd::Constant(
+              features, std::numeric_limits<double>::quiet_NaN())),
+          depthSecondMoment(VectorXd::Constant(
+              features, std::numeric_limits<double>::quiet_NaN())),
+          excessVarianceExplainedByStructure(VectorXd::Constant(
+              features, std::numeric_limits<double>::quiet_NaN())),
+          totalVarianceExplainedByStructure(VectorXd::Constant(
+              features, std::numeric_limits<double>::quiet_NaN())) {
+        if (writeUncertainty_) {
+            uncertainty.emplace(VectorXd::Constant(
+                features, std::numeric_limits<double>::quiet_NaN()));
+        }
+    }
+};
+
+inline bool clamp_tiny_negative(double& value, double scale) {
+    if (value >= 0.0) return true;
+    if (value >= -1e-12 * std::max(1.0, scale)) {
+        value = 0.0;
+        return true;
+    }
+    return false;
+}
+
+inline double positive_raw_dispersion(double factorial, double topicSecond) {
+    return std::isfinite(factorial) && std::isfinite(topicSecond)
+            && topicSecond > 0.0
+        ? std::max(factorial / topicSecond - 1.0, 0.0)
+        : std::numeric_limits<double>::quiet_NaN();
+}
+
+inline void store_variance_decomposition(FeatureVarianceDiagnostics& diagnostics,
+        int32_t feature, double topicSecond, double depthSecond) {
+    if (!std::isfinite(topicSecond) || topicSecond < 0.0
+            || !std::isfinite(depthSecond) || depthSecond < 0.0) {
+        return;
+    }
+    diagnostics.adjustedTopicSecondMoment(feature) = topicSecond;
+    diagnostics.depthSecondMoment(feature) = depthSecond;
+    const double extra = diagnostics.factorialMoment(feature) - depthSecond;
+    if (std::isfinite(extra) && extra > 0.0) {
+        diagnostics.excessVarianceExplainedByStructure(feature) =
+            (topicSecond - depthSecond) / extra;
+    }
+}
+
+inline void accumulate_weighted_topic_sum(const RowMajorMatrixXd& topics,
+        const VectorXd& weights, VectorXd& total) {
+    if (topics.rows() != weights.size() || topics.cols() != total.size()) {
+        error("%s: incompatible topic moment dimensions", __func__);
+    }
+    total.noalias() += topics.transpose() * weights;
+}
+
+inline void accumulate_weighted_topic_second_moment(
+        const RowMajorMatrixXd& topics, const VectorXd& weights,
+        MatrixXd& total, RowMajorMatrixXd& weightedScratch) {
+    if (topics.rows() != weights.size()
+            || topics.cols() != total.rows()
+            || total.rows() != total.cols()) {
+        error("%s: incompatible topic moment dimensions", __func__);
+    }
+    weightedScratch = topics;
+    weightedScratch.array().colwise() *= weights.array();
+    total.noalias() += topics.transpose() * weightedScratch;
+}
+
 template <typename Derived>
 inline void initialize_topic_similarity(
         FeatureResidualState& state,
@@ -734,9 +805,22 @@ inline void write_diagnostic(std::ostream& out, double value) {
     }
 }
 
+inline void write_diagnostic_precise(std::ostream& out, double value) {
+    if (std::isnan(value)) {
+        out << "NA";
+    } else if (std::isinf(value)) {
+        out << (value < 0.0 ? "-inf" : "inf");
+    } else {
+        out << std::scientific
+            << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << value;
+    }
+}
+
 inline void write_feature_residuals(std::ostream& out,
         const std::vector<std::string>& featureNames,
-        const FeatureResidualState& state) {
+        const FeatureResidualState& state,
+        const FeatureVarianceDiagnostics* variance = nullptr) {
     out << "Feature\tabsDiff\tabsDiffRate"
         << "\ttotCount\tnUnits\tlog2Gain"
         << "\tmarginalDev\tconditionalDev"
@@ -744,6 +828,12 @@ inline void write_feature_residuals(std::ostream& out,
         << "\ttopicInformation"
         << "\tcofeatureCorroboration"
         << "\tcofeatureConflict";
+    if (variance) {
+        out << "\tF_w\tQa_w\tQ0_w\tEVES_w\tTVES_w";
+        if (variance->uncertainty.has_value()) {
+            out << "\tU_w";
+        }
+    }
     if (state.useTrainingPrevalence) {
         out << "\tpull\n";
     } else {
@@ -777,6 +867,28 @@ inline void write_feature_residuals(std::ostream& out,
         write_diagnostic(out, state.cofeatureCorroboration(feature));
         out << "\t";
         write_diagnostic(out, state.cofeatureConflict(feature));
+        if (variance) {
+            out << "\t";
+            write_diagnostic_precise(
+                out, variance->factorialMoment(feature));
+            out << "\t";
+            write_diagnostic_precise(
+                out, variance->adjustedTopicSecondMoment(feature));
+            out << "\t";
+            write_diagnostic_precise(
+                out, variance->depthSecondMoment(feature));
+            out << "\t";
+            write_diagnostic(out,
+                variance->excessVarianceExplainedByStructure(feature));
+            out << "\t";
+            write_diagnostic(out,
+                variance->totalVarianceExplainedByStructure(feature));
+            if (variance->uncertainty.has_value()) {
+                out << "\t";
+                write_diagnostic_precise(
+                    out, (*variance->uncertainty)(feature));
+            }
+        }
         if (state.useTrainingPrevalence) {
             out << "\t";
             write_diagnostic(out, state.pull(feature));
@@ -851,7 +963,7 @@ inline std::vector<int32_t> mapInputFeaturesToModel(
 template <typename Model>
 bool appendDocument(Document&& rawDoc, std::string id, SpecialBatch& batch,
         Mode mode, const std::vector<int32_t>& inputToModel, Model& model,
-        int32_t minCount) {
+        int32_t minCount, bool preserveRawModelCounts = false) {
     Document modelDoc;
     if (mode == Mode::AllFeatures) {
         modelDoc.ids.reserve(rawDoc.ids.size());
@@ -880,11 +992,12 @@ bool appendDocument(Document&& rawDoc, std::string id, SpecialBatch& batch,
         return false;
     }
 
-    if (mode == Mode::WeightedModel) {
+    if (mode == Mode::WeightedModel || preserveRawModelCounts) {
         batch.rawModelCounts.push_back(modelDoc.cnts);
-    } else if (mode == Mode::AllFeatures) {
+    }
+    if (mode == Mode::AllFeatures) {
         batch.rawDocs.push_back(std::move(rawDoc));
-    } else {
+    } else if (mode != Mode::WeightedModel) {
         error("%s: special batch used in standard mode", __func__);
     }
     model.applyWeights(modelDoc);
@@ -898,9 +1011,13 @@ inline void accumulate(MatrixXd& pseudobulk, const SpecialBatch& batch,
     if (docTopic.rows() != static_cast<int32_t>(batch.size())) {
         error("%s: topic rows do not match document count", __func__);
     }
-    if (mode == Mode::WeightedModel &&
-            batch.rawModelCounts.size() != batch.size()) {
+    if (mode == Mode::WeightedModel
+            && batch.rawModelCounts.size() != batch.size()) {
         error("%s: raw-count sidecar does not match document count", __func__);
+    }
+    if (!batch.rawModelCounts.empty()
+            && batch.rawModelCounts.size() != batch.size()) {
+        error("%s: partial raw-count sidecar", __func__);
     }
     if (mode == Mode::AllFeatures && batch.rawDocs.size() != batch.size()) {
         error("%s: all-feature documents do not match document count", __func__);
@@ -938,6 +1055,10 @@ inline void accumulate(MatrixXd& pseudobulk, const SpecialBatch& batch,
 
 template <typename RandomEngine>
 void randomize(SpecialBatch& batch, RandomEngine& randomEngine) {
+    if (!batch.rawModelCounts.empty()
+            && batch.rawModelCounts.size() != batch.size()) {
+        error("%s: partial raw-count sidecar", __func__);
+    }
     std::vector<size_t> order(batch.size());
     std::iota(order.begin(), order.end(), 0);
     std::shuffle(order.begin(), order.end(), randomEngine);
@@ -961,6 +1082,17 @@ void randomize(SpecialBatch& batch, RandomEngine& randomEngine) {
 }
 
 inline void appendMoved(SpecialBatch& destination, SpecialBatch& source) {
+    if ((!destination.rawModelCounts.empty()
+            && destination.rawModelCounts.size() != destination.size())
+            || (!source.rawModelCounts.empty()
+                && source.rawModelCounts.size() != source.size())) {
+        error("%s: partial raw-count sidecar", __func__);
+    }
+    if (!destination.empty() && !source.empty()
+            && (destination.rawModelCounts.empty()
+                != source.rawModelCounts.empty())) {
+        error("%s: incompatible raw-count sidecars", __func__);
+    }
     destination.modelDocs.insert(destination.modelDocs.end(),
         std::make_move_iterator(source.modelDocs.begin()),
         std::make_move_iterator(source.modelDocs.end()));
@@ -978,6 +1110,10 @@ inline void appendMoved(SpecialBatch& destination, SpecialBatch& source) {
 
 inline void moveRange(SpecialBatch& source, size_t begin, size_t count,
         SpecialBatch& destination) {
+    if (!source.rawModelCounts.empty()
+            && source.rawModelCounts.size() != source.size()) {
+        error("%s: partial raw-count sidecar", __func__);
+    }
     destination.clear();
     const size_t end = begin + count;
     destination.modelDocs.insert(destination.modelDocs.end(),
@@ -1007,7 +1143,8 @@ bool readSpecialHexMinibatch(std::ifstream& input, HexReader& rawReader,
         Model& model, transform_pseudobulk::SpecialBatch& batch,
         transform_pseudobulk::Mode mode,
         const std::vector<int32_t>& inputToModel, int32_t modal,
-        int32_t batchSize, int32_t maxUnits, int32_t minCount) {
+        int32_t batchSize, int32_t maxUnits, int32_t minCount,
+        bool preserveRawModelCounts = false) {
     batch.clear();
     const int32_t target = std::min(batchSize, maxUnits);
     std::string line;
@@ -1022,7 +1159,7 @@ bool readSpecialHexMinibatch(std::ifstream& input, HexReader& rawReader,
         }
         transform_pseudobulk::appendDocument(
             std::move(rawDoc), std::move(id), batch, mode,
-            inputToModel, model, minCount);
+            inputToModel, model, minCount, preserveRawModelCounts);
     }
     return true;
 }
@@ -1032,7 +1169,8 @@ bool readSpecialDgeMinibatch(DGEReader10X& dge, Model& model,
         transform_pseudobulk::SpecialBatch& batch,
         transform_pseudobulk::Mode mode,
         const std::vector<int32_t>& inputToModel, int32_t batchSize,
-        int32_t maxUnits, int32_t minCount) {
+        int32_t maxUnits, int32_t minCount,
+        bool preserveRawModelCounts = false) {
     batch.clear();
     const int32_t target = std::min(batchSize, maxUnits);
     while (static_cast<int32_t>(batch.size()) < target) {
@@ -1046,7 +1184,7 @@ bool readSpecialDgeMinibatch(DGEReader10X& dge, Model& model,
         }
         transform_pseudobulk::appendDocument(
             std::move(rawDoc), dge.getUnitId(unitIndex), batch, mode,
-            inputToModel, model, minCount);
+            inputToModel, model, minCount, preserveRawModelCounts);
     }
     return true;
 }

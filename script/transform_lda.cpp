@@ -24,7 +24,14 @@ using transform_helpers::readSpecialDgeMinibatch;
 using transform_helpers::readSpecialHexMinibatch;
 using transform_helpers::writeUnitIdHeader;
 using feature_diagnostics::PullRecord;
-using feature_diagnostics::ResidualLocalAgg;
+
+struct ResidualLocalAgg {
+    VectorXd topicExposureTotals;
+    RowVectorXd denseExpected;
+
+    explicit ResidualLocalAgg(int32_t topics)
+        : topicExposureTotals(VectorXd::Zero(topics)) {}
+};
 
 void writeResultHeader(std::ostream& out, LDA4Hex& lda, int32_t topkOnly) {
     if (topkOnly < 0) {
@@ -50,6 +57,19 @@ struct ResidualState : feature_diagnostics::FeatureResidualState {
     RowMajorMatrixXd betaNormRow;
     MatrixXd betaNormCol;
     MatrixXd betaAllocationKernel;
+    feature_diagnostics::FeatureVarianceDiagnostics varianceDiagnostics;
+    VectorXd rawFeatureTotals;
+    VectorXd countWeightedTopicTotals;
+    MatrixXd factorialCountTopicSecondMoment;
+    VectorXd unitTopicTotals;
+    MatrixXd unitTopicSecondMoment;
+    VectorXd inverseCountTopicTotals;
+    MatrixXd inverseCountTopicSecondMoment;
+    VectorXd uncertaintyTopicTotals;
+    MatrixXd uncertaintyTopicSecondMoment;
+    double rawCountTotal = 0.0;
+    double rawFactorialCountTotal = 0.0;
+    int64_t positiveRawCountUnits = 0;
 
     ResidualState(const RowMajorMatrixXd& model, bool cheapDiagnostics,
             bool similarityDiagnostics, bool useTrainingPrevalence,
@@ -64,7 +84,20 @@ struct ResidualState : feature_diagnostics::FeatureResidualState {
               cheapDiagnostics, useTrainingPrevalence, tempDir),
           betaNormRow(rowNormalize(model)),
           betaNormCol(betaNormRow),
-          betaAllocationKernel(dirichlet_expectation_2d(model)) {
+          betaAllocationKernel(dirichlet_expectation_2d(model)),
+          varianceDiagnostics(static_cast<int32_t>(model.cols()), true),
+          rawFeatureTotals(VectorXd::Zero(model.cols())),
+          countWeightedTopicTotals(VectorXd::Zero(model.rows())),
+          factorialCountTopicSecondMoment(
+              MatrixXd::Zero(model.rows(), model.rows())),
+          unitTopicTotals(VectorXd::Zero(model.rows())),
+          unitTopicSecondMoment(MatrixXd::Zero(model.rows(), model.rows())),
+          inverseCountTopicTotals(VectorXd::Zero(model.rows())),
+          inverseCountTopicSecondMoment(
+              MatrixXd::Zero(model.rows(), model.rows())),
+          uncertaintyTopicTotals(VectorXd::Zero(model.rows())),
+          uncertaintyTopicSecondMoment(
+              MatrixXd::Zero(model.rows(), model.rows())) {
         if (similarityDiagnostics) {
             feature_diagnostics::initialize_topic_similarity(
                 *this, betaNormRow);
@@ -158,7 +191,7 @@ public:
                 }
             });
 
-        processResiduals(batch.docs, batch.ids, doc_topic, gamma);
+        processResiduals(batch.docs, batch.ids, doc_topic, gamma, nullptr);
     }
 
     void process(SpecialBatch& batch) {
@@ -175,7 +208,8 @@ public:
         writeTopicRows(batch.ids, doc_topic);
         transform_pseudobulk::accumulate(
             specialPseudobulk, batch, doc_topic, pseudobulkMode);
-        processResiduals(batch.modelDocs, batch.ids, doc_topic, gamma);
+        processResiduals(batch.modelDocs, batch.ids, doc_topic, gamma,
+            batch.rawModelCounts.empty() ? nullptr : &batch.rawModelCounts);
     }
 
     void finalize() {
@@ -226,9 +260,97 @@ private:
     void processResiduals(const std::vector<Document>& docs,
             const std::vector<std::string>& ids,
             const RowMajorMatrixXd& docTopic,
-            const RowMajorMatrixXd& gamma) {
+            const RowMajorMatrixXd& gamma,
+            const std::vector<std::vector<double>>* rawModelCounts) {
         if (!residualState) return;
         const int32_t nDocs = static_cast<int32_t>(docs.size());
+        if (rawModelCounts != nullptr
+                && rawModelCounts->size() != docs.size()) {
+            error("%s: raw-count sidecar does not match document count",
+                __func__);
+        }
+        const double alpha = lda.get_doc_topic_prior();
+        VectorXd rawTotals = VectorXd::Zero(nDocs);
+        VectorXd rawFactorials = VectorXd::Zero(nDocs);
+        VectorXd positiveUnits = VectorXd::Zero(nDocs);
+        VectorXd inverseRawTotals = VectorXd::Zero(nDocs);
+        VectorXd uncertaintyWeights = VectorXd::Zero(nDocs);
+        RowMajorMatrixXd posteriorMeans = RowMajorMatrixXd::Zero(nDocs, K);
+        for (int32_t d = 0; d < nDocs; ++d) {
+            const Document& doc = docs[static_cast<size_t>(d)];
+            const std::vector<double>* rawCounts = rawModelCounts == nullptr
+                ? nullptr
+                : &(*rawModelCounts)[static_cast<size_t>(d)];
+            if (rawCounts != nullptr
+                    && rawCounts->size() != doc.ids.size()) {
+                error("%s: raw counts do not align with model document",
+                    __func__);
+            }
+            double rawTotal = 0.0;
+            for (size_t j = 0; j < doc.ids.size(); ++j) {
+                const double rawObserved = rawCounts == nullptr
+                    ? doc.cnts[j]
+                    : (*rawCounts)[j];
+                if (!std::isfinite(rawObserved) || rawObserved < 0.0) {
+                    error("%s: invalid raw count", __func__);
+                }
+                const uint32_t w = doc.ids[j];
+                residualState->rawFeatureTotals(w) += rawObserved;
+                residualState->varianceDiagnostics.factorialMoment(w) +=
+                    rawObserved * (rawObserved - 1.0);
+                rawTotal += rawObserved;
+            }
+
+            if (!(rawTotal > 0.0) || !std::isfinite(rawTotal)) {
+                continue;
+            }
+            const double rawFactorial = rawTotal * (rawTotal - 1.0);
+            rawTotals(d) = rawTotal;
+            rawFactorials(d) = rawFactorial;
+            positiveUnits(d) = 1.0;
+            inverseRawTotals(d) = 1.0 / rawTotal;
+            residualState->rawCountTotal += rawTotal;
+            residualState->rawFactorialCountTotal += rawFactorial;
+            ++residualState->positiveRawCountUnits;
+
+            const double concentration = gamma.row(d).sum()
+                + static_cast<double>(K) * alpha;
+            if (std::isfinite(concentration) && concentration > 0.0) {
+                posteriorMeans.row(d) =
+                    (gamma.row(d).array() + alpha) / concentration;
+                if (posteriorMeans.row(d).allFinite()
+                        && (posteriorMeans.row(d).array() >= 0.0).all()) {
+                    uncertaintyWeights(d) =
+                        rawFactorial / (concentration + 1.0);
+                } else {
+                    posteriorMeans.row(d).setZero();
+                }
+            }
+        }
+        RowMajorMatrixXd weightedTopics;
+        feature_diagnostics::accumulate_weighted_topic_sum(
+            docTopic, rawTotals,
+            residualState->countWeightedTopicTotals);
+        feature_diagnostics::accumulate_weighted_topic_second_moment(
+            docTopic, rawFactorials,
+            residualState->factorialCountTopicSecondMoment, weightedTopics);
+        feature_diagnostics::accumulate_weighted_topic_sum(
+            docTopic, positiveUnits, residualState->unitTopicTotals);
+        feature_diagnostics::accumulate_weighted_topic_second_moment(
+            docTopic, positiveUnits,
+            residualState->unitTopicSecondMoment, weightedTopics);
+        feature_diagnostics::accumulate_weighted_topic_sum(
+            docTopic, inverseRawTotals,
+            residualState->inverseCountTopicTotals);
+        feature_diagnostics::accumulate_weighted_topic_second_moment(
+            docTopic, inverseRawTotals,
+            residualState->inverseCountTopicSecondMoment, weightedTopics);
+        feature_diagnostics::accumulate_weighted_topic_sum(
+            posteriorMeans, uncertaintyWeights,
+            residualState->uncertaintyTopicTotals);
+        feature_diagnostics::accumulate_weighted_topic_second_moment(
+            posteriorMeans, uncertaintyWeights,
+            residualState->uncertaintyTopicSecondMoment, weightedTopics);
         const std::vector<size_t> documentOffsets =
             feature_diagnostics::make_document_offsets(docs);
         const size_t nCells = documentOffsets.back();
@@ -245,7 +367,6 @@ private:
         VectorXd unitEntropy = VectorXd::Zero(nDocs);
         ThetaEntropyStats similarityEntropy;
         VectorXd expectedNormSq;
-        const double alpha = lda.get_doc_topic_prior();
         const size_t grainSize = std::max<size_t>(
             1, docs.size() / (2 * static_cast<size_t>(threadHint)));
         VectorXd documentTotals;
@@ -507,6 +628,108 @@ private:
             *residualState, residualState->betaNormRow,
             residualState->betaNormCol,
             residualState->topicExposureTotals, threadHint);
+        finalizeVarianceDiagnostics();
+    }
+
+    void finalizeVarianceDiagnostics() {
+        auto& state = *residualState;
+        auto& diagnostics = state.varianceDiagnostics;
+        if (!(state.rawCountTotal > 0.0)
+                || state.positiveRawCountUnits <= 0) {
+            return;
+        }
+
+        const VectorXd predicted = state.betaNormCol.transpose()
+            * state.countWeightedTopicTotals;
+        const MatrixXd factorialCross =
+            state.factorialCountTopicSecondMoment * state.betaNormCol;
+        const MatrixXd unitCross =
+            state.unitTopicSecondMoment * state.betaNormCol;
+        const MatrixXd inverseCountCross =
+            state.inverseCountTopicSecondMoment * state.betaNormCol;
+        const MatrixXd uncertaintyCross =
+            state.uncertaintyTopicSecondMoment * state.betaNormCol;
+        const double positiveUnits =
+            static_cast<double>(state.positiveRawCountUnits);
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+
+        for (int32_t w = 0; w < M; ++w) {
+            const double observed = state.rawFeatureTotals(w);
+            if (!std::isfinite(observed) || observed < 0.0
+                    || !std::isfinite(predicted(w))
+                    || !(predicted(w) > 1e-300)) {
+                continue;
+            }
+            const VectorXd beta = state.betaNormCol.col(w);
+            const double gain = observed / predicted(w);
+            const double gainSquared = gain * gain;
+            const double topicQ = beta.dot(factorialCross.col(w));
+            const double qa = gainSquared * topicQ;
+            const double marginal = observed / state.rawCountTotal;
+            const double q0 = marginal * marginal
+                * state.rawFactorialCountTotal;
+            feature_diagnostics::store_variance_decomposition(
+                diagnostics, w, qa, q0);
+
+            const double adjustedUnitQ = gainSquared
+                * beta.dot(unitCross.col(w));
+            const double adjustedUnitMean = gain
+                * beta.dot(state.unitTopicTotals);
+            double structuredVariance = adjustedUnitQ
+                - adjustedUnitMean * adjustedUnitMean / positiveUnits;
+            const double structuredScale = std::max(
+                std::abs(adjustedUnitQ),
+                adjustedUnitMean * adjustedUnitMean / positiveUnits);
+
+            double samplingVariance = gain
+                    * beta.dot(state.inverseCountTopicTotals)
+                - gainSquared * beta.dot(inverseCountCross.col(w));
+            const double samplingScale = std::max(
+                std::abs(gain
+                    * beta.dot(state.inverseCountTopicTotals)),
+                std::abs(gainSquared
+                    * beta.dot(inverseCountCross.col(w))));
+
+            double dispersionQuadratic = gainSquared * beta.dot(
+                unitCross.col(w) - inverseCountCross.col(w));
+            const double dispersionScale = gainSquared * std::max(
+                std::abs(beta.dot(unitCross.col(w))),
+                std::abs(beta.dot(inverseCountCross.col(w))));
+
+            if (qa > 0.0 && std::isfinite(qa)
+                    && feature_diagnostics::clamp_tiny_negative(
+                        structuredVariance, structuredScale)
+                    && feature_diagnostics::clamp_tiny_negative(
+                        samplingVariance, samplingScale)
+                    && feature_diagnostics::clamp_tiny_negative(
+                        dispersionQuadratic, dispersionScale)) {
+                const double positiveDispersion =
+                    feature_diagnostics::positive_raw_dispersion(
+                        diagnostics.factorialMoment(w), qa);
+                const double denominator = structuredVariance
+                    + samplingVariance
+                    + positiveDispersion * dispersionQuadratic;
+                if (std::isfinite(denominator) && denominator > 0.0) {
+                    diagnostics.totalVarianceExplainedByStructure(w) =
+                        structuredVariance / denominator;
+                }
+            }
+
+            double uncertainty = gainSquared * (
+                beta.array().square().matrix().dot(
+                    state.uncertaintyTopicTotals)
+                - beta.dot(uncertaintyCross.col(w)));
+            const double uncertaintyScale = gainSquared * std::max(
+                std::abs(beta.array().square().matrix().dot(
+                    state.uncertaintyTopicTotals)),
+                std::abs(beta.dot(uncertaintyCross.col(w))));
+            (*diagnostics.uncertainty)(w) =
+                std::isfinite(uncertainty)
+                    && feature_diagnostics::clamp_tiny_negative(
+                        uncertainty, uncertaintyScale)
+                ? uncertainty
+                : nan;
+        }
     }
 
     void writeTopicRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
@@ -748,6 +971,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
             unit_similarity_diagnostics, use_training_prevalence,
             temp_dir);
     }
+    const bool preserveRawModelCounts = computeResiduals && weights_active;
 
     TransformOutputs outputs(outPrefix, computeResiduals);
     writeUnitIdHeader(outputs.results, use_10x, info_header);
@@ -856,7 +1080,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
                     const int32_t remaining = maxUnits - processed;
                     fileopen = readSpecialDgeMinibatch(dge, lda, specialBatch,
                         pseudobulkMode, inputToModel, batchSize, remaining,
-                        minCountInt);
+                        minCountInt, preserveRawModelCounts);
                     if (specialBatch.empty()) {
                         break;
                     }
@@ -877,7 +1101,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
                         transform_pseudobulk::appendDocument(
                             std::move(allRawDocs[cursor]), dge.getUnitId(unitIndex),
                             specialBatch, pseudobulkMode, inputToModel, lda,
-                            minCountInt);
+                            minCountInt, preserveRawModelCounts);
                         ++cursor;
                     }
                     if (specialBatch.empty()) {
@@ -894,7 +1118,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
                 const int32_t remaining = maxUnits - processed;
                 fileopen = readSpecialHexMinibatch(inFileStream, *rawReader,
                     lda, specialBatch, pseudobulkMode, inputToModel, modal,
-                    batchSize, remaining, minCountInt);
+                    batchSize, remaining, minCountInt,
+                    preserveRawModelCounts);
                 if (specialBatch.empty()) {
                     break;
                 }
@@ -928,7 +1153,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
     outFileStream.open(outFile);
     if (!outFileStream) error("Error opening output file: %s for writing", outFile.c_str());
     feature_diagnostics::write_feature_residuals(
-        outFileStream, modelFeatureNames, *residualState);
+        outFileStream, modelFeatureNames, *residualState,
+        &residualState->varianceDiagnostics);
     outFileStream.close();
     notice("Per-feature residuals written to %s", outFile.c_str());
 
