@@ -53,6 +53,8 @@ nav:
     - tiles2hex: modules/tiles2hex.md
     - tiles2rois: modules/tiles2rois.md
     - topic-model: modules/lda4hex.md
+    - Leiden: modules/leiden.md
+    - UAC: modules/uac.md
     - pixel-decode: modules/pixel-decode.md
     - DE tests: modules/de.md
     - visualize: modules/visualization.md

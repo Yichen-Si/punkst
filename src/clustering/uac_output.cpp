@@ -617,4 +617,165 @@ void write_representatives(const std::string& path, const Dataset& data,
     }
 }
 
+void write_visualization_axes(const std::string& path,
+    const State& state, const VisualizationResult& visualization) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write UAC visualization axes: " + path);
+    }
+    out << "#whitening\tview\taxis\teigenvalue\tbasis\tindex\tname"
+        "\tcoefficient\tcontrast_scale\tside\tnormalized_weight\n"
+        << std::scientific << std::setprecision(10);
+    const VisualizationProjection* views[] = {
+        &visualization.mean, &visualization.full};
+    for (const VisualizationProjection* view : views) {
+        if (view->projection.cols() != view->eigenvalues.size()
+            || view->topic_contrasts.rows()
+                != static_cast<Eigen::Index>(state.topics.size())
+            || view->topic_contrasts.cols() != view->projection.cols()) {
+            throw std::invalid_argument(
+                "Invalid UAC visualization axes");
+        }
+        for (Eigen::Index axis = 0; axis < view->projection.cols(); ++axis) {
+            double scale = 0.0;
+            for (Eigen::Index topic = 0;
+                    topic < view->topic_contrasts.rows(); ++topic) {
+                if (view->topic_contrasts(topic, axis) > 0.0) {
+                    scale += view->topic_contrasts(topic, axis);
+                }
+            }
+            if (!(scale > 0.0) || !std::isfinite(scale)) {
+                throw std::runtime_error(
+                    "UAC visualization contrast has no positive mass");
+            }
+            for (Eigen::Index coordinate = 0;
+                    coordinate < view->projection.rows(); ++coordinate) {
+                out << visualization_whitening_name(visualization.whitening)
+                    << "\t" << visualization_view_name(view->view)
+                    << "\t" << axis + 1 << "\t"
+                    << view->eigenvalues(axis)
+                    << "\tilr\t" << coordinate << "\tilr_" << coordinate
+                    << "\t" << view->projection(coordinate, axis)
+                    << "\tNA\tNA\tNA\n";
+            }
+            for (Eigen::Index topic = 0;
+                    topic < view->topic_contrasts.rows(); ++topic) {
+                const double coefficient =
+                    view->topic_contrasts(topic, axis);
+                const char* side = coefficient > 0.0 ? "positive"
+                    : coefficient < 0.0 ? "negative" : "zero";
+                out << visualization_whitening_name(visualization.whitening)
+                    << "\t" << visualization_view_name(view->view)
+                    << "\t" << axis + 1 << "\t"
+                    << view->eigenvalues(axis)
+                    << "\ttopic\t" << topic << "\t"
+                    << state.topics[topic] << "\t" << coefficient
+                    << "\t" << scale << "\t" << side
+                    << "\t" << std::abs(coefficient) / scale << "\n";
+            }
+        }
+    }
+}
+
+void write_visualization_model(const std::string& path,
+    const State& state, const VisualizationResult& visualization) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write UAC visualization model: " + path);
+    }
+    const Eigen::Index dimensions = visualization.mean.projection.cols();
+    if (dimensions <= 0
+        || visualization.full.projection.cols() != dimensions) {
+        throw std::invalid_argument(
+            "Invalid UAC visualization model dimensions");
+    }
+    out << "#whitening\tview\tcluster\tactive\tweight";
+    for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+        out << "\tmean_" << axis + 1;
+    }
+    for (Eigen::Index row = 0; row < dimensions; ++row) {
+        for (Eigen::Index column = row; column < dimensions; ++column) {
+            out << "\tcov_" << row + 1 << "_" << column + 1;
+        }
+    }
+    out << "\n" << std::scientific << std::setprecision(10);
+    const VisualizationProjection* views[] = {
+        &visualization.mean, &visualization.full};
+    for (const VisualizationProjection* view : views) {
+        if (view->component_means.rows() != state.model.weights.size()
+            || view->component_means.cols() != dimensions
+            || view->component_covariances.size()
+                != static_cast<size_t>(state.model.weights.size())) {
+            throw std::invalid_argument(
+                "Invalid UAC projected component model");
+        }
+        for (Eigen::Index component = 0;
+                component < state.model.weights.size(); ++component) {
+            const Eigen::MatrixXd& covariance =
+                view->component_covariances[component];
+            if (covariance.rows() != dimensions
+                || covariance.cols() != dimensions) {
+                throw std::invalid_argument(
+                    "Invalid UAC projected component covariance");
+            }
+            out << visualization_whitening_name(visualization.whitening)
+                << "\t" << visualization_view_name(view->view)
+                << "\t" << component << "\t"
+                << static_cast<int32_t>(state.model.weights(component) > 0.0)
+                << "\t" << state.model.weights(component);
+            for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+                out << "\t" << view->component_means(component, axis);
+            }
+            for (Eigen::Index row = 0; row < dimensions; ++row) {
+                for (Eigen::Index column = row;
+                        column < dimensions; ++column) {
+                    out << "\t" << covariance(row, column);
+                }
+            }
+            out << "\n";
+        }
+    }
+}
+
+void write_visualization_results(const std::string& path,
+    const Dataset& data, const VisualizationResult& visualization) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write UAC visualization results: " + path);
+    }
+    const Eigen::Index dimensions = visualization.mean.projection.cols();
+    if (data.coordinates.rows()
+            != static_cast<Eigen::Index>(data.identifiers.size())
+        || data.coordinates.cols() != visualization.mean.projection.rows()
+        || visualization.full.projection.rows() != data.coordinates.cols()
+        || visualization.full.projection.cols() != dimensions) {
+        throw std::invalid_argument(
+            "Invalid UAC visualization result dimensions");
+    }
+    out << "#id";
+    for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+        out << "\tmean_" << axis + 1;
+    }
+    for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+        out << "\tfull_" << axis + 1;
+    }
+    out << "\n" << std::scientific << std::setprecision(10);
+    for (Eigen::Index document = 0;
+            document < data.coordinates.rows(); ++document) {
+        out << data.identifiers[document];
+        for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+            out << "\t" << data.coordinates.row(document).dot(
+                visualization.mean.projection.col(axis));
+        }
+        for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+            out << "\t" << data.coordinates.row(document).dot(
+                visualization.full.projection.col(axis));
+        }
+        out << "\n";
+    }
+}
+
 } // namespace uac

@@ -397,8 +397,11 @@ void validate_state(const State& state) {
         state.leiden_knn_backend == CosineKnnBackend::Auto
         || state.leiden_knn_backend == CosineKnnBackend::KdTree
         || state.leiden_knn_backend == CosineKnnBackend::Flat;
+    const bool valid_initialization_metric =
+        state.initialization_metric == SimplexMetric::Cosine
+        || state.initialization_metric == SimplexMetric::Hellinger;
     if (!valid_handoff || !valid_proposal || !valid_start_method
-        || !valid_knn_backend
+        || !valid_knn_backend || !valid_initialization_metric
         || state.n_particles <= 0 || state.kmeans_starts < 0
         || state.leiden_starts < 0 || total_starts <= 0
         || state.kmeans_max_iterations <= 0

@@ -133,6 +133,7 @@ State make_state(const FitResult& fit_result, const FitOptions& options,
     state.leiden_starts = options.leiden_starts;
     state.kmeans_max_iterations = options.kmeans_max_iterations;
     state.leiden_neighbors = options.leiden_neighbors;
+    state.initialization_metric = options.initialization_metric;
     state.leiden_knn_backend = options.leiden_knn_backend;
     state.leiden_max_iterations = options.leiden_max_iterations;
     state.selected_start = fit_result.selected_start;
@@ -186,7 +187,7 @@ void write_state(const std::string& path, const State& state) {
     if (!out) throw std::runtime_error("Cannot write UAC state: " + path);
     const int32_t components = static_cast<int32_t>(state.model.weights.size());
     const int32_t dimension = static_cast<int32_t>(state.model.means.cols());
-    out << "##punkst_uac_state_v11\n"
+    out << "##punkst_uac_state_v12\n"
         << "##handoff\t" << handoff_name(state.handoff) << "\n"
         << "##proposal\t" << proposal_name(state.proposal) << "\n"
         << "##particles\t" << state.n_particles << "\n"
@@ -198,6 +199,8 @@ void write_state(const std::string& path, const State& state) {
         << "##kmeans_max_iterations\t"
         << state.kmeans_max_iterations << "\n"
         << "##leiden_neighbors\t" << state.leiden_neighbors << "\n"
+        << "##initialization_metric\t"
+        << simplex_metric_name(state.initialization_metric) << "\n"
         << "##leiden_knn_backend\t"
         << cosine_knn_backend_name(state.leiden_knn_backend) << "\n"
         << "##leiden_max_iterations\t"
@@ -347,6 +350,7 @@ State read_state(const std::string& path) {
     bool saw_fisher_broadening = false;
     bool saw_initialization_ridge_precision = false;
     bool saw_kmeans_starts = false, saw_leiden_starts = false;
+    bool saw_initialization_metric = false;
     bool saw_selected_start = false, saw_selected_start_method = false;
     bool saw_target_relative_floor = false;
     bool saw_cluster_covariance_rank = false;
@@ -370,20 +374,22 @@ State read_state(const std::string& path) {
         std::vector<std::string> token = fields(line);
         if (token.empty()) continue;
         if (state_version == 0
-            && token[0] != "##punkst_uac_state_v11") {
+            && token[0] != "##punkst_uac_state_v11"
+            && token[0] != "##punkst_uac_state_v12") {
             throw std::runtime_error(
-                "UAC state must begin with the v11 header");
+                "UAC state must begin with a supported version header");
         }
-        if (token[0] == "##punkst_uac_state_v11") {
+        if (token[0] == "##punkst_uac_state_v11"
+            || token[0] == "##punkst_uac_state_v12") {
             if (state_version != 0) {
                 throw std::runtime_error("Duplicate UAC state version");
             }
-            state_version = 11;
+            state_version = token[0] == "##punkst_uac_state_v11" ? 11 : 12;
             continue;
         }
         if (token[0].rfind("##punkst_uac_state_v", 0) == 0) {
             throw std::runtime_error(
-                "Unsupported UAC state version; only v11 is accepted");
+                "Unsupported UAC state version; only v11 and v12 are accepted");
         }
         if (token[0].rfind("##", 0) == 0) {
             if (token.size() != 2) throw std::runtime_error("Malformed UAC state metadata");
@@ -422,6 +428,10 @@ State read_state(const std::string& path) {
             }
             else if (key == "leiden_neighbors") {
                 state.leiden_neighbors = parse_state_int32(token[1]);
+            }
+            else if (key == "initialization_metric") {
+                state.initialization_metric = parse_simplex_metric(token[1]);
+                saw_initialization_metric = true;
             }
             else if (key == "leiden_knn_backend") {
                 state.leiden_knn_backend = parse_cosine_knn_backend(token[1]);
@@ -613,9 +623,14 @@ State read_state(const std::string& path) {
         }
         records.push_back(std::move(token));
     }
+    if (state_version == 11) {
+        state.initialization_metric = SimplexMetric::Cosine;
+        saw_initialization_metric = true;
+    }
     if (state_version == 0 || !saw_proposal || !saw_fisher_broadening
         || !saw_kmeans_starts
-        || !saw_leiden_starts || !saw_selected_start
+        || !saw_leiden_starts || !saw_initialization_metric
+        || !saw_selected_start
         || !saw_selected_start_method || !saw_target_relative_floor
         || !saw_cluster_covariance_rank
         || !saw_objective_change_tolerance
@@ -656,6 +671,9 @@ State read_state(const std::string& path) {
         "particle_adapt_calibration", "particle_adapt_min",
         "particle_adapt_plausible_mass", "particle_adapt_plausible_resp",
     };
+    if (state_version >= 12) {
+        required_metadata.push_back("initialization_metric");
+    }
     required_metadata.push_back(
         "particle_variance_change_tolerance");
     for (const auto& key : required_metadata) {

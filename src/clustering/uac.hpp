@@ -80,6 +80,16 @@ enum class StreamingParticleStorage {
     Positions,
 };
 
+enum class VisualizationWhitening {
+    Sample,
+    Mixture,
+};
+
+enum class VisualizationView {
+    Mean,
+    Full,
+};
+
 const char* handoff_name(HandoffMode value);
 const char* proposal_name(ProposalKind value);
 const char* start_method_name(StartMethod value);
@@ -90,6 +100,8 @@ const char* component_screening_mode_name(ComponentScreeningMode value);
 const char* particle_engine_name(ParticleEngine value);
 const char* streaming_count_storage_name(StreamingCountStorage value);
 const char* streaming_particle_storage_name(StreamingParticleStorage value);
+const char* visualization_whitening_name(VisualizationWhitening value);
+const char* visualization_view_name(VisualizationView value);
 HandoffMode parse_handoff(const std::string& value);
 ProposalKind parse_proposal(const std::string& value);
 StartMethod parse_start_method(const std::string& value);
@@ -99,6 +111,8 @@ ParticleEngine parse_particle_engine(const std::string& value);
 StreamingCountStorage parse_streaming_count_storage(
     const std::string& value);
 StreamingParticleStorage parse_streaming_particle_storage(
+    const std::string& value);
+VisualizationWhitening parse_visualization_whitening(
     const std::string& value);
 
 struct Basis {
@@ -178,6 +192,29 @@ struct Model {
     LowRankDiagonalCovariance factor_shrinkage_target;
 };
 
+struct VisualizationOptions {
+    VisualizationWhitening whitening = VisualizationWhitening::Mixture;
+    int32_t dimensions = 2;
+    int32_t n_threads = 1;
+    double covariance_floor = 1e-5;
+};
+
+struct VisualizationProjection {
+    VisualizationView view = VisualizationView::Mean;
+    Eigen::VectorXd eigenvalues;
+    Eigen::MatrixXd projection; // ILR coordinate x visualization axis
+    Eigen::MatrixXd topic_contrasts; // topic x visualization axis
+    RowMajorMatrixXd component_means; // component x visualization axis
+    std::vector<Eigen::MatrixXd> component_covariances;
+};
+
+struct VisualizationResult {
+    VisualizationWhitening whitening = VisualizationWhitening::Mixture;
+    Eigen::MatrixXd whitening_covariance;
+    VisualizationProjection mean;
+    VisualizationProjection full;
+};
+
 struct IterationDiagnostic {
     TracePhase phase = TracePhase::CorrectedMomScore;
     TraceEvent event = TraceEvent::Evaluation;
@@ -215,6 +252,7 @@ struct FitOptions {
     int32_t max_iterations = 300;
     int32_t kmeans_max_iterations = 100;
     int32_t leiden_neighbors = 15;
+    SimplexMetric initialization_metric = SimplexMetric::Cosine;
     CosineKnnBackend leiden_knn_backend = CosineKnnBackend::Auto;
     int32_t leiden_max_iterations = -1;
     int32_t n_threads = 1;
@@ -401,6 +439,7 @@ struct State {
     int32_t leiden_starts = 0;
     int32_t kmeans_max_iterations = 100;
     int32_t leiden_neighbors = 15;
+    SimplexMetric initialization_metric = SimplexMetric::Cosine;
     CosineKnnBackend leiden_knn_backend = CosineKnnBackend::Auto;
     int32_t leiden_max_iterations = -1;
     int32_t selected_start = -1;
@@ -468,6 +507,10 @@ ScoreResult score_particle(Dataset& data, const Basis& basis,
 ScoreResult score_particle(const Dataset& data, const Basis& basis,
     const State& state, const ParticleScoreOptions& options);
 
+VisualizationResult make_visualization(const Dataset& data,
+    const Model& model, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const VisualizationOptions& options = {});
+
 State make_state(const FitResult& fit, const FitOptions& options,
     const StateMetadata& metadata);
 void write_state(const std::string& path, const State& state);
@@ -486,5 +529,11 @@ void write_model_trace(const std::string& path,
 void write_separation(const std::string& path, const Model& model);
 void write_representatives(const std::string& path, const Dataset& data,
     const ScoreResult& score, int32_t n_representatives = 10);
+void write_visualization_axes(const std::string& path,
+    const State& state, const VisualizationResult& visualization);
+void write_visualization_model(const std::string& path,
+    const State& state, const VisualizationResult& visualization);
+void write_visualization_results(const std::string& path,
+    const Dataset& data, const VisualizationResult& visualization);
 
 } // namespace uac

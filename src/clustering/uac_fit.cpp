@@ -24,6 +24,9 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     validate_component_screening(options.component_screening);
     const int64_t total_starts = static_cast<int64_t>(options.kmeans_starts)
         + options.leiden_starts;
+    const bool valid_initialization_metric =
+        options.initialization_metric == SimplexMetric::Cosine
+        || options.initialization_metric == SimplexMetric::Hellinger;
     if (options.n_components <= 0 || options.kmeans_starts < 0
         || options.leiden_starts < 0 || total_starts <= 0
         || options.max_iterations <= 0 || options.n_particles <= 0
@@ -44,7 +47,8 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         || !(options.covariance_shrinkage_strength >= 0.0)
         || !std::isfinite(options.covariance_shrinkage_strength)
         || !(options.fisher_broadening > 0.0)
-        || !std::isfinite(options.fisher_broadening)) {
+        || !std::isfinite(options.fisher_broadening)
+        || !valid_initialization_metric) {
         throw std::invalid_argument("Invalid UAC fit options or dataset");
     }
     if (options.leiden_starts > 0
@@ -138,8 +142,8 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         kmeans.n_clusters = options.n_components;
         kmeans.max_iterations = options.kmeans_max_iterations;
         kmeans.seed = metadata.seed;
-        DenseKMeansResult clustering = cosine_dense_kmeans(
-            data.centers, kmeans);
+        DenseKMeansResult clustering = simplex_dense_kmeans(
+            data.centers, options.initialization_metric, kmeans);
         append_start(std::move(clustering.assignments), metadata);
     }
 
@@ -149,7 +153,8 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         knn_options.knn_search_epsilon = options.leiden_knn_epsilon;
         knn_options.backend = options.leiden_knn_backend;
         knn_options.n_threads = options.n_threads;
-        const CosineKnnResult knn = cosine_knn(data.centers, knn_options);
+        const CosineKnnResult knn = simplex_knn(
+            data.centers, options.initialization_metric, knn_options);
         double resolution = options.leiden_resolution;
         double last_under_resolution = 0.0;
         bool adapting = true;
@@ -173,9 +178,10 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             reconcile_options.n_clusters = options.n_components;
             reconcile_options.max_iterations = options.kmeans_max_iterations;
             reconcile_options.seed = metadata.seed;
-            Eigen::VectorXi assignments = reconcile_cosine_communities(
+            Eigen::VectorXi assignments = reconcile_simplex_communities(
                 leiden.membership, leiden.n_communities,
-                options.n_components, data.centers, reconcile_options);
+                options.n_components, data.centers,
+                options.initialization_metric, reconcile_options);
             append_start(std::move(assignments), metadata);
 
             if (!adapting) continue;

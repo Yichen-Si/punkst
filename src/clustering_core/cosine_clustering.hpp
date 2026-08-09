@@ -15,6 +15,11 @@ enum class CosineKnnBackend {
     Flat
 };
 
+enum class SimplexMetric {
+    Cosine,
+    Hellinger
+};
+
 using CosineFlatKernel = KnnFlatKernel;
 
 struct CosineKnnOptions {
@@ -67,6 +72,16 @@ CosineKnnBackend parse_cosine_knn_backend(const std::string& value);
 CosineFlatKernel parse_cosine_flat_kernel(const std::string& value);
 bool cosine_knn_cblas_available();
 
+const char* simplex_metric_name(SimplexMetric metric);
+SimplexMetric parse_simplex_metric(const std::string& value);
+
+// Embed nonnegative rows on the unit sphere. Cosine uses L2-normalized rows;
+// Hellinger L1-normalizes rows and takes component-wise square roots, making
+// inner products equal to Bhattacharyya affinities.
+RowMajorMatrixXd simplex_metric_coordinates(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric);
+
 RowMajorMatrixXd l2_normalize_rows(
     const Eigen::Ref<const RowMajorMatrixXd>& observations);
 
@@ -74,6 +89,10 @@ RowMajorMatrixXd l2_normalize_rows(
 DenseKMeansResult cosine_dense_kmeans(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const DenseKMeansOptions& options);
+
+DenseKMeansResult simplex_dense_kmeans(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const DenseKMeansOptions& options);
 
 CosineKnnGraph cosine_knn_graph(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
@@ -83,12 +102,26 @@ CosineKnnResult cosine_knn(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const CosineKnnOptions& options);
 
+CosineKnnResult simplex_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const CosineKnnOptions& options);
+
 CosineLeidenResult cosine_leiden_cluster(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const CosineLeidenOptions& options);
+
+CosineLeidenResult simplex_leiden_cluster(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const CosineLeidenOptions& options);
 
 Eigen::VectorXi reconcile_cosine_communities(
     const Eigen::VectorXi& membership, int32_t n_communities,
     int32_t requested_communities,
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const DenseKMeansOptions& kmeans_options);
+
+Eigen::VectorXi reconcile_simplex_communities(
+    const Eigen::VectorXi& membership, int32_t n_communities,
+    int32_t requested_communities,
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const DenseKMeansOptions& kmeans_options);

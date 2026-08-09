@@ -92,6 +92,44 @@ struct StreamingCliOptions {
     bool rebuild = false;
 };
 
+struct VisualizationCliOptions {
+    std::string whitening = "mixture";
+    int32_t dimensions = 2;
+};
+
+void add_visualization_options(
+        ParamList& pl, VisualizationCliOptions& options) {
+    pl.add_option("visual-whitening",
+          "Visualization whitening covariance: sample or mixture",
+          options.whitening)
+      .add_option("visual-dim",
+          "Maximum visualization dimensions; capped at topics minus one",
+          options.dimensions);
+}
+
+uac::VisualizationOptions make_visualization_options(
+    const VisualizationCliOptions& input, int32_t n_threads,
+    double covariance_floor) {
+    if (input.dimensions <= 0) {
+        throw std::invalid_argument("--visual-dim must be positive");
+    }
+    if (n_threads <= 0) {
+        throw std::invalid_argument("--threads must be positive");
+    }
+    if (!(covariance_floor > 0.0)
+        || !std::isfinite(covariance_floor)) {
+        throw std::invalid_argument(
+            "UAC visualization covariance floor must be positive and finite");
+    }
+    uac::VisualizationOptions out;
+    out.whitening =
+        uac::parse_visualization_whitening(input.whitening);
+    out.dimensions = input.dimensions;
+    out.n_threads = n_threads;
+    out.covariance_floor = covariance_floor;
+    return out;
+}
+
 void add_streaming_options(ParamList& pl, StreamingCliOptions& options) {
     pl.add_option("particle-engine",
           "Particle engine: batch or stream", options.engine)
@@ -799,7 +837,10 @@ bool has_fractional_counts(const std::vector<Document>& documents) {
 void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     const uac::State& state, const uac::ScoreResult& score,
     const std::vector<uac::RestartTrace>* traces, int32_t representatives,
+    const uac::VisualizationOptions& visualization_options,
     bool write_model_trace = false, int32_t top_c = -1) {
+    const uac::VisualizationResult visualization = uac::make_visualization(
+        data, state.model, state.helmert, visualization_options);
     const Eigen::VectorXd membership =
         score.effective_membership.size() > 0
         ? score.effective_membership
@@ -811,6 +852,12 @@ void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     uac::write_separation(prefix + ".separation.tsv", state.model);
     uac::write_representatives(prefix + ".representatives.tsv", data, score,
         representatives);
+    uac::write_visualization_axes(
+        prefix + ".visual.axes.tsv", state, visualization);
+    uac::write_visualization_model(
+        prefix + ".visual.model.tsv", state, visualization);
+    uac::write_visualization_results(
+        prefix + ".visual.results.tsv", data, visualization);
     if (traces) uac::write_trace(prefix + ".trace.tsv", *traces);
     if (traces && write_model_trace) {
         uac::write_model_trace(prefix + ".model_trace.tsv", *traces);
@@ -895,6 +942,7 @@ int32_t cmdUacFit(int argc, char** argv) {
     std::string handoff = "particle";
     std::string proposal = "exact_fisher";
     std::string leiden_knn_backend = "auto";
+    std::string initialization_metric = "cosine";
     uac::FitOptions options;
     options.n_components = 0;
     int32_t representatives = 10;
@@ -905,9 +953,10 @@ int32_t cmdUacFit(int argc, char** argv) {
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
     StreamingCliOptions streaming;
+    VisualizationCliOptions visualization;
     screening.mode = "off";
     ParamList pl;
-    pl.add_option("in-topic-center", "Document topic point-center table", center_file, true)
+    pl.add_option("in-theta", "Document topic-proportion (theta) table", center_file, true)
       .add_option("in-model", "Feature-by-topic basis table", basis_file)
       .add_option("out-prefix", "Output prefix", out_prefix, true)
       .add_option("unit-icol-id",
@@ -939,12 +988,15 @@ int32_t cmdUacFit(int argc, char** argv) {
           options.cluster_covariance_rank)
       .add_option("fisher-broadening", "Fisher proposal covariance broadening", options.fisher_broadening)
       .add_option("n-clusters", "Fixed number of clusters", options.n_components, true)
-      .add_option("kmeans-starts", "Cosine k-means++ initialization starts", options.kmeans_starts)
-      .add_option("leiden-starts", "Adaptive cosine-Leiden initialization starts", options.leiden_starts)
+      .add_option("kmeans-starts", "Metric k-means++ initialization starts", options.kmeans_starts)
+      .add_option("leiden-starts", "Adaptive metric-Leiden initialization starts", options.leiden_starts)
+      .add_option("initialization-metric",
+          "Initialization metric: cosine or hellinger",
+          initialization_metric)
       .add_option("max-iter", "Maximum EM iterations", options.max_iterations)
       .add_option("kmeans-max-iter", "Maximum Lloyd/reconciliation iterations", options.kmeans_max_iterations)
-      .add_option("leiden-neighbors", "Cosine k-NN neighbors for Leiden starts", options.leiden_neighbors)
-      .add_option("leiden-knn-backend", "Cosine k-NN backend: auto, kdtree, or flat", leiden_knn_backend)
+      .add_option("leiden-neighbors", "Metric k-NN neighbors for Leiden starts", options.leiden_neighbors)
+      .add_option("leiden-knn-backend", "Metric k-NN backend: auto, kdtree, or flat", leiden_knn_backend)
       .add_option("leiden-knn-epsilon", "Nanoflann search epsilon; positive values require kdtree", options.leiden_knn_epsilon)
       .add_option("leiden-resolution", "Initial Leiden RBConfiguration resolution", options.leiden_resolution)
       .add_option("leiden-max-iter", "Maximum Leiden passes; negative runs to convergence", options.leiden_max_iterations)
@@ -970,12 +1022,16 @@ int32_t cmdUacFit(int argc, char** argv) {
     add_particle_adapt_options(pl, particle_adapt);
     add_component_screening_options(pl, screening);
     add_streaming_options(pl, streaming);
+    add_visualization_options(pl, visualization);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
         if (top_c < -1) {
             throw std::invalid_argument("--top-c must be nonnegative");
         }
+        const uac::VisualizationOptions visualization_options =
+            make_visualization_options(visualization, options.n_threads,
+                options.covariance_floor);
         options.handoff = uac::parse_handoff(handoff);
         options.proposal = uac::parse_proposal(proposal);
         options.particle_engine =
@@ -988,6 +1044,8 @@ int32_t cmdUacFit(int argc, char** argv) {
             make_component_screening_options(screening);
         options.leiden_knn_backend = parse_cosine_knn_backend(
             leiden_knn_backend);
+        options.initialization_metric = parse_simplex_metric(
+            initialization_metric);
         options.adaptive_covariance_shrinkage = !no_covariance_shrinkage;
         options.iteration_callback = [](const uac::IterationDiagnostic& value) {
             std::ostringstream message;
@@ -1130,11 +1188,12 @@ int32_t cmdUacFit(int argc, char** argv) {
             fitted, options, state_metadata);
         report_component_screening(fitted.score);
         write_all_outputs(out_prefix, data, state, fitted.score,
-            &fitted.traces, representatives, write_model_trace, top_c);
+            &fitted.traces, representatives, visualization_options,
+            write_model_trace, top_c);
         notice("UAC fitted %d clusters to %zu documents using %s handoff",
             options.n_components, data.identifiers.size(),
             uac::handoff_name(options.handoff));
-        notice("UAC outputs written to %s.{state,model,results,diagnostics,trace,separation,representatives}.tsv%s",
+        notice("UAC outputs written to %s.{state,model,results,diagnostics,trace,separation,representatives,visual.axes,visual.model,visual.results}.tsv%s",
             out_prefix.c_str(),
             write_model_trace ? " and .model_trace.tsv" : "");
     } catch (const std::exception& exception) {
@@ -1156,9 +1215,10 @@ int32_t cmdUacTransform(int argc, char** argv) {
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
     StreamingCliOptions streaming;
+    VisualizationCliOptions visualization;
     ParamList pl;
     pl.add_option("in-state", "Fitted UAC state", state_file, true)
-      .add_option("in-topic-center", "Document topic point-center table", center_file, true)
+      .add_option("in-theta", "Document topic-proportion (theta) table", center_file, true)
       .add_option("in-model", "Feature-by-topic basis table", basis_file)
       .add_option("out-prefix", "Output prefix", out_prefix, true)
       .add_option("unit-icol-id",
@@ -1180,6 +1240,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
     add_particle_adapt_options(pl, particle_adapt);
     add_component_screening_options(pl, screening);
     add_streaming_options(pl, streaming);
+    add_visualization_options(pl, visualization);
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -1187,6 +1248,9 @@ int32_t cmdUacTransform(int argc, char** argv) {
             throw std::invalid_argument("--top-c must be nonnegative");
         }
         uac::State state = uac::read_state(state_file);
+        const uac::VisualizationOptions visualization_options =
+            make_visualization_options(visualization, threads,
+                state.covariance_floor);
         const uac::ComponentScreeningOptions component_screening =
             make_component_screening_options(
                 screening, state.component_screening);
@@ -1291,7 +1355,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
         }
         report_component_screening(score);
         write_all_outputs(out_prefix, data, state, score, nullptr,
-            representatives, false, top_c);
+            representatives, visualization_options, false, top_c);
         notice("UAC assigned %zu documents using a fixed %s model",
             data.identifiers.size(), uac::handoff_name(state.handoff));
     } catch (const std::exception& exception) {

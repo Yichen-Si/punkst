@@ -127,7 +127,7 @@ void validate_knn_options(
         || static_cast<int32_t>(options.flat_kernel)
             > static_cast<int32_t>(CosineFlatKernel::Cblas)) {
         throw std::invalid_argument(
-            "Cosine k-NN requires at least two rows, positive neighbors and "
+            "Simplex k-NN requires at least two rows, positive neighbors and "
             "threads, and a finite non-negative epsilon");
     }
     const CosineKnnBackend resolved = resolve_backend(
@@ -135,10 +135,10 @@ void validate_knn_options(
     if (options.knn_search_epsilon > 0.0
         && resolved != CosineKnnBackend::KdTree) {
         throw std::invalid_argument(
-            "Cosine k-NN epsilon is supported only by the kd-tree backend");
+            "Simplex k-NN epsilon is supported only by the kd-tree backend");
     }
     if (observations.rows() > std::numeric_limits<int32_t>::max()) {
-        throw std::invalid_argument("Cosine k-NN row count exceeds int32 range");
+        throw std::invalid_argument("Simplex k-NN row count exceeds int32 range");
     }
 }
 
@@ -176,7 +176,7 @@ std::vector<DirectedNeighbor> kd_tree_neighbors(
                 }
                 if (retained != neighbors) {
                     throw std::runtime_error(
-                        "Cosine k-NN query returned too few neighbors");
+                        "Simplex k-NN query returned too few neighbors");
                 }
             }
         });
@@ -184,7 +184,7 @@ std::vector<DirectedNeighbor> kd_tree_neighbors(
     return directed;
 }
 
-CosineKnnGraph filter_positive_cosine_graph(KnnGraph graph) {
+CosineKnnGraph filter_positive_similarity_graph(KnnGraph graph) {
     size_t write = 0;
     for (size_t read = 0; read < graph.weights.size(); ++read) {
         if (graph.weights[read] <= 0.0) continue;
@@ -196,7 +196,7 @@ CosineKnnGraph filter_positive_cosine_graph(KnnGraph graph) {
     graph.weights.resize(write);
     if (graph.edges.empty()) {
         throw std::invalid_argument(
-            "Cosine k-NN graph has no positive-similarity edges");
+            "Simplex k-NN graph has no positive-similarity edges");
     }
     return graph;
 }
@@ -298,21 +298,6 @@ CommunityStats summarize_members(
     return out;
 }
 
-void validate_reconciliation_observations(
-    const Eigen::Ref<const RowMajorMatrixXd>& observations) {
-    if (observations.rows() == 0 || observations.cols() == 0
-        || !observations.allFinite()) {
-        throw std::invalid_argument(
-            "Cosine clustering requires a non-empty finite matrix");
-    }
-    for (Eigen::Index row = 0; row < observations.rows(); ++row) {
-        if (observations.row(row).cwiseAbs().maxCoeff() <= 0.0) {
-            throw std::invalid_argument(
-                "Cosine clustering requires nonzero observation rows");
-        }
-    }
-}
-
 } // namespace
 
 RowMajorMatrixXd l2_normalize_rows(
@@ -343,11 +328,68 @@ RowMajorMatrixXd l2_normalize_rows(
     return out;
 }
 
+const char* simplex_metric_name(SimplexMetric metric) {
+    switch (metric) {
+        case SimplexMetric::Cosine: return "cosine";
+        case SimplexMetric::Hellinger: return "hellinger";
+    }
+    return "unknown";
+}
+
+SimplexMetric parse_simplex_metric(const std::string& value) {
+    if (value == "cosine") return SimplexMetric::Cosine;
+    if (value == "hellinger") return SimplexMetric::Hellinger;
+    throw std::invalid_argument(
+        "Simplex clustering metric must be cosine or hellinger");
+}
+
+RowMajorMatrixXd simplex_metric_coordinates(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric) {
+    if (metric == SimplexMetric::Cosine) {
+        return l2_normalize_rows(observations);
+    }
+    if (metric != SimplexMetric::Hellinger
+        || observations.rows() == 0 || observations.cols() == 0) {
+        throw std::invalid_argument(
+            "Hellinger clustering requires a non-empty nonnegative matrix");
+    }
+    RowMajorMatrixXd out = observations;
+    for (Eigen::Index row = 0; row < out.rows(); ++row) {
+        if (!out.row(row).allFinite()
+            || (out.row(row).array() < 0.0).any()) {
+            throw std::invalid_argument(
+                "Hellinger clustering requires finite nonnegative rows");
+        }
+        const double scale = out.row(row).maxCoeff();
+        if (!(scale > 0.0)) {
+            throw std::invalid_argument(
+                "Hellinger clustering requires positive row sums");
+        }
+        out.row(row) /= scale;
+        const double total = out.row(row).sum();
+        if (!std::isfinite(total) || !(total > 0.0)) {
+            throw std::invalid_argument(
+                "Hellinger clustering requires positive row sums");
+        }
+        out.row(row) = (out.row(row).array() / total).sqrt();
+    }
+    return out;
+}
+
 DenseKMeansResult cosine_dense_kmeans(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const DenseKMeansOptions& options) {
-    const RowMajorMatrixXd normalized = l2_normalize_rows(observations);
-    return dense_kmeans(normalized, options);
+    return simplex_dense_kmeans(
+        observations, SimplexMetric::Cosine, options);
+}
+
+DenseKMeansResult simplex_dense_kmeans(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const DenseKMeansOptions& options) {
+    const RowMajorMatrixXd coordinates = simplex_metric_coordinates(
+        observations, metric);
+    return dense_kmeans(coordinates, options);
 }
 
 const char* cosine_knn_backend_name(CosineKnnBackend backend) {
@@ -379,9 +421,9 @@ bool cosine_knn_cblas_available() {
     return knn_cblas_available();
 }
 
-CosineKnnResult cosine_knn(
+CosineKnnResult simplex_knn(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
-    const CosineKnnOptions& options) {
+    SimplexMetric metric, const CosineKnnOptions& options) {
     validate_knn_options(observations, options);
     tbb::global_control parallelism(
         tbb::global_control::max_allowed_parallelism,
@@ -396,7 +438,8 @@ CosineKnnResult cosine_knn(
     }
 
     const auto normalization_begin = Clock::now();
-    const RowMajorMatrixXd normalized = l2_normalize_rows(observations);
+    const RowMajorMatrixXd normalized = simplex_metric_coordinates(
+        observations, metric);
     out.diagnostics.timings.normalization_seconds =
         elapsed_seconds(normalization_begin);
     const int32_t n = static_cast<int32_t>(normalized.rows());
@@ -404,7 +447,7 @@ CosineKnnResult cosine_knn(
     if (static_cast<size_t>(n) > std::numeric_limits<size_t>::max()
             / static_cast<size_t>(neighbors)) {
         throw std::invalid_argument(
-            "Cosine k-NN neighbor storage exceeds addressable memory");
+            "Simplex k-NN neighbor storage exceeds addressable memory");
     }
     std::vector<DirectedNeighbor> directed;
     switch (out.diagnostics.resolved_backend) {
@@ -429,11 +472,17 @@ CosineKnnResult cosine_knn(
             break;
     }
     const auto reduction_begin = Clock::now();
-    out.graph = filter_positive_cosine_graph(
+    out.graph = filter_positive_similarity_graph(
         knn_detail::union_max_knn_graph(directed, n, neighbors));
     out.diagnostics.timings.graph_reduction_seconds =
         elapsed_seconds(reduction_begin);
     return out;
+}
+
+CosineKnnResult cosine_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const CosineKnnOptions& options) {
+    return simplex_knn(observations, SimplexMetric::Cosine, options);
 }
 
 CosineKnnGraph cosine_knn_graph(
@@ -458,11 +507,24 @@ CosineLeidenResult cosine_leiden_cluster(
     return out;
 }
 
-Eigen::VectorXi reconcile_cosine_communities(
+CosineLeidenResult simplex_leiden_cluster(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const CosineLeidenOptions& options) {
+    CosineKnnResult knn = simplex_knn(observations, metric, options);
+
+    CosineLeidenResult out;
+    out.n_edges = static_cast<int64_t>(knn.graph.edges.size());
+    out.knn = knn.diagnostics;
+    out.clustering = leiden_cluster(
+        knn.graph.n_nodes, knn.graph.edges, knn.graph.weights, options.leiden);
+    return out;
+}
+
+Eigen::VectorXi reconcile_simplex_communities(
     const Eigen::VectorXi& membership, int32_t n_communities,
     int32_t requested_communities,
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
-    const DenseKMeansOptions& kmeans_options) {
+    SimplexMetric metric, const DenseKMeansOptions& kmeans_options) {
     if (observations.rows() > std::numeric_limits<int32_t>::max()) {
         throw std::invalid_argument("Community reconciliation exceeds int32 range");
     }
@@ -490,11 +552,12 @@ Eigen::VectorXi reconcile_cosine_communities(
         }
     }
     if (n_communities == requested_communities) {
-        validate_reconciliation_observations(observations);
+        (void)simplex_metric_coordinates(observations, metric);
         return labels;
     }
 
-    const RowMajorMatrixXd normalized = l2_normalize_rows(observations);
+    const RowMajorMatrixXd normalized = simplex_metric_coordinates(
+        observations, metric);
     for (int32_t community = 0; community < n_communities; ++community) {
         CommunityStats summary = summarize_members(
             communities[community].members, normalized);
@@ -620,4 +683,14 @@ Eigen::VectorXi reconcile_cosine_communities(
         ++groups;
     }
     return labels;
+}
+
+Eigen::VectorXi reconcile_cosine_communities(
+    const Eigen::VectorXi& membership, int32_t n_communities,
+    int32_t requested_communities,
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const DenseKMeansOptions& kmeans_options) {
+    return reconcile_simplex_communities(membership, n_communities,
+        requested_communities, observations, SimplexMetric::Cosine,
+        kmeans_options);
 }

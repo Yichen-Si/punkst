@@ -5,6 +5,10 @@ This document describes the current behavior of:
 - `punkst topic-model`
 - `punkst lda-transform`
 
+Dense `{prefix}.results.tsv` output can be clustered directly with
+[`punkst leiden`](leiden.md), or modeled with uncertainty-aware
+[`punkst uac-fit`](uac.md).
+
 ## Example usage
 
 Fit a 24-topic model from custom sparse input and transform the same units:

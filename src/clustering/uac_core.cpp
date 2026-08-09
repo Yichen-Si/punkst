@@ -151,8 +151,7 @@ const char* streaming_count_storage_name(StreamingCountStorage value) {
     throw std::invalid_argument("Unknown UAC streaming count storage");
 }
 
-const char* streaming_particle_storage_name(
-    StreamingParticleStorage value) {
+const char* streaming_particle_storage_name(StreamingParticleStorage value) {
     switch (value) {
         case StreamingParticleStorage::Auto: return "auto";
         case StreamingParticleStorage::Factors: return "factors";
@@ -182,8 +181,7 @@ StartMethod parse_start_method(const std::string& value) {
     throw std::invalid_argument("UAC start method must be kmeans++ or leiden");
 }
 
-ComponentScreeningMode parse_component_screening_mode(
-    const std::string& value) {
+ComponentScreeningMode parse_component_screening_mode(const std::string& value){
     if (value == "off") return ComponentScreeningMode::Off;
     if (value == "on") return ComponentScreeningMode::On;
     if (value == "auto") return ComponentScreeningMode::Auto;
@@ -198,8 +196,7 @@ ParticleEngine parse_particle_engine(const std::string& value) {
         "UAC particle engine must be batch or stream");
 }
 
-StreamingCountStorage parse_streaming_count_storage(
-    const std::string& value) {
+StreamingCountStorage parse_streaming_count_storage(const std::string& value) {
     if (value == "source") return StreamingCountStorage::Source;
     if (value == "memory") return StreamingCountStorage::Memory;
     throw std::invalid_argument(

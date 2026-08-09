@@ -147,6 +147,7 @@ set(CLUSTERING_SOURCE_FILES
     src/clustering/uac_core.cpp
     src/clustering/uac_state.cpp
     src/clustering/uac_output.cpp
+    src/clustering/uac_visualization.cpp
     src/clustering/uac_stream.hpp
     src/clustering/uac_stream.cpp
     src/clustering/low_rank_covariance.hpp
@@ -205,6 +206,7 @@ set(SOURCE_FILES
     script/fit_lda.cpp
     script/fit_gampois.cpp
     script/transform_gampois.cpp
+    script/leiden.cpp
     script/uac.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
