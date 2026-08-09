@@ -365,7 +365,7 @@ private:
         VectorXd unitResidual = VectorXd::Zero(nDocs);
         VectorXd unitCosine;
         VectorXd unitEntropy = VectorXd::Zero(nDocs);
-        ThetaEntropyStats similarityEntropy;
+        EntropyStats similarityEntropy;
         VectorXd expectedNormSq;
         const size_t grainSize = std::max<size_t>(
             1, docs.size() / (2 * static_cast<size_t>(threadHint)));

@@ -212,22 +212,26 @@ Expectation map_expectation(const Dataset& data, const Model& model,
         ExpectationBlock& block = blocks[block_index];
         Eigen::VectorXd responsibility(components);
         Eigen::VectorXd upper(components);
+        Eigen::VectorXd value(dimension);
+        Eigen::VectorXd dense_standardized;
+        Eigen::VectorXd factor_residual;
         ComponentScreeningWorkspace screening_workspace;
         const int32_t begin = block_index * block_size;
         const int32_t end = std::min(documents, begin + block_size);
         for (int32_t d = begin; d < end; ++d) {
-            const Eigen::VectorXd value = data.coordinates.row(d).transpose();
+            value = data.coordinates.row(d).transpose();
             auto exact_score = [&](int32_t c) {
                     if (factor_rank < 0) {
                         return std::log(model.weights(c))
-                            + dense_solvers[c].log_density(value);
+                            + dense_solvers[c].log_density(
+                                value, dense_standardized);
                     }
-                    const Eigen::VectorXd residual = value
+                    factor_residual = value
                         - model.means.row(c).transpose();
                     return std::log(model.weights(c)) - 0.5
                         * (dimension * kLog2Pi
                             + factor_solvers[c].log_determinant()
-                            + factor_solvers[c].quadratic(residual));
+                            + factor_solvers[c].quadratic(factor_residual));
                 };
             ScreenedComponents selected;
             if (screen) {
@@ -576,6 +580,10 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
         Eigen::MatrixXd log_tilt(components, maximum_samples);
         Eigen::VectorXd evidence(components);
         Eigen::VectorXd responsibility(components);
+        Eigen::VectorXd base;
+        Eigen::MatrixXd dense_standardized;
+        Eigen::VectorXd dense_log_density;
+        RowMajorMatrixXd factor_residual;
         RowMajorMatrixXd bound_residual;
         Eigen::VectorXd bound_term;
         Eigen::VectorXd upper;
@@ -594,24 +602,25 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
             const int32_t samples = particles.samples_for_document(d);
             const auto gaussian_start = std::chrono::steady_clock::now();
             const auto values = particles.values_for_document(d);
-            const Eigen::VectorXd base =
-                particles.log_likelihood_for_document(d)
+            base = particles.log_likelihood_for_document(d)
                 - particles.log_proposal_for_document(d)
                 - Eigen::VectorXd::Constant(samples, std::log(samples));
             evidence.setConstant(
                 -std::numeric_limits<double>::infinity());
             auto exact_score = [&](int32_t c) {
                 if (factor_rank < 0) {
-                    log_tilt.row(c).head(samples) = (base
-                        + dense_solvers[c].log_density_rows(values)).transpose();
+                    dense_solvers[c].log_density_rows(values,
+                        dense_standardized, dense_log_density);
+                    log_tilt.row(c).head(samples) =
+                        (base + dense_log_density).transpose();
                 } else {
-                    const RowMajorMatrixXd residual =
-                        values.rowwise() - model.means.row(c);
+                    factor_residual.resize(samples, dimension);
+                    factor_residual = values.rowwise() - model.means.row(c);
                     log_tilt.row(c).head(samples) = (base.array()
                         - 0.5 * (dimension * kLog2Pi
                             + factor_solvers[c].log_determinant()
                             + factor_solvers[c].quadratic_rows(
-                                residual).array())).matrix().transpose();
+                                factor_residual).array())).matrix().transpose();
                 }
                 evidence(c) = logsumexp(
                     log_tilt.row(c).head(samples).transpose());
@@ -889,4 +898,3 @@ bool resolve_particle_component_screening(
 }
 
 } // namespace uac::detail
-

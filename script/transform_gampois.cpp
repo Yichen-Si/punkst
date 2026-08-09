@@ -342,7 +342,7 @@ private:
         VectorXd unitResidual = VectorXd::Zero(nDocs);
         VectorXd unitCosine;
         VectorXd unitEntropy = VectorXd::Zero(nDocs);
-        ThetaEntropyStats similarityEntropy;
+        EntropyStats similarityEntropy;
         RowMajorMatrixXd expectedTopicWeights(nDocs, K);
         RowMajorMatrixXd rateTopicMeans =
             RowMajorMatrixXd::Zero(nDocs, K);

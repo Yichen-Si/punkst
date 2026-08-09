@@ -103,15 +103,11 @@ State make_state(const FitResult& fit_result, const FitOptions& options,
     const int32_t dimension =
         detail::checked_int32(fit_result.model.means.cols(), "model dimension");
     detail::validate_pilot(fit_result.pilot, components, dimension);
-    const Eigen::MatrixXd expected_helmert =
-        normalized_helmert(dimension + 1);
     if (metadata.topics.size()
             != static_cast<size_t>(dimension + 1)
         || metadata.helmert.rows() != dimension
         || metadata.helmert.cols() != dimension + 1
-        || !metadata.helmert.allFinite()
-        || (metadata.helmert - expected_helmert)
-            .cwiseAbs().maxCoeff() > 1e-12
+        || !is_normalized_helmert(metadata.helmert)
         || !(metadata.center_floor > 0.0)
         || !std::isfinite(metadata.center_floor)
         || !metadata.feature_weights.allFinite()

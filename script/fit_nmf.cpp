@@ -583,7 +583,7 @@ int32_t cmdNmfPoisLog1p(int32_t argc, char** argv) {
     std::vector<MLEStats> stats;
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats);
     const MatrixXd similarity = pairwiseCosineSimilarityRows(rowNormalize(nmf.get_model().transpose()));
-    const ThetaEntropyStats thetaStats = computeThetaEntropyStats(theta, similarity);
+    const EntropyStats thetaStats = computeThetaEntropyStats(theta, similarity);
 
     outf = outPrefix + ".unit_stats.tsv";
     std::ofstream ofs(outf);

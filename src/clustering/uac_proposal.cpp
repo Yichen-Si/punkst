@@ -26,7 +26,7 @@ FisherApproximation fisher_approximation_impl(
     FisherWorkspace local_workspace;
     FisherWorkspace& workspace =
         supplied_workspace ? *supplied_workspace : local_workspace;
-    workspace.composition = composition_from_coordinate(coordinate, helmert);
+    workspace.composition = ilr_inverse_coordinate(coordinate, helmert);
     const Eigen::VectorXd& composition = workspace.composition;
     workspace.simplex_covariance = composition.asDiagonal();
     Eigen::MatrixXd& simplex_covariance = workspace.simplex_covariance;
@@ -179,8 +179,9 @@ DocumentProposal fisher_proposal(
         const double pilot_logdet = cache.log_determinants(c);
         const Eigen::VectorXd pilot_mean = pilot.means.row(c).transpose();
         const Eigen::VectorXd residual = center - pilot_mean;
-        const Eigen::VectorXd b = fisher.gradient
-            - inverse_covariance * residual;
+        const Eigen::VectorXd inverse_residual =
+            inverse_covariance * residual;
+        const Eigen::VectorXd b = fisher.gradient - inverse_residual;
         const Eigen::MatrixXd raw_precision = 0.5
             * (fisher.information + inverse_covariance
                 + fisher.information.transpose()
@@ -218,7 +219,7 @@ DocumentProposal fisher_proposal(
         out.log_precision_determinants(j) = precision_logdet;
         log_weight(j) = std::log(pilot.weights(c))
             - 0.5 * (dimension * kLog2Pi + pilot_logdet
-                + residual.dot(inverse_covariance * residual))
+                + residual.dot(inverse_residual))
             + 0.5 * b.dot(step) + 0.5 * dimension * kLog2Pi
             - 0.5 * precision_logdet;
     }
@@ -433,6 +434,7 @@ ProposalScreeningPlan make_proposal_screening_plan(
         if (!added) break;
     }
 
+    FisherWorkspace fisher_workspace;
     for (const int32_t d : out.audit_documents) {
         DocumentBlock count_block;
         if (count_source) {
@@ -444,7 +446,7 @@ ProposalScreeningPlan make_proposal_screening_plan(
         const FisherApproximation fisher = fisher_approximation_impl(
             center,
             count_source ? count_block.counts.front() : data.counts[d],
-            basis, helmert, proposal_kind);
+            basis, helmert, proposal_kind, true, &fisher_workspace);
         const DocumentProposal full = fisher_proposal(
             center, fisher, pilot, cache, broadening);
         std::vector<uint8_t> retained(components, 0);

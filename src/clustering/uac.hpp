@@ -444,11 +444,6 @@ struct StateMetadata {
     bool weighted_counts = false;
 };
 
-Eigen::MatrixXd normalized_helmert(int32_t topics);
-RowMajorMatrixXd ilr_transform(const Eigen::Ref<const RowMajorMatrixXd>& values,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert, double floor = 1e-12);
-RowMajorMatrixXd ilr_inverse(const Eigen::Ref<const RowMajorMatrixXd>& values,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert);
 void normalize_basis(Basis& basis);
 void normalize_centers(RowMajorMatrixXd& centers, double floor = 1e-12);
 uint64_t basis_checksum(const Basis& basis);
@@ -458,6 +453,12 @@ double median_absolute_relative_variance_change(const Model& current,
 FitResult fit(Dataset& data, const Basis* basis,
     const FitOptions& options);
 FitResult fit(const Dataset& data, const Basis* basis,
+    const FitOptions& options);
+FitResult fit(Dataset& data, const Basis* basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const FitOptions& options);
+FitResult fit(const Dataset& data, const Basis* basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const FitOptions& options);
 ScoreResult score_map(const Dataset& data, const Model& model,
     int32_t n_threads = 1,

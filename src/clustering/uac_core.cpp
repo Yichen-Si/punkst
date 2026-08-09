@@ -305,44 +305,6 @@ void prepare_counts(std::vector<Document>& documents, int32_t feature_count,
 } // namespace detail
 
 
-Eigen::MatrixXd normalized_helmert(int32_t topics) {
-    if (topics < 2) throw std::invalid_argument("UAC requires at least two topics");
-    Eigen::MatrixXd out = Eigen::MatrixXd::Zero(topics - 1, topics);
-    for (int32_t row = 0; row < topics - 1; ++row) {
-        const double denominator = std::sqrt((row + 1.0) * (row + 2.0));
-        out.block(row, 0, 1, row + 1).setConstant(1.0 / denominator);
-        out(row, row + 1) = -(row + 1.0) / denominator;
-    }
-    return out;
-}
-
-RowMajorMatrixXd ilr_transform(const Eigen::Ref<const RowMajorMatrixXd>& values,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert, double floor) {
-    if (values.cols() != helmert.cols() || floor <= 0.0) {
-        throw std::invalid_argument("Invalid UAC ILR transform dimensions or floor");
-    }
-    RowMajorMatrixXd out(values.rows(), helmert.rows());
-    for (Eigen::Index row = 0; row < values.rows(); ++row) {
-        Eigen::VectorXd normalized = values.row(row).transpose().array().max(floor);
-        normalized /= normalized.sum();
-        out.row(row) = (helmert * normalized.array().log().matrix()).transpose();
-    }
-    return out;
-}
-
-RowMajorMatrixXd ilr_inverse(const Eigen::Ref<const RowMajorMatrixXd>& values,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
-    if (values.cols() != helmert.rows()) {
-        throw std::invalid_argument("Invalid UAC inverse ILR dimensions");
-    }
-    RowMajorMatrixXd out(values.rows(), helmert.cols());
-    for (Eigen::Index row = 0; row < values.rows(); ++row) {
-        out.row(row) = detail::composition_from_coordinate(
-            values.row(row).transpose(), helmert).transpose();
-    }
-    return out;
-}
-
 void normalize_basis(Basis& basis) {
     if (basis.probabilities.rows() == 0 || basis.probabilities.cols() < 2
         || basis.features.size() != static_cast<size_t>(basis.probabilities.rows())
@@ -351,11 +313,7 @@ void normalize_basis(Basis& basis) {
         || (basis.probabilities.array() < 0.0).any()) {
         throw std::invalid_argument("Invalid UAC topic basis");
     }
-    for (Eigen::Index topic = 0; topic < basis.probabilities.cols(); ++topic) {
-        const double total = basis.probabilities.col(topic).sum();
-        if (!(total > 0.0)) throw std::invalid_argument("UAC basis has an empty topic");
-        basis.probabilities.col(topic) /= total;
-    }
+    detail::normalizePositiveColumnsInPlace(basis.probabilities);
     basis.checksum = basis_checksum(basis);
 }
 

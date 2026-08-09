@@ -60,6 +60,10 @@ StreamingScoreSummary score_particle_streaming(const Dataset& data,
 // and totals in Dataset. Count-dependent work reads bounded ranges from source.
 FitResult fit_indexed(const Dataset& data, const Basis& basis,
     IndexedDocumentSource& source, const FitOptions& options);
+FitResult fit_indexed(const Dataset& data, const Basis& basis,
+    IndexedDocumentSource& source,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const FitOptions& options);
 ScoreResult score_particle_indexed(const Dataset& data, const Basis& basis,
     IndexedDocumentSource& source, const State& state,
     const ParticleScoreOptions& options);

@@ -554,13 +554,12 @@ Eigen::VectorXd read_feature_weights(const std::string& path,
     return weights;
 }
 
-uac::Dataset make_map_dataset(const CenterTable& centers) {
+uac::Dataset make_map_dataset(const CenterTable& centers,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
     uac::Dataset data;
     data.identifiers = centers.identifiers;
     data.centers = centers.values;
-    const Eigen::MatrixXd helmert = uac::normalized_helmert(
-        data.centers.cols());
-    data.coordinates = uac::ilr_transform(data.centers, helmert);
+    data.coordinates = ilr_transform(data.centers, helmert);
     return data;
 }
 
@@ -582,7 +581,8 @@ void configure_count_features(
 uac::Dataset load_particle_dataset(const CenterTable& centers,
     const uac::Basis& basis, const CountInputOptions& options,
     CountInput& input,
-    const Eigen::VectorXd& feature_weights) {
+    const Eigen::VectorXd& feature_weights,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
     std::vector<Document> documents;
     std::vector<std::string> identifiers;
     if (input.use_10x) {
@@ -625,8 +625,7 @@ uac::Dataset load_particle_dataset(const CenterTable& centers,
     uac::detail::prepare_counts(data.counts,
         static_cast<int32_t>(basis.probabilities.rows()), weights,
         data.raw_totals, data.effective_totals);
-    data.coordinates = uac::ilr_transform(data.centers,
-        uac::normalized_helmert(data.centers.cols()));
+    data.coordinates = ilr_transform(data.centers, helmert);
     return data;
 }
 
@@ -662,7 +661,8 @@ IndexedParticleDataset load_indexed_particle_dataset(
     const CountInputOptions& options,
     CountInput& input,
     const Eigen::VectorXd& feature_weights,
-    const std::string& cache_directory) {
+    const std::string& cache_directory,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
     std::unordered_map<std::string, int32_t> center_index;
     center_index.reserve(centers.identifiers.size());
     for (int32_t d = 0;
@@ -770,8 +770,7 @@ IndexedParticleDataset load_indexed_particle_dataset(
         out.data.raw_totals(d) = raw_totals[d];
         out.data.effective_totals(d) = effective_totals[d];
     }
-    out.data.coordinates = uac::ilr_transform(out.data.centers,
-        uac::normalized_helmert(out.data.centers.cols()));
+    out.data.coordinates = ilr_transform(out.data.centers, helmert);
     out.counts = writer.finish();
     out.weighted_counts =
         out.weighted_counts || feature_weights.size() > 0;
@@ -1036,6 +1035,7 @@ int32_t cmdUacFit(int argc, char** argv) {
         Eigen::VectorXd canonical_feature_weights;
         Eigen::VectorXd runtime_feature_weights;
         uac::Dataset data;
+        Eigen::MatrixXd helmert;
         std::unique_ptr<uac::IndexedDocumentSource> indexed_counts;
         bool weighted_counts = false;
         if (options.handoff == uac::HandoffMode::Particle) {
@@ -1045,6 +1045,8 @@ int32_t cmdUacFit(int argc, char** argv) {
             canonical_basis = read_basis(basis_file);
             centers = read_centers(center_file, kCenterFloor,
                 unit_identifier_column, &canonical_basis.topics);
+            helmert = normalized_helmert(
+                static_cast<int32_t>(centers.topics.size()));
             CountInput count_input = initialize_count_input(count_options);
             prepared_basis = prepare_runtime_basis(
                 canonical_basis, count_input, count_options);
@@ -1065,13 +1067,14 @@ int32_t cmdUacFit(int argc, char** argv) {
                     load_indexed_particle_dataset(
                         centers, runtime_basis, count_options, count_input,
                         runtime_feature_weights,
-                        options.streaming.cache_directory);
+                        options.streaming.cache_directory, helmert);
                 data = std::move(indexed.data);
                 indexed_counts = std::move(indexed.counts);
                 weighted_counts = indexed.weighted_counts;
             } else {
                 data = load_particle_dataset(centers, runtime_basis,
-                    count_options, count_input, runtime_feature_weights);
+                    count_options, count_input, runtime_feature_weights,
+                    helmert);
                 weighted_counts = canonical_feature_weights.size() > 0
                     || has_fractional_counts(data.counts);
             }
@@ -1081,7 +1084,9 @@ int32_t cmdUacFit(int argc, char** argv) {
         } else {
             centers = read_centers(center_file, kCenterFloor,
                 unit_identifier_column);
-            data = make_map_dataset(centers);
+            helmert = normalized_helmert(
+                static_cast<int32_t>(centers.topics.size()));
+            data = make_map_dataset(centers, helmert);
             if (!basis_file.empty() || !count_options.in_file.empty()
                 || !count_options.meta_file.empty()
                 || !count_options.dge_dirs.empty()
@@ -1110,12 +1115,12 @@ int32_t cmdUacFit(int argc, char** argv) {
             options.particle_initial_model = initial.model;
         }
         uac::FitResult fitted = indexed_counts
-            ? uac::fit_indexed(data, *basis_pointer, *indexed_counts, options)
-            : uac::fit(data, basis_pointer, options);
+            ? uac::fit_indexed(data, *basis_pointer, *indexed_counts,
+                helmert, options)
+            : uac::fit(data, basis_pointer, helmert, options);
         uac::StateMetadata state_metadata;
         state_metadata.topics = centers.topics;
-        state_metadata.helmert =
-            uac::normalized_helmert(state_metadata.topics.size());
+        state_metadata.helmert = helmert;
         state_metadata.center_floor = kCenterFloor;
         state_metadata.basis_checksum =
             basis_pointer ? canonical_basis.checksum : 0;
@@ -1210,7 +1215,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
                 || adaptive_particles.enabled()) {
                 throw std::invalid_argument("Particle overrides are invalid for a MAP UAC state");
             }
-            data = make_map_dataset(centers);
+            data = make_map_dataset(centers, state.helmert);
             score = uac::score_map(
                 data, state.model, threads, terminal_screening);
             score.component_screening_options = component_screening;
@@ -1271,7 +1276,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
                     load_indexed_particle_dataset(
                         centers, runtime_basis, count_options, count_input,
                         runtime_weights,
-                        streaming_options.cache_directory);
+                        streaming_options.cache_directory, state.helmert);
                 data = std::move(indexed.data);
                 score = uac::score_particle_indexed(
                     data, runtime_basis, *indexed.counts,
@@ -1279,7 +1284,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
             } else {
                 data = load_particle_dataset(
                     centers, runtime_basis, count_options, count_input,
-                    runtime_weights);
+                    runtime_weights, state.helmert);
                 score = uac::score_particle(
                     data, runtime_basis, *scoring_state, score_options);
             }

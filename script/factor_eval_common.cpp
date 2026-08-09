@@ -93,7 +93,7 @@ UnitGofStats computeUnitGof(const std::vector<Document>& docs,
     stats.residuals = VectorXd::Zero(N);
     stats.cosineSim = VectorXd::Zero(N);
     const MatrixXd topicSimilarity = pairwiseCosineSimilarityRows(betaNorm);
-    const ThetaEntropyStats thetaStats = computeThetaEntropyStats(theta, topicSimilarity);
+    const EntropyStats thetaStats = computeThetaEntropyStats(theta, topicSimilarity);
     stats.entropy = thetaStats.entropy;
     stats.shLcr = thetaStats.sh_lcr;
     stats.shQ = thetaStats.sh_q;

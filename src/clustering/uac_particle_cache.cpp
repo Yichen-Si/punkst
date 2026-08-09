@@ -257,11 +257,12 @@ DocumentProposal particle_cache_proposal(const Dataset& data,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, double broadening,
     const ProposalScreeningPlan* screening_plan, int32_t data_document,
-    int32_t global_document) {
+    int32_t global_document, FisherWorkspace* fisher_workspace = nullptr) {
     const Eigen::VectorXd center =
         data.coordinates.row(data_document).transpose();
     const FisherApproximation fisher = fisher_approximation_impl(
-        center, data.counts[data_document], basis, helmert, proposal_kind);
+        center, data.counts[data_document], basis, helmert, proposal_kind,
+        true, fisher_workspace);
     const std::vector<int32_t>* candidates =
         screening_plan && screening_plan->enabled
         ? &screening_plan->candidates[global_document] : nullptr;
@@ -302,6 +303,7 @@ void write_factor_particle_cache(const std::filesystem::path& path,
     }
     out.write(reinterpret_cast<const char*>(&header), sizeof(header));
     uint64_t checksum = 1469598103934665603ull;
+    FisherWorkspace fisher_workspace;
     for (int32_t local = 0; local < particles.documents; ++local) {
         const int32_t global_document = particles.first_document + local;
         const int32_t data_document = data_is_local_block
@@ -311,7 +313,8 @@ void write_factor_particle_cache(const std::filesystem::path& path,
             ? std::min(samples, adaptive.calibration_particles) : 0;
         const DocumentProposal proposal = particle_cache_proposal(
             data, basis, helmert, pilot, pilot_cache, proposal_kind,
-            broadening, screening_plan, data_document, global_document);
+            broadening, screening_plan, data_document, global_document,
+            &fisher_workspace);
         const int32_t proposal_components =
             static_cast<int32_t>(proposal.weights.size());
         const uint64_t document_seed = hash_string(

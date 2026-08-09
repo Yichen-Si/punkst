@@ -10,20 +10,6 @@
 namespace uac::detail {
 
 
-double logsumexp(const Eigen::Ref<const Eigen::VectorXd>& values) {
-    const double maximum = values.maxCoeff();
-    if (!std::isfinite(maximum)) return maximum;
-    return maximum + std::log((values.array() - maximum).exp().sum());
-}
-
-double logaddexp(double left, double right) {
-    if (!std::isfinite(left)) return right;
-    if (!std::isfinite(right)) return left;
-    const double maximum = std::max(left, right);
-    return maximum + std::log(
-        std::exp(left - maximum) + std::exp(right - maximum));
-}
-
 void validate_component_screening(
     const ComponentScreeningOptions& options) {
     switch (options.mode) {
@@ -56,15 +42,6 @@ int32_t checked_int32(Eigen::Index value, const char* name) {
             std::string("UAC ") + name + " exceeds int32 capacity");
     }
     return static_cast<int32_t>(value);
-}
-
-bool positive_definite(const Eigen::MatrixXd& covariance) {
-    return covariance.rows() > 0 && covariance.rows() == covariance.cols()
-        && covariance.allFinite()
-        && (covariance - covariance.transpose()).cwiseAbs().maxCoeff()
-            <= 1e-8
-        && Eigen::LLT<Eigen::MatrixXd>(covariance).info()
-            == Eigen::Success;
 }
 
 void validate_dataset(const Dataset& data, bool require_counts) {
@@ -404,8 +381,6 @@ void validate_state(const State& state) {
             == StartMethod::KMeans
         ? state.selected_start < state.kmeans_starts
         : state.selected_start >= state.kmeans_starts;
-    const Eigen::MatrixXd expected_helmert =
-        normalized_helmert(dimension + 1);
     const int32_t model_rank =
         state.model.covariance_kind == CovarianceKind::Dense
         ? -1 : checked_int32(
@@ -439,9 +414,7 @@ void validate_state(const State& state) {
         || state.topics.size() != static_cast<size_t>(dimension + 1)
         || state.helmert.rows() != dimension
         || state.helmert.cols() != dimension + 1
-        || !state.helmert.allFinite()
-        || (state.helmert - expected_helmert)
-            .cwiseAbs().maxCoeff() > 1e-12
+        || !is_normalized_helmert(state.helmert)
         || !(state.center_floor > 0.0)
         || !(state.target_relative_floor > 0.0)
         || !(state.covariance_floor > 0.0)
@@ -505,18 +478,6 @@ uint64_t hash_string(uint64_t value, const std::string& text) {
     return fnv_append(value, &separator, 1);
 }
 
-Eigen::MatrixXd floor_covariance(const Eigen::Ref<const Eigen::MatrixXd>& input,
-    double floor) {
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
-        0.5 * (input + input.transpose()));
-    if (solver.info() != Eigen::Success) {
-        throw std::runtime_error("UAC covariance eigendecomposition failed");
-    }
-    return solver.eigenvectors()
-        * solver.eigenvalues().cwiseMax(floor).asDiagonal()
-        * solver.eigenvectors().transpose();
-}
-
 double log_gaussian(const Eigen::Ref<const Eigen::VectorXd>& value,
     const Eigen::Ref<const Eigen::VectorXd>& mean,
     const Eigen::Ref<const Eigen::MatrixXd>& covariance) {
@@ -545,7 +506,14 @@ DenseGaussianSolver::DenseGaussianSolver(
 
 double DenseGaussianSolver::log_density(
     const Eigen::Ref<const Eigen::VectorXd>& value) const {
-    Eigen::VectorXd standardized = value - mean;
+    Eigen::VectorXd standardized;
+    return log_density(value, standardized);
+}
+
+double DenseGaussianSolver::log_density(
+    const Eigen::Ref<const Eigen::VectorXd>& value,
+    Eigen::VectorXd& standardized) const {
+    standardized = value - mean;
     lower.triangularView<Eigen::Lower>().solveInPlace(standardized);
     return -0.5 * (value.size() * kLog2Pi + log_determinant
         + standardized.squaredNorm());
@@ -553,10 +521,20 @@ double DenseGaussianSolver::log_density(
 
 Eigen::VectorXd DenseGaussianSolver::log_density_rows(
     const Eigen::Ref<const RowMajorMatrixXd>& values) const {
-    Eigen::MatrixXd standardized =
-        (values.rowwise() - mean.transpose()).transpose();
+    Eigen::MatrixXd standardized;
+    Eigen::VectorXd output;
+    log_density_rows(values, standardized, output);
+    return output;
+}
+
+void DenseGaussianSolver::log_density_rows(
+    const Eigen::Ref<const RowMajorMatrixXd>& values,
+    Eigen::MatrixXd& standardized, Eigen::VectorXd& output) const {
+    standardized.resize(mean.size(), values.rows());
+    standardized = (values.rowwise() - mean.transpose()).transpose();
     lower.triangularView<Eigen::Lower>().solveInPlace(standardized);
-    return (-0.5 * (mean.size() * kLog2Pi + log_determinant
+    output.resize(values.rows());
+    output = (-0.5 * (mean.size() * kLog2Pi + log_determinant
         + standardized.colwise().squaredNorm().array())).matrix();
 }
 
@@ -715,16 +693,6 @@ int32_t map_start_seed(int32_t seed, int32_t start) {
     const uint64_t value = static_cast<uint32_t>(seed)
         + 104729ull * static_cast<uint32_t>(start);
     return static_cast<int32_t>(value % modulus);
-}
-
-Eigen::VectorXd composition_from_coordinate(
-    const Eigen::Ref<const Eigen::VectorXd>& coordinate,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
-    Eigen::VectorXd logits = helmert.transpose() * coordinate;
-    logits.array() -= logits.maxCoeff();
-    Eigen::VectorXd values = logits.array().exp();
-    values /= values.sum();
-    return values;
 }
 
 Eigen::VectorXd count_log_likelihood_rows(

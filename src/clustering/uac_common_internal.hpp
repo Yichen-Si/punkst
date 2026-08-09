@@ -13,13 +13,9 @@ namespace uac::detail {
 
 inline constexpr double kLog2Pi = 1.83787706640934548356;
 
-double logsumexp(const Eigen::Ref<const Eigen::VectorXd>& values);
-double logaddexp(double left, double right);
-
 void validate_component_screening(
     const ComponentScreeningOptions& options);
 int32_t checked_int32(Eigen::Index value, const char* name);
-bool positive_definite(const Eigen::MatrixXd& covariance);
 void validate_dataset(const Dataset& data, bool require_counts);
 void validate_basis(const Basis& basis, int32_t topics,
     bool require_checksum = true);
@@ -64,8 +60,6 @@ double weighted_hpd_threshold(
     const Eigen::Ref<const Eigen::VectorXd>& probability, double level);
 uint64_t fnv_append(uint64_t value, const void* data, size_t size);
 uint64_t hash_string(uint64_t value, const std::string& text);
-Eigen::MatrixXd floor_covariance(
-    const Eigen::Ref<const Eigen::MatrixXd>& input, double floor);
 double log_gaussian(const Eigen::Ref<const Eigen::VectorXd>& value,
     const Eigen::Ref<const Eigen::VectorXd>& mean,
     const Eigen::Ref<const Eigen::MatrixXd>& covariance);
@@ -80,8 +74,15 @@ struct DenseGaussianSolver {
         const Eigen::Ref<const Eigen::MatrixXd>& covariance);
     double log_density(
         const Eigen::Ref<const Eigen::VectorXd>& value) const;
+    double log_density(
+        const Eigen::Ref<const Eigen::VectorXd>& value,
+        Eigen::VectorXd& standardized) const;
     Eigen::VectorXd log_density_rows(
         const Eigen::Ref<const RowMajorMatrixXd>& values) const;
+    void log_density_rows(
+        const Eigen::Ref<const RowMajorMatrixXd>& values,
+        Eigen::MatrixXd& standardized,
+        Eigen::VectorXd& output) const;
 };
 
 std::vector<DenseGaussianSolver> dense_model_solvers(const Model& model);
@@ -97,9 +98,6 @@ double covariance_prior(const Model& model, double strength);
 int32_t active_component_count(const Model& model);
 double membership_epsilon(int32_t documents);
 int32_t map_start_seed(int32_t seed, int32_t start);
-Eigen::VectorXd composition_from_coordinate(
-    const Eigen::Ref<const Eigen::VectorXd>& coordinate,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert);
 Eigen::VectorXd count_log_likelihood_rows(
     const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
     const Document& document, const Basis& basis,
@@ -118,4 +116,20 @@ void prepare_counts(std::vector<Document>& documents, int32_t feature_count,
     const Eigen::VectorXd* feature_weights, Eigen::VectorXd& raw_totals,
     Eigen::VectorXd& effective_totals);
 
+template<typename Derived>
+void normalizePositiveColumnsInPlace(Eigen::MatrixBase<Derived>& matrix) {
+    if (matrix.rows() == 0 || matrix.cols() == 0 || !matrix.allFinite()
+        || (matrix.array() < 0.0).any()) {
+        throw std::invalid_argument(
+            "Cannot normalize an invalid nonnegative matrix");
+    }
+    for (Eigen::Index column = 0; column < matrix.cols(); ++column) {
+        const auto total = matrix.col(column).sum();
+        if (!(total > 0.0)) {
+            throw std::invalid_argument(
+                "Cannot normalize a matrix with an empty column");
+        }
+        matrix.col(column) /= total;
+    }
+}
 } // namespace uac::detail

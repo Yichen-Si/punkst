@@ -25,6 +25,79 @@ using RealScalar = typename Eigen::NumTraits<Scalar>::Real;
 constexpr double NEG_INF = -std::numeric_limits<double>::infinity();
 constexpr double TINY = 1e-300;
 
+/**
+ * Scalar numerical primitives
+ */
+
+ double safe_log10(double x);
+inline double safe_log(double x) {
+    return std::log(std::max(x, TINY));
+}
+
+template <typename T>
+inline T clamp(T x, T a, T b) {
+    return x < a ? a : (x > b ? b : x);
+}
+
+template <typename T>
+inline T expit(T x) {
+    // Handles large |x| without overflow.
+    if (x >= T(0)) {
+        const T z = std::exp(-x);
+        return T(1) / (T(1) + z);
+    }
+    const T z = std::exp(x);
+    return z / (T(1) + z);
+}
+
+// exp(z)/(1+exp(z))
+inline double sigmoid_stable(double z) {
+    if (z >= 0) {
+        double ez = std::exp(-z);
+        return 1.0 / (1.0 + ez);
+    }
+    double ez = std::exp(z);
+    return ez / (1.0 + ez);
+
+}
+inline Eigen::ArrayXd sigmoid_stable(const Eigen::ArrayXd& z) {
+    Eigen::ArrayXd result(z.size());
+    Eigen::ArrayXd ez = z.exp();
+    Eigen::ArrayXd emz= (-z).exp();
+    result = (z>=0).select(1.0/(1.0+emz), ez/(1.0+ez));
+    return result;
+}
+
+// log(1 + exp(z))
+inline double softplus_stable(double z) {
+    if (z > 40.0) return z; // log(1+exp(z)) ~ z
+    if (z < -40.0) return std::exp(z); // ~ exp(z)
+    return std::log1p(std::exp(z));
+}
+inline Eigen::ArrayXd softplus_stable(const Eigen::ArrayXd& z) {
+    Eigen::ArrayXd result(z.size());
+    const double hi = 40.0;
+    const double lo = -40.0;
+    result = (z > hi).select(z,
+             (z < lo).select(z.exp(), (z.exp() + 1.0).log()));
+    return result;
+}
+
+// eps + tau * log(1 + exp((x-eps)/tau))
+inline double smooth_floor(double x, double eps, double tau, double* slope_out) {
+    if (tau <= 0) {
+        if (slope_out) *slope_out = (x > eps) ? 1.0 : 0.0;
+        return (x > eps) ? x : eps;
+    }
+    double z = (x - eps) / tau;
+    double sp = softplus_stable(z); // log(1+exp(z))
+    double s  = sigmoid_stable(z);  // d/dz softplus = sigmoid
+    if (slope_out) *slope_out = s;  // d/dx = (1/tau)*tau*s = s
+    return eps + tau * sp;
+}
+
+double logit(double x);
+float logit(float x);
 inline double logsumexp(const std::vector<double>& x) {
     double m = *std::max_element(x.begin(), x.end());
     if (!std::isfinite(m)) {
@@ -36,10 +109,12 @@ inline double logsumexp(const std::vector<double>& x) {
     }
     return m + std::log(s);
 }
+double logsumexp(const Eigen::Ref<const Eigen::VectorXd>& values);
+double logaddexp(double left, double right);
 
-inline double safe_log(double x) {
-    return std::log(std::max(x, TINY));
-}
+/**
+ * Special functions and probability distributions
+ */
 
 inline double log_beta_fn(double a, double b) {
     if (!(a > 0.0 && b > 0.0)) {
@@ -47,7 +122,6 @@ inline double log_beta_fn(double a, double b) {
     }
     return std::lgamma(a) + std::lgamma(b) - std::lgamma(a + b);
 }
-
 inline double log_beta_density(double x, double c, double d) {
     if (!(x > 0.0 && x < 1.0)) {
         return NEG_INF;
@@ -55,6 +129,65 @@ inline double log_beta_density(double x, double c, double d) {
     return (c - 1.0) * std::log(x) + (d - 1.0) * std::log1p(-x) - log_beta_fn(c, d);
 }
 
+template<typename T>
+long double factorial(T n) {
+    // Handle invalid input for which factorial is undefined.
+    if (n < 0) {
+        throw std::domain_error("Factorial is not defined for negative numbers.");
+    }
+
+    // --- Lookup Table (n <= 20) ---
+    constexpr int PRECOMPUTED_LIMIT = 21;
+    static const std::array<unsigned long long, PRECOMPUTED_LIMIT> small_factorials = {
+        1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800,
+        39916800, 479001600, 6227020800, 87178291200, 1307674368000,
+        20922789888000, 355687428096000, 6402373705728000,
+        121645100408832000, 2432902008176640000
+    };
+
+    if (n < PRECOMPUTED_LIMIT) {
+        return static_cast<long double>(small_factorials[(uint32_t) n]);
+    }
+
+    // --- Stirling-Ramanujan Approximation (n > 20) ---
+    // ln(n!) ≈ n*ln(n) - n + 0.5*ln(2*π*n) + 1/(12n)
+    long double n_ld = static_cast<long double>(n);
+    long double log_factorial = n_ld * std::log(n_ld) - n_ld +
+                                0.5L * std::log(2 * M_PI * n_ld) +
+                                1.0L / (12.0L * n_ld);
+
+    return std::exp(log_factorial);
+}
+
+template<typename T>
+long double log_factorial(T n) {
+    // Handle invalid input for which factorial is undefined.
+    if (n < 0) {
+        throw std::domain_error("Factorial is not defined for negative numbers.");
+    }
+
+    // --- Lookup Table (n <= 20) ---
+    constexpr int PRECOMPUTED_LIMIT = 21;
+    static const std::array<unsigned long long, PRECOMPUTED_LIMIT> small_factorials = {
+        1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800,
+        39916800, 479001600, 6227020800, 87178291200, 1307674368000,
+        20922789888000, 355687428096000, 6402373705728000,
+        121645100408832000, 2432902008176640000
+    };
+
+    if (n < PRECOMPUTED_LIMIT) {
+        return std::log(static_cast<long double>(small_factorials[(uint32_t) n]));
+    }
+
+    // --- Stirling-Ramanujan Approximation (n > 20) ---
+    // ln(n!) ≈ n*ln(n) - n + 0.5*ln(2*π*n) + 1/(12n)
+    long double n_ld = static_cast<long double>(n);
+    return n_ld * std::log(n_ld) - n_ld +
+           0.5L * std::log(2 * M_PI * n_ld) +
+           1.0L / (12.0L * n_ld);
+}
+
+// Fixed-order numerical integration in log space.
 struct GaussLegendre16 {
     static constexpr int Q = 16;
     static constexpr std::array<double, Q> node = {
@@ -92,37 +225,6 @@ struct GaussLegendre16 {
         return logsumexp(all_terms);
     }
 };
-
-// Calculate the mean absolute difference between two arrays.
-template<typename T>
-T mean_change(const std::vector<T>& arr1, const std::vector<T>& arr2) {
-    if (arr1.size() != arr2.size()) {
-        return std::numeric_limits<T>::max();
-    }
-    T total = 0.0;
-    size_t size = arr1.size();
-    for (size_t i = 0; i < size; i++) {
-        total += std::fabs(arr1[i] - arr2[i]);
-    }
-    return total / size;
-}
-
-template<typename Derived>
-auto mean_max_row_change(const Eigen::MatrixBase<Derived>& arr1,
-                         const Eigen::MatrixBase<Derived>& arr2)
-    -> typename Derived::Scalar
-{
-    using Scalar = typename Derived::Scalar;
-    if (arr1.rows() != arr2.rows() || arr1.cols() != arr2.cols()) {
-        return std::numeric_limits<Scalar>::infinity();
-    }
-    Scalar total = Scalar(0);
-    for (int i = 0; i < arr1.rows(); ++i) {
-        total += (arr1.row(i) - arr2.row(i)).cwiseAbs().maxCoeff();
-    }
-    return total / arr1.rows();
-}
-
 
 // Psi (digamma) function (not optimized for maximum accuracy)
 template<typename T>
@@ -273,7 +375,11 @@ Derived dirichlet_entropy_2d(const Eigen::MatrixBase<Derived>& alpha, bool colwi
     return result;
 }
 
-template<typename Derived>
+/**
+ * Matrix normalization and transformation
+ */
+
+ template<typename Derived>
 void rowSoftmaxInPlace(Eigen::MatrixBase<Derived>& mat)
 {
     using Scalar = typename Derived::Scalar;
@@ -306,20 +412,33 @@ void softmaxInPlace(Eigen::MatrixBase<Derived>& vec) {
     }
 }
 
-template <typename T>
-inline T expit(T x) {
-    // Handles large |x| without overflow.
-    if (x >= T(0)) {
-        const T z = std::exp(-x);
-        return T(1) / (T(1) + z);
-    } else {
-        const T z = std::exp(x);
-        return z / (T(1) + z);
+template <typename Scalar>
+void rowSoftmaxInPlace(Eigen::SparseMatrix<Scalar, Eigen::RowMajor>& mat) {
+    using Real = RealScalar<Scalar>;
+    for (int i = 0; i < mat.outerSize(); ++i) {
+        // First pass: find max for numerical stability
+        Real rowMax = -std::numeric_limits<Real>::infinity();
+        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
+            if (it.value() > rowMax) {
+                rowMax = it.value();
+            }
+        }
+        // Second pass: compute exponentials and sum
+        Real rowSum(0);
+        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
+            double expVal = std::exp(it.value() - rowMax);
+            it.valueRef() = Scalar(expVal);
+            rowSum += expVal;
+        }
+        // Third pass: normalize
+        if (rowSum > std::numeric_limits<Real>::epsilon()) {
+            Real invRowSum = Real(1) / rowSum;
+            for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
+                it.valueRef() *= invRowSum;
+            }
+        }
     }
 }
-
-double logit(double x);
-float logit(float x);
 
 template <typename Scalar, int StorageOrder>
 void rowNormalizeInPlace(Eigen::SparseMatrix<Scalar, StorageOrder>& mat, bool nonNeg = true) {
@@ -373,34 +492,6 @@ void rowNormalizeInPlace(Eigen::SparseMatrix<Scalar, StorageOrder>& mat, bool no
     }
 }
 
-template <typename Scalar>
-void rowSoftmaxInPlace(Eigen::SparseMatrix<Scalar, Eigen::RowMajor>& mat) {
-    using Real = RealScalar<Scalar>;
-    for (int i = 0; i < mat.outerSize(); ++i) {
-        // First pass: find max for numerical stability
-        Real rowMax = -std::numeric_limits<Real>::infinity();
-        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
-            if (it.value() > rowMax) {
-                rowMax = it.value();
-            }
-        }
-        // Second pass: compute exponentials and sum
-        Real rowSum(0);
-        for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
-            double expVal = std::exp(it.value() - rowMax);
-            it.valueRef() = Scalar(expVal);
-            rowSum += expVal;
-        }
-        // Third pass: normalize
-        if (rowSum > std::numeric_limits<Real>::epsilon()) {
-            Real invRowSum = Real(1) / rowSum;
-            for (typename Eigen::SparseMatrix<Scalar, Eigen::RowMajor>::InnerIterator it(mat, i); it; ++it) {
-                it.valueRef() *= invRowSum;
-            }
-        }
-    }
-}
-
 template <typename Derived>
 void rowNormalizeInPlace(Eigen::MatrixBase<Derived>& mat, bool nonNeg = true) {
     using Real = RealScalar<typename Derived::Scalar>;
@@ -434,122 +525,7 @@ rowNormalize(const Eigen::MatrixBase<Derived>& X)
     return out;
 }
 
-struct ThetaEntropyStats {
-    Eigen::VectorXd entropy;
-    Eigen::VectorXd sh_lcr;
-    Eigen::VectorXd sh_q;
-};
-
-template <typename Derived>
-Eigen::MatrixXd pairwiseCosineSimilarityRows(const Eigen::MatrixBase<Derived>& X)
-{
-    const Eigen::Index K = X.rows();
-    Eigen::MatrixXd sim = Eigen::MatrixXd::Zero(K, K);
-    Eigen::VectorXd rowNorms = Eigen::VectorXd::Zero(K);
-    for (Eigen::Index k = 0; k < K; ++k) {
-        rowNorms(k) = X.row(k).norm();
-        sim(k, k) = 1.0;
-    }
-    for (Eigen::Index k = 0; k < K; ++k) {
-        for (Eigen::Index l = k + 1; l < K; ++l) {
-            const double denom = rowNorms(k) * rowNorms(l);
-            double cosine = 0.0;
-            if (denom > 0.0) {
-                cosine = X.row(k).dot(X.row(l)) / denom;
-                cosine = std::clamp(cosine, 0.0, 1.0);
-            }
-            sim(k, l) = cosine;
-            sim(l, k) = cosine;
-        }
-    }
-    return sim;
-}
-
-template <typename Derived>
-ThetaEntropyStats computeThetaEntropyStats(const Eigen::MatrixBase<Derived>& theta,
-        const Eigen::MatrixXd& similarity, Eigen::Index blockRows = 64)
-{
-    if (theta.cols() != similarity.rows() || similarity.rows() != similarity.cols()) {
-        throw std::invalid_argument("theta/similarity dimensions do not match");
-    }
-    if (blockRows <= 0) {
-        throw std::invalid_argument("entropy block size must be positive");
-    }
-
-    const Eigen::Index N = theta.rows();
-    const Eigen::Index K = theta.cols();
-    ThetaEntropyStats stats;
-    stats.entropy = Eigen::VectorXd::Zero(N);
-    stats.sh_lcr = Eigen::VectorXd::Zero(N);
-    stats.sh_q = Eigen::VectorXd::Zero(N);
-
-    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, N, blockRows),
-        [&](const tbb::blocked_range<Eigen::Index>& range) {
-            const Eigen::Index nRows = range.end() - range.begin();
-            RowMajorMatrixXd projected(nRows, K);
-            projected.noalias() =
-                theta.middleRows(range.begin(), nRows) * similarity;
-            for (Eigen::Index local = 0; local < nRows; ++local) {
-                const Eigen::Index i = range.begin() + local;
-                const double thetaSum = theta.row(i).sum();
-                if (thetaSum <= 0.0) {
-                    continue;
-                }
-                const double inverseSum = 1.0 / thetaSum;
-                double entropy = 0.0;
-                double shLcr = 0.0;
-                double thetaZtheta = 0.0;
-                for (Eigen::Index k = 0; k < K; ++k) {
-                    const double pk = theta(i, k) * inverseSum;
-                    if (pk <= 0.0) {
-                        continue;
-                    }
-                    const double rawZk =
-                        projected(local, k) * inverseSum;
-                    const double zk = std::max(
-                        rawZk,
-                        std::numeric_limits<double>::min());
-                    entropy -= pk * std::log(pk);
-                    shLcr -= pk * std::log(zk);
-                    thetaZtheta += pk * rawZk;
-                }
-                stats.entropy(i) = entropy;
-                stats.sh_lcr(i) = shLcr;
-                stats.sh_q(i) = 1.0 - thetaZtheta;
-            }
-        });
-    return stats;
-}
-
-template <typename Derived>
-Eigen::VectorXd rowQuadraticForms(const Eigen::MatrixBase<Derived>& values,
-        const Eigen::MatrixXd& gram, Eigen::Index blockRows = 64)
-{
-    if (values.cols() != gram.rows() || gram.rows() != gram.cols()) {
-        throw std::invalid_argument("values/Gram dimensions do not match");
-    }
-    if (blockRows <= 0) {
-        throw std::invalid_argument("quadratic-form block size must be positive");
-    }
-
-    const Eigen::Index N = values.rows();
-    const Eigen::Index K = values.cols();
-    Eigen::VectorXd out = Eigen::VectorXd::Zero(N);
-    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, N, blockRows),
-        [&](const tbb::blocked_range<Eigen::Index>& range) {
-            const Eigen::Index nRows = range.end() - range.begin();
-            RowMajorMatrixXd projected(nRows, K);
-            projected.noalias() =
-                values.middleRows(range.begin(), nRows) * gram;
-            for (Eigen::Index local = 0; local < nRows; ++local) {
-                const Eigen::Index i = range.begin() + local;
-                out(i) = projected.row(local).dot(values.row(i));
-            }
-        });
-    return out;
-}
-
-
+// Column normalization and sparse transform-and-normalize utilities
 template <typename Scalar, int StorageOrder>
 void colNormalizeInPlace(Eigen::SparseMatrix<Scalar, StorageOrder>& mat, bool nonNeg = true) {
     using Real = RealScalar<Scalar>;
@@ -619,8 +595,7 @@ void colNormalizeInPlace(Eigen::MatrixBase<Derived>& mat, bool nonNeg = true) {
 }
 
 template <typename Scalar, int StorageOrder, typename UnaryOp>
-void transformAndRowNormalize(Eigen::SparseMatrix<Scalar, StorageOrder>& mat,
-                              UnaryOp&& op) {
+void transformAndRowNormalize(Eigen::SparseMatrix<Scalar, StorageOrder>& mat, UnaryOp&& op) {
     using Real = RealScalar<Scalar>;
     const Real zero(0);
     const Real eps = std::numeric_limits<Real>::min();
@@ -694,6 +669,147 @@ void expitAndRowNormalize(Eigen::SparseMatrix<Scalar, StorageOrder>& mat) {
     });
 }
 
+template <typename Derived>
+Eigen::VectorXd rowQuadraticForms(const Eigen::MatrixBase<Derived>& values,
+        const Eigen::MatrixXd& gram, Eigen::Index blockRows = 64)
+{
+    if (values.cols() != gram.rows() || gram.rows() != gram.cols()) {
+        throw std::invalid_argument("values/Gram dimensions do not match");
+    }
+    if (blockRows <= 0) {
+        throw std::invalid_argument("quadratic-form block size must be positive");
+    }
+
+    const Eigen::Index N = values.rows();
+    const Eigen::Index K = values.cols();
+    Eigen::VectorXd out = Eigen::VectorXd::Zero(N);
+    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, N, blockRows),
+        [&](const tbb::blocked_range<Eigen::Index>& range) {
+            const Eigen::Index nRows = range.end() - range.begin();
+            RowMajorMatrixXd projected(nRows, K);
+            projected.noalias() =
+                values.middleRows(range.begin(), nRows) * gram;
+            for (Eigen::Index local = 0; local < nRows; ++local) {
+                const Eigen::Index i = range.begin() + local;
+                out(i) = projected.row(local).dot(values.row(i));
+            }
+        });
+    return out;
+}
+
+/**
+ * Compositional data analysis
+*/
+
+Eigen::MatrixXd normalized_helmert(int32_t parts);
+bool is_normalized_helmert(
+    const Eigen::Ref<const Eigen::MatrixXd>& matrix,
+    double tolerance = 1e-12);
+RowMajorMatrixXd ilr_transform(
+    const Eigen::Ref<const RowMajorMatrixXd>& values,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    double floor = 1e-12);
+Eigen::VectorXd ilr_inverse_coordinate(
+    const Eigen::Ref<const Eigen::VectorXd>& value,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert);
+RowMajorMatrixXd ilr_inverse(
+    const Eigen::Ref<const RowMajorMatrixXd>& values,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert);
+
+struct EntropyStats {
+    Eigen::VectorXd entropy;
+    Eigen::VectorXd sh_lcr;
+    Eigen::VectorXd sh_q;
+};
+
+// Matrix similarity and entropy diagnostics
+template <typename Derived>
+Eigen::MatrixXd pairwiseCosineSimilarityRows(const Eigen::MatrixBase<Derived>& X)
+{
+    const Eigen::Index K = X.rows();
+    Eigen::MatrixXd sim = Eigen::MatrixXd::Zero(K, K);
+    Eigen::VectorXd rowNorms = Eigen::VectorXd::Zero(K);
+    for (Eigen::Index k = 0; k < K; ++k) {
+        rowNorms(k) = X.row(k).norm();
+        sim(k, k) = 1.0;
+    }
+    for (Eigen::Index k = 0; k < K; ++k) {
+        for (Eigen::Index l = k + 1; l < K; ++l) {
+            const double denom = rowNorms(k) * rowNorms(l);
+            double cosine = 0.0;
+            if (denom > 0.0) {
+                cosine = X.row(k).dot(X.row(l)) / denom;
+                cosine = std::clamp(cosine, 0.0, 1.0);
+            }
+            sim(k, l) = cosine;
+            sim(l, k) = cosine;
+        }
+    }
+    return sim;
+}
+
+template <typename Derived>
+EntropyStats computeThetaEntropyStats(const Eigen::MatrixBase<Derived>& theta, const Eigen::MatrixXd& similarity, Eigen::Index blockRows = 64)
+{
+    if (theta.cols() != similarity.rows() || similarity.rows() != similarity.cols()) {
+        throw std::invalid_argument("theta/similarity dimensions do not match");
+    }
+    if (blockRows <= 0) {
+        throw std::invalid_argument("entropy block size must be positive");
+    }
+
+    const Eigen::Index N = theta.rows();
+    const Eigen::Index K = theta.cols();
+    EntropyStats stats;
+    stats.entropy = Eigen::VectorXd::Zero(N);
+    stats.sh_lcr = Eigen::VectorXd::Zero(N);
+    stats.sh_q = Eigen::VectorXd::Zero(N);
+
+    tbb::parallel_for(tbb::blocked_range<Eigen::Index>(0, N, blockRows),
+        [&](const tbb::blocked_range<Eigen::Index>& range) {
+            const Eigen::Index nRows = range.end() - range.begin();
+            RowMajorMatrixXd projected(nRows, K);
+            projected.noalias() =
+                theta.middleRows(range.begin(), nRows) * similarity;
+            for (Eigen::Index local = 0; local < nRows; ++local) {
+                const Eigen::Index i = range.begin() + local;
+                const double thetaSum = theta.row(i).sum();
+                if (thetaSum <= 0.0) {
+                    continue;
+                }
+                const double inverseSum = 1.0 / thetaSum;
+                double entropy = 0.0;
+                double shLcr = 0.0;
+                double thetaZtheta = 0.0;
+                for (Eigen::Index k = 0; k < K; ++k) {
+                    const double pk = theta(i, k) * inverseSum;
+                    if (pk <= 0.0) {
+                        continue;
+                    }
+                    const double rawZk =
+                        projected(local, k) * inverseSum;
+                    const double zk = std::max(
+                        rawZk,
+                        std::numeric_limits<double>::min());
+                    entropy -= pk * std::log(pk);
+                    shLcr -= pk * std::log(zk);
+                    thetaZtheta += pk * rawZk;
+                }
+                stats.entropy(i) = entropy;
+                stats.sh_lcr(i) = shLcr;
+                stats.sh_q(i) = 1.0 - thetaZtheta;
+            }
+        });
+    return stats;
+}
+
+/**
+ * Statistical analysis utilities
+ */
+
+// Sample statistics
+double median(std::vector<double> v);
+double mad(const std::vector<double>& x, double scale = 1.4826);
 template <class Derived>
 Eigen::Matrix<typename Eigen::NumTraits<typename Derived::Scalar>::Real,
     Eigen::Dynamic, 1> columnMedians(const Eigen::DenseBase<Derived>& X)
@@ -721,45 +837,7 @@ Eigen::Matrix<typename Eigen::NumTraits<typename Derived::Scalar>::Real,
     return medians;
 }
 
-// find largest values and indices
-template<typename Derived>
-void findTopK(
-    Eigen::Matrix<typename Derived::Scalar,
-                  Eigen::Dynamic,Eigen::Dynamic>& topVals,
-    Eigen::Matrix<int,Eigen::Dynamic,Eigen::Dynamic>& topIds,
-    const Eigen::MatrixBase<Derived>& mtx,
-    int k)
-{
-    using Scalar = typename Derived::Scalar;
-    int nRows = mtx.rows();
-    int nCols = mtx.cols();
-    k = std::min(k, nCols);
-    topVals.resize(nRows,k);
-    topIds.resize(nRows,k);
-    for (int i = 0; i < nRows; ++i) {
-        std::vector<std::pair<Scalar,int>> rowData;
-        rowData.reserve(nCols);
-        for (int j = 0; j < nCols; ++j) {
-            rowData.emplace_back(mtx(i,j), j);
-        }
-        std::partial_sort(rowData.begin(), rowData.begin()+k, rowData.end(),
-            [](auto &a, auto &b){ return a.first > b.first; }
-        );
-        for (int j = 0; j < k; ++j) {
-            topVals(i,j) = rowData[j].first;
-            topIds(i,j) = rowData[j].second;
-        }
-    }
-}
-
-template<typename T>
-inline T clamp(T x, T a, T b) {
-    return x < a ? a : (x > b ? b : x);
-}
-
-double safe_log10(double x);
-double median(std::vector<double> v);
-double mad(const std::vector<double>& x, double scale = 1.4826);
+// Gaussian, chi-square, and p-value utilities
 double normal_sf(double x);
 double twosided_p_from_z(double z);
 double normal_logsf(double x);
@@ -771,115 +849,50 @@ std::pair<double, double> chisq2x2_log10p(double a, double b, double c, double d
 double cauchy_combination(const std::vector<double>& pval,
                           const std::vector<double>& weights_in = {},
                           double small_p_approx_thresh = 1e-8);
+
+// Convergence diagnostics
+template<typename T>
+T mean_change(const std::vector<T>& arr1, const std::vector<T>& arr2) {
+    if (arr1.size() != arr2.size()) {
+        return std::numeric_limits<T>::max();
+    }
+    T total = 0.0;
+    size_t size = arr1.size();
+    for (size_t i = 0; i < size; i++) {
+        total += std::fabs(arr1[i] - arr2[i]);
+    }
+    return total / size;
+}
+template<typename Derived>
+auto mean_max_row_change(const Eigen::MatrixBase<Derived>& arr1,
+                         const Eigen::MatrixBase<Derived>& arr2)
+    -> typename Derived::Scalar
+{
+    using Scalar = typename Derived::Scalar;
+    if (arr1.rows() != arr2.rows() || arr1.cols() != arr2.cols()) {
+        return std::numeric_limits<Scalar>::infinity();
+    }
+    Scalar total = Scalar(0);
+    for (int i = 0; i < arr1.rows(); ++i) {
+        total += (arr1.row(i) - arr2.row(i)).cwiseAbs().maxCoeff();
+    }
+    return total / arr1.rows();
+}
+
+// Local regression smoothing
 int32_t loess_quadratic_tricube(const std::vector<double>& x,
                                 const std::vector<double>& y,
                                 std::vector<double>& yhat, double span = 0.3);
 
-template<typename T>
-long double factorial(T n) {
-    // Handle invalid input for which factorial is undefined.
-    if (n < 0) {
-        throw std::domain_error("Factorial is not defined for negative numbers.");
-    }
-
-    // --- Lookup Table (n <= 20) ---
-    constexpr int PRECOMPUTED_LIMIT = 21;
-    static const std::array<unsigned long long, PRECOMPUTED_LIMIT> small_factorials = {
-        1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800,
-        39916800, 479001600, 6227020800, 87178291200, 1307674368000,
-        20922789888000, 355687428096000, 6402373705728000,
-        121645100408832000, 2432902008176640000
-    };
-
-    if (n < PRECOMPUTED_LIMIT) {
-        return static_cast<long double>(small_factorials[(uint32_t) n]);
-    }
-
-    // --- Stirling-Ramanujan Approximation (n > 20) ---
-    // ln(n!) ≈ n*ln(n) - n + 0.5*ln(2*π*n) + 1/(12n)
-    long double n_ld = static_cast<long double>(n);
-    long double log_factorial = n_ld * std::log(n_ld) - n_ld +
-                                0.5L * std::log(2 * M_PI * n_ld) +
-                                1.0L / (12.0L * n_ld);
-
-    return std::exp(log_factorial);
-}
-
-template<typename T>
-long double log_factorial(T n) {
-    // Handle invalid input for which factorial is undefined.
-    if (n < 0) {
-        throw std::domain_error("Factorial is not defined for negative numbers.");
-    }
-
-    // --- Lookup Table (n <= 20) ---
-    constexpr int PRECOMPUTED_LIMIT = 21;
-    static const std::array<unsigned long long, PRECOMPUTED_LIMIT> small_factorials = {
-        1, 1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800,
-        39916800, 479001600, 6227020800, 87178291200, 1307674368000,
-        20922789888000, 355687428096000, 6402373705728000,
-        121645100408832000, 2432902008176640000
-    };
-
-    if (n < PRECOMPUTED_LIMIT) {
-        return std::log(static_cast<long double>(small_factorials[(uint32_t) n]));
-    }
-
-    // --- Stirling-Ramanujan Approximation (n > 20) ---
-    // ln(n!) ≈ n*ln(n) - n + 0.5*ln(2*π*n) + 1/(12n)
-    long double n_ld = static_cast<long double>(n);
-    return n_ld * std::log(n_ld) - n_ld +
-           0.5L * std::log(2 * M_PI * n_ld) +
-           1.0L / (12.0L * n_ld);
-}
-
-// exp(z)/(1+exp(z))
-inline double sigmoid_stable(double z) {
-    if (z >= 0) {
-        double ez = std::exp(-z);
-        return 1.0 / (1.0 + ez);
-    }
-    double ez = std::exp(z);
-    return ez / (1.0 + ez);
-
-}
-inline Eigen::ArrayXd sigmoid_stable(const Eigen::ArrayXd& z) {
-    Eigen::ArrayXd result(z.size());
-    Eigen::ArrayXd ez = z.exp();
-    Eigen::ArrayXd emz= (-z).exp();
-    result = (z>=0).select(1.0/(1.0+emz), ez/(1.0+ez));
-    return result;
-}
-
-// log(1 + exp(z))
-inline double softplus_stable(double z) {
-    if (z > 40.0) return z; // log(1+exp(z)) ~ z
-    if (z < -40.0) return std::exp(z); // ~ exp(z)
-    return std::log1p(std::exp(z));
-}
-inline Eigen::ArrayXd softplus_stable(const Eigen::ArrayXd& z) {
-    Eigen::ArrayXd result(z.size());
-    const double hi = 40.0;
-    const double lo = -40.0;
-    result = (z > hi).select(z,
-             (z < lo).select(z.exp(), (z.exp() + 1.0).log()));
-    return result;
-}
-
-// eps + tau * log(1 + exp((x-eps)/tau))
-inline double smooth_floor(double x, double eps, double tau, double* slope_out) {
-    if (tau <= 0) {
-        if (slope_out) *slope_out = (x > eps) ? 1.0 : 0.0;
-        return (x > eps) ? x : eps;
-    }
-    double z = (x - eps) / tau;
-    double sp = softplus_stable(z); // log(1+exp(z))
-    double s  = sigmoid_stable(z);  // d/dz softplus = sigmoid
-    if (slope_out) *slope_out = s;  // d/dx = (1/tau)*tau*s = s
-    return eps + tau * sp;
-}
+// Covariance validation and regularization
+bool positive_definite(
+    const Eigen::Ref<const Eigen::MatrixXd>& matrix,
+    double symmetry_tolerance = 1e-8);
+Eigen::MatrixXd floor_covariance(
+    const Eigen::Ref<const Eigen::MatrixXd>& input, double floor);
 
 /**
+ * Constrained matrix factorization
  * Solve for A in:  B ≈ A C^T (A,B,C >=0, C1=1)
  * Objective:
  *   min_{A>=0} ||(A C^T - B) W^{1/2}||_F^2 + lambda ||A||_F^2, W = diag(w).
@@ -912,4 +925,37 @@ NonnegRidgeResult solve_nonneg_weighted_ridge(
         const RowMajorMatrixXd&, const Eigen::MatrixXd&,
         const Eigen::VectorXd&, double, int, double)>(&solve_nonneg_weighted_ridge);
     return fn(C_converted, B_converted, w0_converted, lambda, max_iters, tol);
+}
+
+/**
+ * Other
+ */
+
+// find largest values and indices
+template<typename Derived>
+void findTopK(Eigen::Matrix<typename Derived::Scalar,
+                Eigen::Dynamic,Eigen::Dynamic>& topVals,
+    Eigen::Matrix<int,Eigen::Dynamic,Eigen::Dynamic>& topIds,
+    const Eigen::MatrixBase<Derived>& mtx, int k)
+{
+    using Scalar = typename Derived::Scalar;
+    int nRows = mtx.rows();
+    int nCols = mtx.cols();
+    k = std::min(k, nCols);
+    topVals.resize(nRows,k);
+    topIds.resize(nRows,k);
+    for (int i = 0; i < nRows; ++i) {
+        std::vector<std::pair<Scalar,int>> rowData;
+        rowData.reserve(nCols);
+        for (int j = 0; j < nCols; ++j) {
+            rowData.emplace_back(mtx(i,j), j);
+        }
+        std::partial_sort(rowData.begin(), rowData.begin()+k, rowData.end(),
+            [](auto &a, auto &b){ return a.first > b.first; }
+        );
+        for (int j = 0; j < k; ++j) {
+            topVals(i,j) = rowData[j].first;
+            topIds(i,j) = rowData[j].second;
+        }
+    }
 }

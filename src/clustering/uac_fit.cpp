@@ -17,7 +17,8 @@ namespace uac::detail {
 
 FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     const Basis* basis, const FitOptions& options,
-    const IndexedDocumentSource* count_source = nullptr) {
+    const IndexedDocumentSource* count_source,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
     validate_dataset(data,
         options.handoff == HandoffMode::Particle && !count_source);
     validate_component_screening(options.component_screening);
@@ -197,8 +198,11 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     std::vector<Candidate> candidates;
     candidates.reserve(static_cast<size_t>(total_starts));
     Eigen::MatrixXd initialization_precision;
-    const Eigen::MatrixXd helmert =
-        normalized_helmert(data.centers.cols());
+    if (helmert.rows() != data.coordinates.cols()
+        || helmert.cols() != data.centers.cols()
+        || !is_normalized_helmert(helmert)) {
+        throw std::invalid_argument("Invalid UAC Helmert basis");
+    }
     std::vector<HardPartitionMoments> partition_moments;
     std::vector<std::vector<Eigen::MatrixXd>> measurement_sums;
     if (options.handoff == HandoffMode::Particle) {
@@ -603,17 +607,39 @@ using namespace detail;
 
 FitResult fit(Dataset& data, const Basis* basis,
     const FitOptions& options) {
-    return fit_impl(data, &data, basis, options);
+    const Eigen::MatrixXd helmert = normalized_helmert(data.centers.cols());
+    return fit_impl(data, &data, basis, options, nullptr, helmert);
 }
 
 FitResult fit(const Dataset& data, const Basis* basis,
     const FitOptions& options) {
-    return fit_impl(data, nullptr, basis, options);
+    const Eigen::MatrixXd helmert = normalized_helmert(data.centers.cols());
+    return fit_impl(data, nullptr, basis, options, nullptr, helmert);
+}
+
+FitResult fit(Dataset& data, const Basis* basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const FitOptions& options) {
+    return fit_impl(data, &data, basis, options, nullptr, helmert);
+}
+
+FitResult fit(const Dataset& data, const Basis* basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const FitOptions& options) {
+    return fit_impl(data, nullptr, basis, options, nullptr, helmert);
 }
 
 FitResult fit_indexed(const Dataset& data, const Basis& basis,
     IndexedDocumentSource& source, const FitOptions& options) {
-    return fit_impl(data, nullptr, &basis, options, &source);
+    const Eigen::MatrixXd helmert = normalized_helmert(data.centers.cols());
+    return fit_impl(data, nullptr, &basis, options, &source, helmert);
+}
+
+FitResult fit_indexed(const Dataset& data, const Basis& basis,
+    IndexedDocumentSource& source,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const FitOptions& options) {
+    return fit_impl(data, nullptr, &basis, options, &source, helmert);
 }
 
 ScoreResult score_map(const Dataset& data, const Model& model,

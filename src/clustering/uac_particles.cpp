@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
 
 namespace uac {
@@ -150,68 +151,58 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, n_threads));
     const auto sampling_start = std::chrono::steady_clock::now();
-    tbb::parallel_for(int32_t{0}, out.documents, [&](int32_t local_document) {
-        const int32_t document = first_document + local_document;
-        const int32_t global_document = global_first + local_document;
-        const Eigen::VectorXd center =
-            data.coordinates.row(document).transpose();
-        const auto fisher_start = std::chrono::steady_clock::now();
-        const FisherApproximation fisher = fisher_approximation_impl(center,
-            data.counts[document], basis, helmert, proposal_kind);
-        const auto proposal_start = std::chrono::steady_clock::now();
-        fisher_nanoseconds.fetch_add(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                proposal_start - fisher_start).count(),
-            std::memory_order_relaxed);
-        const std::vector<int32_t>* candidates =
-            screening_plan && screening_plan->enabled
-            ? &screening_plan->candidates[global_document] : nullptr;
-        const DocumentProposal proposal = fisher_proposal(center, fisher,
-            pilot, pilot_cache, fisher_broadening, candidates);
-        out.proposal_candidates[local_document] =
-            static_cast<int32_t>(proposal.weights.size());
-        fallback_nanoseconds.fetch_add(static_cast<int64_t>(
-            proposal.precision_fallback_seconds * 1e9),
-            std::memory_order_relaxed);
-        fallbacks.fetch_add(proposal.precision_fallbacks,
-            std::memory_order_relaxed);
-        const auto draw_start = std::chrono::steady_clock::now();
-        proposal_nanoseconds.fetch_add(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                draw_start - proposal_start).count(),
-            std::memory_order_relaxed);
-        const uint64_t document_seed = hash_string(
-            seed ^ 0x9e3779b97f4a7c15ull, data.identifiers[document]);
-        std::mt19937_64 engine(document_seed);
-        std::discrete_distribution<int32_t> choose(proposal.weights.data(),
-            proposal.weights.data() + proposal.weights.size());
-        std::normal_distribution<double> normal(0.0, 1.0);
-        for (int32_t sample = 0; sample < samples; ++sample) {
-            const int32_t component = choose(engine);
-            out.proposal_origins[
-                static_cast<size_t>(local_document) * samples + sample] =
-                proposal.component_ids[component];
-            Eigen::VectorXd draw(out.dimension);
-            for (int32_t dim = 0; dim < out.dimension; ++dim) {
-                draw(dim) = normal(engine);
+    tbb::parallel_for(tbb::blocked_range<int32_t>(0, out.documents),
+        [&](const tbb::blocked_range<int32_t>& range) {
+            FisherWorkspace fisher_workspace;
+            for (int32_t local_document = range.begin();
+                    local_document < range.end(); ++local_document) {
+                const int32_t document = first_document + local_document;
+                const int32_t global_document = global_first + local_document;
+                const Eigen::VectorXd center =
+                    data.coordinates.row(document).transpose();
+                const auto fisher_start = std::chrono::steady_clock::now();
+                const FisherApproximation fisher = fisher_approximation_impl(
+                    center, data.counts[document], basis, helmert,
+                    proposal_kind, true, &fisher_workspace);
+                const auto proposal_start = std::chrono::steady_clock::now();
+                fisher_nanoseconds.fetch_add(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        proposal_start - fisher_start).count(),
+                    std::memory_order_relaxed);
+                const std::vector<int32_t>* candidates =
+                    screening_plan && screening_plan->enabled
+                    ? &screening_plan->candidates[global_document] : nullptr;
+                const DocumentProposal proposal = fisher_proposal(center,
+                    fisher, pilot, pilot_cache, fisher_broadening, candidates);
+                out.proposal_candidates[local_document] =
+                    static_cast<int32_t>(proposal.weights.size());
+                fallback_nanoseconds.fetch_add(static_cast<int64_t>(
+                    proposal.precision_fallback_seconds * 1e9),
+                    std::memory_order_relaxed);
+                fallbacks.fetch_add(proposal.precision_fallbacks,
+                    std::memory_order_relaxed);
+                const auto draw_start = std::chrono::steady_clock::now();
+                proposal_nanoseconds.fetch_add(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        draw_start - proposal_start).count(),
+                    std::memory_order_relaxed);
+                const uint64_t document_seed = hash_string(
+                    seed ^ 0x9e3779b97f4a7c15ull,
+                    data.identifiers[document]);
+                auto values = out.values.middleRows(
+                    static_cast<Eigen::Index>(local_document) * samples,
+                    samples);
+                draw_proposal_values(proposal, document_seed, values,
+                    out.proposal_origins.data()
+                        + static_cast<size_t>(local_document) * samples);
+                out.log_proposal.row(local_document) =
+                    proposal_log_density_rows(values, proposal).transpose();
+                draw_nanoseconds.fetch_add(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - draw_start).count(),
+                    std::memory_order_relaxed);
             }
-            proposal.precision_lower[component].transpose()
-                .triangularView<Eigen::Upper>().solveInPlace(draw);
-            const Eigen::VectorXd value = proposal.means[component]
-                + std::sqrt(proposal.broadening) * draw;
-            out.values.row(
-                static_cast<Eigen::Index>(local_document) * samples + sample)
-                = value.transpose();
-        }
-        const auto values = out.values.middleRows(
-            static_cast<Eigen::Index>(local_document) * samples, samples);
-        out.log_proposal.row(local_document) =
-            proposal_log_density_rows(values, proposal).transpose();
-        draw_nanoseconds.fetch_add(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - draw_start).count(),
-            std::memory_order_relaxed);
-    });
+        });
     out.sampling_seconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - sampling_start).count();
     out.fisher_work_seconds = 1e-9 * fisher_nanoseconds.load();
@@ -268,6 +259,8 @@ AdaptiveCountResult adaptive_particle_count(
         - Eigen::VectorXd::Constant(samples, std::log(samples));
     Eigen::MatrixXd log_tilt(components, samples);
     Eigen::VectorXd evidence(components), score(components);
+    Eigen::MatrixXd standardized;
+    Eigen::VectorXd log_density;
     for (int32_t c = 0; c < components; ++c) {
         if (!(model.weights(c) > 0.0)) {
             evidence(c) = -std::numeric_limits<double>::infinity();
@@ -276,8 +269,8 @@ AdaptiveCountResult adaptive_particle_count(
                 -std::numeric_limits<double>::infinity());
             continue;
         }
-        log_tilt.row(c) = (base
-            + solvers[c].log_density_rows(values)).transpose();
+        solvers[c].log_density_rows(values, standardized, log_density);
+        log_tilt.row(c) = (base + log_density).transpose();
         evidence(c) = logsumexp(log_tilt.row(c).transpose());
         score(c) = std::log(model.weights(c)) + evidence(c);
     }
@@ -452,58 +445,76 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
         std::vector<Eigen::VectorXd> calibration_log_q(size);
         std::vector<Eigen::VectorXd> calibration_log_likelihood(size);
         const auto calibration_start = std::chrono::steady_clock::now();
-        tbb::parallel_for(int32_t{0}, size, [&](int32_t local) {
-            const int32_t local_document = begin + local;
-            const int32_t document = first_document + local_document;
-            const int32_t global_document = global_first + local_document;
-            const Eigen::VectorXd center =
-                data.coordinates.row(document).transpose();
-            const auto fisher_start = std::chrono::steady_clock::now();
-            const FisherApproximation fisher = fisher_approximation_impl(
-                center, data.counts[document], basis, helmert, proposal_kind);
-            const auto proposal_start = std::chrono::steady_clock::now();
-            fisher_nanoseconds.fetch_add(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    proposal_start - fisher_start).count(),
-                std::memory_order_relaxed);
-            const std::vector<int32_t>* candidates =
-                screening_plan && screening_plan->enabled
-                ? &screening_plan->candidates[global_document] : nullptr;
-            proposals[local] = fisher_proposal(center, fisher, pilot,
-                pilot_cache, fisher_broadening, candidates);
-            out.proposal_candidates[local_document] =
-                static_cast<int32_t>(proposals[local].weights.size());
-            fallback_nanoseconds.fetch_add(static_cast<int64_t>(
-                proposals[local].precision_fallback_seconds * 1e9),
-                std::memory_order_relaxed);
-            fallbacks.fetch_add(proposals[local].precision_fallbacks,
-                std::memory_order_relaxed);
-            proposal_nanoseconds.fetch_add(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - proposal_start).count(),
-                std::memory_order_relaxed);
-            RowMajorMatrixXd& calibration = calibration_values[local];
-            calibration.resize(options.calibration_particles, dimension);
-            calibration_origins[local].resize(
-                options.calibration_particles);
-            const uint64_t calibration_seed = hash_string(
-                seed ^ 0x6a09e667f3bcc909ull,
-                data.identifiers[document]);
-            draw_proposal_values(
-                proposals[local], calibration_seed, calibration,
-                calibration_origins[local].data());
-            calibration_log_q[local] = proposal_log_density_rows(
-                calibration, proposals[local]);
-            calibration_log_likelihood[local] = count_log_likelihood_rows(
-                calibration, data.counts[document], basis, helmert);
-            const AdaptiveCountResult allocation = adaptive_particle_count(
-                calibration, calibration_log_likelihood[local],
-                calibration_log_q[local], calibration_model,
-                calibration_solvers, options, maximum_particles);
-            counts[local] = allocation.particles;
-            out.adaptive_diagnostics[local_document] =
-                allocation.diagnostic;
-        });
+        tbb::parallel_for(tbb::blocked_range<int32_t>(0, size),
+            [&](const tbb::blocked_range<int32_t>& range) {
+                FisherWorkspace fisher_workspace;
+                for (int32_t local = range.begin(); local < range.end();
+                        ++local) {
+                    const int32_t local_document = begin + local;
+                    const int32_t document = first_document + local_document;
+                    const int32_t global_document =
+                        global_first + local_document;
+                    const Eigen::VectorXd center =
+                        data.coordinates.row(document).transpose();
+                    const auto fisher_start =
+                        std::chrono::steady_clock::now();
+                    const FisherApproximation fisher =
+                        fisher_approximation_impl(center,
+                            data.counts[document], basis, helmert,
+                            proposal_kind, true, &fisher_workspace);
+                    const auto proposal_start =
+                        std::chrono::steady_clock::now();
+                    fisher_nanoseconds.fetch_add(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            proposal_start - fisher_start).count(),
+                        std::memory_order_relaxed);
+                    const std::vector<int32_t>* candidates =
+                        screening_plan && screening_plan->enabled
+                        ? &screening_plan->candidates[global_document]
+                        : nullptr;
+                    proposals[local] = fisher_proposal(center, fisher, pilot,
+                        pilot_cache, fisher_broadening, candidates);
+                    out.proposal_candidates[local_document] =
+                        static_cast<int32_t>(
+                            proposals[local].weights.size());
+                    fallback_nanoseconds.fetch_add(static_cast<int64_t>(
+                        proposals[local].precision_fallback_seconds * 1e9),
+                        std::memory_order_relaxed);
+                    fallbacks.fetch_add(
+                        proposals[local].precision_fallbacks,
+                        std::memory_order_relaxed);
+                    proposal_nanoseconds.fetch_add(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now()
+                                - proposal_start).count(),
+                        std::memory_order_relaxed);
+                    RowMajorMatrixXd& calibration =
+                        calibration_values[local];
+                    calibration.resize(
+                        options.calibration_particles, dimension);
+                    calibration_origins[local].resize(
+                        options.calibration_particles);
+                    const uint64_t calibration_seed = hash_string(
+                        seed ^ 0x6a09e667f3bcc909ull,
+                        data.identifiers[document]);
+                    draw_proposal_values(proposals[local], calibration_seed,
+                        calibration, calibration_origins[local].data());
+                    calibration_log_q[local] = proposal_log_density_rows(
+                        calibration, proposals[local]);
+                    calibration_log_likelihood[local] =
+                        count_log_likelihood_rows(calibration,
+                            data.counts[document], basis, helmert);
+                    const AdaptiveCountResult allocation =
+                        adaptive_particle_count(calibration,
+                            calibration_log_likelihood[local],
+                            calibration_log_q[local], calibration_model,
+                            calibration_solvers, options,
+                            maximum_particles);
+                    counts[local] = allocation.particles;
+                    out.adaptive_diagnostics[local_document] =
+                        allocation.diagnostic;
+                }
+            });
         out.calibration_seconds += std::chrono::duration<double>(
             std::chrono::steady_clock::now() - calibration_start).count();
         for (int32_t local = 0; local < size; ++local) {

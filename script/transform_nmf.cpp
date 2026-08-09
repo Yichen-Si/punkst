@@ -226,7 +226,7 @@ int32_t cmdNmfTransform(int32_t argc, char** argv) {
     ArrayXd resids;
     RowMajorMatrixXd theta = nmf.transform(docs, opts, stats, &resids);
     const MatrixXd similarity = pairwiseCosineSimilarityRows(rowNormalize(beta.transpose()));
-    const ThetaEntropyStats thetaStats = computeThetaEntropyStats(theta, similarity);
+    const EntropyStats thetaStats = computeThetaEntropyStats(theta, similarity);
 
     std::string outf;
     std::ofstream ofs;

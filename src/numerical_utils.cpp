@@ -11,6 +11,130 @@
 #include <tbb/tbb.h>
 #include <tbb/blocked_range.h>
 
+double logsumexp(const Eigen::Ref<const Eigen::VectorXd>& values) {
+    if (values.size() == 0) {
+        return -std::numeric_limits<double>::infinity();
+    }
+    const double maximum = values.maxCoeff();
+    if (!std::isfinite(maximum)) return maximum;
+    return maximum + std::log((values.array() - maximum).exp().sum());
+}
+
+double logaddexp(double left, double right) {
+    if (!std::isfinite(left)) return right;
+    if (!std::isfinite(right)) return left;
+    const double maximum = std::max(left, right);
+    return maximum + std::log(
+        std::exp(left - maximum) + std::exp(right - maximum));
+}
+
+bool positive_definite(const Eigen::Ref<const Eigen::MatrixXd>& matrix,
+    double symmetry_tolerance) {
+    return matrix.rows() > 0 && matrix.rows() == matrix.cols()
+        && matrix.allFinite() && symmetry_tolerance >= 0.0
+        && (matrix - matrix.transpose()).cwiseAbs().maxCoeff()
+            <= symmetry_tolerance
+        && Eigen::LLT<Eigen::MatrixXd>(matrix).info() == Eigen::Success;
+}
+
+Eigen::MatrixXd floor_covariance(
+    const Eigen::Ref<const Eigen::MatrixXd>& input, double floor) {
+    if (input.rows() == 0 || input.rows() != input.cols()
+        || !input.allFinite() || !(floor > 0.0)
+        || !std::isfinite(floor)) {
+        throw std::invalid_argument("Invalid covariance flooring input");
+    }
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
+        0.5 * (input + input.transpose()));
+    if (solver.info() != Eigen::Success) {
+        throw std::runtime_error("Covariance eigendecomposition failed");
+    }
+    return solver.eigenvectors()
+        * solver.eigenvalues().cwiseMax(floor).asDiagonal()
+        * solver.eigenvectors().transpose();
+}
+
+Eigen::MatrixXd normalized_helmert(int32_t parts) {
+    if (parts < 2) {
+        throw std::invalid_argument(
+            "A normalized Helmert basis requires at least two parts");
+    }
+    Eigen::MatrixXd out = Eigen::MatrixXd::Zero(parts - 1, parts);
+    for (int32_t row = 0; row < parts - 1; ++row) {
+        const double denominator = std::sqrt((row + 1.0) * (row + 2.0));
+        out.block(row, 0, 1, row + 1).setConstant(1.0 / denominator);
+        out(row, row + 1) = -(row + 1.0) / denominator;
+    }
+    return out;
+}
+
+bool is_normalized_helmert(
+    const Eigen::Ref<const Eigen::MatrixXd>& matrix, double tolerance) {
+    if (matrix.rows() <= 0 || matrix.cols() != matrix.rows() + 1
+        || !matrix.allFinite() || !(tolerance >= 0.0)
+        || !std::isfinite(tolerance)) {
+        return false;
+    }
+    for (Eigen::Index row = 0; row < matrix.rows(); ++row) {
+        const double denominator = std::sqrt((row + 1.0) * (row + 2.0));
+        for (Eigen::Index column = 0; column < matrix.cols(); ++column) {
+            const double expected = column <= row
+                ? 1.0 / denominator
+                : column == row + 1
+                ? -(row + 1.0) / denominator : 0.0;
+            if (std::abs(matrix(row, column) - expected) > tolerance) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+RowMajorMatrixXd ilr_transform(
+    const Eigen::Ref<const RowMajorMatrixXd>& values,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert, double floor) {
+    if (values.cols() != helmert.cols() || !(floor > 0.0)
+        || !std::isfinite(floor)) {
+        throw std::invalid_argument("Invalid ILR transform input");
+    }
+    RowMajorMatrixXd out(values.rows(), helmert.rows());
+    for (Eigen::Index row = 0; row < values.rows(); ++row) {
+        Eigen::VectorXd normalized =
+            values.row(row).transpose().array().max(floor);
+        normalized /= normalized.sum();
+        out.row(row) =
+            (helmert * normalized.array().log().matrix()).transpose();
+    }
+    return out;
+}
+
+Eigen::VectorXd ilr_inverse_coordinate(
+    const Eigen::Ref<const Eigen::VectorXd>& value,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
+    if (value.size() != helmert.rows()) {
+        throw std::invalid_argument("Invalid inverse ILR input");
+    }
+    Eigen::VectorXd logits = helmert.transpose() * value;
+    logits.array() -= logits.maxCoeff();
+    Eigen::VectorXd out = logits.array().exp();
+    out /= out.sum();
+    return out;
+}
+
+RowMajorMatrixXd ilr_inverse(
+    const Eigen::Ref<const RowMajorMatrixXd>& values,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
+    if (values.cols() != helmert.rows()) {
+        throw std::invalid_argument("Invalid inverse ILR input");
+    }
+    RowMajorMatrixXd out(values.rows(), helmert.cols());
+    for (Eigen::Index row = 0; row < values.rows(); ++row) {
+        out.row(row) = ilr_inverse_coordinate(
+            values.row(row).transpose(), helmert).transpose();
+    }
+    return out;
+}
+
 double logit(double x) {
     if (x <= 0.0 || x >= 1.0) {
         throw std::out_of_range("Input to logit must be in (0, 1)");
