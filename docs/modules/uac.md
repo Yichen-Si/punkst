@@ -7,6 +7,8 @@ After fitting a topic (factor) model, we can cluster cells based on their topic 
 
 UAC starts from the point estimates from a LDA or Gamma-Poisson model and clusters in a (transformed) topic-composition space. But critically different from a purely two-stage approach where only the point estimates in the reduced topic space are clustered, UAC directly uses the raw count data and accounts for the uncertainty in the topic estimates during clustering.
 
+See [Leiden clustering](leiden.md) for the baseline clustering using only the point estimates of topic compositions.
+
 ## Example usage
 
 First fit a topic model and get per-unit topic proportions. For example, a
@@ -218,6 +220,18 @@ ILR-space UAC mixture model fitted after initialization.
 `--cluster-covariance-rank`
 Covariance representation. `-1` uses a dense covariance, `0` uses a diagonal
 covariance, and a positive value uses that factor rank.
+
+`--cluster-covariance-diagonal`
+Controls the diagonal term when `--cluster-covariance-rank` is nonnegative.
+`component` (default) fits a separate diagonal for every cluster. `shared`
+fits the common-uniqueness factor model
+$\Sigma_c=\operatorname{diag}(d_{\rm shared})+B_cB_c^T$. Rank zero with
+`shared` is therefore a homoscedastic diagonal mixture. The shared term is
+diagonal in the fitted ILR basis, not in the original topic coordinates.
+
+In shared mode, covariance shrinkage regularizes the cluster-specific factor
+loadings toward the common diagonal background. Disabling covariance
+shrinkage leaves the ordinary common-uniqueness factor-analysis update.
 
 `--max-iter`, `--objective-change-tol`, `--responsibility-change-tol`
 Mixture convergence controls.

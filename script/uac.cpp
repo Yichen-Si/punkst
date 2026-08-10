@@ -943,6 +943,7 @@ int32_t cmdUacFit(int argc, char** argv) {
     std::string proposal = "exact_fisher";
     std::string leiden_knn_backend = "auto";
     std::string initialization_metric = "cosine";
+    std::string cluster_covariance_diagonal = "component";
     uac::FitOptions options;
     options.n_components = 0;
     int32_t representatives = 10;
@@ -986,6 +987,9 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("cluster-covariance-rank",
           "Cluster covariance rank; -1 uses dense covariance, 0 is diagonal",
           options.cluster_covariance_rank)
+      .add_option("cluster-covariance-diagonal",
+          "Factor covariance diagonal: component or shared",
+          cluster_covariance_diagonal)
       .add_option("fisher-broadening", "Fisher proposal covariance broadening", options.fisher_broadening)
       .add_option("n-clusters", "Fixed number of clusters", options.n_components, true)
       .add_option("kmeans-starts", "Metric k-means++ initialization starts", options.kmeans_starts)
@@ -1046,6 +1050,8 @@ int32_t cmdUacFit(int argc, char** argv) {
             leiden_knn_backend);
         options.initialization_metric = parse_simplex_metric(
             initialization_metric);
+        options.factor_diagonal_mode = uac::parse_factor_diagonal_mode(
+            cluster_covariance_diagonal);
         options.adaptive_covariance_shrinkage = !no_covariance_shrinkage;
         options.iteration_callback = [](const uac::IterationDiagnostic& value) {
             std::ostringstream message;

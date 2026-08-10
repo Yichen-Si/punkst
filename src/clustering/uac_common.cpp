@@ -279,7 +279,8 @@ void validate_model(const Model& model) {
         throw std::invalid_argument("Invalid UAC model weights or means");
     }
     if (model.covariance_kind == CovarianceKind::Dense) {
-        if (model.covariances.size() != static_cast<size_t>(components)
+        if (model.factor_diagonal_mode != FactorDiagonalMode::Component
+            || model.covariances.size() != static_cast<size_t>(components)
             || model.shrinkage_target.rows() != dimension
             || model.shrinkage_target.cols() != dimension
             || !positive_definite(model.shrinkage_target)) {
@@ -304,22 +305,43 @@ void validate_model(const Model& model) {
     }
     const Eigen::Index rank =
         model.factor_covariances.front().factor.cols();
-    auto valid_factor = [&](const LowRankDiagonalCovariance& covariance) {
-        return covariance.diagonal.size() == dimension
-            && covariance.factor.rows() == dimension
+    auto valid_factor_matrix = [&](const LowRankDiagonalCovariance& covariance) {
+        return covariance.factor.rows() == dimension
             && covariance.factor.cols() == rank
-            && covariance.diagonal.allFinite()
-            && covariance.factor.allFinite()
-            && (covariance.diagonal.array() > 0.0).all();
+            && covariance.factor.allFinite();
     };
-    if (!valid_factor(model.factor_shrinkage_target)) {
+    auto valid_diagonal = [&](const Eigen::VectorXd& diagonal) {
+        return diagonal.size() == dimension && diagonal.allFinite()
+            && (diagonal.array() > 0.0).all();
+    };
+    if (!valid_factor_matrix(model.factor_shrinkage_target)
+        || !valid_diagonal(model.factor_shrinkage_target.diagonal)) {
         throw std::invalid_argument(
             "Invalid UAC factor shrinkage target");
     }
     for (const auto& covariance : model.factor_covariances) {
-        if (!valid_factor(covariance)) {
+        if (!valid_factor_matrix(covariance)
+            || (model.factor_diagonal_mode == FactorDiagonalMode::Component
+                && !valid_diagonal(covariance.diagonal))
+            || (model.factor_diagonal_mode == FactorDiagonalMode::Shared
+                && covariance.diagonal.size() != 0)) {
             throw std::invalid_argument("Invalid UAC factor covariance");
         }
+    }
+    if (model.factor_diagonal_mode == FactorDiagonalMode::Shared) {
+        if (!valid_diagonal(model.shared_factor_diagonal)
+            || (model.factor_shrinkage_target.diagonal
+                    - model.shared_factor_diagonal).cwiseAbs().maxCoeff()
+                > 1e-12
+                    * std::max(1.0,
+                        model.shared_factor_diagonal.cwiseAbs().maxCoeff())
+            || (model.factor_shrinkage_target.factor.array() != 0.0).any()) {
+            throw std::invalid_argument(
+                "Invalid UAC shared factor diagonal structure");
+        }
+    } else if (model.shared_factor_diagonal.size() != 0) {
+        throw std::invalid_argument(
+            "Unexpected UAC shared factor diagonal");
     }
 }
 
@@ -402,6 +424,7 @@ void validate_state(const State& state) {
         || state.initialization_metric == SimplexMetric::Hellinger;
     if (!valid_handoff || !valid_proposal || !valid_start_method
         || !valid_knn_backend || !valid_initialization_metric
+        || state.factor_diagonal_mode != state.model.factor_diagonal_mode
         || state.n_particles <= 0 || state.kmeans_starts < 0
         || state.leiden_starts < 0 || total_starts <= 0
         || state.kmeans_max_iterations <= 0
@@ -555,9 +578,20 @@ std::vector<DenseGaussianSolver> dense_model_solvers(const Model& model) {
 
 Eigen::MatrixXd model_covariance_dense(const Model& model,
     int32_t component) {
-    return model.covariance_kind == CovarianceKind::Dense
-        ? model.covariances[component]
-        : model.factor_covariances[component].dense();
+    if (model.covariance_kind == CovarianceKind::Dense) {
+        return model.covariances[component];
+    }
+    Eigen::MatrixXd out = factor_diagonal(model, component).asDiagonal();
+    const auto& factor = model.factor_covariances[component].factor;
+    if (factor.cols() > 0) out.noalias() += factor * factor.transpose();
+    return out;
+}
+
+const Eigen::VectorXd& factor_diagonal(const Model& model,
+    int32_t component) {
+    return model.factor_diagonal_mode == FactorDiagonalMode::Shared
+        ? model.shared_factor_diagonal
+        : model.factor_covariances[component].diagonal;
 }
 
 void validate_particle_initial_model(const Model& model,
@@ -572,10 +606,11 @@ void validate_particle_initial_model(const Model& model,
             "Particle initial model does not match the fitted model shape");
     }
     if (model.covariance_kind == CovarianceKind::FactorAnalytic
-        && model.factor_covariances.front().factor.cols()
-            != reference.factor_covariances.front().factor.cols()) {
+        && (model.factor_diagonal_mode != reference.factor_diagonal_mode
+            || model.factor_covariances.front().factor.cols()
+                != reference.factor_covariances.front().factor.cols())) {
             throw std::invalid_argument(
-                "Particle initial model factor rank differs");
+                "Particle initial model factor rank or diagonal mode differs");
     }
 }
 
@@ -594,7 +629,7 @@ std::vector<double> model_eigenvalue_upper_bounds(const Model& model) {
             value = eigen.eigenvalues().maxCoeff();
         } else {
             const auto& covariance = model.factor_covariances[c];
-            value = covariance.diagonal.maxCoeff();
+            value = factor_diagonal(model, static_cast<int32_t>(c)).maxCoeff();
             if (covariance.factor.cols() > 0) {
                 Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigen(
                     covariance.factor.transpose() * covariance.factor,
@@ -642,9 +677,84 @@ LowRankDiagonalCovariance factorize_covariance(
     return out;
 }
 
+void convert_model_to_factor(Model& model, int32_t rank,
+    FactorDiagonalMode diagonal_mode, double floor) {
+    const int32_t dimension = checked_int32(
+        model.means.cols(), "factor covariance dimension");
+    if (model.covariance_kind != CovarianceKind::Dense
+        || model.covariances.size()
+            != static_cast<size_t>(model.weights.size())
+        || rank < 0 || rank > dimension || !(floor > 0.0)) {
+        throw std::invalid_argument("Invalid UAC factor model conversion");
+    }
+    std::vector<LowRankDiagonalCovariance> provisional;
+    provisional.reserve(model.covariances.size());
+    for (const auto& covariance : model.covariances) {
+        provisional.push_back(factorize_covariance(covariance, rank, floor));
+    }
+    model.covariance_kind = CovarianceKind::FactorAnalytic;
+    model.factor_diagonal_mode = diagonal_mode;
+    model.factor_covariances = std::move(provisional);
+    model.shared_factor_diagonal.resize(0);
+    if (diagonal_mode == FactorDiagonalMode::Component) {
+        model.factor_shrinkage_target = factorize_covariance(
+            model.shrinkage_target, rank, floor);
+        return;
+    }
+
+    model.shared_factor_diagonal = Eigen::VectorXd::Zero(dimension);
+    double active_weight = 0.0;
+    for (int32_t c = 0; c < model.weights.size(); ++c) {
+        if (!(model.weights(c) > 0.0)) continue;
+        active_weight += model.weights(c);
+        model.shared_factor_diagonal.noalias() += model.weights(c)
+            * model.factor_covariances[c].diagonal;
+    }
+    if (!(active_weight > 0.0)) {
+        throw std::runtime_error(
+            "UAC shared factor initialization has no active component");
+    }
+    model.shared_factor_diagonal =
+        (model.shared_factor_diagonal / active_weight).cwiseMax(floor);
+    const Eigen::MatrixXd shared =
+        model.shared_factor_diagonal.asDiagonal();
+    for (int32_t c = 0; c < model.weights.size(); ++c) {
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigen(
+            0.5 * (model.covariances[c] - shared
+                + (model.covariances[c] - shared).transpose()));
+        if (eigen.info() != Eigen::Success) {
+            throw std::runtime_error(
+                "UAC shared factor initialization eigendecomposition failed");
+        }
+        auto& covariance = model.factor_covariances[c];
+        covariance.factor = RowMajorMatrixXd::Zero(dimension, rank);
+        for (int32_t j = 0; j < rank; ++j) {
+            const int32_t index = dimension - 1 - j;
+            const double value = std::max(0.0, eigen.eigenvalues()(index));
+            covariance.factor.col(j) = std::sqrt(value)
+                * eigen.eigenvectors().col(index);
+        }
+        covariance.diagonal.resize(0);
+    }
+    model.factor_shrinkage_target.diagonal =
+        model.shared_factor_diagonal;
+    model.factor_shrinkage_target.factor =
+        RowMajorMatrixXd::Zero(dimension, rank);
+}
+
 double covariance_prior(const Model& model, double strength) {
     double out = 0.0;
     if (model.covariance_kind == CovarianceKind::FactorAnalytic) {
+        if (model.factor_diagonal_mode == FactorDiagonalMode::Shared) {
+            const Eigen::VectorXd inverse =
+                model.shared_factor_diagonal.cwiseInverse();
+            for (const auto& covariance : model.factor_covariances) {
+                out -= 0.5 * strength
+                    * (covariance.factor.array().square().rowwise().sum()
+                        * inverse.array()).sum();
+            }
+            return out;
+        }
         for (const auto& covariance : model.factor_covariances) {
             LowRankDiagonalSolver solver(
                 covariance.diagonal, covariance.factor);

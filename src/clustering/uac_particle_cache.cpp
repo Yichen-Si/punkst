@@ -755,9 +755,25 @@ uint64_t particle_cache_key(const Dataset& data, const Basis& basis,
                 sizeof(double) * covariance.size());
         }
     } else {
-        for (const auto& covariance : initial_model.factor_covariances) {
-            hash = fnv_append(hash, covariance.diagonal.data(),
-                sizeof(double) * covariance.diagonal.size());
+        const int32_t diagonal_mode = static_cast<int32_t>(
+            initial_model.factor_diagonal_mode);
+        hash_cache_value(hash, diagonal_mode);
+        if (initial_model.factor_diagonal_mode
+                == FactorDiagonalMode::Shared) {
+            hash = fnv_append(hash,
+                initial_model.shared_factor_diagonal.data(),
+                sizeof(double)
+                    * initial_model.shared_factor_diagonal.size());
+        }
+        for (int32_t c = 0;
+                c < static_cast<int32_t>(
+                    initial_model.factor_covariances.size()); ++c) {
+            const auto& covariance = initial_model.factor_covariances[c];
+            if (initial_model.factor_diagonal_mode
+                    == FactorDiagonalMode::Component) {
+                hash = fnv_append(hash, covariance.diagonal.data(),
+                    sizeof(double) * covariance.diagonal.size());
+            }
             hash = fnv_append(hash, covariance.factor.data(),
                 sizeof(double) * covariance.factor.size());
         }

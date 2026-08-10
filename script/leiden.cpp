@@ -55,9 +55,35 @@ int32_t parse_numbered_column(const std::string& name, char prefix) {
 }
 
 FactorTable read_factor_table(const std::string& path,
-        int32_t identifier_column, bool allow_topk) {
+        int32_t identifier_column, int32_t factor_column_start,
+        int32_t factor_column_end, bool allow_topk) {
     if (identifier_column < 0) {
-        throw std::invalid_argument("--unit-icol-id must be nonnegative");
+        throw std::invalid_argument("--icol-id must be nonnegative");
+    }
+    if (factor_column_start < -1 || factor_column_end < -1) {
+        throw std::invalid_argument(
+            "factor column indices must be nonnegative");
+    }
+    const bool has_factor_column_start = factor_column_start >= 0;
+    const bool has_factor_column_end = factor_column_end >= 0;
+    if (has_factor_column_start != has_factor_column_end) {
+        throw std::invalid_argument(
+            "--icol-factor-start and --icol-factor-end must be supplied together");
+    }
+    const bool explicit_factor_columns = has_factor_column_start;
+    if (explicit_factor_columns
+            && factor_column_end < factor_column_start) {
+        throw std::invalid_argument(
+            "--icol-factor-end must not precede --icol-factor-start");
+    }
+    if (explicit_factor_columns
+            && factor_column_end - factor_column_start + 1 < 2) {
+        throw std::invalid_argument(
+            "Leiden clustering requires at least two factor columns");
+    }
+    if (explicit_factor_columns && allow_topk) {
+        throw std::invalid_argument(
+            "--allow-topk cannot be combined with explicit factor columns");
     }
     TextLineReader reader(path);
     std::string line;
@@ -69,7 +95,18 @@ FactorTable read_factor_table(const std::string& path,
         split_delimited(strip_leading_hash(line), '\t');
     if (identifier_column >= static_cast<int32_t>(header.size())) {
         throw std::invalid_argument(
-            "--unit-icol-id is outside the factor table");
+            "--icol-id is outside the factor table");
+    }
+    if (explicit_factor_columns
+            && factor_column_end >= static_cast<int32_t>(header.size())) {
+        throw std::invalid_argument(
+            "--icol-factor-end is outside the factor table");
+    }
+    if (explicit_factor_columns
+            && identifier_column >= factor_column_start
+            && identifier_column <= factor_column_end) {
+        throw std::invalid_argument(
+            "--icol-id must select a non-factor column");
     }
 
     std::unordered_set<std::string> header_names;
@@ -82,25 +119,34 @@ FactorTable read_factor_table(const std::string& path,
             throw std::runtime_error(
                 "Factor table has an empty or duplicate header: " + name);
         }
-        int32_t factor = -1;
-        if (str2int32(name, factor) && factor >= 0) {
-            dense_columns.emplace_back(factor, column);
-        }
-        const int32_t k_index = parse_numbered_column(name, 'K');
-        if (k_index > 0) {
-            if (topk_columns[k_index].first > 0) {
-                throw std::runtime_error(
-                    "Duplicate K column index in factor table header");
+        if (!explicit_factor_columns) {
+            int32_t factor = -1;
+            if (str2int32(name, factor) && factor >= 0) {
+                dense_columns.emplace_back(factor, column);
             }
-            topk_columns[k_index].first = column + 1;
-        }
-        const int32_t p_index = parse_numbered_column(name, 'P');
-        if (p_index > 0) {
-            if (topk_columns[p_index].second > 0) {
-                throw std::runtime_error(
-                    "Duplicate P column index in factor table header");
+            const int32_t k_index = parse_numbered_column(name, 'K');
+            if (k_index > 0) {
+                if (topk_columns[k_index].first > 0) {
+                    throw std::runtime_error(
+                        "Duplicate K column index in factor table header");
+                }
+                topk_columns[k_index].first = column + 1;
             }
-            topk_columns[p_index].second = column + 1;
+            const int32_t p_index = parse_numbered_column(name, 'P');
+            if (p_index > 0) {
+                if (topk_columns[p_index].second > 0) {
+                    throw std::runtime_error(
+                        "Duplicate P column index in factor table header");
+                }
+                topk_columns[p_index].second = column + 1;
+            }
+        }
+    }
+    if (explicit_factor_columns) {
+        for (int32_t column = factor_column_start;
+                column <= factor_column_end; ++column) {
+            dense_columns.emplace_back(
+                column - factor_column_start, column);
         }
     }
 
@@ -134,7 +180,7 @@ FactorTable read_factor_table(const std::string& path,
         for (const auto& factor : dense_columns) {
             if (factor.second == identifier_column) {
                 throw std::invalid_argument(
-                    "--unit-icol-id must select a non-factor column");
+                    "--icol-id must select a non-factor column");
             }
         }
     } else {
@@ -149,7 +195,7 @@ FactorTable read_factor_table(const std::string& path,
             const int32_t p_column = item.second.second - 1;
             if (k_column == identifier_column || p_column == identifier_column) {
                 throw std::invalid_argument(
-                    "--unit-icol-id must select a non-factor column");
+                    "--icol-id must select a non-factor column");
             }
             ++expected;
         }
@@ -356,6 +402,7 @@ int32_t cmdLeiden(int argc, char** argv) {
     std::string metric_name = "cosine";
     std::vector<double> resolutions;
     int32_t identifier_column = 0;
+    int32_t factor_column_start = -1, factor_column_end = -1;
     int32_t neighbors = 15, max_iterations = -1, seed = 1, threads = 1;
     double knn_epsilon = 0.0;
     bool allow_topk = false;
@@ -365,9 +412,15 @@ int32_t cmdLeiden(int argc, char** argv) {
       .add_option("in-theta",
           "Dense Gamma-Poisson/LDA theta table", input_path, true)
       .add_option("out-prefix", "Output prefix", output_prefix, true)
-      .add_option("unit-icol-id",
+      .add_option("icol-id",
           "0-based input column used as the unit identifier",
           identifier_column)
+      .add_option("icol-factor-start",
+          "0-based first factor-proportion column (inclusive)",
+          factor_column_start)
+      .add_option("icol-factor-end",
+          "0-based last factor-proportion column (inclusive)",
+          factor_column_end)
       .add_option("metric", "Simplex metric: cosine or hellinger",
           metric_name)
       .add_option("neighbors", "Metric k-NN neighbors", neighbors)
@@ -408,7 +461,8 @@ int32_t cmdLeiden(int argc, char** argv) {
 
         const SimplexMetric metric = parse_simplex_metric(metric_name);
         FactorTable table = read_factor_table(
-            input_path, identifier_column, allow_topk);
+            input_path, identifier_column, factor_column_start,
+            factor_column_end, allow_topk);
         if (table.topk) {
             warning("Clustering K/P top-k input after reconstructing omitted factors as zero; %s geometry is approximate",
                 simplex_metric_name(metric));

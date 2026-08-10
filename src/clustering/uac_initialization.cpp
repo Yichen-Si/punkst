@@ -383,17 +383,31 @@ Pilot pilot_from_map(const Dataset& data, const Model& model,
 }
 
 Pilot pilot_from_model(const Model& model) {
-    if (model.covariance_kind != CovarianceKind::Dense
-        || model.covariances.size()
-            != static_cast<size_t>(model.weights.size())) {
+    if ((model.covariance_kind == CovarianceKind::Dense
+            && model.covariances.size()
+                != static_cast<size_t>(model.weights.size()))
+        || (model.covariance_kind == CovarianceKind::FactorAnalytic
+            && model.factor_covariances.size()
+                != static_cast<size_t>(model.weights.size()))) {
         throw std::invalid_argument(
-            "UAC corrected-moment pilot requires dense covariance");
+            "UAC pilot requires a complete covariance model");
     }
     Pilot out;
     out.weights = model.weights;
     out.means = model.means;
-    out.covariances = model.covariances;
-    out.pooled_covariance = model.shrinkage_target;
+    if (model.covariance_kind == CovarianceKind::Dense) {
+        out.covariances = model.covariances;
+        out.pooled_covariance = model.shrinkage_target;
+    } else {
+        out.pooled_covariance = Eigen::MatrixXd::Zero(
+            model.means.cols(), model.means.cols());
+        out.covariances.reserve(model.weights.size());
+        for (int32_t c = 0; c < model.weights.size(); ++c) {
+            out.covariances.push_back(model_covariance_dense(model, c));
+            out.pooled_covariance.noalias() +=
+                model.weights(c) * out.covariances.back();
+        }
+    }
     return out;
 }
 
@@ -644,6 +658,12 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
                     expectation.sum_f.row(c).transpose();
                 gram.bottomRightCorner(rank, rank) =
                     expectation.sum_ff[c];
+                if (model.factor_diagonal_mode
+                        == FactorDiagonalMode::Shared
+                    && shrinkage > 0.0) {
+                    gram.bottomRightCorner(rank, rank).diagonal().array()
+                        += shrinkage;
+                }
             }
             Eigen::LLT<Eigen::MatrixXd> regression_llt(gram);
             if (regression_llt.info() != Eigen::Success) return {};
@@ -667,7 +687,8 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
             residual.array() += (loading * expectation.sum_ff[c])
                 .cwiseProduct(loading).rowwise().sum().array();
             raw_factor[c].diagonal =
-                (residual / membership).cwiseMax(covariance_floor);
+                model.factor_diagonal_mode == FactorDiagonalMode::Shared
+                ? residual : (residual / membership).cwiseMax(covariance_floor);
             raw_factor[c].factor = loading;
             next.means.row(c) = mean.transpose();
             ++result.active_components;
@@ -685,6 +706,44 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
     if (result.active_components == 0 || !next.weights.allFinite()
         || !next.means.allFinite()) {
         return {};
+    }
+    if (model.covariance_kind == CovarianceKind::FactorAnalytic
+        && model.factor_diagonal_mode == FactorDiagonalMode::Shared) {
+        const int32_t dimension = static_cast<int32_t>(model.means.cols());
+        const int32_t rank = static_cast<int32_t>(
+            model.factor_covariances.front().factor.cols());
+        Eigen::VectorXd residual = Eigen::VectorXd::Zero(dimension);
+        for (int32_t c = 0; c < components; ++c) {
+            if (!(expectation.membership(c) > epsilon)) continue;
+            residual += raw_factor[c].diagonal;
+            if (shrinkage > 0.0 && rank > 0) {
+                residual.array() += shrinkage
+                    * raw_factor[c].factor.array().square().rowwise().sum();
+            }
+        }
+        next.factor_diagonal_mode = FactorDiagonalMode::Shared;
+        next.shared_factor_diagonal =
+            (residual / active_mass).cwiseMax(covariance_floor);
+        next.factor_shrinkage_target.diagonal =
+            next.shared_factor_diagonal;
+        next.factor_shrinkage_target.factor =
+            RowMajorMatrixXd::Zero(dimension, rank);
+        for (int32_t c = 0; c < components; ++c) {
+            next.factor_covariances[c].diagonal.resize(0);
+            if (!(expectation.membership(c) > epsilon)) {
+                next.factor_covariances[c].factor =
+                    RowMajorMatrixXd::Zero(dimension, rank);
+            } else {
+                next.factor_covariances[c].factor = raw_factor[c].factor;
+            }
+        }
+        if (!next.shared_factor_diagonal.allFinite()
+            || !next.factor_shrinkage_target.factor.allFinite()) {
+            return {};
+        }
+        result.valid = true;
+        model = std::move(next);
+        return result;
     }
     try {
         if (adaptive_target && shrinkage > 0.0) {

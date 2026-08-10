@@ -172,7 +172,7 @@ Expectation map_expectation(const Dataset& data, const Model& model,
         for (int32_t c = 0; c < components; ++c) {
             const auto& covariance = model.factor_covariances[c];
             factor_solvers.emplace_back(
-                covariance.diagonal, covariance.factor);
+                factor_diagonal(model, c), covariance.factor);
             if (request.accumulate_moments) {
                 factor_beta.push_back(factor_solvers.back().solve_matrix(
                     covariance.factor).transpose());
@@ -337,7 +337,7 @@ bool resolve_map_component_screening(const Dataset& data,
         for (int32_t c = 0; c < components; ++c) {
             const auto& covariance = model.factor_covariances[c];
             factor_solvers.emplace_back(
-                covariance.diagonal, covariance.factor);
+                factor_diagonal(model, c), covariance.factor);
         }
     }
     const std::vector<double> eigenvalue_upper =
@@ -517,7 +517,7 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
         for (int32_t c = 0; c < components; ++c) {
             const auto& covariance = model.factor_covariances[c];
             factor_solvers.emplace_back(
-                covariance.diagonal, covariance.factor);
+                factor_diagonal(model, c), covariance.factor);
             if (accumulate_moments) {
                 factor_beta.push_back(factor_solvers.back().solve_matrix(
                     covariance.factor).transpose());

@@ -88,12 +88,16 @@ struct DenseGaussianSolver {
 std::vector<DenseGaussianSolver> dense_model_solvers(const Model& model);
 Eigen::MatrixXd model_covariance_dense(
     const Model& model, int32_t component);
+const Eigen::VectorXd& factor_diagonal(
+    const Model& model, int32_t component);
 void validate_particle_initial_model(
     const Model& model, const Model& reference);
 std::vector<double> model_eigenvalue_upper_bounds(const Model& model);
 LowRankDiagonalCovariance factorize_covariance(
     const Eigen::Ref<const Eigen::MatrixXd>& covariance, int32_t rank,
     double floor);
+void convert_model_to_factor(Model& model, int32_t rank,
+    FactorDiagonalMode diagonal_mode, double floor);
 double covariance_prior(const Model& model, double strength);
 int32_t active_component_count(const Model& model);
 double membership_epsilon(int32_t documents);

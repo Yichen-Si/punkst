@@ -411,8 +411,8 @@ void test_topic_to_uac_handoff() {
     std::ifstream state_input(fit_prefix.string() + ".state.tsv");
     std::string state_header;
     require(static_cast<bool>(std::getline(state_input, state_header))
-            && state_header == "##punkst_uac_state_v12",
-        "direct topic-to-UAC fit did not write a v12 state");
+            && state_header == "##punkst_uac_state_v13",
+        "direct topic-to-UAC fit did not write a v13 state");
     std::string state_line;
     bool saw_initialization_metric = false;
     while (std::getline(state_input, state_line)) {
@@ -431,7 +431,7 @@ void test_topic_to_uac_handoff() {
     std::ostringstream state_text_buffer;
     state_text_buffer << state_text_input.rdbuf();
     std::string legacy_state_text = state_text_buffer.str();
-    legacy_state_text.replace(0, std::string("##punkst_uac_state_v12").size(),
+    legacy_state_text.replace(0, std::string("##punkst_uac_state_v13").size(),
         "##punkst_uac_state_v11");
     const std::string metric_record =
         "##initialization_metric\thellinger\n";
@@ -439,6 +439,14 @@ void test_topic_to_uac_handoff() {
     require(metric_position != std::string::npos,
         "UAC state metric record is missing");
     legacy_state_text.erase(metric_position, metric_record.size());
+    const std::string diagonal_mode_record =
+        "##factor_diagonal_mode\tcomponent\n";
+    const size_t diagonal_mode_position =
+        legacy_state_text.find(diagonal_mode_record);
+    require(diagonal_mode_position != std::string::npos,
+        "UAC state factor diagonal mode record is missing");
+    legacy_state_text.erase(
+        diagonal_mode_position, diagonal_mode_record.size());
     const std::filesystem::path legacy_state_path =
         fit_prefix.string() + ".legacy_v11.state.tsv";
     write_text(legacy_state_path, legacy_state_text);

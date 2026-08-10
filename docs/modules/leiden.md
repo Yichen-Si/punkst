@@ -1,10 +1,10 @@
 # Leiden clustering
 
-`punkst leiden` applies standard Leiden community detection to the factor-space
+`punkst leiden` applies Leiden community detection to the factor-space
 embedding written by `gamma-pois-fit --transform`, `gamma-pois-transform`,
-`topic-model --transform`, or `lda-transform`. It is a point-estimate baseline:
-use [UAC](uac.md) when topic uncertainty and overlapping cluster distributions
-should be modeled explicitly.
+`topic-model --transform`, or `lda-transform`.
+
+It is a point-estimate baseline: use [UAC](uac.md) for a model-based clustering that accounts for uncertainty in the embedding.
 
 ## Example
 
@@ -17,22 +17,30 @@ punkst leiden \
   --threads 4 --seed 1
 ```
 
-The command embeds each factor row using the selected simplex metric,
-constructs a union-symmetrized k-nearest-neighbor graph, and applies the native
+The command uses cosine or Hellinger distance in the factor space to construct a union-symmetrized k-nearest-neighbor graph, and applies the native
 RBConfiguration Leiden implementation. When more than one resolution is
-supplied, the graph is built once and reused for every Leiden run. Leiden
-chooses the community count; this command does not reconcile the result to a
-requested number of clusters.
+supplied, the graph is built once and reused for every Leiden run.
 
 ## Inputs
 
 `--in-theta`
 : Dense per-unit factor proportions. Numeric columns named `0..K-1` are used as
-  factors; other metadata columns and an LDA `Background` column are ignored.
+  factors by default; other metadata columns are ignored. For tables with
+  different factor names, pass both `--icol-factor-start` and
+  `--icol-factor-end` to select an inclusive, consecutive range of factor
+  columns by zero-based index.
 
-`--unit-icol-id`
-: Zero-based identifier column. Default: `0`. Identifiers must be nonempty and
-  unique.
+`--icol-id`
+: Zero-based column index for the unit identifier. Default: `0`. Identifiers
+  must be nonempty and unique, and the column must be outside any explicit
+  factor range.
+
+`--icol-factor-start`, `--icol-factor-end`
+: Zero-based inclusive indices of the first and last factor-proportion columns.
+  The options must be supplied together, the selected range must contain at
+  least two consecutive columns, and its headers need not be numeric. When
+  omitted, factor columns continue to be inferred from headers named
+  `0..K-1` or from opted-in K/P top-k input.
 
 Dense input is recommended. Transform output written with `--topk-only` has
 `K1/P1`, `K2/P2`, and similar column pairs and is rejected by default. Pass
@@ -55,8 +63,7 @@ clustering is explicitly approximate.
   the supplied order and must be unique.
 
 `--neighbors`
-: Number of metric neighbors requested per unit. Default: `15`. For smaller
-  datasets it is capped at one less than the number of units.
+: Number of metric neighbors requested per unit. Default: `15`.
 
 `--max-iter`
 : Maximum Leiden passes. Default: `-1`, which runs to convergence with the

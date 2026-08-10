@@ -507,6 +507,17 @@ void write_model_trace(const std::string& path,
                     }
                 }
             }
+            if (model.covariance_kind == CovarianceKind::FactorAnalytic
+                && model.factor_diagonal_mode
+                    == FactorDiagonalMode::Shared) {
+                for (Eigen::Index r = 0;
+                        r < model.shared_factor_diagonal.size(); ++r) {
+                    write_prefix();
+                    out << "\t-1\tshared_diagonal\t" << r
+                        << "\t-1\t" << model.shared_factor_diagonal(r)
+                        << "\n";
+                }
+            }
             const Eigen::MatrixXd target =
                 model.covariance_kind == CovarianceKind::Dense
                 ? model.shrinkage_target

@@ -52,6 +52,11 @@ enum class CovarianceKind {
     FactorAnalytic,
 };
 
+enum class FactorDiagonalMode {
+    Component,
+    Shared,
+};
+
 enum class AdaptiveParticleBinding {
     Minimum,
     Responsibility,
@@ -102,6 +107,7 @@ const char* streaming_count_storage_name(StreamingCountStorage value);
 const char* streaming_particle_storage_name(StreamingParticleStorage value);
 const char* visualization_whitening_name(VisualizationWhitening value);
 const char* visualization_view_name(VisualizationView value);
+const char* factor_diagonal_mode_name(FactorDiagonalMode value);
 HandoffMode parse_handoff(const std::string& value);
 ProposalKind parse_proposal(const std::string& value);
 StartMethod parse_start_method(const std::string& value);
@@ -114,6 +120,7 @@ StreamingParticleStorage parse_streaming_particle_storage(
     const std::string& value);
 VisualizationWhitening parse_visualization_whitening(
     const std::string& value);
+FactorDiagonalMode parse_factor_diagonal_mode(const std::string& value);
 
 struct Basis {
     RowMajorMatrixXd probabilities; // feature x topic
@@ -184,11 +191,14 @@ struct StreamingOptions {
 
 struct Model {
     CovarianceKind covariance_kind = CovarianceKind::Dense;
+    FactorDiagonalMode factor_diagonal_mode =
+        FactorDiagonalMode::Component;
     Eigen::VectorXd weights;
     RowMajorMatrixXd means;
     std::vector<Eigen::MatrixXd> covariances;
     Eigen::MatrixXd shrinkage_target;
     std::vector<LowRankDiagonalCovariance> factor_covariances;
+    Eigen::VectorXd shared_factor_diagonal;
     LowRankDiagonalCovariance factor_shrinkage_target;
 };
 
@@ -247,6 +257,8 @@ struct FitOptions {
     int32_t n_particles = 256;
     int32_t particle_em_fixed_iterations = 0;
     int32_t cluster_covariance_rank = -1;
+    FactorDiagonalMode factor_diagonal_mode =
+        FactorDiagonalMode::Component;
     int32_t kmeans_starts = 5;
     int32_t leiden_starts = 0;
     int32_t max_iterations = 300;
@@ -435,6 +447,8 @@ struct State {
     int32_t n_particles = 256;
     int32_t seed = 1;
     int32_t cluster_covariance_rank = -1;
+    FactorDiagonalMode factor_diagonal_mode =
+        FactorDiagonalMode::Component;
     int32_t kmeans_starts = 5;
     int32_t leiden_starts = 0;
     int32_t kmeans_max_iterations = 100;

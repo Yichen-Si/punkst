@@ -27,6 +27,11 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     const bool valid_initialization_metric =
         options.initialization_metric == SimplexMetric::Cosine
         || options.initialization_metric == SimplexMetric::Hellinger;
+    if (options.factor_diagonal_mode == FactorDiagonalMode::Shared
+        && options.cluster_covariance_rank < 0) {
+        throw std::invalid_argument(
+            "Shared cluster covariance diagonal requires --cluster-covariance-rank >= 0");
+    }
     if (options.n_components <= 0 || options.kmeans_starts < 0
         || options.leiden_starts < 0 || total_starts <= 0
         || options.max_iterations <= 0 || options.n_particles <= 0
@@ -315,18 +320,29 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             throw std::invalid_argument(
                 "UAC factor rank exceeds the ILR dimension");
         }
-        selected->model.covariance_kind = CovarianceKind::FactorAnalytic;
-        selected->model.factor_shrinkage_target = factorize_covariance(
-            selected->model.shrinkage_target, rank,
-            options.covariance_floor);
-        selected->model.factor_covariances.clear();
-        selected->model.factor_covariances.reserve(options.n_components);
-        for (const auto& covariance : selected->model.covariances) {
-            selected->model.factor_covariances.push_back(
-                factorize_covariance(covariance, rank,
-                    options.covariance_floor));
-        }
-        if (options.handoff == HandoffMode::Map) {
+        convert_model_to_factor(selected->model, rank,
+            options.factor_diagonal_mode, options.covariance_floor);
+        if (options.handoff == HandoffMode::Map
+            && options.factor_diagonal_mode
+                == FactorDiagonalMode::Shared) {
+            RestartTrace refinement_metadata = selected->trace;
+            refinement_metadata.points.clear();
+            refinement_metadata.model_trace.clear();
+            refinement_metadata.completed_updates = 0;
+            refinement_metadata.converged = false;
+            refinement_metadata.collapsed = false;
+            refinement_metadata.selected = true;
+            Candidate refined = fit_map_candidate(data, selected->model,
+                options, refinement_metadata);
+            if (refined.trace.collapsed || !refined.trace.succeeded) {
+                throw std::runtime_error(
+                    "Selected UAC initializer collapsed during shared-factor MAP refinement");
+            }
+            selected->model = std::move(refined.model);
+            selected->trace.converged = refined.trace.converged;
+            result.traces.push_back(std::move(refined.trace));
+            result.pilot = pilot_from_model(selected->model);
+        } else if (options.handoff == HandoffMode::Map) {
             const double shrinkage =
                 options.adaptive_covariance_shrinkage
                 ? options.covariance_shrinkage_strength : 0.0;

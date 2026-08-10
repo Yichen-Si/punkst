@@ -135,6 +135,14 @@ const char* component_screening_mode_name(ComponentScreeningMode value) {
     throw std::invalid_argument("Unknown component screening mode");
 }
 
+const char* factor_diagonal_mode_name(FactorDiagonalMode value) {
+    switch (value) {
+        case FactorDiagonalMode::Component: return "component";
+        case FactorDiagonalMode::Shared: return "shared";
+    }
+    throw std::invalid_argument("Unknown UAC factor diagonal mode");
+}
+
 const char* particle_engine_name(ParticleEngine value) {
     switch (value) {
         case ParticleEngine::Batch: return "batch";
@@ -187,6 +195,13 @@ ComponentScreeningMode parse_component_screening_mode(const std::string& value){
     if (value == "auto") return ComponentScreeningMode::Auto;
     throw std::invalid_argument(
         "Component screening mode must be off, on, or auto");
+}
+
+FactorDiagonalMode parse_factor_diagonal_mode(const std::string& value) {
+    if (value == "component") return FactorDiagonalMode::Component;
+    if (value == "shared") return FactorDiagonalMode::Shared;
+    throw std::invalid_argument(
+        "UAC cluster covariance diagonal must be component or shared");
 }
 
 ParticleEngine parse_particle_engine(const std::string& value) {

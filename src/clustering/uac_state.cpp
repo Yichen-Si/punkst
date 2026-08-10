@@ -129,6 +129,7 @@ State make_state(const FitResult& fit_result, const FitOptions& options,
         ? static_cast<int32_t>(
             fit_result.model.factor_covariances.front().factor.cols())
         : -1;
+    state.factor_diagonal_mode = fit_result.model.factor_diagonal_mode;
     state.kmeans_starts = options.kmeans_starts;
     state.leiden_starts = options.leiden_starts;
     state.kmeans_max_iterations = options.kmeans_max_iterations;
@@ -187,13 +188,15 @@ void write_state(const std::string& path, const State& state) {
     if (!out) throw std::runtime_error("Cannot write UAC state: " + path);
     const int32_t components = static_cast<int32_t>(state.model.weights.size());
     const int32_t dimension = static_cast<int32_t>(state.model.means.cols());
-    out << "##punkst_uac_state_v12\n"
+    out << "##punkst_uac_state_v13\n"
         << "##handoff\t" << handoff_name(state.handoff) << "\n"
         << "##proposal\t" << proposal_name(state.proposal) << "\n"
         << "##particles\t" << state.n_particles << "\n"
         << "##seed\t" << state.seed << "\n"
         << "##cluster_covariance_rank\t"
         << state.cluster_covariance_rank << "\n"
+        << "##factor_diagonal_mode\t"
+        << factor_diagonal_mode_name(state.factor_diagonal_mode) << "\n"
         << "##kmeans_starts\t" << state.kmeans_starts << "\n"
         << "##leiden_starts\t" << state.leiden_starts << "\n"
         << "##kmeans_max_iterations\t"
@@ -323,14 +326,23 @@ void write_state(const std::string& path, const State& state) {
             out << "SHRINKAGE_TARGET\t" << r;
             for (int32_t j = 0; j < dimension; ++j) out << "\t" << state.model.shrinkage_target(r, j);
         } else {
-            out << "FA_DIAGONALS\t" << r;
-            for (int32_t c = 0; c < components; ++c) {
-                out << "\t" << state.model.factor_covariances[c].diagonal(r);
-            }
-            out << "\nFA_TARGET\t" << r << "\t"
-                << state.model.factor_shrinkage_target.diagonal(r);
-            for (int32_t j = 0; j < state.cluster_covariance_rank; ++j) {
-                out << "\t" << state.model.factor_shrinkage_target.factor(r, j);
+            if (state.factor_diagonal_mode
+                    == FactorDiagonalMode::Shared) {
+                out << "FA_SHARED_DIAGONAL\t" << r << "\t"
+                    << state.model.shared_factor_diagonal(r);
+            } else {
+                out << "FA_DIAGONALS\t" << r;
+                for (int32_t c = 0; c < components; ++c) {
+                    out << "\t"
+                        << state.model.factor_covariances[c].diagonal(r);
+                }
+                out << "\nFA_TARGET\t" << r << "\t"
+                    << state.model.factor_shrinkage_target.diagonal(r);
+                for (int32_t j = 0;
+                        j < state.cluster_covariance_rank; ++j) {
+                    out << "\t"
+                        << state.model.factor_shrinkage_target.factor(r, j);
+                }
             }
         }
         out << "\nPILOT_POOLED\t" << r;
@@ -354,6 +366,7 @@ State read_state(const std::string& path) {
     bool saw_selected_start = false, saw_selected_start_method = false;
     bool saw_target_relative_floor = false;
     bool saw_cluster_covariance_rank = false;
+    bool saw_factor_diagonal_mode = false;
     bool saw_objective_change_tolerance = false;
     bool saw_responsibility_change_tolerance = false;
     bool saw_particle_variance_change_tolerance = false;
@@ -375,21 +388,24 @@ State read_state(const std::string& path) {
         if (token.empty()) continue;
         if (state_version == 0
             && token[0] != "##punkst_uac_state_v11"
-            && token[0] != "##punkst_uac_state_v12") {
+            && token[0] != "##punkst_uac_state_v12"
+            && token[0] != "##punkst_uac_state_v13") {
             throw std::runtime_error(
                 "UAC state must begin with a supported version header");
         }
         if (token[0] == "##punkst_uac_state_v11"
-            || token[0] == "##punkst_uac_state_v12") {
+            || token[0] == "##punkst_uac_state_v12"
+            || token[0] == "##punkst_uac_state_v13") {
             if (state_version != 0) {
                 throw std::runtime_error("Duplicate UAC state version");
             }
-            state_version = token[0] == "##punkst_uac_state_v11" ? 11 : 12;
+            state_version = token[0] == "##punkst_uac_state_v11" ? 11
+                : token[0] == "##punkst_uac_state_v12" ? 12 : 13;
             continue;
         }
         if (token[0].rfind("##punkst_uac_state_v", 0) == 0) {
             throw std::runtime_error(
-                "Unsupported UAC state version; only v11 and v12 are accepted");
+                "Unsupported UAC state version; only v11, v12, and v13 are accepted");
         }
         if (token[0].rfind("##", 0) == 0) {
             if (token.size() != 2) throw std::runtime_error("Malformed UAC state metadata");
@@ -413,6 +429,11 @@ State read_state(const std::string& path) {
                 state.cluster_covariance_rank =
                     parse_state_int32(token[1]);
                 saw_cluster_covariance_rank = true;
+            }
+            else if (key == "factor_diagonal_mode") {
+                state.factor_diagonal_mode =
+                    parse_factor_diagonal_mode(token[1]);
+                saw_factor_diagonal_mode = true;
             }
             else if (key == "kmeans_starts") {
                 state.kmeans_starts = parse_state_int32(token[1]);
@@ -627,12 +648,17 @@ State read_state(const std::string& path) {
         state.initialization_metric = SimplexMetric::Cosine;
         saw_initialization_metric = true;
     }
+    if (state_version < 13) {
+        state.factor_diagonal_mode = FactorDiagonalMode::Component;
+        saw_factor_diagonal_mode = true;
+    }
     if (state_version == 0 || !saw_proposal || !saw_fisher_broadening
         || !saw_kmeans_starts
         || !saw_leiden_starts || !saw_initialization_metric
         || !saw_selected_start
         || !saw_selected_start_method || !saw_target_relative_floor
         || !saw_cluster_covariance_rank
+        || !saw_factor_diagonal_mode
         || !saw_objective_change_tolerance
         || !saw_responsibility_change_tolerance
         || !saw_particle_variance_change_tolerance
@@ -674,6 +700,9 @@ State read_state(const std::string& path) {
     if (state_version >= 12) {
         required_metadata.push_back("initialization_metric");
     }
+    if (state_version >= 13) {
+        required_metadata.push_back("factor_diagonal_mode");
+    }
     required_metadata.push_back(
         "particle_variance_change_tolerance");
     for (const auto& key : required_metadata) {
@@ -699,6 +728,7 @@ State read_state(const std::string& path) {
     state.model.weights = Eigen::VectorXd::Zero(components);
     state.model.covariance_kind = state.cluster_covariance_rank < 0
         ? CovarianceKind::Dense : CovarianceKind::FactorAnalytic;
+    state.model.factor_diagonal_mode = state.factor_diagonal_mode;
     state.model.means = RowMajorMatrixXd::Zero(components, dimension);
     state.model.covariances.assign(components, Eigen::MatrixXd::Zero(dimension, dimension));
     state.model.shrinkage_target = Eigen::MatrixXd::Zero(dimension, dimension);
@@ -708,12 +738,20 @@ State read_state(const std::string& path) {
         }
         state.model.factor_covariances.resize(components);
         for (auto& covariance : state.model.factor_covariances) {
-            covariance.diagonal = Eigen::VectorXd::Zero(dimension);
+            if (state.factor_diagonal_mode
+                    == FactorDiagonalMode::Component) {
+                covariance.diagonal = Eigen::VectorXd::Zero(dimension);
+            }
             covariance.factor = RowMajorMatrixXd::Zero(
                 dimension, state.cluster_covariance_rank);
         }
-        state.model.factor_shrinkage_target.diagonal =
-            Eigen::VectorXd::Zero(dimension);
+        if (state.factor_diagonal_mode == FactorDiagonalMode::Shared) {
+            state.model.shared_factor_diagonal =
+                Eigen::VectorXd::Zero(dimension);
+        } else {
+            state.model.factor_shrinkage_target.diagonal =
+                Eigen::VectorXd::Zero(dimension);
+        }
         state.model.factor_shrinkage_target.factor = RowMajorMatrixXd::Zero(
             dimension, state.cluster_covariance_rank);
     }
@@ -734,6 +772,7 @@ State read_state(const std::string& path) {
         static_cast<size_t>(components) * dimension, 0);
     std::vector<uint8_t> saw_shrinkage_target(dimension, 0);
     std::vector<uint8_t> saw_fa_diagonals(dimension, 0);
+    std::vector<uint8_t> saw_fa_shared_diagonal(dimension, 0);
     std::vector<uint8_t> saw_fa_target(dimension, 0);
     std::vector<uint8_t> saw_pilot_pooled(dimension, 0);
     auto check_index = [](int32_t value, int32_t size,
@@ -830,7 +869,9 @@ State read_state(const std::string& path) {
             state.model.factor_covariances[c].factor.row(row) =
                 target.transpose();
         } else if (token[0] == "FA_DIAGONALS") {
-            if (state.cluster_covariance_rank < 0 || token.size() < 2) {
+            if (state.cluster_covariance_rank < 0 || token.size() < 2
+                || state.factor_diagonal_mode
+                    != FactorDiagonalMode::Component) {
                 throw std::runtime_error("Unexpected UAC FA_DIAGONALS row");
             }
             const int32_t row = parse_state_int32(token[1]);
@@ -841,8 +882,22 @@ State read_state(const std::string& path) {
             for (int32_t c = 0; c < components; ++c) {
                 state.model.factor_covariances[c].diagonal(row) = target(c);
             }
+        } else if (token[0] == "FA_SHARED_DIAGONAL") {
+            if (state.cluster_covariance_rank < 0 || token.size() != 3
+                || state.factor_diagonal_mode
+                    != FactorDiagonalMode::Shared) {
+                throw std::runtime_error(
+                    "Unexpected UAC FA_SHARED_DIAGONAL row");
+            }
+            const int32_t row = parse_state_int32(token[1]);
+            check_index(row, dimension, "FA_SHARED_DIAGONAL");
+            mark(saw_fa_shared_diagonal[row], "FA_SHARED_DIAGONAL");
+            state.model.shared_factor_diagonal(row) =
+                parse_state_double(token[2]);
         } else if (token[0] == "FA_TARGET") {
-            if (state.cluster_covariance_rank < 0 || token.size() < 2) {
+            if (state.cluster_covariance_rank < 0 || token.size() < 2
+                || state.factor_diagonal_mode
+                    != FactorDiagonalMode::Component) {
                 throw std::runtime_error("Unexpected UAC FA_TARGET row");
             }
             const int32_t row = parse_state_int32(token[1]);
@@ -911,10 +966,18 @@ State read_state(const std::string& path) {
     const bool covariance_records_complete =
         state.cluster_covariance_rank < 0
         ? all_seen(saw_model_cov) && all_seen(saw_shrinkage_target)
+        : state.factor_diagonal_mode == FactorDiagonalMode::Shared
+        ? all_seen(saw_model_factor) && all_seen(saw_fa_shared_diagonal)
         : all_seen(saw_model_factor) && all_seen(saw_fa_diagonals)
             && all_seen(saw_fa_target);
     if (!common_records_complete || !covariance_records_complete) {
         throw std::runtime_error("Incomplete UAC state records");
+    }
+    if (state.cluster_covariance_rank >= 0
+        && state.factor_diagonal_mode == FactorDiagonalMode::Shared) {
+        state.model.factor_shrinkage_target.diagonal =
+            state.model.shared_factor_diagonal;
+        state.model.factor_shrinkage_target.factor.setZero();
     }
     try {
         detail::validate_state(state);
