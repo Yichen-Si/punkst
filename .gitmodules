@@ -4,3 +4,6 @@
 [submodule "ext/clipper2"]
 	path = ext/clipper2
 	url = https://github.com//AngusJohnson/Clipper2.git
+[submodule "ext/faiss"]
+	path = ext/faiss
+	url = https://github.com/facebookresearch/faiss.git

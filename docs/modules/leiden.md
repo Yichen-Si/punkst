@@ -77,12 +77,44 @@ clustering is explicitly approximate.
 : Worker threads used to construct the k-NN graph. Default: `1`.
 
 `--knn-backend`
-: `auto` (default), `kdtree`, or `flat`. Automatic selection uses the existing
-  factor dimension and approximation policy.
+: `auto` (default), `kdtree`, `flat`, `hnsw`, or `nndescent`. `auto` remains
+  exact: it selects kd-tree for positive epsilon or dimensions through 16 and
+  tiled flat search otherwise. HNSW and NN-descent are explicit, optional
+  Faiss backends intended for much larger inputs.
 
 `--knn-epsilon`
 : Nanoflann search epsilon. Default: `0` for exact search. Positive values
   require the `kdtree` backend.
+
+`--hnsw-ef-search`
+: HNSW query effort. Zero (default) begins at
+  `int(log2(n_units) * 6)` and tunes upward or downward using deterministic
+  exact audit queries. `--hnsw-max-ef-search` defaults to 512.
+
+`--hnsw-m`, `--hnsw-ef-construction`, `--hnsw-candidates`
+: HNSW graph degree, construction effort, and returned candidate count.
+  Defaults are 16, 100, and `max(64, 4 * neighbors)` respectively.
+
+`--hnsw-audit-queries`, `--hnsw-recall`, `--hnsw-force`
+: Recall calibration controls. Defaults are 256 queries and a 0.98 one-sided
+  95% lower confidence bound. A failed audit stops the run unless
+  `--hnsw-force` is set.
+
+`--nndescent-iterations`
+: NN-descent refinement iterations. Zero (default) resolves to
+  `max(10, round(log2(n_units)))`.
+
+`--nndescent-graph-size`, `--nndescent-s`
+: NN-descent working graph and candidate-pool settings. Defaults are
+  `max(64, 4 * neighbors)` and 10.
+
+`--nndescent-audit-queries`, `--nndescent-recall`
+: NN-descent recall-audit controls, defaulting to 256 queries and a 0.98 lower
+  confidence bound. Increase `--nndescent-iterations` if the audit fails.
+
+The Faiss choices require a build configured with
+`-DPUNKST_ENABLE_FAISS_ANN=ON`. A binary built without Faiss reports a clear
+error when either backend is requested.
 
 ## Outputs
 
@@ -94,6 +126,7 @@ clustering is explicitly approximate.
 `{prefix}.diagnostics.tsv`
 : Contains one row per resolution. It records input and graph dimensions,
   selected metric, requested and resolved k-NN settings, graph timings,
+  sampled recall and its lower confidence bound, ANN tuning trials,
   community count, RBConfiguration quality, Leiden iterations and convergence,
   and per-run timing. `cluster_column` maps each diagnostic row to its
   assignment column. Graph fields repeat across rows because all resolutions

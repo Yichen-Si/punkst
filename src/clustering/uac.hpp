@@ -314,6 +314,19 @@ struct FitOptions {
     int32_t leiden_neighbors = 15;
     SimplexMetric initialization_metric = SimplexMetric::Cosine;
     CosineKnnBackend leiden_knn_backend = CosineKnnBackend::Auto;
+    int32_t leiden_hnsw_m = 16;
+    int32_t leiden_hnsw_ef_construction = 100;
+    int32_t leiden_hnsw_ef_search = 0;
+    int32_t leiden_hnsw_max_ef_search = 512;
+    int32_t leiden_hnsw_candidates = 0;
+    int32_t leiden_hnsw_audit_queries = 256;
+    double leiden_hnsw_recall = 0.98;
+    bool leiden_hnsw_force = false;
+    int32_t leiden_nndescent_iterations = 0;
+    int32_t leiden_nndescent_graph_size = 0;
+    int32_t leiden_nndescent_sample_candidates = 10;
+    int32_t leiden_nndescent_audit_queries = 256;
+    double leiden_nndescent_recall = 0.98;
     int32_t leiden_max_iterations = -1;
     int32_t n_threads = 1;
     int32_t seed = 1;
@@ -591,6 +604,8 @@ struct FitResult {
     int64_t initialization_measurement_covariance_evaluations = 0;
     InitializationDiagnostics initialization;
     FitScheduleDiagnostics fit_schedule;
+    bool has_leiden_knn_diagnostics = false;
+    CosineKnnDiagnostics leiden_knn_diagnostics;
 };
 
 struct State {
@@ -607,6 +622,25 @@ struct State {
     int32_t leiden_neighbors = 15;
     SimplexMetric initialization_metric = SimplexMetric::Cosine;
     CosineKnnBackend leiden_knn_backend = CosineKnnBackend::Auto;
+    int32_t leiden_hnsw_m = 16;
+    int32_t leiden_hnsw_ef_construction = 100;
+    int32_t leiden_hnsw_ef_search = 0;
+    int32_t leiden_hnsw_max_ef_search = 512;
+    int32_t leiden_hnsw_candidates = 0;
+    int32_t leiden_hnsw_audit_queries = 256;
+    double leiden_hnsw_recall = 0.98;
+    bool leiden_hnsw_force = false;
+    int32_t leiden_nndescent_iterations = 0;
+    int32_t leiden_nndescent_graph_size = 0;
+    int32_t leiden_nndescent_sample_candidates = 10;
+    int32_t leiden_nndescent_audit_queries = 256;
+    double leiden_nndescent_recall = 0.98;
+    int32_t leiden_resolved_ann_parameter = 0;
+    int32_t leiden_resolved_ann_candidates = 0;
+    double leiden_ann_audit_mean_recall = 0.0;
+    double leiden_ann_audit_recall_lcb = 0.0;
+    bool leiden_ann_audit_passed = false;
+    bool leiden_ann_forced = false;
     int32_t leiden_max_iterations = -1;
     int32_t selected_start = -1;
     StartMethod selected_start_method = StartMethod::KMeans;

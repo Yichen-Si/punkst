@@ -12,7 +12,9 @@
 enum class CosineKnnBackend {
     Auto,
     KdTree,
-    Flat
+    Flat,
+    Hnsw,
+    NnDescent
 };
 
 enum class SimplexMetric {
@@ -29,6 +31,24 @@ struct CosineKnnOptions {
     CosineKnnBackend backend = CosineKnnBackend::Auto;
     CosineFlatKernel flat_kernel = CosineFlatKernel::Auto;
     int32_t n_threads = 1;
+    int32_t hnsw_m = 16;
+    int32_t hnsw_ef_construction = 100;
+    // Zero selects the data-size-aware automatic value and recall tuning.
+    int32_t hnsw_ef_search = 0;
+    int32_t hnsw_max_ef_search = 512;
+    // Zero selects max(64, 4 * n_neighbors).
+    int32_t hnsw_candidates = 0;
+    int32_t hnsw_audit_queries = 256;
+    double hnsw_recall = 0.98;
+    bool hnsw_force = false;
+    // Zero selects max(10, round(log2(n_rows))).
+    int32_t nndescent_iterations = 0;
+    // Zero selects max(64, 4 * n_neighbors).
+    int32_t nndescent_graph_size = 0;
+    int32_t nndescent_sample_candidates = 10;
+    int32_t nndescent_audit_queries = 256;
+    double nndescent_recall = 0.98;
+    int32_t ann_seed = 1;
 };
 
 struct CosineLeidenOptions : CosineKnnOptions {
@@ -41,12 +61,28 @@ struct CosineKnnTimings {
     double query_seconds = 0.0;
     double topk_seconds = 0.0;
     double graph_reduction_seconds = 0.0;
+    double audit_seconds = 0.0;
+};
+
+struct CosineKnnAuditTrial {
+    int32_t parameter = 0;
+    double mean_recall = 0.0;
+    double recall_lcb = 0.0;
 };
 
 struct CosineKnnDiagnostics {
     CosineKnnBackend requested_backend = CosineKnnBackend::Auto;
     CosineKnnBackend resolved_backend = CosineKnnBackend::KdTree;
     CosineFlatKernel resolved_flat_kernel = CosineFlatKernel::Eigen;
+    int64_t sample_size = 0;
+    int32_t requested_ann_parameter = 0;
+    int32_t resolved_ann_parameter = 0;
+    int32_t resolved_ann_candidates = 0;
+    double audit_mean_recall = 0.0;
+    double audit_recall_lcb = 0.0;
+    bool audit_passed = false;
+    bool forced = false;
+    std::vector<CosineKnnAuditTrial> audit_trials;
     CosineKnnTimings timings;
 };
 
@@ -71,6 +107,7 @@ const char* cosine_flat_kernel_name(CosineFlatKernel kernel);
 CosineKnnBackend parse_cosine_knn_backend(const std::string& value);
 CosineFlatKernel parse_cosine_flat_kernel(const std::string& value);
 bool cosine_knn_cblas_available();
+bool cosine_knn_faiss_available();
 
 const char* simplex_metric_name(SimplexMetric metric);
 SimplexMetric parse_simplex_metric(const std::string& value);

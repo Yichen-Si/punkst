@@ -90,6 +90,50 @@ else()
   message(STATUS "Using Eigen k-NN (developer CBLAS comparison disabled)")
 endif()
 
+# Optional Faiss approximate-neighbor indexes. The pinned source checkout is
+# expected at ext/faiss for production builds; PUNKST_FAISS_SOURCE_DIR permits
+# an external checkout for development and packaging.
+option(PUNKST_ENABLE_FAISS_ANN "Build Faiss HNSW and NN-descent k-NN backends" OFF)
+set(PUNKST_FAISS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ext/faiss"
+  CACHE PATH "Pinned Faiss source checkout used by PUNKST_ENABLE_FAISS_ANN")
+set(PUNKST_HAVE_FAISS_ANN 0)
+if (PUNKST_ENABLE_FAISS_ANN)
+  if (CMAKE_VERSION VERSION_LESS 3.24)
+    message(FATAL_ERROR "PUNKST_ENABLE_FAISS_ANN requires CMake 3.24 or newer")
+  endif()
+  if (NOT EXISTS "${PUNKST_FAISS_SOURCE_DIR}/faiss/IndexHNSW.h"
+      OR NOT EXISTS "${PUNKST_FAISS_SOURCE_DIR}/faiss/IndexNNDescent.h")
+    message(FATAL_ERROR
+      "Pinned Faiss source is missing at ${PUNKST_FAISS_SOURCE_DIR}; initialize ext/faiss or set PUNKST_FAISS_SOURCE_DIR")
+  endif()
+  set(FAISS_ENABLE_GPU OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_CUVS OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_ROCM OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_MKL OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_PYTHON OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_EXTRAS OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_METAL OFF CACHE BOOL "" FORCE)
+  set(FAISS_ENABLE_SVS OFF CACHE BOOL "" FORCE)
+  set(FAISS_USE_LTO OFF CACHE BOOL "" FORCE)
+  if (ENABLE_X86_64_V4)
+    set(FAISS_OPT_LEVEL avx512 CACHE STRING "" FORCE)
+    set(PUNKST_FAISS_TARGET faiss_avx512)
+  elseif (ENABLE_X86_64_V3)
+    set(FAISS_OPT_LEVEL avx2 CACHE STRING "" FORCE)
+    set(PUNKST_FAISS_TARGET faiss_avx2)
+  else()
+    set(FAISS_OPT_LEVEL generic CACHE STRING "" FORCE)
+    set(PUNKST_FAISS_TARGET faiss)
+  endif()
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${PUNKST_FAISS_SOURCE_DIR}"
+    "${CMAKE_CURRENT_BINARY_DIR}/faiss" EXCLUDE_FROM_ALL)
+  set(PUNKST_HAVE_FAISS_ANN 1)
+  message(STATUS "Enabled Faiss HNSW and NN-descent k-NN backends")
+endif()
+
 option(ENABLE_IMAGE_OUTPUT "Build PNG image output commands" ON)
 if (ENABLE_IMAGE_OUTPUT)
   find_package(PNG REQUIRED)
@@ -124,6 +168,22 @@ set(CLUSTERING_CORE_SOURCE_FILES
     src/clustering_core/leiden.hpp
     src/clustering_core/leiden.cpp
 )
+
+if (PUNKST_ENABLE_FAISS_ANN)
+  add_library(punkst_faiss_ann STATIC
+    src/clustering_core/faiss_ann.hpp
+    src/clustering_core/faiss_ann.cpp
+  )
+  set_target_properties(punkst_faiss_ann PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+  )
+  target_include_directories(punkst_faiss_ann PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(punkst_faiss_ann PRIVATE
+    Eigen3::Eigen ${PUNKST_FAISS_TARGET})
+endif()
 
 set(CLUSTERING_SOURCE_FILES
     src/clustering/uac.hpp
@@ -345,6 +405,7 @@ target_compile_definitions(${APP_EXE} PRIVATE
   PUNKST_ENABLE_IMAGE_OUTPUT=$<BOOL:${ENABLE_IMAGE_OUTPUT}>
   PUNKST_HAVE_CBLAS=${PUNKST_HAVE_CBLAS}
   PUNKST_HAVE_OPENBLAS=${PUNKST_HAVE_OPENBLAS}
+  PUNKST_HAVE_FAISS_ANN=${PUNKST_HAVE_FAISS_ANN}
 )
 
 # Faster Debug builds
@@ -445,6 +506,11 @@ target_link_libraries(${APP_EXE} PRIVATE
     $<$<CXX_COMPILER_ID:GNU>:stdc++fs>
     $<$<CXX_COMPILER_ID:IntelLLVM>:stdc++fs>
 )
+
+if (PUNKST_ENABLE_FAISS_ANN)
+  target_link_libraries(${APP_EXE} PRIVATE
+    punkst_faiss_ann ${PUNKST_FAISS_TARGET})
+endif()
 
 if (PUNKST_HAVE_CBLAS)
   target_link_libraries(${APP_EXE} PRIVATE ${BLAS_LIBRARIES})

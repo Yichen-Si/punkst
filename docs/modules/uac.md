@@ -234,6 +234,13 @@ communities to `--n-clusters`. Hellinger uses square-root topic proportions and
 therefore gives small nonzero topics more influence. It does not change the
 ILR-space UAC mixture model fitted after initialization.
 
+`--leiden-knn-backend` selects `auto`, `kdtree`, `flat`, `hnsw`, or
+`nndescent` for Leiden starts. `auto` retains the exact kd-tree/flat policy;
+the Faiss backends are selected explicitly. Their parameters use the same
+unprefixed `--hnsw-*` and `--nndescent-*` options documented for
+[Leiden clustering](leiden.md). The fitted v15 state records both requested
+settings and the resolved ANN effort, sampled recall, and force status.
+
 Particle handoff initializes covariance from noise-corrected moments, rather
 than the point-estimate/MAP covariance. The default
 `--init-measurement-mode ht` uses an expected 1024 measurement documents per

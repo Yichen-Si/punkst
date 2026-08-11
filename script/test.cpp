@@ -881,8 +881,8 @@ void test_topic_to_uac_handoff() {
     std::ifstream state_input(fit_prefix.string() + ".state.tsv");
     std::string state_header;
     require(static_cast<bool>(std::getline(state_input, state_header))
-            && state_header == "##punkst_uac_state_v14",
-        "direct topic-to-UAC fit did not write a v14 state");
+            && state_header == "##punkst_uac_state_v15",
+        "direct topic-to-UAC fit did not write a v15 state");
     std::string state_line;
     bool saw_initialization_metric = false;
     while (std::getline(state_input, state_line)) {
@@ -905,8 +905,33 @@ void test_topic_to_uac_handoff() {
     std::ostringstream state_text_buffer;
     state_text_buffer << state_text_input.rdbuf();
     std::string legacy_state_text = state_text_buffer.str();
-    legacy_state_text.replace(0, std::string("##punkst_uac_state_v14").size(),
+    legacy_state_text.replace(0, std::string("##punkst_uac_state_v15").size(),
         "##punkst_uac_state_v11");
+    const auto erase_metadata_prefix = [&](const std::string& prefix) {
+        const size_t position = legacy_state_text.find(prefix);
+        require(position != std::string::npos,
+            "UAC v15 ANN metadata record is missing");
+        const size_t end = legacy_state_text.find('\n', position);
+        require(end != std::string::npos,
+            "UAC v15 ANN metadata record is malformed");
+        legacy_state_text.erase(position, end - position + 1);
+    };
+    for (const std::string& prefix : std::vector<std::string>{
+            "##leiden_hnsw_m\t", "##leiden_hnsw_ef_construction\t",
+            "##leiden_hnsw_ef_search\t", "##leiden_hnsw_max_ef_search\t",
+            "##leiden_hnsw_candidates\t", "##leiden_hnsw_audit_queries\t",
+            "##leiden_hnsw_recall\t", "##leiden_hnsw_force\t",
+            "##leiden_nndescent_iterations\t",
+            "##leiden_nndescent_graph_size\t", "##leiden_nndescent_s\t",
+            "##leiden_nndescent_audit_queries\t",
+            "##leiden_nndescent_recall\t",
+            "##leiden_resolved_ann_parameter\t",
+            "##leiden_resolved_ann_candidates\t",
+            "##leiden_ann_audit_mean_recall\t",
+            "##leiden_ann_audit_recall_lcb\t",
+            "##leiden_ann_audit_passed\t", "##leiden_ann_forced\t"}) {
+        erase_metadata_prefix(prefix);
+    }
     const std::string metric_record =
         "##initialization_metric\thellinger\n";
     const size_t metric_position = legacy_state_text.find(metric_record);

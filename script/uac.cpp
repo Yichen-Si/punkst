@@ -995,8 +995,21 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("max-iter", "Maximum EM iterations", options.max_iterations)
       .add_option("kmeans-max-iter", "Maximum Lloyd/reconciliation iterations", options.kmeans_max_iterations)
       .add_option("leiden-neighbors", "Metric k-NN neighbors for Leiden starts", options.leiden_neighbors)
-      .add_option("leiden-knn-backend", "Metric k-NN backend: auto, kdtree, or flat", leiden_knn_backend)
+      .add_option("leiden-knn-backend", "Metric k-NN backend: auto, kdtree, flat, hnsw, or nndescent", leiden_knn_backend)
       .add_option("leiden-knn-epsilon", "Nanoflann search epsilon; positive values require kdtree", options.leiden_knn_epsilon)
+      .add_option("hnsw-m", "HNSW graph degree", options.leiden_hnsw_m)
+      .add_option("hnsw-ef-construction", "HNSW construction effort", options.leiden_hnsw_ef_construction)
+      .add_option("hnsw-ef-search", "HNSW search effort; 0 tunes automatically", options.leiden_hnsw_ef_search)
+      .add_option("hnsw-max-ef-search", "Maximum automatically tuned HNSW search effort", options.leiden_hnsw_max_ef_search)
+      .add_option("hnsw-candidates", "HNSW candidates per unit; 0 uses max(64,4*k)", options.leiden_hnsw_candidates)
+      .add_option("hnsw-audit-queries", "Exact sampled queries for HNSW recall calibration", options.leiden_hnsw_audit_queries)
+      .add_option("hnsw-recall", "Required HNSW sampled-recall lower bound", options.leiden_hnsw_recall)
+      .add_option("hnsw-force", "Run HNSW despite a failed sampled-recall audit", options.leiden_hnsw_force)
+      .add_option("nndescent-iterations", "NN-descent refinements; 0 uses max(10,round(log2(n)))", options.leiden_nndescent_iterations)
+      .add_option("nndescent-graph-size", "NN-descent graph size; 0 uses max(64,4*k)", options.leiden_nndescent_graph_size)
+      .add_option("nndescent-s", "NN-descent candidate-pool parameter", options.leiden_nndescent_sample_candidates)
+      .add_option("nndescent-audit-queries", "Exact sampled queries for NN-descent recall auditing", options.leiden_nndescent_audit_queries)
+      .add_option("nndescent-recall", "Required NN-descent sampled-recall lower bound", options.leiden_nndescent_recall)
       .add_option("leiden-resolution", "Initial Leiden RBConfiguration resolution", options.leiden_resolution)
       .add_option("leiden-max-iter", "Maximum Leiden passes; negative runs to convergence", options.leiden_max_iterations)
       .add_option("objective-change-tol",
@@ -1198,6 +1211,12 @@ int32_t cmdUacFit(int argc, char** argv) {
             ? uac::fit_indexed(data, *basis_pointer, *indexed_counts,
                 helmert, options)
             : uac::fit(data, basis_pointer, helmert, options);
+        if (fitted.has_leiden_knn_diagnostics
+                && fitted.leiden_knn_diagnostics.forced) {
+            warning("HNSW sampled recall LCB %.6g was below target %.6g; continuing because --hnsw-force was set",
+                fitted.leiden_knn_diagnostics.audit_recall_lcb,
+                options.leiden_hnsw_recall);
+        }
         uac::StateMetadata state_metadata;
         state_metadata.topics = centers.topics;
         state_metadata.helmert = helmert;

@@ -219,6 +219,13 @@ Useful CMake options:
 | Disable LTO | `cmake .. -DENABLE_LTO=OFF` | Useful for faster/debug builds or toolchains where LTO is unreliable |
 | No image output | `cmake .. -DENABLE_IMAGE_OUTPUT=OFF` | Builds without libpng |
 | No remote I/O | `cmake .. -DENABLE_REMOTE_IO=OFF` | Builds without libcurl |
+| Faiss ANN k-NN | `cmake .. -DPUNKST_ENABLE_FAISS_ANN=ON` | Adds explicit HNSW and NN-descent backends; requires CMake 3.24+, C++20 for the adapter/Faiss, OpenMP, BLAS, and LAPACK |
+
+Faiss ANN support is optional and disabled by default. Initialize the pinned
+`ext/faiss` submodule before enabling it. The main punkst sources remain C++17;
+only Faiss and its adapter compile as C++20. Release CPU tiers map to Faiss
+`generic`, `avx2`, and `avx512` targets for `x86_64`, `x86_64-v3`, and
+`x86_64-v4` respectively.
 
 <!-- ## Maintainer Release Packaging
 

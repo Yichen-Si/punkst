@@ -89,6 +89,22 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             || options.leiden_max_iterations == 0
             || !(options.leiden_knn_epsilon >= 0.0)
             || !std::isfinite(options.leiden_knn_epsilon)
+            || options.leiden_hnsw_m <= 0
+            || options.leiden_hnsw_ef_construction <= 0
+            || options.leiden_hnsw_ef_search < 0
+            || options.leiden_hnsw_max_ef_search <= 0
+            || options.leiden_hnsw_candidates < 0
+            || options.leiden_hnsw_audit_queries <= 0
+            || !(options.leiden_hnsw_recall > 0.0
+                && options.leiden_hnsw_recall <= 1.0)
+            || !std::isfinite(options.leiden_hnsw_recall)
+            || options.leiden_nndescent_iterations < 0
+            || options.leiden_nndescent_graph_size < 0
+            || options.leiden_nndescent_sample_candidates <= 0
+            || options.leiden_nndescent_audit_queries <= 0
+            || !(options.leiden_nndescent_recall > 0.0
+                && options.leiden_nndescent_recall <= 1.0)
+            || !std::isfinite(options.leiden_nndescent_recall)
             || !(options.leiden_resolution > 0.0)
             || !std::isfinite(options.leiden_resolution))) {
         throw std::invalid_argument("Invalid UAC Leiden start options");
@@ -239,8 +255,31 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         knn_options.knn_search_epsilon = options.leiden_knn_epsilon;
         knn_options.backend = options.leiden_knn_backend;
         knn_options.n_threads = options.n_threads;
+        knn_options.hnsw_m = options.leiden_hnsw_m;
+        knn_options.hnsw_ef_construction =
+            options.leiden_hnsw_ef_construction;
+        knn_options.hnsw_ef_search = options.leiden_hnsw_ef_search;
+        knn_options.hnsw_max_ef_search =
+            options.leiden_hnsw_max_ef_search;
+        knn_options.hnsw_candidates = options.leiden_hnsw_candidates;
+        knn_options.hnsw_audit_queries =
+            options.leiden_hnsw_audit_queries;
+        knn_options.hnsw_recall = options.leiden_hnsw_recall;
+        knn_options.hnsw_force = options.leiden_hnsw_force;
+        knn_options.nndescent_iterations =
+            options.leiden_nndescent_iterations;
+        knn_options.nndescent_graph_size =
+            options.leiden_nndescent_graph_size;
+        knn_options.nndescent_sample_candidates =
+            options.leiden_nndescent_sample_candidates;
+        knn_options.nndescent_audit_queries =
+            options.leiden_nndescent_audit_queries;
+        knn_options.nndescent_recall = options.leiden_nndescent_recall;
+        knn_options.ann_seed = options.seed;
         const CosineKnnResult knn = simplex_knn(
             data.centers, options.initialization_metric, knn_options);
+        result.has_leiden_knn_diagnostics = true;
+        result.leiden_knn_diagnostics = knn.diagnostics;
         double resolution = options.leiden_resolution;
         double last_under_resolution = 0.0;
         bool adapting = true;

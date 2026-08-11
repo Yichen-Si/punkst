@@ -18,7 +18,7 @@ Options:
   --dist-dir DIR          Output directory, default: dist
   --jobs N                Parallel build jobs, default: 4
   --cmake-extra ARGS      Extra CMake arguments, passed as one shell word
-  --keep-build            Keep the existing build directory for partial rebuilds
+  --clean-build           Remove the existing build and staging directories first
   --allow-newer-glibc     Allow packaging when build-host glibc is newer than --glibc-min
   --help                  Show this help
 
@@ -68,7 +68,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$version" ] || [ -z "$tier" ]; then
+if [ -z "$version" ] || [ -z "$tier" ] || [ -z "$glibc_min" ]; then
   usage >&2
   exit 2
 fi
@@ -178,22 +178,116 @@ source_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf unkno
 source_status=$(git -C "$repo_root" status --short 2>/dev/null | sed 's/"/\\"/g' || true)
 EOF
 
-ldd "$stage_dir/bin/punkst" |
-  awk '
+faiss_enabled=$(sed -n 's/^PUNKST_ENABLE_FAISS_ANN:BOOL=//p' "$build_dir/CMakeCache.txt" | tail -n 1)
+faiss_source=$(sed -n 's/^PUNKST_FAISS_SOURCE_DIR:PATH=//p' "$build_dir/CMakeCache.txt" | tail -n 1)
+faiss_opt=$(sed -n 's/^FAISS_OPT_LEVEL:STRING=//p' "$build_dir/CMakeCache.txt" | tail -n 1)
+if [ "$faiss_enabled" = "ON" ]; then
+  if [ -z "$faiss_source" ] || [ ! -f "$faiss_source/LICENSE" ]; then
+    printf 'ERROR: Faiss is enabled but its source/license cannot be found.\n' >&2
+    exit 1
+  fi
+  faiss_revision=$(git -C "$faiss_source" rev-parse HEAD 2>/dev/null || printf unknown)
+  cp "$faiss_source/LICENSE" "$stage_dir/LICENSE.faiss"
+else
+  faiss_revision=disabled
+  faiss_opt=disabled
+fi
+cat >> "$stage_dir/BUILDINFO.txt" <<EOF
+faiss_enabled=${faiss_enabled:-OFF}
+faiss_revision=$faiss_revision
+faiss_opt_level=${faiss_opt:-unknown}
+EOF
+
+is_system_runtime() {
+  case "$1" in
+    linux-vdso.so.*|ld-linux*.so.*|libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|libnsl.so.*|libresolv.so.*)
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Recursively bundle every non-glibc dependency. A Faiss-enabled static link
+# still introduces OpenMP/BLAS/Fortran runtimes whose own dependencies must be
+# followed rather than inferred from the executable alone.
+elf_queue=("$stage_dir/bin/punkst")
+elf_index=0
+while [ "$elf_index" -lt "${#elf_queue[@]}" ]; do
+  elf="${elf_queue[$elf_index]}"
+  elf_index=$((elf_index + 1))
+  if ldd "$elf" | grep -q 'not found'; then
+    printf 'ERROR: unresolved dependency while inspecting %s:\n' "$elf" >&2
+    ldd "$elf" >&2
+    exit 1
+  fi
+  while IFS= read -r lib; do
+    [ -n "$lib" ] || continue
+    base="$(basename "$lib")"
+    if is_system_runtime "$base"; then
+      continue
+    fi
+    destination="$stage_dir/lib/$base"
+    if [ -e "$destination" ]; then
+      if ! cmp -s "$lib" "$destination"; then
+        printf 'ERROR: conflicting runtime libraries named %s.\n' "$base" >&2
+        exit 1
+      fi
+      continue
+    fi
+    cp -L "$lib" "$destination"
+    elf_queue+=("$destination")
+  done < <(ldd "$elf" | awk '
     /=> \// { print $(NF-1) }
     /^[[:space:]]*\// { print $1 }
-  ' |
-  while IFS= read -r lib; do
-    base="$(basename "$lib")"
-    case "$base" in
-      linux-vdso.so.*|ld-linux*.so.*|libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|libnsl.so.*|libresolv.so.*)
-        continue ;;
-    esac
-    cp -L "$lib" "$stage_dir/lib/$base"
+  ')
 done
+printf 'bundled_libraries=' >> "$stage_dir/BUILDINFO.txt"
+for lib in "$stage_dir"/lib/*; do
+  [ -f "$lib" ] || continue
+  printf '%s,' "$(basename "$lib")" >> "$stage_dir/BUILDINFO.txt"
+done
+printf '\n' >> "$stage_dir/BUILDINFO.txt"
 
 if command -v patchelf >/dev/null 2>&1; then
   patchelf --set-rpath '$ORIGIN/../lib' "$stage_dir/bin/punkst"
+  for lib in "$stage_dir"/lib/*; do
+    [ -f "$lib" ] || continue
+    patchelf --set-rpath '$ORIGIN' "$lib"
+  done
+fi
+
+# Verify the staged dependency closure, using the staged libraries rather than
+# any same-named host copies.
+for elf in "$stage_dir/bin/punkst" "$stage_dir"/lib/*; do
+  [ -f "$elf" ] || continue
+  if LD_LIBRARY_PATH="$stage_dir/lib" ldd "$elf" | grep -q 'not found'; then
+    printf 'ERROR: packaged dependency remains unresolved for %s:\n' "$elf" >&2
+    LD_LIBRARY_PATH="$stage_dir/lib" ldd "$elf" >&2
+    exit 1
+  fi
+done
+
+# Check the actual required symbol versions in every packaged ELF. Building on
+# the oldest host remains the primary rule; this catches accidental leakage
+# from a newer compiler or prebuilt dependency.
+glibc_violation=0
+for elf in "$stage_dir/bin/punkst" "$stage_dir"/lib/*; do
+  [ -f "$elf" ] || continue
+  required_glibc=$(readelf --version-info "$elf" 2>/dev/null |
+    sed -n 's/.*Name: GLIBC_\([0-9][0-9.]*\).*/\1/p' |
+    sort -V | tail -n 1)
+  if [ -n "$required_glibc" ] && version_gt "$required_glibc" "$glibc_min"; then
+    printf 'GLIBC symbol requirement %s exceeds %s in %s\n' \
+      "$required_glibc" "$glibc_min" "$elf" >&2
+    glibc_violation=1
+  fi
+done
+if [ "$glibc_violation" -eq 1 ]; then
+  if [ "$allow_newer_glibc" -eq 1 ]; then
+    printf 'WARNING: packaging despite newer GLIBC symbols because --allow-newer-glibc was set.\n' >&2
+  else
+    printf 'ERROR: packaged ELF files require GLIBC symbols newer than --glibc-min.\n' >&2
+    exit 1
+  fi
 fi
 
 cat > "$stage_dir/bin/env-check" <<EOF
@@ -280,9 +374,18 @@ set +e
 "$stage_dir/bin/env-check" --help >/dev/null
 set -e
 
-ldd "$stage_dir/bin/punkst" > "$stage_dir/BUILDINFO.ldd.txt"
-readelf --version-info "$stage_dir/bin/punkst" > "$stage_dir/BUILDINFO.readelf-version-info.txt"
-objdump -p "$stage_dir/bin/punkst" > "$stage_dir/BUILDINFO.objdump-p.txt"
+: > "$stage_dir/BUILDINFO.ldd.txt"
+: > "$stage_dir/BUILDINFO.readelf-version-info.txt"
+: > "$stage_dir/BUILDINFO.objdump-p.txt"
+for elf in "$stage_dir/bin/punkst" "$stage_dir"/lib/*; do
+  [ -f "$elf" ] || continue
+  printf '\n===== %s =====\n' "${elf#$stage_dir/}" >> "$stage_dir/BUILDINFO.ldd.txt"
+  LD_LIBRARY_PATH="$stage_dir/lib" ldd "$elf" >> "$stage_dir/BUILDINFO.ldd.txt"
+  printf '\n===== %s =====\n' "${elf#$stage_dir/}" >> "$stage_dir/BUILDINFO.readelf-version-info.txt"
+  readelf --version-info "$elf" >> "$stage_dir/BUILDINFO.readelf-version-info.txt"
+  printf '\n===== %s =====\n' "${elf#$stage_dir/}" >> "$stage_dir/BUILDINFO.objdump-p.txt"
+  objdump -p "$elf" >> "$stage_dir/BUILDINFO.objdump-p.txt"
+done
 
 (
   cd "$dist_dir"

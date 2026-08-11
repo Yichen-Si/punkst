@@ -348,18 +348,29 @@ void write_clusters(const std::string& path, const FactorTable& table,
 void write_diagnostics(const std::string& path, const FactorTable& table,
         const CosineKnnResult& graph, int32_t requested_neighbors,
         double graph_seconds, int32_t max_iterations, int32_t seed,
-        SimplexMetric metric, const std::vector<LeidenRun>& runs) {
+        SimplexMetric metric, const CosineKnnOptions& knn_options,
+        const std::vector<LeidenRun>& runs) {
     std::ofstream output(path);
     if (!output) {
         throw std::runtime_error("Cannot open Leiden diagnostics: " + path);
     }
+    const bool ann_backend = graph.diagnostics.resolved_backend
+            == CosineKnnBackend::Hnsw
+        || graph.diagnostics.resolved_backend == CosineKnnBackend::NnDescent;
     output << "resolution\tcluster_column\tn_units\tn_factors\tmetric\tinput_format"
         "\ttopk_approximation\trequested_neighbors\tused_neighbors\tn_edges"
         "\tseed\tmax_iterations\tn_communities\tquality\titerations"
         "\tconverged\trequested_knn_backend\tresolved_knn_backend"
         "\tresolved_flat_kernel\tmetric_transform_seconds\tindex_build_seconds"
-        "\tquery_seconds\ttopk_seconds\tgraph_reduction_seconds"
-        "\tgraph_seconds\tleiden_seconds\ttotal_clustering_seconds\n";
+        "\tquery_seconds\ttopk_seconds\tgraph_reduction_seconds";
+    if (ann_backend) {
+        output << "\tann_sample_size\trequested_ann_parameter"
+            "\tresolved_ann_parameter\tresolved_ann_candidates"
+            "\taudit_mean_recall\taudit_recall_lcb\taudit_passed\tforced"
+            "\taudit_trials\taudit_seconds\thnsw_m\thnsw_ef_construction"
+            "\thnsw_max_ef_search\tnndescent_graph_size\tnndescent_s";
+    }
+    output << "\tgraph_seconds\tleiden_seconds\ttotal_clustering_seconds\n";
     output << std::setprecision(17);
     const int32_t used_neighbors = std::min<int32_t>(requested_neighbors,
         static_cast<int32_t>(table.values.rows()) - 1);
@@ -367,6 +378,16 @@ void write_diagnostics(const std::string& path, const FactorTable& table,
             == CosineKnnBackend::Flat
         ? cosine_flat_kernel_name(graph.diagnostics.resolved_flat_kernel)
         : "NA";
+    std::ostringstream audit_trials;
+    for (size_t i = 0; i < graph.diagnostics.audit_trials.size(); ++i) {
+        if (i > 0) audit_trials << ',';
+        const CosineKnnAuditTrial& trial =
+            graph.diagnostics.audit_trials[i];
+        audit_trials << trial.parameter << ':' << trial.mean_recall
+            << ':' << trial.recall_lcb;
+    }
+    const std::string audit_trial_text = graph.diagnostics.audit_trials.empty()
+        ? "NA" : audit_trials.str();
     for (size_t index = 0; index < runs.size(); ++index) {
         const LeidenRun& run = runs[index];
         output << run.resolution << '\t'
@@ -389,8 +410,25 @@ void write_diagnostics(const std::string& path, const FactorTable& table,
             << graph.diagnostics.timings.index_build_seconds << '\t'
             << graph.diagnostics.timings.query_seconds << '\t'
             << graph.diagnostics.timings.topk_seconds << '\t'
-            << graph.diagnostics.timings.graph_reduction_seconds << '\t'
-            << graph_seconds << '\t' << run.seconds << '\t'
+            << graph.diagnostics.timings.graph_reduction_seconds;
+        if (ann_backend) {
+            output << '\t' << graph.diagnostics.sample_size << '\t'
+                << graph.diagnostics.requested_ann_parameter << '\t'
+                << graph.diagnostics.resolved_ann_parameter << '\t'
+                << graph.diagnostics.resolved_ann_candidates << '\t'
+                << graph.diagnostics.audit_mean_recall << '\t'
+                << graph.diagnostics.audit_recall_lcb << '\t'
+                << (graph.diagnostics.audit_passed ? 1 : 0) << '\t'
+                << (graph.diagnostics.forced ? 1 : 0) << '\t'
+                << audit_trial_text << '\t'
+                << graph.diagnostics.timings.audit_seconds << '\t'
+                << knn_options.hnsw_m << '\t'
+                << knn_options.hnsw_ef_construction << '\t'
+                << knn_options.hnsw_max_ef_search << '\t'
+                << knn_options.nndescent_graph_size << '\t'
+                << knn_options.nndescent_sample_candidates;
+        }
+        output << '\t' << graph_seconds << '\t' << run.seconds << '\t'
             << graph_seconds + run.seconds << '\n';
     }
 }
@@ -405,7 +443,13 @@ int32_t cmdLeiden(int argc, char** argv) {
     int32_t factor_column_start = -1, factor_column_end = -1;
     int32_t neighbors = 15, max_iterations = -1, seed = 1, threads = 1;
     double knn_epsilon = 0.0;
-    bool allow_topk = false;
+    int32_t hnsw_m = 16, hnsw_ef_construction = 100;
+    int32_t hnsw_ef_search = 0, hnsw_max_ef_search = 512;
+    int32_t hnsw_candidates = 0, hnsw_audit_queries = 256;
+    int32_t nndescent_iterations = 0, nndescent_graph_size = 0;
+    int32_t nndescent_s = 10, nndescent_audit_queries = 256;
+    double hnsw_recall = 0.98, nndescent_recall = 0.98;
+    bool allow_topk = false, hnsw_force = false;
 
     ParamList parameters;
     parameters
@@ -432,10 +476,42 @@ int32_t cmdLeiden(int argc, char** argv) {
       .add_option("seed", "Leiden random seed", seed)
       .add_option("threads", "Number of k-NN worker threads", threads)
       .add_option("knn-backend",
-          "Metric k-NN backend: auto, kdtree, or flat", knn_backend)
+          "Metric k-NN backend: auto, kdtree, flat, hnsw, or nndescent", knn_backend)
       .add_option("knn-epsilon",
           "Nanoflann search epsilon; positive values require kdtree",
           knn_epsilon)
+      .add_option("hnsw-m", "HNSW graph degree", hnsw_m)
+      .add_option("hnsw-ef-construction",
+          "HNSW construction effort", hnsw_ef_construction)
+      .add_option("hnsw-ef-search",
+          "HNSW search effort; 0 tunes automatically", hnsw_ef_search)
+      .add_option("hnsw-max-ef-search",
+          "Maximum automatically tuned HNSW search effort",
+          hnsw_max_ef_search)
+      .add_option("hnsw-candidates",
+          "HNSW candidates per unit; 0 uses max(64,4*k)",
+          hnsw_candidates)
+      .add_option("hnsw-audit-queries",
+          "Exact sampled queries for HNSW recall calibration",
+          hnsw_audit_queries)
+      .add_option("hnsw-recall",
+          "Required HNSW sampled-recall lower bound", hnsw_recall)
+      .add_option("hnsw-force",
+          "Run HNSW despite a failed sampled-recall audit", hnsw_force)
+      .add_option("nndescent-iterations",
+          "NN-descent refinements; 0 uses max(10,round(log2(n)))",
+          nndescent_iterations)
+      .add_option("nndescent-graph-size",
+          "NN-descent graph size; 0 uses max(64,4*k)",
+          nndescent_graph_size)
+      .add_option("nndescent-s",
+          "NN-descent candidate-pool parameter", nndescent_s)
+      .add_option("nndescent-audit-queries",
+          "Exact sampled queries for NN-descent recall auditing",
+          nndescent_audit_queries)
+      .add_option("nndescent-recall",
+          "Required NN-descent sampled-recall lower bound",
+          nndescent_recall)
       .add_option("allow-topk",
           "Approximate K/P input by setting omitted factors to zero",
           allow_topk);
@@ -473,10 +549,28 @@ int32_t cmdLeiden(int argc, char** argv) {
         knn_options.knn_search_epsilon = knn_epsilon;
         knn_options.backend = parse_cosine_knn_backend(knn_backend);
         knn_options.n_threads = threads;
+        knn_options.hnsw_m = hnsw_m;
+        knn_options.hnsw_ef_construction = hnsw_ef_construction;
+        knn_options.hnsw_ef_search = hnsw_ef_search;
+        knn_options.hnsw_max_ef_search = hnsw_max_ef_search;
+        knn_options.hnsw_candidates = hnsw_candidates;
+        knn_options.hnsw_audit_queries = hnsw_audit_queries;
+        knn_options.hnsw_recall = hnsw_recall;
+        knn_options.hnsw_force = hnsw_force;
+        knn_options.nndescent_iterations = nndescent_iterations;
+        knn_options.nndescent_graph_size = nndescent_graph_size;
+        knn_options.nndescent_sample_candidates = nndescent_s;
+        knn_options.nndescent_audit_queries = nndescent_audit_queries;
+        knn_options.nndescent_recall = nndescent_recall;
+        knn_options.ann_seed = seed;
         const Clock::time_point graph_begin = Clock::now();
         const CosineKnnResult graph = simplex_knn(
             table.values, metric, knn_options);
         const double graph_seconds = elapsed_seconds(graph_begin);
+        if (graph.diagnostics.forced) {
+            warning("HNSW sampled recall LCB %.6g was below target %.6g; continuing because --hnsw-force was set",
+                graph.diagnostics.audit_recall_lcb, hnsw_recall);
+        }
 
         std::vector<LeidenRun> runs;
         runs.reserve(resolutions.size());
@@ -503,10 +597,19 @@ int32_t cmdLeiden(int argc, char** argv) {
             output_prefix + ".diagnostics.tsv";
         write_clusters(clusters_path, table, runs);
         write_diagnostics(diagnostics_path, table, graph, neighbors,
-            graph_seconds, max_iterations, seed, metric, runs);
+            graph_seconds, max_iterations, seed, metric, knn_options, runs);
         notice("Reused one %zu-edge %s k-NN graph for %zu Leiden resolution(s) using the %s backend",
             graph.graph.edges.size(), simplex_metric_name(metric), runs.size(),
             cosine_knn_backend_name(graph.diagnostics.resolved_backend));
+        if (graph.diagnostics.resolved_backend == CosineKnnBackend::Hnsw
+                || graph.diagnostics.resolved_backend
+                    == CosineKnnBackend::NnDescent) {
+            notice("ANN resolved parameter %d with %d candidates (sampled recall %.6g, 95%% LCB %.6g)",
+                graph.diagnostics.resolved_ann_parameter,
+                graph.diagnostics.resolved_ann_candidates,
+                graph.diagnostics.audit_mean_recall,
+                graph.diagnostics.audit_recall_lcb);
+        }
         notice("Leiden outputs written to %s and %s",
             clusters_path.c_str(), diagnostics_path.c_str());
     } catch (const std::exception& exception) {

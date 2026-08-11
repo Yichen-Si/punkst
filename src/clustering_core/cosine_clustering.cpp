@@ -1,6 +1,9 @@
 #include "clustering_core/cosine_clustering.hpp"
 
 #include "clustering_core/knn_internal.hpp"
+#if PUNKST_HAVE_FAISS_ANN
+#include "clustering_core/faiss_ann.hpp"
+#endif
 #include "nanoflann.hpp"
 
 #include <algorithm>
@@ -97,6 +100,55 @@ CosineKnnBackend resolve_backend(
     return CosineKnnBackend::Flat;
 }
 
+std::vector<DirectedNeighbor> ann_candidate_neighbors(
+        const RowMajorMatrixXd& normalized,
+        const std::vector<int32_t>& candidates, int32_t candidates_per_row,
+        int32_t neighbors, CosineKnnTimings& timings) {
+    const int32_t rows = static_cast<int32_t>(normalized.rows());
+    if (candidates_per_row < neighbors
+            || candidates.size() != static_cast<size_t>(rows)
+                * static_cast<size_t>(candidates_per_row)) {
+        throw std::runtime_error("Invalid Faiss ANN candidate matrix");
+    }
+    const auto topk_begin = Clock::now();
+    std::vector<DirectedNeighbor> directed(
+        static_cast<size_t>(rows) * static_cast<size_t>(neighbors));
+    tbb::parallel_for(tbb::blocked_range<int32_t>(0, rows, 64),
+        [&](const tbb::blocked_range<int32_t>& range) {
+            std::vector<int32_t> unique;
+            std::vector<Neighbor> ranked;
+            unique.reserve(static_cast<size_t>(candidates_per_row));
+            ranked.reserve(static_cast<size_t>(candidates_per_row));
+            for (int32_t row = range.begin(); row < range.end(); ++row) {
+                unique.clear();
+                ranked.clear();
+                const size_t begin = static_cast<size_t>(row)
+                    * static_cast<size_t>(candidates_per_row);
+                for (int32_t j = 0; j < candidates_per_row; ++j) {
+                    const int32_t index = candidates[begin + j];
+                    if (index < 0 || index >= rows || index == row
+                            || std::find(unique.begin(), unique.end(), index)
+                                != unique.end()) continue;
+                    unique.push_back(index);
+                    ranked.push_back({index,
+                        -normalized.row(row).dot(normalized.row(index))});
+                }
+                std::sort(ranked.begin(), ranked.end(), neighbor_less);
+                if (static_cast<int32_t>(ranked.size()) < neighbors) {
+                    throw std::runtime_error(
+                        "Faiss ANN returned too few distinct non-self candidates");
+                }
+                for (int32_t j = 0; j < neighbors; ++j) {
+                    const Neighbor& item = ranked[static_cast<size_t>(j)];
+                    directed[static_cast<size_t>(row) * neighbors + j] =
+                        {static_cast<int32_t>(item.index), -item.distance};
+                }
+            }
+        });
+    timings.topk_seconds = elapsed_seconds(topk_begin);
+    return directed;
+}
+
 CosineFlatKernel resolve_flat_kernel(CosineFlatKernel requested) {
     if (requested == CosineFlatKernel::Auto) {
         return CosineFlatKernel::Eigen;
@@ -121,11 +173,23 @@ void validate_knn_options(
         || static_cast<int32_t>(options.backend)
             < static_cast<int32_t>(CosineKnnBackend::Auto)
         || static_cast<int32_t>(options.backend)
-            > static_cast<int32_t>(CosineKnnBackend::Flat)
+            > static_cast<int32_t>(CosineKnnBackend::NnDescent)
         || static_cast<int32_t>(options.flat_kernel)
             < static_cast<int32_t>(CosineFlatKernel::Auto)
         || static_cast<int32_t>(options.flat_kernel)
-            > static_cast<int32_t>(CosineFlatKernel::Cblas)) {
+            > static_cast<int32_t>(CosineFlatKernel::Cblas)
+        || options.hnsw_m <= 0 || options.hnsw_ef_construction <= 0
+        || options.hnsw_ef_search < 0 || options.hnsw_max_ef_search <= 0
+        || options.hnsw_candidates < 0 || options.hnsw_audit_queries <= 0
+        || !(options.hnsw_recall > 0.0 && options.hnsw_recall <= 1.0)
+        || !std::isfinite(options.hnsw_recall)
+        || options.nndescent_iterations < 0
+        || options.nndescent_graph_size < 0
+        || options.nndescent_sample_candidates <= 0
+        || options.nndescent_audit_queries <= 0
+        || !(options.nndescent_recall > 0.0
+            && options.nndescent_recall <= 1.0)
+        || !std::isfinite(options.nndescent_recall)) {
         throw std::invalid_argument(
             "Simplex k-NN requires at least two rows, positive neighbors and "
             "threads, and a finite non-negative epsilon");
@@ -137,6 +201,13 @@ void validate_knn_options(
         throw std::invalid_argument(
             "Simplex k-NN epsilon is supported only by the kd-tree backend");
     }
+#if !PUNKST_HAVE_FAISS_ANN
+    if (resolved == CosineKnnBackend::Hnsw
+            || resolved == CosineKnnBackend::NnDescent) {
+        throw std::invalid_argument(
+            "The requested Faiss ANN backend is unavailable in this build; rebuild with PUNKST_ENABLE_FAISS_ANN=ON");
+    }
+#endif
     if (observations.rows() > std::numeric_limits<int32_t>::max()) {
         throw std::invalid_argument("Simplex k-NN row count exceeds int32 range");
     }
@@ -397,6 +468,8 @@ const char* cosine_knn_backend_name(CosineKnnBackend backend) {
         case CosineKnnBackend::Auto: return "auto";
         case CosineKnnBackend::KdTree: return "kdtree";
         case CosineKnnBackend::Flat: return "flat";
+        case CosineKnnBackend::Hnsw: return "hnsw";
+        case CosineKnnBackend::NnDescent: return "nndescent";
     }
     return "unknown";
 }
@@ -409,8 +482,10 @@ CosineKnnBackend parse_cosine_knn_backend(const std::string& value) {
     if (value == "auto") return CosineKnnBackend::Auto;
     if (value == "kdtree") return CosineKnnBackend::KdTree;
     if (value == "flat") return CosineKnnBackend::Flat;
+    if (value == "hnsw") return CosineKnnBackend::Hnsw;
+    if (value == "nndescent") return CosineKnnBackend::NnDescent;
     throw std::invalid_argument(
-        "Cosine k-NN backend must be auto, kdtree, or flat");
+        "Cosine k-NN backend must be auto, kdtree, flat, hnsw, or nndescent");
 }
 
 CosineFlatKernel parse_cosine_flat_kernel(const std::string& value) {
@@ -419,6 +494,14 @@ CosineFlatKernel parse_cosine_flat_kernel(const std::string& value) {
 
 bool cosine_knn_cblas_available() {
     return knn_cblas_available();
+}
+
+bool cosine_knn_faiss_available() {
+#if PUNKST_HAVE_FAISS_ANN
+    return true;
+#else
+    return false;
+#endif
 }
 
 CosineKnnResult simplex_knn(
@@ -430,6 +513,7 @@ CosineKnnResult simplex_knn(
         static_cast<size_t>(options.n_threads));
     CosineKnnResult out;
     out.diagnostics.requested_backend = options.backend;
+    out.diagnostics.sample_size = observations.rows();
     out.diagnostics.resolved_backend = resolve_backend(
         options, observations.cols());
     if (out.diagnostics.resolved_backend == CosineKnnBackend::Flat) {
@@ -468,6 +552,69 @@ CosineKnnResult simplex_knn(
                     flat_timings.query_seconds;
                 out.diagnostics.timings.topk_seconds =
                     flat_timings.topk_seconds;
+            }
+            break;
+        case CosineKnnBackend::Hnsw:
+        case CosineKnnBackend::NnDescent:
+            {
+#if PUNKST_HAVE_FAISS_ANN
+                FaissAnnCandidateResult ann;
+                if (out.diagnostics.resolved_backend
+                        == CosineKnnBackend::Hnsw) {
+                    FaissHnswOptions faiss_options;
+                    faiss_options.m = options.hnsw_m;
+                    faiss_options.ef_construction =
+                        options.hnsw_ef_construction;
+                    faiss_options.ef_search = options.hnsw_ef_search;
+                    faiss_options.max_ef_search =
+                        options.hnsw_max_ef_search;
+                    faiss_options.candidates = options.hnsw_candidates;
+                    faiss_options.audit_queries = options.hnsw_audit_queries;
+                    faiss_options.recall = options.hnsw_recall;
+                    faiss_options.force = options.hnsw_force;
+                    faiss_options.n_threads = options.n_threads;
+                    ann = faiss_hnsw_candidates(
+                        normalized, neighbors, faiss_options);
+                } else {
+                    FaissNnDescentOptions faiss_options;
+                    faiss_options.iterations =
+                        options.nndescent_iterations;
+                    faiss_options.graph_size =
+                        options.nndescent_graph_size;
+                    faiss_options.sample_candidates =
+                        options.nndescent_sample_candidates;
+                    faiss_options.audit_queries =
+                        options.nndescent_audit_queries;
+                    faiss_options.recall = options.nndescent_recall;
+                    faiss_options.seed = options.ann_seed;
+                    faiss_options.n_threads = options.n_threads;
+                    ann = faiss_nndescent_candidates(
+                        normalized, neighbors, faiss_options);
+                }
+                out.diagnostics.requested_ann_parameter =
+                    ann.requested_parameter;
+                out.diagnostics.resolved_ann_parameter =
+                    ann.resolved_parameter;
+                out.diagnostics.resolved_ann_candidates =
+                    ann.resolved_candidate_count;
+                out.diagnostics.audit_mean_recall = ann.audit_mean_recall;
+                out.diagnostics.audit_recall_lcb = ann.audit_recall_lcb;
+                out.diagnostics.audit_passed = ann.audit_passed;
+                out.diagnostics.forced = ann.forced;
+                for (const FaissAnnAuditTrial& trial : ann.audit_trials) {
+                    out.diagnostics.audit_trials.push_back({trial.parameter,
+                        trial.mean_recall, trial.recall_lcb});
+                }
+                out.diagnostics.timings.index_build_seconds =
+                    ann.index_build_seconds;
+                out.diagnostics.timings.query_seconds = ann.query_seconds;
+                out.diagnostics.timings.audit_seconds = ann.audit_seconds;
+                directed = ann_candidate_neighbors(normalized,
+                    ann.candidates, ann.candidates_per_row, neighbors,
+                    out.diagnostics.timings);
+#else
+                throw std::logic_error("Faiss ANN backend was not compiled");
+#endif
             }
             break;
     }

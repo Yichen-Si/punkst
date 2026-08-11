@@ -136,6 +136,38 @@ State make_state(const FitResult& fit_result, const FitOptions& options,
     state.leiden_neighbors = options.leiden_neighbors;
     state.initialization_metric = options.initialization_metric;
     state.leiden_knn_backend = options.leiden_knn_backend;
+    state.leiden_hnsw_m = options.leiden_hnsw_m;
+    state.leiden_hnsw_ef_construction =
+        options.leiden_hnsw_ef_construction;
+    state.leiden_hnsw_ef_search = options.leiden_hnsw_ef_search;
+    state.leiden_hnsw_max_ef_search = options.leiden_hnsw_max_ef_search;
+    state.leiden_hnsw_candidates = options.leiden_hnsw_candidates;
+    state.leiden_hnsw_audit_queries = options.leiden_hnsw_audit_queries;
+    state.leiden_hnsw_recall = options.leiden_hnsw_recall;
+    state.leiden_hnsw_force = options.leiden_hnsw_force;
+    state.leiden_nndescent_iterations =
+        options.leiden_nndescent_iterations;
+    state.leiden_nndescent_graph_size =
+        options.leiden_nndescent_graph_size;
+    state.leiden_nndescent_sample_candidates =
+        options.leiden_nndescent_sample_candidates;
+    state.leiden_nndescent_audit_queries =
+        options.leiden_nndescent_audit_queries;
+    state.leiden_nndescent_recall = options.leiden_nndescent_recall;
+    if (fit_result.has_leiden_knn_diagnostics) {
+        state.leiden_resolved_ann_parameter =
+            fit_result.leiden_knn_diagnostics.resolved_ann_parameter;
+        state.leiden_resolved_ann_candidates =
+            fit_result.leiden_knn_diagnostics.resolved_ann_candidates;
+        state.leiden_ann_audit_mean_recall =
+            fit_result.leiden_knn_diagnostics.audit_mean_recall;
+        state.leiden_ann_audit_recall_lcb =
+            fit_result.leiden_knn_diagnostics.audit_recall_lcb;
+        state.leiden_ann_audit_passed =
+            fit_result.leiden_knn_diagnostics.audit_passed;
+        state.leiden_ann_forced =
+            fit_result.leiden_knn_diagnostics.forced;
+    }
     state.leiden_max_iterations = options.leiden_max_iterations;
     state.selected_start = fit_result.selected_start;
     state.selected_start_method = fit_result.selected_start_method;
@@ -190,7 +222,8 @@ void write_state(const std::string& path, const State& state) {
     if (!out) throw std::runtime_error("Cannot write UAC state: " + path);
     const int32_t components = static_cast<int32_t>(state.model.weights.size());
     const int32_t dimension = static_cast<int32_t>(state.model.means.cols());
-    out << "##punkst_uac_state_v14\n"
+    out << std::setprecision(17)
+        << "##punkst_uac_state_v15\n"
         << "##handoff\t" << handoff_name(state.handoff) << "\n"
         << "##proposal\t" << proposal_name(state.proposal) << "\n"
         << "##particles\t" << state.n_particles << "\n"
@@ -208,6 +241,43 @@ void write_state(const std::string& path, const State& state) {
         << simplex_metric_name(state.initialization_metric) << "\n"
         << "##leiden_knn_backend\t"
         << cosine_knn_backend_name(state.leiden_knn_backend) << "\n"
+        << "##leiden_hnsw_m\t" << state.leiden_hnsw_m << "\n"
+        << "##leiden_hnsw_ef_construction\t"
+        << state.leiden_hnsw_ef_construction << "\n"
+        << "##leiden_hnsw_ef_search\t"
+        << state.leiden_hnsw_ef_search << "\n"
+        << "##leiden_hnsw_max_ef_search\t"
+        << state.leiden_hnsw_max_ef_search << "\n"
+        << "##leiden_hnsw_candidates\t"
+        << state.leiden_hnsw_candidates << "\n"
+        << "##leiden_hnsw_audit_queries\t"
+        << state.leiden_hnsw_audit_queries << "\n"
+        << "##leiden_hnsw_recall\t"
+        << state.leiden_hnsw_recall << "\n"
+        << "##leiden_hnsw_force\t"
+        << static_cast<int32_t>(state.leiden_hnsw_force) << "\n"
+        << "##leiden_nndescent_iterations\t"
+        << state.leiden_nndescent_iterations << "\n"
+        << "##leiden_nndescent_graph_size\t"
+        << state.leiden_nndescent_graph_size << "\n"
+        << "##leiden_nndescent_s\t"
+        << state.leiden_nndescent_sample_candidates << "\n"
+        << "##leiden_nndescent_audit_queries\t"
+        << state.leiden_nndescent_audit_queries << "\n"
+        << "##leiden_nndescent_recall\t"
+        << state.leiden_nndescent_recall << "\n"
+        << "##leiden_resolved_ann_parameter\t"
+        << state.leiden_resolved_ann_parameter << "\n"
+        << "##leiden_resolved_ann_candidates\t"
+        << state.leiden_resolved_ann_candidates << "\n"
+        << "##leiden_ann_audit_mean_recall\t"
+        << state.leiden_ann_audit_mean_recall << "\n"
+        << "##leiden_ann_audit_recall_lcb\t"
+        << state.leiden_ann_audit_recall_lcb << "\n"
+        << "##leiden_ann_audit_passed\t"
+        << static_cast<int32_t>(state.leiden_ann_audit_passed) << "\n"
+        << "##leiden_ann_forced\t"
+        << static_cast<int32_t>(state.leiden_ann_forced) << "\n"
         << "##leiden_max_iterations\t"
         << state.leiden_max_iterations << "\n"
         << "##selected_start\t" << state.selected_start << "\n"
@@ -221,7 +291,6 @@ void write_state(const std::string& path, const State& state) {
         << "##count_likelihood\t"
         << (state.weighted_counts ? "weighted_multinomial_kernel" : "multinomial")
         << "\n"
-        << std::setprecision(17)
         << "##center_floor\t" << state.center_floor << "\n"
         << "##target_relative_floor\t"
         << state.target_relative_floor << "\n"
@@ -395,25 +464,28 @@ State read_state(const std::string& path) {
             && token[0] != "##punkst_uac_state_v11"
             && token[0] != "##punkst_uac_state_v12"
             && token[0] != "##punkst_uac_state_v13"
-            && token[0] != "##punkst_uac_state_v14") {
+            && token[0] != "##punkst_uac_state_v14"
+            && token[0] != "##punkst_uac_state_v15") {
             throw std::runtime_error(
                 "UAC state must begin with a supported version header");
         }
         if (token[0] == "##punkst_uac_state_v11"
             || token[0] == "##punkst_uac_state_v12"
             || token[0] == "##punkst_uac_state_v13"
-            || token[0] == "##punkst_uac_state_v14") {
+            || token[0] == "##punkst_uac_state_v14"
+            || token[0] == "##punkst_uac_state_v15") {
             if (state_version != 0) {
                 throw std::runtime_error("Duplicate UAC state version");
             }
             state_version = token[0] == "##punkst_uac_state_v11" ? 11
                 : token[0] == "##punkst_uac_state_v12" ? 12
-                : token[0] == "##punkst_uac_state_v13" ? 13 : 14;
+                : token[0] == "##punkst_uac_state_v13" ? 13
+                : token[0] == "##punkst_uac_state_v14" ? 14 : 15;
             continue;
         }
         if (token[0].rfind("##punkst_uac_state_v", 0) == 0) {
             throw std::runtime_error(
-                "Unsupported UAC state version; only v11 through v14 are accepted");
+                "Unsupported UAC state version; only v11 through v15 are accepted");
         }
         if (token[0].rfind("##", 0) == 0) {
             if (token.size() != 2) throw std::runtime_error("Malformed UAC state metadata");
@@ -464,6 +536,75 @@ State read_state(const std::string& path) {
             }
             else if (key == "leiden_knn_backend") {
                 state.leiden_knn_backend = parse_cosine_knn_backend(token[1]);
+            }
+            else if (key == "leiden_hnsw_m") {
+                state.leiden_hnsw_m = parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_hnsw_ef_construction") {
+                state.leiden_hnsw_ef_construction =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_hnsw_ef_search") {
+                state.leiden_hnsw_ef_search = parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_hnsw_max_ef_search") {
+                state.leiden_hnsw_max_ef_search =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_hnsw_candidates") {
+                state.leiden_hnsw_candidates = parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_hnsw_audit_queries") {
+                state.leiden_hnsw_audit_queries =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_hnsw_recall") {
+                state.leiden_hnsw_recall = parse_state_double(token[1]);
+            }
+            else if (key == "leiden_hnsw_force") {
+                state.leiden_hnsw_force = parse_state_bool(token[1]);
+            }
+            else if (key == "leiden_nndescent_iterations") {
+                state.leiden_nndescent_iterations =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_nndescent_graph_size") {
+                state.leiden_nndescent_graph_size =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_nndescent_s") {
+                state.leiden_nndescent_sample_candidates =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_nndescent_audit_queries") {
+                state.leiden_nndescent_audit_queries =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_nndescent_recall") {
+                state.leiden_nndescent_recall =
+                    parse_state_double(token[1]);
+            }
+            else if (key == "leiden_resolved_ann_parameter") {
+                state.leiden_resolved_ann_parameter =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_resolved_ann_candidates") {
+                state.leiden_resolved_ann_candidates =
+                    parse_state_int32(token[1]);
+            }
+            else if (key == "leiden_ann_audit_mean_recall") {
+                state.leiden_ann_audit_mean_recall =
+                    parse_state_double(token[1]);
+            }
+            else if (key == "leiden_ann_audit_recall_lcb") {
+                state.leiden_ann_audit_recall_lcb =
+                    parse_state_double(token[1]);
+            }
+            else if (key == "leiden_ann_audit_passed") {
+                state.leiden_ann_audit_passed = parse_state_bool(token[1]);
+            }
+            else if (key == "leiden_ann_forced") {
+                state.leiden_ann_forced = parse_state_bool(token[1]);
             }
             else if (key == "leiden_max_iterations") {
                 state.leiden_max_iterations =
@@ -669,6 +810,7 @@ State read_state(const std::string& path) {
         state.fisher_refinement_iterations = 1;
         saw_fisher_refinement_iterations = true;
     }
+    // v11-v14 retain the exact-backend-era ANN defaults supplied by State.
     if (state_version == 0 || !saw_proposal || !saw_fisher_broadening
         || !saw_fisher_refinement_iterations
         || !saw_kmeans_starts
@@ -723,6 +865,22 @@ State read_state(const std::string& path) {
     }
     if (state_version >= 14) {
         required_metadata.push_back("fisher_refinement_iterations");
+    }
+    if (state_version >= 15) {
+        const std::vector<std::string> ann_metadata = {
+            "leiden_hnsw_m", "leiden_hnsw_ef_construction",
+            "leiden_hnsw_ef_search", "leiden_hnsw_max_ef_search",
+            "leiden_hnsw_candidates", "leiden_hnsw_audit_queries",
+            "leiden_hnsw_recall", "leiden_hnsw_force",
+            "leiden_nndescent_iterations", "leiden_nndescent_graph_size",
+            "leiden_nndescent_s", "leiden_nndescent_audit_queries",
+            "leiden_nndescent_recall", "leiden_resolved_ann_parameter",
+            "leiden_resolved_ann_candidates",
+            "leiden_ann_audit_mean_recall",
+            "leiden_ann_audit_recall_lcb", "leiden_ann_audit_passed",
+            "leiden_ann_forced"};
+        required_metadata.insert(required_metadata.end(),
+            ann_metadata.begin(), ann_metadata.end());
     }
     required_metadata.push_back(
         "particle_variance_change_tolerance");

@@ -418,7 +418,9 @@ void validate_state(const State& state) {
     const bool valid_knn_backend =
         state.leiden_knn_backend == CosineKnnBackend::Auto
         || state.leiden_knn_backend == CosineKnnBackend::KdTree
-        || state.leiden_knn_backend == CosineKnnBackend::Flat;
+        || state.leiden_knn_backend == CosineKnnBackend::Flat
+        || state.leiden_knn_backend == CosineKnnBackend::Hnsw
+        || state.leiden_knn_backend == CosineKnnBackend::NnDescent;
     const bool valid_initialization_metric =
         state.initialization_metric == SimplexMetric::Cosine
         || state.initialization_metric == SimplexMetric::Hellinger;
@@ -449,6 +451,33 @@ void validate_state(const State& state) {
         || !(state.particle_variance_change_tolerance >= 0.0)
         || !(state.initialization_ridge_precision >= 0.0)
         || !(state.leiden_knn_epsilon >= 0.0)
+        || state.leiden_hnsw_m <= 0
+        || state.leiden_hnsw_ef_construction <= 0
+        || state.leiden_hnsw_ef_search < 0
+        || state.leiden_hnsw_max_ef_search <= 0
+        || state.leiden_hnsw_candidates < 0
+        || state.leiden_hnsw_audit_queries <= 0
+        || !(state.leiden_hnsw_recall > 0.0
+            && state.leiden_hnsw_recall <= 1.0)
+        || state.leiden_nndescent_iterations < 0
+        || state.leiden_nndescent_graph_size < 0
+        || state.leiden_nndescent_sample_candidates <= 0
+        || state.leiden_nndescent_audit_queries <= 0
+        || !(state.leiden_nndescent_recall > 0.0
+            && state.leiden_nndescent_recall <= 1.0)
+        || state.leiden_resolved_ann_parameter < 0
+        || state.leiden_resolved_ann_candidates < 0
+        || !(state.leiden_ann_audit_mean_recall >= 0.0
+            && state.leiden_ann_audit_mean_recall <= 1.0)
+        || !(state.leiden_ann_audit_recall_lcb >= 0.0
+            && state.leiden_ann_audit_recall_lcb <= 1.0)
+        || ((state.leiden_knn_backend == CosineKnnBackend::Hnsw
+                || state.leiden_knn_backend == CosineKnnBackend::NnDescent)
+            && state.leiden_starts > 0
+            && (state.leiden_resolved_ann_parameter <= 0
+                || state.leiden_resolved_ann_candidates <= 0
+                || (!state.leiden_ann_audit_passed
+                    && !state.leiden_ann_forced)))
         || !(state.leiden_resolution > 0.0)
         || !(state.covariance_shrinkage_strength >= 0.0)
         || !(state.fisher_broadening > 0.0)
