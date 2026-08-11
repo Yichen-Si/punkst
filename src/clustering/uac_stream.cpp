@@ -768,6 +768,8 @@ StreamingFitResult fit_streaming(const Dataset& data, const Basis& basis,
     out.model = fitted.model;
     out.pilot = fitted.pilot;
     out.traces = fitted.traces;
+    out.initialization_partitions = std::move(
+        fitted.initialization_partitions);
     out.converged = fitted.converged;
     out.selected_start = fitted.selected_start;
     out.selected_start_method = fitted.selected_start_method;

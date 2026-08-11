@@ -452,6 +452,7 @@ void validate_state(const State& state) {
         || !(state.leiden_resolution > 0.0)
         || !(state.covariance_shrinkage_strength >= 0.0)
         || !(state.fisher_broadening > 0.0)
+        || state.fisher_refinement_iterations <= 0
         || !state.feature_weights.allFinite()
         || (state.feature_weights.array() < 0.0).any()
         || (state.feature_weights.size() > 0 && !state.weighted_counts)

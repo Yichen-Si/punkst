@@ -40,6 +40,7 @@ struct StreamingFitResult {
     Model model;
     Pilot pilot;
     std::vector<RestartTrace> traces;
+    std::vector<InitializationPartition> initialization_partitions;
     StreamingScoreSummary score;
     bool converged = false;
     int32_t selected_start = -1;

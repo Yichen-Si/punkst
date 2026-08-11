@@ -13,6 +13,7 @@ public:
     struct TransformOutputOptions {
         bool appendTopK = false;
         bool dropRandomKey = false;
+        bool scientific = false;
         int32_t randomKeyIndex = -1;
         std::string topKColname = "topK";
         std::string topPColname = "topP";
@@ -135,7 +136,10 @@ class LDA4Hex : public TopicModelWrapper {
 
 public:
 
-    LDA4Hex(HexReader& _reader, int32_t modal = 0, int32_t verbose = 0) : TopicModelWrapper(_reader, modal, verbose) {}
+    LDA4Hex(HexReader& _reader, int32_t modal = 0, int32_t verbose = 0)
+        : TopicModelWrapper(_reader, modal, verbose) {
+        transformOutputOptions_.scientific = true;
+    }
 
     void initialize_scvb0(int32_t nTopics, int32_t seed = -1,
         int32_t nThreads = 0, int32_t verbose = 0,

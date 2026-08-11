@@ -53,6 +53,21 @@ public:
     const std::filesystem::path& work_directory() const {
         return temporary_storage_->directory.path;
     }
+    int32_t document_count() const { return documents; }
+    int32_t dimension_count() const { return dimension; }
+    uint64_t storage_bytes() const { return bytes; }
+    uint64_t peak_shard_bytes() const { return metrics.peak_bytes; }
+    bool adaptive_particles() const { return adaptive; }
+    size_t shard_count() const { return shards.size(); }
+    const std::filesystem::path& shard_path(size_t index) const {
+        return shards.at(index);
+    }
+    int32_t shard_first_document(size_t index) const {
+        return first_documents.at(index);
+    }
+    int32_t shard_document_count(size_t index) const {
+        return document_counts.at(index);
+    }
 
 private:
     std::filesystem::path directory;
@@ -76,7 +91,7 @@ private:
         const Dataset&, const Basis&,
         const Eigen::Ref<const Eigen::MatrixXd>&, const Pilot&,
         const PilotCache&, ProposalKind, int32_t, uint64_t, double,
-        int32_t, const Model&, const AdaptiveParticleOptions&,
+        int32_t, int32_t, const Model&, const AdaptiveParticleOptions&,
         const ProposalScreeningPlan*, const ComponentScreeningOptions&,
         const StreamingOptions&, const IndexedDocumentSource*);
     friend Expectation cached_particle_expectation(
@@ -87,7 +102,7 @@ private:
         Eigen::VectorXd*);
     friend ScoreResult score_particle_cache(
         const ParticleCache&, const Model&,
-        const ComponentScreeningOptions&, bool, int32_t, Expectation*);
+        const ComponentScreeningOptions&, bool, int32_t, Expectation*, bool);
 };
 
 using CachedParticleShard = std::variant<ParticleSet, RaggedParticleSet>;
@@ -97,12 +112,15 @@ public:
 };
 CachedParticleShard read_particle_cache(
     const std::filesystem::path& path);
+void write_particle_cache(const std::filesystem::path& path,
+    const RaggedParticleSet& particles);
 
 ParticleCache open_or_build_particle_cache(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal, int32_t maximum_samples, uint64_t seed,
-    double broadening, int32_t n_threads, const Model& initial_model,
+    double broadening, int32_t refinement_iterations, int32_t n_threads,
+    const Model& initial_model,
     const AdaptiveParticleOptions& adaptive,
     const ProposalScreeningPlan* proposal_screening,
     const ComponentScreeningOptions& screening,
@@ -137,6 +155,7 @@ Expectation cached_particle_expectation(const ParticleCache& cache,
 ScoreResult score_particle_cache(const ParticleCache& cache,
     const Model& model, const ComponentScreeningOptions& screening,
     bool materialize_responsibilities, int32_t n_threads,
-    Expectation* terminal_expectation = nullptr);
+    Expectation* terminal_expectation = nullptr,
+    bool accumulate_moments = false);
 
 } // namespace uac::detail

@@ -64,8 +64,12 @@ FisherApproximation fisher_approximation_impl(
     FisherWorkspace* supplied_workspace = nullptr);
 DocumentProposal fisher_proposal(
     const Eigen::Ref<const Eigen::VectorXd>& center,
-    const FisherApproximation& fisher, const Pilot& pilot,
+    const FisherApproximation& fisher, const Document& document,
+    const Basis& basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    ProposalKind proposal_kind, const Pilot& pilot,
     const PilotCache& cache, double broadening,
+    int32_t refinement_iterations,
     const std::vector<int32_t>* candidate_components = nullptr);
 Eigen::VectorXd proposal_log_density_rows(
     const Eigen::Ref<const RowMajorMatrixXd>& values,
@@ -80,7 +84,8 @@ ProposalScreeningPlan make_proposal_screening_plan(
     const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& cache,
-    ProposalKind proposal_kind, double broadening, uint64_t seed,
+    ProposalKind proposal_kind, double broadening,
+    int32_t refinement_iterations, uint64_t seed,
     const ComponentScreeningOptions& options,
     const IndexedDocumentSource* count_source = nullptr);
 

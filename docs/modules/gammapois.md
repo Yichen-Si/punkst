@@ -324,6 +324,20 @@ $f_0=e_0/\alpha$.
 
 ### Other fitting options
 
+`--random-init-shape`
+Shape of the mean-one Gamma noise used before proportional fitting initializes
+the topic profiles. Default: `0.5`, preserving the original high-variance
+initializer. Larger values reduce random contrast; `100` matches the relative
+noise scale of the LDA global initializer. This option has no effect when
+`--model-init` is supplied.
+
+`--model-init`
+Topic-model TSV used only to initialize the Gamma-Poisson topic profiles. The
+file must contain the same number of topics and exactly the retained feature
+set; feature rows may be in a different order. Each topic is normalized and
+placed on the Gamma-Poisson count scale before training. It does not add
+pseudo-count strength or constrain subsequent updates.
+
 `--sort-topics`
 Sort topics by fitted corpus usage before writing outputs.
 

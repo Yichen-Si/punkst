@@ -46,7 +46,8 @@ public:
         double theta_concentration = 1.0, double nu_shape = 1.0, double nu_rate = -1.0,
         double learning_decay = 0.7, double learning_offset = 10.0,
         int32_t total_doc_count = 1000000, double size_factor = 1.0,
-        const std::vector<double>* feature_sums = nullptr);
+        const std::vector<double>* feature_sums = nullptr,
+        double random_init_shape = 0.5);
     virtual ~GammaPoissonTopicBase() = default;
 
     int32_t get_n_topics() const { return n_topics_; }
@@ -68,6 +69,9 @@ public:
     void set_svb_parameters(int32_t max_iter, double tol);
     void set_nthreads(int32_t nThreads);
     void prepare_inference_cache();
+    void initialize_topic_profiles(
+        const Eigen::Ref<const RowMajorMatrixXd>& profiles,
+        const std::vector<std::string>& topic_names = {});
     void write_model(const std::string& outFile, const std::vector<std::string>& featureNames);
 
 protected:
@@ -94,6 +98,7 @@ protected:
     double learning_decay_ = 0.7;
     double learning_offset_ = 10.0;
     double size_factor_ = 1.0;
+    double random_init_shape_ = 0.5;
     double eps_ = std::numeric_limits<double>::epsilon();
     int32_t max_doc_update_iter_ = 100;
     double mean_change_tol_ = 1e-3;
@@ -128,7 +133,8 @@ public:
         double learning_decay = 0.7, double learning_offset = 10.0,
         int32_t total_doc_count = 1000000, double size_factor = 1.0,
         bool symmetric_nu = true, double nu_max = -1.0,
-        const std::vector<double>* feature_sums = nullptr);
+        const std::vector<double>* feature_sums = nullptr,
+        double random_init_shape = 0.5);
 
     explicit GammaPoissonTopicModel(const std::string& stateFile,
         int seed = std::random_device{}(), int32_t nThreads = 0, int32_t verbose = 0);
@@ -237,7 +243,8 @@ public:
         double beta_shape, double xi_shape, double xi_mean, double theta_concentration,
         double nu_shape, double nu_rate, double kappa, double tau0,
         int32_t totalDocCount, double sizeFactor, bool symmetricNu, double nuMax,
-        int32_t maxIter, double mDelta);
+        int32_t maxIter, double mDelta, double randomInitShape = 0.5);
+    void initializeFromModel(const std::string& modelFile);
     void setFeatureDispersion(const std::vector<double>& tau);
     void clearFeatureDispersion();
     GammaPoissonDispersionResult estimateFeatureDispersion(

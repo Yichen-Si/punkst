@@ -236,6 +236,212 @@ measurement_sums_by_partition(const Dataset& data, const Basis& basis,
     return out;
 }
 
+namespace {
+
+double initialization_sample_uniform(int32_t seed, int32_t document) {
+    uint64_t value = static_cast<uint32_t>(seed);
+    value ^= (static_cast<uint64_t>(static_cast<uint32_t>(document)) + 1)
+        * 0x9e3779b97f4a7c15ULL;
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+    return static_cast<double>(value >> 11)
+        * (1.0 / 9007199254740992.0);
+}
+
+Eigen::VectorXd initialization_inclusion_probabilities(
+    const std::vector<Eigen::VectorXi>& assignments,
+    const std::vector<HardPartitionMoments>& moments,
+    int32_t documents, int32_t target) {
+    Eigen::VectorXd probability = Eigen::VectorXd::Ones(documents);
+    if (target <= 0) return probability;
+    probability.setZero();
+    for (size_t start = 0; start < assignments.size(); ++start) {
+        for (int32_t d = 0; d < documents; ++d) {
+            const int32_t component = assignments[start](d);
+            probability(d) = std::max(probability(d), std::min(
+                1.0, static_cast<double>(target)
+                    / moments[start].counts(component)));
+        }
+    }
+    return probability;
+}
+
+double minimum_partition_effective_size(
+    const std::vector<Eigen::VectorXi>& assignments, int32_t components,
+    const Eigen::Ref<const Eigen::VectorXd>& probability,
+    const std::vector<uint8_t>& selected) {
+    double minimum = std::numeric_limits<double>::infinity();
+    for (const auto& assignment : assignments) {
+        Eigen::VectorXd sum = Eigen::VectorXd::Zero(components);
+        Eigen::VectorXd square = Eigen::VectorXd::Zero(components);
+        for (int32_t d = 0; d < assignment.size(); ++d) {
+            if (!selected[d]) continue;
+            const double weight = 1.0 / probability(d);
+            sum(assignment(d)) += weight;
+            square(assignment(d)) += weight * weight;
+        }
+        for (int32_t c = 0; c < components; ++c) {
+            if (!(square(c) > 0.0)) {
+                throw std::runtime_error(
+                    "UAC initialization sample omitted a start/component stratum");
+            }
+            minimum = std::min(minimum,
+                sum(c) * sum(c) / square(c));
+        }
+    }
+    return minimum;
+}
+
+void pack_symmetric(const Eigen::Ref<const Eigen::MatrixXd>& matrix,
+    Eigen::Ref<Eigen::RowVectorXd> packed) {
+    Eigen::Index offset = 0;
+    for (Eigen::Index row = 0; row < matrix.rows(); ++row) {
+        for (Eigen::Index col = 0; col <= row; ++col) {
+            packed(offset++) = matrix(row, col);
+        }
+    }
+}
+
+void unpack_symmetric(const Eigen::Ref<const Eigen::RowVectorXd>& packed,
+    Eigen::MatrixXd& matrix) {
+    Eigen::Index offset = 0;
+    for (Eigen::Index row = 0; row < matrix.rows(); ++row) {
+        for (Eigen::Index col = 0; col <= row; ++col) {
+            matrix(row, col) = packed(offset);
+            matrix(col, row) = packed(offset++);
+        }
+    }
+}
+
+} // namespace
+
+InitializationMeasurements collect_initialization_measurements(
+    const Dataset& data, const Basis& basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const Eigen::Ref<const Eigen::MatrixXd>& regularizing_precision,
+    const std::vector<Eigen::VectorXi>& assignments,
+    const std::vector<HardPartitionMoments>& moments,
+    int32_t components, ProposalKind proposal,
+    InitializationMeasurementMode mode, int32_t measurement_target,
+    int32_t score_target, int32_t seed,
+    const IndexedDocumentSource* count_source) {
+    const auto work_start = std::chrono::steady_clock::now();
+    const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
+    const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
+    if (assignments.empty() || assignments.size() != moments.size()
+        || components <= 0 || measurement_target <= 0 || score_target < 0) {
+        throw std::invalid_argument(
+            "Invalid UAC initialization measurement sampling options");
+    }
+    const bool sampled_moments = mode
+        == InitializationMeasurementMode::HorvitzThompson;
+    const Eigen::VectorXd measurement_probability =
+        initialization_inclusion_probabilities(assignments, moments,
+            documents, sampled_moments ? measurement_target : 0);
+    const Eigen::VectorXd score_probability =
+        initialization_inclusion_probabilities(assignments, moments,
+            documents, score_target);
+    std::vector<uint8_t> measurement_selected(documents, 0);
+    std::vector<uint8_t> score_selected(documents, 0);
+    std::vector<int32_t> score_row(documents, -1);
+    InitializationMeasurements out;
+    for (int32_t d = 0; d < documents; ++d) {
+        const double uniform = initialization_sample_uniform(seed, d);
+        measurement_selected[d] = uniform < measurement_probability(d);
+        score_selected[d] = uniform < score_probability(d);
+        if (measurement_selected[d]) ++out.measurement_documents;
+        if (score_selected[d]) {
+            score_row[d] = static_cast<int32_t>(out.score_documents.size());
+            out.score_documents.push_back(d);
+        }
+    }
+    out.score_probabilities.resize(out.score_documents.size());
+    for (size_t row = 0; row < out.score_documents.size(); ++row) {
+        out.score_probabilities(row) =
+            score_probability(out.score_documents[row]);
+    }
+    out.maximum_measurement_weight =
+        1.0 / measurement_probability.minCoeff();
+    out.maximum_score_weight = 1.0 / score_probability.minCoeff();
+    out.minimum_measurement_effective_size =
+        minimum_partition_effective_size(assignments, components,
+            measurement_probability, measurement_selected);
+    out.minimum_score_effective_size =
+        minimum_partition_effective_size(assignments, components,
+            score_probability, score_selected);
+
+    const int64_t packed_values = static_cast<int64_t>(dimension)
+        * (dimension + 1) / 2;
+    out.packed_score_covariances.resize(
+        out.score_documents.size(), packed_values);
+    out.cache_bytes = static_cast<uint64_t>(
+        out.packed_score_covariances.size()) * sizeof(double);
+    using PartitionSums = std::vector<std::vector<Eigen::MatrixXd>>;
+    auto empty_sums = [&]() {
+        return PartitionSums(assignments.size(),
+            std::vector<Eigen::MatrixXd>(components,
+                Eigen::MatrixXd::Zero(dimension, dimension)));
+    };
+    constexpr int32_t kMaximumBlocks = 32;
+    const int32_t n_blocks = std::min(documents, kMaximumBlocks);
+    const int32_t block_size = (documents + n_blocks - 1) / n_blocks;
+    std::vector<PartitionSums> block_sums;
+    block_sums.reserve(n_blocks);
+    for (int32_t block = 0; block < n_blocks; ++block) {
+        block_sums.push_back(empty_sums());
+    }
+    std::vector<int64_t> block_evaluations(n_blocks, 0);
+    tbb::parallel_for(int32_t{0}, n_blocks, [&](int32_t block_index) {
+        FisherWorkspace fisher_workspace;
+        Eigen::LLT<Eigen::MatrixXd> measurement_solver;
+        const int32_t begin = block_index * block_size;
+        const int32_t end = std::min(documents, begin + block_size);
+        DocumentBlock count_block;
+        if (count_source) {
+            count_block = read_aligned_document_range(
+                data, *count_source, begin, end - begin);
+        }
+        for (int32_t d = begin; d < end; ++d) {
+            if (!measurement_selected[d] && !score_selected[d]) continue;
+            const Eigen::MatrixXd covariance = measurement_covariance(
+                data.coordinates.row(d).transpose(),
+                count_source ? count_block.counts[d - begin]
+                             : data.counts[d],
+                basis, helmert, regularizing_precision, proposal,
+                &fisher_workspace, &measurement_solver);
+            ++block_evaluations[block_index];
+            if (measurement_selected[d]) {
+                const double weight = 1.0 / measurement_probability(d);
+                for (size_t start = 0; start < assignments.size(); ++start) {
+                    block_sums[block_index][start][assignments[start](d)]
+                        .noalias() += weight * covariance;
+                }
+            }
+            if (score_selected[d]) {
+                Eigen::RowVectorXd packed =
+                    out.packed_score_covariances.row(score_row[d]);
+                pack_symmetric(covariance, packed);
+                out.packed_score_covariances.row(score_row[d]) = packed;
+            }
+        }
+    });
+    out.sums = empty_sums();
+    for (int32_t block = 0; block < n_blocks; ++block) {
+        out.covariance_evaluations += block_evaluations[block];
+        for (size_t start = 0; start < assignments.size(); ++start) {
+            for (int32_t component = 0; component < components; ++component) {
+                out.sums[start][component] +=
+                    block_sums[block][start][component];
+            }
+        }
+    }
+    out.seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - work_start).count();
+    return out;
+}
+
 Model initialize_model_from_partition(const Dataset& data,
     const Eigen::Ref<const Eigen::VectorXi>& assignments, int32_t components,
     double shrinkage, double covariance_floor, double relative_floor) {
@@ -293,7 +499,8 @@ Model initialize_model_from_corrected_moments(const Dataset& data,
     const Eigen::Ref<const Eigen::VectorXi>& assignments,
     const HardPartitionMoments& moments,
     const std::vector<Eigen::MatrixXd>& measurement_sum,
-    double shrinkage, double covariance_floor) {
+    double shrinkage, double covariance_floor,
+    int32_t* floor_activations) {
     const int32_t documents = static_cast<int32_t>(data.coordinates.rows());
     const int32_t components = static_cast<int32_t>(moments.counts.size());
     const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
@@ -309,8 +516,19 @@ Model initialize_model_from_corrected_moments(const Dataset& data,
     for (const auto& sum : measurement_sum) {
         corrected_target -= sum / documents;
     }
-    corrected_target = floor_covariance(
-        corrected_target, covariance_floor);
+    auto floor_and_count = [&](const Eigen::MatrixXd& covariance) {
+        if (floor_activations) {
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
+                0.5 * (covariance + covariance.transpose()),
+                Eigen::EigenvaluesOnly);
+            if (solver.info() == Eigen::Success
+                && solver.eigenvalues().minCoeff() < covariance_floor) {
+                ++*floor_activations;
+            }
+        }
+        return floor_covariance(covariance, covariance_floor);
+    };
+    corrected_target = floor_and_count(corrected_target);
 
     Model model;
     model.weights = moments.counts.cast<double>() / documents;
@@ -321,9 +539,8 @@ Model initialize_model_from_corrected_moments(const Dataset& data,
         Eigen::MatrixXd numerator =
             moments.scatter[c] - measurement_sum[c]
             + shrinkage * corrected_target;
-        model.covariances.push_back(floor_covariance(
-            numerator / (moments.counts(c) + shrinkage),
-            covariance_floor));
+        model.covariances.push_back(floor_and_count(
+            numerator / (moments.counts(c) + shrinkage)));
     }
     return model;
 }
@@ -612,12 +829,20 @@ LowRankDiagonalCovariance shrink_factor_covariance(
 }
 
 ModelUpdate update_model(Model& model, const Expectation& expectation,
-    double shrinkage, double covariance_floor, bool adaptive_target) {
+    double shrinkage, double covariance_floor, bool adaptive_target,
+    bool update_weights, bool allow_extinction,
+    const Eigen::VectorXd* shrinkage_membership) {
     const int32_t components = static_cast<int32_t>(model.weights.size());
     const int32_t documents = expectation.documents;
     const double epsilon = membership_epsilon(documents);
     if (!expectation.membership.allFinite()
         || (expectation.membership.array() < 0.0).any()) {
+        return {};
+    }
+    if (shrinkage_membership != nullptr
+        && (shrinkage_membership->size() != components
+            || !shrinkage_membership->allFinite()
+            || (shrinkage_membership->array() < 0.0).any())) {
         return {};
     }
     double active_mass = 0.0;
@@ -629,19 +854,24 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
     if (!(active_mass > 0.0) || !std::isfinite(active_mass)) return {};
 
     Model next = model;
-    next.weights.setZero();
+    if (update_weights) next.weights.setZero();
     ModelUpdate result;
     std::vector<Eigen::MatrixXd> raw_dense(components);
     std::vector<LowRankDiagonalCovariance> raw_factor(components);
     for (int32_t c = 0; c < components; ++c) {
         const double membership = expectation.membership(c);
-        if (!(membership > epsilon)) continue;
+        if (!(membership > epsilon)) {
+            if (!allow_extinction && model.weights(c) > 0.0) {
+                ++result.active_components;
+            }
+            continue;
+        }
         if (!expectation.first.row(c).allFinite()
             || (model.covariance_kind == CovarianceKind::Dense
                 && !expectation.second[c].allFinite())) {
             return {};
         }
-        next.weights(c) = membership / active_mass;
+        if (update_weights) next.weights(c) = membership / active_mass;
         if (model.covariance_kind == CovarianceKind::FactorAnalytic) {
             const int32_t rank = static_cast<int32_t>(
                 model.factor_covariances[c].factor.cols());
@@ -731,8 +961,10 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
         for (int32_t c = 0; c < components; ++c) {
             next.factor_covariances[c].diagonal.resize(0);
             if (!(expectation.membership(c) > epsilon)) {
-                next.factor_covariances[c].factor =
-                    RowMajorMatrixXd::Zero(dimension, rank);
+                if (allow_extinction || !(model.weights(c) > 0.0)) {
+                    next.factor_covariances[c].factor =
+                        RowMajorMatrixXd::Zero(dimension, rank);
+                }
             } else {
                 next.factor_covariances[c].factor = raw_factor[c].factor;
             }
@@ -768,6 +1000,7 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
         for (int32_t c = 0; c < components; ++c) {
             const double membership = expectation.membership(c);
             if (!(membership > epsilon)) {
+                if (!allow_extinction && model.weights(c) > 0.0) continue;
                 if (model.covariance_kind == CovarianceKind::Dense) {
                     next.covariances[c] = next.shrinkage_target;
                 } else {
@@ -776,17 +1009,20 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
                 }
                 continue;
             }
+            const double effective_membership = shrinkage_membership == nullptr
+                ? membership : (*shrinkage_membership)(c);
             if (model.covariance_kind == CovarianceKind::Dense) {
                 next.covariances[c] = floor_covariance(
-                    (membership * raw_dense[c]
+                    (effective_membership * raw_dense[c]
                         + shrinkage * next.shrinkage_target)
-                        / (membership + shrinkage),
+                        / (effective_membership + shrinkage),
                     covariance_floor);
             } else {
                 const int32_t rank = static_cast<int32_t>(
                     model.factor_covariances[c].factor.cols());
                 next.factor_covariances[c] = shrink_factor_covariance(
-                    raw_factor[c], next.factor_shrinkage_target, membership,
+                    raw_factor[c], next.factor_shrinkage_target,
+                    effective_membership,
                     shrinkage, rank, covariance_floor);
             }
         }
@@ -833,6 +1069,125 @@ void score_corrected_moment_candidates(
             std::numeric_limits<double>::quiet_NaN(),
             score.responsibility_entropy_sum
                 / std::max<Eigen::Index>(1, data.coordinates.rows()));
+        candidate.trace.succeeded = true;
+        candidate.trace.selection_objective = candidate.objective;
+    }
+}
+
+void score_corrected_moment_candidates(
+    const Dataset& data, const FitOptions& options,
+    const InitializationMeasurements& measurements,
+    std::vector<Candidate>& candidates) {
+    std::vector<size_t> candidate_index;
+    std::vector<Model> models;
+    for (size_t index = 0; index < candidates.size(); ++index) {
+        if (!candidates[index].trace.collapsed) {
+            candidate_index.push_back(index);
+            models.push_back(candidates[index].model);
+        }
+    }
+    if (models.empty()) return;
+    const int32_t components = static_cast<int32_t>(models[0].weights.size());
+    const int32_t dimension = static_cast<int32_t>(data.coordinates.cols());
+    const int32_t sampled = static_cast<int32_t>(
+        measurements.score_documents.size());
+    const int64_t packed_values = static_cast<int64_t>(dimension)
+        * (dimension + 1) / 2;
+    if (sampled <= 0
+        || measurements.score_probabilities.size() != sampled
+        || measurements.packed_score_covariances.rows() != sampled
+        || measurements.packed_score_covariances.cols() != packed_values) {
+        throw std::invalid_argument(
+            "Invalid cached UAC initialization candidate score input");
+    }
+    constexpr int32_t kMaximumBlocks = 32;
+    const int32_t n_blocks = std::min(sampled, kMaximumBlocks);
+    const int32_t block_size = (sampled + n_blocks - 1) / n_blocks;
+    std::vector<std::vector<double>> block_likelihood(
+        n_blocks, std::vector<double>(models.size(), 0.0));
+    std::vector<std::vector<double>> block_entropy(
+        n_blocks, std::vector<double>(models.size(), 0.0));
+    std::vector<double> block_seconds(n_blocks, 0.0);
+    tbb::parallel_for(int32_t{0}, n_blocks, [&](int32_t block_index) {
+        std::vector<Eigen::VectorXd> log_score(
+            models.size(), Eigen::VectorXd(components));
+        Eigen::LLT<Eigen::MatrixXd> solver;
+        Eigen::MatrixXd measurement(dimension, dimension);
+        Eigen::MatrixXd marginal(dimension, dimension);
+        Eigen::VectorXd residual(dimension);
+        const int32_t begin = block_index * block_size;
+        const int32_t end = std::min(sampled, begin + block_size);
+        const auto work_start = std::chrono::steady_clock::now();
+        for (int32_t row = begin; row < end; ++row) {
+            unpack_symmetric(
+                measurements.packed_score_covariances.row(row), measurement);
+            const int32_t document = measurements.score_documents[row];
+            const Eigen::VectorXd observed =
+                data.coordinates.row(document).transpose();
+            const double survey_weight =
+                1.0 / measurements.score_probabilities(row);
+            for (size_t candidate = 0; candidate < models.size(); ++candidate) {
+                const Model& model = models[candidate];
+                log_score[candidate].setConstant(
+                    -std::numeric_limits<double>::infinity());
+                for (int32_t c = 0; c < components; ++c) {
+                    if (!(model.weights(c) > 0.0)) continue;
+                    marginal = model.covariances[c] + measurement;
+                    marginal = 0.5 * (marginal + marginal.transpose());
+                    solver.compute(marginal);
+                    if (solver.info() != Eigen::Success) {
+                        throw std::runtime_error(
+                            "UAC cached deconvolution marginal covariance is not positive definite");
+                    }
+                    const double log_determinant =
+                        2.0 * solver.matrixLLT().diagonal()
+                            .array().log().sum();
+                    residual = observed - model.means.row(c).transpose();
+                    log_score[candidate](c) = std::log(model.weights(c))
+                        - 0.5 * (dimension * kLog2Pi + log_determinant
+                            + residual.dot(solver.solve(residual)));
+                }
+                const double normalizer = logsumexp(log_score[candidate]);
+                if (!std::isfinite(normalizer)) {
+                    throw std::runtime_error(
+                        "UAC cached deconvolution has no finite component evidence");
+                }
+                const Eigen::VectorXd responsibility =
+                    (log_score[candidate].array() - normalizer).exp();
+                block_likelihood[block_index][candidate] +=
+                    survey_weight * normalizer;
+                for (int32_t c = 0; c < components; ++c) {
+                    if (responsibility(c) > 0.0) {
+                        block_entropy[block_index][candidate] -= survey_weight
+                            * responsibility(c) * std::log(responsibility(c));
+                    }
+                }
+            }
+        }
+        block_seconds[block_index] = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - work_start).count();
+    });
+    const double total_seconds =
+        std::accumulate(block_seconds.begin(), block_seconds.end(), 0.0);
+    for (size_t local = 0; local < models.size(); ++local) {
+        Candidate& candidate = candidates[candidate_index[local]];
+        double entropy_sum = 0.0;
+        candidate.objective = 0.0;
+        for (int32_t block = 0; block < n_blocks; ++block) {
+            candidate.objective += block_likelihood[block][local];
+            entropy_sum += block_entropy[block][local];
+        }
+        candidate.trace.estep_work.gaussian_seconds +=
+            total_seconds / models.size();
+        candidate.trace.estep_work.document_evaluations += sampled;
+        record_trace_point(candidate.trace, options,
+            TraceEvent::CandidateScore, 0, candidate.objective,
+            active_component_count(candidate.model),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            entropy_sum / std::max<Eigen::Index>(
+                1, data.coordinates.rows()));
         candidate.trace.succeeded = true;
         candidate.trace.selection_objective = candidate.objective;
     }

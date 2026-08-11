@@ -103,7 +103,8 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert, const Pilot& pilot,
     const PilotCache& pilot_cache,
     ProposalKind proposal_kind, int32_t samples, uint64_t seed,
-    double fisher_broadening, int32_t n_threads,
+    double fisher_broadening, int32_t fisher_refinement_iterations,
+    int32_t n_threads,
     const ProposalScreeningPlan* screening_plan, int32_t first_document,
     int32_t documents, int32_t global_first_document) {
     const int32_t global_first = global_first_document >= 0
@@ -115,7 +116,8 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
         || static_cast<int64_t>(first_document) + documents
             > data.coordinates.rows()
         || !(fisher_broadening > 0.0)
-        || !std::isfinite(fisher_broadening)) {
+        || !std::isfinite(fisher_broadening)
+        || fisher_refinement_iterations <= 0) {
         throw std::invalid_argument("Invalid UAC particle input");
     }
     ParticleSet out;
@@ -173,7 +175,9 @@ ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
                     screening_plan && screening_plan->enabled
                     ? &screening_plan->candidates[global_document] : nullptr;
                 const DocumentProposal proposal = fisher_proposal(center,
-                    fisher, pilot, pilot_cache, fisher_broadening, candidates);
+                    fisher, data.counts[document], basis, helmert,
+                    proposal_kind, pilot, pilot_cache, fisher_broadening,
+                    fisher_refinement_iterations, candidates);
                 out.proposal_candidates[local_document] =
                     static_cast<int32_t>(proposal.weights.size());
                 fallback_nanoseconds.fetch_add(static_cast<int64_t>(
@@ -368,6 +372,7 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, uint64_t seed, double fisher_broadening,
+    int32_t fisher_refinement_iterations,
     int32_t n_threads, const Model& calibration_model,
     const AdaptiveParticleOptions& options,
     int32_t maximum_particles,
@@ -386,6 +391,9 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
         || options.minimum_particles <= 0
         || options.minimum_particles < options.calibration_particles
         || maximum_particles < options.minimum_particles
+        || !(fisher_broadening > 0.0)
+        || !std::isfinite(fisher_broadening)
+        || fisher_refinement_iterations <= 0
         || (options.responsibility_se_target.has_value()
             && !(*options.responsibility_se_target > 0.0))
         || !(options.plausible_mass > 0.0 && options.plausible_mass <= 1.0)
@@ -472,8 +480,10 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
                         screening_plan && screening_plan->enabled
                         ? &screening_plan->candidates[global_document]
                         : nullptr;
-                    proposals[local] = fisher_proposal(center, fisher, pilot,
-                        pilot_cache, fisher_broadening, candidates);
+                    proposals[local] = fisher_proposal(center, fisher,
+                        data.counts[document], basis, helmert, proposal_kind,
+                        pilot, pilot_cache, fisher_broadening,
+                        fisher_refinement_iterations, candidates);
                     out.proposal_candidates[local_document] =
                         static_cast<int32_t>(
                             proposals[local].weights.size());
@@ -607,12 +617,14 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, uint64_t seed, double fisher_broadening,
-    int32_t n_threads, const Model& calibration_model,
+    int32_t fisher_refinement_iterations, int32_t n_threads,
+    const Model& calibration_model,
     const AdaptiveParticleOptions& options,
     int32_t maximum_particles,
     const ProposalScreeningPlan* screening_plan) {
     return make_adaptive_particle_range(data, basis, helmert, pilot,
-        pilot_cache, proposal_kind, seed, fisher_broadening, n_threads,
+        pilot_cache, proposal_kind, seed, fisher_broadening,
+        fisher_refinement_iterations, n_threads,
         calibration_model, options, maximum_particles, screening_plan, 0,
         static_cast<int32_t>(data.coordinates.rows()));
 }
@@ -624,11 +636,13 @@ namespace uac {
 ParticleSet make_particles(const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert, const Pilot& pilot,
     ProposalKind proposal_kind, int32_t samples, uint64_t seed,
-    double fisher_broadening, int32_t n_threads) {
+    double fisher_broadening, int32_t n_threads,
+    int32_t fisher_refinement_iterations) {
     const detail::PilotCache pilot_cache(pilot);
     return detail::make_particle_range(data, basis, helmert, pilot, pilot_cache,
         proposal_kind,
-        samples, seed, fisher_broadening, n_threads, nullptr, 0,
+        samples, seed, fisher_broadening, fisher_refinement_iterations,
+        n_threads, nullptr, 0,
         static_cast<int32_t>(data.coordinates.rows()));
 }
 

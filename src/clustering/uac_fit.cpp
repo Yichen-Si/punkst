@@ -1,5 +1,6 @@
 #include "clustering/uac_cache_internal.hpp"
 #include "clustering/uac_initialization_internal.hpp"
+#include "clustering/uac_stochastic_internal.hpp"
 
 #include "clustering_core/cosine_clustering.hpp"
 
@@ -47,12 +48,38 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         || !std::isfinite(options.particle_variance_change_tolerance)
         || !(options.initialization_ridge_precision >= 0.0)
         || !std::isfinite(options.initialization_ridge_precision)
+        || options.initialization_measurement_target <= 0
+        || options.initialization_candidate_score_target < -1
+        || options.initialization_sampling_seed < -1
         || !(options.target_relative_floor > 0.0)
         || !(options.covariance_floor > 0.0)
         || !(options.covariance_shrinkage_strength >= 0.0)
         || !std::isfinite(options.covariance_shrinkage_strength)
         || !(options.fisher_broadening > 0.0)
         || !std::isfinite(options.fisher_broadening)
+        || options.fisher_refinement_iterations <= 0
+        || !(options.fit_document_budget >= 0.0)
+        || !std::isfinite(options.fit_document_budget)
+        || options.fit_full_tail_updates < 0
+        || options.fit_subsample_target <= 0
+        || !(options.fit_subsample_base_fraction >= 0.0)
+        || !(options.fit_subsample_base_fraction < 1.0)
+        || !std::isfinite(options.fit_subsample_base_fraction)
+        || options.fit_subsample_memory_budget == 0
+        || !(options.fit_subsample_safety_factor >= 1.0)
+        || !std::isfinite(options.fit_subsample_safety_factor)
+        || options.fit_subsample_min_updates <= 0
+        || options.fit_subsample_max_updates < options.fit_subsample_min_updates
+        || !(options.fit_subsample_change_tolerance > 0.0)
+        || !std::isfinite(options.fit_subsample_change_tolerance)
+        || options.fit_subsample_topup_rounds < 0
+        || options.fit_batch_documents <= 0
+        || !(options.fit_step_kappa > 0.5)
+        || !(options.fit_step_kappa <= 1.0)
+        || !std::isfinite(options.fit_step_kappa)
+        || !(options.fit_step_initial > 0.0)
+        || !(options.fit_step_initial <= 1.0)
+        || !std::isfinite(options.fit_step_initial)
         || !valid_initialization_metric) {
         throw std::invalid_argument("Invalid UAC fit options or dataset");
     }
@@ -95,6 +122,11 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         throw std::invalid_argument(
             "Particle initial model requires particle handoff");
     }
+    if (options.initialization_only
+        && options.handoff != HandoffMode::Particle) {
+        throw std::invalid_argument(
+            "Initialization-only UAC requires particle handoff");
+    }
     if (options.particle_em_fixed_iterations > 0
         && options.handoff != HandoffMode::Particle) {
         throw std::invalid_argument(
@@ -115,24 +147,73 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         throw std::invalid_argument(
             "The UAC stream particle engine requires particle handoff");
     }
+    if (options.particle_fit_schedule != ParticleFitSchedule::Exact
+        && options.handoff != HandoffMode::Particle) {
+        throw std::invalid_argument(
+            "Approximate UAC particle fitting requires particle handoff");
+    }
+    if (options.particle_fit_schedule == ParticleFitSchedule::Online
+        && options.particle_engine != ParticleEngine::Stream) {
+        throw std::invalid_argument(
+            "Online UAC particle fitting requires the stream engine");
+    }
+    if (options.particle_fit_schedule == ParticleFitSchedule::Subsample
+        && options.particle_engine == ParticleEngine::Batch
+        && options.fit_subsample_storage == SubsampleStorage::Disk) {
+        throw std::invalid_argument(
+            "Batch UAC subsample fitting does not support disk subsample storage");
+    }
+    if (options.particle_fit_schedule == ParticleFitSchedule::Online
+        && !(options.fit_document_budget > 0.0)) {
+        throw std::invalid_argument(
+            "Online UAC particle fitting requires a positive document budget");
+    }
+    if (options.particle_fit_schedule != ParticleFitSchedule::Exact
+        && (options.particle_em_fixed_iterations > 0
+            || options.particle_variance_change_tolerance > 0.0)) {
+        throw std::invalid_argument(
+            "Approximate UAC particle fitting uses its document budget, not exact-EM stopping options");
+    }
     tbb::global_control control(tbb::global_control::max_allowed_parallelism,
         std::max(1, options.n_threads));
     const auto initialization_start =
         std::chrono::steady_clock::now();
     FitResult result;
+    result.initialization.measurement_mode =
+        options.initialization_measurement_mode;
+    result.initialization.total_documents = data.coordinates.rows();
+    result.initialization.sampling_seed =
+        options.initialization_sampling_seed >= 0
+        ? options.initialization_sampling_seed : options.seed;
+    result.initialization.measurement_target =
+        options.initialization_measurement_mode
+                == InitializationMeasurementMode::HorvitzThompson
+        ? options.initialization_measurement_target : 0;
+    result.initialization.candidate_score_target =
+        options.initialization_measurement_mode
+                == InitializationMeasurementMode::Legacy
+        ? 0
+        : options.initialization_candidate_score_target >= 0
+            ? options.initialization_candidate_score_target
+            : options.initialization_measurement_mode
+                    == InitializationMeasurementMode::Full
+                ? 512 : options.initialization_measurement_target;
     struct StartPartition {
+        Eigen::VectorXi raw_assignments;
         Eigen::VectorXi assignments;
         RestartTrace metadata;
     };
     std::vector<StartPartition> starts;
     starts.reserve(static_cast<size_t>(total_starts));
-    auto append_start = [&](Eigen::VectorXi assignments,
+    auto append_start = [&](Eigen::VectorXi raw_assignments,
+                            Eigen::VectorXi assignments,
                             RestartTrace metadata) {
         metadata.handoff = options.handoff;
         metadata.phase = options.handoff == HandoffMode::Particle
             ? TracePhase::CorrectedMomScore : TracePhase::PointMapEm;
         starts.push_back({
-            std::move(assignments), std::move(metadata)});
+            std::move(raw_assignments), std::move(assignments),
+            std::move(metadata)});
     };
 
     int32_t global_start = 0;
@@ -149,7 +230,7 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         kmeans.seed = metadata.seed;
         DenseKMeansResult clustering = simplex_dense_kmeans(
             data.centers, options.initialization_metric, kmeans);
-        append_start(std::move(clustering.assignments), metadata);
+        append_start({}, std::move(clustering.assignments), metadata);
     }
 
     if (options.leiden_starts > 0) {
@@ -174,7 +255,7 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             leiden_options.resolution = resolution;
             leiden_options.max_iterations = options.leiden_max_iterations;
             leiden_options.seed = metadata.seed;
-            const LeidenResult leiden = leiden_cluster(knn.graph.n_nodes,
+            LeidenResult leiden = leiden_cluster(knn.graph.n_nodes,
                 knn.graph.edges, knn.graph.weights, leiden_options);
             metadata.raw_communities = leiden.n_communities;
             metadata.reconciliation_count = std::abs(
@@ -187,7 +268,8 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                 leiden.membership, leiden.n_communities,
                 options.n_components, data.centers,
                 options.initialization_metric, reconcile_options);
-            append_start(std::move(assignments), metadata);
+            append_start(std::move(leiden.membership),
+                std::move(assignments), metadata);
 
             if (!adapting) continue;
             if (leiden.n_communities < options.n_components) {
@@ -216,7 +298,9 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     }
     std::vector<HardPartitionMoments> partition_moments;
     std::vector<std::vector<Eigen::MatrixXd>> measurement_sums;
+    InitializationMeasurements initialization_measurements;
     if (options.handoff == HandoffMode::Particle) {
+        const auto partition_start = std::chrono::steady_clock::now();
         partition_moments.reserve(starts.size());
         for (const auto& start : starts) {
             partition_moments.push_back(hard_partition_moments(
@@ -225,14 +309,61 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         initialization_precision = shared_measurement_precision(
             partition_moments, options.initialization_ridge_precision,
             options.target_relative_floor);
+        result.initialization.partition_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - partition_start).count();
         std::vector<Eigen::VectorXi> assignments;
         assignments.reserve(starts.size());
         for (const auto& start : starts) {
             assignments.push_back(start.assignments);
         }
-        measurement_sums = measurement_sums_by_partition(
-            data, *basis, helmert, initialization_precision, assignments,
-            options.n_components, options.proposal, count_source);
+        if (options.initialization_measurement_mode
+                == InitializationMeasurementMode::Legacy) {
+            const auto measurement_start = std::chrono::steady_clock::now();
+            measurement_sums = measurement_sums_by_partition(
+                data, *basis, helmert, initialization_precision, assignments,
+                options.n_components, options.proposal, count_source);
+            result.initialization.measurement_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now()
+                    - measurement_start).count();
+            result.initialization.measurement_documents =
+                data.coordinates.rows();
+            result.initialization.candidate_score_documents =
+                data.coordinates.rows();
+            result.initialization.minimum_measurement_effective_size =
+                partition_moments.front().counts.minCoeff();
+            result.initialization.minimum_candidate_score_effective_size =
+                result.initialization.minimum_measurement_effective_size;
+        } else {
+            initialization_measurements = collect_initialization_measurements(
+                data, *basis, helmert, initialization_precision, assignments,
+                partition_moments, options.n_components, options.proposal,
+                options.initialization_measurement_mode,
+                options.initialization_measurement_target,
+                result.initialization.candidate_score_target,
+                result.initialization.sampling_seed ^ 0x49ac2d1,
+                count_source);
+            measurement_sums = initialization_measurements.sums;
+            result.initialization.measurement_seconds =
+                initialization_measurements.seconds;
+            result.initialization.measurement_documents =
+                initialization_measurements.measurement_documents;
+            result.initialization.candidate_score_documents =
+                initialization_measurements.score_documents.size();
+            result.initialization.measurement_covariance_evaluations =
+                initialization_measurements.covariance_evaluations;
+            result.initialization.cached_measurement_bytes =
+                initialization_measurements.cache_bytes;
+            result.initialization.maximum_measurement_weight =
+                initialization_measurements.maximum_measurement_weight;
+            result.initialization.maximum_candidate_score_weight =
+                initialization_measurements.maximum_score_weight;
+            result.initialization.minimum_measurement_effective_size =
+                initialization_measurements.minimum_measurement_effective_size;
+            result.initialization.minimum_candidate_score_effective_size =
+                initialization_measurements.minimum_score_effective_size;
+        }
     }
     for (size_t i = 0; i < starts.size(); ++i) {
         const auto& start = starts[i];
@@ -253,7 +384,8 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                 candidate.model = initialize_model_from_corrected_moments(
                     data, start.assignments, partition_moments[i],
                     measurement_sums[i], shrinkage,
-                    options.covariance_floor);
+                    options.covariance_floor,
+                    &result.initialization.covariance_floor_activations);
                 candidates.push_back(std::move(candidate));
             }
         } catch (const std::exception&) {
@@ -263,11 +395,33 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             candidates.push_back(std::move(failed));
         }
     }
+    result.initialization_partitions.reserve(starts.size());
+    for (auto& start : starts) {
+        result.initialization_partitions.push_back({
+            start.metadata.start, start.metadata.start_method,
+            std::move(start.assignments),
+            std::move(start.raw_assignments)});
+    }
     if (options.handoff == HandoffMode::Particle) {
-        score_corrected_moment_candidates(data, *basis, helmert,
-            initialization_precision, options, candidates, count_source);
-        result.initialization_measurement_covariance_evaluations =
-            2 * static_cast<int64_t>(data.coordinates.rows());
+        const auto candidate_score_start = std::chrono::steady_clock::now();
+        if (options.initialization_measurement_mode
+                == InitializationMeasurementMode::Legacy) {
+            score_corrected_moment_candidates(data, *basis, helmert,
+                initialization_precision, options, candidates, count_source);
+            result.initialization_measurement_covariance_evaluations =
+                2 * static_cast<int64_t>(data.coordinates.rows());
+            result.initialization.measurement_covariance_evaluations =
+                result.initialization_measurement_covariance_evaluations;
+        } else {
+            score_corrected_moment_candidates(
+                data, options, initialization_measurements, candidates);
+            result.initialization_measurement_covariance_evaluations =
+                initialization_measurements.covariance_evaluations;
+        }
+        result.initialization.candidate_score_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now()
+                - candidate_score_start).count();
     }
 
     Candidate* selected = nullptr;
@@ -377,6 +531,14 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
         std::chrono::duration<double>(
             std::chrono::steady_clock::now()
             - initialization_start).count();
+    result.initialization.total_seconds = initialization_seconds;
+
+    if (options.initialization_only) {
+        result.model = selected->model;
+        result.score.initialization_seconds = initialization_seconds;
+        result.converged = false;
+        return result;
+    }
 
     if (options.handoff == HandoffMode::Map) {
         result.model = selected->model;
@@ -408,7 +570,8 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
     const ProposalScreeningPlan proposal_screening =
         make_proposal_screening_plan(data, *basis, helmert, result.pilot,
             pilot_cache, options.proposal, options.fisher_broadening,
-            particle_seed, options.component_screening, count_source);
+            options.fisher_refinement_iterations, particle_seed,
+            options.component_screening, count_source);
     ComponentScreeningOptions particle_screening =
         options.component_screening;
     if (particle_screening.mode == ComponentScreeningMode::Auto) {
@@ -416,19 +579,75 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             particle_screening, false);
     }
     Candidate particle;
+    FitScheduleDiagnostics fit_schedule;
+    std::optional<ScoreResult> approximate_terminal_score;
+    std::optional<Expectation> approximate_terminal_expectation;
+    fit_schedule.schedule = options.particle_fit_schedule;
     try {
         if (options.particle_engine == ParticleEngine::Stream) {
             for (int32_t attempt = 0; attempt < 2; ++attempt) {
                 try {
                     StreamingOptions streaming = options.streaming;
+                    if (options.particle_fit_schedule
+                            == ParticleFitSchedule::Subsample) {
+                        const int32_t components = static_cast<int32_t>(
+                            particle_initial.weights.size());
+                        const int32_t dimension = static_cast<int32_t>(
+                            data.coordinates.cols());
+                        const int32_t factor_rank =
+                            particle_initial.covariance_kind
+                                == CovarianceKind::FactorAnalytic
+                            ? static_cast<int32_t>(particle_initial
+                                .factor_covariances.front().factor.cols())
+                            : -1;
+                        const uint64_t base_bytes =
+                            (sizeof(uint16_t) + sizeof(uint8_t)
+                                + sizeof(int32_t))
+                                * static_cast<uint64_t>(
+                                    data.coordinates.rows())
+                            + sizeof(double)
+                                * static_cast<uint64_t>(components)
+                                * (components + 16)
+                            + expectation_block_bytes(components,
+                                dimension, factor_rank)
+                                * std::max(1, options.n_threads);
+                        if (base_bytes >= options.fit_subsample_memory_budget) {
+                            throw std::runtime_error(
+                                "UAC subsample labels and E-step workspace exceed the memory budget");
+                        }
+                        const uint64_t per_document =
+                            sizeof(double)
+                                * static_cast<uint64_t>(options.n_particles)
+                                * (dimension + 2)
+                            + sizeof(int32_t)
+                                * static_cast<uint64_t>(
+                                    options.n_particles + 1)
+                            + sizeof(int64_t);
+                        const uint64_t available =
+                            options.fit_subsample_memory_budget - base_bytes;
+                        const uint64_t block_limit = available
+                            / (std::max(1, options.n_threads)
+                                * std::max<uint64_t>(1, per_document));
+                        streaming.block_documents = std::min(
+                            streaming.block_documents,
+                            static_cast<int32_t>(std::max<uint64_t>(
+                                1, std::min<uint64_t>(
+                                    block_limit,
+                                    std::numeric_limits<int32_t>::max()))));
+                    }
                     if (attempt > 0) streaming.rebuild_cache = true;
                     ParticleCache cache = open_or_build_particle_cache(
                         data, *basis, helmert, result.pilot, pilot_cache,
                         options.proposal, options.n_particles, particle_seed,
-                        options.fisher_broadening, options.n_threads,
+                        options.fisher_broadening,
+                        options.fisher_refinement_iterations,
+                        options.n_threads,
                         particle_initial, options.adaptive_particles,
                         &proposal_screening, options.component_screening,
                         streaming, count_source);
+                    if (mutable_data) {
+                        mutable_data->centers = RowMajorMatrixXd{};
+                    }
                     particle_screening = options.component_screening;
                     if (options.component_screening.mode
                             == ComponentScreeningMode::Auto) {
@@ -436,21 +655,46 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                             particle_screening,
                             cache.auto_screening_enabled());
                     }
-                    CachedResponsibilityState responsibility_state(
-                        cache.work_directory());
-                    auto expectation_function = [&](const Model& model) {
-                        return cached_particle_expectation(cache, model,
-                            particle_screening,
-                            ExpectationRequest{false, false, true},
-                            options.n_threads,
-                            nullptr, &responsibility_state);
-                    };
-                    particle = fit_particle_candidate(expectation_function,
-                        particle_initial, options, selected->trace);
+                    if (options.particle_fit_schedule
+                            == ParticleFitSchedule::Exact) {
+                        CachedResponsibilityState responsibility_state(
+                            cache.work_directory());
+                        auto expectation_function = [&](const Model& model) {
+                            return cached_particle_expectation(cache, model,
+                                particle_screening,
+                                ExpectationRequest{false, false, true},
+                                options.n_threads,
+                                nullptr, &responsibility_state);
+                        };
+                        const auto fit_start =
+                            std::chrono::steady_clock::now();
+                        particle = fit_particle_candidate(
+                            expectation_function, particle_initial, options,
+                            selected->trace);
+                        fit_schedule.full_data_evaluations =
+                            particle.trace.completed_updates;
+                        fit_schedule.fitting_seconds =
+                            std::chrono::duration<double>(
+                                std::chrono::steady_clock::now()
+                                - fit_start).count();
+                    } else {
+                        ApproximateParticleFit approximate =
+                            fit_cached_particle_approximate(cache,
+                                particle_initial, options,
+                                particle_screening, selected->trace);
+                        particle = std::move(approximate.candidate);
+                        fit_schedule = approximate.diagnostics;
+                        approximate_terminal_score =
+                            std::move(approximate.terminal_score);
+                        approximate_terminal_expectation =
+                            std::move(approximate.terminal_expectation);
+                    }
                     if (!particle.trace.collapsed) {
                         ComponentScreeningOptions terminal_screening =
                             particle_screening;
-                        if (options.exact_final_score) {
+                        if (options.exact_final_score
+                            || options.particle_fit_schedule
+                                != ParticleFitSchedule::Exact) {
                             terminal_screening.mode =
                                 ComponentScreeningMode::Off;
                             terminal_screening.maximum_components = 0;
@@ -458,18 +702,39 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                         const auto score_start =
                             std::chrono::steady_clock::now();
                         Expectation terminal_expectation;
-                        result.score = score_particle_cache(
-                            cache, particle.model, terminal_screening,
-                            options.streaming.count_storage
-                                == StreamingCountStorage::Memory,
-                            options.n_threads, &terminal_expectation);
+                        const bool precomputed_terminal =
+                            approximate_terminal_score.has_value()
+                            && approximate_terminal_expectation.has_value();
+                        if (precomputed_terminal) {
+                            result.score = std::move(
+                                *approximate_terminal_score);
+                            terminal_expectation = std::move(
+                                *approximate_terminal_expectation);
+                        } else {
+                            result.score = score_particle_cache(
+                                cache, particle.model, terminal_screening,
+                                options.streaming.count_storage
+                                    == StreamingCountStorage::Memory
+                                    && options.particle_fit_schedule
+                                        != ParticleFitSchedule::Subsample,
+                                options.n_threads, &terminal_expectation);
+                            if (options.particle_fit_schedule
+                                    == ParticleFitSchedule::Subsample) {
+                                ++fit_schedule.subsample_full_cache_scans;
+                                fit_schedule.subsample_read_bytes +=
+                                    cache.storage_bytes();
+                            }
+                            ++fit_schedule.full_data_evaluations;
+                        }
                         finalize_particle_candidate(
                             particle, terminal_expectation, options);
                         add_screening_metrics(result.score,
                             options.component_screening, proposal_screening,
                             particle_screening);
                         result.score.exact_final_score =
-                            options.exact_final_score;
+                            options.exact_final_score
+                            || options.particle_fit_schedule
+                                != ParticleFitSchedule::Exact;
                         result.score.map_component_screening =
                             selected_map_screening.mode
                             == ComponentScreeningMode::On;
@@ -484,14 +749,28 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                                 count_source->peak_block_bytes();
                             result.score.streaming_external_count_parses = 1;
                         }
-                        result.score.scoring_seconds =
-                            std::chrono::duration<double>(
-                                std::chrono::steady_clock::now()
-                                - score_start).count();
+                        if (!precomputed_terminal) {
+                            result.score.scoring_seconds =
+                                std::chrono::duration<double>(
+                                    std::chrono::steady_clock::now()
+                                    - score_start).count();
+                            fit_schedule.fitting_seconds +=
+                                result.score.scoring_seconds;
+                        }
+                        fit_schedule.document_pass_equivalents =
+                            fit_schedule.full_data_evaluations
+                            + static_cast<double>(
+                                fit_schedule.approximate_documents)
+                                / data.coordinates.rows();
+                        result.score.fit_schedule = fit_schedule;
                     }
                     break;
                 } catch (const ParticleCacheCorruption&) {
                     if (attempt > 0) throw;
+                    if (mutable_data && mutable_data->centers.rows() == 0) {
+                        mutable_data->centers = ilr_inverse(
+                            mutable_data->coordinates, helmert);
+                    }
                 }
             }
             if (options.streaming.count_storage
@@ -504,9 +783,13 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             const RaggedParticleSet particles = make_adaptive_particles(
                 data, *basis, helmert, result.pilot, pilot_cache,
                 options.proposal, particle_seed, options.fisher_broadening,
-                options.n_threads, particle_initial,
+                options.fisher_refinement_iterations, options.n_threads,
+                particle_initial,
                 options.adaptive_particles, options.n_particles,
                 &proposal_screening);
+            if (mutable_data) {
+                mutable_data->centers = RowMajorMatrixXd{};
+            }
             if (options.component_screening.mode
                     == ComponentScreeningMode::Auto) {
                 const bool enabled = resolve_particle_component_screening(
@@ -516,17 +799,28 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                 apply_auto_component_screening_resolution(
                     particle_screening, enabled);
             }
-            auto expectation_function = [&](const Model& model) {
-                return particle_expectation(particles, model,
-                    ExpectationRequest{true, false, true},
-                    particle_screening);
-            };
-            particle = fit_particle_candidate(expectation_function,
-                particle_initial, options, selected->trace);
+            if (options.particle_fit_schedule
+                    == ParticleFitSchedule::Subsample) {
+                ApproximateParticleFit approximate = fit_particle_subsample(
+                    particles, particle_initial, options,
+                    particle_screening, selected->trace);
+                particle = std::move(approximate.candidate);
+                fit_schedule = std::move(approximate.diagnostics);
+            } else {
+                auto expectation_function = [&](const Model& model) {
+                    return particle_expectation(particles, model,
+                        ExpectationRequest{true, false, true},
+                        particle_screening);
+                };
+                particle = fit_particle_candidate(expectation_function,
+                    particle_initial, options, selected->trace);
+            }
             if (!particle.trace.collapsed) {
                 ComponentScreeningOptions terminal_screening =
                     particle_screening;
-                if (options.exact_final_score) {
+                if (options.exact_final_score
+                    || options.particle_fit_schedule
+                        != ParticleFitSchedule::Exact) {
                     terminal_screening.mode =
                         ComponentScreeningMode::Off;
                     terminal_screening.maximum_components = 0;
@@ -536,13 +830,23 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                 result.score = score_particles(
                     particles, particle.model, terminal_screening,
                     &terminal_expectation);
+                if (options.particle_fit_schedule
+                        == ParticleFitSchedule::Exact) {
+                    fit_schedule.full_data_evaluations =
+                        particle.trace.completed_updates + 1;
+                } else {
+                    ++fit_schedule.full_data_evaluations;
+                }
                 finalize_particle_candidate(
                     particle, terminal_expectation, options);
                 add_screening_metrics(result.score,
                     options.component_screening, proposal_screening,
                     particle_screening);
                 result.score.exact_final_score =
-                    options.exact_final_score;
+                    options.exact_final_score
+                    || options.particle_fit_schedule
+                        != ParticleFitSchedule::Exact;
+                result.score.fit_schedule = fit_schedule;
                 result.score.map_component_screening =
                     selected_map_screening.mode
                     == ComponentScreeningMode::On;
@@ -553,14 +857,24 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                     + particles.sampling_seconds + particles.likelihood_seconds;
                 result.score.scoring_seconds = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - score_start).count();
+                fit_schedule.fitting_seconds += result.score.scoring_seconds;
+                fit_schedule.document_pass_equivalents =
+                    fit_schedule.full_data_evaluations
+                    + static_cast<double>(fit_schedule.approximate_documents)
+                        / data.coordinates.rows();
+                result.score.fit_schedule = fit_schedule;
             }
         } else {
             const ParticleSet particles = make_particle_range(data, *basis,
                 helmert, result.pilot, pilot_cache, options.proposal,
                 options.n_particles, particle_seed,
-                options.fisher_broadening, options.n_threads,
+                options.fisher_broadening,
+                options.fisher_refinement_iterations, options.n_threads,
                 &proposal_screening, 0,
                 static_cast<int32_t>(data.coordinates.rows()));
+            if (mutable_data) {
+                mutable_data->centers = RowMajorMatrixXd{};
+            }
             if (options.component_screening.mode
                     == ComponentScreeningMode::Auto) {
                 const bool enabled = resolve_particle_component_screening(
@@ -570,17 +884,28 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                 apply_auto_component_screening_resolution(
                     particle_screening, enabled);
             }
-            auto expectation_function = [&](const Model& model) {
-                return particle_expectation(particles, model,
-                    ExpectationRequest{true, false, true},
-                    particle_screening);
-            };
-            particle = fit_particle_candidate(expectation_function,
-                particle_initial, options, selected->trace);
+            if (options.particle_fit_schedule
+                    == ParticleFitSchedule::Subsample) {
+                ApproximateParticleFit approximate = fit_particle_subsample(
+                    particles, particle_initial, options,
+                    particle_screening, selected->trace);
+                particle = std::move(approximate.candidate);
+                fit_schedule = std::move(approximate.diagnostics);
+            } else {
+                auto expectation_function = [&](const Model& model) {
+                    return particle_expectation(particles, model,
+                        ExpectationRequest{true, false, true},
+                        particle_screening);
+                };
+                particle = fit_particle_candidate(expectation_function,
+                    particle_initial, options, selected->trace);
+            }
             if (!particle.trace.collapsed) {
                 ComponentScreeningOptions terminal_screening =
                     particle_screening;
-                if (options.exact_final_score) {
+                if (options.exact_final_score
+                    || options.particle_fit_schedule
+                        != ParticleFitSchedule::Exact) {
                     terminal_screening.mode =
                         ComponentScreeningMode::Off;
                     terminal_screening.maximum_components = 0;
@@ -590,13 +915,23 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                 result.score = score_particles(
                     particles, particle.model, terminal_screening,
                     &terminal_expectation);
+                if (options.particle_fit_schedule
+                        == ParticleFitSchedule::Exact) {
+                    fit_schedule.full_data_evaluations =
+                        particle.trace.completed_updates + 1;
+                } else {
+                    ++fit_schedule.full_data_evaluations;
+                }
                 finalize_particle_candidate(
                     particle, terminal_expectation, options);
                 add_screening_metrics(result.score,
                     options.component_screening, proposal_screening,
                     particle_screening);
                 result.score.exact_final_score =
-                    options.exact_final_score;
+                    options.exact_final_score
+                    || options.particle_fit_schedule
+                        != ParticleFitSchedule::Exact;
+                result.score.fit_schedule = fit_schedule;
                 result.score.map_component_screening =
                     selected_map_screening.mode
                     == ComponentScreeningMode::On;
@@ -604,6 +939,12 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
                     particles.sampling_seconds + particles.likelihood_seconds;
                 result.score.scoring_seconds = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - score_start).count();
+                fit_schedule.fitting_seconds += result.score.scoring_seconds;
+                fit_schedule.document_pass_equivalents =
+                    fit_schedule.full_data_evaluations
+                    + static_cast<double>(fit_schedule.approximate_documents)
+                        / data.coordinates.rows();
+                result.score.fit_schedule = fit_schedule;
             }
         }
     } catch (const std::exception& exception) {
@@ -612,6 +953,7 @@ FitResult fit_impl(const Dataset& data, Dataset* mutable_data,
             + std::string(exception.what()));
     }
     result.traces.push_back(particle.trace);
+    result.fit_schedule = fit_schedule;
     if (particle.trace.collapsed) {
         throw std::runtime_error(
             "Selected UAC initializer collapsed during particle EM");
@@ -760,7 +1102,8 @@ ScoreResult score_particle_impl(const Dataset& data,
         static_cast<uint64_t>(state.seed) ^ 0xF604;
     const ProposalScreeningPlan proposal_screening =
         make_proposal_screening_plan(data, basis, state.helmert, state.pilot,
-            pilot_cache, proposal, state.fisher_broadening, particle_seed,
+            pilot_cache, proposal, state.fisher_broadening,
+            state.fisher_refinement_iterations, particle_seed,
             component_screening, count_source);
     ComponentScreeningOptions particle_screening = component_screening;
     if (particle_screening.mode == ComponentScreeningMode::Auto) {
@@ -777,6 +1120,7 @@ ScoreResult score_particle_impl(const Dataset& data,
                     data, basis, state.helmert, state.pilot, pilot_cache,
                     proposal, particles, particle_seed,
                     state.fisher_broadening,
+                    state.fisher_refinement_iterations,
                     n_threads, state.model, adaptive_particles,
                     &proposal_screening, component_screening, streaming,
                     count_source);
@@ -834,7 +1178,8 @@ ScoreResult score_particle_impl(const Dataset& data,
         const RaggedParticleSet set = make_adaptive_particles(data, basis,
             state.helmert, state.pilot, pilot_cache, proposal,
             particle_seed,
-            state.fisher_broadening, n_threads, state.model,
+            state.fisher_broadening, state.fisher_refinement_iterations,
+            n_threads, state.model,
             adaptive_particles, particles, &proposal_screening);
         if (component_screening.mode == ComponentScreeningMode::Auto) {
             const bool enabled = resolve_particle_component_screening(
@@ -865,7 +1210,8 @@ ScoreResult score_particle_impl(const Dataset& data,
     const auto particle_start = std::chrono::steady_clock::now();
     const ParticleSet set = make_particle_range(data, basis, state.helmert,
         state.pilot, pilot_cache, proposal, particles, particle_seed,
-        state.fisher_broadening, n_threads, &proposal_screening, 0,
+        state.fisher_broadening, state.fisher_refinement_iterations,
+        n_threads, &proposal_screening, 0,
         static_cast<int32_t>(data.coordinates.rows()));
     if (component_screening.mode == ComponentScreeningMode::Auto) {
         const bool enabled = resolve_particle_component_screening(

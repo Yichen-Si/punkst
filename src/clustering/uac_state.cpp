@@ -159,6 +159,8 @@ State make_state(const FitResult& fit_result, const FitOptions& options,
     state.covariance_shrinkage_strength =
         options.covariance_shrinkage_strength;
     state.fisher_broadening = options.fisher_broadening;
+    state.fisher_refinement_iterations =
+        options.fisher_refinement_iterations;
     state.fit_adaptive_particles = options.adaptive_particles;
     state.component_screening = options.component_screening;
     state.fit_map_component_screening =
@@ -188,7 +190,7 @@ void write_state(const std::string& path, const State& state) {
     if (!out) throw std::runtime_error("Cannot write UAC state: " + path);
     const int32_t components = static_cast<int32_t>(state.model.weights.size());
     const int32_t dimension = static_cast<int32_t>(state.model.means.cols());
-    out << "##punkst_uac_state_v13\n"
+    out << "##punkst_uac_state_v14\n"
         << "##handoff\t" << handoff_name(state.handoff) << "\n"
         << "##proposal\t" << proposal_name(state.proposal) << "\n"
         << "##particles\t" << state.n_particles << "\n"
@@ -242,6 +244,8 @@ void write_state(const std::string& path, const State& state) {
         << "##covariance_shrinkage_strength\t"
         << state.covariance_shrinkage_strength << "\n"
         << "##fisher_broadening\t" << state.fisher_broadening << "\n"
+        << "##fisher_refinement_iterations\t"
+        << state.fisher_refinement_iterations << "\n"
         << "##component_screening\t"
         << component_screening_mode_name(
             state.component_screening.mode) << "\n"
@@ -360,6 +364,7 @@ State read_state(const std::string& path) {
     int32_t state_version = 0;
     bool saw_proposal = false;
     bool saw_fisher_broadening = false;
+    bool saw_fisher_refinement_iterations = false;
     bool saw_initialization_ridge_precision = false;
     bool saw_kmeans_starts = false, saw_leiden_starts = false;
     bool saw_initialization_metric = false;
@@ -389,23 +394,26 @@ State read_state(const std::string& path) {
         if (state_version == 0
             && token[0] != "##punkst_uac_state_v11"
             && token[0] != "##punkst_uac_state_v12"
-            && token[0] != "##punkst_uac_state_v13") {
+            && token[0] != "##punkst_uac_state_v13"
+            && token[0] != "##punkst_uac_state_v14") {
             throw std::runtime_error(
                 "UAC state must begin with a supported version header");
         }
         if (token[0] == "##punkst_uac_state_v11"
             || token[0] == "##punkst_uac_state_v12"
-            || token[0] == "##punkst_uac_state_v13") {
+            || token[0] == "##punkst_uac_state_v13"
+            || token[0] == "##punkst_uac_state_v14") {
             if (state_version != 0) {
                 throw std::runtime_error("Duplicate UAC state version");
             }
             state_version = token[0] == "##punkst_uac_state_v11" ? 11
-                : token[0] == "##punkst_uac_state_v12" ? 12 : 13;
+                : token[0] == "##punkst_uac_state_v12" ? 12
+                : token[0] == "##punkst_uac_state_v13" ? 13 : 14;
             continue;
         }
         if (token[0].rfind("##punkst_uac_state_v", 0) == 0) {
             throw std::runtime_error(
-                "Unsupported UAC state version; only v11, v12, and v13 are accepted");
+                "Unsupported UAC state version; only v11 through v14 are accepted");
         }
         if (token[0].rfind("##", 0) == 0) {
             if (token.size() != 2) throw std::runtime_error("Malformed UAC state metadata");
@@ -555,6 +563,11 @@ State read_state(const std::string& path) {
                 state.fisher_broadening = parse_state_double(token[1]);
                 saw_fisher_broadening = true;
             }
+            else if (key == "fisher_refinement_iterations") {
+                state.fisher_refinement_iterations =
+                    parse_state_int32(token[1]);
+                saw_fisher_refinement_iterations = true;
+            }
             else if (key == "component_screening") {
                 state.component_screening.mode =
                     parse_component_screening_mode(token[1]);
@@ -652,7 +665,12 @@ State read_state(const std::string& path) {
         state.factor_diagonal_mode = FactorDiagonalMode::Component;
         saw_factor_diagonal_mode = true;
     }
+    if (state_version < 14) {
+        state.fisher_refinement_iterations = 1;
+        saw_fisher_refinement_iterations = true;
+    }
     if (state_version == 0 || !saw_proposal || !saw_fisher_broadening
+        || !saw_fisher_refinement_iterations
         || !saw_kmeans_starts
         || !saw_leiden_starts || !saw_initialization_metric
         || !saw_selected_start
@@ -702,6 +720,9 @@ State read_state(const std::string& path) {
     }
     if (state_version >= 13) {
         required_metadata.push_back("factor_diagonal_mode");
+    }
+    if (state_version >= 14) {
+        required_metadata.push_back("fisher_refinement_iterations");
     }
     required_metadata.push_back(
         "particle_variance_change_tolerance");

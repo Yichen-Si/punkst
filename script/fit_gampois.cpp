@@ -35,7 +35,7 @@ void append_repeated(std::vector<std::string>& args, const std::string& key,
 } // namespace
 
 int32_t cmdGammaPoisFit(int argc, char** argv) {
-    std::string inFile, metaFile, outPrefix, featureFile;
+    std::string inFile, metaFile, outPrefix, featureFile, modelInitFile;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
@@ -64,6 +64,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     double mDelta = 1e-3;
     int32_t nTopics = 0;
     double betaShape = -1.0;
+    double randomInitShape = 2.0;
     double xiShape = 0.3;
     double xiMean = -1.0;
     double thetaConcentration = 1.0;
@@ -122,6 +123,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("mean-change-tol", "Convergence tolerance per doc", mDelta)
       .add_option("n-topics", "Number of topics", nTopics)
       .add_option("beta-shape", "Gamma shape a for beta_wr; default max(1/K, 0.01)", betaShape)
+      .add_option("random-init-shape",
+          "Shape of mean-one Gamma noise used for random topic initialization",
+          randomInitShape)
       .add_option("xi-shape", "Gamma shape a0 for xi_w", xiShape)
       .add_option("xi-mean", "Prior mean b0 for xi_w; default derives from size factor and vocabulary", xiMean)
       .add_option("theta-concentration", "Total theta concentration alpha", thetaConcentration)
@@ -130,6 +134,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
       .add_option("eb-shrinkage", "Activate asymmetric empirical-Bayes topic-rate nu_r; default uses the symmetric theta concentration prior", ebShrinkage)
       .add_option("nu-max", "Positive cap on E[nu_r] under --eb-shrinkage; default 10*alpha", nuMax)
       .add_option("size-factor", "Corpus mean document length nbar; defaults to the effective feature total divided by document count", sizeFactor);
+    pl.add_option("model-init",
+        "Topic model TSV used only to initialize Gamma-Poisson beta means",
+        modelInitFile);
 
     pl.add_option("dispersion-init-epochs", "Poisson warmup epochs before estimating dispersion", dispersionInitEpochs)
       .add_option("dispersion-estimator", "All-cell moment estimator: factorial or residual", dispersionEstimator)
@@ -165,6 +172,9 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     const bool nuMaxProvided = pl.was_provided("nu-max");
     if (!std::isfinite(thetaConcentration) || thetaConcentration <= 0.0) {
         error("--theta-concentration must be positive and finite");
+    }
+    if (!std::isfinite(randomInitShape) || randomInitShape <= 0.0) {
+        error("--random-init-shape must be positive and finite");
     }
     if (nuMaxProvided && !ebShrinkage) {
         error("--nu-max requires --eb-shrinkage");
@@ -269,7 +279,10 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     gp->initialize(nTopics, seed, nThreads, verbose, betaShape, xiShape, xiMean,
         thetaConcentration, nuShape, nuRate, kappa, tau0,
         gp->nUnits(), resolvedSizeFactor,
-        !ebShrinkage, nuMax, maxIter, mDelta);
+        !ebShrinkage, nuMax, maxIter, mDelta, randomInitShape);
+    if (!modelInitFile.empty()) {
+        gp->initializeFromModel(modelInitFile);
+    }
     if (icolDispersion >= 0) {
         gp->setFeatureDispersion(suppliedTau);
         notice("Using per-feature dispersion tau from column %d of %s",

@@ -38,6 +38,8 @@ enum class TracePhase {
     CorrectedMomScore,
     PointMapEm,
     ParticleEm,
+    SubsampleEm,
+    OnlineEm,
 };
 
 enum class TraceEvent {
@@ -74,6 +76,30 @@ enum class ParticleEngine {
     Stream,
 };
 
+enum class ParticleFitSchedule {
+    Exact,
+    Subsample,
+    Online,
+};
+
+enum class SubsampleStorage {
+    Auto,
+    Resident,
+    Disk,
+};
+
+enum class InitializationMeasurementMode {
+    Legacy,
+    Full,
+    HorvitzThompson,
+};
+
+enum class FitTailMode {
+    Adaptive,
+    Fixed,
+    Off,
+};
+
 enum class StreamingCountStorage {
     Source,
     Memory,
@@ -103,6 +129,11 @@ const char* trace_event_name(TraceEvent value);
 const char* adaptive_particle_binding_name(AdaptiveParticleBinding value);
 const char* component_screening_mode_name(ComponentScreeningMode value);
 const char* particle_engine_name(ParticleEngine value);
+const char* particle_fit_schedule_name(ParticleFitSchedule value);
+const char* subsample_storage_name(SubsampleStorage value);
+const char* initialization_measurement_mode_name(
+    InitializationMeasurementMode value);
+const char* fit_tail_mode_name(FitTailMode value);
 const char* streaming_count_storage_name(StreamingCountStorage value);
 const char* streaming_particle_storage_name(StreamingParticleStorage value);
 const char* visualization_whitening_name(VisualizationWhitening value);
@@ -114,6 +145,11 @@ StartMethod parse_start_method(const std::string& value);
 ComponentScreeningMode parse_component_screening_mode(
     const std::string& value);
 ParticleEngine parse_particle_engine(const std::string& value);
+ParticleFitSchedule parse_particle_fit_schedule(const std::string& value);
+SubsampleStorage parse_subsample_storage(const std::string& value);
+InitializationMeasurementMode parse_initialization_measurement_mode(
+    const std::string& value);
+FitTailMode parse_fit_tail_mode(const std::string& value);
 StreamingCountStorage parse_streaming_count_storage(
     const std::string& value);
 StreamingParticleStorage parse_streaming_particle_storage(
@@ -225,6 +261,17 @@ struct VisualizationResult {
     VisualizationProjection full;
 };
 
+struct VisualizationMoments {
+    Eigen::VectorXd weights;
+    RowMajorMatrixXd means;
+    std::vector<Eigen::MatrixXd> covariances;
+};
+
+struct VisualizationSampleMoments {
+    Eigen::VectorXd mean;
+    Eigen::MatrixXd covariance;
+};
+
 struct IterationDiagnostic {
     TracePhase phase = TracePhase::CorrectedMomScore;
     TraceEvent event = TraceEvent::Evaluation;
@@ -252,6 +299,7 @@ struct FitOptions {
     HandoffMode handoff = HandoffMode::Particle;
     ProposalKind proposal = ProposalKind::ExactFisher;
     ParticleEngine particle_engine = ParticleEngine::Batch;
+    ParticleFitSchedule particle_fit_schedule = ParticleFitSchedule::Exact;
     StreamingOptions streaming;
     int32_t n_components = 3;
     int32_t n_particles = 256;
@@ -273,6 +321,12 @@ struct FitOptions {
     double responsibility_change_tolerance = 1e-3;
     double particle_variance_change_tolerance = 0.0;
     double initialization_ridge_precision = 0.0;
+    InitializationMeasurementMode initialization_measurement_mode =
+        InitializationMeasurementMode::HorvitzThompson;
+    int32_t initialization_measurement_target = 1024;
+    int32_t initialization_candidate_score_target = -1;
+    int32_t initialization_sampling_seed = -1;
+    bool initialization_only = false;
     double target_relative_floor = 1e-4;
     double leiden_knn_epsilon = 0.0;
     double leiden_resolution = 1.0;
@@ -280,12 +334,99 @@ struct FitOptions {
     bool adaptive_covariance_shrinkage = true;
     double covariance_shrinkage_strength = 20.0;
     double fisher_broadening = 1.5;
+    int32_t fisher_refinement_iterations = 1;
+    double fit_document_budget = 0.0;
+    int32_t fit_full_tail_updates = 1;
+    int32_t fit_subsample_target = 1024;
+    double fit_subsample_base_fraction = 0.01;
+    SubsampleStorage fit_subsample_storage = SubsampleStorage::Auto;
+    uint64_t fit_subsample_memory_budget = 1ull << 30;
+    double fit_subsample_safety_factor = 1.1;
+    int32_t fit_subsample_min_updates = 2;
+    int32_t fit_subsample_max_updates = 20;
+    double fit_subsample_change_tolerance = 1e-3;
+    int32_t fit_subsample_topup_rounds = 2;
+    FitTailMode fit_tail = FitTailMode::Adaptive;
+    int32_t fit_batch_documents = 2048;
+    double fit_step_kappa = 0.7;
+    double fit_step_initial = 0.1;
     AdaptiveParticleOptions adaptive_particles;
     ComponentScreeningOptions component_screening;
     std::optional<Model> particle_initial_model;
     bool exact_final_score = false;
     bool capture_model_trace = false;
     std::function<void(const IterationDiagnostic&)> iteration_callback;
+};
+
+struct InitializationDiagnostics {
+    InitializationMeasurementMode measurement_mode =
+        InitializationMeasurementMode::Legacy;
+    int64_t total_documents = 0;
+    int64_t measurement_documents = 0;
+    int64_t candidate_score_documents = 0;
+    int64_t measurement_covariance_evaluations = 0;
+    int32_t sampling_seed = 0;
+    int32_t measurement_target = 0;
+    int32_t candidate_score_target = 0;
+    uint64_t cached_measurement_bytes = 0;
+    double maximum_measurement_weight = 1.0;
+    double maximum_candidate_score_weight = 1.0;
+    double minimum_measurement_effective_size = 0.0;
+    double minimum_candidate_score_effective_size = 0.0;
+    int32_t covariance_floor_activations = 0;
+    double partition_seconds = 0.0;
+    double measurement_seconds = 0.0;
+    double candidate_score_seconds = 0.0;
+    double total_seconds = 0.0;
+};
+
+struct FitScheduleDiagnostics {
+    ParticleFitSchedule schedule = ParticleFitSchedule::Exact;
+    int32_t full_warmup_updates = 0;
+    int32_t approximate_updates = 0;
+    int32_t full_tail_updates = 0;
+    int32_t full_data_evaluations = 0;
+    int32_t subsample_evaluations = 0;
+    int64_t approximate_documents = 0;
+    int32_t subsample_documents = 0;
+    int32_t subsample_topup_rounds = 0;
+    double subsample_minimum_effective_size = 0.0;
+    double subsample_minimum_target_ratio = 0.0;
+    double subsample_weighted_documents = 0.0;
+    double subsample_maximum_weight = 0.0;
+    SubsampleStorage subsample_storage = SubsampleStorage::Auto;
+    uint64_t subsample_memory_budget = 0;
+    uint64_t subsample_predicted_bytes = 0;
+    uint64_t subsample_peak_bytes = 0;
+    uint64_t subsample_selected_particle_bytes = 0;
+    uint64_t subsample_disk_bytes = 0;
+    int32_t subsample_storage_promotions = 0;
+    std::string subsample_peak_phase;
+    int32_t subsample_full_cache_scans = 0;
+    uint64_t subsample_read_bytes = 0;
+    uint64_t subsample_write_bytes = 0;
+    double subsample_io_seconds = 0.0;
+    bool subsample_allocator_converged = false;
+    int32_t subsample_allocator_iterations = 0;
+    double subsample_parameter_change =
+        std::numeric_limits<double>::quiet_NaN();
+    std::string subsample_convergence_reason;
+    FitTailMode tail_mode = FitTailMode::Off;
+    bool audit_converged = false;
+    double audit_parameter_change =
+        std::numeric_limits<double>::quiet_NaN();
+    bool audit_active_set_unchanged = false;
+    std::vector<int32_t> subsample_stratum_documents;
+    std::vector<double> subsample_stratum_purity;
+    std::vector<double> subsample_stratum_probability;
+    std::vector<uint64_t> subsample_stratum_bytes;
+    std::vector<double> subsample_component_target;
+    std::vector<double> subsample_component_predicted_effective_size;
+    std::vector<double> subsample_component_realized_effective_size;
+    std::vector<int32_t> subsample_component_topups;
+    double document_pass_equivalents = 0.0;
+    double fitting_seconds = 0.0;
+    double approximate_seconds = 0.0;
 };
 
 struct EstepWorkDiagnostics {
@@ -332,6 +473,13 @@ struct RestartTrace {
     std::vector<Point> points;
     std::vector<ModelTraceEntry> model_trace;
     EstepWorkDiagnostics estep_work;
+};
+
+struct InitializationPartition {
+    int32_t start = 0;
+    StartMethod start_method = StartMethod::KMeans;
+    Eigen::VectorXi assignments;
+    Eigen::VectorXi raw_assignments;
 };
 
 struct ParticleDiagnostic {
@@ -387,6 +535,7 @@ struct ScoreResult {
     bool particle_component_screening = false;
     bool terminal_component_screening = false;
     bool exact_final_score = false;
+    FitScheduleDiagnostics fit_schedule;
     double component_bound_seconds = 0.0;
     int64_t evaluated_component_documents = 0;
     int64_t possible_component_documents = 0;
@@ -434,11 +583,14 @@ struct FitResult {
     Pilot pilot;
     ScoreResult score;
     std::vector<RestartTrace> traces;
+    std::vector<InitializationPartition> initialization_partitions;
     bool converged = false;
     int32_t selected_start = -1;
     StartMethod selected_start_method = StartMethod::KMeans;
     double selected_leiden_resolution = 0.0;
     int64_t initialization_measurement_covariance_evaluations = 0;
+    InitializationDiagnostics initialization;
+    FitScheduleDiagnostics fit_schedule;
 };
 
 struct State {
@@ -472,6 +624,7 @@ struct State {
     bool adaptive_covariance_shrinkage = true;
     double covariance_shrinkage_strength = 20.0;
     double fisher_broadening = 1.5;
+    int32_t fisher_refinement_iterations = 1;
     AdaptiveParticleOptions fit_adaptive_particles;
     ComponentScreeningOptions component_screening;
     bool fit_map_component_screening = false;
@@ -524,6 +677,22 @@ ScoreResult score_particle(const Dataset& data, const Basis& basis,
 VisualizationResult make_visualization(const Dataset& data,
     const Model& model, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const VisualizationOptions& options = {});
+VisualizationResult make_visualization(const Dataset& data,
+    const VisualizationMoments& moments,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const VisualizationOptions& options = {});
+VisualizationResult make_visualization(const Dataset& data,
+    const VisualizationMoments& moments,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const VisualizationOptions& options,
+    const VisualizationSampleMoments& sample_moments);
+VisualizationMoments summarize_hard_partition(
+    const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
+    const Eigen::Ref<const Eigen::VectorXi>& assignments,
+    int32_t components, int32_t n_threads = 1);
+VisualizationSampleMoments summarize_visualization_sample(
+    const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
+    int32_t n_threads = 1);
 
 State make_state(const FitResult& fit, const FitOptions& options,
     const StateMetadata& metadata);
@@ -536,6 +705,13 @@ void write_results(const std::string& path, const Dataset& data,
     const ScoreResult& score, int32_t top_c = -1);
 void write_diagnostics(const std::string& path, const Dataset& data,
     const ScoreResult& score);
+void write_initialization_diagnostics(const std::string& path,
+    const InitializationDiagnostics& diagnostics);
+void write_initialization_results(const std::string& path,
+    const Dataset& data,
+    const std::vector<InitializationPartition>& partitions);
+void write_subsample_diagnostics(const std::string& path,
+    const FitScheduleDiagnostics& diagnostics);
 void write_trace(const std::string& path,
     const std::vector<RestartTrace>& traces);
 void write_model_trace(const std::string& path,
@@ -545,6 +721,9 @@ void write_representatives(const std::string& path, const Dataset& data,
     const ScoreResult& score, int32_t n_representatives = 10);
 void write_visualization_axes(const std::string& path,
     const State& state, const VisualizationResult& visualization);
+void write_visualization_axes(const std::string& path,
+    const std::vector<std::string>& topics,
+    const VisualizationResult& visualization);
 void write_visualization_model(const std::string& path,
     const State& state, const VisualizationResult& visualization);
 void write_visualization_results(const std::string& path,

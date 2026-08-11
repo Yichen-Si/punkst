@@ -86,7 +86,7 @@ void write_model(const std::string& path, const State& state,
     out << "#cluster\tactive\tweight\teffective_membership"
         "\tmean_variance\tlog_volume";
     for (const auto& topic : state.topics) out << "\t" << topic;
-    out << "\n" << std::scientific << std::setprecision(10);
+    out << "\n" << std::scientific << std::setprecision(4);
     RowMajorMatrixXd compositions = ilr_inverse(state.model.means, state.helmert);
     for (Eigen::Index c = 0; c < state.model.weights.size(); ++c) {
         const Eigen::MatrixXd covariance = detail::model_covariance_dense(
@@ -123,7 +123,7 @@ void write_results(const std::string& path, const Dataset& data,
             out << "\tC" << rank << "\tP" << rank;
         }
         out << "\ttop_c_mass\tomitted_component_mass_bound\tentropy\n"
-            << std::scientific << std::setprecision(10);
+            << std::scientific << std::setprecision(4);
         for_each_responsibility_row(score,
             [&](int64_t d, const Eigen::RowVectorXd& probability) {
             if (d >= static_cast<int64_t>(data.identifiers.size())) {
@@ -165,9 +165,9 @@ void write_results(const std::string& path, const Dataset& data,
         });
         return;
     }
-    out << "#id\ttop_cluster\ttop_probability\tsecond_cluster\tsecond_probability\tentropy";
-    for (int32_t c = 0; c < components; ++c) out << "\tcluster_" << c;
-    out << "\n" << std::scientific << std::setprecision(10);
+    out << "#id\tC1\tP1\tC2\tP2\tentropy";
+    for (int32_t c = 0; c < components; ++c) out << "\t" << c;
+    out << "\n" << std::scientific << std::setprecision(4);
     for_each_responsibility_row(score,
         [&](int64_t d, const Eigen::RowVectorXd& probability) {
         if (d >= static_cast<int64_t>(data.identifiers.size())) {
@@ -254,6 +254,80 @@ void write_diagnostics(const std::string& path, const Dataset& data,
         << score.particle_generation_passes << "\n"
         << "##particle_engine\t"
         << (score.streaming ? "stream" : "batch") << "\n"
+        << "##particle_fit_schedule\t"
+        << particle_fit_schedule_name(score.fit_schedule.schedule) << "\n"
+        << "##fit_full_warmup_updates\t"
+        << score.fit_schedule.full_warmup_updates << "\n"
+        << "##fit_approximate_updates\t"
+        << score.fit_schedule.approximate_updates << "\n"
+        << "##fit_full_tail_updates\t"
+        << score.fit_schedule.full_tail_updates << "\n"
+        << "##fit_full_data_evaluations\t"
+        << score.fit_schedule.full_data_evaluations << "\n"
+        << "##fit_subsample_evaluations\t"
+        << score.fit_schedule.subsample_evaluations << "\n"
+        << "##fit_approximate_documents\t"
+        << score.fit_schedule.approximate_documents << "\n"
+        << "##fit_document_pass_equivalents\t"
+        << score.fit_schedule.document_pass_equivalents << "\n"
+        << "##fit_seconds\t"
+        << score.fit_schedule.fitting_seconds << "\n"
+        << "##fit_approximate_seconds\t"
+        << score.fit_schedule.approximate_seconds << "\n"
+        << "##fit_subsample_documents\t"
+        << score.fit_schedule.subsample_documents << "\n"
+        << "##fit_subsample_topup_rounds\t"
+        << score.fit_schedule.subsample_topup_rounds << "\n"
+        << "##fit_subsample_minimum_effective_size\t"
+        << score.fit_schedule.subsample_minimum_effective_size << "\n"
+        << "##fit_subsample_minimum_target_ratio\t"
+        << score.fit_schedule.subsample_minimum_target_ratio << "\n"
+        << "##fit_subsample_weighted_documents\t"
+        << score.fit_schedule.subsample_weighted_documents << "\n"
+        << "##fit_subsample_maximum_weight\t"
+        << score.fit_schedule.subsample_maximum_weight << "\n"
+        << "##fit_subsample_storage\t"
+        << subsample_storage_name(score.fit_schedule.subsample_storage) << "\n"
+        << "##fit_subsample_memory_budget\t"
+        << score.fit_schedule.subsample_memory_budget << "\n"
+        << "##fit_subsample_predicted_bytes\t"
+        << score.fit_schedule.subsample_predicted_bytes << "\n"
+        << "##fit_subsample_peak_bytes\t"
+        << score.fit_schedule.subsample_peak_bytes << "\n"
+        << "##fit_subsample_selected_particle_bytes\t"
+        << score.fit_schedule.subsample_selected_particle_bytes << "\n"
+        << "##fit_subsample_storage_promotions\t"
+        << score.fit_schedule.subsample_storage_promotions << "\n"
+        << "##fit_subsample_peak_phase\t"
+        << score.fit_schedule.subsample_peak_phase << "\n"
+        << "##fit_subsample_disk_bytes\t"
+        << score.fit_schedule.subsample_disk_bytes << "\n"
+        << "##fit_subsample_full_cache_scans\t"
+        << score.fit_schedule.subsample_full_cache_scans << "\n"
+        << "##fit_subsample_read_bytes\t"
+        << score.fit_schedule.subsample_read_bytes << "\n"
+        << "##fit_subsample_write_bytes\t"
+        << score.fit_schedule.subsample_write_bytes << "\n"
+        << "##fit_subsample_io_seconds\t"
+        << score.fit_schedule.subsample_io_seconds << "\n"
+        << "##fit_subsample_allocator_converged\t"
+        << static_cast<int32_t>(
+            score.fit_schedule.subsample_allocator_converged) << "\n"
+        << "##fit_subsample_allocator_iterations\t"
+        << score.fit_schedule.subsample_allocator_iterations << "\n"
+        << "##fit_subsample_parameter_change\t"
+        << score.fit_schedule.subsample_parameter_change << "\n"
+        << "##fit_subsample_convergence_reason\t"
+        << score.fit_schedule.subsample_convergence_reason << "\n"
+        << "##fit_tail_mode\t"
+        << fit_tail_mode_name(score.fit_schedule.tail_mode) << "\n"
+        << "##fit_audit_converged\t"
+        << static_cast<int32_t>(score.fit_schedule.audit_converged) << "\n"
+        << "##fit_audit_parameter_change\t"
+        << score.fit_schedule.audit_parameter_change << "\n"
+        << "##fit_audit_active_set_unchanged\t"
+        << static_cast<int32_t>(
+            score.fit_schedule.audit_active_set_unchanged) << "\n"
         << "##stream_cache_reused\t"
         << static_cast<int32_t>(score.streaming_cache_reused) << "\n"
         << "##stream_cache_bytes\t"
@@ -375,6 +449,152 @@ void write_diagnostics(const std::string& path, const Dataset& data,
             out << "NA\tNA\tNA\tNA\tNA\tNA\tNA";
         }
         out << "\n";
+    }
+}
+
+void write_initialization_diagnostics(const std::string& path,
+    const InitializationDiagnostics& diagnostics) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write UAC initialization diagnostics: " + path);
+    }
+    out << "metric\tvalue\n" << std::scientific << std::setprecision(4)
+        << "measurement_mode\t"
+        << initialization_measurement_mode_name(
+            diagnostics.measurement_mode) << "\n"
+        << "total_documents\t" << diagnostics.total_documents << "\n"
+        << "measurement_documents\t"
+        << diagnostics.measurement_documents << "\n"
+        << "candidate_score_documents\t"
+        << diagnostics.candidate_score_documents << "\n"
+        << "measurement_covariance_evaluations\t"
+        << diagnostics.measurement_covariance_evaluations << "\n"
+        << "sampling_seed\t" << diagnostics.sampling_seed << "\n"
+        << "measurement_target\t" << diagnostics.measurement_target << "\n"
+        << "candidate_score_target\t"
+        << diagnostics.candidate_score_target << "\n"
+        << "cached_measurement_bytes\t"
+        << diagnostics.cached_measurement_bytes << "\n"
+        << "maximum_measurement_weight\t"
+        << diagnostics.maximum_measurement_weight << "\n"
+        << "maximum_candidate_score_weight\t"
+        << diagnostics.maximum_candidate_score_weight << "\n"
+        << "minimum_measurement_effective_size\t"
+        << diagnostics.minimum_measurement_effective_size << "\n"
+        << "minimum_candidate_score_effective_size\t"
+        << diagnostics.minimum_candidate_score_effective_size << "\n"
+        << "covariance_floor_activations\t"
+        << diagnostics.covariance_floor_activations << "\n"
+        << "partition_seconds\t" << diagnostics.partition_seconds << "\n"
+        << "measurement_seconds\t" << diagnostics.measurement_seconds << "\n"
+        << "candidate_score_seconds\t"
+        << diagnostics.candidate_score_seconds << "\n"
+        << "total_seconds\t" << diagnostics.total_seconds << "\n";
+}
+
+void write_initialization_results(const std::string& path,
+    const Dataset& data,
+    const std::vector<InitializationPartition>& partitions) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write UAC initialization results: " + path);
+    }
+    if (partitions.empty()) {
+        throw std::invalid_argument(
+            "UAC initialization results require at least one partition");
+    }
+    const Eigen::Index documents = static_cast<Eigen::Index>(
+        data.identifiers.size());
+    out << "#id";
+    int32_t kmeans_index = 0;
+    int32_t leiden_index = 0;
+    for (const auto& partition : partitions) {
+        if (partition.assignments.size() != documents) {
+            throw std::invalid_argument(
+                "UAC initialization partition size differs from dataset");
+        }
+        const char* method = nullptr;
+        switch (partition.start_method) {
+            case StartMethod::KMeans: method = "kmeans"; break;
+            case StartMethod::Leiden: method = "leiden"; break;
+        }
+        if (!method) {
+            throw std::invalid_argument(
+                "Unknown UAC initialization partition method");
+        }
+        const int32_t method_index = partition.start_method
+                == StartMethod::KMeans
+            ? ++kmeans_index : ++leiden_index;
+        const std::string column = std::string(method)
+            + (method_index == 1 ? "" : std::to_string(method_index));
+        if (partition.start_method == StartMethod::Leiden) {
+            if (partition.raw_assignments.size() != documents) {
+                throw std::invalid_argument(
+                    "Raw UAC Leiden partition size differs from dataset");
+            }
+            out << "\t" << column << "_raw";
+        } else if (partition.raw_assignments.size() != 0) {
+            throw std::invalid_argument(
+                "Raw UAC initialization partition is only valid for Leiden");
+        }
+        out << "\t" << column;
+    }
+    out << "\n";
+    for (Eigen::Index d = 0; d < documents; ++d) {
+        out << data.identifiers[d];
+        for (const auto& partition : partitions) {
+            if (partition.start_method == StartMethod::Leiden) {
+                out << "\t" << partition.raw_assignments(d);
+            }
+            out << "\t" << partition.assignments(d);
+        }
+        out << "\n";
+    }
+}
+
+void write_subsample_diagnostics(const std::string& path,
+    const FitScheduleDiagnostics& diagnostics) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write UAC subsample diagnostics: " + path);
+    }
+    out << "record\tindex\tdocuments\tpurity\tinclusion_probability"
+        "\tbytes\ttarget\tpredicted_kish\trealized_kish\tshortfall"
+        "\ttopups\n";
+    for (size_t h = 0;
+            h < diagnostics.subsample_stratum_documents.size(); ++h) {
+        const int32_t documents = diagnostics.subsample_stratum_documents[h];
+        const double purity = h < diagnostics.subsample_stratum_purity.size()
+            ? diagnostics.subsample_stratum_purity[h] : 0.0;
+        const double probability =
+            h < diagnostics.subsample_stratum_probability.size()
+            ? diagnostics.subsample_stratum_probability[h] : 0.0;
+        const uint64_t bytes = h < diagnostics.subsample_stratum_bytes.size()
+            ? diagnostics.subsample_stratum_bytes[h] : 0;
+        out << "stratum\t" << h << "\t" << documents << "\t"
+            << purity << "\t" << probability << "\t" << bytes
+            << "\tNA\tNA\tNA\tNA\tNA\n";
+    }
+    for (size_t c = 0;
+            c < diagnostics.subsample_component_target.size(); ++c) {
+        const double target = diagnostics.subsample_component_target[c];
+        const double predicted =
+            c < diagnostics.subsample_component_predicted_effective_size.size()
+            ? diagnostics.subsample_component_predicted_effective_size[c] : 0.0;
+        const double realized =
+            c < diagnostics.subsample_component_realized_effective_size.size()
+            ? diagnostics.subsample_component_realized_effective_size[c] : 0.0;
+        const int32_t topups =
+            c < diagnostics.subsample_component_topups.size()
+            ? diagnostics.subsample_component_topups[c] : 0;
+        out << "component\t" << c
+            << "\tNA\tNA\tNA\tNA\t" << target << "\t"
+            << predicted << "\t" << realized << "\t"
+            << std::max(0.0, target - realized) << "\t"
+            << topups << "\n";
     }
 }
 
@@ -537,7 +757,7 @@ void write_separation(const std::string& path, const Model& model) {
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot write UAC separation: " + path);
     out << "#cluster_a\tcluster_b\tstandardized_separation\tbhattacharyya_distance\n"
-        << std::scientific << std::setprecision(10);
+        << std::scientific << std::setprecision(4);
     for (Eigen::Index a = 0; a < model.weights.size(); ++a) {
         if (!(model.weights(a) > 0.0)) continue;
         for (Eigen::Index b = a + 1; b < model.weights.size(); ++b) {
@@ -630,6 +850,12 @@ void write_representatives(const std::string& path, const Dataset& data,
 
 void write_visualization_axes(const std::string& path,
     const State& state, const VisualizationResult& visualization) {
+    write_visualization_axes(path, state.topics, visualization);
+}
+
+void write_visualization_axes(const std::string& path,
+    const std::vector<std::string>& topics,
+    const VisualizationResult& visualization) {
     std::ofstream out(path);
     if (!out) {
         throw std::runtime_error(
@@ -643,7 +869,7 @@ void write_visualization_axes(const std::string& path,
     for (const VisualizationProjection* view : views) {
         if (view->projection.cols() != view->eigenvalues.size()
             || view->topic_contrasts.rows()
-                != static_cast<Eigen::Index>(state.topics.size())
+                != static_cast<Eigen::Index>(topics.size())
             || view->topic_contrasts.cols() != view->projection.cols()) {
             throw std::invalid_argument(
                 "Invalid UAC visualization axes");
@@ -681,7 +907,8 @@ void write_visualization_axes(const std::string& path,
                     << "\t" << axis + 1 << "\t"
                     << view->eigenvalues(axis)
                     << "\ttopic\t" << topic << "\t"
-                    << state.topics[topic] << "\t" << coefficient
+                    << topics[static_cast<size_t>(topic)] << "\t"
+                    << coefficient
                     << "\t" << scale << "\t" << side
                     << "\t" << std::abs(coefficient) / scale << "\n";
             }
@@ -773,7 +1000,7 @@ void write_visualization_results(const std::string& path,
     for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
         out << "\tfull_" << axis + 1;
     }
-    out << "\n" << std::scientific << std::setprecision(10);
+    out << "\n" << std::scientific << std::setprecision(4);
     for (Eigen::Index document = 0;
             document < data.coordinates.rows(); ++document) {
         out << data.identifiers[document];

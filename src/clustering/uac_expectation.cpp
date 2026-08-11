@@ -46,11 +46,46 @@ uint64_t expectation_block_bytes(int32_t components, int32_t dimension,
     return sizeof(double) * values;
 }
 
+uint64_t particle_expectation_peak_bytes(int32_t documents,
+    int32_t components, int32_t dimension, int32_t factor_rank,
+    int32_t maximum_samples, bool screen) {
+    if (documents <= 0) return 0;
+    const int32_t requested_blocks = expectation_shards(
+        documents, components, dimension, factor_rank);
+    const int32_t block_size =
+        (documents + requested_blocks - 1) / requested_blocks;
+    const int32_t blocks = (documents + block_size - 1) / block_size;
+    uint64_t workspace_values =
+        static_cast<uint64_t>(components) * maximum_samples
+        + 2 * static_cast<uint64_t>(components);
+    if (screen) {
+        workspace_values += static_cast<uint64_t>(maximum_samples) * dimension
+            + maximum_samples + components;
+    }
+    return static_cast<uint64_t>(blocks)
+        * (sizeof(double) * workspace_values
+            + expectation_block_bytes(components, dimension, factor_rank));
+}
+
 void reduce_expectation_blocks(Expectation& out,
     const std::vector<ExpectationBlock>& blocks) {
     for (const auto& block : blocks) {
+        if (block.subsample_stratum_documents.size() > 0) {
+            out.subsample_stratum_documents += block.subsample_stratum_documents;
+            out.subsample_stratum_purity += block.subsample_stratum_purity;
+            out.subsample_transfer += block.subsample_transfer;
+            out.subsample_stratum_bytes += block.subsample_stratum_bytes;
+        }
         if (block.membership.size() > 0) {
             out.membership += block.membership;
+            if (block.membership_weight_squared.size() > 0) {
+                if (out.membership_weight_squared.size() == 0) {
+                    out.membership_weight_squared = Eigen::VectorXd::Zero(
+                        block.membership_weight_squared.size());
+                }
+                out.membership_weight_squared +=
+                    block.membership_weight_squared;
+            }
             out.first += block.first;
         }
         out.log_likelihood += block.log_likelihood;
@@ -113,6 +148,13 @@ Expectation empty_expectation(int32_t documents, int32_t components,
 
 void accumulate_expectation(Expectation& target, const Expectation& source) {
     target.membership += source.membership;
+    if (source.membership_weight_squared.size() > 0) {
+        if (target.membership_weight_squared.size() == 0) {
+            target.membership_weight_squared = Eigen::VectorXd::Zero(
+                source.membership_weight_squared.size());
+        }
+        target.membership_weight_squared += source.membership_weight_squared;
+    }
     target.first += source.first;
     target.log_likelihood += source.log_likelihood;
     target.log_likelihood_upper += source.log_likelihood_upper;
@@ -474,12 +516,26 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     const Model& model, const ExpectationRequest& request = {},
     const ComponentScreeningOptions& screening = {},
     int32_t forced_blocks = 0,
-    ExpectationBlock* external_block = nullptr) {
+    ExpectationBlock* external_block = nullptr,
+    const Eigen::VectorXd* document_weights = nullptr) {
     const bool accumulate_moments = request.accumulate_moments;
     validate_component_screening(screening);
     const bool screen =
         screening.mode != ComponentScreeningMode::Off;
     const int32_t documents = particles.documents;
+    if (document_weights != nullptr) {
+        if (document_weights->size() != documents) {
+            throw std::invalid_argument(
+                "UAC document-weight count does not match particles");
+        }
+        for (int32_t d = 0; d < documents; ++d) {
+            if (!std::isfinite((*document_weights)(d))
+                || !((*document_weights)(d) > 0.0)) {
+                throw std::invalid_argument(
+                    "UAC document weights must be finite and positive");
+            }
+        }
+    }
     const int32_t maximum_samples = [&]() {
         if constexpr (std::is_same_v<ParticleCollection, ParticleSet>) {
             return particles.samples;
@@ -489,6 +545,11 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     }();
     const int32_t dimension = particles.dimension;
     const int32_t components = static_cast<int32_t>(model.weights.size());
+    if (request.collect_subsample_statistics
+        && components > std::numeric_limits<uint16_t>::max()) {
+        throw std::invalid_argument(
+            "UAC subsample statistics support at most 65535 components");
+    }
     const int32_t factor_rank = model.covariance_kind
             == CovarianceKind::FactorAnalytic
         ? static_cast<int32_t>(model.factor_covariances.front().factor.cols())
@@ -497,6 +558,10 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     if (accumulate_moments) {
         out = empty_expectation(
             documents, components, dimension, factor_rank);
+        if (document_weights != nullptr) {
+            out.membership_weight_squared =
+                Eigen::VectorXd::Zero(components);
+        }
     } else {
         out.documents = documents;
     }
@@ -509,6 +574,14 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     }
     if (request.collect_diagnostics) {
         out.particle_diagnostics.resize(documents);
+    }
+    if (request.collect_subsample_statistics) {
+        out.subsample_strata.resize(documents);
+        out.subsample_document_samples.resize(documents);
+        out.subsample_stratum_documents = Eigen::VectorXi::Zero(components);
+        out.subsample_stratum_purity = Eigen::VectorXd::Zero(components);
+        out.subsample_transfer = Eigen::MatrixXd::Zero(components, components);
+        out.subsample_stratum_bytes = Eigen::VectorXd::Zero(components);
     }
     std::vector<LowRankDiagonalSolver> factor_solvers;
     std::vector<Eigen::MatrixXd> factor_beta, factor_conditional;
@@ -550,26 +623,21 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
     const int32_t block_size =
         (documents + requested_blocks - 1) / requested_blocks;
     const int32_t n_blocks = (documents + block_size - 1) / block_size;
-    uint64_t block_workspace_values =
-        static_cast<uint64_t>(components) * maximum_samples
-        + 2 * static_cast<uint64_t>(components);
-    if (screen) {
-        block_workspace_values +=
-            static_cast<uint64_t>(maximum_samples) * dimension
-            + maximum_samples + components;
+    out.peak_workspace_bytes = particle_expectation_peak_bytes(
+        documents, components, dimension, factor_rank, maximum_samples,
+        screen);
+    if (!accumulate_moments || external_block) {
+        out.peak_workspace_bytes -= static_cast<uint64_t>(n_blocks)
+            * expectation_block_bytes(components, dimension, factor_rank);
     }
-    out.peak_workspace_bytes = static_cast<uint64_t>(n_blocks)
-        * (sizeof(double) * block_workspace_values
-            + (accumulate_moments && !external_block
-                ? expectation_block_bytes(
-                    components, dimension, factor_rank)
-                : 0));
     std::vector<ExpectationBlock> blocks;
     if (!external_block) {
         blocks.reserve(n_blocks);
         for (int32_t block = 0; block < n_blocks; ++block) {
             blocks.emplace_back(
-                components, dimension, factor_rank, accumulate_moments);
+                components, dimension, factor_rank, accumulate_moments,
+                document_weights != nullptr,
+                request.collect_subsample_statistics);
         }
     }
     std::atomic<int64_t> gaussian_nanoseconds{0};
@@ -599,6 +667,8 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
         int64_t local_moment_nanoseconds = 0;
         double local_bound_seconds = 0.0;
         for (int32_t d = begin; d < end; ++d) {
+            const double document_weight = document_weights == nullptr
+                ? 1.0 : (*document_weights)(d);
             const int32_t samples = particles.samples_for_document(d);
             const auto gaussian_start = std::chrono::steady_clock::now();
             const auto values = particles.values_for_document(d);
@@ -667,8 +737,8 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - gaussian_start).count();
             const double normalizer = selected.log_mass;
-            block.log_likelihood += normalizer;
-            block.log_likelihood_upper += logaddexp(
+            block.log_likelihood += document_weight * normalizer;
+            block.log_likelihood_upper += document_weight * logaddexp(
                 selected.log_mass, selected.log_upper_mass);
             block.evaluated_component_documents += selected.evaluated.size();
             block.possible_component_documents += possible_components;
@@ -681,9 +751,26 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
                 block.maximum_omitted_component_mass,
                 selected.omitted_mass_bound);
             if (accumulate_moments || request.store_responsibilities
-                || request.collect_diagnostics) {
+                || request.collect_diagnostics
+                || request.collect_subsample_statistics) {
                 responsibility =
                     (selected.score.array() - normalizer).exp();
+            }
+            if (request.collect_subsample_statistics) {
+                Eigen::Index stratum_index = 0;
+                const double purity = responsibility.maxCoeff(&stratum_index);
+                const int32_t stratum = static_cast<int32_t>(stratum_index);
+                out.subsample_strata[d] = static_cast<uint16_t>(stratum);
+                out.subsample_document_samples[d] = samples;
+                ++block.subsample_stratum_documents(stratum);
+                block.subsample_stratum_purity(stratum) += purity;
+                block.subsample_transfer.row(stratum) +=
+                    responsibility.transpose();
+                const double bytes = sizeof(double)
+                        * static_cast<double>(samples) * (dimension + 2)
+                    + sizeof(int32_t) * static_cast<double>(samples + 1)
+                    + sizeof(int64_t);
+                block.subsample_stratum_bytes(stratum) += bytes;
             }
             if (request.store_responsibilities) {
                 out.responsibilities.row(d) = responsibility.transpose();
@@ -735,21 +822,28 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
                 for (const int32_t c : selected.evaluated) {
                     const double component_responsibility = responsibility(c);
                     if (!(component_responsibility > 0.0)) continue;
-                    block.membership(c) += component_responsibility;
+                    const double weighted_responsibility = document_weight
+                        * component_responsibility;
+                    block.membership(c) += weighted_responsibility;
+                    if (block.membership_weight_squared.size() > 0) {
+                        block.membership_weight_squared(c) +=
+                            component_responsibility
+                            * document_weight * document_weight;
+                    }
                     const Eigen::VectorXd tau =
                         (log_tilt.row(c).head(samples).transpose().array()
                             - evidence(c)).exp();
                     if (factor_rank < 0) {
                         block.first.row(c).noalias() +=
-                            component_responsibility
+                            weighted_responsibility
                             * (values.transpose() * tau).transpose();
                         RowMajorMatrixXd weighted = values;
                         weighted.array().colwise() *= tau.array().sqrt();
-                        block.second[c].noalias() += component_responsibility
+                        block.second[c].noalias() += weighted_responsibility
                             * weighted.transpose() * weighted;
                     } else {
                         const Eigen::VectorXd weight =
-                            component_responsibility * tau;
+                            weighted_responsibility * tau;
                         const RowMajorMatrixXd residual =
                             values.rowwise() - model.means.row(c);
                         const RowMajorMatrixXd factors =
@@ -795,16 +889,34 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
 
 Expectation particle_expectation(const ParticleSet& particles,
     const Model& model, const ExpectationRequest& request,
-    const ComponentScreeningOptions& screening) {
+    const ComponentScreeningOptions& screening,
+    const Eigen::VectorXd* document_weights) {
     return particle_expectation_impl(
-        particles, model, request, screening);
+        particles, model, request, screening, 0, nullptr, document_weights);
 }
 
 Expectation particle_expectation(const RaggedParticleSet& particles,
     const Model& model, const ExpectationRequest& request,
-    const ComponentScreeningOptions& screening) {
+    const ComponentScreeningOptions& screening,
+    const Eigen::VectorXd* document_weights) {
     return particle_expectation_impl(
-        particles, model, request, screening);
+        particles, model, request, screening, 0, nullptr, document_weights);
+}
+
+Expectation particle_expectation(const IndexedFixedParticleView& particles,
+    const Model& model, const ExpectationRequest& request,
+    const ComponentScreeningOptions& screening,
+    const Eigen::VectorXd* document_weights) {
+    return particle_expectation_impl(
+        particles, model, request, screening, 0, nullptr, document_weights);
+}
+
+Expectation particle_expectation(const IndexedRaggedParticleView& particles,
+    const Model& model, const ExpectationRequest& request,
+    const ComponentScreeningOptions& screening,
+    const Eigen::VectorXd* document_weights) {
+    return particle_expectation_impl(
+        particles, model, request, screening, 0, nullptr, document_weights);
 }
 
 template<class ParticleCollection>

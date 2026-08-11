@@ -14,6 +14,7 @@ struct Expectation {
     int32_t documents = 0;
     RowMajorMatrixXd responsibilities;
     Eigen::VectorXd membership;
+    Eigen::VectorXd membership_weight_squared;
     RowMajorMatrixXd first;
     std::vector<Eigen::MatrixXd> second;
     RowMajorMatrixXd sum_y2;
@@ -41,16 +42,24 @@ struct Expectation {
     bool has_responsibility_change = false;
     std::vector<int32_t> per_document_evaluated_components;
     std::vector<double> per_document_omitted_component_mass;
+    std::vector<uint16_t> subsample_strata;
+    std::vector<int32_t> subsample_document_samples;
+    Eigen::VectorXi subsample_stratum_documents;
+    Eigen::VectorXd subsample_stratum_purity;
+    Eigen::MatrixXd subsample_transfer;
+    Eigen::VectorXd subsample_stratum_bytes;
 };
 
 struct ExpectationRequest {
     bool store_responsibilities = false;
     bool collect_diagnostics = false;
     bool accumulate_moments = true;
+    bool collect_subsample_statistics = false;
 };
 
 struct ExpectationBlock {
     Eigen::VectorXd membership;
+    Eigen::VectorXd membership_weight_squared;
     RowMajorMatrixXd first;
     std::vector<Eigen::MatrixXd> second;
     RowMajorMatrixXd sum_y2;
@@ -67,11 +76,26 @@ struct ExpectationBlock {
     int32_t component_bound_violations = 0;
     double omitted_component_mass_sum = 0.0;
     double maximum_omitted_component_mass = 0.0;
+    Eigen::VectorXi subsample_stratum_documents;
+    Eigen::VectorXd subsample_stratum_purity;
+    Eigen::MatrixXd subsample_transfer;
+    Eigen::VectorXd subsample_stratum_bytes;
 
     ExpectationBlock(int32_t components, int32_t dimension,
-        int32_t factor_rank = -1, bool accumulate_moments = true) {
+        int32_t factor_rank = -1, bool accumulate_moments = true,
+        bool weighted_documents = false,
+        bool collect_subsample_statistics = false) {
+        if (collect_subsample_statistics) {
+            subsample_stratum_documents = Eigen::VectorXi::Zero(components);
+            subsample_stratum_purity = Eigen::VectorXd::Zero(components);
+            subsample_transfer = Eigen::MatrixXd::Zero(components, components);
+            subsample_stratum_bytes = Eigen::VectorXd::Zero(components);
+        }
         if (!accumulate_moments) return;
         membership = Eigen::VectorXd::Zero(components);
+        if (weighted_documents) {
+            membership_weight_squared = Eigen::VectorXd::Zero(components);
+        }
         first = RowMajorMatrixXd::Zero(components, dimension);
         if (factor_rank < 0) {
             second.assign(components,
@@ -89,6 +113,9 @@ struct ExpectationBlock {
 
 uint64_t expectation_block_bytes(
     int32_t components, int32_t dimension, int32_t factor_rank);
+uint64_t particle_expectation_peak_bytes(int32_t documents,
+    int32_t components, int32_t dimension, int32_t factor_rank,
+    int32_t maximum_samples, bool screen);
 int32_t expectation_shards(int32_t documents, int32_t components,
     int32_t dimension, int32_t factor_rank);
 void reduce_expectation_blocks(
@@ -105,10 +132,20 @@ bool resolve_map_component_screening(
     const ComponentScreeningOptions& requested, uint64_t seed);
 Expectation particle_expectation(const ParticleSet& particles,
     const Model& model, const ExpectationRequest& request = {},
-    const ComponentScreeningOptions& screening = {});
+    const ComponentScreeningOptions& screening = {},
+    const Eigen::VectorXd* document_weights = nullptr);
 Expectation particle_expectation(const RaggedParticleSet& particles,
     const Model& model, const ExpectationRequest& request = {},
-    const ComponentScreeningOptions& screening = {});
+    const ComponentScreeningOptions& screening = {},
+    const Eigen::VectorXd* document_weights = nullptr);
+Expectation particle_expectation(const IndexedFixedParticleView& particles,
+    const Model& model, const ExpectationRequest& request = {},
+    const ComponentScreeningOptions& screening = {},
+    const Eigen::VectorXd* document_weights = nullptr);
+Expectation particle_expectation(const IndexedRaggedParticleView& particles,
+    const Model& model, const ExpectationRequest& request = {},
+    const ComponentScreeningOptions& screening = {},
+    const Eigen::VectorXd* document_weights = nullptr);
 Expectation particle_expectation_into(const ParticleSet& particles,
     const Model& model, const ExpectationRequest& request,
     const ComponentScreeningOptions& screening, ExpectationBlock& block);

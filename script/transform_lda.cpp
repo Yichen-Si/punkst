@@ -976,7 +976,7 @@ int32_t cmdLDATransform(int argc, char** argv) {
     TransformOutputs outputs(outPrefix, computeResiduals);
     writeUnitIdHeader(outputs.results, use_10x, info_header);
     writeResultHeader(outputs.results, lda, topk_only);
-    outputs.results << std::fixed << std::setprecision(4);
+    outputs.results << std::scientific << std::setprecision(4);
     if (computeResiduals) {
         writeUnitIdHeader(outputs.unitStats, use_10x, info_header);
         outputs.unitStats << "total_count\tresidual\tentropy";

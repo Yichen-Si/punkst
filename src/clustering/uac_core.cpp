@@ -102,8 +102,47 @@ const char* trace_phase_name(TracePhase value) {
             return "corrected_mom_score";
         case TracePhase::PointMapEm: return "point_map_em";
         case TracePhase::ParticleEm: return "particle_em";
+        case TracePhase::SubsampleEm: return "subsample_em";
+        case TracePhase::OnlineEm: return "online_em";
     }
     throw std::invalid_argument("Unknown UAC trace phase");
+}
+
+const char* particle_fit_schedule_name(ParticleFitSchedule value) {
+    switch (value) {
+        case ParticleFitSchedule::Exact: return "exact";
+        case ParticleFitSchedule::Subsample: return "subsample";
+        case ParticleFitSchedule::Online: return "online";
+    }
+    throw std::invalid_argument("Unknown UAC particle fit schedule");
+}
+
+const char* subsample_storage_name(SubsampleStorage value) {
+    switch (value) {
+        case SubsampleStorage::Auto: return "auto";
+        case SubsampleStorage::Resident: return "resident";
+        case SubsampleStorage::Disk: return "disk";
+    }
+    throw std::invalid_argument("Unknown UAC subsample storage");
+}
+
+const char* initialization_measurement_mode_name(
+    InitializationMeasurementMode value) {
+    switch (value) {
+        case InitializationMeasurementMode::Legacy: return "legacy";
+        case InitializationMeasurementMode::Full: return "full";
+        case InitializationMeasurementMode::HorvitzThompson: return "ht";
+    }
+    throw std::invalid_argument("Unknown UAC initialization measurement mode");
+}
+
+const char* fit_tail_mode_name(FitTailMode value) {
+    switch (value) {
+        case FitTailMode::Adaptive: return "adaptive";
+        case FitTailMode::Fixed: return "fixed";
+        case FitTailMode::Off: return "off";
+    }
+    throw std::invalid_argument("Unknown UAC fit tail mode");
 }
 
 const char* trace_event_name(TraceEvent value) {
@@ -209,6 +248,41 @@ ParticleEngine parse_particle_engine(const std::string& value) {
     if (value == "stream") return ParticleEngine::Stream;
     throw std::invalid_argument(
         "UAC particle engine must be batch or stream");
+}
+
+ParticleFitSchedule parse_particle_fit_schedule(const std::string& value) {
+    if (value == "exact") return ParticleFitSchedule::Exact;
+    if (value == "subsample") return ParticleFitSchedule::Subsample;
+    if (value == "online") return ParticleFitSchedule::Online;
+    throw std::invalid_argument(
+        "UAC particle fit schedule must be exact, subsample, or online");
+}
+
+SubsampleStorage parse_subsample_storage(const std::string& value) {
+    if (value == "auto") return SubsampleStorage::Auto;
+    if (value == "resident") return SubsampleStorage::Resident;
+    if (value == "disk") return SubsampleStorage::Disk;
+    throw std::invalid_argument(
+        "UAC subsample storage must be auto, resident, or disk");
+}
+
+InitializationMeasurementMode parse_initialization_measurement_mode(
+    const std::string& value) {
+    if (value == "legacy") return InitializationMeasurementMode::Legacy;
+    if (value == "full") return InitializationMeasurementMode::Full;
+    if (value == "ht") {
+        return InitializationMeasurementMode::HorvitzThompson;
+    }
+    throw std::invalid_argument(
+        "UAC initialization measurement mode must be legacy, full, or ht");
+}
+
+FitTailMode parse_fit_tail_mode(const std::string& value) {
+    if (value == "adaptive") return FitTailMode::Adaptive;
+    if (value == "fixed") return FitTailMode::Fixed;
+    if (value == "off") return FitTailMode::Off;
+    throw std::invalid_argument(
+        "UAC fit tail must be adaptive, fixed, or off");
 }
 
 StreamingCountStorage parse_streaming_count_storage(const std::string& value) {

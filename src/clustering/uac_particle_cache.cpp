@@ -40,7 +40,9 @@ uint64_t particle_set_bytes(const RaggedParticleSet& particles) {
         + sizeof(int32_t) * (
             samples + static_cast<uint64_t>(particles.documents))
         + sizeof(int64_t)
-            * static_cast<uint64_t>(particles.offsets.size());
+            * static_cast<uint64_t>(particles.offsets.size())
+        + sizeof(AdaptiveParticleDiagnostic)
+            * static_cast<uint64_t>(particles.adaptive_diagnostics.size());
 }
 
 void ParticleCacheMetrics::add(const ParticleSet& particles) {
@@ -256,6 +258,7 @@ DocumentProposal particle_cache_proposal(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, double broadening,
+    int32_t refinement_iterations,
     const ProposalScreeningPlan* screening_plan, int32_t data_document,
     int32_t global_document, FisherWorkspace* fisher_workspace = nullptr) {
     const Eigen::VectorXd center =
@@ -266,8 +269,9 @@ DocumentProposal particle_cache_proposal(const Dataset& data,
     const std::vector<int32_t>* candidates =
         screening_plan && screening_plan->enabled
         ? &screening_plan->candidates[global_document] : nullptr;
-    return fisher_proposal(center, fisher, pilot, pilot_cache,
-        broadening, candidates);
+    return fisher_proposal(center, fisher, data.counts[data_document],
+        basis, helmert, proposal_kind, pilot, pilot_cache,
+        broadening, refinement_iterations, candidates);
 }
 
 template<class ParticleCollection>
@@ -276,6 +280,7 @@ void write_factor_particle_cache(const std::filesystem::path& path,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, uint64_t seed, double broadening,
+    int32_t refinement_iterations,
     const AdaptiveParticleOptions& adaptive,
     const ProposalScreeningPlan* screening_plan,
     bool data_is_local_block = false) {
@@ -313,7 +318,8 @@ void write_factor_particle_cache(const std::filesystem::path& path,
             ? std::min(samples, adaptive.calibration_particles) : 0;
         const DocumentProposal proposal = particle_cache_proposal(
             data, basis, helmert, pilot, pilot_cache, proposal_kind,
-            broadening, screening_plan, data_document, global_document,
+            broadening, refinement_iterations, screening_plan,
+            data_document, global_document,
             &fisher_workspace);
         const int32_t proposal_components =
             static_cast<int32_t>(proposal.weights.size());
@@ -688,6 +694,7 @@ void hash_cache_value(uint64_t& hash, const Value& value) {
 uint64_t particle_cache_key(const Dataset& data, const Basis& basis,
     const Pilot& pilot, const Model& initial_model, ProposalKind proposal,
     int32_t maximum_samples, uint64_t seed, double broadening,
+    int32_t refinement_iterations,
     const AdaptiveParticleOptions& adaptive,
     const ComponentScreeningOptions& screening,
     StreamingParticleStorage storage, int32_t block_documents,
@@ -700,6 +707,7 @@ uint64_t particle_cache_key(const Dataset& data, const Basis& basis,
     hash_cache_value(hash, maximum_samples);
     hash_cache_value(hash, seed);
     hash_cache_value(hash, broadening);
+    hash_cache_value(hash, refinement_iterations);
     hash_cache_value(hash, storage);
     hash_cache_value(hash, block_documents);
     hash_cache_value(hash, adaptive.calibration_particles);
@@ -796,7 +804,8 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal, int32_t maximum_samples, uint64_t seed,
-    double broadening, int32_t n_threads, const Model& initial_model,
+    double broadening, int32_t refinement_iterations, int32_t n_threads,
+    const Model& initial_model,
     const AdaptiveParticleOptions& adaptive,
     const ProposalScreeningPlan* proposal_screening,
     const ComponentScreeningOptions& screening,
@@ -853,7 +862,7 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
     }
     const uint64_t key = particle_cache_key(data, basis, pilot,
         initial_model, proposal, maximum_samples, seed, broadening,
-        adaptive, screening, options.particle_storage,
+        refinement_iterations, adaptive, screening, options.particle_storage,
         options.block_documents, count_source);
     const std::filesystem::path root = options.cache_directory.empty()
         ? std::filesystem::path(".uac-cache")
@@ -1052,14 +1061,16 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
             const int32_t data_first = count_source ? 0 : first;
             RaggedParticleSet particles = make_adaptive_particle_range(
                 particle_data, basis, helmert, pilot, pilot_cache, proposal, seed,
-                broadening, n_threads, initial_model, adaptive,
+                broadening, refinement_iterations, n_threads,
+                initial_model, adaptive,
                 maximum_samples, proposal_screening, data_first, count,
                 first);
             cache.metrics.add(particles);
             if (cache.storage == StreamingParticleStorage::Factors) {
                 write_factor_particle_cache(cache.shards[shard], particles,
                     particle_data, basis, helmert, pilot, pilot_cache,
-                    proposal, seed, broadening, adaptive,
+                    proposal, seed, broadening, refinement_iterations,
+                    adaptive,
                     proposal_screening, count_source != nullptr);
             } else {
                 write_particle_cache(cache.shards[shard], particles);
@@ -1075,13 +1086,15 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
             const int32_t data_first = count_source ? 0 : first;
             ParticleSet particles = make_particle_range(particle_data, basis, helmert,
                 pilot, pilot_cache, proposal, maximum_samples, seed,
-                broadening, n_threads, proposal_screening, data_first, count,
+                broadening, refinement_iterations, n_threads,
+                proposal_screening, data_first, count,
                 first);
             cache.metrics.add(particles);
             if (cache.storage == StreamingParticleStorage::Factors) {
                 write_factor_particle_cache(cache.shards[shard], particles,
                     particle_data, basis, helmert, pilot, pilot_cache,
-                    proposal, seed, broadening, adaptive,
+                    proposal, seed, broadening, refinement_iterations,
+                    adaptive,
                     proposal_screening, count_source != nullptr);
             } else {
                 write_particle_cache(cache.shards[shard], particles);
@@ -1109,7 +1122,7 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
                 const RaggedParticleSet one =
                     make_adaptive_particle_range(particle_data, basis, helmert,
                         pilot, pilot_cache, proposal, seed, broadening,
-                        n_threads, initial_model, adaptive,
+                        refinement_iterations, n_threads, initial_model, adaptive,
                         maximum_samples, proposal_screening, data_document, 1,
                         document);
                 const int32_t samples = one.samples_for_document(0);
@@ -1138,7 +1151,8 @@ ParticleCache open_or_build_particle_cache(const Dataset& data,
             } else {
                 const ParticleSet one = make_particle_range(
                     particle_data, basis, helmert, pilot, pilot_cache, proposal,
-                    maximum_samples, seed, broadening, n_threads,
+                    maximum_samples, seed, broadening,
+                    refinement_iterations, n_threads,
                     proposal_screening, data_document, 1, document);
                 const auto values = one.values_for_document(0);
                 audit.values.insert(audit.values.end(), values.data(),

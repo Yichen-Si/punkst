@@ -3,6 +3,9 @@
 #include <Eigen/Eigenvalues>
 #include <Eigen/QR>
 
+#include <unordered_map>
+#include <unordered_set>
+
 namespace {
 
 double positive_or(double x, double fallback) {
@@ -40,7 +43,8 @@ GammaPoissonTopicBase::GammaPoissonTopicBase(int32_t n_topics, int32_t n_feature
     int seed, int32_t nThreads, int32_t verbose, double beta_shape, double xi_shape,
     double xi_mean, double theta_concentration, double nu_shape, double nu_rate,
     double learning_decay, double learning_offset, int32_t total_doc_count,
-    double size_factor, const std::vector<double>* feature_sums)
+    double size_factor, const std::vector<double>* feature_sums,
+    double random_init_shape)
     : n_topics_(n_topics), n_features_(n_features), seed_(normalize_seed(seed)),
       nThreads_(nThreads), verbose_(verbose),
       total_doc_count_(total_doc_count > 0 ? total_doc_count : 1000000),
@@ -51,12 +55,17 @@ GammaPoissonTopicBase::GammaPoissonTopicBase(int32_t n_topics, int32_t n_feature
       f0_(positive_or(nu_rate, 1.0)),
       learning_decay_(positive_or(learning_decay, 0.7)),
       learning_offset_(learning_offset >= 0.0 ? learning_offset : 10.0),
-      size_factor_(positive_or(size_factor, 1.0)) {
+      size_factor_(positive_or(size_factor, 1.0)),
+      random_init_shape_(random_init_shape) {
     if (!std::isfinite(a_) || a_ <= 0.0) {
         a_ = std::max(1.0 / static_cast<double>(std::max(1, n_topics_)), 0.01);
     }
     if (!std::isfinite(b0_) || b0_ <= 0.0) {
         b0_ = static_cast<double>(std::max(1, n_features_)) / size_factor_;
+    }
+    if (!std::isfinite(random_init_shape_) || random_init_shape_ <= 0.0) {
+        throw std::invalid_argument(
+            "Gamma-Poisson random initialization shape must be positive and finite");
     }
     random_engine_.seed(seed_);
     if (nu_rate <= 0.0) {
@@ -72,10 +81,11 @@ GammaPoissonTopicModel::GammaPoissonTopicModel(int32_t n_topics, int32_t n_featu
     double nu_shape, double nu_rate,
     double learning_decay, double learning_offset, int32_t total_doc_count,
     double size_factor, bool symmetric_nu, double nu_max,
-    const std::vector<double>* feature_sums)
+    const std::vector<double>* feature_sums, double random_init_shape)
     : GammaPoissonTopicBase(n_topics, n_features, seed, nThreads, verbose,
           beta_shape, xi_shape, xi_mean, theta_concentration, nu_shape, nu_rate,
-          learning_decay, learning_offset, total_doc_count, size_factor, feature_sums),
+          learning_decay, learning_offset, total_doc_count, size_factor,
+          feature_sums, random_init_shape),
       symmetric_nu_(symmetric_nu), theta_concentration_(theta_concentration),
       nu_max_(nu_max) {
     if (!std::isfinite(theta_concentration_) || theta_concentration_ <= 0.0) {
@@ -325,7 +335,8 @@ void GammaPoissonTopicBase::init_from_feature_sums(const std::vector<double>* fe
     feature_mean *= size_factor_ / feature_mean.sum();
 
     // Use beta storage as the IPF work matrix, avoiding another K-by-V allocation.
-    std::gamma_distribution<double> noise(0.5, 2.0);
+    std::gamma_distribution<double> noise(
+        random_init_shape_, 1.0 / random_init_shape_);
     for (int32_t k = 0; k < n_topics_; ++k) {
         for (int32_t w = 0; w < n_features_; ++w) {
             beta_rate_(k, w) = std::max(noise(random_engine_), 1e-300);
@@ -376,6 +387,61 @@ void GammaPoissonTopicBase::init_from_feature_sums(const std::vector<double>* fe
     for (int32_t w = 0; w < n_features_; ++w) {
         xi_rate_(w) = a0_ / b0_ + a_ * feature_mean(w) * n_topics_;
     }
+    refresh_cache();
+}
+
+void GammaPoissonTopicBase::initialize_topic_profiles(
+    const Eigen::Ref<const RowMajorMatrixXd>& profiles,
+    const std::vector<std::string>& topic_names) {
+    if (profiles.rows() != n_topics_ || profiles.cols() != n_features_) {
+        throw std::invalid_argument(
+            "Gamma-Poisson initial model dimensions do not match the fitted model");
+    }
+    if (!topic_names.empty()
+        && static_cast<int32_t>(topic_names.size()) != n_topics_) {
+        throw std::invalid_argument(
+            "Gamma-Poisson initial model topic names do not match the topic count");
+    }
+
+    constexpr double kProfileFloor = 1e-12;
+    RowMajorMatrixXd normalized = profiles;
+    for (int32_t k = 0; k < n_topics_; ++k) {
+        double total = 0.0;
+        for (int32_t w = 0; w < n_features_; ++w) {
+            const double value = normalized(k, w);
+            if (!std::isfinite(value) || value < 0.0) {
+                throw std::invalid_argument(
+                    "Gamma-Poisson initial model values must be non-negative and finite");
+            }
+            normalized(k, w) = std::max(value, kProfileFloor);
+            total += normalized(k, w);
+        }
+        if (!(total > 0.0) || !std::isfinite(total)) {
+            throw std::invalid_argument(
+                "Gamma-Poisson initial model has an empty topic");
+        }
+        normalized.row(k) /= total;
+    }
+
+    for (int32_t k = 0; k < n_topics_; ++k) {
+        for (int32_t w = 0; w < n_features_; ++w) {
+            const double mean = size_factor_ * normalized(k, w);
+            beta_shape_(k, w) = a_;
+            beta_rate_(k, w) = a_ / mean;
+        }
+    }
+    xi_shape_ = VectorXd::Constant(n_features_, a0_ + a_ * n_topics_);
+    for (int32_t w = 0; w < n_features_; ++w) {
+        double beta_sum = 0.0;
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            beta_sum += size_factor_ * normalized(k, w);
+        }
+        xi_rate_(w) = a0_ / b0_ + a_ * beta_sum;
+    }
+    topic_usage_ = VectorXd::Constant(n_topics_,
+        size_factor_ * static_cast<double>(total_doc_count_)
+            / static_cast<double>(n_topics_));
+    if (!topic_names.empty()) topic_names_ = topic_names;
     refresh_cache();
 }
 
@@ -1414,7 +1480,7 @@ void GammaPoisson4Hex::initialize(int32_t nTopics, int32_t seed, int32_t nThread
     double theta_concentration, double nu_shape, double nu_rate,
     double kappa, double tau0,
     int32_t totalDocCount, double sizeFactor, bool symmetricNu, double nuMax,
-    int32_t maxIter, double mDelta) {
+    int32_t maxIter, double mDelta, double randomInitShape) {
     if (reader.features.size() != static_cast<size_t>(M_)) {
         featureNames.resize(M_);
         for (int32_t i = 0; i < M_; ++i) featureNames[i] = std::to_string(i);
@@ -1426,7 +1492,8 @@ void GammaPoisson4Hex::initialize(int32_t nTopics, int32_t seed, int32_t nThread
         nTopics, M_, seed, nThreads, verbose, beta_shape, xi_shape, xi_mean,
         theta_concentration, nu_shape, nu_rate, kappa, tau0,
         totalDocCount, sizeFactor,
-        symmetricNu, nuMax, reader.readFullSums ? &sums : nullptr);
+        symmetricNu, nuMax, reader.readFullSums ? &sums : nullptr,
+        randomInitShape);
     if (!reader.readFullSums) {
         error("%s: full effective feature totals are required for Gamma-Poisson state calibration",
             __func__);
@@ -1440,6 +1507,53 @@ void GammaPoisson4Hex::initialize(int32_t nTopics, int32_t seed, int32_t nThread
         raw_sums, reader.getFeatureWeights(), reader.hasFeatureWeights());
     model_->set_svb_parameters(maxIter, mDelta);
     initialized = true;
+}
+
+void GammaPoisson4Hex::initializeFromModel(const std::string& modelFile) {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    RowMajorMatrixXd values;
+    std::vector<std::string> model_features, model_topics;
+    read_matrix_from_file(
+        modelFile, values, &model_features, &model_topics);
+    if (values.cols() != model_->get_n_topics()) {
+        error("%s: Initial model has %d topics but --n-topics is %d",
+            __func__, static_cast<int32_t>(values.cols()),
+            model_->get_n_topics());
+    }
+
+    std::unordered_map<std::string, int32_t> model_feature_index;
+    for (int32_t w = 0; w < static_cast<int32_t>(model_features.size()); ++w) {
+        if (!model_feature_index.emplace(model_features[w], w).second) {
+            error("%s: Duplicate feature in initial model: %s",
+                __func__, model_features[w].c_str());
+        }
+    }
+    std::unordered_set<std::string> topic_seen;
+    for (const auto& topic : model_topics) {
+        if (!topic_seen.insert(topic).second) {
+            error("%s: Duplicate topic in initial model: %s",
+                __func__, topic.c_str());
+        }
+    }
+    if (model_feature_index.size() != featureNames.size()) {
+        error("%s: Initial model and fitted data must have the same retained feature set",
+            __func__);
+    }
+
+    RowMajorMatrixXd profiles(model_->get_n_topics(), M_);
+    for (int32_t w = 0; w < M_; ++w) {
+        const auto it = model_feature_index.find(featureNames[w]);
+        if (it == model_feature_index.end()) {
+            error("%s: Initial model is missing retained feature: %s",
+                __func__, featureNames[w].c_str());
+        }
+        profiles.col(w) = values.row(it->second).transpose();
+    }
+    model_->initialize_topic_profiles(profiles, model_topics);
+    topicNames_ = model_topics;
+    notice("Initialized Gamma-Poisson topics from %s", modelFile.c_str());
 }
 
 void GammaPoisson4Hex::setFeatureDispersion(const std::vector<double>& tau) {

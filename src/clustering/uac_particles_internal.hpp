@@ -2,9 +2,11 @@
 
 #include "clustering/uac_proposal_internal.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <random>
+#include <utility>
 #include <vector>
 
 namespace uac {
@@ -85,12 +87,52 @@ struct RaggedParticleSet {
         int32_t document) const;
 };
 
+template<class ParticleCollection>
+struct IndexedParticleView {
+    const ParticleCollection* source = nullptr;
+    const std::vector<int32_t>* indices = nullptr;
+    int32_t documents = 0;
+    int32_t dimension = 0;
+    int32_t maximum_samples = 0;
+
+    explicit IndexedParticleView(const ParticleCollection& input,
+        const std::vector<int32_t>& selected)
+        : source(&input), indices(&selected),
+          documents(static_cast<int32_t>(selected.size())),
+          dimension(input.dimension) {
+        for (const int32_t document : selected) {
+            maximum_samples = std::max(
+                maximum_samples, input.samples_for_document(document));
+        }
+    }
+
+    int32_t samples_for_document(int32_t document) const {
+        return source->samples_for_document(indices->at(document));
+    }
+    Eigen::Map<const RowMajorMatrixXd> values_for_document(
+        int32_t document) const {
+        return source->values_for_document(indices->at(document));
+    }
+    Eigen::Map<const Eigen::VectorXd> log_likelihood_for_document(
+        int32_t document) const {
+        return source->log_likelihood_for_document(indices->at(document));
+    }
+    Eigen::Map<const Eigen::VectorXd> log_proposal_for_document(
+        int32_t document) const {
+        return source->log_proposal_for_document(indices->at(document));
+    }
+};
+
+using IndexedFixedParticleView = IndexedParticleView<ParticleSet>;
+using IndexedRaggedParticleView = IndexedParticleView<RaggedParticleSet>;
+
 namespace detail {
 
 ParticleSet make_particle_range(const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert, const Pilot& pilot,
     const PilotCache& pilot_cache, ProposalKind proposal_kind,
     int32_t samples, uint64_t seed, double fisher_broadening,
+    int32_t fisher_refinement_iterations,
     int32_t n_threads, const ProposalScreeningPlan* screening_plan,
     int32_t first_document, int32_t documents,
     int32_t global_first_document = -1);
@@ -121,6 +163,7 @@ RaggedParticleSet make_adaptive_particle_range(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, uint64_t seed, double fisher_broadening,
+    int32_t fisher_refinement_iterations,
     int32_t n_threads, const Model& calibration_model,
     const AdaptiveParticleOptions& options, int32_t maximum_particles,
     const ProposalScreeningPlan* screening_plan,
@@ -130,6 +173,7 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
     const Basis& basis, const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& pilot_cache,
     ProposalKind proposal_kind, uint64_t seed, double fisher_broadening,
+    int32_t fisher_refinement_iterations,
     int32_t n_threads, const Model& calibration_model,
     const AdaptiveParticleOptions& options, int32_t maximum_particles,
     const ProposalScreeningPlan* screening_plan);
@@ -139,6 +183,7 @@ RaggedParticleSet make_adaptive_particles(const Dataset& data,
 ParticleSet make_particles(const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert, const Pilot& pilot,
     ProposalKind proposal, int32_t samples, uint64_t seed,
-    double fisher_broadening = 1.5, int32_t n_threads = 1);
+    double fisher_broadening = 1.5, int32_t n_threads = 1,
+    int32_t fisher_refinement_iterations = 1);
 
 } // namespace uac

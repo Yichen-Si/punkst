@@ -10,6 +10,7 @@ punkst provides several command-line tools for analyzing high resolution spatial
 - [topic-model](lda4hex.md): Run LDA on the spot level data
 - [Leiden](leiden.md): Cluster Gamma-Poisson or LDA factor embeddings on a cosine or Hellinger k-NN graph
 - [UAC](uac.md): Fit uncertainty-aware clusters in topic space
+- [ILR linear embedding](ilr-linear-embed.md): Build interpretable supervised topic-space visualizations from hard partitions
 - [pixel-decode](pixel-decode.md): Annotate each pixel with the top factors and their probabilities
 - [cooccurrence](coexp.md): Compute gene co-occurrence and/or extract marker genes from the co-occurrence matrix
 - [visualization](visualization.md): Visualize the pixel level analysis results

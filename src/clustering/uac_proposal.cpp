@@ -135,13 +135,48 @@ PilotCache::PilotCache(const Pilot& pilot)
 
 
 
+namespace {
+
+double coordinate_log_likelihood(
+    const Eigen::Ref<const Eigen::VectorXd>& coordinate,
+    const Document& document, const Basis& basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
+    const Eigen::VectorXd composition =
+        ilr_inverse_coordinate(coordinate, helmert);
+    double out = 0.0;
+    for (size_t j = 0; j < document.ids.size(); ++j) {
+        const uint32_t feature = document.ids[j];
+        const double count = document.cnts[j];
+        if (!(count > 0.0)) continue;
+        if (feature >= static_cast<uint32_t>(basis.probabilities.rows())) {
+            throw std::runtime_error(
+                "UAC document feature index is out of range");
+        }
+        const double probability =
+            basis.probabilities.row(feature).dot(composition);
+        if (!(probability > 0.0) || !std::isfinite(probability)) {
+            throw std::runtime_error(
+                "UAC observed feature has zero proposal probability");
+        }
+        out += count * std::log(probability);
+    }
+    return out;
+}
+
+} // namespace
+
 DocumentProposal fisher_proposal(
     const Eigen::Ref<const Eigen::VectorXd>& center,
-    const FisherApproximation& fisher, const Pilot& pilot,
+    const FisherApproximation& fisher, const Document& document,
+    const Basis& basis,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    ProposalKind proposal_kind, const Pilot& pilot,
     const PilotCache& cache, double broadening,
+    int32_t refinement_iterations,
     const std::vector<int32_t>* candidate_components) {
-    if (!(broadening > 0.0) || !std::isfinite(broadening)) {
-        throw std::invalid_argument("Invalid UAC Fisher broadening");
+    if (!(broadening > 0.0) || !std::isfinite(broadening)
+        || refinement_iterations <= 0) {
+        throw std::invalid_argument("Invalid UAC Fisher proposal options");
     }
     const int32_t dimension = static_cast<int32_t>(center.size());
     DocumentProposal out;
@@ -178,13 +213,14 @@ DocumentProposal fisher_proposal(
             cache.inverse_covariances[c];
         const double pilot_logdet = cache.log_determinants(c);
         const Eigen::VectorXd pilot_mean = pilot.means.row(c).transpose();
-        const Eigen::VectorXd residual = center - pilot_mean;
-        const Eigen::VectorXd inverse_residual =
-            inverse_covariance * residual;
-        const Eigen::VectorXd b = fisher.gradient - inverse_residual;
-        const Eigen::MatrixXd raw_precision = 0.5
-            * (fisher.information + inverse_covariance
-                + fisher.information.transpose()
+        Eigen::VectorXd mode = center;
+        FisherApproximation current_fisher = fisher;
+        Eigen::VectorXd residual = mode - pilot_mean;
+        Eigen::VectorXd inverse_residual = inverse_covariance * residual;
+        Eigen::VectorXd b = current_fisher.gradient - inverse_residual;
+        Eigen::MatrixXd raw_precision = 0.5
+            * (current_fisher.information + inverse_covariance
+                + current_fisher.information.transpose()
                 + inverse_covariance.transpose());
         Eigen::LLT<Eigen::MatrixXd> precision_llt(raw_precision);
         Eigen::MatrixXd precision_lower;
@@ -211,17 +247,114 @@ DocumentProposal fisher_proposal(
             throw std::runtime_error(
                 "UAC Fisher precision is not positive definite");
         }
-        const Eigen::VectorXd step = precision_llt.solve(b);
+        Eigen::VectorXd step = precision_llt.solve(b);
+        if (refinement_iterations > 1) {
+            FisherWorkspace workspace;
+            double current_log_posterior = coordinate_log_likelihood(
+                mode, document, basis, helmert)
+                - 0.5 * residual.dot(inverse_residual);
+            for (int32_t iteration = 0;
+                    iteration < refinement_iterations; ++iteration) {
+                if (iteration > 0) {
+                    current_fisher = fisher_approximation_impl(
+                        mode, document, basis, helmert, proposal_kind,
+                        true, &workspace);
+                    residual = mode - pilot_mean;
+                    inverse_residual = inverse_covariance * residual;
+                    b = current_fisher.gradient - inverse_residual;
+                    raw_precision = 0.5
+                        * (current_fisher.information + inverse_covariance
+                            + current_fisher.information.transpose()
+                            + inverse_covariance.transpose());
+                    precision_llt.compute(raw_precision);
+                    if (precision_llt.info() != Eigen::Success) {
+                        precision_llt.compute(
+                            floor_covariance(raw_precision, 1e-8));
+                    }
+                    if (precision_llt.info() != Eigen::Success) break;
+                    step = precision_llt.solve(b);
+                }
+                if (!step.allFinite()
+                    || step.norm() <= 1e-6 * (1.0 + mode.norm())) {
+                    break;
+                }
+                double scale = 1.0;
+                bool accepted = false;
+                Eigen::VectorXd candidate;
+                for (int32_t backtrack = 0; backtrack < 20; ++backtrack) {
+                    candidate = mode + scale * step;
+                    const Eigen::VectorXd candidate_residual =
+                        candidate - pilot_mean;
+                    const double candidate_log_posterior =
+                        coordinate_log_likelihood(
+                            candidate, document, basis, helmert)
+                        - 0.5 * candidate_residual.dot(
+                            inverse_covariance * candidate_residual);
+                    if (candidate_log_posterior
+                            >= current_log_posterior - 1e-12) {
+                        mode = std::move(candidate);
+                        current_log_posterior = candidate_log_posterior;
+                        accepted = true;
+                        break;
+                    }
+                    scale *= 0.5;
+                }
+                if (!accepted) break;
+            }
+            current_fisher = fisher_approximation_impl(
+                mode, document, basis, helmert, proposal_kind,
+                true, &workspace);
+            residual = mode - pilot_mean;
+            inverse_residual = inverse_covariance * residual;
+            raw_precision = 0.5
+                * (current_fisher.information + inverse_covariance
+                    + current_fisher.information.transpose()
+                    + inverse_covariance.transpose());
+            precision_llt.compute(raw_precision);
+            precision_lower = precision_llt.info() == Eigen::Success
+                ? Eigen::MatrixXd(precision_llt.matrixL())
+                : Eigen::MatrixXd();
+            if (precision_llt.info() != Eigen::Success
+                || !precision_lower.allFinite()
+                || (precision_lower.diagonal().array() <= 0.0).any()) {
+                const auto fallback_start =
+                    std::chrono::steady_clock::now();
+                precision_llt.compute(floor_covariance(raw_precision, 1e-8));
+                precision_lower = precision_llt.matrixL();
+                out.precision_fallback_seconds +=
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now()
+                        - fallback_start).count();
+                ++out.precision_fallbacks;
+            }
+            if (precision_llt.info() != Eigen::Success
+                || !precision_lower.allFinite()
+                || (precision_lower.diagonal().array() <= 0.0).any()) {
+                throw std::runtime_error(
+                    "UAC refined Fisher precision is not positive definite");
+            }
+        } else {
+            mode = center + step;
+        }
         const double precision_logdet = 2.0
             * precision_lower.diagonal().array().log().sum();
-        out.means.push_back(center + step);
+        out.means.push_back(mode);
         out.precision_lower.push_back(std::move(precision_lower));
         out.log_precision_determinants(j) = precision_logdet;
-        log_weight(j) = std::log(pilot.weights(c))
-            - 0.5 * (dimension * kLog2Pi + pilot_logdet
-                + residual.dot(inverse_residual))
-            + 0.5 * b.dot(step) + 0.5 * dimension * kLog2Pi
-            - 0.5 * precision_logdet;
+        if (refinement_iterations == 1) {
+            log_weight(j) = std::log(pilot.weights(c))
+                - 0.5 * (dimension * kLog2Pi + pilot_logdet
+                    + residual.dot(inverse_residual))
+                + 0.5 * b.dot(step) + 0.5 * dimension * kLog2Pi
+                - 0.5 * precision_logdet;
+        } else {
+            log_weight(j) = std::log(pilot.weights(c))
+                - 0.5 * (pilot_logdet
+                    + residual.dot(inverse_residual))
+                + coordinate_log_likelihood(
+                    mode, document, basis, helmert)
+                - 0.5 * precision_logdet;
+        }
     }
     out.weights = (log_weight.array() - logsumexp(log_weight)).exp();
     return out;
@@ -294,7 +427,8 @@ ProposalScreeningPlan make_proposal_screening_plan(
     const Dataset& data, const Basis& basis,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const Pilot& pilot, const PilotCache& cache,
-    ProposalKind proposal_kind, double broadening, uint64_t seed,
+    ProposalKind proposal_kind, double broadening,
+    int32_t refinement_iterations, uint64_t seed,
     const ComponentScreeningOptions& options,
     const IndexedDocumentSource* count_source) {
     validate_component_screening(options);
@@ -448,7 +582,10 @@ ProposalScreeningPlan make_proposal_screening_plan(
             count_source ? count_block.counts.front() : data.counts[d],
             basis, helmert, proposal_kind, true, &fisher_workspace);
         const DocumentProposal full = fisher_proposal(
-            center, fisher, pilot, cache, broadening);
+            center, fisher,
+            count_source ? count_block.counts.front() : data.counts[d],
+            basis, helmert, proposal_kind, pilot, cache, broadening,
+            refinement_iterations);
         std::vector<uint8_t> retained(components, 0);
         for (const int32_t c : out.candidates[d]) retained[c] = 1;
         double omitted = 0.0;

@@ -65,7 +65,11 @@ void writeTopicVectorWithTopK(std::ostream& os,
                               int32_t row,
                               const std::vector<std::string>& unitCols,
                               const TopicModelWrapper::TransformOutputOptions& outOpts) {
-    os << std::fixed << std::setprecision(4);
+    if (outOpts.scientific) {
+        os << std::scientific << std::setprecision(4);
+    } else {
+        os << std::fixed << std::setprecision(4);
+    }
     const int32_t K = static_cast<int32_t>(doc_topic.cols());
     if (outOpts.appendTopK) {
         // Compute argmax before writing

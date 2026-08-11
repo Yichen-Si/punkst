@@ -2,9 +2,11 @@
 #include "clustering/uac_common_internal.hpp"
 #include "clustering/uac_stream.hpp"
 #include "punkst.h"
+#include "uac_cli_common.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <filesystem>
@@ -13,17 +15,50 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace {
 
-struct CenterTable {
-    std::vector<std::string> identifiers;
-    std::vector<std::string> topics;
-    RowMajorMatrixXd values;
-};
+using CenterTable = uac_cli::TopicCenterTable;
+
+uint64_t parse_memory_budget(const std::string& value,
+    const char* option) {
+    if (value.empty()) {
+        throw std::invalid_argument(std::string(option) + " must not be empty");
+    }
+    std::string digits = value;
+    uint64_t multiplier = 1;
+    const char suffix = static_cast<char>(std::toupper(
+        static_cast<unsigned char>(digits.back())));
+    if (suffix == 'K' || suffix == 'M' || suffix == 'G') {
+        digits.pop_back();
+        multiplier = suffix == 'K' ? 1024ull
+            : suffix == 'M' ? 1024ull * 1024ull
+                            : 1024ull * 1024ull * 1024ull;
+    }
+    if (digits.empty()
+        || !std::all_of(digits.begin(), digits.end(), [](char value) {
+            return std::isdigit(static_cast<unsigned char>(value));
+        })) {
+        throw std::invalid_argument(
+            "Invalid " + std::string(option) + ": " + value);
+    }
+    uint64_t amount = 0;
+    try {
+        amount = std::stoull(digits);
+    } catch (const std::exception&) {
+        throw std::invalid_argument(
+            "Invalid " + std::string(option) + ": " + value);
+    }
+    if (amount > std::numeric_limits<uint64_t>::max() / multiplier) {
+        throw std::invalid_argument(
+            "Invalid " + std::string(option) + ": " + value);
+    }
+    return amount * multiplier;
+}
 
 struct CountInputOptions {
     std::string in_file;
@@ -282,128 +317,8 @@ uac::Basis read_basis(const std::string& path) {
 CenterTable read_centers(const std::string& path, double floor,
     int32_t identifier_column,
     const std::vector<std::string>* expected_topics = nullptr) {
-    if (identifier_column < 0) {
-        throw std::invalid_argument("--unit-icol-id must be nonnegative");
-    }
-    TextLineReader reader(path);
-    std::string line;
-    while (reader.getline(line) && line.empty()) {}
-    if (line.empty()) {
-        throw std::runtime_error("UAC topic-center table is empty: " + path);
-    }
-    const std::vector<std::string> header =
-        split_delimited(strip_leading_hash(line), '\t');
-    if (identifier_column >= static_cast<int32_t>(header.size())) {
-        throw std::runtime_error(
-            "--unit-icol-id is outside the topic-center table");
-    }
-    std::unordered_map<std::string, int32_t> header_index;
-    for (int32_t i = 0; i < static_cast<int32_t>(header.size()); ++i) {
-        if (header[i].empty()
-            || !header_index.emplace(header[i], i).second) {
-            throw std::runtime_error(
-                "Empty or duplicate UAC topic-center header: " + header[i]);
-        }
-        if (header[i] == "Background") {
-            throw std::runtime_error(
-                "Background-enabled LDA output is not a UAC topic center");
-        }
-    }
-    UnitFactorResultReadOptions factor_options;
-    factor_options.xColName.clear();
-    factor_options.yColName.clear();
-    factor_options.topKColName.clear();
-    factor_options.topPColName.clear();
-    factor_options.requireFactorValues = false;
-    const UnitFactorResultHeader factor_header =
-        parse_unit_factor_result_header(header, factor_options);
-    if (factor_header.hasTopPairs()) {
-        throw std::runtime_error(
-            "LDA K/P top-k output is not a dense UAC topic center");
-    }
-
-    std::vector<int32_t> topic_columns;
-    CenterTable table;
-    if (expected_topics) {
-        table.topics = *expected_topics;
-        topic_columns.reserve(expected_topics->size());
-        for (const auto& topic : *expected_topics) {
-            const auto found = header_index.find(topic);
-            if (found == header_index.end()) {
-                throw std::runtime_error(
-                    "UAC topic-center table is missing topic: " + topic);
-            }
-            topic_columns.push_back(found->second);
-        }
-    } else {
-        if (factor_header.factorCols.empty()) {
-            throw std::runtime_error(
-                "MAP UAC topic columns must have trailing headers 0..K-1");
-        }
-        topic_columns.reserve(factor_header.factorCols.size());
-        table.topics.reserve(factor_header.factorCols.size());
-        const int32_t first_topic = static_cast<int32_t>(header.size()
-            - factor_header.factorCols.size());
-        for (size_t i = 0; i < factor_header.factorCols.size(); ++i) {
-            const int32_t column = factor_header.factorCols[i].second;
-            if (column != first_topic + static_cast<int32_t>(i)) {
-                throw std::runtime_error(
-                    "MAP UAC topic columns must be the trailing 0..K-1 block");
-            }
-            topic_columns.push_back(column);
-            table.topics.push_back(header[column]);
-        }
-    }
-    if (topic_columns.size() < 2
-        || std::find(topic_columns.begin(), topic_columns.end(),
-            identifier_column) != topic_columns.end()) {
-        throw std::runtime_error(
-            "--unit-icol-id must select a non-topic column");
-    }
-
-    std::vector<double> values;
-    std::unordered_set<std::string> seen;
-    uint64_t input_row = 1;
-    while (reader.getline(line)) {
-        ++input_row;
-        if (line.empty() || is_comment_line(line)) continue;
-        const std::vector<std::string> fields =
-            split_delimited(line, '\t');
-        if (fields.size() != header.size()) {
-            throw std::runtime_error(
-                "UAC topic-center row has the wrong column count at line "
-                + std::to_string(input_row));
-        }
-        const std::string& identifier = fields[identifier_column];
-        if (identifier.empty() || !seen.insert(identifier).second) {
-            throw std::runtime_error("Empty or duplicate UAC center identifier: "
-                + identifier);
-        }
-        table.identifiers.push_back(identifier);
-        for (const int32_t column : topic_columns) {
-            double value = 0.0;
-            if (!str2double(fields[column], value) || value < 0.0
-                || !std::isfinite(value)) {
-                throw std::runtime_error(
-                    "Invalid UAC topic probability at line "
-                    + std::to_string(input_row));
-            }
-            values.push_back(value);
-        }
-    }
-    if (table.identifiers.empty()) {
-        throw std::runtime_error("UAC topic-center table has no data rows");
-    }
-    table.values.resize(table.identifiers.size(), topic_columns.size());
-    for (Eigen::Index row = 0; row < table.values.rows(); ++row) {
-        for (Eigen::Index column = 0;
-                column < table.values.cols(); ++column) {
-            table.values(row, column) = values[
-                static_cast<size_t>(row * table.values.cols() + column)];
-        }
-    }
-    uac::normalize_centers(table.values, floor);
-    return table;
+    return uac_cli::read_topic_centers(path, floor, identifier_column,
+        expected_topics, "--unit-icol-id");
 }
 
 CountInput initialize_count_input(const CountInputOptions& options) {
@@ -812,9 +727,9 @@ IndexedParticleDataset load_indexed_particle_dataset(
     out.counts = writer.finish();
     out.weighted_counts =
         out.weighted_counts || feature_weights.size() > 0;
-    notice("Spool-indexed %zu UAC count documents in %llu bytes",
+    notice("Spool-indexed %zu UAC count documents in %.4f MB",
         out.data.identifiers.size(),
-        static_cast<unsigned long long>(out.counts->storage_bytes()));
+        (out.counts->storage_bytes()*1e-6));
     return out;
 }
 
@@ -849,6 +764,10 @@ void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     uac::write_model(prefix + ".model.tsv", state, &membership);
     uac::write_results(prefix + ".results.tsv", data, score, top_c);
     uac::write_diagnostics(prefix + ".diagnostics.tsv", data, score);
+    if (score.fit_schedule.schedule == uac::ParticleFitSchedule::Subsample) {
+        uac::write_subsample_diagnostics(
+            prefix + ".subsample.tsv", score.fit_schedule);
+    }
     uac::write_separation(prefix + ".separation.tsv", state.model);
     uac::write_representatives(prefix + ".representatives.tsv", data, score,
         representatives);
@@ -937,18 +856,25 @@ void add_count_options(ParamList& pl, CountInputOptions& options) {
 } // namespace
 
 int32_t cmdUacFit(int argc, char** argv) {
-    constexpr double kCenterFloor = 1e-12;
     std::string center_file, basis_file, out_prefix, particle_initial_state;
     std::string handoff = "particle";
     std::string proposal = "exact_fisher";
+    std::string particle_fit_schedule = "exact";
+    std::string fit_subsample_storage = "auto";
+    std::string fit_subsample_memory_budget = "1G";
+    std::string fit_tail = "adaptive";
+    std::string initialization_measurement_mode = "ht";
     std::string leiden_knn_backend = "auto";
     std::string initialization_metric = "cosine";
     std::string cluster_covariance_diagonal = "component";
     uac::FitOptions options;
     options.n_components = 0;
+    double fit_document_budget =
+        std::numeric_limits<double>::quiet_NaN();
     int32_t representatives = 10;
     int32_t top_c = -1;
     int32_t unit_identifier_column = 0;
+    double center_floor = 1e-12;
     bool no_covariance_shrinkage = false, write_model_trace = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
@@ -963,15 +889,81 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("unit-icol-id",
           "0-based topic-result column used as the unit identifier",
           unit_identifier_column)
+      .add_option("center-floor",
+          "Positive floor applied to topic centers before row normalization",
+          center_floor)
       .add_option("handoff", "Handoff: map or particle", handoff)
       .add_option("particle-proposal", "Particle proposal: exact_fisher or sparse_empirical_fisher", proposal)
       .add_option("particles", "Particles per document", options.n_particles)
       .add_option("particle-em-fixed-iterations",
           "Diagnostic fixed number of particle EM E/M pairs; 0 uses convergence stopping",
           options.particle_em_fixed_iterations)
+      .add_option("particle-fit-schedule",
+          "Particle fitting schedule: exact, subsample, or online",
+          particle_fit_schedule)
+      .add_option("fit-document-budget",
+          "Approximate fitting work in full-data document-pass equivalents",
+          fit_document_budget)
+      .add_option("fit-full-tail-updates",
+          "Exact full-data EM updates after approximate fitting",
+          options.fit_full_tail_updates)
+      .add_option("fit-subsample-target",
+          "Target Kish effective documents per warm-up responsibility stratum",
+          options.fit_subsample_target)
+      .add_option("fit-subsample-base-fraction",
+          "Uniform inclusion floor for the stratified subsample",
+          options.fit_subsample_base_fraction)
+      .add_option("fit-subsample-storage",
+          "Subsample storage: auto, resident, or disk",
+          fit_subsample_storage)
+      .add_option("fit-subsample-memory-budget",
+          "Additional subsample memory budget in bytes or K/M/G units",
+          fit_subsample_memory_budget)
+      .add_option("fit-subsample-safety-factor",
+          "Safety multiplier for component Kish targets",
+          options.fit_subsample_safety_factor)
+      .add_option("fit-subsample-min-updates",
+          "Minimum stratified subsample EM updates",
+          options.fit_subsample_min_updates)
+      .add_option("fit-subsample-max-updates",
+          "Maximum stratified subsample EM updates",
+          options.fit_subsample_max_updates)
+      .add_option("fit-subsample-change-tol",
+          "Maximum relative parameter change for subsample convergence",
+          options.fit_subsample_change_tolerance)
+      .add_option("fit-subsample-topup-rounds",
+          "Maximum deterministic subsample top-up rounds",
+          options.fit_subsample_topup_rounds)
+      .add_option("fit-tail",
+          "Post-subsample exact tail: adaptive, fixed, or off",
+          fit_tail)
+      .add_option("fit-batch-documents",
+          "Documents per online sufficient-statistic minibatch",
+          options.fit_batch_documents)
+      .add_option("fit-step-kappa",
+          "Online Robbins-Monro exponent in (0.5, 1]",
+          options.fit_step_kappa)
+      .add_option("fit-step-initial",
+          "Initial online Robbins-Monro step in (0, 1]",
+          options.fit_step_initial)
       .add_option("init-ridge",
           "Scalar initialization measurement regularizing precision; 0 uses shared empirical precision",
           options.initialization_ridge_precision)
+      .add_option("init-measurement-mode",
+          "Corrected-moment measurements: legacy, full one-pass cache, or ht",
+          initialization_measurement_mode)
+      .add_option("init-measurement-target",
+          "Expected HT measurement documents per initialization start/component",
+          options.initialization_measurement_target)
+      .add_option("init-candidate-score-target",
+          "Expected candidate-score documents per start/component; negative uses the mode default (full=512, ht=measurement target), 0 uses all documents",
+          options.initialization_candidate_score_target)
+      .add_option("init-sampling-seed",
+          "Initialization sampling seed; negative reuses --seed",
+          options.initialization_sampling_seed)
+      .add_option("initialization-only",
+          "Stop after corrected-moment initialization and write initializer outputs",
+          options.initialization_only)
       .add_option("particle-initial-state",
           "State whose model initializes particle EM; the current-data initializer still supplies the pilot and proposal",
           particle_initial_state)
@@ -991,6 +983,9 @@ int32_t cmdUacFit(int argc, char** argv) {
           "Factor covariance diagonal: component or shared",
           cluster_covariance_diagonal)
       .add_option("fisher-broadening", "Fisher proposal covariance broadening", options.fisher_broadening)
+      .add_option("fisher-refinement-iterations",
+          "Fisher proposal Newton/Fisher iterations; 1 preserves the legacy one-step proposal",
+          options.fisher_refinement_iterations)
       .add_option("n-clusters", "Fixed number of clusters", options.n_components, true)
       .add_option("kmeans-starts", "Metric k-means++ initialization starts", options.kmeans_starts)
       .add_option("leiden-starts", "Adaptive metric-Leiden initialization starts", options.leiden_starts)
@@ -1033,6 +1028,10 @@ int32_t cmdUacFit(int argc, char** argv) {
         if (top_c < -1) {
             throw std::invalid_argument("--top-c must be nonnegative");
         }
+        if (!(center_floor > 0.0) || !std::isfinite(center_floor)) {
+            throw std::invalid_argument(
+                "--center-floor must be positive and finite");
+        }
         const uac::VisualizationOptions visualization_options =
             make_visualization_options(visualization, options.n_threads,
                 options.covariance_floor);
@@ -1040,6 +1039,20 @@ int32_t cmdUacFit(int argc, char** argv) {
         options.proposal = uac::parse_proposal(proposal);
         options.particle_engine =
             uac::parse_particle_engine(streaming.engine);
+        options.particle_fit_schedule =
+            uac::parse_particle_fit_schedule(particle_fit_schedule);
+        options.fit_document_budget = std::isfinite(fit_document_budget)
+            ? fit_document_budget
+            : options.particle_fit_schedule == uac::ParticleFitSchedule::Online
+                ? 1.0 : 0.0;
+        options.fit_subsample_storage =
+            uac::parse_subsample_storage(fit_subsample_storage);
+        options.fit_subsample_memory_budget = parse_memory_budget(
+            fit_subsample_memory_budget, "--fit-subsample-memory-budget");
+        options.fit_tail = uac::parse_fit_tail_mode(fit_tail);
+        options.initialization_measurement_mode =
+            uac::parse_initialization_measurement_mode(
+                initialization_measurement_mode);
         options.streaming = make_streaming_options(
             streaming, out_prefix);
         options.adaptive_particles = make_particle_adapt_options(
@@ -1107,7 +1120,7 @@ int32_t cmdUacFit(int argc, char** argv) {
                 throw std::invalid_argument("Particle UAC requires --in-model");
             }
             canonical_basis = read_basis(basis_file);
-            centers = read_centers(center_file, kCenterFloor,
+            centers = read_centers(center_file, center_floor,
                 unit_identifier_column, &canonical_basis.topics);
             helmert = normalized_helmert(
                 static_cast<int32_t>(centers.topics.size()));
@@ -1146,7 +1159,7 @@ int32_t cmdUacFit(int argc, char** argv) {
                 || canonical_feature_weights.size() > 0;
             basis_pointer = &runtime_basis;
         } else {
-            centers = read_centers(center_file, kCenterFloor,
+            centers = read_centers(center_file, center_floor,
                 unit_identifier_column);
             helmert = normalized_helmert(
                 static_cast<int32_t>(centers.topics.size()));
@@ -1165,6 +1178,9 @@ int32_t cmdUacFit(int argc, char** argv) {
                     "MAP UAC does not accept model or count inputs");
             }
         }
+        // Dataset construction owns its copy. Releasing the input center table
+        // here prevents three simultaneous D-by-K matrices at fit startup.
+        centers.values = RowMajorMatrixXd{};
         if (!particle_initial_state.empty()) {
             if (options.handoff != uac::HandoffMode::Particle) {
                 throw std::invalid_argument(
@@ -1185,23 +1201,54 @@ int32_t cmdUacFit(int argc, char** argv) {
         uac::StateMetadata state_metadata;
         state_metadata.topics = centers.topics;
         state_metadata.helmert = helmert;
-        state_metadata.center_floor = kCenterFloor;
+        state_metadata.center_floor = center_floor;
         state_metadata.basis_checksum =
             basis_pointer ? canonical_basis.checksum : 0;
         state_metadata.feature_weights = canonical_feature_weights;
         state_metadata.weighted_counts = weighted_counts;
         uac::State state = uac::make_state(
             fitted, options, state_metadata);
-        report_component_screening(fitted.score);
-        write_all_outputs(out_prefix, data, state, fitted.score,
-            &fitted.traces, representatives, visualization_options,
-            write_model_trace, top_c);
+        uac::write_initialization_results(
+            out_prefix + ".initialization.results.tsv", data,
+            fitted.initialization_partitions);
+        uac::write_initialization_diagnostics(
+            out_prefix + ".initialization.tsv", fitted.initialization);
+        if (options.initialization_only) {
+            const uac::VisualizationResult visualization =
+                uac::make_visualization(data, state.model, state.helmert,
+                    visualization_options);
+            uac::write_state(out_prefix + ".state.tsv", state);
+            uac::write_model(out_prefix + ".model.tsv", state);
+            uac::write_separation(out_prefix + ".separation.tsv", state.model);
+            uac::write_visualization_axes(
+                out_prefix + ".visual.axes.tsv", state, visualization);
+            uac::write_visualization_model(
+                out_prefix + ".visual.model.tsv", state, visualization);
+            uac::write_visualization_results(
+                out_prefix + ".visual.results.tsv", data, visualization);
+            uac::write_trace(out_prefix + ".trace.tsv", fitted.traces);
+            if (write_model_trace) {
+                uac::write_model_trace(
+                    out_prefix + ".model_trace.tsv", fitted.traces);
+            }
+        } else {
+            report_component_screening(fitted.score);
+            write_all_outputs(out_prefix, data, state, fitted.score,
+                &fitted.traces, representatives, visualization_options,
+                write_model_trace, top_c);
+        }
         notice("UAC fitted %d clusters to %zu documents using %s handoff",
             options.n_components, data.identifiers.size(),
             uac::handoff_name(options.handoff));
-        notice("UAC outputs written to %s.{state,model,results,diagnostics,trace,separation,representatives,visual.axes,visual.model,visual.results}.tsv%s",
-            out_prefix.c_str(),
-            write_model_trace ? " and .model_trace.tsv" : "");
+        if (options.initialization_only) {
+            notice("UAC initializer outputs written to %s.{state,model,separation,trace,visual.axes,visual.model,visual.results,initialization,initialization.results}.tsv%s",
+                out_prefix.c_str(),
+                write_model_trace ? " and .model_trace.tsv" : "");
+        } else {
+            notice("UAC outputs written to %s.{state,model,results,diagnostics,trace,separation,representatives,visual.axes,visual.model,visual.results,initialization,initialization.results}.tsv%s",
+                out_prefix.c_str(),
+                write_model_trace ? " and .model_trace.tsv" : "");
+        }
     } catch (const std::exception& exception) {
         std::cerr << "UAC fit failed: " << exception.what() << "\n";
         return 1;
@@ -1213,6 +1260,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
     std::string state_file, center_file, basis_file, out_prefix;
     std::string proposal;
     int32_t particles = 0;
+    int32_t fisher_refinement_iterations = 0;
     int32_t threads = 1, representatives = 10;
     int32_t top_c = -1;
     int32_t unit_identifier_column = 0;
@@ -1234,6 +1282,9 @@ int32_t cmdUacTransform(int argc, char** argv) {
           "Scoring proposal override: exact_fisher or sparse_empirical_fisher",
           proposal)
       .add_option("particles", "Scoring particle-count override", particles)
+      .add_option("fisher-refinement-iterations",
+          "Scoring Fisher-refinement override; 0 uses the fitted state",
+          fisher_refinement_iterations)
       .add_option("threads", "Number of TBB worker threads", threads)
       .add_option("n-representatives", "Representatives per cluster", representatives)
       .add_option("exact-final-score",
@@ -1252,6 +1303,10 @@ int32_t cmdUacTransform(int argc, char** argv) {
         pl.print_options();
         if (top_c < -1) {
             throw std::invalid_argument("--top-c must be nonnegative");
+        }
+        if (fisher_refinement_iterations < 0) {
+            throw std::invalid_argument(
+                "--fisher-refinement-iterations must be nonnegative");
         }
         uac::State state = uac::read_state(state_file);
         const uac::VisualizationOptions visualization_options =
@@ -1281,6 +1336,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
         uac::ScoreResult score;
         if (state.handoff == uac::HandoffMode::Map) {
             if (!proposal.empty() || particles > 0
+                || fisher_refinement_iterations > 0
                 || particle_engine != uac::ParticleEngine::Batch
                 || adaptive_particles.enabled()) {
                 throw std::invalid_argument("Particle overrides are invalid for a MAP UAC state");
@@ -1320,10 +1376,15 @@ int32_t cmdUacTransform(int argc, char** argv) {
                 state.feature_weights, prepared_basis);
             uac::State runtime_state;
             const uac::State* scoring_state = &state;
-            if (!prepared_basis.is_full()) {
+            if (!prepared_basis.is_full()
+                || fisher_refinement_iterations > 0) {
                 runtime_state = state;
                 runtime_state.basis_checksum = runtime_basis.checksum;
                 runtime_state.feature_weights = runtime_weights;
+                if (fisher_refinement_iterations > 0) {
+                    runtime_state.fisher_refinement_iterations =
+                        fisher_refinement_iterations;
+                }
                 scoring_state = &runtime_state;
             }
             const uac::ProposalKind scoring_proposal = proposal.empty()

@@ -143,6 +143,7 @@ set(CLUSTERING_SOURCE_FILES
     src/clustering/uac_cache_internal.hpp
     src/clustering/uac_particle_cache.cpp
     src/clustering/uac_cached_expectation.cpp
+    src/clustering/uac_stochastic.cpp
     src/clustering/uac_fit.cpp
     src/clustering/uac_core.cpp
     src/clustering/uac_state.cpp
@@ -207,7 +208,9 @@ set(SOURCE_FILES
     script/fit_gampois.cpp
     script/transform_gampois.cpp
     script/leiden.cpp
+    script/uac_cli_common.cpp
     script/uac.cpp
+    script/ilr_linear_embed.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp

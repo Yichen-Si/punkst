@@ -11,6 +11,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv);
 int32_t cmdLeiden(int argc, char** argv);
 int32_t cmdUacFit(int argc, char** argv);
 int32_t cmdUacTransform(int argc, char** argv);
+int32_t cmdIlrLinearEmbed(int argc, char** argv);
 int32_t cmdHDPSVI(int argc, char** argv);
 int32_t cmdLDATransform(int argc, char** argv);
 int32_t cmdLDAFactorEval(int argc, char** argv);
@@ -62,6 +63,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("leiden", "Cluster factor embeddings with Leiden", cmdLeiden)
         .add_command("uac-fit", "Fit uncertainty-aware clustering", cmdUacFit)
         .add_command("uac-transform", "Assign documents using a fitted UAC state", cmdUacTransform)
+        .add_command("ilr-linear-embed", "Embed topic proportions using hard cluster partitions", cmdIlrLinearEmbed)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)
         .add_command("lda-transform", "Transform data using fitted LDA model", cmdLDATransform)
         .add_command("lda-factor-eval", "Evaluate leave-one-out LDA factor contribution", cmdLDAFactorEval)

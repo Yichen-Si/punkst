@@ -4,6 +4,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -129,6 +130,18 @@ Expectation cached_particle_expectation(const ParticleCache& cache,
     if (request.collect_diagnostics) {
         out.particle_diagnostics.resize(cache.documents);
     }
+    if (request.collect_subsample_statistics) {
+        if (components > std::numeric_limits<uint16_t>::max()) {
+            throw std::invalid_argument(
+                "UAC subsample statistics support at most 65535 components");
+        }
+        out.subsample_strata.resize(cache.documents);
+        out.subsample_document_samples.resize(cache.documents);
+        out.subsample_stratum_documents = Eigen::VectorXi::Zero(components);
+        out.subsample_stratum_purity = Eigen::VectorXd::Zero(components);
+        out.subsample_transfer = Eigen::MatrixXd::Zero(components, components);
+        out.subsample_stratum_bytes = Eigen::VectorXd::Zero(components);
+    }
     if (metadata) {
         metadata->particles.resize(cache.documents);
         metadata->proposal_components.resize(cache.documents);
@@ -191,7 +204,8 @@ Expectation cached_particle_expectation(const ParticleCache& cache,
     for (int32_t arithmetic = 0;
             arithmetic < arithmetic_count; ++arithmetic) {
         blocks.emplace_back(components, cache.dimension, factor_rank,
-            request.accumulate_moments);
+            request.accumulate_moments, false,
+            request.collect_subsample_statistics);
     }
     std::vector<double> gaussian_seconds(arithmetic_count, 0.0);
     std::vector<double> moment_seconds(arithmetic_count, 0.0);
@@ -319,6 +333,14 @@ Expectation cached_particle_expectation(const ParticleCache& cache,
                         std::copy(local.particle_diagnostics.begin(),
                             local.particle_diagnostics.end(),
                             out.particle_diagnostics.begin() + first);
+                    }
+                    if (request.collect_subsample_statistics) {
+                        std::copy(local.subsample_strata.begin(),
+                            local.subsample_strata.end(),
+                            out.subsample_strata.begin() + first);
+                        std::copy(local.subsample_document_samples.begin(),
+                            local.subsample_document_samples.end(),
+                            out.subsample_document_samples.begin() + first);
                     }
                     if (metadata) {
                         for (int32_t d = 0;
@@ -463,7 +485,7 @@ Expectation cached_particle_expectation(const ParticleCache& cache,
 ScoreResult score_particle_cache(const ParticleCache& cache,
     const Model& model, const ComponentScreeningOptions& screening,
     bool materialize_responsibilities, int32_t n_threads,
-    Expectation* terminal_expectation) {
+    Expectation* terminal_expectation, bool accumulate_moments) {
     CachedDocumentMetadata metadata;
     const int32_t components = static_cast<int32_t>(model.weights.size());
     const std::filesystem::path sidecar =
@@ -473,7 +495,8 @@ ScoreResult score_particle_cache(const ParticleCache& cache,
         Eigen::VectorXd::Zero(components);
     Expectation expectation = cached_particle_expectation(cache, model,
         screening,
-        ExpectationRequest{materialize_responsibilities, true, false},
+        ExpectationRequest{materialize_responsibilities, true,
+            accumulate_moments},
         n_threads,
         &metadata, nullptr,
         materialize_responsibilities ? nullptr : &sidecar,
@@ -566,4 +589,3 @@ ScoreResult score_particle_cache(const ParticleCache& cache,
 }
 
 } // namespace uac::detail
-

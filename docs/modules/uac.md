@@ -206,6 +206,23 @@ only the supplied point estimates.
 Maximum particles per unit. Default: `256`. More particles can improve the
 integral approximation at additional compute and memory cost.
 
+`--fisher-refinement-iterations`
+Number of damped Fisher/Newton steps used to locate each component-specific
+particle-proposal mode. Default: `1`, which preserves the original one-step
+proposal. Values above one recompute the likelihood gradient and Fisher
+information after each accepted step and use backtracking to avoid decreasing
+the component posterior. The setting is saved in the fitted state.
+
+`--center-floor`
+Positive floor applied to input topic proportions before row normalization and
+the ILR transform. Default: `1e-12`. This value is saved in the fitted state
+and reused by `uac-transform`. Current LDA and Gamma-Poisson transforms write
+topic proportions in four-digit scientific notation, so the default only
+guards the logarithm and does not impose a practical abundance threshold.
+Sparse LDA assignment estimates can still be much smaller than the
+Gamma-Poisson posterior means; a larger floor such as `5e-5` is an optional
+regularization for those proposal centers, not a lossless formatting repair.
+
 `--kmeans-starts`, `--leiden-starts`
 Numbers of candidate initialization starts. The best valid start is selected
 before mixture fitting.
@@ -216,6 +233,43 @@ stage: k-means++ starts, the Leiden k-NN graph, and reconciliation of Leiden
 communities to `--n-clusters`. Hellinger uses square-root topic proportions and
 therefore gives small nonzero topics more influence. It does not change the
 ILR-space UAC mixture model fitted after initialization.
+
+Particle handoff initializes covariance from noise-corrected moments, rather
+than the point-estimate/MAP covariance. The default
+`--init-measurement-mode ht` uses an expected 1024 measurement documents per
+initialization start/component. `legacy` performs separate full-data passes
+for the corrected moments and candidate scores. `full` evaluates each
+document's Fisher measurement
+covariance once, accumulates exact full-data corrected moments, and reuses a
+packed symmetric covariance cache for candidate scoring. A positive
+`--init-candidate-score-target` retains a deterministic sample with at least
+that expected number of documents per start/component and uses
+inverse-probability-weighted candidate objectives; zero scores all documents.
+When the option is omitted, `full` uses 512 and `ht` uses the measurement
+target. Thus `--init-measurement-mode full` means exact corrected moments plus
+512-per-stratum candidate scoring unless explicitly overridden.
+
+`--init-measurement-mode ht` estimates only the measurement-noise sums with a
+Horvitz--Thompson sample while retaining exact full-data point scatters.
+`--init-measurement-target` is the expected sample size per start/component
+and defaults to 1024.
+The estimator of each measurement sum is unbiased before positive-definite
+covariance flooring. Sampling uses the resolved initialization sampling seed
+and is deterministic for a fixed input and option set.
+`{prefix}.initialization.tsv` reports evaluated and
+scored documents, cached bytes, maximum weights, minimum Kish effective sample
+sizes, covariance-floor activations, and phase timings.
+
+`--initialization-only` stops after corrected-moment candidate selection and
+writes the initializer state, model, separation, trace, initialization
+diagnostics, and visualization outputs. The visualization axes, projected
+model, and projected input centers are computed directly from the selected
+initialized Gaussian mixture without running EM. This mode is intended for
+initialization benchmarking and requires particle handoff.
+
+`--init-sampling-seed` varies only initialization sampling while leaving the
+k-means/Leiden starts controlled by `--seed`; a negative value (default)
+reuses `--seed`.
 
 `--cluster-covariance-rank`
 Covariance representation. `-1` uses a dense covariance, `0` uses a diagonal
@@ -235,6 +289,58 @@ shrinkage leaves the ordinary common-uniqueness factor-analysis update.
 
 `--max-iter`, `--objective-change-tol`, `--responsibility-change-tol`
 Mixture convergence controls.
+
+`--particle-fit-schedule subsample|online`
+Enables large-data fitting schedules. Both begin with one exact
+full-data warm-up update, prevent component extinction during approximate
+updates, and always use an exact unscreened terminal scoring pass. `subsample`
+uses a transfer-aware, inverse-probability-weighted responsibility-stratified
+sample. With `--particle-engine batch`, selected units are addressed through
+an index and the full resident particle table is retained for the exact audit.
+With `--particle-engine stream`, the selected compact subsample is resident or
+spilled to temporary disk. `online` blends scaled minibatch sufficient statistics with a
+Robbins-Monro step. The default schedule is `exact`, and approximate schedules
+require particle handoff; `online` additionally requires the streaming engine.
+
+`--fit-document-budget`
+Optional hard cap on approximate E-step work in full-data document-pass
+equivalents. Zero (the subsample default) disables the cap.
+`--fit-subsample-target` and `--fit-subsample-base-fraction` control subsample effective
+size and uniform coverage. `--fit-subsample-storage auto|resident|disk` and
+`--fit-subsample-memory-budget` (default `1G`) control the memory/I/O tradeoff;
+batch subsample mode supports `auto` or `resident`. `--fit-subsample-min-updates`,
+`--fit-subsample-max-updates`, and `--fit-subsample-change-tol` control parameter-based
+stopping. `--fit-subsample-topup-rounds` bounds deterministic Kish-size repairs.
+`--fit-tail adaptive` (the default) uses an exact audit and at most one
+corrective update; `fixed` applies `--fit-full-tail-updates`, while `off` goes
+directly to the mandatory exact score. `--fit-batch-documents`,
+`--fit-step-kappa`, and `--fit-step-initial` control online updates.
+
+The subsample memory budget is a resident working-set bound for schedule-owned
+state. Streamed accounting uses the actual selected particle count of every
+unit (including adaptive ragged counts), the largest source or compact shard,
+inverse-probability weights, and E-step scratch/accumulator storage. `auto`
+may promote a realized resident selection to disk; explicit `resident` fails
+if either initial selection or a top-up crosses the bound. Batch accounting is
+additional to the already-resident full particle table.
+
+The allocator treats transfers below `1e-3` of a component column's maximum as
+numerical fuzzy-responsibility tails. Its allocation and realized Kish targets
+also retain a `1 / safety-factor` margin below the component's warmup mass.
+Together these rules prevent an effectively empty or diffuse component from
+forcing all strata to probability one. A stalled dual solve is completed by a
+monotone cost-weighted feasibility repair, rather than an unconditional census.
+
+Subsample fits also write `{prefix}.subsample.tsv`, containing per-stratum inclusion
+rates and per-component predicted and realized Kish sizes. Memory, disk, cache
+scan, allocator, convergence, and audit statistics are recorded in
+`{prefix}.diagnostics.tsv`. The predicted Kish values reflect the final
+post-top-up probabilities. `fit_subsample_evaluations` counts every selected
+E-step, including a result discarded by a subsequent top-up, and
+`fit_approximate_documents` sums the physical documents processed by all of
+those E-steps. `fit_full_data_evaluations` includes warm-up, exact tail/audit,
+and terminal scoring. Consequently `fit_document_pass_equivalents` is
+`fit_full_data_evaluations + fit_approximate_documents / D`.
 
 `--n-representatives`
 Number of high-responsibility example units written per cluster. Default: `10`.
@@ -277,6 +383,10 @@ stored in the state is used.
 Override the particle proposal with `exact_fisher` or
 `sparse_empirical_fisher`.
 
+`--fisher-refinement-iterations`
+Override the fitted Fisher-refinement count. Use `0` (the default) to retain
+the value stored in the state.
+
 `--exact-final-score`
 Evaluate every active cluster in the final scoring pass, even when component
 screening is configured.
@@ -315,15 +425,25 @@ For `uac-transform`, `weight` remains the fitted population weight, whereas
 
 ### Unit assignments
 
+`{prefix}.initialization.results.tsv`
+Hard partitions produced by every initialization start. K-means starts write
+`kmeans`, `kmeans2`, and so on. Leiden starts write the original graph
+partition as `leiden_raw`, `leiden2_raw`, and so on; these may contain fewer
+or more than `--n-clusters` communities. Each raw column is followed by its
+reconciled fixed-size partition: `leiden`, `leiden2`, and so on. These suffixes
+index starts within each method; global start indices remain in the trace.
+
 `{prefix}.results.tsv`
 Soft assignments for each unit. In the full table:
 
-- `top_cluster` and `top_probability` give the most probable cluster
-- `second_cluster` and `second_probability` give the runner-up
+- `C1` and `P1` give the most probable cluster and its probability
+- `C2` and `P2` give the runner-up and its probability
 - `entropy` summarizes assignment ambiguity; values near zero indicate a
   concentrated assignment, while larger values indicate probability spread
   across several clusters. Its range is $0$ to $\log C$.
-- `cluster_c` is the responsibility $\phi_{dc}$ for cluster $c$
+- the integer column `c` is the responsibility $\phi_{dc}$ for cluster $c$
+
+Probabilities and entropy are written in `%.4e` scientific notation.
 
 With top-C output, `C1/P1`, `C2/P2`, and so on contain the retained cluster
 IDs and probabilities. `top_c_mass` is their summed probability.
@@ -343,6 +463,8 @@ Pairwise cluster separation. `standardized_separation` measures center
 distance relative to the clusters' pooled covariance.
 `bhattacharyya_distance` also accounts for covariance-volume differences.
 Larger values indicate less-overlapping fitted Gaussian components.
+Floating-point fields in the model, separation, results, and projected-unit
+visualization tables are written in `%.4e` scientific notation.
 
 ### Fit and particle diagnostics
 
