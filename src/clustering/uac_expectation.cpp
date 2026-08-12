@@ -90,8 +90,8 @@ void reduce_expectation_blocks(Expectation& out,
         }
         out.log_likelihood += block.log_likelihood;
         out.log_likelihood_upper += block.log_likelihood_upper;
-        out.responsibility_entropy_sum +=
-            block.responsibility_entropy_sum;
+        out.top_probability_sum += block.top_probability_sum;
+        out.responsibility_weight_sum += block.responsibility_weight_sum;
         out.component_bound_seconds += block.component_bound_seconds;
         out.evaluated_component_documents +=
             block.evaluated_component_documents;
@@ -158,8 +158,8 @@ void accumulate_expectation(Expectation& target, const Expectation& source) {
     target.first += source.first;
     target.log_likelihood += source.log_likelihood;
     target.log_likelihood_upper += source.log_likelihood_upper;
-    target.responsibility_entropy_sum +=
-        source.responsibility_entropy_sum;
+    target.top_probability_sum += source.top_probability_sum;
+    target.responsibility_weight_sum += source.responsibility_weight_sum;
     target.component_bound_seconds += source.component_bound_seconds;
     target.evaluated_component_documents +=
         source.evaluated_component_documents;
@@ -319,6 +319,8 @@ Expectation map_expectation(const Dataset& data, const Model& model,
                 block.maximum_omitted_component_mass,
                 selected.omitted_mass_bound);
             responsibility = (selected.score.array() - normalizer).exp();
+            block.top_probability_sum += responsibility.maxCoeff();
+            block.responsibility_weight_sum += 1.0;
             if (request.store_responsibilities) {
                 out.responsibilities.row(d) = responsibility.transpose();
                 out.per_document_evaluated_components[d] =
@@ -755,6 +757,9 @@ Expectation particle_expectation_impl(const ParticleCollection& particles,
                 || request.collect_subsample_statistics) {
                 responsibility =
                     (selected.score.array() - normalizer).exp();
+                block.top_probability_sum +=
+                    document_weight * responsibility.maxCoeff();
+                block.responsibility_weight_sum += document_weight;
             }
             if (request.collect_subsample_statistics) {
                 Eigen::Index stratum_index = 0;

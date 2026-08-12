@@ -28,12 +28,20 @@ double mean_max_responsibility_change(
     return total / current.rows();
 }
 
+double mean_top_probability(const Expectation& expectation) {
+    if (!(expectation.responsibility_weight_sum > 0.0)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    return expectation.top_probability_sum
+        / expectation.responsibility_weight_sum;
+}
+
 void record_trace_point(RestartTrace& trace, const FitOptions& options,
     TraceEvent event, int32_t completed_updates, double objective,
     int32_t active_components,
     double relative_objective_change, double responsibility_change,
     double variance_change,
-    double mean_responsibility_entropy) {
+    double mean_top_probability_value) {
     RestartTrace::Point point;
     point.event = event;
     point.completed_updates = completed_updates;
@@ -42,13 +50,13 @@ void record_trace_point(RestartTrace& trace, const FitOptions& options,
     point.relative_objective_change = relative_objective_change;
     point.mean_max_responsibility_change = responsibility_change;
     point.median_absolute_relative_variance_change = variance_change;
-    point.mean_responsibility_entropy = mean_responsibility_entropy;
+    point.mean_top_probability = mean_top_probability_value;
     trace.points.push_back(std::move(point));
     if (options.iteration_callback) {
-        options.iteration_callback({trace.phase, event, trace.start,
-            completed_updates, relative_objective_change,
+        options.iteration_callback({trace.phase, event, trace.start_method,
+            trace.start, completed_updates, relative_objective_change,
             responsibility_change, variance_change,
-            mean_responsibility_entropy});
+            mean_top_probability_value});
     }
 }
 
@@ -89,6 +97,8 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
     RowMajorMatrixXd previous_responsibilities;
     double converged_log_likelihood =
         -std::numeric_limits<double>::infinity();
+    double latest_mean_top_probability =
+        std::numeric_limits<double>::quiet_NaN();
     double previous_objective_lower =
         -std::numeric_limits<double>::infinity();
     double previous_objective_upper =
@@ -98,6 +108,7 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
     for (int32_t iteration = 0; iteration < options.max_iterations; ++iteration) {
         Expectation expectation = map_expectation(data, out.model,
             ExpectationRequest{true, false, true}, map_screening);
+        latest_mean_top_probability = mean_top_probability(expectation);
         accumulate_estep_work(out.trace, expectation);
         const double objective = expectation.log_likelihood
             + covariance_prior(out.model, shrinkage);
@@ -122,7 +133,9 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
         record_trace_point(out.trace, options, TraceEvent::Evaluation,
             out.trace.completed_updates, objective,
             active_component_count(out.model), relative_change,
-            responsibility_change);
+            responsibility_change,
+            std::numeric_limits<double>::quiet_NaN(),
+            latest_mean_top_probability);
         if (iteration > 0
             && (relative_change < options.objective_change_tolerance
                 || responsibility_change
@@ -150,6 +163,7 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
     } else {
         const Expectation final_expectation = map_expectation(data, out.model,
             ExpectationRequest{false, false, false}, map_screening);
+        latest_mean_top_probability = mean_top_probability(final_expectation);
         accumulate_estep_work(out.trace, final_expectation);
         out.objective = final_expectation.log_likelihood;
     }
@@ -159,7 +173,9 @@ Candidate fit_map_candidate(const Dataset& data, Model initial,
         out.objective + covariance_prior(out.model, shrinkage),
         active_component_count(out.model),
         std::numeric_limits<double>::quiet_NaN(),
-        std::numeric_limits<double>::quiet_NaN());
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(),
+        latest_mean_top_probability);
     out.trace.succeeded = true;
     return out;
 }
@@ -211,7 +227,9 @@ Candidate fit_particle_candidate(
             out.trace.completed_updates, bootstrap.log_likelihood,
             active_component_count(out.model),
             std::numeric_limits<double>::quiet_NaN(),
-            std::numeric_limits<double>::quiet_NaN());
+            std::numeric_limits<double>::quiet_NaN(),
+            std::numeric_limits<double>::quiet_NaN(),
+            mean_top_probability(bootstrap));
         previous_responsibilities = bootstrap.responsibilities;
         previous_objective_lower = bootstrap.log_likelihood;
         previous_objective_upper = bootstrap.log_likelihood_upper;
@@ -271,7 +289,8 @@ Candidate fit_particle_candidate(
         record_trace_point(out.trace, options, TraceEvent::Evaluation,
             out.trace.completed_updates, objective,
             active_component_count(out.model), relative_change,
-            responsibility_change, variance_change);
+            responsibility_change, variance_change,
+            mean_top_probability(expectation));
         const bool convergence_eligible =
             !options.adaptive_covariance_shrinkage
             || adaptive_update_completed;
@@ -323,7 +342,9 @@ void finalize_particle_candidate(Candidate& candidate,
         candidate.trace.completed_updates, candidate.objective,
         active_component_count(candidate.model),
         std::numeric_limits<double>::quiet_NaN(),
-        std::numeric_limits<double>::quiet_NaN());
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(),
+        mean_top_probability(terminal));
     if (options.capture_model_trace) {
         ModelTraceEntry entry;
         entry.completed_updates = candidate.trace.completed_updates;

@@ -357,6 +357,10 @@ Number of cluster/probability pairs to write per unit. `0` writes all cluster
 responsibilities. With component screening, omitting this option defaults to
 the top five pairs.
 
+`--diagnosis-per-unit`
+Append per-unit statistics to `{prefix}.diagnostics.tsv`. These rows are
+omitted by default.
+
 `--threads`, `--seed`
 Execution and reproducibility controls.
 
@@ -398,7 +402,7 @@ the value stored in the state.
 Evaluate every active cluster in the final scoring pass, even when component
 screening is configured.
 
-`--top-c`, `--n-representatives`, `--threads`
+`--top-c`, `--n-representatives`, `--threads`, `--diagnosis-per-unit`
 Control output density, representative count, and parallelism as in fitting.
 
 ## Interpreting outputs
@@ -476,8 +480,11 @@ visualization tables are written in `%.4e` scientific notation.
 ### Fit and particle diagnostics
 
 `{prefix}.diagnostics.tsv`
-Starts with run-level timing, particle, streaming, and screening summaries,
-followed by one row per unit. Important per-unit fields include:
+Contains run-level timing, particle, streaming, and screening summaries. With
+`--diagnosis-per-unit`, it also contains one row per unit. Only applicable
+columns are written: for example, adaptive-allocation columns require adaptive
+particle sizing, and component-screening columns require screening in the
+corresponding phase. Important per-unit fields include:
 
 - `raw_total` and `effective_total`: input depth before and after optional
   feature weighting
@@ -489,15 +496,17 @@ followed by one row per unit. Important per-unit fields include:
 - `omitted_component_mass_bound`: upper bound on responsibility omitted by
   component screening
 
-Particle-specific fields are `NA` for a MAP model. Low relative ESS or high
-maximum weight suggests increasing `--particles` or reviewing the count/model
-match before relying on fine differences in responsibilities.
+Floating-point diagnostics use `%.4e` scientific notation, except count-like
+values such as `raw_total` and `effective_total`, which use `%.2f`. Low
+relative ESS or high maximum weight suggests increasing `--particles` or
+reviewing the count/model match before relying on fine differences in
+responsibilities.
 
 `{prefix}.trace.tsv`
 Written by `uac-fit`. It records candidate-start scoring and mixture progress,
 including objective, responsibility change, covariance change, active-cluster
-count, and whether a start was selected. Use it to check convergence and to
-identify collapsed or unstable starts.
+count, mean top assignment probability, and whether a start was selected. Use
+it to check convergence and to identify collapsed or unstable starts.
 
 `{prefix}.model_trace.tsv`
 Written only with `uac-fit --write-model-trace`. It contains component
@@ -524,8 +533,10 @@ Covariance used to scale the projection:
   an additional $O(D(K-1)^2)$ calculation. This option must be requested again
   during transform because visualization settings are not stored in the state.
 
-Two views are written. `mean` emphasizes differences among cluster centers.
-`full` uses both center differences and covariance-shape differences.
+The `mean` view, which emphasizes differences among cluster centers, is always
+computed and written. Pass `--visual-full` to additionally compute and write
+the `full` view, which uses both center differences and covariance-shape
+differences.
 
 `{prefix}.visual.axes.tsv`
 Axis definitions. Rows with `basis=ilr` contain the projection matrix $V$.
@@ -551,7 +562,8 @@ $$
 $$
 
 `{prefix}.visual.results.tsv`
-Projected point-center coordinates for every unit in the `mean` and `full`
-views. These coordinates project the input topic point estimates; they are not
-particle posterior means. Join them to `{prefix}.results.tsv` by `#id` to
-color points by cluster responsibility, assignment entropy, or metadata.
+Projected point-center coordinates for every unit in the `mean` view, plus the
+`full` view when `--visual-full` is supplied. These coordinates project the
+input topic point estimates; they are not particle posterior means. Join them
+to `{prefix}.results.tsv` by `#id` to color points by cluster responsibility,
+assignment entropy, or metadata.

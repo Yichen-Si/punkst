@@ -1,4 +1,4 @@
-#include "uac_cli_common.hpp"
+#include "cli_common.hpp"
 
 #include "utils.h"
 
@@ -8,12 +8,68 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace uac_cli {
+namespace punkst_cli {
+
+namespace {
+
+RowMajorMatrixXd normalize_factor_proportions(
+        const Eigen::Ref<const RowMajorMatrixXd>& values) {
+    RowMajorMatrixXd out = values;
+    for (Eigen::Index row = 0; row < out.rows(); ++row) {
+        const double scale = out.row(row).maxCoeff();
+        if (!(scale > 0.0) || !std::isfinite(scale)) {
+            throw std::invalid_argument(
+                "Projection requires positive finite factor rows");
+        }
+        out.row(row) /= scale;
+        const double total = out.row(row).sum();
+        if (!(total > 0.0) || !std::isfinite(total)) {
+            throw std::invalid_argument(
+                "Projection requires positive finite factor rows");
+        }
+        out.row(row) /= total;
+    }
+    return out;
+}
+
+} // namespace
+
+const char* projection_space_name(ProjectionSpace space) {
+    return space == ProjectionSpace::Linear ? "linear" : "ilr";
+}
+
+std::vector<ProjectionSpace> parse_projection_spaces(
+        const std::string& value) {
+    if (value == "linear") return {ProjectionSpace::Linear};
+    if (value == "ilr") return {ProjectionSpace::Ilr};
+    if (value == "both") {
+        return {ProjectionSpace::Linear, ProjectionSpace::Ilr};
+    }
+    throw std::invalid_argument(
+        "--projection-space must be both, linear, or ilr");
+}
+
+ProjectionData prepare_projection(
+    const Eigen::Ref<const RowMajorMatrixXd>& values,
+    ProjectionSpace space,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    double center_floor) {
+    ProjectionData out;
+    if (space == ProjectionSpace::Linear) {
+        out.centers = normalize_factor_proportions(values);
+        out.coordinates = out.centers * helmert.transpose();
+    } else {
+        out.centers = values;
+        uac::normalize_centers(out.centers, center_floor);
+        out.coordinates = ilr_transform(out.centers, helmert);
+    }
+    return out;
+}
 
 TopicCenterTable read_topic_centers(const std::string& path, double floor,
     int32_t identifier_column,
     const std::vector<std::string>* expected_topics,
-    const std::string& identifier_option) {
+    const std::string& identifier_option, bool normalize) {
     if (identifier_column < 0) {
         throw std::invalid_argument(
             identifier_option + " must be nonnegative");
@@ -136,8 +192,8 @@ TopicCenterTable read_topic_centers(const std::string& path, double floor,
                 static_cast<size_t>(row * table.values.cols() + column)];
         }
     }
-    uac::normalize_centers(table.values, floor);
+    if (normalize) uac::normalize_centers(table.values, floor);
     return table;
 }
 
-} // namespace uac_cli
+} // namespace punkst_cli

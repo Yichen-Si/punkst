@@ -51,11 +51,12 @@ Eigen::MatrixXd sample_whitening_covariance(
     return symmetrize(covariance);
 }
 
-VisualizationProjection solve_projection(VisualizationView view,
+VisualizationProjection solve_projection_axes(VisualizationView view,
     const Eigen::Ref<const Eigen::MatrixXd>& kernel,
     const Eigen::Ref<const Eigen::MatrixXd>& whitening_covariance,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
-    const VisualizationMoments& moments, int32_t output_dimensions) {
+    const Eigen::Ref<const RowMajorMatrixXd>& component_means,
+    int32_t maximum_dimensions, bool positive_only) {
     Eigen::GeneralizedSelfAdjointEigenSolver<Eigen::MatrixXd> solver(
         symmetrize(kernel), whitening_covariance);
     if (solver.info() != Eigen::Success) {
@@ -63,6 +64,15 @@ VisualizationProjection solve_projection(VisualizationView view,
             "UAC visualization generalized eigendecomposition failed");
     }
     const int32_t dimension = static_cast<int32_t>(kernel.rows());
+    const double rank_tolerance = 256.0
+        * std::numeric_limits<double>::epsilon()
+        * std::max(1.0, solver.eigenvalues().cwiseAbs().maxCoeff());
+    int32_t output_dimensions = std::min(dimension, maximum_dimensions);
+    if (positive_only) {
+        output_dimensions = std::min<int32_t>(output_dimensions,
+            static_cast<int32_t>((solver.eigenvalues().array()
+                > rank_tolerance).count()));
+    }
     VisualizationProjection out;
     out.view = view;
     out.eigenvalues.resize(output_dimensions);
@@ -88,7 +98,18 @@ VisualizationProjection solve_projection(VisualizationView view,
             out.topic_contrasts.col(axis) *= -1.0;
         }
     }
-    out.component_means = moments.means * out.projection;
+    out.component_means = component_means * out.projection;
+    return out;
+}
+
+VisualizationProjection solve_projection(VisualizationView view,
+    const Eigen::Ref<const Eigen::MatrixXd>& kernel,
+    const Eigen::Ref<const Eigen::MatrixXd>& whitening_covariance,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const VisualizationMoments& moments, int32_t output_dimensions) {
+    VisualizationProjection out = solve_projection_axes(view, kernel,
+        whitening_covariance, helmert, moments.means, output_dimensions,
+        false);
     out.component_covariances.reserve(moments.weights.size());
     for (int32_t component = 0; component < moments.weights.size();
             ++component) {
@@ -98,6 +119,20 @@ VisualizationProjection solve_projection(VisualizationView view,
         out.component_covariances.push_back(symmetrize(covariance));
     }
     return out;
+}
+
+void validate_visualization_means(const VisualizationMeans& means,
+        int32_t dimension) {
+    const int32_t components = detail::checked_int32(
+        means.weights.size(), "visualization component count");
+    if (components <= 0 || means.means.rows() != components
+        || means.means.cols() != dimension
+        || !means.weights.allFinite() || !means.means.allFinite()
+        || (means.weights.array() < 0.0).any()
+        || std::abs(means.weights.sum() - 1.0) > 1e-8
+        || !(means.weights.array() > 0.0).any()) {
+        throw std::invalid_argument("Invalid visualization means");
+    }
 }
 
 void validate_visualization_moments(const VisualizationMoments& moments,
@@ -243,29 +278,31 @@ static VisualizationResult make_visualization_impl(const Dataset& data,
             "UAC visualization whitening covariance is not positive definite");
     }
 
-    Eigen::MatrixXd covariance_kernel = Eigen::MatrixXd::Zero(
-        dimension, dimension);
-    for (int32_t component = 0; component < moments.weights.size();
-            ++component) {
-        if (!(moments.weights(component) > 0.0)) continue;
-        const Eigen::MatrixXd difference =
-            moments.covariances[static_cast<size_t>(component)]
-            - average_covariance;
-        covariance_kernel.noalias() += moments.weights(component)
-            * difference * whitening_solver.solve(difference);
-    }
-    covariance_kernel = symmetrize(covariance_kernel);
-    Eigen::MatrixXd full_kernel = mean_kernel
-        * whitening_solver.solve(mean_kernel) + covariance_kernel;
-    full_kernel = symmetrize(full_kernel);
-
     VisualizationResult out;
     out.whitening = options.whitening;
     out.whitening_covariance = whitening_covariance;
     out.mean = solve_projection(VisualizationView::Mean, mean_kernel,
         whitening_covariance, helmert, moments, output_dimensions);
-    out.full = solve_projection(VisualizationView::Full, full_kernel,
-        whitening_covariance, helmert, moments, output_dimensions);
+    out.full.view = VisualizationView::Full;
+    if (options.include_full) {
+        Eigen::MatrixXd covariance_kernel = Eigen::MatrixXd::Zero(
+            dimension, dimension);
+        for (int32_t component = 0; component < moments.weights.size();
+                ++component) {
+            if (!(moments.weights(component) > 0.0)) continue;
+            const Eigen::MatrixXd difference =
+                moments.covariances[static_cast<size_t>(component)]
+                - average_covariance;
+            covariance_kernel.noalias() += moments.weights(component)
+                * difference * whitening_solver.solve(difference);
+        }
+        covariance_kernel = symmetrize(covariance_kernel);
+        Eigen::MatrixXd full_kernel = mean_kernel
+            * whitening_solver.solve(mean_kernel) + covariance_kernel;
+        full_kernel = symmetrize(full_kernel);
+        out.full = solve_projection(VisualizationView::Full, full_kernel,
+            whitening_covariance, helmert, moments, output_dimensions);
+    }
     return out;
 }
 
@@ -284,6 +321,95 @@ VisualizationResult make_visualization(const Dataset& data,
     const VisualizationSampleMoments& sample_moments) {
     return make_visualization_impl(
         data, moments, helmert, options, &sample_moments);
+}
+
+VisualizationResult make_mean_visualization(
+    const VisualizationMeans& means,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const VisualizationOptions& options,
+    const VisualizationSampleMoments& sample_moments) {
+    const int32_t dimension = detail::checked_int32(
+        means.means.cols(), "visualization coordinate dimension");
+    const int32_t topics = detail::checked_int32(
+        helmert.cols(), "visualization topic count");
+    if (dimension <= 0 || topics != dimension + 1
+        || helmert.rows() != dimension || !helmert.allFinite()
+        || !is_normalized_helmert(helmert) || options.dimensions <= 0
+        || !(options.covariance_floor > 0.0)
+        || !std::isfinite(options.covariance_floor)
+        || sample_moments.mean.size() != dimension
+        || sample_moments.covariance.rows() != dimension
+        || sample_moments.covariance.cols() != dimension
+        || !sample_moments.mean.allFinite()
+        || !sample_moments.covariance.allFinite()) {
+        throw std::invalid_argument("Invalid mean visualization input");
+    }
+    validate_visualization_means(means, dimension);
+    const Eigen::VectorXd mixture_mean =
+        means.means.transpose() * means.weights;
+    Eigen::MatrixXd mean_kernel = Eigen::MatrixXd::Zero(
+        dimension, dimension);
+    for (int32_t component = 0; component < means.weights.size();
+            ++component) {
+        if (!(means.weights(component) > 0.0)) continue;
+        const Eigen::VectorXd difference =
+            means.means.row(component).transpose() - mixture_mean;
+        mean_kernel.noalias() += means.weights(component)
+            * difference * difference.transpose();
+    }
+    const Eigen::VectorXd center_difference =
+        sample_moments.mean - mixture_mean;
+    Eigen::MatrixXd whitening_covariance = sample_moments.covariance
+        + center_difference * center_difference.transpose();
+    whitening_covariance = floor_covariance(
+        symmetrize(whitening_covariance), options.covariance_floor);
+
+    VisualizationResult out;
+    out.whitening = options.whitening;
+    out.whitening_covariance = whitening_covariance;
+    out.mean = solve_projection_axes(VisualizationView::Mean,
+        symmetrize(mean_kernel), whitening_covariance, helmert, means.means,
+        options.dimensions, true);
+    out.full.view = VisualizationView::Full;
+    return out;
+}
+
+VisualizationMeans summarize_hard_partition_means(
+    const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
+    const Eigen::Ref<const Eigen::VectorXi>& assignments,
+    int32_t components) {
+    const int32_t documents = detail::checked_int32(
+        coordinates.rows(), "hard-partition document count");
+    const int32_t dimension = detail::checked_int32(
+        coordinates.cols(), "hard-partition dimension");
+    if (documents <= 0 || dimension <= 0 || components <= 0
+        || assignments.size() != documents || !coordinates.allFinite()) {
+        throw std::invalid_argument(
+            "Invalid hard-partition visualization input");
+    }
+    Eigen::VectorXi counts = Eigen::VectorXi::Zero(components);
+    VisualizationMeans out;
+    out.means = RowMajorMatrixXd::Zero(components, dimension);
+    for (int32_t document = 0; document < documents; ++document) {
+        const int32_t component = assignments(document);
+        if (component < 0 || component >= components) {
+            throw std::invalid_argument(
+                "Hard-partition label is out of range");
+        }
+        ++counts(component);
+        out.means.row(component) += coordinates.row(document);
+    }
+    out.weights.resize(components);
+    for (int32_t component = 0; component < components; ++component) {
+        if (counts(component) <= 0) {
+            throw std::invalid_argument(
+                "Hard partition contains an empty component");
+        }
+        out.means.row(component) /= counts(component);
+        out.weights(component) = static_cast<double>(counts(component))
+            / static_cast<double>(documents);
+    }
+    return out;
 }
 
 VisualizationMoments summarize_hard_partition(

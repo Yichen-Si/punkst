@@ -196,10 +196,11 @@ void write_results(const std::string& path, const Dataset& data,
 }
 
 void write_diagnostics(const std::string& path, const Dataset& data,
-    const ScoreResult& score) {
+    const ScoreResult& score, bool per_unit) {
     std::ofstream out(path);
     if (!out) throw std::runtime_error("Cannot write UAC diagnostics: " + path);
-    out << "##initialization_seconds\t"
+    out << std::scientific << std::setprecision(4)
+        << "##initialization_seconds\t"
         << score.initialization_seconds << "\n"
         << "##particle_generation_seconds\t"
         << score.particle_generation_seconds << "\n"
@@ -397,56 +398,138 @@ void write_diagnostics(const std::string& path, const Dataset& data,
         << "##proposal_audit_violations\t"
         << score.proposal_audit_violations << "\n"
         << "##proposal_audit_maximum_omitted_mass\t"
-        << score.proposal_audit_maximum_omitted_mass << "\n"
-        << "#id\traw_total\teffective_total\tparticles\trelative_ess\tmaximum_weight\tlog_likelihood_range\tlog_proposal_range\thpd80_log_density_threshold\thpd95_log_density_threshold"
-        << "\tproposal_components\tevaluated_components"
-        << "\tomitted_component_mass_bound"
-        << "\tadapt_preliminary_max_resp\tadapt_preliminary_entropy"
-        << "\tadapt_plausible_components\tadapt_max_resp_se"
-        << "\tadapt_projected_resp_particles\tadapt_projected_moment_particles"
-        << "\tadapt_binding\n"
-        << std::scientific << std::setprecision(10);
-    for (size_t d = 0; d < data.identifiers.size(); ++d) {
-        const bool particle = d < score.particle_diagnostics.size();
-        out << data.identifiers[d] << "\t"
-            << (data.raw_totals.size() ? data.raw_totals(d) : 0.0) << "\t"
-            << (data.effective_totals.size() ? data.effective_totals(d) : 0.0)
-            << "\t" << (d < score.per_document_particles.size()
-                ? score.per_document_particles[d] : 0) << "\t";
-        if (particle) {
-            const auto& value = score.particle_diagnostics[d];
-            out << value.relative_ess << "\t" << value.maximum_weight << "\t"
-                << value.log_likelihood_range << "\t"
-                << value.log_proposal_range << "\t"
-                << value.hpd80_log_density_threshold << "\t"
-                << value.hpd95_log_density_threshold;
-        } else {
-            out << "NA\tNA\tNA\tNA\tNA\tNA";
+        << score.proposal_audit_maximum_omitted_mass << "\n";
+    if (!per_unit) return;
+
+    const bool raw_total = data.raw_totals.size() > 0;
+    const bool effective_total = data.effective_totals.size() > 0;
+    const bool particle_diagnostics = !score.particle_diagnostics.empty();
+    const bool adaptive = score.adaptive_particle_options.enabled()
+        && !score.adaptive_particle_diagnostics.empty();
+    const bool adaptive_responsibility = adaptive
+        && score.adaptive_particle_options.responsibility_se_target.has_value();
+    const bool adaptive_moment = adaptive
+        && score.adaptive_particle_options.moment_ess_target.has_value();
+    const bool proposal_screening = score.proposal_component_screening
+        && !score.per_document_proposal_components.empty();
+    const bool terminal_screening = score.terminal_component_screening;
+    const bool evaluated_components = terminal_screening
+        && !score.per_document_evaluated_components.empty();
+    const bool omitted_component_mass = terminal_screening
+        && !score.per_document_omitted_component_mass.empty();
+
+    out << "#id";
+    if (raw_total) out << "\traw_total";
+    if (effective_total) out << "\teffective_total";
+    if (adaptive && !score.per_document_particles.empty()) {
+        out << "\tparticles";
+    }
+    if (particle_diagnostics) {
+        out << "\trelative_ess\tmaximum_weight"
+            << "\tlog_likelihood_range\tlog_proposal_range"
+            << "\thpd80_log_density_threshold"
+            << "\thpd95_log_density_threshold";
+    }
+    if (proposal_screening) out << "\tproposal_components";
+    if (evaluated_components) out << "\tevaluated_components";
+    if (omitted_component_mass) out << "\tomitted_component_mass_bound";
+    if (adaptive) {
+        out << "\tadapt_preliminary_max_resp"
+            << "\tadapt_preliminary_entropy"
+            << "\tadapt_plausible_components";
+        if (adaptive_responsibility) {
+            out << "\tadapt_max_resp_se"
+                << "\tadapt_projected_resp_particles";
         }
-        out << "\t"
-            << (d < score.per_document_proposal_components.size()
-                ? score.per_document_proposal_components[d] : 0)
-            << "\t"
-            << (d < score.per_document_evaluated_components.size()
-                ? score.per_document_evaluated_components[d] : 0)
-            << "\t";
-        if (d < score.per_document_omitted_component_mass.size()) {
-            out << score.per_document_omitted_component_mass[d];
+        if (adaptive_moment) {
+            out << "\tadapt_projected_moment_particles";
+        }
+        out << "\tadapt_binding";
+    }
+    out << "\n";
+
+    auto write_scientific_or_na = [&](const auto& values, size_t document) {
+        if (document < values.size()) {
+            out << values[document];
         } else {
             out << "NA";
         }
-        out << "\t";
-        if (d < score.adaptive_particle_diagnostics.size()) {
-            const auto& value = score.adaptive_particle_diagnostics[d];
-            out << value.preliminary_maximum_responsibility << "\t"
-                << value.preliminary_entropy << "\t"
-                << value.plausible_components << "\t"
-                << value.maximum_responsibility_se << "\t"
-                << value.projected_responsibility_particles << "\t"
-                << value.projected_moment_particles << "\t"
-                << adaptive_particle_binding_name(value.binding);
+    };
+    auto write_count_or_na = [&](const Eigen::VectorXd& values,
+                                 size_t document) {
+        if (document < static_cast<size_t>(values.size())) {
+            out << std::fixed << std::setprecision(2) << values(document)
+                << std::scientific << std::setprecision(4);
         } else {
-            out << "NA\tNA\tNA\tNA\tNA\tNA\tNA";
+            out << "NA";
+        }
+    };
+    for (size_t d = 0; d < data.identifiers.size(); ++d) {
+        out << data.identifiers[d];
+        if (raw_total) {
+            out << "\t";
+            write_count_or_na(data.raw_totals, d);
+        }
+        if (effective_total) {
+            out << "\t";
+            write_count_or_na(data.effective_totals, d);
+        }
+        if (adaptive && !score.per_document_particles.empty()) {
+            out << "\t";
+            write_scientific_or_na(score.per_document_particles, d);
+        }
+        if (particle_diagnostics) {
+            out << "\t";
+            if (d < score.particle_diagnostics.size()) {
+                const auto& value = score.particle_diagnostics[d];
+                out << value.relative_ess << "\t"
+                    << value.maximum_weight << "\t"
+                    << value.log_likelihood_range << "\t"
+                    << value.log_proposal_range << "\t"
+                    << value.hpd80_log_density_threshold << "\t"
+                    << value.hpd95_log_density_threshold;
+            } else {
+                out << "NA\tNA\tNA\tNA\tNA\tNA";
+            }
+        }
+        if (proposal_screening) {
+            out << "\t";
+            write_scientific_or_na(score.per_document_proposal_components, d);
+        }
+        if (evaluated_components) {
+            out << "\t";
+            write_scientific_or_na(score.per_document_evaluated_components, d);
+        }
+        if (omitted_component_mass) {
+            out << "\t";
+            write_scientific_or_na(
+                score.per_document_omitted_component_mass, d);
+        }
+        if (adaptive) {
+            out << "\t";
+            if (d < score.adaptive_particle_diagnostics.size()) {
+                const auto& value = score.adaptive_particle_diagnostics[d];
+                out << value.preliminary_maximum_responsibility << "\t"
+                    << value.preliminary_entropy << "\t"
+                    << value.plausible_components;
+                if (adaptive_responsibility) {
+                    out << "\t" << value.maximum_responsibility_se << "\t"
+                        << std::fixed << std::setprecision(2)
+                        << value.projected_responsibility_particles
+                        << std::scientific << std::setprecision(4);
+                }
+                if (adaptive_moment) {
+                    out << "\t" << std::fixed << std::setprecision(2)
+                        << value.projected_moment_particles
+                        << std::scientific << std::setprecision(4);
+                }
+                out << "\t" << adaptive_particle_binding_name(value.binding);
+            } else {
+                out << "NA\tNA\tNA";
+                if (adaptive_responsibility) out << "\tNA\tNA";
+                if (adaptive_moment) out << "\tNA";
+                out << "\tNA";
+            }
         }
         out << "\n";
     }
@@ -609,7 +692,7 @@ void write_trace(const std::string& path,
         "\trelative_objective_change"
         "\tmean_max_responsibility_change"
         "\tmedian_absolute_relative_variance_change"
-        "\tmean_responsibility_entropy"
+        "\tmean_top_probability"
         "\tactive_components\tconverged\tcollapsed"
         "\tfixed_em_iteration_schedule\n"
         << std::scientific << std::setprecision(12);
@@ -669,8 +752,8 @@ void write_trace(const std::string& path,
                 out << "NA";
             }
             out << "\t";
-            if (std::isfinite(point.mean_responsibility_entropy)) {
-                out << point.mean_responsibility_entropy;
+            if (std::isfinite(point.mean_top_probability)) {
+                out << point.mean_top_probability;
             } else {
                 out << "NA";
             }
@@ -864,8 +947,10 @@ void write_visualization_axes(const std::string& path,
     out << "#whitening\tview\taxis\teigenvalue\tbasis\tindex\tname"
         "\tcoefficient\tcontrast_scale\tside\tnormalized_weight\n"
         << std::scientific << std::setprecision(10);
-    const VisualizationProjection* views[] = {
-        &visualization.mean, &visualization.full};
+    std::vector<const VisualizationProjection*> views{&visualization.mean};
+    if (visualization.full.projection.cols() > 0) {
+        views.push_back(&visualization.full);
+    }
     for (const VisualizationProjection* view : views) {
         if (view->projection.cols() != view->eigenvalues.size()
             || view->topic_contrasts.rows()
@@ -924,8 +1009,9 @@ void write_visualization_model(const std::string& path,
             "Cannot write UAC visualization model: " + path);
     }
     const Eigen::Index dimensions = visualization.mean.projection.cols();
-    if (dimensions <= 0
-        || visualization.full.projection.cols() != dimensions) {
+    const bool has_full = visualization.full.projection.cols() > 0;
+    if (dimensions <= 0 || (has_full
+            && visualization.full.projection.cols() != dimensions)) {
         throw std::invalid_argument(
             "Invalid UAC visualization model dimensions");
     }
@@ -939,8 +1025,8 @@ void write_visualization_model(const std::string& path,
         }
     }
     out << "\n" << std::scientific << std::setprecision(10);
-    const VisualizationProjection* views[] = {
-        &visualization.mean, &visualization.full};
+    std::vector<const VisualizationProjection*> views{&visualization.mean};
+    if (has_full) views.push_back(&visualization.full);
     for (const VisualizationProjection* view : views) {
         if (view->component_means.rows() != state.model.weights.size()
             || view->component_means.cols() != dimensions
@@ -987,18 +1073,25 @@ void write_visualization_results(const std::string& path,
     const Eigen::Index dimensions = visualization.mean.projection.cols();
     if (data.coordinates.rows()
             != static_cast<Eigen::Index>(data.identifiers.size())
-        || data.coordinates.cols() != visualization.mean.projection.rows()
-        || visualization.full.projection.rows() != data.coordinates.cols()
-        || visualization.full.projection.cols() != dimensions) {
+        || data.coordinates.cols() != visualization.mean.projection.rows()) {
         throw std::invalid_argument(
             "Invalid UAC visualization result dimensions");
+    }
+    const bool has_full = visualization.full.projection.cols() > 0;
+    if (has_full
+        && (visualization.full.projection.rows() != data.coordinates.cols()
+            || visualization.full.projection.cols() != dimensions)) {
+        throw std::invalid_argument(
+            "Invalid UAC full visualization result dimensions");
     }
     out << "#id";
     for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
         out << "\tmean_" << axis + 1;
     }
-    for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
-        out << "\tfull_" << axis + 1;
+    if (has_full) {
+        for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+            out << "\tfull_" << axis + 1;
+        }
     }
     out << "\n" << std::scientific << std::setprecision(4);
     for (Eigen::Index document = 0;
@@ -1008,9 +1101,11 @@ void write_visualization_results(const std::string& path,
             out << "\t" << data.coordinates.row(document).dot(
                 visualization.mean.projection.col(axis));
         }
-        for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
-            out << "\t" << data.coordinates.row(document).dot(
-                visualization.full.projection.col(axis));
+        if (has_full) {
+            for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+                out << "\t" << data.coordinates.row(document).dot(
+                    visualization.full.projection.col(axis));
+            }
         }
         out << "\n";
     }

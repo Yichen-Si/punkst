@@ -2,7 +2,7 @@
 #include "clustering/uac_common_internal.hpp"
 #include "clustering/uac_stream.hpp"
 #include "punkst.h"
-#include "uac_cli_common.hpp"
+#include "cli_common.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -22,7 +22,7 @@
 
 namespace {
 
-using CenterTable = uac_cli::TopicCenterTable;
+using CenterTable = punkst_cli::TopicCenterTable;
 
 uint64_t parse_memory_budget(const std::string& value,
     const char* option) {
@@ -130,6 +130,7 @@ struct StreamingCliOptions {
 struct VisualizationCliOptions {
     std::string whitening = "mixture";
     int32_t dimensions = 2;
+    bool full = false;
 };
 
 void add_visualization_options(
@@ -139,7 +140,10 @@ void add_visualization_options(
           options.whitening)
       .add_option("visual-dim",
           "Maximum visualization dimensions; capped at topics minus one",
-          options.dimensions);
+          options.dimensions)
+      .add_option("visual-full",
+          "Also compute the full visualization using covariance-shape differences",
+          options.full);
 }
 
 uac::VisualizationOptions make_visualization_options(
@@ -162,6 +166,7 @@ uac::VisualizationOptions make_visualization_options(
     out.dimensions = input.dimensions;
     out.n_threads = n_threads;
     out.covariance_floor = covariance_floor;
+    out.include_full = input.full;
     return out;
 }
 
@@ -317,7 +322,7 @@ uac::Basis read_basis(const std::string& path) {
 CenterTable read_centers(const std::string& path, double floor,
     int32_t identifier_column,
     const std::vector<std::string>* expected_topics = nullptr) {
-    return uac_cli::read_topic_centers(path, floor, identifier_column,
+    return punkst_cli::read_topic_centers(path, floor, identifier_column,
         expected_topics, "--unit-icol-id");
 }
 
@@ -753,7 +758,8 @@ void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     const uac::State& state, const uac::ScoreResult& score,
     const std::vector<uac::RestartTrace>* traces, int32_t representatives,
     const uac::VisualizationOptions& visualization_options,
-    bool write_model_trace = false, int32_t top_c = -1) {
+    bool write_model_trace = false, int32_t top_c = -1,
+    bool diagnosis_per_unit = false) {
     const uac::VisualizationResult visualization = uac::make_visualization(
         data, state.model, state.helmert, visualization_options);
     const Eigen::VectorXd membership =
@@ -763,7 +769,8 @@ void write_all_outputs(const std::string& prefix, const uac::Dataset& data,
     uac::write_state(prefix + ".state.tsv", state);
     uac::write_model(prefix + ".model.tsv", state, &membership);
     uac::write_results(prefix + ".results.tsv", data, score, top_c);
-    uac::write_diagnostics(prefix + ".diagnostics.tsv", data, score);
+    uac::write_diagnostics(prefix + ".diagnostics.tsv", data, score,
+        diagnosis_per_unit);
     if (score.fit_schedule.schedule == uac::ParticleFitSchedule::Subsample) {
         uac::write_subsample_diagnostics(
             prefix + ".subsample.tsv", score.fit_schedule);
@@ -876,6 +883,7 @@ int32_t cmdUacFit(int argc, char** argv) {
     int32_t unit_identifier_column = 0;
     double center_floor = 1e-12;
     bool no_covariance_shrinkage = false, write_model_trace = false;
+    bool diagnosis_per_unit = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
@@ -970,6 +978,9 @@ int32_t cmdUacFit(int argc, char** argv) {
       .add_option("write-model-trace",
           "Write particle model parameters before each E-step and at termination",
           write_model_trace)
+      .add_option("diagnosis-per-unit",
+          "Append applicable per-unit statistics to diagnostics output",
+          diagnosis_per_unit)
       .add_option("exact-final-score",
           "Evaluate every active component in the terminal scoring pass",
           options.exact_final_score)
@@ -1084,7 +1095,8 @@ int32_t cmdUacFit(int argc, char** argv) {
             message << "UAC " << uac::trace_phase_name(value.phase)
                 << " start " << value.start << " after "
                 << value.completed_updates
-                << " updates: relative objective change ";
+                << " updates (" << uac::start_method_name(value.start_method)
+                << " initialization): relative objective change ";
             if (std::isfinite(value.relative_objective_change)) {
                 message << value.relative_objective_change;
             } else {
@@ -1104,9 +1116,9 @@ int32_t cmdUacFit(int argc, char** argv) {
             } else {
                 message << "NA";
             }
-            message << "; mean responsibility entropy ";
-            if (std::isfinite(value.mean_responsibility_entropy)) {
-                message << value.mean_responsibility_entropy;
+            message << "; mean top probability ";
+            if (std::isfinite(value.mean_top_probability)) {
+                message << value.mean_top_probability;
             } else {
                 message << "NA";
             }
@@ -1254,7 +1266,7 @@ int32_t cmdUacFit(int argc, char** argv) {
             report_component_screening(fitted.score);
             write_all_outputs(out_prefix, data, state, fitted.score,
                 &fitted.traces, representatives, visualization_options,
-                write_model_trace, top_c);
+                write_model_trace, top_c, diagnosis_per_unit);
         }
         notice("UAC fitted %d clusters to %zu documents using %s handoff",
             options.n_components, data.identifiers.size(),
@@ -1284,6 +1296,7 @@ int32_t cmdUacTransform(int argc, char** argv) {
     int32_t top_c = -1;
     int32_t unit_identifier_column = 0;
     bool exact_final_score = false;
+    bool diagnosis_per_unit = false;
     CountInputOptions count_options;
     ParticleAdaptOptions particle_adapt;
     ComponentScreeningCliOptions screening;
@@ -1309,6 +1322,9 @@ int32_t cmdUacTransform(int argc, char** argv) {
       .add_option("exact-final-score",
           "Evaluate every active component in the terminal scoring pass",
           exact_final_score)
+      .add_option("diagnosis-per-unit",
+          "Append applicable per-unit statistics to diagnostics output",
+          diagnosis_per_unit)
       .add_option("top-c",
           "Responsibility pairs in results; 0 writes the legacy dense table, omitted defaults to 5 for screened terminal scores",
           top_c);
@@ -1441,7 +1457,8 @@ int32_t cmdUacTransform(int argc, char** argv) {
         }
         report_component_screening(score);
         write_all_outputs(out_prefix, data, state, score, nullptr,
-            representatives, visualization_options, false, top_c);
+            representatives, visualization_options, false, top_c,
+            diagnosis_per_unit);
         notice("UAC assigned %zu documents using a fixed %s model",
             data.identifiers.size(), uac::handoff_name(state.handoff));
     } catch (const std::exception& exception) {

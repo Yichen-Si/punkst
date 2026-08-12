@@ -399,7 +399,8 @@ void scale_expectation(Expectation& value, double factor,
     for (auto& sum : value.sum_yf) sum *= factor;
     value.log_likelihood *= factor;
     value.log_likelihood_upper *= factor;
-    value.responsibility_entropy_sum *= factor;
+    value.top_probability_sum *= factor;
+    value.responsibility_weight_sum *= factor;
 }
 
 template<class Value>
@@ -469,6 +470,10 @@ void blend_expectation(Expectation& target, const Expectation& source,
     target.log_likelihood_upper =
         (1.0 - step) * target.log_likelihood_upper
         + step * source.log_likelihood_upper;
+    blend_value(target.top_probability_sum,
+        source.top_probability_sum, step);
+    blend_value(target.responsibility_weight_sum,
+        source.responsibility_weight_sum, step);
 }
 
 Candidate initialize_candidate(Model initial, const FitOptions& options,
@@ -523,7 +528,9 @@ void record_evaluation(Candidate& candidate, const FitOptions& options,
         candidate.trace.completed_updates, expectation.log_likelihood,
         active_component_count(candidate.model),
         std::numeric_limits<double>::quiet_NaN(),
-        std::numeric_limits<double>::quiet_NaN());
+        std::numeric_limits<double>::quiet_NaN(),
+        std::numeric_limits<double>::quiet_NaN(),
+        mean_top_probability(expectation));
 }
 
 struct SubsampleAllocation {
@@ -1257,7 +1264,9 @@ ApproximateParticleFit fit_cached_particle_approximate(
                 estimate.log_likelihood,
                 active_component_count(candidate.model),
                 std::numeric_limits<double>::quiet_NaN(),
-                std::numeric_limits<double>::quiet_NaN());
+                std::numeric_limits<double>::quiet_NaN(),
+                std::numeric_limits<double>::quiet_NaN(),
+                mean_top_probability(estimate));
             const double tau0 = std::pow(options.fit_step_initial,
                 -1.0 / options.fit_step_kappa);
             const double step = std::pow(update_index + tau0,

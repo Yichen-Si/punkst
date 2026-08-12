@@ -243,6 +243,7 @@ struct VisualizationOptions {
     int32_t dimensions = 2;
     int32_t n_threads = 1;
     double covariance_floor = 1e-5;
+    bool include_full = false;
 };
 
 struct VisualizationProjection {
@@ -267,6 +268,11 @@ struct VisualizationMoments {
     std::vector<Eigen::MatrixXd> covariances;
 };
 
+struct VisualizationMeans {
+    Eigen::VectorXd weights;
+    RowMajorMatrixXd means;
+};
+
 struct VisualizationSampleMoments {
     Eigen::VectorXd mean;
     Eigen::MatrixXd covariance;
@@ -275,6 +281,7 @@ struct VisualizationSampleMoments {
 struct IterationDiagnostic {
     TracePhase phase = TracePhase::CorrectedMomScore;
     TraceEvent event = TraceEvent::Evaluation;
+    StartMethod start_method = StartMethod::KMeans;
     int32_t start = 0;
     int32_t completed_updates = 0;
     double relative_objective_change =
@@ -283,7 +290,7 @@ struct IterationDiagnostic {
         std::numeric_limits<double>::quiet_NaN();
     double median_absolute_relative_variance_change =
         std::numeric_limits<double>::quiet_NaN();
-    double mean_responsibility_entropy =
+    double mean_top_probability =
         std::numeric_limits<double>::quiet_NaN();
 };
 
@@ -346,7 +353,7 @@ struct FitOptions {
     double covariance_floor = 1e-5;
     bool adaptive_covariance_shrinkage = true;
     double covariance_shrinkage_strength = 20.0;
-    double fisher_broadening = 1.5;
+    double fisher_broadening = 1.;
     int32_t fisher_refinement_iterations = 1;
     double fit_document_budget = 0.0;
     int32_t fit_full_tail_updates = 1;
@@ -479,7 +486,7 @@ struct RestartTrace {
             std::numeric_limits<double>::quiet_NaN();
         double median_absolute_relative_variance_change =
             std::numeric_limits<double>::quiet_NaN();
-        double mean_responsibility_entropy =
+        double mean_top_probability =
             std::numeric_limits<double>::quiet_NaN();
         int32_t active_components = 0;
     };
@@ -720,6 +727,15 @@ VisualizationResult make_visualization(const Dataset& data,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const VisualizationOptions& options,
     const VisualizationSampleMoments& sample_moments);
+VisualizationResult make_mean_visualization(
+    const VisualizationMeans& means,
+    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+    const VisualizationOptions& options,
+    const VisualizationSampleMoments& sample_moments);
+VisualizationMeans summarize_hard_partition_means(
+    const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
+    const Eigen::Ref<const Eigen::VectorXi>& assignments,
+    int32_t components);
 VisualizationMoments summarize_hard_partition(
     const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
     const Eigen::Ref<const Eigen::VectorXi>& assignments,
@@ -738,7 +754,7 @@ void write_model(const std::string& path, const State& state,
 void write_results(const std::string& path, const Dataset& data,
     const ScoreResult& score, int32_t top_c = -1);
 void write_diagnostics(const std::string& path, const Dataset& data,
-    const ScoreResult& score);
+    const ScoreResult& score, bool per_unit = false);
 void write_initialization_diagnostics(const std::string& path,
     const InitializationDiagnostics& diagnostics);
 void write_initialization_results(const std::string& path,

@@ -24,7 +24,8 @@ struct Expectation {
     std::vector<ParticleDiagnostic> particle_diagnostics;
     double log_likelihood = 0.0;
     double log_likelihood_upper = 0.0;
-    double responsibility_entropy_sum = 0.0;
+    double top_probability_sum = 0.0;
+    double responsibility_weight_sum = 0.0;
     double gaussian_seconds = 0.0;
     double component_bound_seconds = 0.0;
     double moment_seconds = 0.0;
@@ -68,7 +69,8 @@ struct ExpectationBlock {
     std::vector<Eigen::MatrixXd> sum_yf;
     double log_likelihood = 0.0;
     double log_likelihood_upper = 0.0;
-    double responsibility_entropy_sum = 0.0;
+    double top_probability_sum = 0.0;
+    double responsibility_weight_sum = 0.0;
     double component_bound_seconds = 0.0;
     int64_t evaluated_component_documents = 0;
     int64_t possible_component_documents = 0;

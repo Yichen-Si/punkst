@@ -17,7 +17,8 @@
 
 int32_t cmdUacFit(int argc, char** argv);
 int32_t cmdUacTransform(int argc, char** argv);
-int32_t cmdIlrLinearEmbed(int argc, char** argv);
+int32_t cmdLeiden(int argc, char** argv);
+int32_t cmdLinearEmbed(int argc, char** argv);
 int32_t cmdLDATransform(int argc, char** argv);
 
 namespace {
@@ -104,6 +105,16 @@ std::string metadata_value(const std::filesystem::path& path,
     throw std::runtime_error("UAC test failed: missing metadata " + key);
 }
 
+std::string table_header(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    require(static_cast<bool>(input), "cannot read " + path.string());
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.rfind("#id", 0) == 0) return line;
+    }
+    return {};
+}
+
 std::string read_text(const std::filesystem::path& path) {
     std::ifstream input(path);
     require(static_cast<bool>(input), "cannot read " + path.string());
@@ -185,6 +196,44 @@ void require_uac_results_format(const std::filesystem::path& path,
         }
     }
     require(rows > 0, "UAC results table is empty");
+}
+
+void require_uac_trace_top_probability(
+        const std::filesystem::path& path, const std::string& phase) {
+    std::ifstream input(path);
+    require(static_cast<bool>(input), "cannot read " + path.string());
+    std::string line;
+    require(static_cast<bool>(std::getline(input, line)),
+        "missing UAC trace header");
+    std::vector<std::string> header;
+    std::istringstream header_stream(line);
+    std::string field;
+    while (std::getline(header_stream, field, '\t')) {
+        header.push_back(field);
+    }
+    const auto found = std::find(
+        header.begin(), header.end(), "mean_top_probability");
+    require(found != header.end(),
+        "UAC trace omitted mean_top_probability");
+    const size_t column = std::distance(header.begin(), found);
+    bool saw_evaluation = false;
+    while (std::getline(input, line)) {
+        std::vector<std::string> fields;
+        std::istringstream row(line);
+        while (std::getline(row, field, '\t')) fields.push_back(field);
+        if (fields.size() <= column || fields.size() < 3
+            || fields[1] != phase || fields[2] != "evaluation") {
+            continue;
+        }
+        saw_evaluation = true;
+        require(fields[column] != "NA", phase +
+            " trace has no mean top probability");
+        const double value = std::stod(fields[column]);
+        require(value > 0.0 && value <= 1.0,
+            phase + " mean top probability is outside (0, 1]");
+    }
+    require(saw_evaluation,
+        "UAC trace omitted " + phase + " evaluations");
 }
 
 void require_initialization_results_format(
@@ -325,6 +374,8 @@ void test_visualization_projection() {
     require(uac::VisualizationOptions{}.whitening
             == uac::VisualizationWhitening::Mixture,
         "mixture visualization whitening is not the API default");
+    require(!uac::VisualizationOptions{}.include_full,
+        "full visualization is unexpectedly enabled by default");
     const Eigen::MatrixXd helmert = normalized_helmert(3);
     uac::Dataset data;
     data.coordinates.resize(8, 2);
@@ -381,6 +432,7 @@ void test_visualization_projection() {
     options.dimensions = 2;
     options.n_threads = 2;
     options.covariance_floor = 1e-8;
+    options.include_full = true;
     const uac::VisualizationResult visualization =
         uac::make_visualization(data, model, helmert, options);
     uac::VisualizationMoments model_moments;
@@ -466,6 +518,14 @@ void test_visualization_projection() {
             - visualization.full.projection).cwiseAbs().maxCoeff() < 1e-12,
         "dense and factor visualization projections differ");
 
+    options.include_full = false;
+    const uac::VisualizationResult mean_visualization =
+        uac::make_visualization(data, model, helmert, options);
+    require(mean_visualization.mean.projection.cols() == 2
+            && mean_visualization.full.projection.cols() == 0,
+        "mean-only visualization computed a full projection");
+    options.include_full = true;
+
     uac::Model inactive_model = model;
     inactive_model.weights.resize(3);
     inactive_model.weights << 0.4, 0.6, 0.0;
@@ -513,6 +573,21 @@ void test_visualization_projection() {
         uac::make_visualization(data, hard_moments, helmert, options);
     const uac::VisualizationSampleMoments sample_moments =
         uac::summarize_visualization_sample(data.coordinates, 2);
+    const uac::VisualizationMeans hard_means =
+        uac::summarize_hard_partition_means(
+            data.coordinates, assignments, 2);
+    options.whitening = uac::VisualizationWhitening::Mixture;
+    const uac::VisualizationResult mean_only =
+        uac::make_mean_visualization(
+            hard_means, helmert, options, sample_moments);
+    require(mean_only.mean.projection.cols() == 1
+            && mean_only.full.projection.cols() == 0
+            && (mean_only.mean.projection.col(0)
+                - hard_mixture.mean.projection.col(0)).cwiseAbs().maxCoeff()
+                < 1e-10
+            && std::abs(mean_only.mean.topic_contrasts.col(0).sum()) < 1e-12,
+        "mean-only hard-partition projection is incorrect");
+    options.whitening = uac::VisualizationWhitening::Sample;
     const uac::VisualizationResult cached_hard_sample =
         uac::make_visualization(
             data, hard_moments, helmert, options, sample_moments);
@@ -700,6 +775,15 @@ void test_topic_to_uac_handoff() {
         fit_prefix.string() + ".separation.tsv", 2);
     require_scientific_fields(
         fit_prefix.string() + ".visual.results.tsv", 1);
+    require_uac_trace_top_probability(
+        fit_prefix.string() + ".trace.tsv", "particle_em");
+    const std::filesystem::path fit_diagnostics =
+        fit_prefix.string() + ".diagnostics.tsv";
+    require(table_header(fit_diagnostics).empty(),
+        "UAC wrote per-unit diagnostics without --diagnosis-per-unit");
+    require(metadata_value(fit_diagnostics, "initialization_seconds")
+            .find('e') != std::string::npos,
+        "UAC run diagnostics are not in scientific notation");
     const std::string default_initialization =
         read_text(fit_prefix.string() + ".initialization.tsv");
     require(default_initialization.find("measurement_mode\tht")
@@ -741,7 +825,7 @@ void test_topic_to_uac_handoff() {
         2, 2);
     require(data_rows(legacy_init_prefix.string() + ".visual.axes.tsv") > 0,
         "initialization-only fit omitted visualization axes");
-    require(data_rows(legacy_init_prefix.string() + ".visual.model.tsv") == 4,
+    require(data_rows(legacy_init_prefix.string() + ".visual.model.tsv") == 2,
         "initialization-only fit omitted the projected initializer model");
     require(data_rows(legacy_init_prefix.string() + ".visual.results.tsv")
             == 12,
@@ -838,6 +922,8 @@ void test_topic_to_uac_handoff() {
     require(read_text(resident_prefix.string() + ".model.tsv")
             == read_text(auto_prefix.string() + ".model.tsv"),
         "automatically promoted subsample model differs");
+    require_uac_trace_top_probability(
+        resident_prefix.string() + ".trace.tsv", "subsample_em");
     for (const auto& prefix : {resident_prefix, disk_prefix}) {
         const std::filesystem::path results =
             prefix.string() + ".diagnostics.tsv";
@@ -988,9 +1074,11 @@ void test_topic_to_uac_handoff() {
         "--count-icol-id", "1",
         "--out-prefix", transform_prefix.string(),
         "--particles", "16",
+        "--diagnosis-per-unit",
         "--threads", "1",
         "--n-representatives", "1",
         "--visual-whitening", "sample",
+        "--visual-full",
     };
     require(run_command(cmdUacTransform,
             std::move(transform_arguments)) == 0,
@@ -1005,17 +1093,35 @@ void test_topic_to_uac_handoff() {
     require_scientific_fields(
         transform_prefix.string() + ".visual.results.tsv", 1);
 
+    const std::filesystem::path transform_diagnostics =
+        transform_prefix.string() + ".diagnostics.tsv";
+    require(table_header(transform_diagnostics)
+            == "#id\traw_total\teffective_total\trelative_ess"
+               "\tmaximum_weight\tlog_likelihood_range"
+               "\tlog_proposal_range\thpd80_log_density_threshold"
+               "\thpd95_log_density_threshold",
+        "UAC per-unit diagnostics did not omit inapplicable columns");
+    require(read_text(transform_diagnostics).find(
+                "doc_0\t10.00\t10.00\t") != std::string::npos,
+        "UAC count-like diagnostics are not written with two decimals");
+
     require(data_rows(transform_prefix.string() + ".results.tsv") == 12,
         "direct topic-to-UAC transform wrote the wrong row count");
-    require(data_rows(fit_prefix.string() + ".visual.axes.tsv") == 6,
+    require(data_rows(fit_prefix.string() + ".visual.axes.tsv") == 3,
         "UAC fit wrote the wrong one-dimensional axis row count");
-    require(data_rows(fit_prefix.string() + ".visual.model.tsv") == 4,
+    require(data_rows(fit_prefix.string() + ".visual.model.tsv") == 2,
         "UAC fit wrote the wrong projected-model row count");
     require(data_rows(fit_prefix.string() + ".visual.results.tsv") == 12,
         "UAC fit wrote the wrong projected-document row count");
     require(data_rows(transform_prefix.string() + ".visual.results.tsv")
             == 12,
         "UAC transform wrote the wrong projected-document row count");
+    require(read_text(fit_prefix.string() + ".visual.results.tsv").find(
+                "#id\tmean_1\n") == 0,
+        "UAC fit did not default to mean-only visualization");
+    require(read_text(transform_prefix.string() + ".visual.results.tsv").find(
+                "#id\tmean_1\tfull_1\n") == 0,
+        "UAC transform did not include the requested full visualization");
     require(first_data_field(
             fit_prefix.string() + ".visual.axes.tsv") == "mixture",
         "UAC fit did not use default mixture visualization whitening");
@@ -1046,8 +1152,8 @@ void test_topic_to_uac_handoff() {
     embed_partition_text << "extra_unit\tleft\tearly\n";
     write_text(embed_theta, embed_theta_text.str());
     write_text(embed_partitions, embed_partition_text.str());
-    const auto embedded = run_command_capture_error(cmdIlrLinearEmbed, {
-        "ilr-linear-embed",
+    const auto embedded = run_command_capture_error(cmdLinearEmbed, {
+        "linear-embed",
         "--in-theta", embed_theta.string(),
         "--in-partition", embed_partitions.string(),
         "--out-prefix", embed_prefix.string(),
@@ -1061,19 +1167,23 @@ void test_topic_to_uac_handoff() {
             && embedded.second.find(
                 "theta units 12; partition units 11; intersection 10")
                 != std::string::npos,
-        "ILR embedding did not report partial input matching");
+        "linear embedding did not report partial input matching");
     for (const std::string& label : {"primary", "secondary"}) {
         const std::string prefix = embed_prefix.string() + "." + label;
-        require(data_rows(prefix + ".transform.tsv") > 0,
-            "ILR embedding omitted its raw transformation");
-        require(data_rows(prefix + ".mean.axes.tsv") == 2
-                && data_rows(prefix + ".full.axes.tsv") == 2,
-            "ILR embedding wrote the wrong axis-weight shape");
+        for (const std::string& space : {"linear", "ilr"}) {
+            require(data_rows(prefix + "." + space + ".transform.tsv") > 0,
+                "linear embedding omitted a space transformation");
+            require(data_rows(prefix + "." + space + ".mean.axes.tsv") == 2,
+                "linear embedding wrote the wrong mean axis-weight shape");
+            require(!std::filesystem::exists(
+                        prefix + "." + space + ".full.axes.tsv"),
+                "linear embedding wrote full axes without --visual-full");
+        }
         require(data_rows(prefix + ".results.tsv") == 12,
-            "ILR embedding did not project every theta unit");
+            "linear embedding did not project every theta unit");
         require(read_text(prefix + ".results.tsv").find(
-                "#id\tmean_1\tfull_1\n") == 0,
-            "ILR embedding wrote the wrong coordinate header");
+                "#id\tlinear_mean_1\tilr_mean_1\n") == 0,
+            "linear embedding wrote the wrong coordinate header");
     }
 
     const std::filesystem::path row_partition =
@@ -1087,19 +1197,26 @@ void test_topic_to_uac_handoff() {
             << (document < 6 ? 0 : 1) << "\n";
     }
     write_text(row_partition, row_partition_text.str());
-    require(run_command(cmdIlrLinearEmbed, {
-        "ilr-linear-embed",
+    require(run_command(cmdLinearEmbed, {
+        "linear-embed",
         "--in-theta", embed_theta.string(),
         "--in-partition", row_partition.string(),
         "--out-prefix", row_prefix.string(),
         "--id-as-row-index",
         "--visual-dim", "1",
         "--whitening", "sample",
+        "--visual-full",
         "--threads", "1",
     }) == 0,
-        "row-index ILR linear embedding failed");
+        "row-index linear embedding failed");
     require(data_rows(row_prefix.string() + ".results.tsv") == 12,
-        "row-index ILR embedding wrote the wrong coordinate row count");
+        "row-index linear embedding wrote the wrong coordinate row count");
+    require(data_rows(row_prefix.string() + ".linear.full.axes.tsv") == 2
+            && data_rows(row_prefix.string() + ".ilr.full.axes.tsv") == 2
+            && read_text(row_prefix.string() + ".results.tsv").find(
+                "#id\tlinear_mean_1\tlinear_full_1"
+                "\tilr_mean_1\tilr_full_1\n") == 0,
+        "row-index linear embedding omitted requested full visualization");
 
     remove_uac_outputs(fit_prefix);
     remove_uac_outputs(legacy_init_prefix);
@@ -1127,10 +1244,12 @@ void test_topic_to_uac_handoff() {
             embed_prefix.string() + ".primary",
             embed_prefix.string() + ".secondary",
             row_prefix.string()}) {
-        for (const std::string& suffix : {
-                ".transform.tsv", ".mean.axes.tsv", ".full.axes.tsv",
-                ".results.tsv"}) {
-            std::filesystem::remove(prefix + suffix);
+        std::filesystem::remove(prefix + ".results.tsv");
+        for (const std::string& space : {"linear", "ilr"}) {
+            for (const std::string& suffix : {
+                    ".transform.tsv", ".mean.axes.tsv", ".full.axes.tsv"}) {
+                std::filesystem::remove(prefix + "." + space + suffix);
+            }
         }
     }
 }
@@ -1166,6 +1285,86 @@ void test_gamma_poisson_model_initialization() {
         "Gamma-Poisson model initialization accepted mismatched dimensions");
 }
 
+void test_leiden_projection_outputs() {
+    const std::filesystem::path base =
+        std::filesystem::temp_directory_path()
+        / "punkst_leiden_projection";
+    const std::filesystem::path theta_path =
+        base.string() + ".theta.tsv";
+    std::ostringstream theta;
+    theta << "#id\t0\t1\t2\t3\n";
+    for (int32_t group = 0; group < 3; ++group) {
+        for (int32_t offset = 0; offset < 6; ++offset) {
+            theta << "unit_" << group << "_" << offset;
+            for (int32_t factor = 0; factor < 4; ++factor) {
+                const double value = factor == group ? 1.0
+                    : factor == (group + 1) % 4
+                    ? 0.01 * (offset + 1) : 0.0;
+                theta << '\t' << value;
+            }
+            theta << '\n';
+        }
+    }
+    write_text(theta_path, theta.str());
+
+    const std::filesystem::path default_prefix =
+        base.string() + ".default";
+    require(run_command(cmdLeiden, {
+        "leiden", "--in-theta", theta_path.string(),
+        "--out-prefix", default_prefix.string(), "--neighbors", "4",
+        "--resolution", "0.5", "1", "--threads", "1", "--seed", "42",
+    }) == 0, "Leiden default projection run failed");
+    const std::string axes = read_text(
+        default_prefix.string() + ".projection.axes.tsv");
+    const std::string coordinates = read_text(
+        default_prefix.string() + ".projection.results.tsv");
+    require(axes.find("\nlinear\t") != std::string::npos
+            && axes.find("\nilr\t") != std::string::npos
+            && coordinates.find("\tlinear_r0.5_1") != std::string::npos
+            && coordinates.find("\tilr_r0.5_1") != std::string::npos
+            && coordinates.find("\tlinear_r1_1")
+                != std::string::npos,
+        "Leiden default projections omitted a space or resolution");
+
+    const std::filesystem::path linear_prefix =
+        base.string() + ".linear";
+    require(run_command(cmdLeiden, {
+        "leiden", "--in-theta", theta_path.string(),
+        "--out-prefix", linear_prefix.string(), "--neighbors", "4",
+        "--resolution", "1", "--projection-space", "linear",
+        "--threads", "1", "--seed", "42",
+    }) == 0, "Leiden linear-only projection run failed");
+    const std::string linear_axes = read_text(
+        linear_prefix.string() + ".projection.axes.tsv");
+    require(linear_axes.find("\nlinear\t") != std::string::npos
+            && linear_axes.find("\nilr\t") == std::string::npos,
+        "Leiden linear-only projection included ILR axes");
+
+    const std::filesystem::path disabled_prefix =
+        base.string() + ".disabled";
+    require(run_command(cmdLeiden, {
+        "leiden", "--in-theta", theta_path.string(),
+        "--out-prefix", disabled_prefix.string(), "--neighbors", "4",
+        "--resolution", "1", "--no-projection", "--threads", "1",
+        "--seed", "42",
+    }) == 0, "Leiden projection opt-out run failed");
+    require(!std::filesystem::exists(
+                disabled_prefix.string() + ".projection.axes.tsv")
+            && !std::filesystem::exists(
+                disabled_prefix.string() + ".projection.results.tsv"),
+        "Leiden projection opt-out wrote projection files");
+
+    for (const std::filesystem::path& prefix : {
+            default_prefix, linear_prefix, disabled_prefix}) {
+        for (const std::string& suffix : {
+                ".clusters.tsv", ".diagnostics.tsv",
+                ".projection.axes.tsv", ".projection.results.tsv"}) {
+            std::filesystem::remove(prefix.string() + suffix);
+        }
+    }
+    std::filesystem::remove(theta_path);
+}
+
 } // namespace
 
 int32_t test(int32_t, char**) {
@@ -1174,6 +1373,7 @@ int32_t test(int32_t, char**) {
         test_visualization_projection();
         test_factor_covariance_change_math();
         test_topic_to_uac_handoff();
+        test_leiden_projection_outputs();
         test_gamma_poisson_model_initialization();
         std::cout << "UAC tests passed\n";
     } catch (const std::exception& exception) {

@@ -86,13 +86,14 @@ ModelUpdate update_model(Model& model, const Expectation& expectation,
 
 Candidate fit_map_candidate(const Dataset& data, Model initial,
     const FitOptions& options, const RestartTrace& metadata);
+double mean_top_probability(const Expectation& expectation);
 void record_trace_point(RestartTrace& trace, const FitOptions& options,
     TraceEvent event, int32_t completed_updates, double objective,
     int32_t active_components, double relative_objective_change,
     double responsibility_change,
     double variance_change =
         std::numeric_limits<double>::quiet_NaN(),
-    double mean_responsibility_entropy =
+    double mean_top_probability =
         std::numeric_limits<double>::quiet_NaN());
 void accumulate_estep_work(
     RestartTrace& trace, const Expectation& expectation);

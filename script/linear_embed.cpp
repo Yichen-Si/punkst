@@ -1,6 +1,6 @@
 #include "clustering/uac.hpp"
 #include "punkst.h"
-#include "uac_cli_common.hpp"
+#include "cli_common.hpp"
 #include "utils.h"
 
 #include <algorithm>
@@ -18,9 +18,25 @@
 
 namespace {
 
+using punkst_cli::ProjectionSpace;
+using punkst_cli::projection_space_name;
+
 struct PartitionTable {
     std::vector<std::string> identifiers;
     std::vector<std::vector<std::string>> values;
+};
+
+struct ProjectionOutput {
+    ProjectionSpace space = ProjectionSpace::Linear;
+    const uac::Dataset* data = nullptr;
+    uac::VisualizationResult visualization;
+};
+
+struct ProjectionInput {
+    ProjectionSpace space = ProjectionSpace::Linear;
+    uac::Dataset data;
+    RowMajorMatrixXd matched_coordinates;
+    std::optional<uac::VisualizationSampleMoments> sample_moments;
 };
 
 void validate_partition_columns(int32_t identifier_column,
@@ -130,7 +146,7 @@ std::vector<std::string> resolve_partition_labels(
 }
 
 std::vector<int32_t> match_partition_rows(
-    const uac_cli::TopicCenterTable& theta,
+    const punkst_cli::TopicCenterTable& theta,
     const PartitionTable& partitions, bool id_as_row_index) {
     std::vector<int32_t> matched(partitions.identifiers.size(), -1);
     std::unordered_set<int32_t> seen_rows;
@@ -201,11 +217,11 @@ void write_axis_weights(const std::string& path,
     const uac::VisualizationProjection& projection) {
     std::ofstream out(path);
     if (!out) {
-        throw std::runtime_error("Cannot write ILR axis weights: " + path);
+        throw std::runtime_error("Cannot write embedding axis weights: " + path);
     }
     if (projection.topic_contrasts.rows()
             != static_cast<Eigen::Index>(topics.size())) {
-        throw std::invalid_argument("Invalid ILR axis-weight dimensions");
+        throw std::invalid_argument("Invalid embedding axis-weight dimensions");
     }
     out << "#Factor";
     for (Eigen::Index axis = 0;
@@ -220,7 +236,7 @@ void write_axis_weights(const std::string& path,
             .cwiseMax(0.0).sum();
         if (!(scales(axis) > 0.0) || !std::isfinite(scales(axis))) {
             throw std::runtime_error(
-                "ILR visualization contrast has no positive mass");
+                "Embedding contrast has no positive mass");
         }
     }
     for (Eigen::Index topic = 0;
@@ -238,35 +254,51 @@ void write_axis_weights(const std::string& path,
 }
 
 void write_coordinates(const std::string& path,
-    const uac::Dataset& data,
-    const uac::VisualizationResult& visualization) {
+    const std::vector<std::string>& identifiers,
+    const std::vector<ProjectionOutput>& projections) {
     std::ofstream out(path);
     if (!out) {
         throw std::runtime_error(
-            "Cannot write ILR embedding coordinates: " + path);
+            "Cannot write linear embedding coordinates: " + path);
     }
     out << "#id";
-    for (Eigen::Index axis = 0;
-            axis < visualization.mean.projection.cols(); ++axis) {
-        out << "\tmean_" << axis + 1;
-    }
-    for (Eigen::Index axis = 0;
-            axis < visualization.full.projection.cols(); ++axis) {
-        out << "\tfull_" << axis + 1;
+    for (const ProjectionOutput& projection : projections) {
+        const char* space = projection_space_name(projection.space);
+        for (Eigen::Index axis = 0;
+                axis < projection.visualization.mean.projection.cols();
+                ++axis) {
+            out << '\t' << space << "_mean_" << axis + 1;
+        }
+        for (Eigen::Index axis = 0;
+                axis < projection.visualization.full.projection.cols();
+                ++axis) {
+            out << '\t' << space << "_full_" << axis + 1;
+        }
     }
     out << "\n" << std::scientific << std::setprecision(4);
     for (Eigen::Index document = 0;
-            document < data.coordinates.rows(); ++document) {
-        out << data.identifiers[static_cast<size_t>(document)];
-        for (Eigen::Index axis = 0;
-                axis < visualization.mean.projection.cols(); ++axis) {
-            out << '\t' << data.coordinates.row(document).dot(
-                visualization.mean.projection.col(axis));
-        }
-        for (Eigen::Index axis = 0;
-                axis < visualization.full.projection.cols(); ++axis) {
-            out << '\t' << data.coordinates.row(document).dot(
-                visualization.full.projection.col(axis));
+            document < static_cast<Eigen::Index>(identifiers.size());
+            ++document) {
+        out << identifiers[static_cast<size_t>(document)];
+        for (const ProjectionOutput& projection : projections) {
+            if (projection.data == nullptr
+                || projection.data->coordinates.rows()
+                    != static_cast<Eigen::Index>(identifiers.size())) {
+                throw std::invalid_argument(
+                    "Invalid embedding coordinate dimensions");
+            }
+            for (Eigen::Index axis = 0;
+                    axis < projection.visualization.mean.projection.cols();
+                    ++axis) {
+                out << '\t' << projection.data->coordinates.row(document).dot(
+                    projection.visualization.mean.projection.col(axis));
+            }
+            for (Eigen::Index axis = 0;
+                    axis < projection.visualization.full.projection.cols();
+                    ++axis) {
+                out << '\t' << projection.data->coordinates.row(document).dot(
+                    projection.visualization.full.projection.col(axis));
+            }
         }
         out << '\n';
     }
@@ -274,9 +306,10 @@ void write_coordinates(const std::string& path,
 
 } // namespace
 
-int32_t cmdIlrLinearEmbed(int argc, char** argv) {
+int32_t cmdLinearEmbed(int argc, char** argv) {
     std::string theta_path, partition_path, output_prefix;
     std::string whitening_name = "mixture";
+    std::string projection_space_name_option = "both";
     std::vector<int32_t> partition_columns;
     std::vector<std::string> partition_labels;
     int32_t theta_identifier_column = 0;
@@ -286,6 +319,7 @@ int32_t cmdIlrLinearEmbed(int argc, char** argv) {
     double center_floor = 1e-12;
     double covariance_floor = 1e-5;
     bool id_as_row_index = false;
+    bool visual_full = false;
 
     ParamList parameters;
     parameters
@@ -313,12 +347,18 @@ int32_t cmdIlrLinearEmbed(int argc, char** argv) {
       .add_option("visual-dim", "Alias for --dim", visual_dim)
       .add_option("whitening", "Whitening covariance: sample or mixture",
           whitening_name)
+      .add_option("projection-space",
+          "Projection coordinates: both, linear, or ilr",
+          projection_space_name_option)
       .add_option("center-floor",
-          "Positive floor applied to theta before row normalization",
+          "Positive factor floor for the ILR projection",
           center_floor)
       .add_option("covariance-floor",
           "Positive eigenvalue floor for the whitening covariance",
           covariance_floor)
+      .add_option("visual-full",
+          "Also compute the full visualization using covariance-shape differences",
+          visual_full)
       .add_option("threads", "Number of covariance worker threads", threads);
 
     try {
@@ -339,24 +379,28 @@ int32_t cmdIlrLinearEmbed(int argc, char** argv) {
         if (threads <= 0) {
             throw std::invalid_argument("--threads must be positive");
         }
-        if (!(center_floor > 0.0) || !std::isfinite(center_floor)) {
-            throw std::invalid_argument(
-                "--center-floor must be positive and finite");
-        }
         if (!(covariance_floor > 0.0)
             || !std::isfinite(covariance_floor)) {
             throw std::invalid_argument(
                 "--covariance-floor must be positive and finite");
         }
+        const std::vector<ProjectionSpace> projection_spaces =
+            punkst_cli::parse_projection_spaces(
+                projection_space_name_option);
+        if (std::find(projection_spaces.begin(), projection_spaces.end(),
+                ProjectionSpace::Ilr) != projection_spaces.end()
+            && (!(center_floor > 0.0) || !std::isfinite(center_floor))) {
+            throw std::invalid_argument(
+                "--center-floor must be positive and finite");
+        }
         parameters.print_options();
-
         const uac::VisualizationWhitening whitening =
             uac::parse_visualization_whitening(whitening_name);
         const std::vector<std::string> labels = resolve_partition_labels(
             partition_columns, partition_labels);
-        uac_cli::TopicCenterTable theta = uac_cli::read_topic_centers(
+        punkst_cli::TopicCenterTable theta = punkst_cli::read_topic_centers(
             theta_path, center_floor, theta_identifier_column, nullptr,
-            "--theta-icol-id");
+            "--theta-icol-id", false);
         const PartitionTable partitions = read_partitions(
             partition_path, partition_identifier_column, partition_columns);
         const std::vector<int32_t> matched_rows = match_partition_rows(
@@ -367,40 +411,52 @@ int32_t cmdIlrLinearEmbed(int argc, char** argv) {
         if (matched_documents != static_cast<int32_t>(theta.identifiers.size())
             || matched_documents
                 != static_cast<int32_t>(partitions.identifiers.size())) {
-            warning("ILR linear embedding input mismatch: theta units %zu; partition units %zu; intersection %d",
+            warning("Linear embedding input mismatch: theta units %zu; partition units %zu; intersection %d",
                 theta.identifiers.size(), partitions.identifiers.size(),
                 matched_documents);
         }
         const int32_t topics = static_cast<int32_t>(theta.values.cols());
         if (matched_documents < topics) {
             throw std::runtime_error(
-                "ILR linear embedding intersection is too small: requires at least "
+                "Linear embedding intersection is too small: requires at least "
                 + std::to_string(topics) + " matched units");
         }
 
         const Eigen::MatrixXd helmert = normalized_helmert(topics);
-        uac::Dataset all_data;
-        all_data.identifiers = theta.identifiers;
-        all_data.centers = theta.values;
-        all_data.coordinates = ilr_transform(theta.values, helmert);
-        std::optional<uac::VisualizationSampleMoments> sample_moments;
-        if (whitening == uac::VisualizationWhitening::Sample) {
-            sample_moments = uac::summarize_visualization_sample(
-                all_data.coordinates, threads);
-        }
-        RowMajorMatrixXd matched_coordinates(
-            matched_documents, all_data.coordinates.cols());
         std::vector<int32_t> matched_partition_rows;
         matched_partition_rows.reserve(static_cast<size_t>(matched_documents));
-        int32_t matched_index = 0;
         for (int32_t partition_row = 0;
                 partition_row < static_cast<int32_t>(matched_rows.size());
                 ++partition_row) {
             if (matched_rows[static_cast<size_t>(partition_row)] < 0) continue;
-            matched_coordinates.row(matched_index) = all_data.coordinates.row(
-                matched_rows[static_cast<size_t>(partition_row)]);
             matched_partition_rows.push_back(partition_row);
-            ++matched_index;
+        }
+
+        std::vector<ProjectionInput> inputs;
+        inputs.reserve(projection_spaces.size());
+        for (const ProjectionSpace space : projection_spaces) {
+            ProjectionInput input;
+            input.space = space;
+            input.data.identifiers = theta.identifiers;
+            punkst_cli::ProjectionData projection =
+                punkst_cli::prepare_projection(theta.values,
+                    space, helmert, center_floor);
+            input.data.centers = std::move(projection.centers);
+            input.data.coordinates = std::move(projection.coordinates);
+            input.matched_coordinates.resize(
+                matched_documents, input.data.coordinates.cols());
+            for (int32_t matched = 0; matched < matched_documents; ++matched) {
+                const int32_t partition_row =
+                    matched_partition_rows[static_cast<size_t>(matched)];
+                input.matched_coordinates.row(matched) =
+                    input.data.coordinates.row(matched_rows[
+                        static_cast<size_t>(partition_row)]);
+            }
+            if (whitening == uac::VisualizationWhitening::Sample) {
+                input.sample_moments = uac::summarize_visualization_sample(
+                    input.data.coordinates, threads);
+            }
+            inputs.push_back(std::move(input));
         }
 
         uac::VisualizationOptions options;
@@ -409,6 +465,7 @@ int32_t cmdIlrLinearEmbed(int argc, char** argv) {
             requested_dimensions, topics - 1);
         options.n_threads = threads;
         options.covariance_floor = covariance_floor;
+        options.include_full = visual_full;
         for (size_t partition = 0;
                 partition < partition_columns.size(); ++partition) {
             std::unordered_map<std::string, int32_t> component_index;
@@ -426,54 +483,100 @@ int32_t cmdIlrLinearEmbed(int argc, char** argv) {
                 static_cast<int32_t>(component_index.size());
             if (components < 2) {
                 throw std::runtime_error(
-                    "ILR linear embedding requires at least two clusters");
+                    "Linear embedding requires at least two clusters");
             }
-            const uac::VisualizationMoments moments =
-                uac::summarize_hard_partition(
-                    matched_coordinates, assignments, components, threads);
-            uac::VisualizationResult visualization = sample_moments
-                ? uac::make_visualization(all_data, moments, helmert, options,
-                    *sample_moments)
-                : uac::make_visualization(
-                    all_data, moments, helmert, options);
-            const int32_t mean_dimensions = std::min({
-                options.dimensions, components - 1,
-                positive_rank(visualization.mean.eigenvalues)});
-            const int32_t full_dimensions = std::min(
-                options.dimensions,
-                positive_rank(visualization.full.eigenvalues));
-            if (mean_dimensions <= 0) {
-                throw std::runtime_error(
-                    "Hard partition has no positive mean-separation axis");
-            }
-            if (full_dimensions <= 0) {
-                throw std::runtime_error(
-                    "Hard partition has no positive full-separation axis");
-            }
-            truncate_projection(visualization.mean, mean_dimensions);
-            truncate_projection(visualization.full, full_dimensions);
-            if (mean_dimensions < requested_dimensions
-                || full_dimensions < requested_dimensions) {
-                notice("ILR linear embedding partition %s resolved dimensions: mean %d, full %d (requested %d)",
-                    labels[partition].c_str(), mean_dimensions,
-                    full_dimensions, requested_dimensions);
-            }
-
             const std::string prefix = partition_columns.size() == 1
                 ? output_prefix : output_prefix + "." + labels[partition];
-            uac::write_visualization_axes(
-                prefix + ".transform.tsv", theta.topics, visualization);
-            write_axis_weights(prefix + ".mean.axes.tsv", theta.topics,
-                visualization.mean);
-            write_axis_weights(prefix + ".full.axes.tsv", theta.topics,
-                visualization.full);
-            write_coordinates(prefix + ".results.tsv", all_data,
-                visualization);
-            notice("ILR linear embedding outputs written to %s.{transform,mean.axes,full.axes,results}.tsv",
-                prefix.c_str());
+            std::vector<ProjectionOutput> projections;
+            projections.reserve(inputs.size());
+            for (ProjectionInput& input : inputs) {
+                uac::VisualizationResult visualization;
+                if (visual_full) {
+                    const uac::VisualizationMoments moments =
+                        uac::summarize_hard_partition(
+                            input.matched_coordinates, assignments,
+                            components, threads);
+                    visualization = input.sample_moments
+                        ? uac::make_visualization(input.data, moments, helmert,
+                            options, *input.sample_moments)
+                        : uac::make_visualization(
+                            input.data, moments, helmert, options);
+                } else {
+                    const uac::VisualizationMeans means =
+                        uac::summarize_hard_partition_means(
+                            input.matched_coordinates, assignments,
+                            components);
+                    uac::VisualizationOptions mean_options = options;
+                    mean_options.dimensions = std::min(
+                        mean_options.dimensions, components - 1);
+                    const uac::VisualizationSampleMoments whitening_moments =
+                        input.sample_moments ? *input.sample_moments
+                        : uac::summarize_visualization_sample(
+                            input.matched_coordinates, threads);
+                    visualization = uac::make_mean_visualization(
+                        means, helmert, mean_options, whitening_moments);
+                }
+                const int32_t mean_dimensions = visual_full
+                    ? std::min({options.dimensions, components - 1,
+                        positive_rank(visualization.mean.eigenvalues)})
+                    : static_cast<int32_t>(
+                        visualization.mean.projection.cols());
+                if (mean_dimensions <= 0) {
+                    throw std::runtime_error(
+                        "Hard partition has no positive mean-separation axis");
+                }
+                if (visual_full) {
+                    truncate_projection(
+                        visualization.mean, mean_dimensions);
+                }
+                int32_t full_dimensions = 0;
+                if (visual_full) {
+                    full_dimensions = std::min(options.dimensions,
+                        positive_rank(visualization.full.eigenvalues));
+                    if (full_dimensions <= 0) {
+                        throw std::runtime_error(
+                            "Hard partition has no positive full-separation axis");
+                    }
+                    truncate_projection(
+                        visualization.full, full_dimensions);
+                }
+                if (mean_dimensions < requested_dimensions
+                    || (visual_full
+                        && full_dimensions < requested_dimensions)) {
+                    if (visual_full) {
+                        notice("Linear embedding partition %s %s-space resolved dimensions: mean %d, full %d (requested %d)",
+                            labels[partition].c_str(),
+                            projection_space_name(input.space),
+                            mean_dimensions, full_dimensions,
+                            requested_dimensions);
+                    } else {
+                        notice("Linear embedding partition %s %s-space resolved dimensions: mean %d (requested %d)",
+                            labels[partition].c_str(),
+                            projection_space_name(input.space),
+                            mean_dimensions, requested_dimensions);
+                    }
+                }
+                const std::string space_prefix = prefix + "."
+                    + projection_space_name(input.space);
+                uac::write_visualization_axes(
+                    space_prefix + ".transform.tsv", theta.topics,
+                    visualization);
+                write_axis_weights(space_prefix + ".mean.axes.tsv",
+                    theta.topics, visualization.mean);
+                if (visual_full) {
+                    write_axis_weights(space_prefix + ".full.axes.tsv",
+                        theta.topics, visualization.full);
+                }
+                projections.push_back(
+                    {input.space, &input.data, std::move(visualization)});
+            }
+            write_coordinates(
+                prefix + ".results.tsv", theta.identifiers, projections);
+            notice("Linear embedding wrote %zu projection space(s) under %s and coordinates to %s.results.tsv",
+                projections.size(), prefix.c_str(), prefix.c_str());
         }
     } catch (const std::exception& exception) {
-        std::cerr << "ILR linear embedding failed: "
+        std::cerr << "Linear embedding failed: "
             << exception.what() << "\n";
         return 1;
     }

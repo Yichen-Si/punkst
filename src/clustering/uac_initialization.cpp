@@ -630,7 +630,7 @@ Pilot pilot_from_model(const Model& model) {
 
 struct DeconvolutionScore {
     double log_likelihood = 0.0;
-    double responsibility_entropy_sum = 0.0;
+    double top_probability_sum = 0.0;
     double gaussian_seconds = 0.0;
 };
 
@@ -690,7 +690,7 @@ std::vector<DeconvolutionScore> deconvolution_marginal_scores(
         (documents + block_size - 1) / block_size;
     std::vector<std::vector<double>> block_likelihood(
         n_blocks, std::vector<double>(models.size(), 0.0));
-    std::vector<std::vector<double>> block_entropy(
+    std::vector<std::vector<double>> block_top_probability(
         n_blocks, std::vector<double>(models.size(), 0.0));
     std::vector<double> block_seconds(n_blocks, 0.0);
     tbb::parallel_for(int32_t{0}, n_blocks, [&](int32_t block_index) {
@@ -753,13 +753,8 @@ std::vector<DeconvolutionScore> deconvolution_marginal_scores(
                 const Eigen::VectorXd responsibility =
                     (log_score[candidate].array() - normalizer).exp();
                 block_likelihood[block_index][candidate] += normalizer;
-                for (int32_t c = 0; c < components; ++c) {
-                    const double weight = responsibility(c);
-                    if (weight > 0.0) {
-                        block_entropy[block_index][candidate] -=
-                            weight * std::log(weight);
-                    }
-                }
+                block_top_probability[block_index][candidate] +=
+                    responsibility.maxCoeff();
             }
         }
         block_seconds[block_index] = std::chrono::duration<double>(
@@ -772,8 +767,8 @@ std::vector<DeconvolutionScore> deconvolution_marginal_scores(
         for (int32_t block = 0; block < n_blocks; ++block) {
             out[candidate].log_likelihood +=
                 block_likelihood[block][candidate];
-            out[candidate].responsibility_entropy_sum +=
-                block_entropy[block][candidate];
+            out[candidate].top_probability_sum +=
+                block_top_probability[block][candidate];
         }
         out[candidate].gaussian_seconds =
             total_seconds / models.size();
@@ -1067,7 +1062,7 @@ void score_corrected_moment_candidates(
             std::numeric_limits<double>::quiet_NaN(),
             std::numeric_limits<double>::quiet_NaN(),
             std::numeric_limits<double>::quiet_NaN(),
-            score.responsibility_entropy_sum
+            score.top_probability_sum
                 / std::max<Eigen::Index>(1, data.coordinates.rows()));
         candidate.trace.succeeded = true;
         candidate.trace.selection_objective = candidate.objective;
@@ -1105,8 +1100,9 @@ void score_corrected_moment_candidates(
     const int32_t block_size = (sampled + n_blocks - 1) / n_blocks;
     std::vector<std::vector<double>> block_likelihood(
         n_blocks, std::vector<double>(models.size(), 0.0));
-    std::vector<std::vector<double>> block_entropy(
+    std::vector<std::vector<double>> block_top_probability(
         n_blocks, std::vector<double>(models.size(), 0.0));
+    std::vector<double> block_weight(n_blocks, 0.0);
     std::vector<double> block_seconds(n_blocks, 0.0);
     tbb::parallel_for(int32_t{0}, n_blocks, [&](int32_t block_index) {
         std::vector<Eigen::VectorXd> log_score(
@@ -1126,6 +1122,7 @@ void score_corrected_moment_candidates(
                 data.coordinates.row(document).transpose();
             const double survey_weight =
                 1.0 / measurements.score_probabilities(row);
+            block_weight[block_index] += survey_weight;
             for (size_t candidate = 0; candidate < models.size(); ++candidate) {
                 const Model& model = models[candidate];
                 log_score[candidate].setConstant(
@@ -1156,12 +1153,8 @@ void score_corrected_moment_candidates(
                     (log_score[candidate].array() - normalizer).exp();
                 block_likelihood[block_index][candidate] +=
                     survey_weight * normalizer;
-                for (int32_t c = 0; c < components; ++c) {
-                    if (responsibility(c) > 0.0) {
-                        block_entropy[block_index][candidate] -= survey_weight
-                            * responsibility(c) * std::log(responsibility(c));
-                    }
-                }
+                block_top_probability[block_index][candidate] +=
+                    survey_weight * responsibility.maxCoeff();
             }
         }
         block_seconds[block_index] = std::chrono::duration<double>(
@@ -1169,13 +1162,15 @@ void score_corrected_moment_candidates(
     });
     const double total_seconds =
         std::accumulate(block_seconds.begin(), block_seconds.end(), 0.0);
+    const double total_weight =
+        std::accumulate(block_weight.begin(), block_weight.end(), 0.0);
     for (size_t local = 0; local < models.size(); ++local) {
         Candidate& candidate = candidates[candidate_index[local]];
-        double entropy_sum = 0.0;
+        double top_probability_sum = 0.0;
         candidate.objective = 0.0;
         for (int32_t block = 0; block < n_blocks; ++block) {
             candidate.objective += block_likelihood[block][local];
-            entropy_sum += block_entropy[block][local];
+            top_probability_sum += block_top_probability[block][local];
         }
         candidate.trace.estep_work.gaussian_seconds +=
             total_seconds / models.size();
@@ -1186,8 +1181,7 @@ void score_corrected_moment_candidates(
             std::numeric_limits<double>::quiet_NaN(),
             std::numeric_limits<double>::quiet_NaN(),
             std::numeric_limits<double>::quiet_NaN(),
-            entropy_sum / std::max<Eigen::Index>(
-                1, data.coordinates.rows()));
+            top_probability_sum / std::max(1.0, total_weight));
         candidate.trace.succeeded = true;
         candidate.trace.selection_objective = candidate.objective;
     }

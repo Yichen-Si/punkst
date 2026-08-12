@@ -116,6 +116,42 @@ The Faiss choices require a build configured with
 `-DPUNKST_ENABLE_FAISS_ANN=ON`. A binary built without Faiss reports a clear
 error when either backend is requested.
 
+## Projection options
+
+After clustering, Leiden uses each hard partition to compute interpretable
+mean-separation axes. The axes solve a generalized eigendecomposition of the
+between-cluster covariance against the total covariance. This is a supervised
+summary of the resulting partition; it does not replace or change the cosine
+or Hellinger graph used for clustering.
+
+`--projection-space`
+: Projection coordinate spaces: `both` (default), `linear`, or `ilr`.
+  `linear` uses L1-normalized factor proportions and produces axes of the form
+  $z=\sum_k u_k p_k$. `ilr` produces log-contrast axes
+  $z=\sum_k u_k\log p_k$. In both cases $\sum_k u_k=0$, so the positive and
+  negative coefficients define two interpretable sides of a factor contrast.
+
+`--projection-dim`
+: Maximum axes per coordinate space and resolution. Default: `4`. The actual
+  count is capped at $K-1$, one less than the number of communities, and the
+  positive numerical rank of the between-cluster kernel.
+
+`--no-projection`
+: Skip all projection calculations and files. This takes precedence over
+  `--projection-space`.
+
+`--projection-center-floor`
+: Positive floor applied before the ILR transform. Default: `1e-12`. It does
+  not affect the linear projection or the Leiden graph.
+
+`--projection-covariance-floor`
+: Positive eigenvalue floor for the whitening covariance. Default: `1e-5`.
+
+Projection input is derived from a copy of the factor table, so these options
+never alter graph construction or cluster assignments. With `--allow-topk`,
+both projections use the same approximate zero-filled composition as the
+clustering input.
+
 ## Outputs
 
 `{prefix}.clusters.tsv`
@@ -131,3 +167,16 @@ error when either backend is requested.
   and per-run timing. `cluster_column` maps each diagnostic row to its
   assignment column. Graph fields repeat across rows because all resolutions
   use the same graph.
+
+`{prefix}.projection.axes.tsv`
+: Long-form factor coefficients for every computed space, resolution, and
+  axis. It includes the eigenvalue, raw coefficient, contrast side and scale,
+  and the normalized weight within the positive or negative side.
+
+`{prefix}.projection.results.tsv`
+: Projected coordinates in input order. Column names identify both coordinate
+  space and source resolution, for example `linear_r0.5_1`, `ilr_r0.5_1`, and
+  `linear_r1_1`. The resolution is included even when only one resolution is
+  requested. A one-community partition, or a partition with no positive
+  separation axis, is omitted with a warning rather than causing an otherwise
+  successful Leiden run to fail.

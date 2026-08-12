@@ -267,10 +267,10 @@ set(SOURCE_FILES
     script/fit_lda.cpp
     script/fit_gampois.cpp
     script/transform_gampois.cpp
+    script/cli_common.cpp
     script/leiden.cpp
-    script/uac_cli_common.cpp
     script/uac.cpp
-    script/ilr_linear_embed.cpp
+    script/linear_embed.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp
