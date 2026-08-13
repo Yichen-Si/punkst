@@ -69,10 +69,33 @@ ProjectionData prepare_projection(
 TopicCenterTable read_topic_centers(const std::string& path, double floor,
     int32_t identifier_column,
     const std::vector<std::string>* expected_topics,
-    const std::string& identifier_option, bool normalize) {
+    const std::string& identifier_option, bool normalize,
+    int32_t factor_column_start, int32_t factor_column_end) {
     if (identifier_column < 0) {
         throw std::invalid_argument(
             identifier_option + " must be nonnegative");
+    }
+    if (factor_column_start < -1 || factor_column_end < -1) {
+        throw std::invalid_argument(
+            "factor column indices must be nonnegative");
+    }
+    const bool explicit_factor_columns = factor_column_start >= 0;
+    if (explicit_factor_columns != (factor_column_end >= 0)) {
+        throw std::invalid_argument(
+            "--icol-factor-start and --icol-factor-end must be supplied together");
+    }
+    if (explicit_factor_columns && expected_topics != nullptr) {
+        throw std::invalid_argument(
+            "Explicit factor columns cannot be combined with expected topics");
+    }
+    if (explicit_factor_columns && factor_column_end < factor_column_start) {
+        throw std::invalid_argument(
+            "--icol-factor-end must not precede --icol-factor-start");
+    }
+    if (explicit_factor_columns
+            && factor_column_end - factor_column_start + 1 < 2) {
+        throw std::invalid_argument(
+            "Linear embedding requires at least two factor columns");
     }
     TextLineReader reader(path);
     std::string line;
@@ -86,6 +109,17 @@ TopicCenterTable read_topic_centers(const std::string& path, double floor,
     if (identifier_column >= static_cast<int32_t>(header.size())) {
         throw std::runtime_error(
             identifier_option + " is outside the topic-center table");
+    }
+    if (explicit_factor_columns
+            && factor_column_end >= static_cast<int32_t>(header.size())) {
+        throw std::invalid_argument(
+            "--icol-factor-end is outside the topic-center table");
+    }
+    if (explicit_factor_columns
+            && identifier_column >= factor_column_start
+            && identifier_column <= factor_column_end) {
+        throw std::invalid_argument(
+            identifier_option + " must select a non-factor column");
     }
     std::unordered_map<std::string, int32_t> header_index;
     for (int32_t i = 0; i < static_cast<int32_t>(header.size()); ++i) {
@@ -105,16 +139,18 @@ TopicCenterTable read_topic_centers(const std::string& path, double floor,
     factor_options.topKColName.clear();
     factor_options.topPColName.clear();
     factor_options.requireFactorValues = false;
-    const UnitFactorResultHeader factor_header =
-        parse_unit_factor_result_header(header, factor_options);
-    if (factor_header.hasTopPairs()) {
-        throw std::runtime_error(
-            "LDA K/P top-k output is not a dense topic center");
-    }
-
     std::vector<int32_t> topic_columns;
     TopicCenterTable table;
-    if (expected_topics) {
+    if (explicit_factor_columns) {
+        topic_columns.reserve(static_cast<size_t>(
+            factor_column_end - factor_column_start + 1));
+        table.topics.reserve(topic_columns.capacity());
+        for (int32_t column = factor_column_start;
+                column <= factor_column_end; ++column) {
+            topic_columns.push_back(column);
+            table.topics.push_back(header[static_cast<size_t>(column)]);
+        }
+    } else if (expected_topics) {
         table.topics = *expected_topics;
         topic_columns.reserve(expected_topics->size());
         for (const std::string& topic : *expected_topics) {
@@ -126,6 +162,12 @@ TopicCenterTable read_topic_centers(const std::string& path, double floor,
             topic_columns.push_back(found->second);
         }
     } else {
+        const UnitFactorResultHeader factor_header =
+            parse_unit_factor_result_header(header, factor_options);
+        if (factor_header.hasTopPairs()) {
+            throw std::runtime_error(
+                "LDA K/P top-k output is not a dense topic center");
+        }
         if (factor_header.factorCols.empty()) {
             throw std::runtime_error(
                 "Topic columns must have trailing headers 0..K-1");

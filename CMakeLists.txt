@@ -169,6 +169,8 @@ set(CLUSTERING_CORE_SOURCE_FILES
     src/clustering_core/leiden.cpp
     src/clustering_core/projection.hpp
     src/clustering_core/projection.cpp
+    src/clustering_core/qda_projection.hpp
+    src/clustering_core/qda_projection.cpp
 )
 
 if (PUNKST_ENABLE_FAISS_ANN)
