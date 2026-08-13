@@ -104,7 +104,7 @@ void writeTopicVectorWithTopK(std::ostream& os,
 
 int32_t TopicModelWrapper::trainOnline(const std::string& inFile,
     int32_t _bsize, int32_t _minCountTrain, int32_t maxUnits,
-    uac::DocumentBatchSink* cacheSink) {
+    punkst::DocumentBatchSink* cacheSink) {
     if (!initialized) error("Model must be initialized before training");
     batchSize = _bsize;
     minCountTrain = _minCountTrain;
@@ -156,14 +156,14 @@ int32_t TopicModelWrapper::trainOnline(
 }
 
 int32_t TopicModelWrapper::trainOnline(
-    uac::DocumentBlockSource& source, int32_t _bsize,
+    punkst::DocumentBlockSource& source, int32_t _bsize,
     int32_t maxUnits) {
     if (!initialized) error("Model must be initialized before training");
     batchSize = _bsize;
     ntot = 0;
     source.reset();
     int32_t b = 0;
-    uac::DocumentBlock block;
+    punkst::DocumentBlock block;
     while (source.next(block, batchSize)) {
         if (block.counts.empty()) break;
         minibatch = std::move(block.counts);

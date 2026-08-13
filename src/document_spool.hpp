@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace uac {
+namespace punkst {
 
 struct DocumentBlock {
     int64_t first_document = 0;
@@ -82,4 +82,4 @@ std::unique_ptr<IndexedDocumentSource> open_binary_document_spool(
     const std::filesystem::path& path,
     bool remove_on_destruction = false);
 
-} // namespace uac
+} // namespace punkst

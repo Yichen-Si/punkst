@@ -1596,14 +1596,14 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
 
 GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     const GammaPoissonDispersionOptions& options,
-    uac::DocumentBlockSource& source,
+    punkst::DocumentBlockSource& source,
     int32_t batchSize_, int32_t maxUnits) {
     if (!initialized || !model_) {
         error("%s: GammaPoisson4Hex is not initialized", __func__);
     }
     GammaPoissonDispersionEstimator estimator(*model_, options);
     source.reset();
-    uac::DocumentBlock block;
+    punkst::DocumentBlock block;
     int32_t processed = 0;
     while (processed < maxUnits && source.next(block, batchSize_)) {
         if (block.counts.empty()) break;

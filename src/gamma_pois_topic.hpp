@@ -252,7 +252,7 @@ public:
         int32_t batchSize, int32_t minCountTrain, int32_t maxUnits);
     GammaPoissonDispersionResult estimateFeatureDispersion(
         const GammaPoissonDispersionOptions& options,
-        uac::DocumentBlockSource& source,
+        punkst::DocumentBlockSource& source,
         int32_t batchSize, int32_t maxUnits);
     GammaPoissonDispersionResult estimateFeatureDispersion(
         const GammaPoissonDispersionOptions& options,

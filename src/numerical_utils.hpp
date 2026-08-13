@@ -702,6 +702,8 @@ Eigen::VectorXd rowQuadraticForms(const Eigen::MatrixBase<Derived>& values,
 */
 
 Eigen::MatrixXd normalized_helmert(int32_t parts);
+void normalize_compositions(RowMajorMatrixXd& values,
+    double floor = 1e-12);
 bool is_normalized_helmert(
     const Eigen::Ref<const Eigen::MatrixXd>& matrix,
     double tolerance = 1e-12);

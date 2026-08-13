@@ -8,6 +8,14 @@
 
 namespace uac {
 
+using punkst::DocumentBlock;
+using punkst::DocumentBatchSink;
+using punkst::DocumentBlockSource;
+using punkst::IndexedDocumentSource;
+using punkst::DocumentSpoolMode;
+using punkst::BinaryDocumentSpoolWriter;
+using punkst::open_binary_document_spool;
+
 struct StreamingScoreRow {
     int64_t document = 0;
     std::string identifier;

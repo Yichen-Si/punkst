@@ -60,7 +60,7 @@ ProjectionData prepare_projection(
         out.coordinates = out.centers * helmert.transpose();
     } else {
         out.centers = values;
-        uac::normalize_centers(out.centers, center_floor);
+        normalize_compositions(out.centers, center_floor);
         out.coordinates = ilr_transform(out.centers, helmert);
     }
     return out;
@@ -192,7 +192,7 @@ TopicCenterTable read_topic_centers(const std::string& path, double floor,
                 static_cast<size_t>(row * table.values.cols() + column)];
         }
     }
-    if (normalize) uac::normalize_centers(table.values, floor);
+    if (normalize) normalize_compositions(table.values, floor);
     return table;
 }
 

@@ -34,8 +34,8 @@ public:
 
     int32_t trainOnline(const std::string& inFile, int32_t _bsize,
         int32_t _minCountTrain, int32_t maxUnits = INT32_MAX,
-        uac::DocumentBatchSink* cacheSink = nullptr);
-    int32_t trainOnline(uac::DocumentBlockSource& source,
+        punkst::DocumentBatchSink* cacheSink = nullptr);
+    int32_t trainOnline(punkst::DocumentBlockSource& source,
         int32_t _bsize, int32_t maxUnits = INT32_MAX);
     int32_t trainOnline(
         const std::vector<std::vector<Document>>& residentBatches,

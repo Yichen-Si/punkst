@@ -1,5 +1,5 @@
 #include "clustering_core/cosine_clustering.hpp"
-#include "clustering/uac.hpp"
+#include "clustering_core/projection.hpp"
 #include "punkst.h"
 #include "cli_common.hpp"
 #include "utils.h"
@@ -41,7 +41,7 @@ struct LeidenRun {
 struct ProjectionOutput {
     ProjectionSpace space = ProjectionSpace::Linear;
     size_t run = 0;
-    uac::VisualizationProjection projection;
+    punkst::projection::VisualizationProjection projection;
     RowMajorMatrixXd coordinates;
 };
 
@@ -759,19 +759,19 @@ int32_t cmdLeiden(int argc, char** argv) {
             const Eigen::MatrixXd helmert = normalized_helmert(factors);
             std::optional<RowMajorMatrixXd> linear_coordinates;
             std::optional<RowMajorMatrixXd> ilr_coordinates;
-            std::optional<uac::VisualizationSampleMoments> linear_sample;
-            std::optional<uac::VisualizationSampleMoments> ilr_sample;
+            std::optional<punkst::projection::VisualizationSampleMoments> linear_sample;
+            std::optional<punkst::projection::VisualizationSampleMoments> ilr_sample;
             for (const ProjectionSpace space : projection_spaces) {
                 punkst_cli::ProjectionData projection =
                     punkst_cli::prepare_projection(table.values,
                         space, helmert, projection_center_floor);
                 if (space == ProjectionSpace::Linear) {
                     linear_coordinates = std::move(projection.coordinates);
-                    linear_sample = uac::summarize_visualization_sample(
+                    linear_sample = punkst::projection::summarize_visualization_sample(
                         *linear_coordinates, threads);
                 } else {
                     ilr_coordinates = std::move(projection.coordinates);
-                    ilr_sample = uac::summarize_visualization_sample(
+                    ilr_sample = punkst::projection::summarize_visualization_sample(
                         *ilr_coordinates, threads);
                 }
             }
@@ -786,24 +786,24 @@ int32_t cmdLeiden(int argc, char** argv) {
                     const RowMajorMatrixXd& coordinates =
                         space == ProjectionSpace::Linear
                         ? *linear_coordinates : *ilr_coordinates;
-                    const uac::VisualizationSampleMoments& sample =
+                    const punkst::projection::VisualizationSampleMoments& sample =
                         space == ProjectionSpace::Linear
                         ? *linear_sample : *ilr_sample;
-                    const uac::VisualizationMeans means =
-                        uac::summarize_hard_partition_means(coordinates,
+                    const punkst::projection::VisualizationMeans means =
+                        punkst::projection::summarize_hard_partition_means(coordinates,
                             run.result.membership,
                             run.result.n_communities);
-                    uac::VisualizationOptions projection_options;
+                    punkst::projection::VisualizationOptions projection_options;
                     projection_options.whitening =
-                        uac::VisualizationWhitening::Mixture;
+                        punkst::projection::VisualizationWhitening::Mixture;
                     projection_options.dimensions = std::min(
                         projection_dimensions,
                         run.result.n_communities - 1);
                     projection_options.n_threads = threads;
                     projection_options.covariance_floor =
                         projection_covariance_floor;
-                    const uac::VisualizationResult visualization =
-                        uac::make_mean_visualization(means, helmert,
+                    const punkst::projection::VisualizationResult visualization =
+                        punkst::projection::make_mean_visualization(means, helmert,
                             projection_options, sample);
                     if (visualization.mean.projection.cols() <= 0) {
                         warning("Leiden resolution %.8g has no positive %s projection axis; omitting it",

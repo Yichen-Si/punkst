@@ -64,7 +64,6 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("uac-fit", "Fit uncertainty-aware clustering", cmdUacFit)
         .add_command("uac-transform", "Assign documents using a fitted UAC state", cmdUacTransform)
         .add_command("linear-embed", "Embed topic proportions using hard cluster partitions", cmdLinearEmbed)
-        .add_command("ilr-linear-embed", "Alias for linear-embed", cmdLinearEmbed)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)
         .add_command("lda-transform", "Transform data using fitted LDA model", cmdLDATransform)
         .add_command("lda-factor-eval", "Evaluate leave-one-out LDA factor contribution", cmdLDAFactorEval)

@@ -403,17 +403,6 @@ void normalize_basis(Basis& basis) {
     basis.checksum = basis_checksum(basis);
 }
 
-void normalize_centers(RowMajorMatrixXd& centers, double floor) {
-    if (centers.rows() == 0 || centers.cols() < 2 || !centers.allFinite()
-        || (centers.array() < 0.0).any() || !(floor > 0.0)) {
-        throw std::invalid_argument("Invalid UAC point centers");
-    }
-    for (Eigen::Index row = 0; row < centers.rows(); ++row) {
-        centers.row(row) = centers.row(row).array().max(floor);
-        centers.row(row) /= centers.row(row).sum();
-    }
-}
-
 uint64_t basis_checksum(const Basis& basis) {
     uint64_t value = 14695981039346656037ull;
     for (const auto& name : basis.features) value = detail::hash_string(value, name);

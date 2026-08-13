@@ -1,4 +1,4 @@
-#include "clustering/uac.hpp"
+#include "clustering_core/projection.hpp"
 #include "punkst.h"
 #include "cli_common.hpp"
 #include "utils.h"
@@ -28,15 +28,15 @@ struct PartitionTable {
 
 struct ProjectionOutput {
     ProjectionSpace space = ProjectionSpace::Linear;
-    const uac::Dataset* data = nullptr;
-    uac::VisualizationResult visualization;
+    const punkst_cli::ProjectionData* data = nullptr;
+    punkst::projection::VisualizationResult visualization;
 };
 
 struct ProjectionInput {
     ProjectionSpace space = ProjectionSpace::Linear;
-    uac::Dataset data;
+    punkst_cli::ProjectionData data;
     RowMajorMatrixXd matched_coordinates;
-    std::optional<uac::VisualizationSampleMoments> sample_moments;
+    std::optional<punkst::projection::VisualizationSampleMoments> sample_moments;
 };
 
 void validate_partition_columns(int32_t identifier_column,
@@ -185,7 +185,7 @@ std::vector<int32_t> match_partition_rows(
     return matched;
 }
 
-void truncate_projection(uac::VisualizationProjection& projection,
+void truncate_projection(punkst::projection::VisualizationProjection& projection,
         int32_t dimensions) {
     projection.eigenvalues.conservativeResize(dimensions);
     projection.projection.conservativeResize(
@@ -214,7 +214,7 @@ int32_t positive_rank(const Eigen::Ref<const Eigen::VectorXd>& eigenvalues) {
 
 void write_axis_weights(const std::string& path,
     const std::vector<std::string>& topics,
-    const uac::VisualizationProjection& projection) {
+    const punkst::projection::VisualizationProjection& projection) {
     std::ofstream out(path);
     if (!out) {
         throw std::runtime_error("Cannot write embedding axis weights: " + path);
@@ -394,8 +394,8 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
                 "--center-floor must be positive and finite");
         }
         parameters.print_options();
-        const uac::VisualizationWhitening whitening =
-            uac::parse_visualization_whitening(whitening_name);
+        const punkst::projection::VisualizationWhitening whitening =
+            punkst::projection::parse_visualization_whitening(whitening_name);
         const std::vector<std::string> labels = resolve_partition_labels(
             partition_columns, partition_labels);
         punkst_cli::TopicCenterTable theta = punkst_cli::read_topic_centers(
@@ -437,7 +437,6 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
         for (const ProjectionSpace space : projection_spaces) {
             ProjectionInput input;
             input.space = space;
-            input.data.identifiers = theta.identifiers;
             punkst_cli::ProjectionData projection =
                 punkst_cli::prepare_projection(theta.values,
                     space, helmert, center_floor);
@@ -452,14 +451,14 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
                     input.data.coordinates.row(matched_rows[
                         static_cast<size_t>(partition_row)]);
             }
-            if (whitening == uac::VisualizationWhitening::Sample) {
-                input.sample_moments = uac::summarize_visualization_sample(
+            if (whitening == punkst::projection::VisualizationWhitening::Sample) {
+                input.sample_moments = punkst::projection::summarize_visualization_sample(
                     input.data.coordinates, threads);
             }
             inputs.push_back(std::move(input));
         }
 
-        uac::VisualizationOptions options;
+        punkst::projection::VisualizationOptions options;
         options.whitening = whitening;
         options.dimensions = std::min(
             requested_dimensions, topics - 1);
@@ -490,30 +489,31 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
             std::vector<ProjectionOutput> projections;
             projections.reserve(inputs.size());
             for (ProjectionInput& input : inputs) {
-                uac::VisualizationResult visualization;
+                punkst::projection::VisualizationResult visualization;
                 if (visual_full) {
-                    const uac::VisualizationMoments moments =
-                        uac::summarize_hard_partition(
+                    const punkst::projection::VisualizationMoments moments =
+                        punkst::projection::summarize_hard_partition(
                             input.matched_coordinates, assignments,
                             components, threads);
                     visualization = input.sample_moments
-                        ? uac::make_visualization(input.data, moments, helmert,
+                        ? punkst::projection::make_visualization(
+                            input.data.coordinates, moments, helmert,
                             options, *input.sample_moments)
-                        : uac::make_visualization(
-                            input.data, moments, helmert, options);
+                        : punkst::projection::make_visualization(
+                            input.data.coordinates, moments, helmert, options);
                 } else {
-                    const uac::VisualizationMeans means =
-                        uac::summarize_hard_partition_means(
+                    const punkst::projection::VisualizationMeans means =
+                        punkst::projection::summarize_hard_partition_means(
                             input.matched_coordinates, assignments,
                             components);
-                    uac::VisualizationOptions mean_options = options;
+                    punkst::projection::VisualizationOptions mean_options = options;
                     mean_options.dimensions = std::min(
                         mean_options.dimensions, components - 1);
-                    const uac::VisualizationSampleMoments whitening_moments =
+                    const punkst::projection::VisualizationSampleMoments whitening_moments =
                         input.sample_moments ? *input.sample_moments
-                        : uac::summarize_visualization_sample(
+                        : punkst::projection::summarize_visualization_sample(
                             input.matched_coordinates, threads);
-                    visualization = uac::make_mean_visualization(
+                    visualization = punkst::projection::make_mean_visualization(
                         means, helmert, mean_options, whitening_moments);
                 }
                 const int32_t mean_dimensions = visual_full
@@ -558,7 +558,7 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
                 }
                 const std::string space_prefix = prefix + "."
                     + projection_space_name(input.space);
-                uac::write_visualization_axes(
+                punkst::projection::write_visualization_axes(
                     space_prefix + ".transform.tsv", theta.topics,
                     visualization);
                 write_axis_weights(space_prefix + ".mean.axes.tsv",

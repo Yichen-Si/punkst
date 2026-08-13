@@ -100,7 +100,7 @@ inline void add_training_count_cache_options(
             options.temp_dir);
 }
 
-class TrainingCountCache final : public uac::DocumentBatchSink {
+class TrainingCountCache final : public punkst::DocumentBatchSink {
 public:
     using ResidentBatches = std::vector<std::vector<Document>>;
 
@@ -137,7 +137,7 @@ public:
         return enabled_;
     }
 
-    uac::DocumentBatchSink* sink() {
+    punkst::DocumentBatchSink* sink() {
         return enabled_ ? this : nullptr;
     }
 
@@ -146,7 +146,7 @@ public:
             ? &resident_batches_ : nullptr;
     }
 
-    uac::DocumentBlockSource* source() {
+    punkst::DocumentBlockSource* source() {
         return source_.get();
     }
 
@@ -288,9 +288,9 @@ private:
     void begin_sequential_storage() {
         if (writer_) return;
         directory_.init(parent_);
-        writer_ = std::make_unique<uac::BinaryDocumentSpoolWriter>(
+        writer_ = std::make_unique<punkst::BinaryDocumentSpoolWriter>(
             directory_.path / "training-counts.bin", features_,
-            uac::DocumentSpoolMode::Sequential);
+            punkst::DocumentSpoolMode::Sequential);
         const uint64_t spill_documents = total_documents_;
         for (std::vector<Document>& batch : resident_batches_) {
             append_batch_to_disk(batch);
@@ -329,7 +329,7 @@ private:
     uint64_t resident_payload_bytes_ = 0;
     uint64_t total_documents_ = 0;
     uint64_t disk_documents_written_ = 0;
-    std::unique_ptr<uac::BinaryDocumentSpoolWriter> writer_;
-    std::unique_ptr<uac::DocumentBlockSource> source_;
+    std::unique_ptr<punkst::BinaryDocumentSpoolWriter> writer_;
+    std::unique_ptr<punkst::DocumentBlockSource> source_;
     std::chrono::steady_clock::time_point construction_start_;
 };

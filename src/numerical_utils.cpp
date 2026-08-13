@@ -68,6 +68,18 @@ Eigen::MatrixXd normalized_helmert(int32_t parts) {
     return out;
 }
 
+void normalize_compositions(RowMajorMatrixXd& values, double floor) {
+    if (values.rows() == 0 || values.cols() < 2 || !values.allFinite()
+        || (values.array() < 0.0).any() || !(floor > 0.0)
+        || !std::isfinite(floor)) {
+        throw std::invalid_argument("Invalid compositions");
+    }
+    for (Eigen::Index row = 0; row < values.rows(); ++row) {
+        values.row(row) = values.row(row).array().max(floor);
+        values.row(row) /= values.row(row).sum();
+    }
+}
+
 bool is_normalized_helmert(
     const Eigen::Ref<const Eigen::MatrixXd>& matrix, double tolerance) {
     if (matrix.rows() <= 0 || matrix.cols() != matrix.rows() + 1

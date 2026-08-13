@@ -167,6 +167,8 @@ set(CLUSTERING_CORE_SOURCE_FILES
     src/clustering_core/cosine_clustering.cpp
     src/clustering_core/leiden.hpp
     src/clustering_core/leiden.cpp
+    src/clustering_core/projection.hpp
+    src/clustering_core/projection.cpp
 )
 
 if (PUNKST_ENABLE_FAISS_ANN)
@@ -239,6 +241,7 @@ set(SOURCE_FILES
     src/dataunits.hpp
     src/dataunits.cpp
     src/document_spool.hpp
+    src/document_spool.cpp
     src/lda.hpp
     src/lda.cpp
     src/lda_svb.cpp

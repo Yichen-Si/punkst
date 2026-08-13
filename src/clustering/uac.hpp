@@ -2,6 +2,7 @@
 
 #include "dataunits.hpp"
 #include "clustering_core/cosine_clustering.hpp"
+#include "clustering_core/projection.hpp"
 #include "clustering/low_rank_covariance.hpp"
 #include "numerical_utils.hpp"
 
@@ -111,15 +112,23 @@ enum class StreamingParticleStorage {
     Positions,
 };
 
-enum class VisualizationWhitening {
-    Sample,
-    Mixture,
-};
+using punkst::projection::VisualizationWhitening;
+using punkst::projection::VisualizationView;
+using punkst::projection::VisualizationOptions;
+using punkst::projection::VisualizationProjection;
+using punkst::projection::VisualizationResult;
+using punkst::projection::VisualizationMoments;
+using punkst::projection::VisualizationMeans;
+using punkst::projection::VisualizationSampleMoments;
+using punkst::projection::visualization_whitening_name;
+using punkst::projection::visualization_view_name;
+using punkst::projection::make_mean_visualization;
+using punkst::projection::summarize_hard_partition_means;
+using punkst::projection::summarize_hard_partition;
+using punkst::projection::summarize_visualization_sample;
 
-enum class VisualizationView {
-    Mean,
-    Full,
-};
+VisualizationWhitening parse_visualization_whitening(
+    const std::string& value);
 
 const char* handoff_name(HandoffMode value);
 const char* proposal_name(ProposalKind value);
@@ -136,8 +145,6 @@ const char* initialization_measurement_mode_name(
 const char* fit_tail_mode_name(FitTailMode value);
 const char* streaming_count_storage_name(StreamingCountStorage value);
 const char* streaming_particle_storage_name(StreamingParticleStorage value);
-const char* visualization_whitening_name(VisualizationWhitening value);
-const char* visualization_view_name(VisualizationView value);
 const char* factor_diagonal_mode_name(FactorDiagonalMode value);
 HandoffMode parse_handoff(const std::string& value);
 ProposalKind parse_proposal(const std::string& value);
@@ -153,8 +160,6 @@ FitTailMode parse_fit_tail_mode(const std::string& value);
 StreamingCountStorage parse_streaming_count_storage(
     const std::string& value);
 StreamingParticleStorage parse_streaming_particle_storage(
-    const std::string& value);
-VisualizationWhitening parse_visualization_whitening(
     const std::string& value);
 FactorDiagonalMode parse_factor_diagonal_mode(const std::string& value);
 
@@ -236,46 +241,6 @@ struct Model {
     std::vector<LowRankDiagonalCovariance> factor_covariances;
     Eigen::VectorXd shared_factor_diagonal;
     LowRankDiagonalCovariance factor_shrinkage_target;
-};
-
-struct VisualizationOptions {
-    VisualizationWhitening whitening = VisualizationWhitening::Mixture;
-    int32_t dimensions = 2;
-    int32_t n_threads = 1;
-    double covariance_floor = 1e-5;
-    bool include_full = false;
-};
-
-struct VisualizationProjection {
-    VisualizationView view = VisualizationView::Mean;
-    Eigen::VectorXd eigenvalues;
-    Eigen::MatrixXd projection; // ILR coordinate x visualization axis
-    Eigen::MatrixXd topic_contrasts; // topic x visualization axis
-    RowMajorMatrixXd component_means; // component x visualization axis
-    std::vector<Eigen::MatrixXd> component_covariances;
-};
-
-struct VisualizationResult {
-    VisualizationWhitening whitening = VisualizationWhitening::Mixture;
-    Eigen::MatrixXd whitening_covariance;
-    VisualizationProjection mean;
-    VisualizationProjection full;
-};
-
-struct VisualizationMoments {
-    Eigen::VectorXd weights;
-    RowMajorMatrixXd means;
-    std::vector<Eigen::MatrixXd> covariances;
-};
-
-struct VisualizationMeans {
-    Eigen::VectorXd weights;
-    RowMajorMatrixXd means;
-};
-
-struct VisualizationSampleMoments {
-    Eigen::VectorXd mean;
-    Eigen::MatrixXd covariance;
 };
 
 struct IterationDiagnostic {
@@ -692,7 +657,6 @@ struct StateMetadata {
 };
 
 void normalize_basis(Basis& basis);
-void normalize_centers(RowMajorMatrixXd& centers, double floor = 1e-12);
 uint64_t basis_checksum(const Basis& basis);
 double median_absolute_relative_variance_change(const Model& current,
     const Model& previous, double covariance_floor);
@@ -727,22 +691,6 @@ VisualizationResult make_visualization(const Dataset& data,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     const VisualizationOptions& options,
     const VisualizationSampleMoments& sample_moments);
-VisualizationResult make_mean_visualization(
-    const VisualizationMeans& means,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert,
-    const VisualizationOptions& options,
-    const VisualizationSampleMoments& sample_moments);
-VisualizationMeans summarize_hard_partition_means(
-    const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
-    const Eigen::Ref<const Eigen::VectorXi>& assignments,
-    int32_t components);
-VisualizationMoments summarize_hard_partition(
-    const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
-    const Eigen::Ref<const Eigen::VectorXi>& assignments,
-    int32_t components, int32_t n_threads = 1);
-VisualizationSampleMoments summarize_visualization_sample(
-    const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
-    int32_t n_threads = 1);
 
 State make_state(const FitResult& fit, const FitOptions& options,
     const StateMetadata& metadata);

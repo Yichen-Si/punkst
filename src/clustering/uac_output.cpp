@@ -933,72 +933,15 @@ void write_representatives(const std::string& path, const Dataset& data,
 
 void write_visualization_axes(const std::string& path,
     const State& state, const VisualizationResult& visualization) {
-    write_visualization_axes(path, state.topics, visualization);
+    punkst::projection::write_visualization_axes(
+        path, state.topics, visualization);
 }
 
 void write_visualization_axes(const std::string& path,
     const std::vector<std::string>& topics,
     const VisualizationResult& visualization) {
-    std::ofstream out(path);
-    if (!out) {
-        throw std::runtime_error(
-            "Cannot write UAC visualization axes: " + path);
-    }
-    out << "#whitening\tview\taxis\teigenvalue\tbasis\tindex\tname"
-        "\tcoefficient\tcontrast_scale\tside\tnormalized_weight\n"
-        << std::scientific << std::setprecision(10);
-    std::vector<const VisualizationProjection*> views{&visualization.mean};
-    if (visualization.full.projection.cols() > 0) {
-        views.push_back(&visualization.full);
-    }
-    for (const VisualizationProjection* view : views) {
-        if (view->projection.cols() != view->eigenvalues.size()
-            || view->topic_contrasts.rows()
-                != static_cast<Eigen::Index>(topics.size())
-            || view->topic_contrasts.cols() != view->projection.cols()) {
-            throw std::invalid_argument(
-                "Invalid UAC visualization axes");
-        }
-        for (Eigen::Index axis = 0; axis < view->projection.cols(); ++axis) {
-            double scale = 0.0;
-            for (Eigen::Index topic = 0;
-                    topic < view->topic_contrasts.rows(); ++topic) {
-                if (view->topic_contrasts(topic, axis) > 0.0) {
-                    scale += view->topic_contrasts(topic, axis);
-                }
-            }
-            if (!(scale > 0.0) || !std::isfinite(scale)) {
-                throw std::runtime_error(
-                    "UAC visualization contrast has no positive mass");
-            }
-            for (Eigen::Index coordinate = 0;
-                    coordinate < view->projection.rows(); ++coordinate) {
-                out << visualization_whitening_name(visualization.whitening)
-                    << "\t" << visualization_view_name(view->view)
-                    << "\t" << axis + 1 << "\t"
-                    << view->eigenvalues(axis)
-                    << "\tilr\t" << coordinate << "\tilr_" << coordinate
-                    << "\t" << view->projection(coordinate, axis)
-                    << "\tNA\tNA\tNA\n";
-            }
-            for (Eigen::Index topic = 0;
-                    topic < view->topic_contrasts.rows(); ++topic) {
-                const double coefficient =
-                    view->topic_contrasts(topic, axis);
-                const char* side = coefficient > 0.0 ? "positive"
-                    : coefficient < 0.0 ? "negative" : "zero";
-                out << visualization_whitening_name(visualization.whitening)
-                    << "\t" << visualization_view_name(view->view)
-                    << "\t" << axis + 1 << "\t"
-                    << view->eigenvalues(axis)
-                    << "\ttopic\t" << topic << "\t"
-                    << topics[static_cast<size_t>(topic)] << "\t"
-                    << coefficient
-                    << "\t" << scale << "\t" << side
-                    << "\t" << std::abs(coefficient) / scale << "\n";
-            }
-        }
-    }
+    punkst::projection::write_visualization_axes(
+        path, topics, visualization);
 }
 
 void write_visualization_model(const std::string& path,

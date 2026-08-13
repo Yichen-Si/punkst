@@ -2,8 +2,7 @@
 
 `punkst linear-embed` constructs supervised views of dense Gamma-Poisson or
 LDA topic proportions using one or more hard cluster partitions. By default it
-projects both normalized raw factor proportions and their ILR transform. The
-older `punkst ilr-linear-embed` command remains an alias.
+projects both normalized raw factor proportions and their ILR transform.
 
 ## Usage
 
