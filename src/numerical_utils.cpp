@@ -11,32 +11,6 @@
 #include <tbb/tbb.h>
 #include <tbb/blocked_range.h>
 
-double logsumexp(const Eigen::Ref<const Eigen::VectorXd>& values) {
-    if (values.size() == 0) {
-        return -std::numeric_limits<double>::infinity();
-    }
-    const double maximum = values.maxCoeff();
-    if (!std::isfinite(maximum)) return maximum;
-    return maximum + std::log((values.array() - maximum).exp().sum());
-}
-
-double logaddexp(double left, double right) {
-    if (!std::isfinite(left)) return right;
-    if (!std::isfinite(right)) return left;
-    const double maximum = std::max(left, right);
-    return maximum + std::log(
-        std::exp(left - maximum) + std::exp(right - maximum));
-}
-
-bool positive_definite(const Eigen::Ref<const Eigen::MatrixXd>& matrix,
-    double symmetry_tolerance) {
-    return matrix.rows() > 0 && matrix.rows() == matrix.cols()
-        && matrix.allFinite() && symmetry_tolerance >= 0.0
-        && (matrix - matrix.transpose()).cwiseAbs().maxCoeff()
-            <= symmetry_tolerance
-        && Eigen::LLT<Eigen::MatrixXd>(matrix).info() == Eigen::Success;
-}
-
 Eigen::MatrixXd floor_covariance(
     const Eigen::Ref<const Eigen::MatrixXd>& input, double floor) {
     if (input.rows() == 0 || input.rows() != input.cols()
@@ -116,33 +90,6 @@ RowMajorMatrixXd ilr_transform(
         normalized /= normalized.sum();
         out.row(row) =
             (helmert * normalized.array().log().matrix()).transpose();
-    }
-    return out;
-}
-
-Eigen::VectorXd ilr_inverse_coordinate(
-    const Eigen::Ref<const Eigen::VectorXd>& value,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
-    if (value.size() != helmert.rows()) {
-        throw std::invalid_argument("Invalid inverse ILR input");
-    }
-    Eigen::VectorXd logits = helmert.transpose() * value;
-    logits.array() -= logits.maxCoeff();
-    Eigen::VectorXd out = logits.array().exp();
-    out /= out.sum();
-    return out;
-}
-
-RowMajorMatrixXd ilr_inverse(
-    const Eigen::Ref<const RowMajorMatrixXd>& values,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert) {
-    if (values.cols() != helmert.rows()) {
-        throw std::invalid_argument("Invalid inverse ILR input");
-    }
-    RowMajorMatrixXd out(values.rows(), helmert.cols());
-    for (Eigen::Index row = 0; row < values.rows(); ++row) {
-        out.row(row) = ilr_inverse_coordinate(
-            values.row(row).transpose(), helmert).transpose();
     }
     return out;
 }

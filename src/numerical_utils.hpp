@@ -109,8 +109,6 @@ inline double logsumexp(const std::vector<double>& x) {
     }
     return m + std::log(s);
 }
-double logsumexp(const Eigen::Ref<const Eigen::VectorXd>& values);
-double logaddexp(double left, double right);
 
 /**
  * Special functions and probability distributions
@@ -711,12 +709,6 @@ RowMajorMatrixXd ilr_transform(
     const Eigen::Ref<const RowMajorMatrixXd>& values,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     double floor = 1e-12);
-Eigen::VectorXd ilr_inverse_coordinate(
-    const Eigen::Ref<const Eigen::VectorXd>& value,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert);
-RowMajorMatrixXd ilr_inverse(
-    const Eigen::Ref<const RowMajorMatrixXd>& values,
-    const Eigen::Ref<const Eigen::MatrixXd>& helmert);
 
 struct EntropyStats {
     Eigen::VectorXd entropy;
@@ -887,9 +879,6 @@ int32_t loess_quadratic_tricube(const std::vector<double>& x,
                                 std::vector<double>& yhat, double span = 0.3);
 
 // Covariance validation and regularization
-bool positive_definite(
-    const Eigen::Ref<const Eigen::MatrixXd>& matrix,
-    double symmetry_tolerance = 1e-8);
 Eigen::MatrixXd floor_covariance(
     const Eigen::Ref<const Eigen::MatrixXd>& input, double floor);
 

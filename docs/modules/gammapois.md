@@ -8,8 +8,7 @@
 The command accepts either the custom sparse text (from `tiles2hex`) or the 10X MEX format as input, similar to `topic-model` / `lda-transform`.
 
 Dense `{prefix}.results.tsv` output can be clustered directly with
-[`punkst leiden`](leiden.md), or modeled with uncertainty-aware
-[`punkst uac-fit`](uac.md).
+[`punkst leiden`](leiden.md).
 
 ## Example usage
 

@@ -4,8 +4,6 @@
 embedding written by `gamma-pois-fit --transform`, `gamma-pois-transform`,
 `topic-model --transform`, or `lda-transform`.
 
-It is a point-estimate baseline: use [UAC](uac.md) for a model-based clustering that accounts for uncertainty in the embedding.
-
 ## Example
 
 ```bash
