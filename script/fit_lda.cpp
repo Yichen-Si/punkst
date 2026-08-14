@@ -43,6 +43,7 @@ void appendOptions(std::vector<std::string>& args, const std::string& name, cons
 }
 
 int32_t runDelegatedTransform(const std::string& modelFile,
+        bool inputIsState,
         const std::string& outPrefix,
         const std::string& inFile,
         const std::string& metaFile,
@@ -72,7 +73,7 @@ int32_t runDelegatedTransform(const std::string& modelFile,
     std::vector<std::string> args;
     args.reserve(32);
     args.push_back("lda-transform");
-    appendOption(args, "in-model", modelFile);
+    appendOption(args, inputIsState ? "in-state" : "in-model", modelFile);
     appendOption(args, "out-prefix", outPrefix);
     appendOption(args, "min-count", 1);
     appendOption(args, "threads", nThreads);
@@ -451,12 +452,19 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
 
         lda4hex->writeModelToFile(outModel);
         notice("Model written to %s", outModel.c_str());
+        if (!fitBackground) {
+            const std::string outState = outPrefix + ".state.tsv";
+            lda4hex->writeStateToFile(outState);
+            notice("LDA state written to %s", outState.c_str());
+        }
     }
 
     if (transform) {
-        const std::string transformModel = projection_only ? priorFile : outModel;
+        const std::string transformModel = projection_only
+            ? priorFile : outPrefix + ".state.tsv";
         if (!fitBackground) {
-            return runDelegatedTransform(transformModel, outPrefix, inFile, metaFile,
+            return runDelegatedTransform(transformModel, !projection_only,
+                outPrefix, inFile, metaFile,
                 dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
                 include_ftr_regex, exclude_ftr_regex, defaultWeight, icolWeight,
                 maxIter, mDelta, nThreads, modal, debug_,

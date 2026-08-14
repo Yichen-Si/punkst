@@ -193,6 +193,141 @@ VisualizationWhitening parse_visualization_whitening(
         "Visualization whitening must be sample or mixture");
 }
 
+double quartimax_objective(
+        const Eigen::Ref<const Eigen::MatrixXd>& loadings) {
+    return loadings.array().square().square().sum();
+}
+
+void quartimax_rotate(Eigen::MatrixXd& basis, Eigen::MatrixXd& loadings) {
+    constexpr int32_t maximum_sweeps = 100;
+    constexpr double relative_tolerance = 1e-12;
+    constexpr double update_tolerance = 32.0
+        * std::numeric_limits<double>::epsilon();
+    if (basis.cols() != loadings.cols()) {
+        throw std::invalid_argument("Quartimax basis/loading dimensions differ");
+    }
+    if (basis.cols() <= 1) return;
+
+    double objective_value = quartimax_objective(loadings);
+    for (int32_t sweep = 0; sweep < maximum_sweeps; ++sweep) {
+        for (Eigen::Index left = 0; left < basis.cols(); ++left) {
+            for (Eigen::Index right = left + 1;
+                    right < basis.cols(); ++right) {
+                const Eigen::ArrayXd x = loadings.col(left).array();
+                const Eigen::ArrayXd y = loadings.col(right).array();
+                const Eigen::ArrayXd difference = 0.5
+                    * (x.square() - y.square());
+                const Eigen::ArrayXd product = x * y;
+                const double cosine_coefficient =
+                    (difference.square() - product.square()).sum();
+                const double sine_coefficient =
+                    2.0 * (difference * product).sum();
+                const double gain = std::hypot(
+                    cosine_coefficient, sine_coefficient)
+                    - cosine_coefficient;
+                const double pair_scale = x.square().square().sum()
+                    + y.square().square().sum();
+                if (gain <= update_tolerance * std::max(1.0, pair_scale)) {
+                    continue;
+                }
+                const double angle = 0.25 * std::atan2(
+                    sine_coefficient, cosine_coefficient);
+                const double cosine = std::cos(angle);
+                const double sine = std::sin(angle);
+                const Eigen::VectorXd basis_left = basis.col(left);
+                const Eigen::VectorXd loading_left = loadings.col(left);
+                basis.col(left) = cosine * basis_left
+                    + sine * basis.col(right);
+                basis.col(right) = -sine * basis_left
+                    + cosine * basis.col(right);
+                loadings.col(left) = cosine * loading_left
+                    + sine * loadings.col(right);
+                loadings.col(right) = -sine * loading_left
+                    + cosine * loadings.col(right);
+            }
+        }
+        const double next_objective = quartimax_objective(loadings);
+        const double improvement = next_objective - objective_value;
+        objective_value = next_objective;
+        if (improvement <= relative_tolerance
+                * std::max(1.0, std::abs(objective_value))) {
+            break;
+        }
+    }
+}
+
+void quartimax_rotate(VisualizationProjection& projection) {
+    const Eigen::Index dimensions = projection.projection.cols();
+    if (dimensions != projection.eigenvalues.size()
+            || projection.topic_contrasts.cols() != dimensions
+            || projection.component_means.cols() != dimensions) {
+        throw std::invalid_argument(
+            "Invalid visualization projection for quartimax rotation");
+    }
+    Eigen::MatrixXd rotation = Eigen::MatrixXd::Identity(
+        dimensions, dimensions);
+    Eigen::MatrixXd contrasts = projection.topic_contrasts;
+    quartimax_rotate(rotation, contrasts);
+
+    Eigen::VectorXd scores = (rotation.array().square().colwise()
+        * projection.eigenvalues.array()).colwise().sum().matrix();
+    std::vector<Eigen::Index> order(static_cast<size_t>(dimensions));
+    for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+        order[static_cast<size_t>(axis)] = axis;
+    }
+    std::stable_sort(order.begin(), order.end(),
+        [&](Eigen::Index left, Eigen::Index right) {
+            if (scores(left) != scores(right)) {
+                return scores(left) > scores(right);
+            }
+            const double left_concentration = contrasts.col(left).array()
+                .square().square().sum();
+            const double right_concentration = contrasts.col(right).array()
+                .square().square().sum();
+            if (left_concentration != right_concentration) {
+                return left_concentration > right_concentration;
+            }
+            return left < right;
+        });
+    Eigen::MatrixXd ordered_rotation(dimensions, dimensions);
+    Eigen::MatrixXd ordered_contrasts(contrasts.rows(), dimensions);
+    Eigen::VectorXd ordered_scores(dimensions);
+    for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+        const Eigen::Index source = order[static_cast<size_t>(axis)];
+        ordered_rotation.col(axis) = rotation.col(source);
+        ordered_contrasts.col(axis) = contrasts.col(source);
+        ordered_scores(axis) = scores(source);
+    }
+    rotation = std::move(ordered_rotation);
+    contrasts = std::move(ordered_contrasts);
+    projection.axis_scores = std::move(ordered_scores);
+    projection.projection *= rotation;
+    projection.topic_contrasts = std::move(contrasts);
+    projection.component_means *= rotation;
+    for (Eigen::MatrixXd& covariance : projection.component_covariances) {
+        if (covariance.rows() != dimensions
+                || covariance.cols() != dimensions) {
+            throw std::invalid_argument(
+                "Invalid component covariance for quartimax rotation");
+        }
+        covariance = (rotation.transpose() * covariance * rotation).eval();
+    }
+    for (Eigen::Index axis = 0; axis < dimensions; ++axis) {
+        Eigen::Index pivot = 0;
+        projection.topic_contrasts.col(axis).cwiseAbs().maxCoeff(&pivot);
+        if (projection.topic_contrasts(pivot, axis) < 0.0) {
+            projection.projection.col(axis) *= -1.0;
+            projection.topic_contrasts.col(axis) *= -1.0;
+            projection.component_means.col(axis) *= -1.0;
+            for (Eigen::MatrixXd& covariance :
+                    projection.component_covariances) {
+                covariance.row(axis) *= -1.0;
+                covariance.col(axis) *= -1.0;
+            }
+        }
+    }
+}
+
 static VisualizationResult make_visualization_impl(
     const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
     const VisualizationMoments& moments,
@@ -496,7 +631,7 @@ void write_visualization_axes(const std::string& path,
         throw std::runtime_error(
             "Cannot write visualization axes: " + path);
     }
-    out << "#whitening\tview\taxis\teigenvalue\tbasis\tindex\tname"
+    out << "#whitening\tview\taxis\tseparation_score\tbasis\tindex\tname"
         "\tcoefficient\tcontrast_scale\tside\tnormalized_weight\n"
         << std::scientific << std::setprecision(10);
     std::vector<const VisualizationProjection*> views{&visualization.mean};
@@ -504,7 +639,7 @@ void write_visualization_axes(const std::string& path,
         views.push_back(&visualization.full);
     }
     for (const VisualizationProjection* view : views) {
-        if (view->projection.cols() != view->eigenvalues.size()
+        if (view->projection.cols() != view->axis_scores.size()
             || view->topic_contrasts.rows()
                 != static_cast<Eigen::Index>(topics.size())
             || view->topic_contrasts.cols() != view->projection.cols()) {
@@ -527,7 +662,7 @@ void write_visualization_axes(const std::string& path,
                 out << visualization_whitening_name(visualization.whitening)
                     << "\t" << visualization_view_name(view->view)
                     << "\t" << axis + 1 << "\t"
-                    << view->eigenvalues(axis)
+                    << view->axis_scores(axis)
                     << "\tilr\t" << coordinate << "\tilr_" << coordinate
                     << "\t" << view->projection(coordinate, axis)
                     << "\tNA\tNA\tNA\n";
@@ -541,7 +676,7 @@ void write_visualization_axes(const std::string& path,
                 out << visualization_whitening_name(visualization.whitening)
                     << "\t" << visualization_view_name(view->view)
                     << "\t" << axis + 1 << "\t"
-                    << view->eigenvalues(axis)
+                    << view->axis_scores(axis)
                     << "\ttopic\t" << topic << "\t"
                     << topics[static_cast<size_t>(topic)] << "\t"
                     << coefficient

@@ -18,12 +18,16 @@ struct QdaProjectionOptions {
     double covariance_shrinkage = 0.10;
     double ridge = 1e-5;
     double improvement_tolerance = 1e-5;
+    double sparsity_strength = 0.0;
 };
 
 struct QdaProjectionResult {
     Eigen::MatrixXd projection;
     double training_loss = 0.0;
     double validation_loss = 0.0;
+    double quartimax_score = 0.0;
+    double training_objective = 0.0;
+    double validation_objective = 0.0;
     int32_t restart = -1;
     int32_t epoch = -1;
 };
@@ -33,6 +37,15 @@ QdaProjectionResult fit_qda_projection(
     const Eigen::Ref<const Eigen::VectorXi>& training_labels,
     const Eigen::Ref<const RowMajorMatrixXd>& validation,
     const Eigen::Ref<const Eigen::VectorXi>& validation_labels,
+    int32_t components,
+    const QdaProjectionOptions& options = {});
+
+double qda_projection_log_loss(
+    const Eigen::Ref<const Eigen::MatrixXd>& projection,
+    const Eigen::Ref<const RowMajorMatrixXd>& training,
+    const Eigen::Ref<const Eigen::VectorXi>& training_labels,
+    const Eigen::Ref<const RowMajorMatrixXd>& evaluation,
+    const Eigen::Ref<const Eigen::VectorXi>& evaluation_labels,
     int32_t components,
     const QdaProjectionOptions& options = {});
 

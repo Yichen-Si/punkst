@@ -43,7 +43,7 @@ int32_t cmdGammaPoisFit(int argc, char** argv) {
     int32_t debug_ = 0, verbose = 0;
     int32_t nThreads = 1;
     int32_t modal = 0;
-    int32_t minCountTrain = 20, minCountFeature = 1;
+    int32_t minCountTrain = 20, minCountFeature = 100;
     int32_t icolWeight = -1;
     int32_t icolDispersion = -1;
     bool estimateDispersion = false;

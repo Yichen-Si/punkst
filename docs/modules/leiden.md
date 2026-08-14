@@ -19,6 +19,10 @@ The command uses cosine or Hellinger distance in the factor space to construct a
 RBConfiguration Leiden implementation. When more than one resolution is
 supplied, the graph is built once and reused for every Leiden run.
 
+The resulting fixed partition can be converted into calibrated probabilities
+for future topic-model transforms with the
+[probabilistic partition classifier](partition-classifier.md).
+
 ## Inputs
 
 `--in-theta`
@@ -116,39 +120,11 @@ error when either backend is requested.
 
 ## Projection options
 
-After clustering, Leiden uses each hard partition to compute interpretable
-mean-separation axes. The axes solve a generalized eigendecomposition of the
-between-cluster covariance against the total covariance. This is a supervised
-summary of the resulting partition; it does not replace or change the cosine
-or Hellinger graph used for clustering.
-
-`--projection-space`
-: Projection coordinate spaces: `both` (default), `linear`, or `ilr`.
-  `linear` uses L1-normalized factor proportions and produces axes of the form
-  $z=\sum_k u_k p_k$. `ilr` produces log-contrast axes
-  $z=\sum_k u_k\log p_k$. In both cases $\sum_k u_k=0$, so the positive and
-  negative coefficients define two interpretable sides of a factor contrast.
-
-`--projection-dim`
-: Maximum axes per coordinate space and resolution. Default: `4`. The actual
-  count is capped at $K-1$, one less than the number of communities, and the
-  positive numerical rank of the between-cluster kernel.
-
-`--no-projection`
-: Skip all projection calculations and files. This takes precedence over
-  `--projection-space`.
-
-`--projection-center-floor`
-: Positive floor applied before the ILR transform. Default: `1e-12`. It does
-  not affect the linear projection or the Leiden graph.
-
-`--projection-covariance-floor`
-: Positive eigenvalue floor for the whitening covariance. Default: `1e-5`.
-
-Projection input is derived from a copy of the factor table, so these options
-never alter graph construction or cluster assignments. With `--allow-topk`,
-both projections use the same approximate zero-filled composition as the
-clustering input.
+Leiden delegates each post-clustering projection to the same implementation
+used by `linear-embed`. See
+[Linear Embedding: projection options](linear-embed.md#projection-options) for
+the methods, defaults, all projection options, and the mapping between Leiden
+and `linear-embed` option names.
 
 ## Outputs
 
@@ -166,15 +142,18 @@ clustering input.
   assignment column. Graph fields repeat across rows because all resolutions
   use the same graph.
 
-`{prefix}.projection.axes.tsv`
-: Long-form factor coefficients for every computed space, resolution, and
-  axis. It includes the eigenvalue, raw coefficient, contrast side and scale,
-  and the normalized weight within the positive or negative side.
+`{partition-prefix}.cluster_factors.tsv`
+: Contains factors as rows and zero-based clusters as columns. Each value is
+  the unnormalized sum of that factor's input theta values over all units in
+  the cluster. With one resolution, `partition-prefix` is `{prefix}`. With
+  multiple resolutions it is `{prefix}.r<resolution>`. For `--allow-topk`
+  input, these sums use the reconstructed matrix in which omitted factors are
+  zero.
 
-`{prefix}.projection.results.tsv`
-: Projected coordinates in input order. Column names identify both coordinate
-  space and source resolution, for example `linear_r0.5_1`, `ilr_r0.5_1`, and
-  `linear_r1_1`. The resolution is included even when only one resolution is
-  requested. A one-community partition, or a partition with no positive
-  separation axis, is omitted with a warning rather than causing an otherwise
-  successful Leiden run to fail.
+Projection outputs use the
+[Linear Embedding output format](linear-embed.md#outputs). With one resolution
+their base prefix is `{prefix}.projection`. With multiple resolutions each
+partition has a separate base prefix `{prefix}.projection.r<resolution>`, for
+example `sample.projection.r0.5` and `sample.projection.r1`. A one-community
+partition or partition without a positive separation axis is omitted with a
+warning rather than causing an otherwise successful Leiden run to fail.

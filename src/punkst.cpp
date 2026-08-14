@@ -10,6 +10,8 @@ int32_t cmdGammaPoisFit(int argc, char** argv);
 int32_t cmdGammaPoisTransform(int argc, char** argv);
 int32_t cmdLeiden(int argc, char** argv);
 int32_t cmdLinearEmbed(int argc, char** argv);
+int32_t cmdPartitionClassifierFit(int argc, char** argv);
+int32_t cmdPartitionClassifierPredict(int argc, char** argv);
 int32_t cmdHDPSVI(int argc, char** argv);
 int32_t cmdLDATransform(int argc, char** argv);
 int32_t cmdLDAFactorEval(int argc, char** argv);
@@ -60,6 +62,8 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("gamma-pois-transform", "Transform data using fitted Gamma-Poisson topic model state", cmdGammaPoisTransform)
         .add_command("leiden", "Cluster factor embeddings with Leiden", cmdLeiden)
         .add_command("linear-embed", "Embed topic proportions using hard cluster partitions", cmdLinearEmbed)
+        .add_command("partition-classifier-fit", "Fit a calibrated classifier for a fixed partition", cmdPartitionClassifierFit)
+        .add_command("partition-classifier-predict", "Apply a fitted partition classifier", cmdPartitionClassifierPredict)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)
         .add_command("lda-transform", "Transform data using fitted LDA model", cmdLDATransform)
         .add_command("lda-factor-eval", "Evaluate leave-one-out LDA factor contribution", cmdLDAFactorEval)

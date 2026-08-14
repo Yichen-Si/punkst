@@ -17,8 +17,7 @@ punkst gamma-pois-fit \
   --in-data hex_12.txt --in-meta hex_12.json \
   --features features_with_totals.tsv \
   --n-topics 12 --n-epochs 4 --size-factor 1000 \
-  --minibatch-size 256 --min-count-train 20 \
-  --estimate-dispersion --dispersion-init-epochs 2 \
+  --estimate-dispersion --dispersion-init-epochs 1 \
   --out-prefix gp_h12_k12 --residuals \
   --transform --threads 4 --seed 1
 ```
@@ -187,7 +186,7 @@ count for every retained feature. For 10X input it remains optional because
 totals are read from the matrix.
 
 `--min-count-per-feature`
-Minimum feature total count. Default: `1`.
+Minimum feature total count. Default: `100`.
 
 `--include-feature-regex`, `--exclude-feature-regex`
 Regex-based feature filtering.
@@ -480,6 +479,11 @@ indices.
 `--threads`, `--seed`, `--verbose`, `--debug`
 Execution controls.
 
+`--classifier-model` and `--classifier-*`
+Write calibrated predictions of a fixed partition and optionally propagate the
+local Gamma-Poisson shape/rate posterior uncertainty. See the
+[probabilistic partition classifier](partition-classifier.md).
+
 
 ## Outputs
 
@@ -511,6 +515,10 @@ $\sum_d \hat\theta_{dr} n_{dw}$, where $\hat\theta_d$ is the normalized
 topic vector written to `{prefix}.results.tsv` and $n_{dw}$ is the raw input
 count, independent of any feature weight. With `--pseudobulk-all-features`, the
 rows cover all retained input features; otherwise they cover model features.
+
+`{prefix}.classifications.tsv`
+Written when `--classifier-model` is supplied. It contains unit metadata,
+prediction diagnostics, LRVB status, and compact or dense class probabilities.
 
 `{prefix}.unit_stats.tsv`
 Written when `--residuals` or `--feature-residuals` is enabled. Its default

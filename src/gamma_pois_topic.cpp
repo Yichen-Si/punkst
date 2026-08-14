@@ -1844,6 +1844,20 @@ const VectorXd& GammaPoisson4Hex::getFeatureDispersion() const {
     return model_->get_feature_dispersion();
 }
 
+double GammaPoisson4Hex::getThetaPriorShape() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_theta_prior_shape();
+}
+
+VectorXd GammaPoisson4Hex::getThetaPriorRate() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_theta_prior_rate();
+}
+
 bool GammaPoisson4Hex::featureWeightsActive() const {
     return model_ && model_->feature_weights_active();
 }

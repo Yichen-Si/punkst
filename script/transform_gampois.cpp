@@ -1,5 +1,7 @@
 #include "gamma_pois_topic.hpp"
 #include "transform_helper.hpp"
+#include "partition_classifier.hpp"
+#include "partition_classifier_lrvb.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -30,6 +32,130 @@ using transform_helpers::readSpecialDgeMinibatch;
 using transform_helpers::readSpecialHexMinibatch;
 using transform_helpers::writeUnitIdHeader;
 using feature_diagnostics::PullRecord;
+
+struct GammaClassifierOutput {
+    std::string path;
+    std::ofstream stream;
+    punkst::partition_classifier::Model model;
+    punkst::partition_classifier::PropagationOptions propagation;
+    int32_t topK = 3;
+    bool dense = false;
+    uint64_t attempted = 0;
+    uint64_t failed = 0;
+    uint64_t localNonconvergence = 0;
+    uint64_t curvatureFailures = 0;
+    uint64_t otherFailures = 0;
+    uint64_t successful = 0;
+    uint64_t fixedPointIterations = 0;
+    uint64_t cgIterations = 0;
+    int32_t maximumFixedPointIterations = 0;
+    int32_t maximumCgIterations = 0;
+    double maximumFixedPointResidual = 0.0;
+    double maximumCurvatureJitter = 0.0;
+
+    GammaClassifierOutput(const std::string& prefix, const std::string& modelPath,
+            const punkst::partition_classifier::PropagationOptions& options,
+            int32_t top_k, bool dense_probabilities)
+        : path(prefix + ".classifications.tsv"), stream(path),
+          model(punkst::partition_classifier::Model::read(modelPath)),
+          propagation(options), topK(top_k), dense(dense_probabilities) {
+        if (!stream) throw std::runtime_error("Cannot write classifications: " + path);
+        if (topK <= 0) throw std::invalid_argument("--classifier-top-k must be positive");
+    }
+
+    void writeHeader(bool use10x, const std::string& infoHeader) {
+        writeUnitIdHeader(stream, use10x, infoHeader);
+        stream << "prediction\tmaximum_probability\tentropy"
+            "\tpropagation_method\tcandidate_count"
+            "\theld_fixed_candidate_tail_mass"
+            "\toutput_topk_tail_probability\tlrvb_status";
+        if (dense) {
+            for (size_t component = 0; component < model.classes.size();
+                    ++component) stream << "\tP" << component;
+        } else {
+            for (int32_t rank = 1; rank <= std::min<int32_t>(
+                    topK, model.classes.size()); ++rank) {
+                stream << "\tC" << rank << "\tP" << rank;
+            }
+        }
+        stream << "\tfixed_point_iterations\tfixed_point_residual"
+            "\tcg_iterations\tcurvature_jitter";
+        stream << '\n' << std::scientific << std::setprecision(4);
+    }
+
+    void write(const std::string& id,
+            const punkst::partition_classifier::PropagatedPrediction& prediction) {
+        attempted += prediction.lrvb_attempted;
+        if (prediction.lrvb_attempted) {
+            fixedPointIterations += prediction.fixed_point_iterations;
+            maximumFixedPointIterations = std::max(
+                maximumFixedPointIterations,
+                prediction.fixed_point_iterations);
+            if (std::isfinite(prediction.fixed_point_residual)) {
+                maximumFixedPointResidual = std::max(
+                    maximumFixedPointResidual,
+                    prediction.fixed_point_residual);
+            }
+        }
+        if (prediction.lrvb_failed) {
+            ++failed;
+            if (prediction.lrvb_status == "local_nonconvergence") {
+                ++localNonconvergence;
+            } else if (prediction.lrvb_status.find("curvature")
+                    != std::string::npos
+                    || prediction.lrvb_status.find("PSD")
+                        != std::string::npos
+                    || prediction.lrvb_status.find("eigendecomposition")
+                        != std::string::npos) {
+                ++curvatureFailures;
+            } else {
+                ++otherFailures;
+            }
+        } else if (prediction.lrvb_status == "ok") {
+            ++successful;
+            cgIterations += prediction.cg_iterations;
+            maximumCgIterations = std::max(
+                maximumCgIterations, prediction.cg_iterations);
+            maximumCurvatureJitter = std::max(
+                maximumCurvatureJitter, prediction.curvature_jitter);
+        }
+        std::vector<int32_t> order(prediction.probabilities.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](int32_t left,
+                int32_t right) { return prediction.probabilities(left)
+                    > prediction.probabilities(right); });
+        double entropy = 0.0;
+        for (const double probability : prediction.probabilities) {
+            if (probability > 0.0) entropy -= probability * std::log(probability);
+        }
+        const int32_t output_count = std::min<int32_t>(topK, order.size());
+        double output_mass = 0.0;
+        for (int32_t rank = 0; rank < output_count; ++rank) {
+            output_mass += prediction.probabilities(order[rank]);
+        }
+        stream << id << '\t' << model.classes[order[0]] << '\t'
+            << prediction.probabilities(order[0]) << '\t' << entropy << '\t'
+            << prediction.method << '\t' << prediction.candidate_count << '\t'
+            << prediction.held_fixed_tail_mass << '\t'
+            << std::max(0.0, 1.0 - output_mass) << '\t'
+            << prediction.lrvb_status;
+        if (dense) {
+            for (const double probability : prediction.probabilities) {
+                stream << '\t' << probability;
+            }
+        } else {
+            for (int32_t rank = 0; rank < output_count; ++rank) {
+                stream << '\t' << model.classes[order[rank]] << '\t'
+                    << prediction.probabilities(order[rank]);
+            }
+        }
+        stream << '\t' << prediction.fixed_point_iterations << '\t'
+            << prediction.fixed_point_residual << '\t'
+            << prediction.cg_iterations << '\t'
+            << prediction.curvature_jitter;
+        stream << '\n';
+    }
+};
 
 struct ResidualLocalAgg {
     RowVectorXd denseExpected;
@@ -137,14 +263,16 @@ public:
         std::ostream& results_, RowMajorMatrixXd& pseudobulk_,
         MatrixXd& specialPseudobulk_, Mode pseudobulkMode_,
         std::ostream* unitStats_, ResidualState* residualState_,
-        bool similarityDiagnostics_, int32_t nThreads_)
+        bool similarityDiagnostics_, int32_t nThreads_,
+        GammaClassifierOutput* classifierOutput_ = nullptr)
         : gp(gp_), results(results_), pseudobulk(pseudobulk_),
           specialPseudobulk(specialPseudobulk_), pseudobulkMode(pseudobulkMode_),
           unitStats(unitStats_), residualState(residualState_),
           similarityDiagnostics(similarityDiagnostics_),
+          classifierOutput(classifierOutput_),
           threadHint(std::max(1, nThreads_)),
           M(gp_.nFeatures()), K(gp_.getNumTopics()) {
-        if (residualState) {
+        if (residualState || classifierOutput) {
             residualTls = std::make_unique<ResidualTls>([this] {
                 return ResidualLocalAgg(K);
             });
@@ -157,13 +285,14 @@ public:
         }
         RowMajorMatrixXd doc_topic;
         std::vector<GammaPoissonDocumentPosterior> posteriors;
-        if (residualState) {
+        if (residualState || classifierOutput) {
             gp.transformWithPosteriors(
                 DocumentView(batch.docs), doc_topic, posteriors);
         } else {
             doc_topic = gp.transformMeans(DocumentView(batch.docs));
         }
         writeTopicRows(batch.ids, doc_topic);
+        writeClassificationRows(batch.docs, batch.ids, posteriors);
         processResiduals(batch.docs, batch.ids, doc_topic, posteriors, nullptr);
         for (size_t i = 0; i < batch.docs.size(); ++i) {
             const Document& doc = batch.docs[i];
@@ -186,13 +315,14 @@ public:
         }
         RowMajorMatrixXd doc_topic;
         std::vector<GammaPoissonDocumentPosterior> posteriors;
-        if (residualState) {
+        if (residualState || classifierOutput) {
             gp.transformWithPosteriors(
                 DocumentView(batch.modelDocs), doc_topic, posteriors);
         } else {
             doc_topic = gp.transformMeans(DocumentView(batch.modelDocs));
         }
         writeTopicRows(batch.ids, doc_topic);
+        writeClassificationRows(batch.modelDocs, batch.ids, posteriors);
         processResiduals(batch.modelDocs, batch.ids, doc_topic, posteriors,
             batch.rawModelCounts.empty() ? nullptr : &batch.rawModelCounts);
         transform_pseudobulk::accumulate(
@@ -217,6 +347,35 @@ private:
     void writeTopicRows(const std::vector<std::string>& ids,
         const RowMajorMatrixXd& doc_topic) {
         transform_helpers::writeTopicRows(results, ids, doc_topic);
+    }
+
+    void writeClassificationRows(const std::vector<Document>& docs,
+            const std::vector<std::string>& ids,
+            const std::vector<GammaPoissonDocumentPosterior>& posteriors) {
+        if (classifierOutput == nullptr) return;
+        if (docs.size() != ids.size() || docs.size() != posteriors.size()) {
+            error("%s: classifier posterior batch dimensions do not match",
+                __func__);
+        }
+        const VectorXd priorRate = gp.getThetaPriorRate();
+        const VectorXd* dispersion = gp.hasFeatureDispersion()
+            ? &gp.getFeatureDispersion() : nullptr;
+        std::vector<punkst::partition_classifier::PropagatedPrediction>
+            predictions(docs.size());
+        tbb::parallel_for(0, static_cast<int32_t>(docs.size()),
+            [&](int32_t document) {
+                predictions[static_cast<size_t>(document)] =
+                    punkst::partition_classifier::propagate_gamma_poisson(
+                    classifierOutput->model,
+                    posteriors[static_cast<size_t>(document)],
+                    docs[static_cast<size_t>(document)], gp.getTopicCapacity(),
+                    gp.getBetaAllocationKernel(), gp.getExpectedBeta(),
+                    gp.getThetaPriorShape(), priorRate, dispersion,
+                    classifierOutput->propagation);
+            });
+        for (size_t document = 0; document < docs.size(); ++document) {
+            classifierOutput->write(ids[document], predictions[document]);
+        }
     }
 
     void finalizeVarianceDiagnostics() {
@@ -663,6 +822,7 @@ private:
     std::ostream* unitStats;
     ResidualState* residualState;
     bool similarityDiagnostics;
+    GammaClassifierOutput* classifierOutput;
     int32_t threadHint;
     std::unique_ptr<ResidualTls> residualTls;
     int32_t M;
@@ -673,6 +833,7 @@ private:
 
 int32_t cmdGammaPoisTransform(int argc, char** argv) {
     std::string inFile, metaFile, stateFile, outPrefix, featureFile, temp_dir;
+    std::string classifier_model;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
     int32_t seed = -1;
@@ -703,6 +864,16 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     double dispersion_loess_span = 0.3;
     double dispersion_delta_min = 1e-8;
     double dispersion_delta_max = 1e4;
+    double classifier_ambiguity_threshold = 0.95;
+    double classifier_candidate_mass = 0.999;
+    double classifier_max_failure_rate = 0.01;
+    double classifier_fixed_point_tolerance = 1e-7;
+    int32_t classifier_top_k = 3;
+    int32_t classifier_bootstrap_draws = 64;
+    int32_t classifier_fixed_point_max_iterations = 5000;
+    bool classifier_dense = false;
+    bool classifier_lrvb_all = false;
+    bool classifier_plugin_only = false;
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
@@ -752,6 +923,18 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
       .add_option("dispersion-delta-min", "Lower bound for estimated NB2 dispersion phi", dispersion_delta_min)
       .add_option("dispersion-delta-max", "Upper bound for estimated NB2 dispersion phi", dispersion_delta_max);
 
+    pl.add_option("classifier-model", "Partition classifier model", classifier_model)
+      .add_option("classifier-top-k", "Classification class/probability pairs", classifier_top_k)
+      .add_option("classifier-dense-probabilities", "Write dense classification probabilities", classifier_dense)
+      .add_option("classifier-ambiguity-threshold", "Skip LRVB above this leading probability", classifier_ambiguity_threshold)
+      .add_option("classifier-candidate-mass", "Candidate-class probability mass", classifier_candidate_mass)
+      .add_option("classifier-lrvb-all", "Attempt LRVB for all units", classifier_lrvb_all)
+      .add_option("classifier-plugin-only", "Disable classifier uncertainty propagation", classifier_plugin_only)
+      .add_option("classifier-fixed-point-tol", "Scale-aware classifier fixed-point tolerance", classifier_fixed_point_tolerance)
+      .add_option("classifier-fixed-point-max-iter", "Maximum classifier fixed-point iterations", classifier_fixed_point_max_iterations)
+      .add_option("classifier-max-lrvb-failure-rate", "Maximum attempted-unit LRVB failure rate", classifier_max_failure_rate)
+      .add_option("classifier-bootstrap-draws", "Reserved one-step bootstrap draw count", classifier_bootstrap_draws);
+
     try {
         pl.readArgs(argc, argv);
         pl.print_options();
@@ -762,6 +945,19 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     }
 
     if (batchSize <= 0) batchSize = 512;
+    if (!classifier_model.empty()
+            && !(classifier_ambiguity_threshold > 0.0
+                && classifier_ambiguity_threshold <= 1.0
+                && classifier_candidate_mass > 0.0
+                && classifier_candidate_mass <= 1.0
+                && std::isfinite(classifier_fixed_point_tolerance)
+                && classifier_fixed_point_tolerance > 0.0
+                && classifier_fixed_point_max_iterations > 0
+                && classifier_max_failure_rate >= 0.0
+                && classifier_max_failure_rate <= 1.0
+                && classifier_bootstrap_draws > 0)) {
+        error("Invalid classifier propagation option");
+    }
     if (seed <= 0) seed = std::random_device{}();
     if (randomize_output && sorted_by_barcode) {
         error("--randomize-output and --sorted-by-barcode are mutually exclusive");
@@ -994,6 +1190,25 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     gp.writeUnitHeader(results);
     results << std::scientific << std::setprecision(4);
 
+    std::unique_ptr<GammaClassifierOutput> classifierOutput;
+    if (!classifier_model.empty()) {
+        punkst::partition_classifier::PropagationOptions propagation;
+        propagation.ambiguity_threshold = classifier_ambiguity_threshold;
+        propagation.candidate_mass = classifier_candidate_mass;
+        propagation.lrvb_all = classifier_lrvb_all;
+        propagation.plugin_only = classifier_plugin_only;
+        propagation.fixed_point_tolerance =
+            classifier_fixed_point_tolerance;
+        propagation.fixed_point_max_iterations =
+            classifier_fixed_point_max_iterations;
+        classifierOutput = std::make_unique<GammaClassifierOutput>(outPrefix,
+            classifier_model, propagation, classifier_top_k, classifier_dense);
+        if (classifierOutput->model.topics != gp.get_topic_names()) {
+            error("Classifier topics do not exactly match Gamma-Poisson topic names/order");
+        }
+        classifierOutput->writeHeader(use_10x, info_header);
+    }
+
     std::unique_ptr<ResidualState> residualState;
     std::unique_ptr<std::ofstream> unitStats;
     if (compute_residuals) {
@@ -1021,7 +1236,7 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     GammaPoisTransformBatchProcessor processor(gp, results, pseudobulk,
         specialPseudobulk, pseudobulkMode,
         unitStats.get(), residualState.get(),
-        unit_similarity_diagnostics, nThreads);
+        unit_similarity_diagnostics, nThreads, classifierOutput.get());
     bool fileopen = true;
     int32_t processed = 0;
     TransformBatch batch;
@@ -1235,6 +1450,48 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
             (outPrefix + ".unit_stats.tsv").c_str());
     }
     notice("Transformation results written to %s", resultsPath.c_str());
+    bool classifierFailure = false;
+    if (classifierOutput) {
+        classifierOutput->stream.close();
+        notice("Partition classifications written to %s",
+            classifierOutput->path.c_str());
+        const double failureRate = classifierOutput->attempted > 0
+            ? static_cast<double>(classifierOutput->failed)
+                / classifierOutput->attempted : 0.0;
+        notice("Gamma-Poisson classifier LRVB attempted %zu units; %zu failed (%.6g)",
+            classifierOutput->attempted, classifierOutput->failed, failureRate);
+        const std::string diagnosticPath =
+            outPrefix + ".classification_diagnostics.tsv";
+        std::ofstream diagnostic(diagnosticPath);
+        if (!diagnostic) {
+            error("Cannot write classification diagnostics: %s",
+                diagnosticPath.c_str());
+        }
+        const double meanFixedPointIterations = classifierOutput->attempted > 0
+            ? static_cast<double>(classifierOutput->fixedPointIterations)
+                / classifierOutput->attempted : 0.0;
+        const double meanCgIterations = classifierOutput->successful > 0
+            ? static_cast<double>(classifierOutput->cgIterations)
+                / classifierOutput->successful : 0.0;
+        diagnostic << "#attempted\tfailed\tfailure_rate\tmaximum_failure_rate"
+            "\tlocal_nonconvergence\tcurvature_failures\tother_failures"
+            "\tmean_fixed_point_iterations\tmax_fixed_point_iterations"
+            "\tmax_fixed_point_residual\tmean_cg_iterations"
+            "\tmax_cg_iterations\tmax_curvature_jitter\n"
+            << classifierOutput->attempted << '\t' << classifierOutput->failed
+            << '\t' << std::scientific << std::setprecision(4)
+            << failureRate << '\t' << classifier_max_failure_rate << '\t'
+            << classifierOutput->localNonconvergence << '\t'
+            << classifierOutput->curvatureFailures << '\t'
+            << classifierOutput->otherFailures << '\t'
+            << meanFixedPointIterations << '\t'
+            << classifierOutput->maximumFixedPointIterations << '\t'
+            << classifierOutput->maximumFixedPointResidual << '\t'
+            << meanCgIterations << '\t'
+            << classifierOutput->maximumCgIterations << '\t'
+            << classifierOutput->maximumCurvatureJitter << '\n';
+        classifierFailure = failureRate > classifier_max_failure_rate;
+    }
 
     const std::string pseudobulkPath = outPrefix + ".pseudobulk.tsv";
     std::ofstream pseudobulkOut(pseudobulkPath);
@@ -1264,5 +1521,5 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
         notice("Per-feature residuals written to %s",
             featureResidualPath.c_str());
     }
-    return 0;
+    return classifierFailure ? 1 : 0;
 }

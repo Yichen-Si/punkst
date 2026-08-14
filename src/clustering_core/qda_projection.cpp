@@ -1,4 +1,5 @@
 #include "clustering_core/qda_projection.hpp"
+#include "clustering_core/projection.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +19,7 @@ namespace {
 struct SufficientStatistics {
     Eigen::VectorXd global_mean;
     Eigen::MatrixXd global_covariance;
+    Eigen::MatrixXd topic_helmert;
     RowMajorMatrixXd means;
     std::vector<Eigen::MatrixXd> covariances;
     Eigen::VectorXi counts;
@@ -25,6 +27,8 @@ struct SufficientStatistics {
 
 struct ObjectiveResult {
     double loss = std::numeric_limits<double>::infinity();
+    double log_loss = std::numeric_limits<double>::infinity();
+    double quartimax_score = 0.0;
     Eigen::MatrixXd gradient;
 };
 
@@ -56,6 +60,7 @@ SufficientStatistics summarize(
     const Eigen::Index n = values.rows();
     const Eigen::Index p = values.cols();
     SufficientStatistics out;
+    out.topic_helmert = normalized_helmert(static_cast<int32_t>(p + 1));
     out.global_mean = values.colwise().mean();
     Eigen::MatrixXd centered = values;
     centered.rowwise() -= out.global_mean.transpose();
@@ -227,7 +232,7 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
 
     ObjectiveResult out;
     Eigen::MatrixXd derivatives(n, components);
-    out.loss = 0.0;
+    out.log_loss = 0.0;
     for (Eigen::Index row = 0; row < n; ++row) {
         const double maximum = logits.row(row).maxCoeff();
         Eigen::ArrayXd probabilities =
@@ -237,11 +242,17 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
         if (!(selected > 0.0) || !std::isfinite(selected)) {
             throw std::runtime_error("Non-finite QDA conditional loss");
         }
-        out.loss -= std::log(selected) / static_cast<double>(n);
+        out.log_loss -= std::log(selected) / static_cast<double>(n);
         derivatives.row(row) = probabilities.matrix().transpose()
             / static_cast<double>(n);
         derivatives(row, labels(row)) -= 1.0 / static_cast<double>(n);
     }
+    const Eigen::MatrixXd topic_contrasts =
+        statistics.topic_helmert.transpose() * q;
+    out.quartimax_score = quartimax_objective(topic_contrasts)
+        / static_cast<double>(d);
+    out.loss = out.log_loss
+        - options.sparsity_strength * out.quartimax_score;
     if (!need_gradient) return out;
 
     std::vector<Eigen::MatrixXd> projected_gradients(components);
@@ -285,6 +296,12 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
         out.gradient.noalias() += (2.0 * scale_gradient / d)
             * statistics.global_covariance * q;
     }
+    if (options.sparsity_strength > 0.0) {
+        out.gradient.noalias() -=
+            (4.0 * options.sparsity_strength / static_cast<double>(d))
+            * statistics.topic_helmert
+            * topic_contrasts.array().cube().matrix();
+    }
     return out;
 }
 
@@ -320,10 +337,51 @@ void canonicalize(Eigen::MatrixXd& q,
         rotation.col(axis) = solver.eigenvectors().col(d - 1 - axis);
     }
     q *= rotation;
+
+    const Eigen::MatrixXd helmert = normalized_helmert(
+        static_cast<int32_t>(q.rows() + 1));
+    Eigen::MatrixXd topic_contrasts = helmert.transpose() * q;
+    quartimax_rotate(q, topic_contrasts);
+
+    std::vector<Eigen::Index> order(static_cast<size_t>(d));
+    std::vector<double> scatter(static_cast<size_t>(d));
+    std::vector<double> concentration(static_cast<size_t>(d));
+    for (Eigen::Index axis = 0; axis < d; ++axis) {
+        order[static_cast<size_t>(axis)] = axis;
+        scatter[static_cast<size_t>(axis)] =
+            q.col(axis).dot(between * q.col(axis));
+        concentration[static_cast<size_t>(axis)] =
+            topic_contrasts.col(axis).array().square().square().sum();
+    }
+    std::stable_sort(order.begin(), order.end(),
+        [&](Eigen::Index left, Eigen::Index right) {
+            const double left_scatter = scatter[static_cast<size_t>(left)];
+            const double right_scatter = scatter[static_cast<size_t>(right)];
+            if (left_scatter != right_scatter) {
+                return left_scatter > right_scatter;
+            }
+            const double left_concentration =
+                concentration[static_cast<size_t>(left)];
+            const double right_concentration =
+                concentration[static_cast<size_t>(right)];
+            if (left_concentration != right_concentration) {
+                return left_concentration > right_concentration;
+            }
+            return left < right;
+        });
+    Eigen::MatrixXd ordered_q(q.rows(), d);
+    Eigen::MatrixXd ordered_contrasts(topic_contrasts.rows(), d);
+    for (Eigen::Index axis = 0; axis < d; ++axis) {
+        const Eigen::Index source = order[static_cast<size_t>(axis)];
+        ordered_q.col(axis) = q.col(source);
+        ordered_contrasts.col(axis) = topic_contrasts.col(source);
+    }
+    q = std::move(ordered_q);
+    topic_contrasts = std::move(ordered_contrasts);
     for (Eigen::Index axis = 0; axis < d; ++axis) {
         Eigen::Index pivot = 0;
-        q.col(axis).cwiseAbs().maxCoeff(&pivot);
-        if (q(pivot, axis) < 0.0) q.col(axis) *= -1.0;
+        topic_contrasts.col(axis).cwiseAbs().maxCoeff(&pivot);
+        if (topic_contrasts(pivot, axis) < 0.0) q.col(axis) *= -1.0;
     }
 }
 
@@ -348,7 +406,9 @@ QdaProjectionResult fit_qda_projection(
         || !(options.covariance_shrinkage >= 0.0)
         || !(options.covariance_shrinkage <= 1.0)
         || !(options.ridge > 0.0)
-        || !(options.improvement_tolerance >= 0.0)) {
+        || !(options.improvement_tolerance >= 0.0)
+        || !(options.sparsity_strength >= 0.0)
+        || !std::isfinite(options.sparsity_strength)) {
         throw std::invalid_argument("Invalid QDA projection input or options");
     }
     validate_labels(training_labels, components, 2, "Training");
@@ -428,11 +488,47 @@ QdaProjectionResult fit_qda_projection(
         throw std::runtime_error("QDA projection optimization produced no result");
     }
     canonicalize(best.projection, statistics);
-    best.training_loss = objective(best.projection, training,
-        training_labels, statistics, options, false).loss;
-    best.validation_loss = objective(best.projection, validation,
-        validation_labels, statistics, options, false).loss;
+    const ObjectiveResult training_fit = objective(best.projection, training,
+        training_labels, statistics, options, false);
+    const ObjectiveResult validation_fit = objective(best.projection,
+        validation, validation_labels, statistics, options, false);
+    best.training_loss = training_fit.log_loss;
+    best.validation_loss = validation_fit.log_loss;
+    best.quartimax_score = training_fit.quartimax_score;
+    best.training_objective = training_fit.loss;
+    best.validation_objective = validation_fit.loss;
     return best;
+}
+
+double qda_projection_log_loss(
+    const Eigen::Ref<const Eigen::MatrixXd>& projection,
+    const Eigen::Ref<const RowMajorMatrixXd>& training,
+    const Eigen::Ref<const Eigen::VectorXi>& training_labels,
+    const Eigen::Ref<const RowMajorMatrixXd>& evaluation,
+    const Eigen::Ref<const Eigen::VectorXi>& evaluation_labels,
+    int32_t components, const QdaProjectionOptions& options) {
+    if (training.rows() <= 0 || evaluation.rows() <= 0
+        || training.cols() <= 1 || training.cols() != evaluation.cols()
+        || projection.rows() != training.cols() || projection.cols() <= 0
+        || projection.cols() >= projection.rows()
+        || training.rows() != training_labels.size()
+        || evaluation.rows() != evaluation_labels.size()
+        || !training.allFinite() || !evaluation.allFinite()
+        || !projection.allFinite() || components < 2
+        || options.n_threads <= 0
+        || !(options.covariance_shrinkage >= 0.0)
+        || !(options.covariance_shrinkage <= 1.0)
+        || !(options.ridge > 0.0)
+        || !(options.sparsity_strength >= 0.0)
+        || !std::isfinite(options.sparsity_strength)) {
+        throw std::invalid_argument("Invalid QDA projection evaluation input");
+    }
+    validate_labels(training_labels, components, 2, "Training");
+    validate_labels(evaluation_labels, components, 1, "Evaluation");
+    const SufficientStatistics statistics = summarize(
+        training, training_labels, components);
+    return objective(projection, evaluation, evaluation_labels,
+        statistics, options, false).log_loss;
 }
 
 } // namespace punkst::projection

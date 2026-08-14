@@ -1,7 +1,10 @@
+#pragma once
+
 #include "punkst.h"
 #include "lda.hpp"
 #include "hdp.hpp"
 #include "document_spool.hpp"
+#include "lda_state.hpp"
 #include <memory>
 #include <regex>
 
@@ -192,6 +195,50 @@ public:
         initialized = true;
     }
 
+    void initialize_transform(const LdaState& state,
+        int seed = std::random_device{}(), int nThreads = 0, int verbose = 0,
+        int32_t maxIter = 100, double mDelta = -1.) {
+        state.validate();
+        std::vector<std::uint32_t> kept_indices;
+        std::vector<std::string> state_features = state.features;
+        setupPriorMapping(state_features, kept_indices);
+        RowMajorMatrixXd components(state.topics.size(), kept_indices.size());
+        for (size_t feature = 0; feature < kept_indices.size(); ++feature) {
+            components.col(feature) = state.components.col(kept_indices[feature]);
+        }
+        if (state.feature_weights_active) {
+            std::vector<double> weights(kept_indices.size());
+            for (size_t feature = 0; feature < kept_indices.size(); ++feature) {
+                weights[feature] = state.feature_weights[kept_indices[feature]];
+            }
+            reader.setFeatureWeights(weights);
+        }
+        K_ = static_cast<int32_t>(state.topics.size());
+        topicNames = state.topics;
+        lda = std::make_unique<LatentDirichletAllocation>(
+            components, seed, nThreads, verbose, InferenceType::SVB,
+            state.alpha);
+        lda->set_svb_parameters(maxIter, mDelta);
+        initialized = true;
+    }
+
+    void writeStateToFile(const std::string& path) const {
+        if (!initialized || !lda || lda->get_algorithm() != InferenceType::SVB) {
+            error("%s: plain LDA SVB is required", __FUNCTION__);
+        }
+        LdaState state;
+        state.alpha = lda->get_doc_topic_prior();
+        state.eta = lda->get_topic_word_prior();
+        state.topics = const_cast<LDA4Hex*>(this)->get_topic_names();
+        state.features = getFeatureNames();
+        state.components = lda->get_model();
+        state.feature_weights_active = reader.hasFeatureWeights();
+        if (state.feature_weights_active) {
+            state.feature_weights = reader.getFeatureWeights();
+        }
+        state.write(path);
+    }
+
     int32_t getNumTopics() const override {
         return lda ? lda->get_n_topics() : 0;
     }
@@ -302,6 +349,12 @@ public:
     }
     const RowMajorMatrixXd& get_model_matrix() const override {
         return lda->get_model();
+    }
+    const MatrixXd& get_allocation_kernel() const {
+        if (!initialized || !lda) {
+            error("%s: LDA4Hex is not initialized", __FUNCTION__);
+        }
+        return lda->get_allocation_kernel();
     }
     RowMajorMatrixXd copy_model_matrix() const override {
         return lda->get_model();

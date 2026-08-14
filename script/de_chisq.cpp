@@ -470,21 +470,34 @@ int32_t cmdDeconvPseudobulk(int argc, char** argv) {
 }
 
 int32_t cmdPseudoBulk(int argc, char** argv) {
-    std::string inFile, metaFile, labelFile, outFile;
+    std::string inFile, metaFile, labelFile, outFile, outPrefix;
+    std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
+    std::vector<std::string> partition_labels;
     int left_idx = 0;
     int right_idx = -1;
-    int icol_label = -1;
+    std::vector<int32_t> icol_labels;
     int digits = 2;
+    bool in_memory = false;
+    bool label_id_is_barcode_index = false;
 
     ParamList pl;
     // Input Options
-    pl.add_option("in-data", "Input hex file", inFile, true)
-      .add_option("in-meta", "Metadata file", metaFile, true)
+    pl.add_option("in-data", "Input hex file", inFile)
+      .add_option("in-meta", "Metadata file", metaFile)
+      .add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
+      .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
+      .add_option("in-features", "Input features.tsv.gz", in_ft)
+      .add_option("in-matrix", "Input matrix.mtx.gz", in_mtx)
+      .add_option("dataset-id", "Dataset IDs for joint 10X input", dataset_ids)
+      .add_option("in-memory", "Load all 10X matrix entries into memory instead of streaming by barcode", in_memory)
       .add_option("in-label", "Label file", labelFile, true)
-      .add_option("icol-label", "Column index (0-based) in --in-label to use as categocial label", icol_label, true)
+      .add_option("icol-label", "Column index (0-based) in --in-label to use as categorical label; may be repeated", icol_labels, true)
       .add_option("icol-id-data", "Column index (0-based) in --in-data for matching", right_idx)
-      .add_option("icol-id-label", "Column index (0-based) in --in-label for matching", left_idx);
-    pl.add_option("out", "Output file", outFile, true)
+      .add_option("icol-id-label", "Column index (0-based) in --in-label for matching (10X: barcode)", left_idx)
+      .add_option("label-id-is-barcode-index", "For 10X input, interpret label IDs as 0-based indices into the barcode file", label_id_is_barcode_index);
+    pl.add_option("out", "Output file (single --icol-label only)", outFile)
+      .add_option("out-prefix", "Common prefix for <prefix>.<label>.pseudobulk.tsv outputs", outPrefix)
+      .add_option("partition-labels", "Output filename labels corresponding to --icol-label", partition_labels)
       .add_option("digits", "Number of digits for output counts", digits);
     try {
         pl.readArgs(argc, argv);
@@ -495,16 +508,69 @@ int32_t cmdPseudoBulk(int argc, char** argv) {
         return 1;
     }
 
-    if (icol_label < 0) {
-        error("--icol-label must be non-negative");
+    if (icol_labels.empty()) {
+        error("At least one --icol-label must be provided");
+    }
+    for (int32_t icol_label : icol_labels) {
+        if (icol_label < 0) {
+            error("--icol-label must be non-negative");
+        }
+    }
+    if (outFile.empty() == outPrefix.empty()) {
+        error("Exactly one of --out or --out-prefix must be provided");
+    }
+    if (!outFile.empty() && icol_labels.size() != 1) {
+        error("--out can only be used with one --icol-label; use --out-prefix for multiple partitions");
+    }
+    if (!partition_labels.empty() && outPrefix.empty()) {
+        error("--partition-labels requires --out-prefix");
+    }
+    if (!partition_labels.empty() && partition_labels.size() != icol_labels.size()) {
+        error("The number of --partition-labels values (%zu) must match the number of --icol-label values (%zu)",
+            partition_labels.size(), icol_labels.size());
+    }
+    if (partition_labels.empty()) {
+        partition_labels.reserve(icol_labels.size());
+        for (int32_t icol_label : icol_labels) {
+            partition_labels.push_back(std::to_string(icol_label));
+        }
+    }
+    std::set<std::string> unique_partition_labels;
+    for (const auto& partition_label : partition_labels) {
+        if (partition_label.empty()) {
+            error("--partition-labels values must not be empty");
+        }
+        if (!unique_partition_labels.insert(partition_label).second) {
+            error("Duplicate partition output label: %s", partition_label.c_str());
+        }
     }
 
-    HexReader reader(metaFile);
+    HexReader reader;
+    std::unique_ptr<DGEReader10X> dge_ptr;
+    const bool use_10x = initHexOrDgeInput(reader, dge_ptr, inFile, metaFile,
+        dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, true);
+    if (!use_10x && in_memory) {
+        warning("--in-memory has no effect for custom sparse input");
+    }
+    if (use_10x && right_idx >= 0) {
+        warning("--icol-id-data is ignored for 10X input; barcodes are used as data IDs");
+    }
+    if (label_id_is_barcode_index && !use_10x) {
+        error("--label-id-is-barcode-index requires 10X input");
+    }
+    if (label_id_is_barcode_index && left_idx < 0) {
+        error("--label-id-is-barcode-index requires --icol-id-label to be non-negative");
+    }
+
     int32_t M = reader.nFeatures;
     std::string line;
-    std::vector<std::string> tokens, labels;
-    std::unordered_map<std::string, uint32_t> label2idx;
-    std::unordered_map<int32_t, uint32_t> id2lidx;
+    std::vector<std::string> tokens;
+    const size_t n_partitions = icol_labels.size();
+    std::vector<std::vector<std::string>> labels(n_partitions);
+    std::vector<std::unordered_map<std::string, uint32_t>> label2idx(n_partitions);
+    std::vector<std::unordered_map<std::string, uint32_t>> id2lidx(n_partitions);
+    const int32_t max_label_col = *std::max_element(
+        icol_labels.begin(), icol_labels.end());
     int32_t nline = 0;
 
     // Read label file
@@ -514,73 +580,140 @@ int32_t cmdPseudoBulk(int argc, char** argv) {
         while (std::getline(in, line)) {
             if (line.empty() || line[0] == '#') continue;
             split(tokens, "\t", line);
-            if (tokens.size() <= std::max(left_idx, icol_label)) {
+            if (tokens.size() <= static_cast<size_t>(
+                    std::max(left_idx, max_label_col))) {
                 error("Invalid line in label file: %s", line.c_str());
             }
-            std::string label = tokens[icol_label];
-            int32_t id = nline++;
+            std::string id = std::to_string(nline++);
             if (left_idx >= 0) {
-                if (!str2int32(tokens[left_idx], id)) {
-                    error("Invalid ID in label file: %s", tokens[left_idx].c_str());
+                if (use_10x && !label_id_is_barcode_index) {
+                    id = tokens[left_idx];
+                } else {
+                    int32_t numeric_id = -1;
+                    if (!str2int32(tokens[left_idx], numeric_id)) {
+                        error("Invalid ID in label file: %s", tokens[left_idx].c_str());
+                    }
+                    if (label_id_is_barcode_index &&
+                        (numeric_id < 0 || numeric_id >= dge_ptr->nBarcodes)) {
+                        error("Barcode index in label file is out of range [0,%d): %d",
+                            dge_ptr->nBarcodes, numeric_id);
+                    }
+                    id = std::to_string(numeric_id);
                 }
             }
-            uint32_t lidx = 0;
-            auto it = label2idx.find(label);
-            if (it == label2idx.end()) {
-                lidx = static_cast<uint32_t>(label2idx.size());
-                label2idx[label] = lidx;
-            } else {
-                lidx = it->second;
+            for (size_t p = 0; p < n_partitions; ++p) {
+                const std::string& label = tokens[icol_labels[p]];
+                uint32_t lidx = 0;
+                auto it = label2idx[p].find(label);
+                if (it == label2idx[p].end()) {
+                    lidx = static_cast<uint32_t>(label2idx[p].size());
+                    label2idx[p][label] = lidx;
+                } else {
+                    lidx = it->second;
+                }
+                if (!id2lidx[p].emplace(id, lidx).second) {
+                    warning("Duplicate ID in label file for column %d; using the last label for %s",
+                        icol_labels[p], id.c_str());
+                    id2lidx[p][id] = lidx;
+                }
             }
-            id2lidx[id] = lidx;
         }
     }
-    int32_t K = static_cast<int32_t>(label2idx.size());
-    labels.resize(K);
-    for (const auto& p : label2idx) {
-        labels[p.second] = p.first;
+    std::vector<RowMajorMatrixXd> pseudoBulks;
+    pseudoBulks.reserve(n_partitions);
+    for (size_t p = 0; p < n_partitions; ++p) {
+        const int32_t K = static_cast<int32_t>(label2idx[p].size());
+        labels[p].resize(K);
+        for (const auto& entry : label2idx[p]) {
+            labels[p][entry.second] = entry.first;
+        }
+        notice("Found %d unique labels for label column %d", K, icol_labels[p]);
+        pseudoBulks.emplace_back(RowMajorMatrixXd::Zero(M, K));
     }
-    notice("Found %d unique labels in label file", K);
 
-    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> pseudoBulk = Eigen::MatrixXd::Zero(M, K);
-
-    std::ifstream inFileStream(inFile);
-    if (!inFileStream) {
-        error("Fail to open input file: %s", inFile.c_str());
-    }
     nline = 0;
     int32_t n_kept = 0;
-    while (std::getline(inFileStream, line)) {
-        std::string info;
-        Document doc;
-        int32_t ct = reader.parseLine(doc, info, line);
-        int32_t id = nline++;
-        if (nline % 10000 == 0) {
-            notice("Processed %d lines, kept %d", nline, n_kept);
+    auto add_document = [&](const Document& doc, const std::string& id,
+                            int32_t positional_id) {
+        const std::string lookup_id = label_id_is_barcode_index
+            ? std::to_string(positional_id) : id;
+        bool kept = false;
+        for (size_t p = 0; p < n_partitions; ++p) {
+            auto it = id2lidx[p].find(lookup_id);
+            if (it == id2lidx[p].end()) {
+                continue;
+            }
+            const uint32_t lidx = it->second;
+            for (size_t t = 0; t < doc.ids.size(); ++t) {
+                pseudoBulks[p](doc.ids[t], lidx) += doc.cnts[t];
+            }
+            kept = true;
         }
-        if (ct <= 0) {
-            continue;
+        if (kept) {
+            n_kept++;
         }
-        if (right_idx >= 0) {
-            split(tokens, "\t", info);
-            if (tokens.size() <= static_cast<size_t>(right_idx) ||
-                !str2int32(tokens[right_idx], id)) {
-                error("Invalid line in data file starting with %s", info.c_str());
+    };
+
+    if (use_10x) {
+        if (in_memory) {
+            std::vector<Document> docs;
+            std::vector<int32_t> barcode_idx;
+            dge_ptr->readAll(docs, barcode_idx, 0);
+            for (size_t i = 0; i < docs.size(); ++i) {
+                add_document(docs[i], dge_ptr->getUnitId(barcode_idx[i]),
+                    barcode_idx[i]);
+            }
+            nline = static_cast<int32_t>(docs.size());
+        } else {
+            Document doc;
+            int32_t barcode_idx = -1;
+            std::string barcode;
+            while (dge_ptr->next(doc, &barcode_idx, &barcode)) {
+                ++nline;
+                if (nline % 10000 == 0) {
+                    notice("Processed %d barcode blocks, kept %d", nline, n_kept);
+                }
+                add_document(doc, barcode, barcode_idx);
             }
         }
-        auto it = id2lidx.find(id);
-        if (it == id2lidx.end()) {
-            continue;
+    } else {
+        std::ifstream inFileStream(inFile);
+        if (!inFileStream) {
+            error("Fail to open input file: %s", inFile.c_str());
         }
-        uint32_t lidx = it->second;
-        for (size_t t = 0; t < doc.ids.size(); ++t) {
-            pseudoBulk(doc.ids[t], lidx) += doc.cnts[t];
+        while (std::getline(inFileStream, line)) {
+            std::string info;
+            Document doc;
+            int32_t ct = reader.parseLine(doc, info, line);
+            std::string id = std::to_string(nline++);
+            if (nline % 10000 == 0) {
+                notice("Processed %d lines, kept %d", nline, n_kept);
+            }
+            if (ct <= 0) {
+                continue;
+            }
+            if (right_idx >= 0) {
+                split(tokens, "\t", info);
+                int32_t numeric_id = -1;
+                if (tokens.size() <= static_cast<size_t>(right_idx) ||
+                    !str2int32(tokens[right_idx], numeric_id)) {
+                    error("Invalid line in data file starting with %s", info.c_str());
+                }
+                id = std::to_string(numeric_id);
+            }
+            add_document(doc, id, nline - 1);
         }
-        n_kept++;
     }
-    notice("Finished processing %d lines, kept %d", nline, n_kept);
+    notice("Finished processing %d %s, kept %d", nline,
+        use_10x ? "barcode blocks" : "lines", n_kept);
 
-    write_matrix_to_file(outFile, pseudoBulk, digits, false, reader.features, "Feature", &labels);
+    for (size_t p = 0; p < n_partitions; ++p) {
+        const std::string output_file = outPrefix.empty()
+            ? outFile
+            : outPrefix + "." + partition_labels[p] + ".pseudobulk.tsv";
+        write_matrix_to_file(output_file, pseudoBulks[p], digits, false,
+            reader.features, "Feature", &labels[p]);
+    }
 
     return 0;
 }

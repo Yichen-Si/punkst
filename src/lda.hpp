@@ -95,6 +95,9 @@ public:
     const RowMajorMatrixXd& get_model() const {
         return components_;
     }
+    const MatrixXd& get_allocation_kernel() const {
+        return exp_Elog_beta_;
+    }
     const VectorXd& get_background_model() const {
         assert(algo_ == InferenceType::SVB_DN);
         return lambda0_;
@@ -125,6 +128,9 @@ public:
     }
     double get_doc_topic_prior() const {
         return alpha_;
+    }
+    double get_topic_word_prior() const {
+        return eta_;
     }
     const std::vector<std::string>& get_topic_names();
     void get_topic_abundance(std::vector<double>& weights) const;

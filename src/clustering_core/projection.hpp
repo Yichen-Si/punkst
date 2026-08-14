@@ -29,6 +29,7 @@ struct VisualizationOptions {
 struct VisualizationProjection {
     VisualizationView view = VisualizationView::Mean;
     Eigen::VectorXd eigenvalues;
+    Eigen::VectorXd axis_scores;
     Eigen::MatrixXd projection;
     Eigen::MatrixXd topic_contrasts;
     RowMajorMatrixXd component_means;
@@ -62,6 +63,11 @@ const char* visualization_whitening_name(VisualizationWhitening value);
 const char* visualization_view_name(VisualizationView value);
 VisualizationWhitening parse_visualization_whitening(
     const std::string& value);
+
+double quartimax_objective(
+    const Eigen::Ref<const Eigen::MatrixXd>& loadings);
+void quartimax_rotate(Eigen::MatrixXd& basis, Eigen::MatrixXd& loadings);
+void quartimax_rotate(VisualizationProjection& projection);
 
 VisualizationResult make_visualization(
     const Eigen::Ref<const RowMajorMatrixXd>& coordinates,

@@ -224,6 +224,12 @@ Warm-start the topic model before enabling the background. -->
 `{prefix}.model.tsv`
 Feature-by-topic model matrix.
 
+`{prefix}.state.tsv`
+Versioned plain-SVB state containing the unnormalized global components,
+document/topic priors, ordered topic and feature names, and feature-weight
+metadata. This is the recommended input to `lda-transform`. It is not written
+for background-enabled fitting.
+
 `{prefix}.features.tsv`
 Written for 10X fitting when `--features` is not supplied.
 
@@ -266,12 +272,17 @@ For custom sparse input, carried-over metadata columns from `header_info` appear
 
 ## `lda-transform`
 
-`lda-transform` applies a fitted plain LDA model to new data.
+`lda-transform` applies a fitted plain LDA model to new data. It also accepts
+the versioned state written by current `topic-model` fits; the state preserves
+the priors and feature weights needed for uncertainty-aware
+[partition classification](partition-classifier.md).
 
 ### Required
 
-`--in-model`
-Input topic-word model matrix.
+Exactly one of:
+
+- `--in-state`: versioned plain-SVB LDA state (recommended).
+- `--in-model`: legacy topic-word model matrix.
 
 `--out-prefix`
 
@@ -349,6 +360,13 @@ Write sparse top-k output to `{prefix}.results.tsv`. The value must be a positiv
 `--pseudobulk-all-features`
 Include every retained input feature in `{prefix}.pseudobulk.tsv`, including features absent from the model. Counts are accumulated on the raw scale as `raw_count * topic_proportion`; extra features do not participate in transformation, residuals, unit totals, or `--min-count`.
 
+`--classifier-model` and `--classifier-*`
+Write calibrated fixed-partition predictions and optionally propagate local
+LDA posterior uncertainty. See the
+[probabilistic partition classifier](partition-classifier.md). A legacy
+`--in-model` requires explicit positive `--alpha` unless
+`--classifier-plugin-only` is used.
+
 ### Outputs
 
 `{prefix}.results.tsv`
@@ -375,3 +393,7 @@ through the inferred topic proportions.
 
 In `{prefix}.unit_stats.tsv`, `total_count` is the raw total count after feature
 remapping and filtering but before feature weights are applied.
+
+`{prefix}.classifications.tsv`
+Written when `--classifier-model` is supplied. It contains unit metadata,
+prediction diagnostics, LRVB status, and compact or dense class probabilities.

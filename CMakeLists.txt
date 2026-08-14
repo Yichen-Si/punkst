@@ -171,6 +171,8 @@ set(CLUSTERING_CORE_SOURCE_FILES
     src/clustering_core/projection.cpp
     src/clustering_core/qda_projection.hpp
     src/clustering_core/qda_projection.cpp
+    src/linear_embedding.hpp
+    src/linear_embedding.cpp
 )
 
 if (PUNKST_ENABLE_FAISS_ANN)
@@ -216,12 +218,18 @@ set(SOURCE_FILES
     src/document_spool.cpp
     src/lda.hpp
     src/lda.cpp
+    src/lda_state.hpp
+    src/lda_state.cpp
     src/lda_svb.cpp
     src/lda_scvb0.cpp
     src/gamma_pois_topic.hpp
     src/gamma_pois_topic.cpp
     src/gamma_pois_dispersion.hpp
     src/gamma_pois_dispersion.cpp
+    src/partition_classifier.hpp
+    src/partition_classifier.cpp
+    src/partition_classifier_lrvb.hpp
+    src/partition_classifier_lrvb.cpp
     ${CLUSTERING_CORE_SOURCE_FILES}
     src/hdp.hpp
     src/hdp.cpp
@@ -242,8 +250,10 @@ set(SOURCE_FILES
     script/fit_gampois.cpp
     script/transform_gampois.cpp
     script/cli_common.cpp
+    script/linear_embedding_cli.hpp
     script/leiden.cpp
     script/linear_embed.cpp
+    script/partition_classifier.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp

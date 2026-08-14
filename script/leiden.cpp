@@ -1,7 +1,7 @@
 #include "clustering_core/cosine_clustering.hpp"
-#include "clustering_core/projection.hpp"
 #include "punkst.h"
 #include "cli_common.hpp"
+#include "linear_embedding_cli.hpp"
 #include "utils.h"
 
 #include <algorithm>
@@ -10,7 +10,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
-#include <optional>
+#include <numeric>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -23,7 +23,6 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 using punkst_cli::ProjectionSpace;
-using punkst_cli::projection_space_name;
 
 struct FactorTable {
     std::vector<std::string> identifiers;
@@ -36,13 +35,6 @@ struct LeidenRun {
     double resolution = 1.0;
     LeidenResult result;
     double seconds = 0.0;
-};
-
-struct ProjectionOutput {
-    ProjectionSpace space = ProjectionSpace::Linear;
-    size_t run = 0;
-    punkst::projection::VisualizationProjection projection;
-    RowMajorMatrixXd coordinates;
 };
 
 double elapsed_seconds(const Clock::time_point& begin) {
@@ -458,105 +450,11 @@ void write_diagnostics(const std::string& path, const FactorTable& table,
     }
 }
 
-void write_projection_axes(const std::string& path,
-        const FactorTable& table, const std::vector<LeidenRun>& runs,
-        const std::vector<ProjectionOutput>& projections) {
-    std::ofstream output(path);
-    if (!output) {
-        throw std::runtime_error(
-            "Cannot open Leiden projection axes: " + path);
-    }
-    output << "#space\tresolution\tcluster_column\taxis\teigenvalue"
-        "\tfactor_index\tfactor\tcoefficient\tcontrast_scale\tside"
-        "\tnormalized_weight\n"
-        << std::scientific << std::setprecision(10);
-    for (const ProjectionOutput& item : projections) {
-        if (item.run >= runs.size()
-            || item.projection.topic_contrasts.rows()
-                != static_cast<Eigen::Index>(table.factors.size())
-            || item.projection.topic_contrasts.cols()
-                != item.projection.eigenvalues.size()) {
-            throw std::invalid_argument(
-                "Invalid Leiden projection axis dimensions");
-        }
-        const LeidenRun& run = runs[item.run];
-        for (Eigen::Index axis = 0;
-                axis < item.projection.topic_contrasts.cols(); ++axis) {
-            const double scale = item.projection.topic_contrasts.col(axis)
-                .cwiseMax(0.0).sum();
-            if (!(scale > 0.0) || !std::isfinite(scale)) {
-                throw std::runtime_error(
-                    "Leiden projection contrast has no positive mass");
-            }
-            for (Eigen::Index factor = 0;
-                    factor < item.projection.topic_contrasts.rows();
-                    ++factor) {
-                const double coefficient =
-                    item.projection.topic_contrasts(factor, axis);
-                const char* side = coefficient > 0.0 ? "positive"
-                    : coefficient < 0.0 ? "negative" : "zero";
-                output << projection_space_name(item.space) << '\t'
-                    << run.resolution << '\t'
-                    << cluster_column_name(run, item.run) << '\t'
-                    << axis + 1 << '\t'
-                    << item.projection.eigenvalues(axis) << '\t'
-                    << factor << '\t'
-                    << table.factors[static_cast<size_t>(factor)] << '\t'
-                    << coefficient << '\t' << scale << '\t' << side << '\t'
-                    << std::abs(coefficient) / scale << '\n';
-            }
-        }
-    }
-}
-
-std::string projection_column_name(const ProjectionOutput& projection,
-        const std::vector<LeidenRun>& runs, Eigen::Index axis) {
-    return std::string(projection_space_name(projection.space)) + "_r"
-        + resolution_label(runs[projection.run].resolution) + "_"
-        + std::to_string(axis + 1);
-}
-
-void write_projection_results(const std::string& path,
-        const FactorTable& table, const std::vector<LeidenRun>& runs,
-        const std::vector<ProjectionOutput>& projections) {
-    std::ofstream output(path);
-    if (!output) {
-        throw std::runtime_error(
-            "Cannot open Leiden projection results: " + path);
-    }
-    output << "#id";
-    for (const ProjectionOutput& item : projections) {
-        if (item.run >= runs.size()
-            || item.coordinates.rows()
-                != static_cast<Eigen::Index>(table.identifiers.size())
-            || item.coordinates.cols() != item.projection.projection.cols()) {
-            throw std::invalid_argument(
-                "Invalid Leiden projection result dimensions");
-        }
-        for (Eigen::Index axis = 0; axis < item.coordinates.cols(); ++axis) {
-            output << '\t' << projection_column_name(item, runs, axis);
-        }
-    }
-    output << "\n" << std::scientific << std::setprecision(4);
-    for (Eigen::Index row = 0;
-            row < static_cast<Eigen::Index>(table.identifiers.size()); ++row) {
-        output << table.identifiers[static_cast<size_t>(row)];
-        for (const ProjectionOutput& item : projections) {
-            for (Eigen::Index axis = 0; axis < item.coordinates.cols();
-                    ++axis) {
-                output << '\t' << item.coordinates(row, axis);
-            }
-        }
-        output << '\n';
-    }
-}
-
 } // namespace
 
 int32_t cmdLeiden(int argc, char** argv) {
     std::string input_path, output_prefix, knn_backend = "auto";
     std::string metric_name = "cosine";
-    std::string projection_space = "both";
     std::vector<double> resolutions;
     int32_t identifier_column = 0;
     int32_t factor_column_start = -1, factor_column_end = -1;
@@ -568,11 +466,9 @@ int32_t cmdLeiden(int argc, char** argv) {
     int32_t nndescent_iterations = 0, nndescent_graph_size = 0;
     int32_t nndescent_s = 10, nndescent_audit_queries = 256;
     double hnsw_recall = 0.98, nndescent_recall = 0.98;
-    int32_t projection_dimensions = 4;
-    double projection_center_floor = 1e-12;
-    double projection_covariance_floor = 1e-5;
+    punkst_cli::LinearEmbeddingCliOptions embedding_cli;
     bool allow_topk = false, hnsw_force = false;
-    bool no_projection = false;
+    bool skip_projection = false;
 
     ParamList parameters;
     parameters
@@ -640,23 +536,31 @@ int32_t cmdLeiden(int argc, char** argv) {
           allow_topk)
       .add_option("projection-space",
           "Projection coordinates: both, linear, or ilr",
-          projection_space)
+          embedding_cli.projection_space)
       .add_option("projection-dim",
-          "Maximum projection dimensions", projection_dimensions)
+          "Maximum projection dimensions", embedding_cli.values.dimensions)
       .add_option("projection-center-floor",
           "Positive factor floor for the ILR projection",
-          projection_center_floor)
+          embedding_cli.values.center_floor)
       .add_option("projection-covariance-floor",
           "Positive eigenvalue floor for projection whitening",
-          projection_covariance_floor)
-      .add_option("no-projection",
-          "Disable post-clustering linear and ILR projections",
-          no_projection);
+          embedding_cli.values.covariance_floor)
+      .add_option("projection-whitening",
+          "Projection whitening covariance: sample or mixture",
+          embedding_cli.whitening)
+      .add_option("projection-full",
+          "Also compute projections using covariance-shape differences",
+          embedding_cli.include_full);
+    embedding_cli.add_qda_options(parameters);
+    parameters
+      .add_option("skip-projection",
+          "Disable all post-clustering projection work",
+          skip_projection);
 
     try {
         parameters.readArgs(argc, argv);
+        const bool projections_disabled = skip_projection;
         if (resolutions.empty()) resolutions.push_back(1.0);
-        parameters.print_options();
         validate_resolutions(resolutions);
         if (neighbors <= 0) {
             throw std::invalid_argument("--neighbors must be positive");
@@ -672,26 +576,42 @@ int32_t cmdLeiden(int argc, char** argv) {
                 "--knn-epsilon must be finite and nonnegative");
         }
         std::vector<ProjectionSpace> projection_spaces;
-        if (!no_projection) {
+        if (!projections_disabled) {
             projection_spaces =
-                punkst_cli::parse_projection_spaces(projection_space);
-            if (projection_dimensions <= 0) {
+                punkst_cli::parse_projection_spaces(
+                    embedding_cli.projection_space);
+            if (embedding_cli.projection_space == "ilr") {
+                throw std::invalid_argument(
+                    "--projection-space must be linear or both for Leiden embeddings");
+            }
+            if (embedding_cli.values.dimensions <= 0) {
                 throw std::invalid_argument(
                     "--projection-dim must be positive");
             }
-            if (!(projection_covariance_floor > 0.0)
-                || !std::isfinite(projection_covariance_floor)) {
+            if (!(embedding_cli.values.covariance_floor > 0.0)
+                || !std::isfinite(
+                    embedding_cli.values.covariance_floor)) {
                 throw std::invalid_argument(
                     "--projection-covariance-floor must be positive and finite");
             }
             if (std::find(projection_spaces.begin(), projection_spaces.end(),
                     ProjectionSpace::Ilr) != projection_spaces.end()
-                && (!(projection_center_floor > 0.0)
-                    || !std::isfinite(projection_center_floor))) {
+                && (!(embedding_cli.values.center_floor > 0.0)
+                    || !std::isfinite(
+                        embedding_cli.values.center_floor))) {
                 throw std::invalid_argument(
                     "--projection-center-floor must be positive and finite");
             }
+            embedding_cli.finalize_qda_options(parameters);
+            embedding_cli.values.projection_spaces = projection_spaces;
+            embedding_cli.values.whitening =
+                punkst::projection::parse_visualization_whitening(
+                    embedding_cli.whitening);
+            embedding_cli.values.threads = threads;
+            embedding_cli.values.include_full = embedding_cli.include_full;
+            embedding_cli.values.validate();
         }
+        parameters.print_options();
 
         const SimplexMetric metric = parse_simplex_metric(metric_name);
         FactorTable table = read_factor_table(
@@ -750,102 +670,53 @@ int32_t cmdLeiden(int argc, char** argv) {
             runs.push_back(std::move(run));
         }
 
-        std::vector<ProjectionOutput> projections;
-        if (!projection_spaces.empty()
-            && std::any_of(runs.begin(), runs.end(), [](const LeidenRun& run) {
-                return run.result.n_communities >= 2;
-            })) {
-            const int32_t factors = static_cast<int32_t>(table.values.cols());
-            const Eigen::MatrixXd helmert = normalized_helmert(factors);
-            std::optional<RowMajorMatrixXd> linear_coordinates;
-            std::optional<RowMajorMatrixXd> ilr_coordinates;
-            std::optional<punkst::projection::VisualizationSampleMoments> linear_sample;
-            std::optional<punkst::projection::VisualizationSampleMoments> ilr_sample;
-            for (const ProjectionSpace space : projection_spaces) {
-                punkst_cli::ProjectionData projection =
-                    punkst_cli::prepare_projection(table.values,
-                        space, helmert, projection_center_floor);
-                if (space == ProjectionSpace::Linear) {
-                    linear_coordinates = std::move(projection.coordinates);
-                    linear_sample = punkst::projection::summarize_visualization_sample(
-                        *linear_coordinates, threads);
-                } else {
-                    ilr_coordinates = std::move(projection.coordinates);
-                    ilr_sample = punkst::projection::summarize_visualization_sample(
-                        *ilr_coordinates, threads);
-                }
-            }
-            for (size_t run_index = 0; run_index < runs.size(); ++run_index) {
-                const LeidenRun& run = runs[run_index];
-                if (run.result.n_communities < 2) {
-                    warning("Leiden resolution %.8g has one community; omitting its projections",
-                        run.resolution);
-                    continue;
-                }
-                for (const ProjectionSpace space : projection_spaces) {
-                    const RowMajorMatrixXd& coordinates =
-                        space == ProjectionSpace::Linear
-                        ? *linear_coordinates : *ilr_coordinates;
-                    const punkst::projection::VisualizationSampleMoments& sample =
-                        space == ProjectionSpace::Linear
-                        ? *linear_sample : *ilr_sample;
-                    const punkst::projection::VisualizationMeans means =
-                        punkst::projection::summarize_hard_partition_means(coordinates,
-                            run.result.membership,
-                            run.result.n_communities);
-                    punkst::projection::VisualizationOptions projection_options;
-                    projection_options.whitening =
-                        punkst::projection::VisualizationWhitening::Mixture;
-                    projection_options.dimensions = std::min(
-                        projection_dimensions,
-                        run.result.n_communities - 1);
-                    projection_options.n_threads = threads;
-                    projection_options.covariance_floor =
-                        projection_covariance_floor;
-                    const punkst::projection::VisualizationResult visualization =
-                        punkst::projection::make_mean_visualization(means, helmert,
-                            projection_options, sample);
-                    if (visualization.mean.projection.cols() <= 0) {
-                        warning("Leiden resolution %.8g has no positive %s projection axis; omitting it",
-                            run.resolution, projection_space_name(space));
-                        continue;
-                    }
-                    ProjectionOutput item;
-                    item.space = space;
-                    item.run = run_index;
-                    item.projection = visualization.mean;
-                    item.coordinates =
-                        coordinates * item.projection.projection;
-                    projections.push_back(std::move(item));
-                }
-            }
-        } else if (!projection_spaces.empty()) {
-            for (const LeidenRun& run : runs) {
-                warning("Leiden resolution %.8g has one community; omitting its projections",
-                    run.resolution);
-            }
-        }
-
         const std::string clusters_path = output_prefix + ".clusters.tsv";
         const std::string diagnostics_path =
             output_prefix + ".diagnostics.tsv";
         write_clusters(clusters_path, table, runs);
         write_diagnostics(diagnostics_path, table, graph, neighbors,
             graph_seconds, max_iterations, seed, metric, knn_options, runs);
-        if (!projections.empty()) {
-            const std::string projection_axes_path =
-                output_prefix + ".projection.axes.tsv";
-            const std::string projection_results_path =
-                output_prefix + ".projection.results.tsv";
-            write_projection_axes(
-                projection_axes_path, table, runs, projections);
-            write_projection_results(
-                projection_results_path, table, runs, projections);
-            notice("Leiden projections written to %s and %s",
-                projection_axes_path.c_str(),
-                projection_results_path.c_str());
-        } else if (!projection_spaces.empty()) {
-            warning("No Leiden projection output was available");
+        for (const LeidenRun& run : runs) {
+            const std::string partition_prefix = runs.size() == 1
+                ? output_prefix
+                : output_prefix + ".r" + resolution_label(run.resolution);
+            const Eigen::MatrixXd cluster_factors =
+                punkst::linear_embedding::aggregate_cluster_factors(
+                    table.values, run.result.membership,
+                    run.result.n_communities);
+            punkst::linear_embedding::write_cluster_factors(
+                partition_prefix + ".cluster_factors.tsv", table.factors,
+                cluster_factors);
+        }
+        if (!projection_spaces.empty()) {
+            punkst_cli::TopicCenterTable theta;
+            theta.identifiers = table.identifiers;
+            theta.topics = table.factors;
+            theta.values = table.values;
+            std::vector<int32_t> matched_rows(table.identifiers.size());
+            std::iota(matched_rows.begin(), matched_rows.end(), 0);
+            for (size_t run_index = 0; run_index < runs.size(); ++run_index) {
+                const LeidenRun& run = runs[run_index];
+                if (run.result.n_communities < 2) {
+                    warning("Leiden resolution %.8g has one community; omitting its embeddings",
+                        run.resolution);
+                    continue;
+                }
+                const std::string label = "r"
+                    + resolution_label(run.resolution);
+                const std::string projection_prefix = runs.size() == 1
+                    ? output_prefix + ".projection"
+                    : output_prefix + ".projection." + label;
+                try {
+                    punkst::linear_embedding::run_partition(theta,
+                        matched_rows, run.result.membership,
+                        run.result.n_communities, label, projection_prefix,
+                        embedding_cli.values);
+                } catch (const std::exception& exception) {
+                    warning("Leiden resolution %.8g embeddings omitted: %s",
+                        run.resolution, exception.what());
+                }
+            }
         }
         notice("Reused one %zu-edge %s k-NN graph for %zu Leiden resolution(s) using the %s backend",
             graph.graph.edges.size(), simplex_metric_name(metric), runs.size(),

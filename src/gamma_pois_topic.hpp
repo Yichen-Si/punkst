@@ -161,6 +161,12 @@ public:
     const MatrixXd& get_expected_beta() const { return e_beta_; }
     const MatrixXd& get_beta_allocation_kernel() const { return beta_kernel_; }
     const VectorXd& get_feature_dispersion() const { return tau_; }
+    double get_theta_prior_shape() const { return theta_prior_shape(); }
+    VectorXd get_theta_prior_rate() const {
+        VectorXd out(n_topics_);
+        for (int32_t k = 0; k < n_topics_; ++k) out(k) = theta_prior_rate(k);
+        return out;
+    }
     void expected_observed_counts(const Document& doc, std::vector<double>& means) const;
     void write_state(const std::string& outFile, const std::vector<std::string>& featureNames);
     static std::vector<std::string> read_state_feature_names(const std::string& stateFile);
@@ -285,6 +291,8 @@ public:
     const MatrixXd& getExpectedBeta() const;
     const MatrixXd& getBetaAllocationKernel() const;
     const VectorXd& getFeatureDispersion() const;
+    double getThetaPriorShape() const;
+    VectorXd getThetaPriorRate() const;
     bool featureWeightsActive() const;
     const std::vector<double>& getFeatureWeights() const;
     void getTopicAbundance(std::vector<double>& topic_weights) override;
