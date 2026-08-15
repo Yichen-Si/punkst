@@ -1,5 +1,6 @@
 #include "clustering_core/cosine_clustering.hpp"
 #include "clustering_core/projection.hpp"
+#include "clustering_core/qda_projection.hpp"
 #include "gamma_pois_topic.hpp"
 #include "numerical_utils.hpp"
 #include "partition_classifier.hpp"
@@ -67,6 +68,13 @@ void test_quartimax_rotation() {
     require(punkst::projection::quartimax_objective(
             projection.topic_contrasts) + 1e-12 >= original_objective,
         "quartimax rotation decreased sparsity objective");
+    for (Eigen::Index axis = 0;
+            axis < projection.topic_contrasts.cols(); ++axis) {
+        Eigen::Index pivot = 0;
+        projection.topic_contrasts.col(axis).cwiseAbs().maxCoeff(&pivot);
+        require(projection.topic_contrasts(pivot, axis) >= 0.0,
+            "quartimax rotation did not orient the largest contrast positive");
+    }
 }
 
 void write_text(
@@ -227,13 +235,13 @@ void test_linear_embedding_outputs() {
         base.string() + ".output";
 
     std::ostringstream theta, partitions;
-    theta << "#id\t0\t1\n";
+    theta << "#id\t0\t1\t2\n";
     partitions << "#row\tpartition\n";
     for (int32_t document = 0; document < 12; ++document) {
         const bool first = document < 6;
         theta << "doc_" << document << "\t"
-            << (first ? 0.95 : 0.05) << "\t"
-            << (first ? 0.05 : 0.95) << "\n";
+            << (first ? 0.94 : 0.05) << "\t"
+            << (first ? 0.05 : 0.94) << "\t0.01\n";
         partitions << document << "\t"
             << (first ? "first" : "second") << "\n";
     }
@@ -258,10 +266,10 @@ void test_linear_embedding_outputs() {
     require(read_text(output_prefix.string() + ".cluster_labels.tsv")
             == "#cluster_index\tcluster_name\n0\tfirst\n1\tsecond\n",
         "linear embedding omitted the original cluster-label mapping");
-    require(data_rows(output_prefix.string() + ".cluster_factors.tsv") == 2,
+    require(data_rows(output_prefix.string() + ".cluster_factor_abundance.tsv") == 3,
         "linear embedding omitted the cluster factor sums");
-    require(data_rows(output_prefix.string() + ".linear.full.axes.tsv") == 2
-            && data_rows(output_prefix.string() + ".ilr.full.axes.tsv") == 2
+    require(data_rows(output_prefix.string() + ".linear.full.axes.tsv") == 3
+            && data_rows(output_prefix.string() + ".ilr.full.axes.tsv") == 3
             && read_text(output_prefix.string() + ".results.tsv").find(
                 "#id\tlinear_mean_1\tlinear_full_1"
                 "\tilr_mean_1\tilr_full_1\n") == 0,
@@ -273,13 +281,110 @@ void test_linear_embedding_outputs() {
     std::filesystem::remove(
         output_prefix.string() + ".cluster_labels.tsv");
     std::filesystem::remove(
-        output_prefix.string() + ".cluster_factors.tsv");
+        output_prefix.string() + ".cluster_factor_abundance.tsv");
     for (const std::string& space : {"linear", "ilr"}) {
         for (const std::string& suffix : {
                 ".transform.tsv", ".mean.axes.tsv", ".full.axes.tsv"}) {
             std::filesystem::remove(
                 output_prefix.string() + "." + space + suffix);
         }
+    }
+}
+
+void test_lda_projection_outputs() {
+    const std::filesystem::path base =
+        std::filesystem::temp_directory_path()
+        / "punkst_lda_projection";
+    const std::filesystem::path theta_path = base.string() + ".theta.tsv";
+    const std::filesystem::path partition_path =
+        base.string() + ".partition.tsv";
+    const std::filesystem::path linear_prefix = base.string() + ".linear";
+    const std::filesystem::path repeat_prefix = base.string() + ".repeat";
+    const std::filesystem::path leiden_prefix = base.string() + ".leiden";
+    std::ostringstream theta, partition;
+    theta << "#id\t0\t1\t2\t3\n";
+    partition << "#id\tcluster\n";
+    for (int32_t group = 0; group < 3; ++group) {
+        for (int32_t offset = 0; offset < 12; ++offset) {
+            const std::string identifier = "unit_" + std::to_string(group)
+                + "_" + std::to_string(offset);
+            theta << identifier;
+            for (int32_t factor = 0; factor < 4; ++factor) {
+                theta << '\t' << (factor == group ? 1.0
+                    : 0.01 * (offset + 1));
+            }
+            theta << '\n';
+            partition << identifier << "\tclass_" << group << '\n';
+        }
+    }
+    write_text(theta_path, theta.str());
+    write_text(partition_path, partition.str());
+
+    require(run_command(cmdLinearEmbed, {
+        "linear-embed", "--in-theta", theta_path.string(),
+        "--in-partition", partition_path.string(), "--out-prefix",
+        linear_prefix.string(), "--skip-qda-projection",
+        "--dim", "2", "--lda-epochs", "2", "--lda-restarts", "1",
+        "--lda-eval-every", "1", "--lda-patience", "2", "--threads", "1",
+    }) == 0, "linear embedding LDA projection failed");
+    const std::string linear_results = read_text(
+        linear_prefix.string() + ".results.tsv");
+    require(linear_results.find("\tlinear_lda_1") != std::string::npos
+            && linear_results.find("\tlinear_qda_1") == std::string::npos
+            && std::filesystem::exists(linear_prefix.string()
+                + ".linear.lda.transform.tsv")
+            && std::filesystem::exists(linear_prefix.string()
+                + ".linear.lda.axes.tsv")
+            && std::filesystem::exists(linear_prefix.string()
+                + ".linear.lda.diagnostics.tsv"),
+        "linear embedding omitted LDA-only outputs");
+    require(run_command(cmdLinearEmbed, {
+        "linear-embed", "--in-theta", theta_path.string(),
+        "--in-partition", partition_path.string(), "--out-prefix",
+        repeat_prefix.string(), "--skip-qda-projection",
+        "--dim", "2", "--lda-epochs", "2", "--lda-restarts", "1",
+        "--lda-eval-every", "1", "--lda-patience", "2", "--threads", "1",
+    }) == 0, "repeated LDA projection failed");
+    for (const std::string& suffix : {".results.tsv",
+            ".linear.lda.transform.tsv", ".linear.lda.axes.tsv",
+            ".linear.lda.diagnostics.tsv"}) {
+        require(read_text(linear_prefix.string() + suffix)
+                == read_text(repeat_prefix.string() + suffix),
+            "LDA projection is not deterministic");
+    }
+
+    require(run_command(cmdLeiden, {
+        "leiden", "--in-theta", theta_path.string(), "--out-prefix",
+        leiden_prefix.string(), "--neighbors", "10", "--resolution", "1",
+        "--skip-qda-projection", "--projection-dim", "2",
+        "--lda-epochs", "2", "--lda-restarts", "1", "--lda-eval-every", "1",
+        "--lda-patience", "2", "--threads", "1", "--seed", "42",
+    }) == 0, "Leiden LDA projection failed");
+    require(read_text(leiden_prefix.string()
+                + ".projection.results.tsv").find("\tlinear_lda_1")
+            != std::string::npos
+            && std::filesystem::exists(leiden_prefix.string()
+                + ".projection.linear.lda.diagnostics.tsv"),
+        "Leiden omitted requested LDA projection outputs");
+
+    for (const std::filesystem::path& path : {theta_path, partition_path}) {
+        std::filesystem::remove(path);
+    }
+    for (const std::string& suffix : {".results.tsv", ".cluster_labels.tsv",
+            ".cluster_factor_abundance.tsv", ".linear.transform.tsv",
+            ".linear.mean.axes.tsv", ".linear.lda.transform.tsv",
+            ".linear.lda.axes.tsv", ".linear.lda.diagnostics.tsv"}) {
+        std::filesystem::remove(linear_prefix.string() + suffix);
+        std::filesystem::remove(repeat_prefix.string() + suffix);
+    }
+    for (const std::string& suffix : {".clusters.tsv", ".diagnostics.tsv",
+            ".cluster_factor_abundance.tsv", ".projection.results.tsv",
+            ".projection.linear.transform.tsv",
+            ".projection.linear.mean.axes.tsv",
+            ".projection.linear.lda.transform.tsv",
+            ".projection.linear.lda.axes.tsv",
+            ".projection.linear.lda.diagnostics.tsv"}) {
+        std::filesystem::remove(leiden_prefix.string() + suffix);
     }
 }
 
@@ -322,13 +427,15 @@ void test_partition_classifier_outputs() {
         "--out-prefix", output_prefix.string(),
         "--folds", "3", "--ridge-grid", "1e-6", "1e-2",
         "--min-per-class", "2", "--train-max-rows", "24",
-        "--max-iterations", "150",
+        "--max-iterations", "150", "--crossfit",
     }) == 0, "partition classifier fit failed");
     const std::string compact = read_text(
-        output_prefix.string() + ".results.tsv");
+        output_prefix.string() + ".classifications.tsv");
     require(compact.find("#id\tC1\tP1\tC2\tP2\tC3\tP3\n") == 0,
         "partition classifier compact columns have the wrong order");
-    require(data_rows(output_prefix.string() + ".results.tsv") == 36
+    require(data_rows(output_prefix.string() + ".classifications.tsv") == 36
+            && !std::filesystem::exists(
+                output_prefix.string() + ".results.tsv")
             && data_rows(output_prefix.string() + ".cv.tsv") == 2,
         "partition classifier wrote the wrong result or CV row count");
     const auto model = punkst::partition_classifier::Model::read(
@@ -337,6 +444,37 @@ void test_partition_classifier_outputs() {
             == std::vector<std::string>({"0", "1", "2"}),
         "partition classifier did not preserve class/topic order");
     model.validate();
+    const std::string bundle_path =
+        output_prefix.string() + ".crossfit.classifier.tsv";
+    require(punkst::partition_classifier::CrossfitBundle::is_bundle(
+                bundle_path),
+        "partition classifier did not identify its crossfit bundle");
+    const auto bundle =
+        punkst::partition_classifier::CrossfitBundle::read(bundle_path);
+    require(bundle.full_model.intercepts.isApprox(model.intercepts, 1e-15)
+            && bundle.full_model.coefficients.isApprox(
+                model.coefficients, 1e-15)
+            && bundle.heldout_fold_by_identifier.size() == 24
+            && bundle.fold_models.size() == 3,
+        "crossfit bundle did not preserve the full model or routes");
+    int32_t heldout_fold = -1;
+    require(&bundle.model_for("unit_0_0", false, &heldout_fold)
+                == &bundle.full_model
+            && heldout_fold == -1,
+        "bundle default did not select the full model");
+    require(data_rows(output_prefix.string()
+                + ".crossfit.diagnostics.tsv") == 4
+            && !std::filesystem::exists(
+                output_prefix.string() + ".crossfit.results.tsv"),
+        "crossfit classifier outputs are incomplete");
+    const std::string crossfit_classifications = read_text(
+        output_prefix.string() + ".crossfit.classifications.tsv");
+    require(crossfit_classifications.find("#id\tC1\tP1\tC2\tP2") == 0
+            && crossfit_classifications.find("full_unseen")
+                == std::string::npos
+            && data_rows(output_prefix.string()
+                + ".crossfit.classifications.tsv") == 36,
+        "crossfit classifications are incomplete");
     const std::filesystem::path roundtrip_path =
         base.string() + ".roundtrip.classifier.tsv";
     model.write(roundtrip_path);
@@ -380,8 +518,11 @@ void test_partition_classifier_outputs() {
     std::filesystem::remove(theta_path);
     std::filesystem::remove(partition_path);
     for (const std::string& suffix : {
-            ".classifier.tsv", ".results.tsv", ".cv.tsv",
-            ".calibration.tsv"}) {
+            ".classifier.tsv", ".cv.tsv",
+            ".calibration.tsv", ".classifications.tsv",
+            ".crossfit.classifier.tsv",
+            ".crossfit.classifications.tsv",
+            ".crossfit.diagnostics.tsv"}) {
         std::filesystem::remove(output_prefix.string() + suffix);
     }
     std::filesystem::remove(predict_prefix.string() + ".results.tsv");
@@ -426,6 +567,15 @@ void test_partition_classifier_lda_lrvb() {
             && std::abs(prediction.probabilities.sum() - 1.0) < 1e-10
             && prediction.probabilities.minCoeff() >= 0.0,
         "LDA classifier propagation failed: " + prediction.lrvb_status);
+    const Eigen::VectorXd composition = assigned / assigned.sum();
+    const auto warm_prediction =
+        punkst::partition_classifier::propagate_lda_from_composition(
+            classifier, composition, document, allocation_kernel, 0.5,
+            options);
+    require(warm_prediction.lrvb_status == "ok"
+            && warm_prediction.probabilities.isApprox(
+                prediction.probabilities, 1e-8),
+        "LDA composition warm start changed converged propagation");
 
     options.fixed_point_max_iterations = 1;
     options.fixed_point_tolerance = 1e-15;
@@ -485,6 +635,19 @@ void test_partition_classifier_gamma_poisson_lrvb() {
             && prediction.probabilities.minCoeff() >= 0.0,
         "Gamma-Poisson classifier propagation failed: "
             + prediction.lrvb_status);
+    Eigen::VectorXd composition = model.get_topic_capacity().array()
+        * posterior.shape.array() / posterior.rate.array();
+    composition /= composition.sum();
+    const auto warm_prediction = punkst::partition_classifier::
+        propagate_gamma_poisson_from_composition(
+            classifier, composition, document, model.get_topic_capacity(),
+            model.get_beta_allocation_kernel(), model.get_expected_beta(),
+            model.get_theta_prior_shape(), prior_rate,
+            model.get_size_factor(), nullptr, options);
+    require(warm_prediction.lrvb_status == "ok"
+            && warm_prediction.probabilities.isApprox(
+                prediction.probabilities, 1e-8),
+        "Gamma-Poisson composition warm start changed converged propagation");
 
     punkst::partition_classifier::PropagationOptions nonconvergence_options;
     nonconvergence_options.lrvb_all = true;
@@ -580,15 +743,30 @@ void test_classifier_transform_wiring() {
     const std::filesystem::path metadata_path = base.string() + ".meta.json";
     const std::filesystem::path classifier_path =
         base.string() + ".classifier.tsv";
+    const std::filesystem::path classifier_bundle_path =
+        base.string() + ".crossfit.classifier.tsv";
     const std::filesystem::path lda_state_path = base.string() + ".lda.state.tsv";
     const std::filesystem::path lda_prefix = base.string() + ".lda";
     const std::filesystem::path lda_parallel_prefix =
         base.string() + ".lda.parallel";
     const std::filesystem::path lda_plain_prefix =
         base.string() + ".lda.plain";
+    const std::filesystem::path lda_reuse_prefix =
+        base.string() + ".lda.reuse";
+    const std::filesystem::path lda_bundle_prefix =
+        base.string() + ".lda.bundle";
+    const std::filesystem::path lda_crossfit_prefix =
+        base.string() + ".lda.crossfit";
+    const std::filesystem::path lda_classifier_prefix =
+        base.string() + ".lda.classifier-output";
     const std::filesystem::path gp_state_path = base.string() + ".gp.state.tsv";
     const std::filesystem::path gp_prefix = base.string() + ".gp";
     const std::filesystem::path gp_plain_prefix = base.string() + ".gp.plain";
+    const std::filesystem::path gp_reuse_prefix = base.string() + ".gp.reuse";
+    const std::filesystem::path gp_crossfit_prefix =
+        base.string() + ".gp.crossfit";
+    const std::filesystem::path gp_classifier_prefix =
+        base.string() + ".gp.classifier-output";
     write_text(metadata_path,
         "{\"n_units\":2,\"n_modalities\":1,\"n_features\":3,"
         "\"offset_data\":1,\"header_info\":[\"document\"],"
@@ -610,6 +788,15 @@ void test_classifier_transform_wiring() {
     classifier.ridge = 1e-3;
     classifier.temperature = 1.0;
     classifier.write(classifier_path);
+    punkst::partition_classifier::CrossfitBundle classifier_bundle;
+    classifier_bundle.full_model = classifier;
+    classifier_bundle.full_model.sampled_rows = 2;
+    classifier_bundle.fold_models = {classifier, classifier};
+    classifier_bundle.fold_models[0].temperature = 2.0;
+    classifier_bundle.fold_models[1].temperature = 0.5;
+    classifier_bundle.heldout_fold_by_identifier = {
+        {"doc_0", 0}, {"doc_1", 1}};
+    classifier_bundle.write(classifier_bundle_path);
 
     LdaState lda_state;
     lda_state.alpha = 0.5;
@@ -631,7 +818,7 @@ void test_classifier_transform_wiring() {
         "--minibatch-size", "2", "--threads", "1", "--seed", "31",
     }) == 0, "state-backed LDA classifier transform failed");
     require(read_text(lda_prefix.string() + ".classifications.tsv").find(
-            "#document\tprediction\tmaximum_probability\tentropy") == 0
+            "#document\tclassifier_model_source\tentropy") == 0
             && data_rows(lda_prefix.string() + ".classifications.tsv") == 2,
         "LDA classification output metadata/header is malformed");
     require(read_text(lda_prefix.string() + ".classifications.tsv").find(
@@ -663,6 +850,53 @@ void test_classifier_transform_wiring() {
     require(read_text(lda_prefix.string() + ".results.tsv")
             == read_text(lda_plain_prefix.string() + ".results.tsv"),
         "enabling the classifier changed LDA topic output");
+    require(run_command(cmdLDATransform, {
+        "lda-transform", "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(), "--in-state",
+        lda_state_path.string(), "--out-prefix", lda_reuse_prefix.string(),
+        "--classifier-only", "--in-transform-results",
+        lda_plain_prefix.string() + ".results.tsv",
+        "--classifier-model", classifier_path.string(),
+        "--classifier-lrvb-all", "--min-count", "1",
+        "--minibatch-size", "2", "--threads", "1", "--seed", "31",
+    }) == 0, "classifier-only LDA transform failed");
+    require(data_rows(lda_reuse_prefix.string() + ".classifications.tsv") == 2
+            && !std::filesystem::exists(
+                lda_reuse_prefix.string() + ".results.tsv")
+            && !std::filesystem::exists(
+                lda_reuse_prefix.string() + ".pseudobulk.tsv"),
+        "classifier-only LDA transform wrote the wrong outputs");
+    require(run_command(cmdLDATransform, {
+        "lda-transform", "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(), "--in-state",
+        lda_state_path.string(), "--out-prefix", lda_bundle_prefix.string(),
+        "--classifier-model", classifier_bundle_path.string(),
+        "--classifier-lrvb-all", "--min-count", "1",
+        "--minibatch-size", "2", "--threads", "1", "--seed", "31",
+    }) == 0, "bundle-default LDA classifier transform failed");
+    require(read_text(lda_prefix.string() + ".classifications.tsv")
+            == read_text(lda_bundle_prefix.string() + ".classifications.tsv"),
+        "bundle default does not reproduce the standalone full model");
+    require(run_command(cmdLDATransform, {
+        "lda-transform", "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(), "--in-state",
+        lda_state_path.string(), "--out-prefix", lda_crossfit_prefix.string(),
+        "--out-prefix-classifier", lda_classifier_prefix.string(),
+        "--classifier-model", classifier_bundle_path.string(),
+        "--classifier-crossfit", "--classifier-plugin-only",
+        "--min-count", "1", "--minibatch-size", "2", "--threads", "1",
+        "--seed", "31",
+    }) == 0, "crossfit LDA classifier transform failed");
+    const std::string lda_crossfit = read_text(
+        lda_classifier_prefix.string() + ".classifications.tsv");
+    require(lda_crossfit.find("doc_0\theldout_fold_0\t") != std::string::npos
+            && lda_crossfit.find("doc_1\theldout_fold_1\t")
+                != std::string::npos
+            && std::filesystem::exists(lda_classifier_prefix.string()
+                + ".classification_diagnostics.tsv")
+            && !std::filesystem::exists(lda_crossfit_prefix.string()
+                + ".classifications.tsv"),
+        "LDA transform did not route crossfit identifiers");
 
     GammaPoissonTopicModel gp_model(3, 3, 37, 1, 0,
         0.5, 0.3, -1.0, 1.5, 1.0, -1.0,
@@ -680,7 +914,7 @@ void test_classifier_transform_wiring() {
         "--threads", "1", "--seed", "41",
     }) == 0, "Gamma-Poisson classifier transform failed");
     require(read_text(gp_prefix.string() + ".classifications.tsv").find(
-            "#document\tprediction\tmaximum_probability\tentropy") == 0
+            "#document\tclassifier_model_source\tentropy") == 0
             && data_rows(gp_prefix.string() + ".classifications.tsv") == 2,
         "Gamma-Poisson classification output metadata/header is malformed");
     require(run_command(cmdGammaPoisTransform, {
@@ -693,13 +927,55 @@ void test_classifier_transform_wiring() {
     require(read_text(gp_prefix.string() + ".results.tsv")
             == read_text(gp_plain_prefix.string() + ".results.tsv"),
         "enabling the classifier changed Gamma-Poisson topic output");
+    require(run_command(cmdGammaPoisTransform, {
+        "gamma-pois-transform", "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(), "--in-state",
+        gp_state_path.string(), "--out-prefix", gp_reuse_prefix.string(),
+        "--classifier-only", "--in-transform-results",
+        gp_plain_prefix.string() + ".results.tsv",
+        "--factor-is-in-sample",
+        "--classifier-model", classifier_path.string(),
+        "--classifier-lrvb-all", "--min-count", "1",
+        "--minibatch-size", "1", "--threads", "1", "--seed", "41",
+    }) == 0, "classifier-only Gamma-Poisson transform failed");
+    require(data_rows(gp_reuse_prefix.string() + ".classifications.tsv") == 2
+            && !std::filesystem::exists(
+                gp_reuse_prefix.string() + ".results.tsv")
+            && !std::filesystem::exists(
+                gp_reuse_prefix.string() + ".pseudobulk.tsv")
+            && !std::filesystem::exists(
+                gp_reuse_prefix.string() + ".dispersion.tsv"),
+        "classifier-only Gamma-Poisson transform wrote the wrong outputs");
+    require(run_command(cmdGammaPoisTransform, {
+        "gamma-pois-transform", "--in-data", input_path.string(),
+        "--in-meta", metadata_path.string(), "--in-state",
+        gp_state_path.string(), "--out-prefix", gp_crossfit_prefix.string(),
+        "--out-prefix-classifier", gp_classifier_prefix.string(),
+        "--classifier-model", classifier_bundle_path.string(),
+        "--classifier-crossfit", "--classifier-plugin-only",
+        "--use-stored-dispersion", "--min-count", "1",
+        "--minibatch-size", "1", "--threads", "1", "--seed", "41",
+    }) == 0, "crossfit Gamma-Poisson classifier transform failed");
+    const std::string gp_crossfit = read_text(
+        gp_classifier_prefix.string() + ".classifications.tsv");
+    require(gp_crossfit.find("doc_0\theldout_fold_0\t") != std::string::npos
+            && gp_crossfit.find("doc_1\theldout_fold_1\t")
+                != std::string::npos
+            && std::filesystem::exists(gp_classifier_prefix.string()
+                + ".classification_diagnostics.tsv")
+            && !std::filesystem::exists(gp_crossfit_prefix.string()
+                + ".classifications.tsv"),
+        "Gamma-Poisson transform did not route crossfit identifiers");
 
     for (const std::filesystem::path& path : {
-            input_path, metadata_path, classifier_path, lda_state_path,
+            input_path, metadata_path, classifier_path, classifier_bundle_path,
+            lda_state_path,
             gp_state_path}) std::filesystem::remove(path);
     for (const std::filesystem::path& prefix : {
             lda_prefix, lda_parallel_prefix, lda_plain_prefix,
-            gp_prefix, gp_plain_prefix}) {
+            lda_reuse_prefix, lda_bundle_prefix, lda_crossfit_prefix,
+            lda_classifier_prefix, gp_prefix, gp_plain_prefix, gp_reuse_prefix,
+            gp_crossfit_prefix, gp_classifier_prefix}) {
         for (const std::string& suffix : {
                 ".results.tsv", ".classifications.tsv", ".pseudobulk.tsv",
                 ".classification_diagnostics.tsv"}) {
@@ -747,9 +1023,9 @@ void test_leiden_projection_outputs() {
             && std::filesystem::exists(default_prefix.string()
                 + ".projection.r0.5.ilr.transform.tsv")
             && std::filesystem::exists(default_prefix.string()
-                + ".r0.5.cluster_factors.tsv")
+                + ".r0.5.cluster_factor_abundance.tsv")
             && std::filesystem::exists(default_prefix.string()
-                + ".r1.cluster_factors.tsv")
+                + ".r1.cluster_factor_abundance.tsv")
             && first_coordinates.find("\tlinear_mean_1") != std::string::npos
             && first_coordinates.find("\tilr_mean_1") != std::string::npos
             && second_coordinates.find("\tlinear_mean_1")
@@ -767,7 +1043,7 @@ void test_leiden_projection_outputs() {
     require(std::filesystem::exists(linear_prefix.string()
                 + ".projection.linear.transform.tsv")
             && std::filesystem::exists(linear_prefix.string()
-                + ".cluster_factors.tsv")
+                + ".cluster_factor_abundance.tsv")
             && !std::filesystem::exists(linear_prefix.string()
                 + ".projection.ilr.transform.tsv"),
         "Leiden linear-only projection included ILR axes");
@@ -785,7 +1061,7 @@ void test_leiden_projection_outputs() {
             && !std::filesystem::exists(
                 disabled_prefix.string() + ".projection.results.tsv")
             && std::filesystem::exists(disabled_prefix.string()
-                + ".cluster_factors.tsv"),
+                + ".cluster_factor_abundance.tsv"),
         "Leiden projection opt-out wrote projection files");
 
     for (const std::filesystem::path& prefix : {
@@ -793,7 +1069,7 @@ void test_leiden_projection_outputs() {
         for (const std::string& suffix : {
                 ".clusters.tsv", ".diagnostics.tsv", ".projection.results.tsv",
                 ".projection.linear.transform.tsv",
-                ".projection.linear.mean.axes.tsv", ".cluster_factors.tsv"}) {
+                ".projection.linear.mean.axes.tsv", ".cluster_factor_abundance.tsv"}) {
             std::filesystem::remove(prefix.string() + suffix);
         }
     }
@@ -805,7 +1081,7 @@ void test_leiden_projection_outputs() {
                 + ".projection." + label + suffix);
         }
         std::filesystem::remove(default_prefix.string()
-            + "." + label + ".cluster_factors.tsv");
+            + "." + label + ".cluster_factor_abundance.tsv");
     }
     std::filesystem::remove(theta_path);
 }
@@ -814,11 +1090,13 @@ void test_leiden_projection_outputs() {
 
 int32_t test(int32_t, char**) {
     try {
+        punkst::projection::testing::run_discriminant_projection_gradient_tests();
         punkst::partition_classifier::testing::run_classifier_gradient_test();
         punkst::partition_classifier::testing::run_lrvb_numerical_tests();
         test_quartimax_rotation();
         test_simplex_metrics();
         test_linear_embedding_outputs();
+        test_lda_projection_outputs();
         test_partition_classifier_outputs();
         test_partition_classifier_lda_lrvb();
         test_partition_classifier_gamma_poisson_lrvb();

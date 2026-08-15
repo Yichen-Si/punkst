@@ -89,3 +89,7 @@ private:
 void write_gamma_poisson_dispersion_diagnostics(const std::string& out_file,
     const std::vector<std::string>& feature_names,
     const GammaPoissonDispersionResult& result);
+
+std::vector<double> read_gamma_poisson_dispersion(
+    const std::string& input_file,
+    const std::vector<std::string>& expected_feature_names);

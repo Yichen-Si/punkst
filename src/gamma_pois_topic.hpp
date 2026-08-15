@@ -291,6 +291,7 @@ public:
     const MatrixXd& getExpectedBeta() const;
     const MatrixXd& getBetaAllocationKernel() const;
     const VectorXd& getFeatureDispersion() const;
+    double getSizeFactor() const;
     double getThetaPriorShape() const;
     VectorXd getThetaPriorRate() const;
     bool featureWeightsActive() const;

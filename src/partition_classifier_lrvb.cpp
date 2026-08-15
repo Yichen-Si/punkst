@@ -817,7 +817,8 @@ PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
         double prior_shape,
         const Eigen::Ref<const Eigen::VectorXd>& prior_rate,
         const Eigen::VectorXd* feature_dispersion,
-        const PropagationOptions& options) {
+        const PropagationOptions& options,
+        const Eigen::VectorXd* initial_composition) {
     classifier.validate();
     if (classifier.topics.size() != static_cast<size_t>(topic_capacity.size())) {
         throw std::invalid_argument(
@@ -831,9 +832,14 @@ PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
     PropagatedPrediction result;
     Eigen::VectorXd fallback_probabilities;
     try {
-        Eigen::VectorXd initial_abundance = topic_capacity.array()
-            * posterior.shape.array() / posterior.rate.array();
-        result.probabilities = classifier.probabilities(initial_abundance);
+        if (initial_composition != nullptr) {
+            result.probabilities = classifier.probabilities(
+                *initial_composition);
+        } else {
+            const Eigen::VectorXd initial_abundance = topic_capacity.array()
+                * posterior.shape.array() / posterior.rate.array();
+            result.probabilities = classifier.probabilities(initial_abundance);
+        }
         fallback_probabilities = result.probabilities;
         Eigen::Index initial_leading = 0;
         const double initial_maximum =
@@ -963,9 +969,14 @@ PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
         if (fallback_probabilities.size() != 0) {
             result.probabilities = fallback_probabilities;
         } else if (result.probabilities.size() == 0) {
-            Eigen::VectorXd abundance = topic_capacity.array()
-                * posterior.shape.array() / posterior.rate.array();
-            result.probabilities = classifier.probabilities(abundance);
+            if (initial_composition != nullptr) {
+                result.probabilities = classifier.probabilities(
+                    *initial_composition);
+            } else {
+                const Eigen::VectorXd abundance = topic_capacity.array()
+                    * posterior.shape.array() / posterior.rate.array();
+                result.probabilities = classifier.probabilities(abundance);
+            }
         }
         result.method = "plugin";
         result.lrvb_status = exception.what();
@@ -973,6 +984,79 @@ PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
         result.lrvb_failed = true;
     }
     return result;
+}
+
+PropagatedPrediction propagate_lda_from_composition(
+        const Model& classifier,
+        const Eigen::Ref<const Eigen::VectorXd>& composition,
+        const Document& document,
+        const Eigen::Ref<const Eigen::MatrixXd>& lda_allocation_kernel,
+        double alpha, const PropagationOptions& options) {
+    if (composition.size() != lda_allocation_kernel.rows()
+            || !composition.allFinite()
+            || (composition.array() < 0.0).any()
+            || !(composition.sum() > 0.0)) {
+        throw std::invalid_argument("Invalid LDA warm-start composition");
+    }
+    const double total = document.ct_tot >= 0.0
+        ? document.ct_tot
+        : std::accumulate(document.cnts.begin(), document.cnts.end(), 0.0);
+    if (!(total >= 0.0) || !std::isfinite(total)) {
+        throw std::invalid_argument("Invalid LDA warm-start document total");
+    }
+    const Eigen::VectorXd assigned = total * composition / composition.sum();
+    return propagate_lda(classifier, assigned, document,
+        lda_allocation_kernel, alpha, options);
+}
+
+PropagatedPrediction propagate_gamma_poisson_from_composition(
+        const Model& classifier,
+        const Eigen::Ref<const Eigen::VectorXd>& composition,
+        const Document& document,
+        const Eigen::Ref<const Eigen::VectorXd>& topic_capacity,
+        const Eigen::MatrixXd& beta_allocation_kernel,
+        const Eigen::MatrixXd& expected_beta,
+        double prior_shape,
+        const Eigen::Ref<const Eigen::VectorXd>& prior_rate,
+        double size_factor,
+        const Eigen::VectorXd* feature_dispersion,
+        const PropagationOptions& options) {
+    const int32_t topics = static_cast<int32_t>(topic_capacity.size());
+    if (composition.size() != topics || prior_rate.size() != topics
+            || !composition.allFinite()
+            || (composition.array() < 0.0).any()
+            || !(composition.sum() > 0.0)
+            || !(prior_shape > 0.0) || !(size_factor > 0.0)
+            || !std::isfinite(size_factor)
+            || !topic_capacity.allFinite()
+            || (topic_capacity.array() <= 0.0).any()) {
+        throw std::invalid_argument(
+            "Invalid Gamma-Poisson warm-start composition");
+    }
+    const double total = document.ct_tot >= 0.0
+        ? document.ct_tot
+        : std::accumulate(document.cnts.begin(), document.cnts.end(), 0.0);
+    if (!(total >= 0.0) || !std::isfinite(total)) {
+        throw std::invalid_argument(
+            "Invalid Gamma-Poisson warm-start document total");
+    }
+    GammaPoissonDocumentPosterior posterior;
+    posterior.exposure = total / size_factor;
+    posterior.rate = prior_rate + posterior.exposure * topic_capacity;
+    const Eigen::VectorXd normalized = composition / composition.sum();
+    Eigen::VectorXd allocation = normalized.array()
+        * posterior.rate.array() / topic_capacity.array();
+    const double allocation_total = allocation.sum();
+    if (!(allocation_total > 0.0) || !allocation.allFinite()) {
+        throw std::invalid_argument(
+            "Invalid Gamma-Poisson reconstructed warm start");
+    }
+    allocation /= allocation_total;
+    posterior.shape = Eigen::VectorXd::Constant(topics, prior_shape)
+        + total * allocation;
+    return propagate_gamma_poisson(classifier, posterior, document,
+        topic_capacity, beta_allocation_kernel, expected_beta, prior_shape,
+        prior_rate, feature_dispersion, options, &normalized);
 }
 
 } // namespace punkst::partition_classifier

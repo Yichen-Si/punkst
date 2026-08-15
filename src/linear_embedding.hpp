@@ -4,10 +4,16 @@
 #include "numerical_utils.hpp"
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace punkst::linear_embedding {
+
+class ProjectionFactorFilterError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 enum class ProjectionSpace {
     Linear,
@@ -33,7 +39,10 @@ struct Options {
     int32_t threads = 1;
     double center_floor = 1e-12;
     double covariance_floor = 1e-5;
+    double min_cover_mass = 0.997;
+    double min_mass = 1e-6;
     bool include_full = false;
+    bool eigen_projection = true;
     bool qda_projection = true;
     int32_t qda_train_max_rows = 12000;
     int32_t qda_validation_max_rows = 4000;
@@ -50,6 +59,22 @@ struct Options {
     bool qda_sparsity_cv = false;
     int32_t qda_sparsity_cv_folds = 5;
     std::vector<double> qda_sparsity_grid;
+    bool lda_projection = true;
+    int32_t lda_train_max_rows = 12000;
+    int32_t lda_validation_max_rows = 4000;
+    double lda_validation_fraction = 0.20;
+    int32_t lda_epochs = 250;
+    double lda_learning_rate = 0.03;
+    double lda_covariance_shrinkage = 0.10;
+    double lda_ridge = 1e-5;
+    int32_t lda_restarts = 2;
+    int32_t lda_evaluate_every = 5;
+    int32_t lda_patience = 12;
+    int32_t lda_seed = 1;
+    double lda_sparsity_strength = 0.0;
+    bool lda_sparsity_cv = false;
+    int32_t lda_sparsity_cv_folds = 5;
+    std::vector<double> lda_sparsity_grid;
 
     void validate();
 };

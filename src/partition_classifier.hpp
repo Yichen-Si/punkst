@@ -3,12 +3,15 @@
 #include "numerical_utils.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace punkst::partition_classifier {
 
 constexpr int32_t MODEL_SCHEMA_VERSION = 1;
+constexpr int32_t CROSSFIT_SCHEMA_VERSION = 1;
 
 struct FitOptions {
     std::vector<double> ridge_grid{
@@ -17,6 +20,7 @@ struct FitOptions {
     int32_t max_iterations = 300;
     int32_t lbfgs_history = 10;
     double gradient_tolerance = 1e-7;
+    std::function<void(const std::string&)> progress_callback;
 };
 
 struct Metrics {
@@ -81,11 +85,53 @@ struct FitResult {
     RowMajorMatrixXd cross_fitted_probabilities;
 };
 
+struct CrossfitFoldDiagnostic {
+    int32_t fold = -1;
+    int32_t training_rows = 0;
+    int32_t heldout_rows = 0;
+    int32_t inner_folds = 0;
+    double ridge = 0.0;
+    double temperature = 1.0;
+    Metrics metrics;
+};
+
+struct CrossfitResult {
+    std::vector<Model> fold_models;
+    Eigen::VectorXi fold_by_row;
+    RowMajorMatrixXd probabilities;
+    std::vector<CrossfitFoldDiagnostic> diagnostics;
+    Metrics overall;
+};
+
+class CrossfitBundle {
+public:
+    Model full_model;
+    std::vector<Model> fold_models;
+    std::unordered_map<std::string, int32_t> heldout_fold_by_identifier;
+
+    void validate(double tolerance = 1e-8) const;
+    void write(const std::string& path) const;
+    static bool is_bundle(const std::string& path);
+    static CrossfitBundle read(const std::string& path);
+    const Model& model_for(const std::string& identifier,
+        bool use_crossfit, int32_t* heldout_fold = nullptr) const;
+};
+
 FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
     const Eigen::Ref<const Eigen::VectorXi>& labels,
     const Eigen::Ref<const Eigen::VectorXd>& weights,
     const std::vector<std::string>& topics,
     const std::vector<std::string>& classes,
+    const FitOptions& options = {});
+
+CrossfitResult fit_crossfit(
+    const Eigen::Ref<const RowMajorMatrixXd>& compositions,
+    const Eigen::Ref<const Eigen::VectorXi>& labels,
+    const Eigen::Ref<const Eigen::VectorXd>& weights,
+    const std::vector<std::string>& identifiers,
+    const std::vector<std::string>& topics,
+    const std::vector<std::string>& classes,
+    uint64_t seed,
     const FitOptions& options = {});
 
 Metrics evaluate(const Eigen::Ref<const RowMajorMatrixXd>& probabilities,

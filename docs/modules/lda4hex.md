@@ -367,6 +367,17 @@ LDA posterior uncertainty. See the
 `--in-model` requires explicit positive `--alpha` unless
 `--classifier-plugin-only` is used.
 
+`--out-prefix-classifier`
+Use a separate prefix for `.classifications.tsv` and
+`.classification_diagnostics.tsv`. It defaults to `--out-prefix`.
+
+`--classifier-only`, `--in-transform-results`
+Reuse a previous dense LDA `.results.tsv` as the classifier warm start while
+rereading the original counts and fitted state. The source rows must match the
+retained input units in order and use the exact dense topic block. This mode
+writes only classification output; residual, pseudobulk-all-features, and
+top-k factor-output options are not allowed.
+
 ### Outputs
 
 `{prefix}.results.tsv`
@@ -394,6 +405,8 @@ through the inferred topic proportions.
 In `{prefix}.unit_stats.tsv`, `total_count` is the raw total count after feature
 remapping and filtering but before feature weights are applied.
 
-`{prefix}.classifications.tsv`
+`{classifier-prefix}.classifications.tsv`
 Written when `--classifier-model` is supplied. It contains unit metadata,
 prediction diagnostics, LRVB status, and compact or dense class probabilities.
+The classifier prefix is `--out-prefix-classifier` when supplied and otherwise
+`--out-prefix`.

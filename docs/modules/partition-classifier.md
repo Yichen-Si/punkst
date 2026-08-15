@@ -18,7 +18,8 @@ punkst partition-classifier-fit \
   --in-theta sample.results.tsv \
   --in-partition sample.leiden.clusters.tsv \
   --icol-partition 1 \
-  --out-prefix sample.partition
+  --out-prefix sample.partition \
+  --crossfit
 
 punkst lda-transform \
   --in-state sample.state.tsv \
@@ -54,14 +55,39 @@ values `1e-6,1e-5,...,1` by weighted out-of-fold log loss. A global softmax
 temperature is fitted to all out-of-fold logits for the stored model;
 calibration diagnostics use cross-fitted temperatures.
 
+`--crossfit` additionally fits strict nested outer-fold models. For each outer
+fold, ridge selection and temperature calibration use only the outer training
+rows; the outer held-out rows do not enter coefficients, hyperparameter
+selection, or calibration. Fold assignment is deterministic, stratified by
+class, and keyed by unit identifier. This evaluates the supervised classifier
+conditional on the already fitted topic model and fixed partition; it does not
+cross-fit either of those upstream stages.
+
+Crossfit fitting is substantially more expensive than the ordinary fit because
+each outer model performs its own inner cross-validation. The ordinary
+all-data model is still fitted and stored in the bundle, so one bundle supports
+both prediction of genuinely new units and honest classifier-stage predictions
+for sampled fitting-cohort units.
+
 Outputs are:
 
 - `{prefix}.classifier.tsv`: versioned model, topic/class order, centered
   coefficients, ridge, temperature, and sampling metadata.
-- `{prefix}.results.tsv`: predictions for every theta row.
+- `{prefix}.classifications.tsv`: plug-in full-model classifications for every
+  theta row, written as `id C1 P1 C2 P2 ...` (or dense probabilities).
 - `{prefix}.cv.tsv`: out-of-fold log loss, Brier score, and accuracy per ridge.
 - `{prefix}.calibration.tsv`: overall, one-vs-rest classwise, and 15-bin
   reliability diagnostics.
+- `{prefix}.crossfit.classifier.tsv`: self-contained bundle containing the
+  ordinary full model, all outer-fold models, and sampled-identifier routes
+  (with `--crossfit`).
+- `{prefix}.crossfit.classifications.tsv`: out-of-sample plug-in
+  classifications for every theta row. Sampled training identifiers use the
+  outer-fold model that excluded them; other rows use the full model, which
+  was fitted only on the sampled training identifiers.
+- `{prefix}.crossfit.diagnostics.tsv`: per-outer-fold training/held-out counts,
+  selected ridge, calibrated temperature, and unpenalized held-out metrics,
+  plus their aggregate.
 
 Compact output is `C1 P1 C2 P2 C3 P3`. `--top-k` changes the number of pairs;
 `--dense-probabilities` writes `P0..P(C-1)`. Ties use stored class order.
@@ -73,11 +99,45 @@ Compact output is `C1 P1 C2 P2 C3 P3`. `--top-k` changes the number of pairs;
 
 Pass `--classifier-model` to `lda-transform` or `gamma-pois-transform` to write
 `{prefix}.classifications.tsv` and
-`{prefix}.classification_diagnostics.tsv`. Unit metadata is followed by the predicted
-class, maximum probability, entropy, propagation method, candidate count,
-held-fixed candidate-tail mass, output top-k tail mass, LRVB status, and the
-requested compact or dense probabilities. Fixed-point iterations and residual,
-CG iterations, and applied curvature jitter follow the probability columns.
+`{prefix}.classification_diagnostics.tsv`. Unit metadata is followed by
+entropy, propagation method, candidate count, held-fixed candidate-tail mass,
+output top-k tail mass, LRVB status, and the requested compact or dense
+probabilities. In compact output, `C1` and `P1` are the predicted class and its
+maximum probability. Fixed-point iterations and residual, CG iterations, and
+applied curvature jitter follow the probability columns.
+
+By default, `{prefix}` is the value of `--out-prefix`. Set
+`--out-prefix-classifier` to place the two classification files under a
+different prefix while leaving topic-transform results, pseudobulk, and
+residual outputs under `--out-prefix`.
+
+To apply multiple classifiers to one factor transform, add
+`--classifier-only --in-transform-results prior.results.tsv`. The command
+rereads the original counts and fitted factor state, takes dense topic
+compositions from the prior result in unit order, and writes only classifier
+outputs. Confident units stop after plug-in prediction; ambiguous units use the
+saved composition as a warm start and continue local inference to the stricter
+classifier fixed point before LRVB. The source table must have the expected
+topics as its exact trailing dense block, and the input filtering, weights,
+minimum count, modality, and identifier settings must reproduce the source
+transform. This is a convergent warm start, not an exact posterior checkpoint.
+
+Gamma-Poisson classifier-only runs must also select the original dispersion:
+use `--factor-is-in-sample` or `--use-stored-dispersion` when it came from the
+fitted state, or pass the original transform diagnostics with
+`--in-transform-dispersion prior.dispersion.tsv`.
+
+`--classifier-model` accepts either the legacy single-model file or a crossfit
+bundle. A bundle uses its embedded all-data model by default, which is the
+appropriate choice for a new dataset. Add `--classifier-crossfit` explicitly
+when transforming data that may overlap the classifier fitting cohort. Sampled
+fitting identifiers then use their held-out outer-fold models; identifiers not
+stored in the bundle use the all-data model. This explicit opt-in avoids
+accidentally treating coincident identifiers from an unrelated dataset as
+training rows. `classifier_model_source` is `full`, `heldout_fold_N`, or
+`full_unseen` on every classification row. The diagnostics file also reports
+the prediction mode and routed row counts, and a crossfit run warns when no
+identifier matched.
 
 By default, units whose plug-in leading probability is at least 0.95 skip
 uncertainty propagation. Other units use the smallest leading candidate set

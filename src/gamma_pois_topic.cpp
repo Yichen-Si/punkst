@@ -1844,6 +1844,13 @@ const VectorXd& GammaPoisson4Hex::getFeatureDispersion() const {
     return model_->get_feature_dispersion();
 }
 
+double GammaPoisson4Hex::getSizeFactor() const {
+    if (!initialized || !model_) {
+        error("%s: GammaPoisson4Hex is not initialized", __func__);
+    }
+    return model_->get_size_factor();
+}
+
 double GammaPoisson4Hex::getThetaPriorShape() const {
     if (!initialized || !model_) {
         error("%s: GammaPoisson4Hex is not initialized", __func__);

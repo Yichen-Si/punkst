@@ -13,6 +13,7 @@
 #include "error.hpp"
 #include "gamma_pois_topic.hpp"
 #include "numerical_utils.hpp"
+#include "utils.h"
 
 namespace {
 
@@ -475,4 +476,65 @@ void write_gamma_poisson_dispersion_diagnostics(const std::string& out_file,
         write_number_or_na(out, d.max_influence);
         out << "\n";
     }
+}
+
+std::vector<double> read_gamma_poisson_dispersion(
+        const std::string& input_file,
+        const std::vector<std::string>& expected_feature_names) {
+    std::ifstream input(input_file);
+    if (!input) {
+        throw std::runtime_error(
+            "Cannot open transform dispersion file: " + input_file);
+    }
+    std::string line;
+    if (!std::getline(input, line)) {
+        throw std::runtime_error(
+            "Transform dispersion file is empty: " + input_file);
+    }
+    const std::vector<std::string> header = split_delimited(line, '\t');
+    int32_t feature_column = -1;
+    int32_t tau_column = -1;
+    for (int32_t column = 0;
+            column < static_cast<int32_t>(header.size()); ++column) {
+        if (header[column] == "Feature") feature_column = column;
+        if (header[column] == "tau") tau_column = column;
+    }
+    if (feature_column < 0 || tau_column < 0) {
+        throw std::runtime_error(
+            "Transform dispersion file requires Feature and tau columns");
+    }
+    const int32_t required_column = std::max(feature_column, tau_column);
+    std::vector<double> output;
+    output.reserve(expected_feature_names.size());
+    uint64_t line_number = 1;
+    while (std::getline(input, line)) {
+        ++line_number;
+        if (line.empty() || is_comment_line(line)) continue;
+        const std::vector<std::string> fields = split_delimited(line, '\t');
+        if (required_column >= static_cast<int32_t>(fields.size())) {
+            throw std::runtime_error(
+                "Transform dispersion row has too few columns at line "
+                + std::to_string(line_number));
+        }
+        if (output.size() >= expected_feature_names.size()
+                || fields[feature_column]
+                    != expected_feature_names[output.size()]) {
+            throw std::runtime_error(
+                "Transform dispersion features do not exactly match the model "
+                "at line " + std::to_string(line_number));
+        }
+        double tau = 0.0;
+        if (!str2double(fields[tau_column], tau)
+                || !(tau > 0.0) || !std::isfinite(tau)) {
+            throw std::runtime_error(
+                "Invalid transform dispersion tau at line "
+                + std::to_string(line_number));
+        }
+        output.push_back(tau);
+    }
+    if (output.size() != expected_feature_names.size()) {
+        throw std::runtime_error(
+            "Transform dispersion feature count does not match the model");
+    }
+    return output;
 }

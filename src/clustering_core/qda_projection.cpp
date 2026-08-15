@@ -22,6 +22,7 @@ struct SufficientStatistics {
     Eigen::MatrixXd topic_helmert;
     RowMajorMatrixXd means;
     std::vector<Eigen::MatrixXd> covariances;
+    Eigen::MatrixXd pooled_within_covariance;
     Eigen::VectorXi counts;
 };
 
@@ -90,6 +91,15 @@ SufficientStatistics summarize(
         out.covariances[static_cast<size_t>(component)] = symmetrize(
             out.covariances[static_cast<size_t>(component)]);
     }
+    out.pooled_within_covariance = Eigen::MatrixXd::Zero(p, p);
+    for (int32_t component = 0; component < components; ++component) {
+        out.pooled_within_covariance.noalias() +=
+            static_cast<double>(out.counts(component) - 1)
+            * out.covariances[static_cast<size_t>(component)];
+    }
+    out.pooled_within_covariance /= static_cast<double>(n - components);
+    out.pooled_within_covariance = symmetrize(
+        out.pooled_within_covariance);
     return out;
 }
 
@@ -179,7 +189,7 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
         const Eigen::Ref<const RowMajorMatrixXd>& values,
         const Eigen::Ref<const Eigen::VectorXi>& labels,
         const SufficientStatistics& statistics,
-        const QdaProjectionOptions& options, bool need_gradient) {
+        const DiscriminantProjectionOptions& options, bool need_gradient) {
     const Eigen::Index n = values.rows();
     const Eigen::Index p = values.cols();
     const Eigen::Index d = q.cols();
@@ -189,8 +199,9 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
     const double raw_scale = (q.transpose()
         * statistics.global_covariance * q).trace() / d;
     const double scale = std::max(1e-6, raw_scale);
-    const double ridge_scale = (1.0 + options.covariance_shrinkage)
-        * options.ridge * scale;
+    const double ridge_multiplier = options.model == DiscriminantModel::Qda
+        ? 1.0 + options.covariance_shrinkage : 1.0;
+    const double ridge_scale = ridge_multiplier * options.ridge * scale;
     const double constant = d * std::log(2.0 * std::acos(-1.0));
 
     Eigen::MatrixXd logits(n, components);
@@ -200,21 +211,50 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
     tbb::global_control thread_control(
         tbb::global_control::max_allowed_parallelism,
         static_cast<size_t>(options.n_threads));
-    tbb::parallel_for(int32_t{0}, components, [&](int32_t component) {
-        Eigen::MatrixXd base = (1.0 - options.covariance_shrinkage)
-            * statistics.covariances[static_cast<size_t>(component)]
-            + options.covariance_shrinkage * statistics.global_covariance;
+    Eigen::MatrixXd shared_base;
+    if (options.model == DiscriminantModel::Lda) {
+        const double isotropic_scale =
+            statistics.pooled_within_covariance.trace()
+            / static_cast<double>(p);
+        shared_base = (1.0 - options.covariance_shrinkage)
+            * statistics.pooled_within_covariance
+            + options.covariance_shrinkage * isotropic_scale
+                * Eigen::MatrixXd::Identity(p, p);
+    }
+    auto factor_covariance = [&](const Eigen::MatrixXd& base,
+            Eigen::MatrixXd& precision, double& log_determinant) {
         Eigen::MatrixXd covariance = symmetrize(q.transpose() * base * q);
         covariance.diagonal().array() += ridge_scale;
         Eigen::LLT<Eigen::MatrixXd> solver(covariance);
         if (solver.info() != Eigen::Success) {
             throw std::runtime_error(
-                "QDA projected covariance is not positive definite");
+                "Discriminant projected covariance is not positive definite");
         }
-        const double log_determinant = 2.0
-            * solver.matrixL().toDenseMatrix().diagonal().array().log().sum();
-        Eigen::MatrixXd precision = solver.solve(
-            Eigen::MatrixXd::Identity(d, d));
+        log_determinant = 2.0 * solver.matrixL().toDenseMatrix()
+            .diagonal().array().log().sum();
+        precision = solver.solve(Eigen::MatrixXd::Identity(d, d));
+    };
+    Eigen::MatrixXd shared_precision;
+    double shared_log_determinant = 0.0;
+    if (options.model == DiscriminantModel::Lda) {
+        factor_covariance(shared_base, shared_precision,
+            shared_log_determinant);
+    }
+    tbb::parallel_for(int32_t{0}, components, [&](int32_t component) {
+        Eigen::MatrixXd base = options.model == DiscriminantModel::Qda
+            ? (1.0 - options.covariance_shrinkage)
+                * statistics.covariances[static_cast<size_t>(component)]
+                + options.covariance_shrinkage
+                    * statistics.global_covariance
+            : shared_base;
+        Eigen::MatrixXd precision;
+        double log_determinant = 0.0;
+        if (options.model == DiscriminantModel::Qda) {
+            factor_covariance(base, precision, log_determinant);
+        } else {
+            precision = shared_precision;
+            log_determinant = shared_log_determinant;
+        }
         Eigen::MatrixXd difference = projected;
         difference.rowwise() -= means.row(component);
         Eigen::MatrixXd weighted = difference * precision;
@@ -240,7 +280,8 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
         probabilities /= probabilities.sum();
         const double selected = probabilities(labels(row));
         if (!(selected > 0.0) || !std::isfinite(selected)) {
-            throw std::runtime_error("Non-finite QDA conditional loss");
+            throw std::runtime_error(
+                "Non-finite discriminant conditional loss");
         }
         out.log_loss -= std::log(selected) / static_cast<double>(n);
         derivatives.row(row) = probabilities.matrix().transpose()
@@ -280,7 +321,7 @@ ObjectiveResult objective(const Eigen::Ref<const Eigen::MatrixXd>& q,
             * q * covariance_gradient;
         q_gradients[static_cast<size_t>(component)] = std::move(q_gradient);
         scale_gradients[static_cast<size_t>(component)] =
-            (1.0 + options.covariance_shrinkage)
+            ridge_multiplier
             * options.ridge * covariance_gradient.trace();
     });
     Eigen::MatrixXd projected_gradient = Eigen::MatrixXd::Zero(n, d);
@@ -387,12 +428,12 @@ void canonicalize(Eigen::MatrixXd& q,
 
 } // namespace
 
-QdaProjectionResult fit_qda_projection(
+DiscriminantProjectionResult fit_discriminant_projection(
     const Eigen::Ref<const RowMajorMatrixXd>& training,
     const Eigen::Ref<const Eigen::VectorXi>& training_labels,
     const Eigen::Ref<const RowMajorMatrixXd>& validation,
     const Eigen::Ref<const Eigen::VectorXi>& validation_labels,
-    int32_t components, const QdaProjectionOptions& options) {
+        int32_t components, const DiscriminantProjectionOptions& options) {
     if (training.rows() <= 0 || validation.rows() <= 0
         || training.cols() <= 1 || training.cols() != validation.cols()
         || training.rows() != training_labels.size()
@@ -409,7 +450,8 @@ QdaProjectionResult fit_qda_projection(
         || !(options.improvement_tolerance >= 0.0)
         || !(options.sparsity_strength >= 0.0)
         || !std::isfinite(options.sparsity_strength)) {
-        throw std::invalid_argument("Invalid QDA projection input or options");
+        throw std::invalid_argument(
+            "Invalid discriminant projection input or options");
     }
     validate_labels(training_labels, components, 2, "Training");
     validate_labels(validation_labels, components, 1, "Validation");
@@ -417,13 +459,15 @@ QdaProjectionResult fit_qda_projection(
         training, training_labels, components);
     const Eigen::Index p = training.cols();
     const Eigen::Index d = options.dimensions;
-    QdaProjectionResult best;
+    DiscriminantProjectionResult best;
     best.validation_loss = std::numeric_limits<double>::infinity();
     for (int32_t restart = 0; restart < options.restarts; ++restart) {
         const uint64_t random_seed = splitmix64(
             static_cast<uint64_t>(static_cast<uint32_t>(options.seed))
             ^ (static_cast<uint64_t>(options.dimensions) << 32)
-            ^ static_cast<uint64_t>(restart) ^ 0x514441ULL);
+            ^ static_cast<uint64_t>(restart)
+            ^ (options.model == DiscriminantModel::Qda
+                ? 0x514441ULL : 0x4c4441ULL));
         Eigen::MatrixXd b;
         if (restart == 0) {
             b = fisher_initializer(statistics, options.dimensions, random_seed);
@@ -485,7 +529,8 @@ QdaProjectionResult fit_qda_projection(
         }
     }
     if (best.restart < 0 || best.projection.size() == 0) {
-        throw std::runtime_error("QDA projection optimization produced no result");
+        throw std::runtime_error(
+            "Discriminant projection optimization produced no result");
     }
     canonicalize(best.projection, statistics);
     const ObjectiveResult training_fit = objective(best.projection, training,
@@ -500,13 +545,13 @@ QdaProjectionResult fit_qda_projection(
     return best;
 }
 
-double qda_projection_log_loss(
+double discriminant_projection_log_loss(
     const Eigen::Ref<const Eigen::MatrixXd>& projection,
     const Eigen::Ref<const RowMajorMatrixXd>& training,
     const Eigen::Ref<const Eigen::VectorXi>& training_labels,
     const Eigen::Ref<const RowMajorMatrixXd>& evaluation,
     const Eigen::Ref<const Eigen::VectorXi>& evaluation_labels,
-    int32_t components, const QdaProjectionOptions& options) {
+        int32_t components, const DiscriminantProjectionOptions& options) {
     if (training.rows() <= 0 || evaluation.rows() <= 0
         || training.cols() <= 1 || training.cols() != evaluation.cols()
         || projection.rows() != training.cols() || projection.cols() <= 0
@@ -521,7 +566,8 @@ double qda_projection_log_loss(
         || !(options.ridge > 0.0)
         || !(options.sparsity_strength >= 0.0)
         || !std::isfinite(options.sparsity_strength)) {
-        throw std::invalid_argument("Invalid QDA projection evaluation input");
+        throw std::invalid_argument(
+            "Invalid discriminant projection evaluation input");
     }
     validate_labels(training_labels, components, 2, "Training");
     validate_labels(evaluation_labels, components, 1, "Evaluation");
@@ -530,5 +576,87 @@ double qda_projection_log_loss(
     return objective(projection, evaluation, evaluation_labels,
         statistics, options, false).log_loss;
 }
+
+QdaProjectionResult fit_qda_projection(
+        const Eigen::Ref<const RowMajorMatrixXd>& training,
+        const Eigen::Ref<const Eigen::VectorXi>& training_labels,
+        const Eigen::Ref<const RowMajorMatrixXd>& validation,
+        const Eigen::Ref<const Eigen::VectorXi>& validation_labels,
+        int32_t components, const QdaProjectionOptions& supplied_options) {
+    QdaProjectionOptions options = supplied_options;
+    options.model = DiscriminantModel::Qda;
+    return fit_discriminant_projection(training, training_labels, validation,
+        validation_labels, components, options);
+}
+
+double qda_projection_log_loss(
+        const Eigen::Ref<const Eigen::MatrixXd>& projection,
+        const Eigen::Ref<const RowMajorMatrixXd>& training,
+        const Eigen::Ref<const Eigen::VectorXi>& training_labels,
+        const Eigen::Ref<const RowMajorMatrixXd>& evaluation,
+        const Eigen::Ref<const Eigen::VectorXi>& evaluation_labels,
+        int32_t components, const QdaProjectionOptions& supplied_options) {
+    QdaProjectionOptions options = supplied_options;
+    options.model = DiscriminantModel::Qda;
+    return discriminant_projection_log_loss(projection, training,
+        training_labels, evaluation, evaluation_labels, components, options);
+}
+
+namespace testing {
+
+void run_discriminant_projection_gradient_tests() {
+    RowMajorMatrixXd values(9, 3);
+    values <<
+        0.8, 0.1, -0.2,
+        1.1, -0.2, 0.3,
+        0.6, 0.4, 0.1,
+        -0.4, 1.0, 0.2,
+        0.1, 0.7, -0.3,
+        -0.2, 1.2, 0.5,
+        -0.5, -0.1, 1.0,
+        0.2, -0.4, 0.8,
+        -0.3, 0.3, 1.3;
+    Eigen::VectorXi labels(9);
+    labels << 0, 0, 0, 1, 1, 1, 2, 2, 2;
+    const SufficientStatistics statistics = summarize(values, labels, 3);
+    Eigen::MatrixXd initial(3, 2);
+    initial << 0.8, -0.2, 0.3, 0.9, -0.5, 0.4;
+    Eigen::MatrixXd q, r;
+    positive_qr(initial, q, r);
+    constexpr double step = 1e-6;
+    for (const DiscriminantModel model : {
+            DiscriminantModel::Qda, DiscriminantModel::Lda}) {
+        DiscriminantProjectionOptions options;
+        options.model = model;
+        options.covariance_shrinkage = 0.2;
+        options.ridge = 1e-3;
+        options.sparsity_strength = 0.07;
+        options.n_threads = 1;
+        const ObjectiveResult analytic = objective(
+            q, values, labels, statistics, options, true);
+        Eigen::MatrixXd numerical(q.rows(), q.cols());
+        for (Eigen::Index row = 0; row < q.rows(); ++row) {
+            for (Eigen::Index axis = 0; axis < q.cols(); ++axis) {
+                Eigen::MatrixXd plus = q;
+                Eigen::MatrixXd minus = q;
+                plus(row, axis) += step;
+                minus(row, axis) -= step;
+                numerical(row, axis) = (objective(plus, values, labels,
+                    statistics, options, false).loss
+                    - objective(minus, values, labels, statistics,
+                        options, false).loss) / (2.0 * step);
+            }
+        }
+        const double scale = std::max({1.0, analytic.gradient.norm(),
+            numerical.norm()});
+        if ((analytic.gradient - numerical).norm() > 2e-5 * scale) {
+            throw std::runtime_error(std::string(
+                model == DiscriminantModel::Qda ? "QDA" : "LDA")
+                + " projection gradient disagrees with finite differences");
+        }
+    }
+}
+
+} // namespace testing
 
 } // namespace punkst::projection

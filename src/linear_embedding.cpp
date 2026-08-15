@@ -20,7 +20,15 @@ using punkst::linear_embedding::ProjectionData;
 using punkst::linear_embedding::ProjectionSpace;
 using punkst::linear_embedding::projection_space_name;
 
-constexpr int32_t minimum_qda_cluster_rows = 11;
+constexpr int32_t minimum_discriminant_cluster_rows = 11;
+
+const char* discriminant_name(punkst::projection::DiscriminantModel model) {
+    return model == punkst::projection::DiscriminantModel::Qda ? "QDA" : "LDA";
+}
+
+const char* discriminant_tag(punkst::projection::DiscriminantModel model) {
+    return model == punkst::projection::DiscriminantModel::Qda ? "qda" : "lda";
+}
 
 RowMajorMatrixXd normalize_factor_proportions(
         const Eigen::Ref<const RowMajorMatrixXd>& values) {
@@ -78,12 +86,85 @@ struct ProjectionInput {
     std::optional<punkst::projection::VisualizationSampleMoments> sample_moments;
 };
 
-struct QdaRows {
+struct FactorMassSelection {
+    punkst::linear_embedding::TopicCenterTable table;
+    double retained_mass_proportion = 0.0;
+};
+
+FactorMassSelection select_projection_factors(
+        const punkst::linear_embedding::TopicCenterTable& theta,
+        const std::vector<int32_t>& matched_rows,
+        double min_cover_mass, double min_mass) {
+    const Eigen::Index factors = theta.values.cols();
+    Eigen::VectorXd masses = Eigen::VectorXd::Zero(factors);
+    for (const int32_t row : matched_rows) {
+        masses += theta.values.row(row).transpose();
+    }
+    const double total_mass = masses.sum();
+    if (!(total_mass > 0.0) || !std::isfinite(total_mass)) {
+        throw punkst::linear_embedding::ProjectionFactorFilterError(
+            "Projection factor filter requires positive matched factor mass");
+    }
+
+    std::vector<Eigen::Index> mass_order(static_cast<size_t>(factors));
+    std::iota(mass_order.begin(), mass_order.end(), Eigen::Index{0});
+    std::stable_sort(mass_order.begin(), mass_order.end(),
+        [&](Eigen::Index left, Eigen::Index right) {
+            return masses(left) > masses(right);
+        });
+    std::vector<bool> covered(static_cast<size_t>(factors),
+        min_cover_mass >= 1.0);
+    if (min_cover_mass < 1.0) {
+        double cumulative_mass = 0.0;
+        for (const Eigen::Index factor : mass_order) {
+            covered[static_cast<size_t>(factor)] = true;
+            cumulative_mass += masses(factor);
+            if (cumulative_mass / total_mass > min_cover_mass) break;
+        }
+    }
+
+    std::vector<Eigen::Index> retained;
+    retained.reserve(static_cast<size_t>(factors));
+    double retained_mass = 0.0;
+    for (Eigen::Index factor = 0; factor < factors; ++factor) {
+        const double proportion = masses(factor) / total_mass;
+        if (covered[static_cast<size_t>(factor)]
+                && (min_mass <= 0.0 || proportion >= min_mass)) {
+            retained.push_back(factor);
+            retained_mass += masses(factor);
+        }
+    }
+    if (retained.size() < 3) {
+        throw punkst::linear_embedding::ProjectionFactorFilterError(
+            "Projection factor filter retained "
+            + std::to_string(retained.size()) + " of "
+            + std::to_string(factors)
+            + " factors; at least three are required"
+            + " (--min-cover-mass " + std::to_string(min_cover_mass)
+            + ", --min-mass " + std::to_string(min_mass) + ")");
+    }
+
+    FactorMassSelection selection;
+    selection.table.identifiers = theta.identifiers;
+    selection.table.topics.reserve(retained.size());
+    selection.table.values.resize(theta.values.rows(), retained.size());
+    for (size_t target = 0; target < retained.size(); ++target) {
+        const Eigen::Index source = retained[target];
+        selection.table.topics.push_back(
+            theta.topics[static_cast<size_t>(source)]);
+        selection.table.values.col(static_cast<Eigen::Index>(target)) =
+            theta.values.col(source);
+    }
+    selection.retained_mass_proportion = retained_mass / total_mass;
+    return selection;
+}
+
+struct DiscriminantRows {
     std::vector<int32_t> training;
     std::vector<int32_t> validation;
 };
 
-struct QdaSparsityCvEntry {
+struct DiscriminantSparsityCvEntry {
     double strength = 0.0;
     double mean_heldout_loss = 0.0;
     double standard_error = 0.0;
@@ -97,25 +178,31 @@ struct QdaSparsityCvEntry {
     bool selected = false;
 };
 
-struct QdaSparsityCvResult {
-    std::vector<QdaSparsityCvEntry> entries;
+struct DiscriminantSparsityCvResult {
+    std::vector<DiscriminantSparsityCvEntry> entries;
     double selected_strength = 0.0;
     double eligibility_threshold = 0.0;
     int32_t folds = 0;
     size_t population_rows = 0;
 };
 
-int32_t adaptive_qda_training_cap(
+int32_t adaptive_discriminant_training_cap(
         int32_t input_dimensions, int32_t output_dimensions,
-        int32_t components) {
+        int32_t components, punkst::projection::DiscriminantModel model) {
     const int64_t grassmann_degrees = static_cast<int64_t>(output_dimensions)
         * (input_dimensions - output_dimensions);
-    const int64_t class_degrees = static_cast<int64_t>(components)
-        * output_dimensions * (output_dimensions + 3) / 2;
-    const int64_t total_degrees = grassmann_degrees + class_degrees
-        + components - 1;
+    const int64_t mean_degrees = static_cast<int64_t>(components)
+        * output_dimensions;
+    const int64_t covariance_degrees =
+        model == punkst::projection::DiscriminantModel::Qda
+        ? static_cast<int64_t>(components) * output_dimensions
+            * (output_dimensions + 1) / 2
+        : static_cast<int64_t>(output_dimensions)
+            * (output_dimensions + 1) / 2;
+    const int64_t total_degrees = grassmann_degrees + mean_degrees
+        + covariance_degrees + components - 1;
     const int64_t target = std::max<int64_t>(
-        static_cast<int64_t>(50) * components, 3 * total_degrees);
+        static_cast<int64_t>(200) * components, 3 * total_degrees);
     if (target > std::numeric_limits<int32_t>::max()) {
         return std::numeric_limits<int32_t>::max();
     }
@@ -150,7 +237,7 @@ std::vector<int32_t> stratified_cap(const std::vector<int32_t>& rows,
     }
     if (maximum_rows < components * minimum_per_class) {
         throw std::invalid_argument(
-            "QDA row cap is too small for the represented classes");
+            "Discriminant row cap is too small for the represented classes");
     }
     std::vector<std::vector<int32_t>> by_class(components);
     for (const int32_t row : rows) {
@@ -188,7 +275,8 @@ std::vector<int32_t> stratified_cap(const std::vector<int32_t>& rows,
     return out;
 }
 
-QdaRows make_qda_rows(const Eigen::Ref<const Eigen::VectorXi>& assignments,
+DiscriminantRows make_discriminant_rows(
+        const Eigen::Ref<const Eigen::VectorXi>& assignments,
         int32_t components, double validation_fraction,
         int32_t training_cap, int32_t validation_cap, int32_t seed) {
     std::vector<std::vector<int32_t>> by_class(components);
@@ -196,11 +284,11 @@ QdaRows make_qda_rows(const Eigen::Ref<const Eigen::VectorXi>& assignments,
         by_class[static_cast<size_t>(assignments(row))].push_back(
             static_cast<int32_t>(row));
     }
-    QdaRows out;
+    DiscriminantRows out;
     for (int32_t component = 0; component < components; ++component) {
         if (by_class[component].size() < 3) {
             throw std::invalid_argument(
-                "QDA projection requires at least three matched rows per class");
+                "Discriminant projection requires at least three matched rows per class");
         }
         deterministic_order(by_class[component],
             static_cast<uint64_t>(static_cast<uint32_t>(seed))
@@ -243,13 +331,14 @@ Eigen::VectorXi select_labels(
     return out;
 }
 
-QdaSparsityCvResult cross_validate_qda_sparsity(
+DiscriminantSparsityCvResult cross_validate_discriminant_sparsity(
         const Eigen::Ref<const RowMajorMatrixXd>& coordinates,
         const Eigen::Ref<const Eigen::VectorXi>& assignments,
         int32_t components, const std::vector<double>& strengths,
         int32_t requested_folds, double inner_validation_fraction,
         int32_t training_cap, int32_t validation_cap, int32_t seed,
-        const punkst::projection::QdaProjectionOptions& base_options) {
+        const punkst::projection::DiscriminantProjectionOptions& base_options) {
+    const char* const method = discriminant_name(base_options.model);
     std::vector<int32_t> population(coordinates.rows());
     for (Eigen::Index row = 0; row < coordinates.rows(); ++row) {
         population[static_cast<size_t>(row)] = static_cast<int32_t>(row);
@@ -281,7 +370,8 @@ QdaSparsityCvResult cross_validate_qda_sparsity(
     }
     if (folds < 2) {
         throw std::runtime_error(
-            "QDA sparsity cross-validation requires at least two folds");
+            std::string(method)
+                + " sparsity cross-validation requires at least two folds");
     }
     Eigen::VectorXi fold_by_row(cv_assignments.size());
     for (int32_t component = 0; component < components; ++component) {
@@ -295,12 +385,12 @@ QdaSparsityCvResult cross_validate_qda_sparsity(
         }
     }
 
-    QdaSparsityCvResult out;
+    DiscriminantSparsityCvResult out;
     out.folds = folds;
     out.population_rows = population.size();
     out.entries.reserve(strengths.size());
     for (const double strength : strengths) {
-        QdaSparsityCvEntry entry;
+        DiscriminantSparsityCvEntry entry;
         entry.strength = strength;
         std::vector<double> fold_losses;
         fold_losses.reserve(static_cast<size_t>(folds));
@@ -327,7 +417,7 @@ QdaSparsityCvResult cross_validate_qda_sparsity(
                 static_cast<uint64_t>(static_cast<uint32_t>(seed))
                     ^ static_cast<uint64_t>(fold) ^ 0x696e6e6572ULL)
                 & 0x7fffffffULL);
-            const QdaRows inner_rows = make_qda_rows(
+            const DiscriminantRows inner_rows = make_discriminant_rows(
                 outer_training_labels, components,
                 inner_validation_fraction, training_cap, validation_cap,
                 fold_seed);
@@ -339,17 +429,17 @@ QdaSparsityCvResult cross_validate_qda_sparsity(
                 outer_training_labels, inner_rows.training);
             const Eigen::VectorXi inner_validation_labels = select_labels(
                 outer_training_labels, inner_rows.validation);
-            punkst::projection::QdaProjectionOptions fold_options =
+            punkst::projection::DiscriminantProjectionOptions fold_options =
                 base_options;
             fold_options.seed = fold_seed;
             fold_options.sparsity_strength = strength;
-            const punkst::projection::QdaProjectionResult fit =
-                punkst::projection::fit_qda_projection(
+            const punkst::projection::DiscriminantProjectionResult fit =
+                punkst::projection::fit_discriminant_projection(
                     inner_training, inner_training_labels,
                     inner_validation, inner_validation_labels,
                     components, fold_options);
             const double heldout_loss =
-                punkst::projection::qda_projection_log_loss(
+                punkst::projection::discriminant_projection_log_loss(
                     fit.projection, outer_training, outer_training_labels,
                     outer_validation, outer_validation_labels, components,
                     fold_options);
@@ -377,21 +467,24 @@ QdaSparsityCvResult cross_validate_qda_sparsity(
         entry.mean_training_loss /= folds;
         entry.mean_validation_loss /= folds;
         entry.mean_validation_objective /= folds;
-        notice("QDA sparsity CV lambda %.10g: held-out log loss %.10g (SE %.10g), quartimax %.10g",
-            strength, entry.mean_heldout_loss, entry.standard_error,
+        notice("%s sparsity CV lambda %.10g: held-out log loss %.10g (SE %.10g), quartimax %.10g",
+            method, strength, entry.mean_heldout_loss, entry.standard_error,
             entry.mean_quartimax_score);
         out.entries.push_back(entry);
     }
     const auto baseline = std::find_if(out.entries.begin(), out.entries.end(),
-        [](const QdaSparsityCvEntry& entry) { return entry.strength == 0.0; });
+        [](const DiscriminantSparsityCvEntry& entry) {
+            return entry.strength == 0.0;
+        });
     if (baseline == out.entries.end()) {
-        throw std::logic_error("QDA sparsity CV grid has no zero baseline");
+        throw std::logic_error(std::string(method)
+            + " sparsity CV grid has no zero baseline");
     }
     out.eligibility_threshold = baseline->mean_heldout_loss
         + baseline->standard_error;
     size_t selected = static_cast<size_t>(baseline - out.entries.begin());
     for (size_t index = 0; index < out.entries.size(); ++index) {
-        QdaSparsityCvEntry& entry = out.entries[index];
+        DiscriminantSparsityCvEntry& entry = out.entries[index];
         entry.loss_increase = entry.mean_heldout_loss
             - baseline->mean_heldout_loss;
         entry.eligible = entry.mean_heldout_loss
@@ -449,7 +542,7 @@ void write_axis_weights(const std::string& path,
             != static_cast<Eigen::Index>(topics.size())) {
         throw std::invalid_argument("Invalid embedding axis-weight dimensions");
     }
-    out << "#Cluster";
+    out << "#Factor";
     for (Eigen::Index axis = 0;
             axis < projection.topic_contrasts.cols(); ++axis) {
         out << "\tw" << axis + 1 << "_p\tw" << axis + 1 << "_n";
@@ -479,11 +572,16 @@ void write_axis_weights(const std::string& path,
     }
 }
 
+struct DiscriminantCoordinateOutput {
+    std::string column_name;
+    const punkst::linear_embedding::ProjectionData* data = nullptr;
+    const Eigen::MatrixXd* projection = nullptr;
+};
+
 void write_coordinates(const std::string& path,
     const std::vector<std::string>& identifiers,
     const std::vector<ProjectionOutput>& projections,
-    const punkst::linear_embedding::ProjectionData* qda_data = nullptr,
-    const Eigen::MatrixXd* qda_projection = nullptr) {
+    const std::vector<DiscriminantCoordinateOutput>& discriminant_outputs) {
     std::ofstream out(path);
     if (!out) {
         throw std::runtime_error(
@@ -503,9 +601,11 @@ void write_coordinates(const std::string& path,
             out << '\t' << space << "_full_" << axis + 1;
         }
     }
-    if (qda_projection != nullptr) {
-        for (Eigen::Index axis = 0; axis < qda_projection->cols(); ++axis) {
-            out << "\tlinear_qda_" << axis + 1;
+    for (const DiscriminantCoordinateOutput& learned :
+            discriminant_outputs) {
+        if (learned.projection == nullptr) continue;
+        for (Eigen::Index axis = 0; axis < learned.projection->cols(); ++axis) {
+            out << "\tlinear_" << learned.column_name << '_' << axis + 1;
         }
     }
     out << "\n" << std::scientific << std::setprecision(4);
@@ -533,27 +633,35 @@ void write_coordinates(const std::string& path,
                     projection.visualization.full.projection.col(axis));
             }
         }
-        if (qda_projection != nullptr) {
-            if (qda_data == nullptr || qda_data->coordinates.rows()
+        for (const DiscriminantCoordinateOutput& learned :
+                discriminant_outputs) {
+            if (learned.projection == nullptr) continue;
+            if (learned.data == nullptr || learned.data->coordinates.rows()
                     != static_cast<Eigen::Index>(identifiers.size())
-                || qda_data->coordinates.cols() != qda_projection->rows()) {
-                throw std::invalid_argument("Invalid QDA coordinate dimensions");
+                || learned.data->coordinates.cols()
+                    != learned.projection->rows()) {
+                throw std::invalid_argument(
+                    "Invalid discriminant coordinate dimensions");
             }
-            for (Eigen::Index axis = 0; axis < qda_projection->cols(); ++axis) {
-                out << '\t' << qda_data->coordinates.row(document).dot(
-                    qda_projection->col(axis));
+            for (Eigen::Index axis = 0; axis < learned.projection->cols();
+                    ++axis) {
+                out << '\t' << learned.data->coordinates.row(document).dot(
+                    learned.projection->col(axis));
             }
         }
         out << '\n';
     }
 }
 
-void write_qda_transform(const std::string& path,
+void write_discriminant_transform(const std::string& path,
         const std::vector<std::string>& topics,
         const Eigen::Ref<const Eigen::MatrixXd>& projection,
         const Eigen::Ref<const Eigen::MatrixXd>& topic_contrasts) {
     std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write QDA transform: " + path);
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write discriminant transform: " + path);
+    }
     out << "#axis\tbasis\tindex\tname\tcoefficient\n"
         << std::scientific << std::setprecision(10);
     for (Eigen::Index axis = 0; axis < projection.cols(); ++axis) {
@@ -571,12 +679,8 @@ void write_qda_transform(const std::string& path,
     }
 }
 
-void write_qda_sparsity_cv(const std::string& path,
-        const QdaSparsityCvResult& result) {
-    std::ofstream out(path);
-    if (!out) {
-        throw std::runtime_error("Cannot write QDA sparsity CV trace: " + path);
-    }
+void write_discriminant_sparsity_cv(std::ostream& out,
+        const DiscriminantSparsityCvResult& result) {
     out << "#lambda\tfolds\tcv_rows\theldout_rows"
         "\tmean_heldout_logloss\tse_heldout_logloss"
         "\tloss_increase_from_zero\tmean_quartimax_score"
@@ -584,7 +688,7 @@ void write_qda_sparsity_cv(const std::string& path,
         "\tmean_inner_validation_objective\teligibility_threshold"
         "\teligible\tselected\n"
         << std::scientific << std::setprecision(10);
-    for (const QdaSparsityCvEntry& entry : result.entries) {
+    for (const DiscriminantSparsityCvEntry& entry : result.entries) {
         out << entry.strength << '\t' << result.folds << '\t'
             << result.population_rows << '\t' << entry.heldout_rows << '\t'
             << entry.mean_heldout_loss << '\t' << entry.standard_error << '\t'
@@ -598,33 +702,203 @@ void write_qda_sparsity_cv(const std::string& path,
     }
 }
 
-void write_qda_diagnostics(const std::string& path,
-        const punkst::projection::QdaProjectionResult& result,
-        const punkst::projection::QdaProjectionOptions& options,
+void write_discriminant_diagnostics(const std::string& path,
+        const punkst::projection::DiscriminantProjectionResult& result,
+        const punkst::projection::DiscriminantProjectionOptions& options,
         size_t training_rows, size_t validation_rows,
         int32_t training_hard_cap, int32_t training_adaptive_cap,
-        int32_t training_effective_cap, const char* sparsity_selection) {
+        int32_t training_effective_cap, const char* sparsity_selection,
+        const std::optional<DiscriminantSparsityCvResult>& cv_result) {
     std::ofstream out(path);
-    if (!out) throw std::runtime_error("Cannot write QDA diagnostics: " + path);
-    out << "#training_rows\tvalidation_rows\tdimensions\trestart\tepoch"
-        "\ttraining_hard_cap\ttraining_adaptive_cap\ttraining_effective_cap"
-        "\ttraining_logloss\tvalidation_logloss\tseed\tepochs\trestarts"
-        "\tlearning_rate\tcovariance_shrinkage\tridge\tevaluate_every"
-        "\tpatience_checks\tsparsity_selection\tsparsity_strength"
-        "\tquartimax_score\ttraining_objective\tvalidation_objective\n"
-        << training_rows << '\t' << validation_rows << '\t'
-        << result.projection.cols() << '\t' << result.restart << '\t'
-        << result.epoch << '\t' << training_hard_cap << '\t'
-        << training_adaptive_cap << '\t' << training_effective_cap << '\t'
+    if (!out) {
+        throw std::runtime_error(
+            "Cannot write discriminant diagnostics: " + path);
+    }
+    out << "## diagnostics\n#statistics\tvalue\n"
+        << "training_rows\t" << training_rows << '\n'
+        << "validation_rows\t" << validation_rows << '\n'
+        << "dimensions\t" << result.projection.cols() << '\n'
+        << "restart\t" << result.restart << '\n'
+        << "epoch\t" << result.epoch << '\n'
+        << "training_hard_cap\t" << training_hard_cap << '\n'
+        << "training_adaptive_cap\t" << training_adaptive_cap << '\n'
+        << "training_effective_cap\t" << training_effective_cap << '\n'
         << std::scientific << std::setprecision(10)
-        << result.training_loss << '\t' << result.validation_loss << '\t'
-        << options.seed << '\t' << options.epochs << '\t' << options.restarts
-        << '\t' << options.learning_rate << '\t'
-        << options.covariance_shrinkage << '\t' << options.ridge << '\t'
-        << options.evaluate_every << '\t' << options.patience_checks << '\t'
-        << sparsity_selection << '\t' << options.sparsity_strength << '\t'
-        << result.quartimax_score << '\t' << result.training_objective << '\t'
-        << result.validation_objective << '\n';
+        << "training_logloss\t" << result.training_loss << '\n'
+        << "validation_logloss\t" << result.validation_loss << '\n'
+        << "seed\t" << options.seed << '\n'
+        << "epochs\t" << options.epochs << '\n'
+        << "restarts\t" << options.restarts << '\n'
+        << "learning_rate\t" << options.learning_rate << '\n'
+        << "covariance_shrinkage\t" << options.covariance_shrinkage << '\n'
+        << "ridge\t" << options.ridge << '\n'
+        << "evaluate_every\t" << options.evaluate_every << '\n'
+        << "patience_checks\t" << options.patience_checks << '\n'
+        << "sparsity_selection\t" << sparsity_selection << '\n'
+        << "sparsity_strength\t" << options.sparsity_strength << '\n'
+        << "quartimax_score\t" << result.quartimax_score << '\n'
+        << "training_objective\t" << result.training_objective << '\n'
+        << "validation_objective\t" << result.validation_objective << '\n';
+    if (cv_result) {
+        out << "## sparsity_cv\n";
+        write_discriminant_sparsity_cv(out, *cv_result);
+    }
+}
+
+struct DiscriminantPipelineOptions {
+    punkst::projection::DiscriminantModel model =
+        punkst::projection::DiscriminantModel::Qda;
+    int32_t dimensions = 2;
+    int32_t threads = 1;
+    int32_t train_max_rows = 12000;
+    int32_t validation_max_rows = 4000;
+    double validation_fraction = 0.20;
+    int32_t epochs = 250;
+    double learning_rate = 0.03;
+    double covariance_shrinkage = 0.10;
+    double ridge = 1e-5;
+    int32_t restarts = 2;
+    int32_t evaluate_every = 5;
+    int32_t patience = 12;
+    int32_t seed = 1;
+    double sparsity_strength = 0.0;
+    bool sparsity_cv = false;
+    int32_t sparsity_cv_folds = 5;
+    std::vector<double> sparsity_grid;
+};
+
+std::optional<punkst::projection::DiscriminantProjectionResult>
+fit_and_write_discriminant_projection(
+        const Eigen::Ref<const RowMajorMatrixXd>& matched_coordinates,
+        const Eigen::Ref<const Eigen::VectorXi>& assignments,
+        int32_t components, int32_t topics,
+        const Eigen::Ref<const Eigen::MatrixXd>& helmert,
+        const std::vector<std::string>& topic_names,
+        const std::string& partition_label, const std::string& output_prefix,
+        const DiscriminantPipelineOptions& pipeline) {
+    const char* const method = discriminant_name(pipeline.model);
+    const char* const tag = discriminant_tag(pipeline.model);
+    if (topics < 3) {
+        warning("%s projection partition %s omitted: at least three topics are required",
+            method, partition_label.c_str());
+        return std::nullopt;
+    }
+
+    Eigen::VectorXi cluster_counts = Eigen::VectorXi::Zero(components);
+    for (Eigen::Index row = 0; row < assignments.size(); ++row) {
+        ++cluster_counts(assignments(row));
+    }
+    std::vector<int32_t> component_map(static_cast<size_t>(components), -1);
+    int32_t retained_components = 0;
+    for (int32_t component = 0; component < components; ++component) {
+        if (cluster_counts(component) >= minimum_discriminant_cluster_rows) {
+            component_map[static_cast<size_t>(component)] =
+                retained_components++;
+        }
+    }
+    notice("%s projection partition %s: %d of %d clusters enter optimization; clusters with <= 10 matched rows are discarded",
+        method, partition_label.c_str(), retained_components, components);
+    if (retained_components < 2) {
+        warning("%s projection partition %s omitted: fewer than two clusters have more than 10 matched rows",
+            method, partition_label.c_str());
+        return std::nullopt;
+    }
+
+    std::vector<int32_t> documents;
+    documents.reserve(static_cast<size_t>(assignments.size()));
+    for (Eigen::Index document = 0; document < assignments.size(); ++document) {
+        if (component_map[static_cast<size_t>(assignments(document))] >= 0) {
+            documents.push_back(static_cast<int32_t>(document));
+        }
+    }
+    const RowMajorMatrixXd coordinates = select_rows(
+        matched_coordinates, documents);
+    Eigen::VectorXi retained_assignments(documents.size());
+    for (size_t row = 0; row < documents.size(); ++row) {
+        retained_assignments(static_cast<Eigen::Index>(row)) =
+            component_map[static_cast<size_t>(assignments(documents[row]))];
+    }
+
+    punkst::projection::DiscriminantProjectionOptions options;
+    options.model = pipeline.model;
+    options.dimensions = std::min(pipeline.dimensions, topics - 2);
+    if (pipeline.model == punkst::projection::DiscriminantModel::Lda) {
+        options.dimensions = std::min(options.dimensions,
+            retained_components - 1);
+    }
+    options.epochs = pipeline.epochs;
+    options.learning_rate = pipeline.learning_rate;
+    options.covariance_shrinkage = pipeline.covariance_shrinkage;
+    options.ridge = pipeline.ridge;
+    options.restarts = pipeline.restarts;
+    options.evaluate_every = pipeline.evaluate_every;
+    options.patience_checks = pipeline.patience;
+    options.seed = pipeline.seed;
+    options.n_threads = pipeline.threads;
+    options.sparsity_strength = pipeline.sparsity_strength;
+    if (options.dimensions < pipeline.dimensions) {
+        notice("%s projection partition %s resolved dimensions: %d (requested %d)",
+            method, partition_label.c_str(), options.dimensions,
+            pipeline.dimensions);
+    }
+    const int32_t adaptive_training_cap =
+        adaptive_discriminant_training_cap(
+            static_cast<int32_t>(coordinates.cols()), options.dimensions,
+            retained_components, pipeline.model);
+    const int32_t effective_training_cap = pipeline.train_max_rows > 0
+        ? std::min(pipeline.train_max_rows, adaptive_training_cap)
+        : adaptive_training_cap;
+    notice("%s projection partition %s training cap: adaptive %d, hard %d, effective %d",
+        method, partition_label.c_str(), adaptive_training_cap,
+        pipeline.train_max_rows, effective_training_cap);
+
+    std::optional<DiscriminantSparsityCvResult> cv_result;
+    if (pipeline.sparsity_cv) {
+        notice("%s sparsity CV partition %s: testing %zu strengths with up to %d outer folds",
+            method, partition_label.c_str(), pipeline.sparsity_grid.size(),
+            pipeline.sparsity_cv_folds);
+        cv_result = cross_validate_discriminant_sparsity(
+            coordinates, retained_assignments, retained_components,
+            pipeline.sparsity_grid, pipeline.sparsity_cv_folds,
+            pipeline.validation_fraction, effective_training_cap,
+            pipeline.validation_max_rows, pipeline.seed, options);
+        options.sparsity_strength = cv_result->selected_strength;
+        notice("%s sparsity CV partition %s: selected lambda %.10g; eligibility threshold %.10g; folds %d; rows %zu",
+            method, partition_label.c_str(), cv_result->selected_strength,
+            cv_result->eligibility_threshold, cv_result->folds,
+            cv_result->population_rows);
+    }
+    const DiscriminantRows rows = make_discriminant_rows(
+        retained_assignments, retained_components,
+        pipeline.validation_fraction, effective_training_cap,
+        pipeline.validation_max_rows, pipeline.seed);
+    const RowMajorMatrixXd training = select_rows(coordinates, rows.training);
+    const RowMajorMatrixXd validation = select_rows(
+        coordinates, rows.validation);
+    const Eigen::VectorXi training_labels = select_labels(
+        retained_assignments, rows.training);
+    const Eigen::VectorXi validation_labels = select_labels(
+        retained_assignments, rows.validation);
+    punkst::projection::DiscriminantProjectionResult result =
+        punkst::projection::fit_discriminant_projection(
+            training, training_labels, validation, validation_labels,
+            retained_components, options);
+
+    const Eigen::MatrixXd topic_contrasts = helmert.transpose()
+        * result.projection;
+    const std::string base = output_prefix + ".linear." + tag;
+    write_discriminant_transform(base + ".transform.tsv", topic_names,
+        result.projection, topic_contrasts);
+    punkst::projection::VisualizationProjection axes;
+    axes.projection = result.projection;
+    axes.topic_contrasts = topic_contrasts;
+    write_axis_weights(base + ".axes.tsv", topic_names, axes);
+    write_discriminant_diagnostics(base + ".diagnostics.tsv", result,
+        options, rows.training.size(), rows.validation.size(),
+        pipeline.train_max_rows, adaptive_training_cap,
+        effective_training_cap, pipeline.sparsity_cv ? "cv"
+            : options.sparsity_strength > 0.0 ? "fixed" : "none", cv_result);
+    return result;
 }
 
 } // namespace
@@ -697,7 +971,7 @@ void punkst::linear_embedding::write_cluster_factors(
     for (Eigen::Index cluster = 0; cluster < sums.cols(); ++cluster) {
         output << "\tcluster_" << cluster;
     }
-    output << '\n' << std::setprecision(6);
+    output << '\n' << std::setprecision(17);
     for (Eigen::Index factor = 0; factor < sums.rows(); ++factor) {
         output << factor_names[static_cast<size_t>(factor)];
         for (Eigen::Index cluster = 0; cluster < sums.cols(); ++cluster) {
@@ -709,9 +983,19 @@ void punkst::linear_embedding::write_cluster_factors(
 
 void punkst::linear_embedding::Options::validate() {
     if (dimensions <= 0 || threads <= 0
-            || !(covariance_floor > 0.0)
-            || !std::isfinite(covariance_floor)) {
+            || (eigen_projection && (!(covariance_floor > 0.0)
+                || !std::isfinite(covariance_floor)))) {
         throw std::invalid_argument("Invalid linear embedding options");
+    }
+    if (!std::isfinite(min_cover_mass) || min_cover_mass < 0.0
+            || min_cover_mass > 1.0 || !std::isfinite(min_mass)
+            || min_mass < 0.0 || min_mass > 1.0) {
+        throw std::invalid_argument(
+            "Projection factor mass thresholds must be between zero and one");
+    }
+    if (!eigen_projection && !qda_projection && !lda_projection) {
+        throw std::invalid_argument(
+            "At least one of eigen, QDA, or LDA projection must be enabled");
     }
     if (projection_spaces.empty()
             || std::find(projection_spaces.begin(), projection_spaces.end(),
@@ -719,51 +1003,72 @@ void punkst::linear_embedding::Options::validate() {
         throw std::invalid_argument(
             "Linear embedding requires the linear projection space");
     }
-    if (std::find(projection_spaces.begin(), projection_spaces.end(),
+    if (eigen_projection
+            && std::find(projection_spaces.begin(), projection_spaces.end(),
             ProjectionSpace::Ilr) != projection_spaces.end()
             && (!(center_floor > 0.0) || !std::isfinite(center_floor))) {
         throw std::invalid_argument(
             "Projection center floor must be positive and finite");
     }
-    if (!qda_projection) return;
-    if (qda_train_max_rows < 0 || qda_validation_max_rows < 0
-            || !(qda_validation_fraction > 0.0)
-            || !(qda_validation_fraction < 1.0)
-            || qda_epochs <= 0 || qda_restarts <= 0
-            || qda_evaluate_every <= 0 || qda_patience <= 0
-            || qda_seed < 0 || !(qda_learning_rate > 0.0)
-            || !(qda_covariance_shrinkage >= 0.0)
-            || !(qda_covariance_shrinkage <= 1.0)
-            || !(qda_ridge > 0.0)) {
-        throw std::invalid_argument("Invalid QDA projection options");
-    }
-    if (!(qda_sparsity_strength >= 0.0)
-            || !std::isfinite(qda_sparsity_strength)
-            || qda_sparsity_cv_folds < 2) {
-        throw std::invalid_argument("Invalid QDA sparsity options");
-    }
-    if (qda_sparsity_cv && qda_sparsity_grid.empty()) {
-        qda_sparsity_grid = {
-            0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0};
-    }
-    if (qda_sparsity_cv) {
-        for (const double strength : qda_sparsity_grid) {
+    auto validate_discriminant = [](const char* name, bool enabled,
+            int32_t train_max_rows, int32_t validation_max_rows,
+            double validation_fraction, int32_t epochs, int32_t restarts,
+            int32_t evaluate_every, int32_t patience, int32_t seed,
+            double learning_rate, double covariance_shrinkage, double ridge,
+            double sparsity_strength, bool sparsity_cv,
+            int32_t sparsity_cv_folds, std::vector<double>& sparsity_grid) {
+        if (!enabled) return;
+        if (train_max_rows < 0 || validation_max_rows < 0
+                || !(validation_fraction > 0.0)
+                || !(validation_fraction < 1.0)
+                || epochs <= 0 || restarts <= 0 || evaluate_every <= 0
+                || patience <= 0 || seed < 0 || !(learning_rate > 0.0)
+                || !(covariance_shrinkage >= 0.0)
+                || !(covariance_shrinkage <= 1.0) || !(ridge > 0.0)) {
+            throw std::invalid_argument(std::string("Invalid ") + name
+                + " projection options");
+        }
+        if (!(sparsity_strength >= 0.0)
+                || !std::isfinite(sparsity_strength)
+                || sparsity_cv_folds < 2) {
+            throw std::invalid_argument(std::string("Invalid ") + name
+                + " sparsity options");
+        }
+        if (sparsity_cv && sparsity_grid.empty()) {
+            sparsity_grid = {
+                0.0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0};
+        }
+        if (!sparsity_cv) return;
+        for (const double strength : sparsity_grid) {
             if (!(strength >= 0.0) || !std::isfinite(strength)) {
                 throw std::invalid_argument(
-                    "QDA sparsity grid must be finite and nonnegative");
+                    std::string(name)
+                        + " sparsity grid must be finite and nonnegative");
             }
         }
-        std::sort(qda_sparsity_grid.begin(), qda_sparsity_grid.end());
+        std::sort(sparsity_grid.begin(), sparsity_grid.end());
         const auto duplicate = std::adjacent_find(
-            qda_sparsity_grid.begin(), qda_sparsity_grid.end());
-        if (duplicate != qda_sparsity_grid.end()
-                || qda_sparsity_grid.size() < 2
-                || qda_sparsity_grid.front() != 0.0
-                || !(qda_sparsity_grid.back() > 0.0)) {
+            sparsity_grid.begin(), sparsity_grid.end());
+        if (duplicate != sparsity_grid.end() || sparsity_grid.size() < 2
+                || sparsity_grid.front() != 0.0
+                || !(sparsity_grid.back() > 0.0)) {
             throw std::invalid_argument(
-                "QDA sparsity grid requires unique values including zero and a positive candidate");
+                std::string(name)
+                    + " sparsity grid requires unique values including zero and a positive candidate");
         }
-    }
+    };
+    validate_discriminant("QDA", qda_projection, qda_train_max_rows,
+        qda_validation_max_rows, qda_validation_fraction, qda_epochs,
+        qda_restarts, qda_evaluate_every, qda_patience, qda_seed,
+        qda_learning_rate, qda_covariance_shrinkage, qda_ridge,
+        qda_sparsity_strength, qda_sparsity_cv, qda_sparsity_cv_folds,
+        qda_sparsity_grid);
+    validate_discriminant("LDA", lda_projection, lda_train_max_rows,
+        lda_validation_max_rows, lda_validation_fraction, lda_epochs,
+        lda_restarts, lda_evaluate_every, lda_patience, lda_seed,
+        lda_learning_rate, lda_covariance_shrinkage, lda_ridge,
+        lda_sparsity_strength, lda_sparsity_cv, lda_sparsity_cv_folds,
+        lda_sparsity_grid);
 }
 
 void punkst::linear_embedding::run_partition(
@@ -793,18 +1098,31 @@ void punkst::linear_embedding::run_partition(
                 "Invalid linear embedding assignment or row mapping");
         }
     }
-    const int32_t topics = static_cast<int32_t>(theta.values.cols());
-    if (topics < 2 || assignments.size() < topics) {
+    const FactorMassSelection factor_selection = select_projection_factors(
+        theta, matched_theta_rows, pipeline.min_cover_mass,
+        pipeline.min_mass);
+    const TopicCenterTable& projection_theta = factor_selection.table;
+    const int32_t topics = static_cast<int32_t>(
+        projection_theta.values.cols());
+    if (assignments.size() < topics) {
         throw std::runtime_error(
             "Linear embedding partition has too few matched units");
     }
+    notice("Projection factor filter partition %s retained %d of %d factors (retained matched mass proportion %.10g; min cover %.10g; min mass %.10g)",
+        partition_label.c_str(), topics,
+        static_cast<int32_t>(theta.values.cols()),
+        factor_selection.retained_mass_proportion,
+        pipeline.min_cover_mass, pipeline.min_mass);
     const Eigen::MatrixXd helmert = normalized_helmert(topics);
     std::vector<ProjectionInput> inputs;
     inputs.reserve(pipeline.projection_spaces.size());
     for (const ProjectionSpace space : pipeline.projection_spaces) {
+        if (!pipeline.eigen_projection && space != ProjectionSpace::Linear) {
+            continue;
+        }
         ProjectionInput input;
         input.space = space;
-        input.data = prepare_projection(theta.values, space, helmert,
+        input.data = prepare_projection(projection_theta.values, space, helmert,
             pipeline.center_floor);
         input.matched_coordinates.resize(
             matched_theta_rows.size(), input.data.coordinates.cols());
@@ -829,135 +1147,59 @@ void punkst::linear_embedding::run_partition(
             break;
         }
     }
-    std::optional<punkst::projection::QdaProjectionResult> qda_result;
-    std::optional<QdaRows> qda_rows;
-    punkst::projection::QdaProjectionOptions qda_options;
-    if (pipeline.qda_projection && topics < 3) {
-        warning("QDA projection partition %s omitted: at least three topics are required",
-            partition_label.c_str());
-    } else if (pipeline.qda_projection) {
-        Eigen::VectorXi cluster_counts = Eigen::VectorXi::Zero(components);
-        for (Eigen::Index row = 0; row < assignments.size(); ++row) {
-            ++cluster_counts(assignments(row));
-        }
-        std::vector<int32_t> qda_component_map(
-            static_cast<size_t>(components), -1);
-        int32_t qda_components = 0;
-        for (int32_t component = 0; component < components; ++component) {
-            if (cluster_counts(component) >= minimum_qda_cluster_rows) {
-                qda_component_map[static_cast<size_t>(component)] =
-                    qda_components++;
-            }
-        }
-        notice("QDA projection partition %s: %d of %d clusters enter optimization; clusters with <= 10 matched rows are discarded",
-            partition_label.c_str(), qda_components, components);
-        if (qda_components < 2) {
-            warning("QDA projection partition %s omitted: fewer than two clusters have more than 10 matched rows",
-                partition_label.c_str());
-        } else {
-            std::vector<int32_t> qda_documents;
-            qda_documents.reserve(static_cast<size_t>(assignments.size()));
-            for (Eigen::Index document = 0; document < assignments.size();
-                    ++document) {
-                if (qda_component_map[static_cast<size_t>(
-                        assignments(document))] >= 0) {
-                    qda_documents.push_back(static_cast<int32_t>(document));
-                }
-            }
-            const RowMajorMatrixXd qda_coordinates = select_rows(
-                linear_input->matched_coordinates, qda_documents);
-            Eigen::VectorXi qda_assignments(qda_documents.size());
-            for (size_t row = 0; row < qda_documents.size(); ++row) {
-                qda_assignments(static_cast<Eigen::Index>(row)) =
-                    qda_component_map[static_cast<size_t>(assignments(
-                        qda_documents[row]))];
-            }
-            qda_options.dimensions = std::min(
-                pipeline.dimensions, topics - 2);
-            qda_options.epochs = pipeline.qda_epochs;
-            qda_options.learning_rate = pipeline.qda_learning_rate;
-            qda_options.covariance_shrinkage =
-                pipeline.qda_covariance_shrinkage;
-            qda_options.ridge = pipeline.qda_ridge;
-            qda_options.restarts = pipeline.qda_restarts;
-            qda_options.evaluate_every = pipeline.qda_evaluate_every;
-            qda_options.patience_checks = pipeline.qda_patience;
-            qda_options.seed = pipeline.qda_seed;
-            qda_options.n_threads = pipeline.threads;
-            qda_options.sparsity_strength =
-                pipeline.qda_sparsity_strength;
-            if (qda_options.dimensions < pipeline.dimensions) {
-                notice("QDA projection partition %s resolved dimensions: %d (requested %d)",
-                    partition_label.c_str(), qda_options.dimensions,
-                    pipeline.dimensions);
-            }
-            const int32_t adaptive_training_cap = adaptive_qda_training_cap(
-                static_cast<int32_t>(qda_coordinates.cols()),
-                qda_options.dimensions, qda_components);
-            const int32_t effective_training_cap =
-                pipeline.qda_train_max_rows > 0
-                ? std::min(pipeline.qda_train_max_rows,
-                    adaptive_training_cap)
-                : adaptive_training_cap;
-            notice("QDA projection partition %s training cap: adaptive %d, hard %d, effective %d",
-                partition_label.c_str(), adaptive_training_cap,
-                pipeline.qda_train_max_rows, effective_training_cap);
-            std::optional<QdaSparsityCvResult> cv_result;
-            if (pipeline.qda_sparsity_cv) {
-                notice("QDA sparsity CV partition %s: testing %zu strengths with up to %d outer folds",
-                    partition_label.c_str(),
-                    pipeline.qda_sparsity_grid.size(),
-                    pipeline.qda_sparsity_cv_folds);
-                cv_result = cross_validate_qda_sparsity(
-                    qda_coordinates, qda_assignments, qda_components,
-                    pipeline.qda_sparsity_grid,
-                    pipeline.qda_sparsity_cv_folds,
-                    pipeline.qda_validation_fraction,
-                    effective_training_cap,
-                    pipeline.qda_validation_max_rows,
-                    pipeline.qda_seed, qda_options);
-                qda_options.sparsity_strength = cv_result->selected_strength;
-                notice("QDA sparsity CV partition %s: selected lambda %.10g; eligibility threshold %.10g; folds %d; rows %zu",
-                    partition_label.c_str(), cv_result->selected_strength,
-                    cv_result->eligibility_threshold, cv_result->folds,
-                    cv_result->population_rows);
-            }
-            qda_rows = make_qda_rows(qda_assignments, qda_components,
-                pipeline.qda_validation_fraction, effective_training_cap,
-                pipeline.qda_validation_max_rows, pipeline.qda_seed);
-            const RowMajorMatrixXd training = select_rows(
-                qda_coordinates, qda_rows->training);
-            const RowMajorMatrixXd validation = select_rows(
-                qda_coordinates, qda_rows->validation);
-            const Eigen::VectorXi training_labels = select_labels(
-                qda_assignments, qda_rows->training);
-            const Eigen::VectorXi validation_labels = select_labels(
-                qda_assignments, qda_rows->validation);
-            qda_result = punkst::projection::fit_qda_projection(
-                training, training_labels, validation, validation_labels,
-                qda_components, qda_options);
-            const Eigen::MatrixXd topic_contrasts = helmert.transpose()
-                * qda_result->projection;
-            write_qda_transform(output_prefix + ".linear.qda.transform.tsv",
-                theta.topics, qda_result->projection, topic_contrasts);
-            punkst::projection::VisualizationProjection axes;
-            axes.projection = qda_result->projection;
-            axes.topic_contrasts = topic_contrasts;
-            write_axis_weights(output_prefix + ".linear.qda.axes.tsv",
-                theta.topics, axes);
-            if (cv_result) {
-                write_qda_sparsity_cv(
-                    output_prefix + ".linear.qda.sparsity_cv.tsv",
-                    *cv_result);
-            }
-            write_qda_diagnostics(
-                output_prefix + ".linear.qda.diagnostics.tsv",
-                *qda_result, qda_options, qda_rows->training.size(),
-                qda_rows->validation.size(), pipeline.qda_train_max_rows,
-                adaptive_training_cap, effective_training_cap,
-                pipeline.qda_sparsity_cv ? "cv"
-                    : qda_options.sparsity_strength > 0.0 ? "fixed" : "none");
-        }
+    std::optional<punkst::projection::DiscriminantProjectionResult> qda_result;
+    if (pipeline.qda_projection) {
+        DiscriminantPipelineOptions learned;
+        learned.model = punkst::projection::DiscriminantModel::Qda;
+        learned.dimensions = pipeline.dimensions;
+        learned.threads = pipeline.threads;
+        learned.train_max_rows = pipeline.qda_train_max_rows;
+        learned.validation_max_rows = pipeline.qda_validation_max_rows;
+        learned.validation_fraction = pipeline.qda_validation_fraction;
+        learned.epochs = pipeline.qda_epochs;
+        learned.learning_rate = pipeline.qda_learning_rate;
+        learned.covariance_shrinkage = pipeline.qda_covariance_shrinkage;
+        learned.ridge = pipeline.qda_ridge;
+        learned.restarts = pipeline.qda_restarts;
+        learned.evaluate_every = pipeline.qda_evaluate_every;
+        learned.patience = pipeline.qda_patience;
+        learned.seed = pipeline.qda_seed;
+        learned.sparsity_strength = pipeline.qda_sparsity_strength;
+        learned.sparsity_cv = pipeline.qda_sparsity_cv;
+        learned.sparsity_cv_folds = pipeline.qda_sparsity_cv_folds;
+        learned.sparsity_grid = pipeline.qda_sparsity_grid;
+        qda_result = fit_and_write_discriminant_projection(
+            linear_input->matched_coordinates, assignments, components,
+            topics, helmert, projection_theta.topics, partition_label,
+            output_prefix,
+            learned);
+    }
+    std::optional<punkst::projection::DiscriminantProjectionResult> lda_result;
+    if (pipeline.lda_projection) {
+        DiscriminantPipelineOptions learned;
+        learned.model = punkst::projection::DiscriminantModel::Lda;
+        learned.dimensions = pipeline.dimensions;
+        learned.threads = pipeline.threads;
+        learned.train_max_rows = pipeline.lda_train_max_rows;
+        learned.validation_max_rows = pipeline.lda_validation_max_rows;
+        learned.validation_fraction = pipeline.lda_validation_fraction;
+        learned.epochs = pipeline.lda_epochs;
+        learned.learning_rate = pipeline.lda_learning_rate;
+        learned.covariance_shrinkage = pipeline.lda_covariance_shrinkage;
+        learned.ridge = pipeline.lda_ridge;
+        learned.restarts = pipeline.lda_restarts;
+        learned.evaluate_every = pipeline.lda_evaluate_every;
+        learned.patience = pipeline.lda_patience;
+        learned.seed = pipeline.lda_seed;
+        learned.sparsity_strength = pipeline.lda_sparsity_strength;
+        learned.sparsity_cv = pipeline.lda_sparsity_cv;
+        learned.sparsity_cv_folds = pipeline.lda_sparsity_cv_folds;
+        learned.sparsity_grid = pipeline.lda_sparsity_grid;
+        lda_result = fit_and_write_discriminant_projection(
+            linear_input->matched_coordinates, assignments, components,
+            topics, helmert, projection_theta.topics, partition_label,
+            output_prefix,
+            learned);
     }
 
     punkst::projection::VisualizationOptions visualization_options;
@@ -970,6 +1212,7 @@ void punkst::linear_embedding::run_partition(
     std::vector<ProjectionOutput> projections;
     projections.reserve(inputs.size());
     for (ProjectionInput& input : inputs) {
+        if (!pipeline.eigen_projection) continue;
         punkst::projection::VisualizationResult visualization;
         if (pipeline.include_full) {
             const punkst::projection::VisualizationMoments moments =
@@ -1041,19 +1284,29 @@ void punkst::linear_embedding::run_partition(
         const std::string space_prefix = output_prefix + "."
             + projection_space_name(input.space);
         punkst::projection::write_visualization_axes(
-            space_prefix + ".transform.tsv", theta.topics, visualization);
+            space_prefix + ".transform.tsv", projection_theta.topics,
+            visualization);
         write_axis_weights(space_prefix + ".mean.axes.tsv",
-            theta.topics, visualization.mean);
+            projection_theta.topics, visualization.mean);
         if (pipeline.include_full) {
             write_axis_weights(space_prefix + ".full.axes.tsv",
-                theta.topics, visualization.full);
+                projection_theta.topics, visualization.full);
         }
         projections.push_back(
             {input.space, &input.data, std::move(visualization)});
     }
-    write_coordinates(output_prefix + ".results.tsv", theta.identifiers,
-        projections, qda_result ? &linear_input->data : nullptr,
-        qda_result ? &qda_result->projection : nullptr);
+    std::vector<DiscriminantCoordinateOutput> discriminant_outputs;
+    if (qda_result) {
+        discriminant_outputs.push_back(
+            {"qda", &linear_input->data, &qda_result->projection});
+    }
+    if (lda_result) {
+        discriminant_outputs.push_back(
+            {"lda", &linear_input->data, &lda_result->projection});
+    }
+    write_coordinates(output_prefix + ".results.tsv",
+        projection_theta.identifiers,
+        projections, discriminant_outputs);
     notice("Linear embedding wrote %zu projection space(s) under %s and coordinates to %s.results.tsv",
         projections.size(), output_prefix.c_str(), output_prefix.c_str());
 }

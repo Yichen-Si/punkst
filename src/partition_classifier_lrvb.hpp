@@ -41,6 +41,13 @@ PropagatedPrediction propagate_lda(const Model& classifier,
     const Eigen::Ref<const Eigen::MatrixXd>& lda_allocation_kernel,
     double alpha, const PropagationOptions& options = {});
 
+PropagatedPrediction propagate_lda_from_composition(
+    const Model& classifier,
+    const Eigen::Ref<const Eigen::VectorXd>& composition,
+    const Document& document,
+    const Eigen::Ref<const Eigen::MatrixXd>& lda_allocation_kernel,
+    double alpha, const PropagationOptions& options = {});
+
 PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
     const GammaPoissonDocumentPosterior& posterior,
     const Document& document,
@@ -49,6 +56,20 @@ PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
     const Eigen::MatrixXd& expected_beta,
     double prior_shape,
     const Eigen::Ref<const Eigen::VectorXd>& prior_rate,
+    const Eigen::VectorXd* feature_dispersion,
+    const PropagationOptions& options = {},
+    const Eigen::VectorXd* initial_composition = nullptr);
+
+PropagatedPrediction propagate_gamma_poisson_from_composition(
+    const Model& classifier,
+    const Eigen::Ref<const Eigen::VectorXd>& composition,
+    const Document& document,
+    const Eigen::Ref<const Eigen::VectorXd>& topic_capacity,
+    const Eigen::MatrixXd& beta_allocation_kernel,
+    const Eigen::MatrixXd& expected_beta,
+    double prior_shape,
+    const Eigen::Ref<const Eigen::VectorXd>& prior_rate,
+    double size_factor,
     const Eigen::VectorXd* feature_dispersion,
     const PropagationOptions& options = {});
 

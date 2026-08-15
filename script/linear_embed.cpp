@@ -241,14 +241,20 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
       .add_option("visual-full",
           "Also compute the full visualization using covariance-shape differences",
           embedding_cli.include_full);
-    embedding_cli.add_qda_options(parameters);
+    embedding_cli.add_discriminant_options(parameters);
     parameters.add_option("threads",
-          "Number of covariance and QDA worker threads",
+          "Number of covariance and discriminant-projection worker threads",
           threads);
 
     try {
         parameters.readArgs(argc, argv);
-        embedding_cli.finalize_qda_options(parameters);
+        embedding_cli.finalize_discriminant_options(parameters);
+        if (!embedding_cli.values.eigen_projection
+                && !embedding_cli.values.qda_projection
+                && !embedding_cli.values.lda_projection) {
+            throw std::invalid_argument(
+                "linear-embed requires at least one of eigen, QDA, or LDA projection");
+        }
         if (partition_columns.empty()) partition_columns.push_back(1);
         const bool has_dim = parameters.was_provided("dim");
         const bool has_visual_dim = parameters.was_provided("visual-dim");
@@ -265,19 +271,25 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
         if (threads <= 0) {
             throw std::invalid_argument("--threads must be positive");
         }
-        if (!(embedding_cli.values.covariance_floor > 0.0)
-            || !std::isfinite(embedding_cli.values.covariance_floor)) {
+        if (embedding_cli.values.eigen_projection
+            && (!(embedding_cli.values.covariance_floor > 0.0)
+                || !std::isfinite(
+                    embedding_cli.values.covariance_floor))) {
             throw std::invalid_argument(
                 "--covariance-floor must be positive and finite");
         }
-        const std::vector<ProjectionSpace> projection_spaces =
-            punkst_cli::parse_projection_spaces(
+        std::vector<ProjectionSpace> projection_spaces{
+            ProjectionSpace::Linear};
+        if (embedding_cli.values.eigen_projection) {
+            projection_spaces = punkst_cli::parse_projection_spaces(
                 embedding_cli.projection_space);
-        if (embedding_cli.projection_space == "ilr") {
-            throw std::invalid_argument(
-                "--projection-space must be linear or both for linear-embed");
+            if (embedding_cli.projection_space == "ilr") {
+                throw std::invalid_argument(
+                    "--projection-space must be linear or both for linear-embed");
+            }
         }
-        if (std::find(projection_spaces.begin(), projection_spaces.end(),
+        if (embedding_cli.values.eigen_projection
+            && std::find(projection_spaces.begin(), projection_spaces.end(),
                 ProjectionSpace::Ilr) != projection_spaces.end()
             && (!(embedding_cli.values.center_floor > 0.0)
                 || !std::isfinite(embedding_cli.values.center_floor))) {
@@ -286,8 +298,10 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
         }
         parameters.print_options();
         const punkst::projection::VisualizationWhitening whitening =
-            punkst::projection::parse_visualization_whitening(
-                embedding_cli.whitening);
+            embedding_cli.values.eigen_projection
+            ? punkst::projection::parse_visualization_whitening(
+                embedding_cli.whitening)
+            : embedding_cli.values.whitening;
         const std::vector<std::string> labels = resolve_partition_labels(
             partition_columns, partition_labels);
         punkst_cli::TopicCenterTable theta = punkst_cli::read_topic_centers(
@@ -309,13 +323,6 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
                 theta.identifiers.size(), partitions.identifiers.size(),
                 matched_documents);
         }
-        const int32_t topics = static_cast<int32_t>(theta.values.cols());
-        if (matched_documents < topics) {
-            throw std::runtime_error(
-                "Linear embedding intersection is too small: requires at least "
-                + std::to_string(topics) + " matched units");
-        }
-
         std::vector<int32_t> matched_partition_rows;
         std::vector<int32_t> matched_theta_rows;
         matched_partition_rows.reserve(static_cast<size_t>(matched_documents));
@@ -367,7 +374,7 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
                     theta.values, matched_theta_rows, assignments,
                     components);
             punkst::linear_embedding::write_cluster_factors(
-                prefix + ".cluster_factors.tsv", theta.topics,
+                prefix + ".cluster_factor_abundance.tsv", theta.topics,
                 cluster_factors);
             punkst::linear_embedding::run_partition(theta,
                 matched_theta_rows, assignments, components,

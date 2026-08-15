@@ -394,6 +394,10 @@ dispersion should be preserved. If the state has no stored dispersion, that
 option preserves the Poisson model. `gamma-pois-fit --transform` enables it
 automatically.
 
+`--factor-is-in-sample` is the concise in-sample declaration. It enables both
+`--use-stored-dispersion` and `--use-training-prevalence`; the two original
+options remain independently available.
+
 ### Optional
 
 `--minibatch-size`
@@ -429,6 +433,22 @@ provided values must agree with the state for model features.
 `--use-stored-dispersion`
 Skip transform-data dispersion estimation and use the state dispersion. A
 state without dispersion remains Poisson.
+
+`--factor-is-in-sample`
+Declare that the transform input is the same sample used to fit the factor
+model. This enables stored dispersion and fitted training prevalence.
+
+`--classifier-only`, `--in-transform-results`
+Reuse a previous dense Gamma-Poisson `.results.tsv` as the classifier warm
+start while rereading the original counts and fitted state. Rows and topics
+must match the original transform exactly. Only classification files are
+written, and confident units do not repeat local factor inference.
+
+`--in-transform-dispersion`
+In classifier-only mode, load the `Feature` and `tau` columns from the original
+transform's `.dispersion.tsv`. Feature names and order must match exactly. It
+is mutually exclusive with `--use-stored-dispersion` and
+`--factor-is-in-sample`.
 
 `--dispersion-estimator`, `--dispersion-loess-span`,
 `--dispersion-min-information`, `--dispersion-outlier-sd`,
@@ -484,6 +504,10 @@ Write calibrated predictions of a fixed partition and optionally propagate the
 local Gamma-Poisson shape/rate posterior uncertainty. See the
 [probabilistic partition classifier](partition-classifier.md).
 
+`--out-prefix-classifier`
+Use a separate prefix for `.classifications.tsv` and
+`.classification_diagnostics.tsv`. It defaults to `--out-prefix`.
+
 
 ## Outputs
 
@@ -516,9 +540,11 @@ topic vector written to `{prefix}.results.tsv` and $n_{dw}$ is the raw input
 count, independent of any feature weight. With `--pseudobulk-all-features`, the
 rows cover all retained input features; otherwise they cover model features.
 
-`{prefix}.classifications.tsv`
+`{classifier-prefix}.classifications.tsv`
 Written when `--classifier-model` is supplied. It contains unit metadata,
 prediction diagnostics, LRVB status, and compact or dense class probabilities.
+The classifier prefix is `--out-prefix-classifier` when supplied and otherwise
+`--out-prefix`.
 
 `{prefix}.unit_stats.tsv`
 Written when `--residuals` or `--feature-residuals` is enabled. Its default

@@ -142,7 +142,7 @@ and `linear-embed` option names.
   assignment column. Graph fields repeat across rows because all resolutions
   use the same graph.
 
-`{partition-prefix}.cluster_factors.tsv`
+`{partition-prefix}.cluster_factor_abundance.tsv`
 : Contains factors as rows and zero-based clusters as columns. Each value is
   the unnormalized sum of that factor's input theta values over all units in
   the cluster. With one resolution, `partition-prefix` is `{prefix}`. With

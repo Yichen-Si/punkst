@@ -8,11 +8,16 @@
 #include <iomanip>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_set>
 
 namespace punkst::partition_classifier {
 namespace {
+
+void report_progress(const FitOptions& options, const std::string& message) {
+    if (options.progress_callback) options.progress_callback(message);
+}
 
 struct Objective {
     const RowMajorMatrixXd& x;
@@ -254,6 +259,136 @@ std::vector<int32_t> all_rows(int32_t count) {
     return out;
 }
 
+uint64_t identifier_hash(const std::string& identifier, uint64_t seed) {
+    uint64_t value = 1469598103934665603ULL ^ seed;
+    for (const unsigned char byte : identifier) {
+        value ^= byte;
+        value *= 1099511628211ULL;
+    }
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
+}
+
+struct FoldAssignment {
+    Eigen::VectorXi by_row;
+    int32_t folds = 0;
+};
+
+FoldAssignment make_stratified_folds(
+        const Eigen::Ref<const Eigen::VectorXi>& labels,
+        const std::vector<int32_t>& rows,
+        const std::vector<std::string>& identifiers,
+        int32_t classes, int32_t requested_folds, uint64_t seed) {
+    std::vector<std::vector<int32_t>> by_class(
+        static_cast<size_t>(classes));
+    for (const int32_t row : rows) {
+        if (row < 0 || row >= labels.size() || labels(row) < 0
+                || labels(row) >= classes) {
+            throw std::invalid_argument("Invalid crossfit row or label");
+        }
+        by_class[static_cast<size_t>(labels(row))].push_back(row);
+    }
+    int32_t folds = requested_folds;
+    for (const auto& class_rows : by_class) {
+        folds = std::min(folds, static_cast<int32_t>(class_rows.size()));
+    }
+    if (folds < 2) {
+        throw std::invalid_argument(
+            "Crossfit requires at least two represented rows per class");
+    }
+    FoldAssignment output;
+    output.by_row = Eigen::VectorXi::Constant(labels.size(), -1);
+    output.folds = folds;
+    for (int32_t component = 0; component < classes; ++component) {
+        auto& class_rows = by_class[static_cast<size_t>(component)];
+        std::sort(class_rows.begin(), class_rows.end(),
+            [&](int32_t left, int32_t right) {
+                const uint64_t left_hash = identifier_hash(
+                    identifiers[static_cast<size_t>(left)], seed);
+                const uint64_t right_hash = identifier_hash(
+                    identifiers[static_cast<size_t>(right)], seed);
+                return left_hash == right_hash ? left < right
+                    : left_hash < right_hash;
+            });
+        for (size_t index = 0; index < class_rows.size(); ++index) {
+            output.by_row(class_rows[index]) =
+                static_cast<int32_t>(index % folds);
+        }
+    }
+    return output;
+}
+
+struct NestedModelFit {
+    Model model;
+    int32_t inner_folds = 0;
+};
+
+NestedModelFit fit_nested_model(const RowMajorMatrixXd& x,
+        const Eigen::VectorXi& labels, const Eigen::VectorXd& weights,
+        const std::vector<int32_t>& rows,
+        const std::vector<std::string>& identifiers,
+        const std::vector<std::string>& topics,
+        const std::vector<std::string>& classes, uint64_t seed,
+        const FitOptions& options) {
+    const int32_t class_count = static_cast<int32_t>(classes.size());
+    const FoldAssignment assignment = make_stratified_folds(
+        labels, rows, identifiers, class_count, options.folds, seed);
+    double best_loss = std::numeric_limits<double>::infinity();
+    double selected_ridge = 0.0;
+    RowMajorMatrixXd selected_oof;
+    Eigen::VectorXi compact_labels(rows.size());
+    Eigen::VectorXd compact_weights(rows.size());
+    for (size_t index = 0; index < rows.size(); ++index) {
+        compact_labels(index) = labels(rows[index]);
+        compact_weights(index) = weights(rows[index]);
+    }
+    for (const double ridge : options.ridge_grid) {
+        if (!(ridge >= 0.0) || !std::isfinite(ridge)) {
+            throw std::invalid_argument(
+                "Ridge grid must be finite and nonnegative");
+        }
+        RowMajorMatrixXd oof(rows.size(), class_count);
+        for (int32_t fold = 0; fold < assignment.folds; ++fold) {
+            std::vector<int32_t> training;
+            std::vector<int32_t> validation;
+            for (const int32_t row : rows) {
+                (assignment.by_row(row) == fold ? validation : training)
+                    .push_back(row);
+            }
+            const Eigen::VectorXd parameters = fit_parameters(
+                x, labels, weights, training, class_count, ridge, options);
+            const RowMajorMatrixXd logits = parameter_logits(
+                x, validation, parameters, class_count);
+            size_t output_index = 0;
+            for (size_t index = 0; index < rows.size(); ++index) {
+                if (assignment.by_row(rows[index]) == fold) {
+                    oof.row(index) = logits.row(output_index++);
+                }
+            }
+        }
+        const double loss = evaluate(probabilities_from_logits(oof, 1.0),
+            compact_labels, compact_weights).log_loss;
+        if (loss < best_loss) {
+            best_loss = loss;
+            selected_ridge = ridge;
+            selected_oof = std::move(oof);
+        }
+    }
+    const double temperature = fit_temperature(
+        selected_oof, compact_labels, compact_weights);
+    const Eigen::VectorXd parameters = fit_parameters(x, labels, weights,
+        rows, class_count, selected_ridge, options);
+    NestedModelFit output;
+    output.model = make_model(parameters, topics, classes, selected_ridge);
+    output.model.temperature = temperature;
+    output.model.folds = assignment.folds;
+    output.inner_folds = assignment.folds;
+    output.model.validate();
+    return output;
+}
+
 void require_unique_nonempty(const std::vector<std::string>& values,
         const char* what) {
     std::unordered_set<std::string> seen;
@@ -458,6 +593,238 @@ Model Model::read(const std::string& path) {
     return model;
 }
 
+void CrossfitBundle::validate(double tolerance) const {
+    full_model.validate(tolerance);
+    if (fold_models.size() < 2
+            || heldout_fold_by_identifier.size() != full_model.sampled_rows) {
+        throw std::invalid_argument("Invalid classifier crossfit bundle");
+    }
+    for (const Model& model : fold_models) {
+        model.validate(tolerance);
+        if (model.topics != full_model.topics
+                || model.classes != full_model.classes) {
+            throw std::invalid_argument(
+                "Crossfit fold model topics or classes differ");
+        }
+    }
+    for (const auto& route : heldout_fold_by_identifier) {
+        if (route.first.empty() || route.second < 0
+                || route.second >= static_cast<int32_t>(fold_models.size())) {
+            throw std::invalid_argument("Invalid classifier crossfit route");
+        }
+    }
+}
+
+const Model& CrossfitBundle::model_for(const std::string& identifier,
+        bool use_crossfit, int32_t* heldout_fold) const {
+    if (heldout_fold != nullptr) *heldout_fold = -1;
+    if (use_crossfit) {
+        const auto found = heldout_fold_by_identifier.find(identifier);
+        if (found != heldout_fold_by_identifier.end()) {
+            if (heldout_fold != nullptr) *heldout_fold = found->second;
+            return fold_models[static_cast<size_t>(found->second)];
+        }
+    }
+    return full_model;
+}
+
+void CrossfitBundle::write(const std::string& path) const {
+    validate();
+    std::ofstream output(path);
+    if (!output) {
+        throw std::runtime_error("Cannot write classifier crossfit bundle: "
+            + path);
+    }
+    output << "#partition_classifier_crossfit\t" << CROSSFIT_SCHEMA_VERSION
+        << '\n' << "#outer_folds\t" << fold_models.size()
+        << '\n' << "#matched_rows\t" << full_model.matched_rows
+        << '\n' << "#sampled_rows\t" << full_model.sampled_rows
+        << '\n' << "#minimum_per_class\t" << full_model.minimum_per_class
+        << '\n' << "#sampling_seed\t" << full_model.sampling_seed << '\n'
+        << std::scientific
+        << std::setprecision(std::numeric_limits<double>::max_digits10);
+    for (size_t topic = 0; topic < full_model.topics.size(); ++topic) {
+        output << "topic\t" << topic << '\t' << full_model.topics[topic]
+            << '\n';
+    }
+    for (size_t component = 0; component < full_model.classes.size();
+            ++component) {
+        output << "class_name\t" << component << '\t'
+            << full_model.classes[component] << '\n';
+    }
+    auto write_model = [&](const char* name, const Model& model) {
+        output << "model\t" << name << '\t' << model.ridge << '\t'
+            << model.temperature << '\t' << model.folds << '\n';
+        for (Eigen::Index component = 0;
+                component < model.intercepts.size(); ++component) {
+            output << "intercept\t" << name << '\t' << component << '\t'
+                << model.intercepts(component) << '\n';
+            for (Eigen::Index topic = 0; topic < model.coefficients.cols();
+                    ++topic) {
+                output << "coefficient\t" << name << '\t' << component
+                    << '\t' << topic << '\t'
+                    << model.coefficients(component, topic) << '\n';
+            }
+        }
+    };
+    write_model("full", full_model);
+    std::vector<std::string> fold_names(fold_models.size());
+    for (size_t fold = 0; fold < fold_models.size(); ++fold) {
+        fold_names[fold] = std::to_string(fold);
+        write_model(fold_names[fold].c_str(), fold_models[fold]);
+    }
+    std::vector<std::pair<std::string, int32_t>> routes(
+        heldout_fold_by_identifier.begin(),
+        heldout_fold_by_identifier.end());
+    std::sort(routes.begin(), routes.end());
+    for (const auto& route : routes) {
+        output << "route\t" << route.first << '\t' << route.second << '\n';
+    }
+}
+
+CrossfitBundle CrossfitBundle::read(const std::string& path) {
+    TextLineReader input(path);
+    std::string line;
+    CrossfitBundle bundle;
+    bool version_seen = false;
+    int32_t outer_folds = -1;
+    std::vector<std::string> topics;
+    std::vector<std::string> classes;
+    auto resolve_model = [&](const std::string& name) -> Model& {
+        if (name == "full") return bundle.full_model;
+        int32_t fold = -1;
+        if (!str2int32(name, fold) || fold < 0 || fold >= outer_folds) {
+            throw std::runtime_error("Invalid crossfit model index");
+        }
+        return bundle.fold_models[static_cast<size_t>(fold)];
+    };
+    while (input.getline(line)) {
+        if (line.empty()) continue;
+        const std::vector<std::string> fields = split_delimited(line, '\t');
+        if (fields[0] == "#partition_classifier_crossfit") {
+            int32_t version = 0;
+            if (fields.size() != 2 || !str2int32(fields[1], version)
+                    || version != CROSSFIT_SCHEMA_VERSION) {
+                throw std::runtime_error("Unsupported classifier crossfit schema");
+            }
+            version_seen = true;
+        } else if (fields[0] == "#outer_folds") {
+            if (fields.size() != 2 || !str2int32(fields[1], outer_folds)
+                    || outer_folds < 2) {
+                throw std::runtime_error("Invalid crossfit fold count");
+            }
+            bundle.fold_models.resize(static_cast<size_t>(outer_folds));
+        } else if (fields[0] == "#matched_rows" && fields.size() == 2) {
+            if (!str2uint64(fields[1], bundle.full_model.matched_rows))
+                throw std::runtime_error("Invalid crossfit matched rows");
+        } else if (fields[0] == "#sampled_rows" && fields.size() == 2) {
+            if (!str2uint64(fields[1], bundle.full_model.sampled_rows))
+                throw std::runtime_error("Invalid crossfit sampled rows");
+        } else if (fields[0] == "#minimum_per_class"
+                && fields.size() == 2) {
+            if (!str2int32(fields[1], bundle.full_model.minimum_per_class))
+                throw std::runtime_error("Invalid crossfit minimum");
+        } else if (fields[0] == "#sampling_seed" && fields.size() == 2) {
+            if (!str2uint64(fields[1], bundle.full_model.sampling_seed))
+                throw std::runtime_error("Invalid crossfit seed");
+        } else if (fields[0] == "topic") {
+            int32_t index = -1;
+            if (fields.size() != 3 || !str2int32(fields[1], index)
+                    || index != static_cast<int32_t>(topics.size())) {
+                throw std::runtime_error("Invalid crossfit topic row");
+            }
+            topics.push_back(fields[2]);
+        } else if (fields[0] == "class_name") {
+            int32_t index = -1;
+            if (fields.size() != 3 || !str2int32(fields[1], index)
+                    || index != static_cast<int32_t>(classes.size())) {
+                throw std::runtime_error("Invalid crossfit class row");
+            }
+            classes.push_back(fields[2]);
+        } else if (fields[0] == "model") {
+            if (fields.size() != 5 || topics.empty() || classes.empty()
+                    || outer_folds < 2) {
+                throw std::runtime_error("Invalid crossfit model row");
+            }
+            Model& model = resolve_model(fields[1]);
+            model.topics = topics;
+            model.classes = classes;
+            model.intercepts = Eigen::VectorXd::Zero(classes.size());
+            model.coefficients = RowMajorMatrixXd::Zero(
+                classes.size(), topics.size());
+            if (!str2double(fields[2], model.ridge)
+                    || !str2double(fields[3], model.temperature)
+                    || !str2int32(fields[4], model.folds)) {
+                throw std::runtime_error("Invalid crossfit model metadata");
+            }
+        } else if (fields[0] == "intercept") {
+            int32_t component = -1;
+            double value = 0.0;
+            if (fields.size() != 4) {
+                throw std::runtime_error("Invalid crossfit intercept row");
+            }
+            Model& model = resolve_model(fields[1]);
+            if (!str2int32(fields[2], component)
+                    || component < 0 || component >= model.intercepts.size()
+                    || !str2double(fields[3], value)) {
+                throw std::runtime_error("Invalid crossfit intercept row");
+            }
+            model.intercepts(component) = value;
+        } else if (fields[0] == "coefficient") {
+            int32_t component = -1, topic = -1;
+            double value = 0.0;
+            if (fields.size() != 5) {
+                throw std::runtime_error("Invalid crossfit coefficient row");
+            }
+            Model& model = resolve_model(fields[1]);
+            if (!str2int32(fields[2], component)
+                    || !str2int32(fields[3], topic) || component < 0
+                    || component >= model.coefficients.rows() || topic < 0
+                    || topic >= model.coefficients.cols()
+                    || !str2double(fields[4], value)) {
+                throw std::runtime_error("Invalid crossfit coefficient row");
+            }
+            model.coefficients(component, topic) = value;
+        } else if (fields[0] == "route") {
+            int32_t fold = -1;
+            if (fields.size() != 3 || fields[1].empty()
+                    || !str2int32(fields[2], fold) || fold < 0
+                    || fold >= outer_folds
+                    || !bundle.heldout_fold_by_identifier.emplace(
+                        fields[1], fold).second) {
+                throw std::runtime_error("Invalid crossfit route row");
+            }
+        } else if (fields[0][0] != '#') {
+            throw std::runtime_error("Unknown crossfit row: " + fields[0]);
+        }
+    }
+    if (!version_seen || outer_folds < 2) {
+        throw std::runtime_error("Incomplete classifier crossfit bundle: "
+            + path);
+    }
+    bundle.full_model.folds = outer_folds;
+    for (Model& model : bundle.fold_models) {
+        model.matched_rows = bundle.full_model.matched_rows;
+        model.sampled_rows = bundle.full_model.sampled_rows;
+        model.minimum_per_class = bundle.full_model.minimum_per_class;
+        model.sampling_seed = bundle.full_model.sampling_seed;
+    }
+    bundle.validate(1e-7);
+    return bundle;
+}
+
+bool CrossfitBundle::is_bundle(const std::string& path) {
+    TextLineReader input(path);
+    std::string line;
+    while (input.getline(line)) {
+        if (line.empty()) continue;
+        const std::vector<std::string> fields = split_delimited(line, '\t');
+        return fields.size() == 2
+            && fields[0] == "#partition_classifier_crossfit";
+    }
+    throw std::runtime_error("Classifier model is empty: " + path);
+}
+
 Metrics evaluate(const Eigen::Ref<const RowMajorMatrixXd>& probabilities,
         const Eigen::Ref<const Eigen::VectorXi>& labels,
         const Eigen::Ref<const Eigen::VectorXd>& weights) {
@@ -589,6 +956,14 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
         }
     }
 
+    {
+        std::ostringstream message;
+        message << "Partition classifier CV started: "
+            << options.ridge_grid.size() << " ridge values, " << folds
+            << " folds, " << rows << " rows";
+        report_progress(options, message.str());
+    }
+
     FitResult result;
     result.cv.reserve(options.ridge_grid.size());
     std::vector<RowMajorMatrixXd> ridge_logits;
@@ -628,8 +1003,21 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
     }
     result.cv[selected].selected = true;
     result.oof_logits = std::move(ridge_logits[selected]);
+    {
+        std::ostringstream message;
+        message << "Partition classifier CV parameter selection finished: "
+            << "ridge " << result.cv[selected].ridge
+            << ", OOF log loss " << result.cv[selected].metrics.log_loss;
+        report_progress(options, message.str());
+    }
     result.calibration.stored_temperature = fit_temperature(
         result.oof_logits, labels, weights);
+    {
+        std::ostringstream message;
+        message << "Partition classifier OOF temperature calibration finished: "
+            << result.calibration.stored_temperature;
+        report_progress(options, message.str());
+    }
 
     result.cross_fitted_probabilities.resize(rows, class_count);
     for (int32_t fold = 0; fold < folds; ++fold) {
@@ -707,6 +1095,12 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
     }
 
     const std::vector<int32_t> complete = all_rows(rows);
+    {
+        std::ostringstream message;
+        message << "Partition classifier full model fitting started: "
+            << rows << " rows, ridge " << result.cv[selected].ridge;
+        report_progress(options, message.str());
+    }
     const Eigen::VectorXd parameters = fit_parameters(x, labels, weights,
         complete, class_count, result.cv[selected].ridge, options);
     result.model = make_model(parameters, topics, classes,
@@ -714,6 +1108,127 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
     result.model.temperature = result.calibration.stored_temperature;
     result.model.folds = folds;
     result.model.validate();
+    report_progress(options,
+        "Partition classifier full model fitting finished");
+    return result;
+}
+
+CrossfitResult fit_crossfit(
+        const Eigen::Ref<const RowMajorMatrixXd>& compositions,
+        const Eigen::Ref<const Eigen::VectorXi>& labels,
+        const Eigen::Ref<const Eigen::VectorXd>& weights,
+        const std::vector<std::string>& identifiers,
+        const std::vector<std::string>& topics,
+        const std::vector<std::string>& classes, uint64_t seed,
+        const FitOptions& options) {
+    const int32_t rows = static_cast<int32_t>(compositions.rows());
+    const int32_t class_count = static_cast<int32_t>(classes.size());
+    if (rows < 4 || identifiers.size() != static_cast<size_t>(rows)
+            || labels.size() != rows || weights.size() != rows
+            || compositions.cols() != static_cast<Eigen::Index>(topics.size())
+            || topics.size() < 2 || classes.size() < 2
+            || !compositions.allFinite()
+            || (compositions.array() < 0.0).any()
+            || (compositions.rowwise().sum().array() <= 0.0).any()
+            || !weights.allFinite() || (weights.array() <= 0.0).any()
+            || options.ridge_grid.empty() || options.folds < 2) {
+        throw std::invalid_argument("Invalid classifier crossfit input");
+    }
+    require_unique_nonempty(identifiers, "Crossfit identifiers");
+    require_unique_nonempty(topics, "Classifier topics");
+    require_unique_nonempty(classes, "Classifier classes");
+    RowMajorMatrixXd normalized = compositions;
+    for (Eigen::Index row = 0; row < normalized.rows(); ++row) {
+        normalized.row(row) /= normalized.row(row).sum();
+    }
+    const RowMajorMatrixXd x = normalized
+        * normalized_helmert(static_cast<int32_t>(topics.size())).transpose();
+    const std::vector<int32_t> complete = all_rows(rows);
+    const FoldAssignment outer = make_stratified_folds(labels, complete,
+        identifiers, class_count, options.folds, seed ^ 0x6f75746572ULL);
+    for (int32_t component = 0; component < class_count; ++component) {
+        int32_t count = 0;
+        for (int32_t row = 0; row < rows; ++row) {
+            count += labels(row) == component;
+        }
+        if (count < 3) {
+            throw std::invalid_argument(
+                "Nested crossfit requires at least three rows per class");
+        }
+    }
+
+    {
+        std::ostringstream message;
+        message << "Partition classifier nested crossfit started: "
+            << outer.folds << " outer folds, " << rows << " rows";
+        report_progress(options, message.str());
+    }
+
+    CrossfitResult result;
+    result.fold_by_row = outer.by_row;
+    result.probabilities.resize(rows, class_count);
+    result.fold_models.reserve(outer.folds);
+    result.diagnostics.reserve(outer.folds);
+    for (int32_t fold = 0; fold < outer.folds; ++fold) {
+        std::vector<int32_t> training;
+        std::vector<int32_t> heldout;
+        for (int32_t row = 0; row < rows; ++row) {
+            (outer.by_row(row) == fold ? heldout : training).push_back(row);
+        }
+        {
+            std::ostringstream message;
+            message << "Partition classifier crossfit fold " << (fold + 1)
+                << '/' << outer.folds
+                << " started: nested parameter selection and final fitting on "
+                << training.size() << " rows";
+            report_progress(options, message.str());
+        }
+        const NestedModelFit fitted = fit_nested_model(x, labels, weights,
+            training, identifiers, topics, classes,
+            seed ^ (static_cast<uint64_t>(fold) << 32)
+                ^ 0x696e6e6572ULL,
+            options);
+        result.fold_models.push_back(fitted.model);
+        {
+            std::ostringstream message;
+            message << "Partition classifier crossfit fold " << (fold + 1)
+                << '/' << outer.folds << " final model fitting finished: "
+                << training.size() << " training rows, " << heldout.size()
+                << " held-out rows, " << fitted.inner_folds
+                << " inner folds, ridge " << fitted.model.ridge
+                << ", temperature " << fitted.model.temperature;
+            report_progress(options, message.str());
+        }
+        RowMajorMatrixXd fold_probabilities(heldout.size(), class_count);
+        Eigen::VectorXi fold_labels(heldout.size());
+        Eigen::VectorXd fold_weights(heldout.size());
+        for (size_t index = 0; index < heldout.size(); ++index) {
+            const int32_t row = heldout[index];
+            fold_probabilities.row(index) = fitted.model.probabilities(
+                normalized.row(row).transpose()).transpose();
+            result.probabilities.row(row) = fold_probabilities.row(index);
+            fold_labels(index) = labels(row);
+            fold_weights(index) = weights(row);
+        }
+        CrossfitFoldDiagnostic diagnostic;
+        diagnostic.fold = fold;
+        diagnostic.training_rows = training.size();
+        diagnostic.heldout_rows = heldout.size();
+        diagnostic.inner_folds = fitted.inner_folds;
+        diagnostic.ridge = fitted.model.ridge;
+        diagnostic.temperature = fitted.model.temperature;
+        diagnostic.metrics = evaluate(
+            fold_probabilities, fold_labels, fold_weights);
+        result.diagnostics.push_back(diagnostic);
+    }
+    result.overall = evaluate(result.probabilities, labels, weights);
+    {
+        std::ostringstream message;
+        message << "Partition classifier nested crossfit finished: OOS log loss "
+            << result.overall.log_loss << ", accuracy "
+            << result.overall.accuracy;
+        report_progress(options, message.str());
+    }
     return result;
 }
 

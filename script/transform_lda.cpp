@@ -2,6 +2,7 @@
 #include "transform_helper.hpp"
 #include "partition_classifier.hpp"
 #include "partition_classifier_lrvb.hpp"
+#include "factor_result_stream.hpp"
 
 #include <fstream>
 #include <iomanip>
@@ -31,6 +32,10 @@ struct ClassifierOutput {
     std::string path;
     std::ofstream stream;
     punkst::partition_classifier::Model model;
+    std::unique_ptr<punkst::partition_classifier::CrossfitBundle> bundle;
+    bool useCrossfit = false;
+    uint64_t heldoutModelRows = 0;
+    uint64_t fullModelRows = 0;
     punkst::partition_classifier::PropagationOptions propagation;
     int32_t topK = 3;
     bool dense = false;
@@ -50,10 +55,22 @@ struct ClassifierOutput {
     ClassifierOutput(const std::string& outPrefix,
             const std::string& modelPath,
             const punkst::partition_classifier::PropagationOptions& options,
-            int32_t top_k, bool dense_probabilities)
+            int32_t top_k, bool dense_probabilities, bool use_crossfit)
         : path(outPrefix + ".classifications.tsv"), stream(path),
-          model(punkst::partition_classifier::Model::read(modelPath)),
-          propagation(options), topK(top_k), dense(dense_probabilities) {
+          useCrossfit(use_crossfit), propagation(options), topK(top_k),
+          dense(dense_probabilities) {
+        if (punkst::partition_classifier::CrossfitBundle::is_bundle(modelPath)) {
+            bundle = std::make_unique<
+                punkst::partition_classifier::CrossfitBundle>(
+                    punkst::partition_classifier::CrossfitBundle::read(modelPath));
+            model = bundle->full_model;
+        } else {
+            if (useCrossfit) {
+                throw std::invalid_argument(
+                    "--classifier-crossfit requires a crossfit classifier bundle");
+            }
+            model = punkst::partition_classifier::Model::read(modelPath);
+        }
         if (!stream) {
             throw std::runtime_error("Cannot write classifications: " + path);
         }
@@ -62,9 +79,16 @@ struct ClassifierOutput {
         }
     }
 
+    const punkst::partition_classifier::Model& modelFor(
+            const std::string& id, int32_t* heldout_fold) const {
+        if (bundle) return bundle->model_for(id, useCrossfit, heldout_fold);
+        if (heldout_fold != nullptr) *heldout_fold = -1;
+        return model;
+    }
+
     void writeHeader(bool use10x, const std::string& infoHeader) {
         writeUnitIdHeader(stream, use10x, infoHeader);
-        stream << "prediction\tmaximum_probability\tentropy"
+        stream << "classifier_model_source\tentropy"
             "\tpropagation_method\tcandidate_count"
             "\theld_fixed_candidate_tail_mass"
             "\toutput_topk_tail_probability\tlrvb_status";
@@ -83,7 +107,10 @@ struct ClassifierOutput {
     }
 
     void write(const std::string& id,
-            const punkst::partition_classifier::PropagatedPrediction& prediction) {
+            const punkst::partition_classifier::PropagatedPrediction& prediction,
+            int32_t heldout_fold) {
+        if (useCrossfit && heldout_fold >= 0) ++heldoutModelRows;
+        else ++fullModelRows;
         if (prediction.lrvb_attempted) ++attempted;
         if (prediction.lrvb_attempted) {
             fixedPointIterations += prediction.fixed_point_iterations;
@@ -136,9 +163,15 @@ struct ClassifierOutput {
         for (int32_t rank = 0; rank < output_count; ++rank) {
             output_mass += prediction.probabilities(order[rank]);
         }
-        stream << id << '\t' << model.classes[order[0]] << '\t'
-            << prediction.probabilities(order[0]) << '\t' << entropy << '\t'
-            << prediction.method << '\t' << prediction.candidate_count << '\t'
+        stream << id << '\t';
+        if (useCrossfit) {
+            if (heldout_fold >= 0) stream << "heldout_fold_" << heldout_fold;
+            else stream << "full_unseen";
+        } else {
+            stream << "full";
+        }
+        stream << '\t' << entropy << '\t' << prediction.method << '\t'
+            << prediction.candidate_count << '\t'
             << prediction.held_fixed_tail_mass << '\t'
             << std::max(0.0, 1.0 - output_mass) << '\t'
             << prediction.lrvb_status;
@@ -247,12 +280,15 @@ struct TransformOutputs {
     std::ofstream results;
     std::ofstream unitStats;
 
-    TransformOutputs(const std::string& outPrefix, bool writeUnitStats)
+    TransformOutputs(const std::string& outPrefix, bool writeUnitStats,
+            bool writeResults)
         : resultsPath(outPrefix + ".results.tsv"),
-          unitStatsPath(outPrefix + ".unit_stats.tsv"),
-          results(resultsPath) {
-        if (!results) {
-            error("Error opening output file: %s for writing", resultsPath.c_str());
+          unitStatsPath(outPrefix + ".unit_stats.tsv") {
+        if (writeResults) {
+            results.open(resultsPath);
+            if (!results) {
+                error("Error opening output file: %s for writing", resultsPath.c_str());
+            }
         }
         if (writeUnitStats) {
             unitStats.open(unitStatsPath);
@@ -270,7 +306,8 @@ public:
             MatrixXd& specialPseudobulk_, Mode pseudobulkMode_,
             ResidualState* residualState_, int32_t topkOnly_,
             bool similarityDiagnostics_, int32_t nThreads_,
-            ClassifierOutput* classifierOutput_ = nullptr)
+            ClassifierOutput* classifierOutput_ = nullptr,
+            punkst::FactorResultStream* factorResults_ = nullptr)
         : lda(lda_),
           resultsStream(resultsStream_),
           unitMetaStream(unitMetaStream_),
@@ -281,10 +318,11 @@ public:
           topkOnly(topkOnly_),
           similarityDiagnostics(similarityDiagnostics_),
           classifierOutput(classifierOutput_),
+          factorResults(factorResults_),
           threadHint(std::max<int32_t>(1, nThreads_)),
           M(lda_.nFeatures()),
           K(lda_.getNumTopics()) {
-        if (pseudobulkMode == Mode::Standard) {
+        if (factorResults == nullptr && pseudobulkMode == Mode::Standard) {
             standardTls = std::make_unique<StandardTls>([this] {
                 return StandardLocalAgg(M, K);
             });
@@ -298,6 +336,13 @@ public:
 
     void process(TransformBatch& batch) {
         if (batch.empty()) {
+            return;
+        }
+        if (factorResults != nullptr) {
+            const Eigen::MatrixXd compositions =
+                factorResults->next_batch(batch.ids);
+            writeWarmStartClassificationRows(
+                batch.docs, batch.ids, compositions);
             return;
         }
         if (pseudobulkMode != Mode::Standard) {
@@ -337,6 +382,13 @@ public:
         if (batch.empty()) {
             return;
         }
+        if (factorResults != nullptr) {
+            const Eigen::MatrixXd compositions =
+                factorResults->next_batch(batch.ids);
+            writeWarmStartClassificationRows(
+                batch.modelDocs, batch.ids, compositions);
+            return;
+        }
         if (pseudobulkMode == Mode::Standard) {
             error("%s: special batch used with standard pseudobulk mode", __func__);
         }
@@ -353,6 +405,7 @@ public:
     }
 
     void finalize() {
+        if (factorResults != nullptr) return;
         if (pseudobulkMode == Mode::Standard) {
             for (auto& local : *standardTls) {
                 pseudobulk += local.pseudobulk;
@@ -408,18 +461,62 @@ private:
         }
         std::vector<punkst::partition_classifier::PropagatedPrediction>
             predictions(docs.size());
+        std::vector<const punkst::partition_classifier::Model*>
+            classifierModels(docs.size());
+        std::vector<int32_t> heldoutFolds(docs.size(), -1);
+        for (size_t document = 0; document < docs.size(); ++document) {
+            classifierModels[document] = &classifierOutput->modelFor(
+                ids[document], &heldoutFolds[document]);
+        }
         tbb::parallel_for(0, static_cast<int32_t>(docs.size()),
             [&](int32_t document) {
                 predictions[static_cast<size_t>(document)] =
                     punkst::partition_classifier::propagate_lda(
-                    classifierOutput->model,
+                    *classifierModels[static_cast<size_t>(document)],
                     gamma.row(document).transpose(),
                     docs[static_cast<size_t>(document)],
                     lda.get_allocation_kernel(),
                     lda.get_doc_topic_prior(), classifierOutput->propagation);
             });
         for (size_t document = 0; document < docs.size(); ++document) {
-            classifierOutput->write(ids[document], predictions[document]);
+            classifierOutput->write(ids[document], predictions[document],
+                heldoutFolds[document]);
+        }
+    }
+
+    void writeWarmStartClassificationRows(
+            const std::vector<Document>& docs,
+            const std::vector<std::string>& ids,
+            const Eigen::Ref<const Eigen::MatrixXd>& compositions) {
+        if (classifierOutput == nullptr) return;
+        if (compositions.rows() != static_cast<Eigen::Index>(docs.size())
+                || compositions.cols() != K || ids.size() != docs.size()) {
+            error("%s: classifier warm-start batch dimensions do not match",
+                __func__);
+        }
+        std::vector<punkst::partition_classifier::PropagatedPrediction>
+            predictions(docs.size());
+        std::vector<const punkst::partition_classifier::Model*>
+            classifierModels(docs.size());
+        std::vector<int32_t> heldoutFolds(docs.size(), -1);
+        for (size_t document = 0; document < docs.size(); ++document) {
+            classifierModels[document] = &classifierOutput->modelFor(
+                ids[document], &heldoutFolds[document]);
+        }
+        tbb::parallel_for(0, static_cast<int32_t>(docs.size()),
+            [&](int32_t document) {
+                predictions[static_cast<size_t>(document)] =
+                    punkst::partition_classifier::
+                        propagate_lda_from_composition(
+                    *classifierModels[static_cast<size_t>(document)],
+                    compositions.row(document).transpose(),
+                    docs[static_cast<size_t>(document)],
+                    lda.get_allocation_kernel(), lda.get_doc_topic_prior(),
+                    classifierOutput->propagation);
+            });
+        for (size_t document = 0; document < docs.size(); ++document) {
+            classifierOutput->write(ids[document], predictions[document],
+                heldoutFolds[document]);
         }
     }
 
@@ -946,6 +1043,7 @@ private:
     int32_t topkOnly;
     bool similarityDiagnostics;
     ClassifierOutput* classifierOutput;
+    punkst::FactorResultStream* factorResults;
     int32_t threadHint;
     int32_t M;
     int32_t K;
@@ -956,7 +1054,8 @@ private:
 } // namespace
 
 int32_t cmdLDATransform(int argc, char** argv) {
-    std::string inFile, metaFile, modelFile, stateFile, outPrefix, featureFile, temp_dir;
+    std::string inFile, metaFile, modelFile, stateFile, outPrefix,
+        classifierOutPrefix, featureFile, temp_dir, inTransformResults;
     std::string classifier_model;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
@@ -991,6 +1090,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
     bool classifier_dense = false;
     bool classifier_lrvb_all = false;
     bool classifier_plugin_only = false;
+    bool classifier_crossfit = false;
+    bool classifier_only = false;
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
@@ -998,6 +1099,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("in-model", "Legacy input model matrix (topic-word) file", modelFile)
       .add_option("in-state", "Versioned LDA SVB state", stateFile)
       .add_option("out-prefix", "Output prefix for results files", outPrefix, true)
+      .add_option("out-prefix-classifier", "Output prefix for classification files; defaults to --out-prefix", classifierOutPrefix)
+      .add_option("classifier-only", "Classify from prior dense transform results without repeating factor inference", classifier_only)
+      .add_option("in-transform-results", "Dense prior transform results used to warm-start classifier-only inference", inTransformResults)
       .add_option("minibatch-size", "Minibatch size", batchSize)
       .add_option("modal", "Modality to use (0-based)", modal)
       .add_option("threads", "Number of threads", nThreads)
@@ -1033,7 +1137,8 @@ int32_t cmdLDATransform(int argc, char** argv) {
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
 
     pl.add_option("alpha", "Document-topic prior required for legacy-model LRVB", alpha)
-      .add_option("classifier-model", "Partition classifier model", classifier_model)
+      .add_option("classifier-model", "Partition classifier model or crossfit bundle", classifier_model)
+      .add_option("classifier-crossfit", "Route classifier-training IDs through held-out fold models", classifier_crossfit)
       .add_option("classifier-top-k", "Classification class/probability pairs", classifier_top_k)
       .add_option("classifier-dense-probabilities", "Write dense classification probabilities", classifier_dense)
       .add_option("classifier-ambiguity-threshold", "Skip LRVB above this leading probability", classifier_ambiguity_threshold)
@@ -1058,6 +1163,17 @@ int32_t cmdLDATransform(int argc, char** argv) {
         batchSize = 512;
         warning("Minibatch size must be greater than 0, using default value of %d", batchSize);
     }
+    if (classifierOutPrefix.empty()) classifierOutPrefix = outPrefix;
+    if (classifier_only != !inTransformResults.empty()) {
+        error("--classifier-only and --in-transform-results must be supplied together");
+    }
+    if (classifier_only && classifier_model.empty()) {
+        error("--classifier-only requires --classifier-model");
+    }
+    if (classifier_only && (computeResiduals || pseudobulk_all_features
+            || topk_only > 0)) {
+        error("--classifier-only cannot be combined with residual, pseudobulk-all-features, or top-k factor output options");
+    }
     if (modelFile.empty() == stateFile.empty()) {
         error("Exactly one of --in-model or --in-state is required");
     }
@@ -1073,6 +1189,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
                 && classifier_max_failure_rate <= 1.0
                 && classifier_bootstrap_draws > 0)) {
         error("Invalid classifier propagation option");
+    }
+    if (classifier_crossfit && classifier_model.empty()) {
+        error("--classifier-crossfit requires --classifier-model");
     }
     if (!classifier_model.empty() && stateFile.empty()
             && !classifier_plugin_only && !(alpha > 0.0)) {
@@ -1194,10 +1313,12 @@ int32_t cmdLDATransform(int argc, char** argv) {
     }
     const bool preserveRawModelCounts = computeResiduals && weights_active;
 
-    TransformOutputs outputs(outPrefix, computeResiduals);
-    writeUnitIdHeader(outputs.results, use_10x, info_header);
-    writeResultHeader(outputs.results, lda, topk_only);
-    outputs.results << std::scientific << std::setprecision(4);
+    TransformOutputs outputs(outPrefix, computeResiduals, !classifier_only);
+    if (!classifier_only) {
+        writeUnitIdHeader(outputs.results, use_10x, info_header);
+        writeResultHeader(outputs.results, lda, topk_only);
+        outputs.results << std::scientific << std::setprecision(4);
+    }
     std::unique_ptr<ClassifierOutput> classifierOutput;
     if (!classifier_model.empty()) {
         punkst::partition_classifier::PropagationOptions propagation;
@@ -1209,8 +1330,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
             classifier_fixed_point_tolerance;
         propagation.fixed_point_max_iterations =
             classifier_fixed_point_max_iterations;
-        classifierOutput = std::make_unique<ClassifierOutput>(outPrefix,
-            classifier_model, propagation, classifier_top_k, classifier_dense);
+        classifierOutput = std::make_unique<ClassifierOutput>(classifierOutPrefix,
+            classifier_model, propagation, classifier_top_k, classifier_dense,
+            classifier_crossfit);
         if (classifierOutput->model.topics != lda.get_topic_names()) {
             error("Classifier topics do not exactly match LDA topic names/order");
         }
@@ -1226,11 +1348,18 @@ int32_t cmdLDATransform(int argc, char** argv) {
         outputs.unitStats << std::fixed;
     }
 
+    std::unique_ptr<punkst::FactorResultStream> factorResults;
+    if (classifier_only) {
+        factorResults = std::make_unique<punkst::FactorResultStream>(
+            inTransformResults, lda.get_topic_names());
+    }
+
     TransformBatchProcessor processor(lda, outputs.results,
         computeResiduals ? &outputs.unitStats : nullptr,
         pseudobulk, specialPseudobulk, pseudobulkMode,
         residualState.get(), topk_only,
-        unit_similarity_diagnostics, nThreads, classifierOutput.get());
+        unit_similarity_diagnostics, nThreads, classifierOutput.get(),
+        factorResults.get());
 
     bool fileopen = true;
     int32_t processed = 0;
@@ -1369,8 +1498,13 @@ int32_t cmdLDATransform(int argc, char** argv) {
         }
     }
     processor.finalize();
-    outputs.results.close();
-    notice("Transformation results written to %s", outputs.resultsPath.c_str());
+    if (factorResults) {
+        factorResults->require_finished(debug_ > 0);
+    }
+    if (!classifier_only) {
+        outputs.results.close();
+        notice("Transformation results written to %s", outputs.resultsPath.c_str());
+    }
     if (computeResiduals) {
         outputs.unitStats.close();
         notice("Per-unit residuals written to %s", outputs.unitStatsPath.c_str());
@@ -1385,8 +1519,13 @@ int32_t cmdLDATransform(int argc, char** argv) {
                 / classifierOutput->attempted : 0.0;
         notice("LDA classifier LRVB attempted %zu units; %zu failed (%.6g)",
             classifierOutput->attempted, classifierOutput->failed, failure_rate);
+        if (classifierOutput->useCrossfit
+                && classifierOutput->heldoutModelRows == 0) {
+            warning("--classifier-crossfit matched no classifier-training IDs; "
+                "all rows used the full model");
+        }
         const std::string diagnosticPath =
-            outPrefix + ".classification_diagnostics.tsv";
+            classifierOutPrefix + ".classification_diagnostics.tsv";
         std::ofstream diagnostic(diagnosticPath);
         if (!diagnostic) {
             error("Cannot write classification diagnostics: %s",
@@ -1402,7 +1541,9 @@ int32_t cmdLDATransform(int argc, char** argv) {
             "\tlocal_nonconvergence\tcurvature_failures\tother_failures"
             "\tmean_fixed_point_iterations\tmax_fixed_point_iterations"
             "\tmax_fixed_point_residual\tmean_cg_iterations"
-            "\tmax_cg_iterations\tmax_curvature_jitter\n"
+            "\tmax_cg_iterations\tmax_curvature_jitter"
+            "\tclassifier_prediction_mode\theldout_model_rows"
+            "\tfull_model_rows\n"
             << classifierOutput->attempted << '\t' << classifierOutput->failed
             << '\t' << std::scientific << std::setprecision(4)
             << failure_rate << '\t' << classifier_max_failure_rate << '\t'
@@ -1414,9 +1555,14 @@ int32_t cmdLDATransform(int argc, char** argv) {
             << classifierOutput->maximumFixedPointResidual << '\t'
             << meanCgIterations << '\t'
             << classifierOutput->maximumCgIterations << '\t'
-            << classifierOutput->maximumCurvatureJitter << '\n';
+            << classifierOutput->maximumCurvatureJitter << '\t'
+            << (classifierOutput->useCrossfit ? "crossfit" : "full") << '\t'
+            << classifierOutput->heldoutModelRows << '\t'
+            << classifierOutput->fullModelRows << '\n';
         classifier_failure = failure_rate > classifier_max_failure_rate;
     }
+
+    if (classifier_only) return classifier_failure ? 1 : 0;
 
     std::string outFile = outPrefix + ".pseudobulk.tsv";
     std::ofstream outFileStream(outFile);

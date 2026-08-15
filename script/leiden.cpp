@@ -551,7 +551,7 @@ int32_t cmdLeiden(int argc, char** argv) {
       .add_option("projection-full",
           "Also compute projections using covariance-shape differences",
           embedding_cli.include_full);
-    embedding_cli.add_qda_options(parameters);
+    embedding_cli.add_discriminant_options(parameters);
     parameters
       .add_option("skip-projection",
           "Disable all post-clustering projection work",
@@ -577,39 +577,49 @@ int32_t cmdLeiden(int argc, char** argv) {
         }
         std::vector<ProjectionSpace> projection_spaces;
         if (!projections_disabled) {
-            projection_spaces =
-                punkst_cli::parse_projection_spaces(
+            embedding_cli.finalize_discriminant_options(parameters);
+            const bool any_projection =
+                embedding_cli.values.eigen_projection
+                || embedding_cli.values.qda_projection
+                || embedding_cli.values.lda_projection;
+            if (any_projection) {
+                projection_spaces = punkst_cli::parse_projection_spaces(
                     embedding_cli.projection_space);
-            if (embedding_cli.projection_space == "ilr") {
-                throw std::invalid_argument(
-                    "--projection-space must be linear or both for Leiden embeddings");
-            }
-            if (embedding_cli.values.dimensions <= 0) {
-                throw std::invalid_argument(
-                    "--projection-dim must be positive");
-            }
-            if (!(embedding_cli.values.covariance_floor > 0.0)
-                || !std::isfinite(
-                    embedding_cli.values.covariance_floor)) {
-                throw std::invalid_argument(
-                    "--projection-covariance-floor must be positive and finite");
-            }
-            if (std::find(projection_spaces.begin(), projection_spaces.end(),
-                    ProjectionSpace::Ilr) != projection_spaces.end()
-                && (!(embedding_cli.values.center_floor > 0.0)
+                if (embedding_cli.projection_space == "ilr") {
+                    throw std::invalid_argument(
+                        "--projection-space must be linear or both for Leiden embeddings");
+                }
+                if (embedding_cli.values.dimensions <= 0) {
+                    throw std::invalid_argument(
+                        "--projection-dim must be positive");
+                }
+                if (embedding_cli.values.eigen_projection
+                    && (!(embedding_cli.values.covariance_floor > 0.0)
                     || !std::isfinite(
-                        embedding_cli.values.center_floor))) {
-                throw std::invalid_argument(
-                    "--projection-center-floor must be positive and finite");
+                        embedding_cli.values.covariance_floor))) {
+                    throw std::invalid_argument(
+                        "--projection-covariance-floor must be positive and finite");
+                }
+                if (embedding_cli.values.eigen_projection
+                    && std::find(projection_spaces.begin(),
+                        projection_spaces.end(), ProjectionSpace::Ilr)
+                        != projection_spaces.end()
+                    && (!(embedding_cli.values.center_floor > 0.0)
+                        || !std::isfinite(
+                            embedding_cli.values.center_floor))) {
+                    throw std::invalid_argument(
+                        "--projection-center-floor must be positive and finite");
+                }
+                embedding_cli.values.projection_spaces = projection_spaces;
+                if (embedding_cli.values.eigen_projection) {
+                    embedding_cli.values.whitening =
+                        punkst::projection::parse_visualization_whitening(
+                            embedding_cli.whitening);
+                }
+                embedding_cli.values.threads = threads;
+                embedding_cli.values.include_full = embedding_cli.include_full;
+                embedding_cli.values.validate();
             }
-            embedding_cli.finalize_qda_options(parameters);
-            embedding_cli.values.projection_spaces = projection_spaces;
-            embedding_cli.values.whitening =
-                punkst::projection::parse_visualization_whitening(
-                    embedding_cli.whitening);
-            embedding_cli.values.threads = threads;
-            embedding_cli.values.include_full = embedding_cli.include_full;
-            embedding_cli.values.validate();
         }
         parameters.print_options();
 
@@ -685,7 +695,7 @@ int32_t cmdLeiden(int argc, char** argv) {
                     table.values, run.result.membership,
                     run.result.n_communities);
             punkst::linear_embedding::write_cluster_factors(
-                partition_prefix + ".cluster_factors.tsv", table.factors,
+                partition_prefix + ".cluster_factor_abundance.tsv", table.factors,
                 cluster_factors);
         }
         if (!projection_spaces.empty()) {
@@ -712,6 +722,9 @@ int32_t cmdLeiden(int argc, char** argv) {
                         matched_rows, run.result.membership,
                         run.result.n_communities, label, projection_prefix,
                         embedding_cli.values);
+                } catch (const punkst::linear_embedding::
+                        ProjectionFactorFilterError&) {
+                    throw;
                 } catch (const std::exception& exception) {
                     warning("Leiden resolution %.8g embeddings omitted: %s",
                         run.resolution, exception.what());

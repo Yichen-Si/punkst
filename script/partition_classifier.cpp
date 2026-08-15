@@ -355,6 +355,28 @@ void write_calibration(const std::string& path,
     }
 }
 
+void write_crossfit_diagnostics(const std::string& path,
+        const punkst::partition_classifier::CrossfitResult& result) {
+    std::ofstream output(path);
+    if (!output) {
+        throw std::runtime_error(
+            "Cannot write classifier crossfit diagnostics: " + path);
+    }
+    output << "#kind\tfold\ttraining_rows\theldout_rows\tinner_folds"
+        "\tridge\ttemperature\tweight\tlog_loss\tbrier\taccuracy\n"
+        << std::scientific << std::setprecision(10);
+    for (const auto& fold : result.diagnostics) {
+        output << "fold\t" << fold.fold << '\t' << fold.training_rows << '\t'
+            << fold.heldout_rows << '\t' << fold.inner_folds << '\t'
+            << fold.ridge << '\t' << fold.temperature << '\t'
+            << fold.metrics.weight << '\t' << fold.metrics.log_loss << '\t'
+            << fold.metrics.brier << '\t' << fold.metrics.accuracy << '\n';
+    }
+    output << "overall\t.\t.\t.\t.\t.\t.\t" << result.overall.weight
+        << '\t' << result.overall.log_loss << '\t' << result.overall.brier
+        << '\t' << result.overall.accuracy << '\n';
+}
+
 void write_prediction_header(std::ofstream& output, int32_t classes,
         int32_t top_k, bool dense) {
     output << "#id";
@@ -401,6 +423,42 @@ void write_predictions(const DenseThetaStream& theta, const Model& model,
     });
 }
 
+void write_crossfit_classifications(const DenseThetaStream& theta,
+        const punkst::partition_classifier::CrossfitBundle& bundle,
+        const std::string& path, int32_t top_k, bool dense) {
+    if (top_k <= 0) throw std::invalid_argument("--top-k must be positive");
+    std::ofstream output(path);
+    if (!output) {
+        throw std::runtime_error(
+            "Cannot write crossfit classifications: " + path);
+    }
+    write_prediction_header(output, bundle.full_model.classes.size(),
+        top_k, dense);
+    output << std::scientific << std::setprecision(6);
+    theta.for_each([&](uint64_t, const std::string& identifier,
+            const Eigen::VectorXd& composition) {
+        const Model& model = bundle.model_for(identifier, true);
+        const Eigen::VectorXd probability = model.probabilities(composition);
+        output << identifier;
+        if (dense) {
+            for (const double value : probability) output << '\t' << value;
+        } else {
+            std::vector<int32_t> order(probability.size());
+            std::iota(order.begin(), order.end(), 0);
+            std::stable_sort(order.begin(), order.end(),
+                [&](int32_t left, int32_t right) {
+                    return probability(left) > probability(right);
+                });
+            for (int32_t rank = 0;
+                    rank < std::min<int32_t>(top_k, order.size()); ++rank) {
+                output << '\t' << model.classes[order[rank]] << '\t'
+                    << probability(order[rank]);
+            }
+        }
+        output << '\n';
+    });
+}
+
 } // namespace
 
 int32_t cmdPartitionClassifierFit(int argc, char** argv) {
@@ -420,6 +478,7 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
     std::vector<double> ridge_grid;
     bool id_as_row_index = false;
     bool dense = false;
+    bool crossfit = false;
 
     ParamList parameters;
     parameters
@@ -450,7 +509,10 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
           gradient_tolerance)
       .add_option("sampling-seed", "Deterministic sampling seed", seed)
       .add_option("top-k", "Number of prediction class/probability pairs", top_k)
-      .add_option("dense-probabilities", "Write P0..P(C-1)", dense);
+      .add_option("dense-probabilities", "Write P0..P(C-1)", dense)
+      .add_option("crossfit",
+          "Also fit a nested crossfit bundle for overlapping transforms",
+          crossfit);
     try {
         parameters.readArgs(argc, argv);
         if (train_max_rows < 0 || minimum_per_class < 2 || folds < 2
@@ -520,12 +582,14 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
         RowMajorMatrixXd compositions(sample.size(), theta.topics().size());
         Eigen::VectorXi labels(sample.size());
         Eigen::VectorXd weights(sample.size());
+        std::vector<std::string> sample_identifiers(sample.size());
         double mean_weight = 0.0;
         for (size_t index = 0; index < sample.size(); ++index) {
             compositions.row(index) = sample[index].composition.transpose();
             labels(index) = sample[index].label;
             weights(index) = static_cast<double>(counts[labels(index)])
                 / quotas[labels(index)];
+            sample_identifiers[index] = sample[index].identifier;
             mean_weight += weights(index);
         }
         mean_weight /= weights.size();
@@ -537,6 +601,9 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
         options.max_iterations = max_iterations;
         options.lbfgs_history = lbfgs_history;
         options.gradient_tolerance = gradient_tolerance;
+        options.progress_callback = [](const std::string& message) {
+            notice("%s", message.c_str());
+        };
         auto fitted = punkst::partition_classifier::fit(compositions, labels,
             weights, theta.topics(), classes, options);
         fitted.model.matched_rows = matched_rows;
@@ -547,8 +614,29 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
         write_cv(output_prefix + ".cv.tsv", fitted.cv);
         write_calibration(output_prefix + ".calibration.tsv",
             fitted.calibration, fitted.model.classes);
-        write_predictions(theta, fitted.model, output_prefix + ".results.tsv",
-            top_k, dense);
+        write_predictions(theta, fitted.model,
+            output_prefix + ".classifications.tsv", top_k, dense);
+        if (crossfit) {
+            auto crossfitted = punkst::partition_classifier::fit_crossfit(
+                compositions, labels, weights, sample_identifiers,
+                theta.topics(), classes, static_cast<uint64_t>(seed), options);
+            punkst::partition_classifier::CrossfitBundle bundle;
+            bundle.full_model = fitted.model;
+            bundle.fold_models = crossfitted.fold_models;
+            for (size_t index = 0; index < sample_identifiers.size(); ++index) {
+                bundle.heldout_fold_by_identifier.emplace(
+                    sample_identifiers[index],
+                    crossfitted.fold_by_row(static_cast<Eigen::Index>(index)));
+            }
+            bundle.write(output_prefix + ".crossfit.classifier.tsv");
+            write_crossfit_diagnostics(
+                output_prefix + ".crossfit.diagnostics.tsv", crossfitted);
+            write_crossfit_classifications(theta, bundle,
+                output_prefix + ".crossfit.classifications.tsv", top_k,
+                dense);
+            notice("Nested crossfit bundle and diagnostics written under %s.crossfit",
+                output_prefix.c_str());
+        }
         notice("Partition classifier fit %zu classes from %zu/%zu matched rows",
             classes.size(), sample.size(), matched_rows);
     } catch (const std::exception& exception) {
