@@ -1,4 +1,5 @@
 #include "gamma_pois_topic.hpp"
+#include "gamma_pois_topic_v1.hpp"
 #include "transform_helper.hpp"
 #include "partition_classifier.hpp"
 #include "partition_classifier_lrvb.hpp"
@@ -23,6 +24,27 @@
 #include <tbb/parallel_for.h>
 
 namespace {
+
+enum class GammaPoissonStateKind {
+    HierarchicalV1,
+    NormalizedMap,
+};
+
+GammaPoissonStateKind gamma_poisson_state_kind(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) error("Cannot open Gamma-Poisson state %s", path.c_str());
+    std::string header;
+    std::getline(in, header);
+    if (header == "#punkst_gamma_pois_state_v4") {
+        return GammaPoissonStateKind::HierarchicalV1;
+    }
+    if (header == "#punkst_gamma_pois_state_v5") {
+        return GammaPoissonStateKind::NormalizedMap;
+    }
+    error("Gamma-Poisson state %s has unsupported header '%s'; expected v4 or v5",
+        path.c_str(), header.c_str());
+    return GammaPoissonStateKind::NormalizedMap;
+}
 
 using transform_pseudobulk::Mode;
 using transform_pseudobulk::SpecialBatch;
@@ -196,7 +218,7 @@ struct ResidualLocalAgg {
     explicit ResidualLocalAgg(int32_t) {}
 };
 
-VectorXd gammaPoissonTopicReference(GammaPoisson4Hex& gp) {
+VectorXd gammaPoissonTopicReference(GammaPoisson4HexInterface& gp) {
     std::vector<double> abundance;
     gp.get_topic_abundance(abundance);
     VectorXd reference(static_cast<int32_t>(abundance.size()));
@@ -225,7 +247,7 @@ struct ResidualState : feature_diagnostics::FeatureResidualState {
     double exposureSquaredTotal = 0.0;
     int64_t positiveExposureUnits = 0;
 
-    ResidualState(GammaPoisson4Hex& gp, bool cheapDiagnostics,
+    ResidualState(GammaPoisson4HexInterface& gp, bool cheapDiagnostics,
             bool similarityDiagnostics, bool useTrainingPrevalence,
             const std::string& tempDir)
         : FeatureResidualState(
@@ -292,7 +314,7 @@ void randomizeDocuments(std::vector<Document>& docs, std::vector<std::string>& i
 
 class GammaPoisTransformBatchProcessor {
 public:
-    GammaPoisTransformBatchProcessor(GammaPoisson4Hex& gp_,
+    GammaPoisTransformBatchProcessor(GammaPoisson4HexInterface& gp_,
         std::ostream& results_, RowMajorMatrixXd& pseudobulk_,
         MatrixXd& specialPseudobulk_, Mode pseudobulkMode_,
         std::ostream* unitStats_, ResidualState* residualState_,
@@ -912,7 +934,7 @@ private:
             similarityDiagnostics);
     }
 
-    GammaPoisson4Hex& gp;
+    GammaPoisson4HexInterface& gp;
     std::ostream& results;
     RowMajorMatrixXd& pseudobulk;
     MatrixXd& specialPseudobulk;
@@ -1135,15 +1157,15 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
     }
     if (defaultWeight < 0.0) defaultWeight = -1.0;
 
-    std::unique_ptr<GammaPoissonTopicModel> loadedModel =
-        GammaPoissonTopicModel::load_state_deferred(
-            stateFile, seed, nThreads, verbose);
-    const std::vector<std::string>& stateFeatureNames =
-        loadedModel->get_feature_names();
-    const bool stateWeightsActive =
-        loadedModel->feature_weights_active();
-    const std::vector<double>& stateFeatureWeights =
-        loadedModel->get_feature_weight();
+    const GammaPoissonStateKind stateKind =
+        gamma_poisson_state_kind(stateFile);
+    const GammaPoissonStateFeatureInfo stateInfo =
+        stateKind == GammaPoissonStateKind::NormalizedMap
+        ? GammaPoissonTopicModel::read_state_feature_info(stateFile)
+        : gampois_v1::GammaPoissonTopicModel::read_state_feature_info(stateFile);
+    const std::vector<std::string>& stateFeatureNames = stateInfo.names;
+    const bool stateWeightsActive = stateInfo.feature_weights_active;
+    const std::vector<double>& stateFeatureWeights = stateInfo.feature_weight;
     HexReader reader;
     std::unique_ptr<DGEReader10X> dge_ptr;
     const bool use_10x = initHexOrDgeInput(reader, dge_ptr, inFile, metaFile,
@@ -1254,9 +1276,25 @@ int32_t cmdGammaPoisTransform(int argc, char** argv) {
         reader.getInfoHeaderStr(info_header);
     }
 
-    GammaPoisson4Hex gp(reader, modal, verbose);
-    gp.initialize_transform(std::move(loadedModel), maxIter, mDelta,
-        keptModelFeatures);
+    std::unique_ptr<GammaPoisson4HexInterface> gpHolder;
+    if (stateKind == GammaPoissonStateKind::NormalizedMap) {
+        auto model = GammaPoissonTopicModel::load_state_deferred(
+            stateFile, seed, nThreads, verbose);
+        auto wrapper = std::make_unique<GammaPoisson4Hex>(
+            reader, modal, verbose);
+        wrapper->initialize_transform(std::move(model), maxIter, mDelta,
+            keptModelFeatures);
+        gpHolder = std::move(wrapper);
+    } else {
+        auto model = gampois_v1::GammaPoissonTopicModel::load_state_deferred(
+            stateFile, seed, nThreads, verbose);
+        auto wrapper = std::make_unique<gampois_v1::GammaPoisson4Hex>(
+            reader, modal, verbose);
+        wrapper->initialize_transform(std::move(model), maxIter, mDelta,
+            keptModelFeatures);
+        gpHolder = std::move(wrapper);
+    }
+    GammaPoisson4HexInterface& gp = *gpHolder;
 
     const int32_t M = gp.nFeatures();
     const int32_t K = gp.getNumTopics();

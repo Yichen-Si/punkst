@@ -7,7 +7,23 @@
 #include "Eigen/Dense"
 #include "dataunits.hpp"
 
-class GammaPoissonTopicModel;
+struct GammaPoissonDocumentPosterior {
+    Eigen::VectorXd shape;
+    Eigen::VectorXd rate;
+    double exposure = 0.0;
+};
+
+class GammaPoissonDispersionModel {
+public:
+    virtual ~GammaPoissonDispersionModel() = default;
+    virtual int32_t get_n_topics() const = 0;
+    virtual int32_t get_n_features() const = 0;
+    virtual bool feature_weights_active() const = 0;
+    virtual const std::vector<double>& get_feature_weight() const = 0;
+    virtual void infer_document_posterior(const Document& doc,
+        GammaPoissonDocumentPosterior& posterior) const = 0;
+    virtual const Eigen::MatrixXd& get_expected_beta() const = 0;
+};
 
 enum class GammaPoissonDispersionEstimatorKind : int32_t {
     Factorial = 0,
@@ -57,14 +73,14 @@ struct GammaPoissonDispersionResult {
 
 class GammaPoissonDispersionEstimator {
 public:
-    GammaPoissonDispersionEstimator(const GammaPoissonTopicModel& model,
+    GammaPoissonDispersionEstimator(const GammaPoissonDispersionModel& model,
         const GammaPoissonDispersionOptions& options);
 
     void accumulate(DocumentView docs);
     GammaPoissonDispersionResult finish();
 
 private:
-    const GammaPoissonTopicModel& model_;
+    const GammaPoissonDispersionModel& model_;
     int32_t n_features_ = 0;
     int32_t n_topics_ = 0;
     GammaPoissonDispersionOptions options_;

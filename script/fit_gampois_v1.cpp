@@ -1,4 +1,4 @@
-#include "gamma_pois_topic.hpp"
+#include "gamma_pois_topic_v1.hpp"
 #include "count_cache_options.hpp"
 
 #include <climits>
@@ -34,7 +34,7 @@ void append_repeated(std::vector<std::string>& args, const std::string& key,
 
 } // namespace
 
-int32_t cmdGammaPoisFitMap(int argc, char** argv) {
+int32_t cmdGammaPoisFitV1(int argc, char** argv) {
     std::string inFile, metaFile, outPrefix, featureFile, modelInitFile;
     std::vector<std::string> dge_dirs, in_bc, in_ft, in_mtx, dataset_ids;
     std::string include_ftr_regex, exclude_ftr_regex;
@@ -63,19 +63,21 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
     int32_t maxIter = 100;
     double mDelta = 1e-3;
     int32_t nTopics = 0;
+    double betaShape = -1.0;
     double randomInitShape = 2.0;
+    double xiShape = 0.3;
+    double xiMean = -1.0;
     double thetaConcentration = 1.0;
-    double dictionaryPriorMass = 1.0;
-    double regularization = 0.0;
-    int32_t regularizeWarmupEpochs = 1;
-    int32_t regularizeRampEpochs = 1;
-    int32_t finalRefinePasses = 0;
-    double finalRefineTol = 1e-5;
+    double nuShape = 1.0;
+    double nuRate = -1.0;
+    double sizeFactor = -1.0;
     double dispersionLoessSpan = 0.3;
     double dispersionMinInformation = 8.0;
     double dispersionOutlierSd = 2.0;
     double dispersionDeltaMin = 1e-8;
     double dispersionDeltaMax = 1e4;
+    bool ebShrinkage = false;
+    double nuMax = -1.0;
 
     ParamList pl;
     pl.add_option("in-data", "Input hex file", inFile)
@@ -120,23 +122,18 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
       .add_option("max-iter", "Max iterations per doc", maxIter)
       .add_option("mean-change-tol", "Convergence tolerance per doc", mDelta)
       .add_option("n-topics", "Number of topics", nTopics)
+      .add_option("beta-shape", "Gamma shape a for beta_wr; default max(1/K, 0.01)", betaShape)
       .add_option("random-init-shape",
           "Shape of mean-one Gamma noise used for random topic initialization",
           randomInitShape)
+      .add_option("xi-shape", "Gamma shape a0 for xi_w", xiShape)
+      .add_option("xi-mean", "Prior mean b0 for xi_w; default derives from size factor and vocabulary", xiMean)
       .add_option("theta-concentration", "Total theta concentration alpha", thetaConcentration)
-      .add_option("dictionary-prior-mass",
-          "Total anti-collapse pseudocount mass per topic", dictionaryPriorMass)
-      .add_option("regularization",
-          "Token-normalized ownership-entropy regularization", regularization)
-      .add_option("regularize-warmup-epochs",
-          "Epochs with zero regularization", regularizeWarmupEpochs)
-      .add_option("regularize-ramp-epochs",
-          "Epochs over which regularization reaches full strength",
-          regularizeRampEpochs)
-      .add_option("final-refine-passes",
-          "Maximum full-data deterministic refinement passes", finalRefinePasses)
-      .add_option("final-refine-tol",
-          "Maximum dictionary row-L1 change for refinement convergence", finalRefineTol);
+      .add_option("nu-shape", "Gamma shape e0 for nu_r; only used with --eb-shrinkage", nuShape)
+      .add_option("nu-rate", "Gamma rate f0 for nu_r; default e0/alpha; only used with --eb-shrinkage", nuRate)
+      .add_option("eb-shrinkage", "Activate asymmetric empirical-Bayes topic-rate nu_r; default uses the symmetric theta concentration prior", ebShrinkage)
+      .add_option("nu-max", "Positive cap on E[nu_r] under --eb-shrinkage; default 10*alpha", nuMax)
+      .add_option("size-factor", "Corpus mean document length nbar; defaults to the effective feature total divided by document count", sizeFactor);
     pl.add_option("model-init",
         "Topic model TSV used only to initialize Gamma-Poisson beta means",
         modelInitFile);
@@ -163,8 +160,6 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
     validate_training_count_cache_options(
         count_cache_options.mode, count_cache_options.memory_budget);
     if (nTopics <= 0) error("--n-topics must be greater than 0");
-    if (maxIter <= 0 || !std::isfinite(mDelta) || mDelta <= 0.0)
-        error("--max-iter and --mean-change-tol must be positive");
     if (randomizeOutput && !transform) {
         error("--randomize-output requires --transform");
     }
@@ -174,28 +169,19 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
     if (unitSimilarityDiagnostics && !computeResiduals) {
         error("--unit-diagnostics-similarity requires --residuals");
     }
+    const bool nuMaxProvided = pl.was_provided("nu-max");
     if (!std::isfinite(thetaConcentration) || thetaConcentration <= 0.0) {
         error("--theta-concentration must be positive and finite");
     }
-    if (!std::isfinite(kappa) || kappa <= 0.5 || kappa > 1.0)
-        error("--kappa must be in (0.5, 1]");
-    if (!std::isfinite(tau0) || tau0 <= 0.0)
-        error("--tau0 must be positive and finite");
     if (!std::isfinite(randomInitShape) || randomInitShape <= 0.0) {
         error("--random-init-shape must be positive and finite");
     }
-    if (!std::isfinite(dictionaryPriorMass) || dictionaryPriorMass < 0.0)
-        error("--dictionary-prior-mass must be non-negative and finite");
-    if (!std::isfinite(regularization) || regularization < 0.0)
-        error("--regularization must be non-negative and finite");
-    if (regularizeWarmupEpochs < 0 || regularizeRampEpochs < 0)
-        error("Regularization warmup and ramp epochs must be non-negative");
-    if (regularization > 0.0
-        && nEpochs < regularizeWarmupEpochs + regularizeRampEpochs)
-        error("--n-epochs must cover regularization warmup and ramp");
-    if (finalRefinePasses < 0 || !std::isfinite(finalRefineTol)
-        || finalRefineTol <= 0.0)
-        error("Final refinement passes must be non-negative and tolerance positive");
+    if (nuMaxProvided && !ebShrinkage) {
+        error("--nu-max requires --eb-shrinkage");
+    }
+    if (nuMaxProvided && (!std::isfinite(nuMax) || nuMax <= 0.0)) {
+        error("--nu-max must be positive and finite");
+    }
     if (icolDispersion >= 0 && featureFile.empty()) {
         error("--features is required when --icol-dispersion is non-negative");
     }
@@ -204,10 +190,6 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
     }
     if (estimateDispersion && (dispersionInitEpochs < 1 || dispersionInitEpochs >= nEpochs)) {
         error("--dispersion-init-epochs must be at least 1 and smaller than --n-epochs");
-    }
-    if (estimateDispersion && regularization > 0.0
-        && regularizeWarmupEpochs < dispersionInitEpochs) {
-        error("--regularize-warmup-epochs must cover --dispersion-init-epochs");
     }
     if (dispersionEstimator != "factorial" && dispersionEstimator != "residual") {
         error("--dispersion-estimator must be factorial or residual");
@@ -259,7 +241,7 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
         error("--features must provide a non-negative total count for every "
             "retained feature when fitting custom Gamma-Poisson input");
     }
-    auto gp = std::make_unique<GammaPoisson4Hex>(reader, modal, verbose);
+    auto gp = std::make_unique<gampois_v1::GammaPoisson4Hex>(reader, modal, verbose);
     if (use_10x) {
         int32_t n_overlap = dge_ptr->setFeatureIndexRemap(gp->getFeatureNames(), false);
         if (n_overlap == 0) {
@@ -282,12 +264,22 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
         }
     }
 
-    GammaPoissonMapOptions mapOptions;
-    mapOptions.dictionary_prior_mass = dictionaryPriorMass;
-    mapOptions.ownership_strength = regularization;
-    gp->initialize(nTopics, seed, nThreads, verbose, thetaConcentration,
-        kappa, tau0, gp->nUnits(), maxIter, mDelta,
-        randomInitShape, mapOptions);
+    const double resolvedSizeFactor = gp->resolveSizeFactor(sizeFactor);
+    notice("Using size factor nbar = %.6g", resolvedSizeFactor);
+    if (ebShrinkage && !nuMaxProvided) {
+        nuMax = 10.0 * thetaConcentration;
+    }
+    if (ebShrinkage) {
+        if (!std::isfinite(nuMax) || nuMax <= 0.0) {
+            error("Resolved --nu-max must be positive and finite");
+        }
+        notice("Empirical-Bayes nu_r shrinkage active; E[nu_r] cap = %.6g",
+            nuMax);
+    }
+    gp->initialize(nTopics, seed, nThreads, verbose, betaShape, xiShape, xiMean,
+        thetaConcentration, nuShape, nuRate, kappa, tau0,
+        gp->nUnits(), resolvedSizeFactor,
+        !ebShrinkage, nuMax, maxIter, mDelta, randomInitShape);
     if (!modelInitFile.empty()) {
         gp->initializeFromModel(modelInitFile);
     }
@@ -298,12 +290,8 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
     }
 
     const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
-    const int32_t documentsPerEpoch = debug_ > 0
-        ? debug_ : std::max<int32_t>(1, gp->nUnits());
-    gp->configureOwnershipAnnealing(regularizeWarmupEpochs,
-        regularizeRampEpochs, documentsPerEpoch);
     const int32_t count_passes =
-        nEpochs + (estimateDispersion ? 1 : 0) + finalRefinePasses;
+        nEpochs + (estimateDispersion ? 1 : 0);
     TrainingCountCache count_cache(count_cache_options,
         use_10x, count_passes, gp->nFeatures());
     notice("Starting Gamma-Poisson model training....");
@@ -325,21 +313,7 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
             n = gp->trainOnline(inFile, batchSize, minCountTrain, maxUnits);
         }
         notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
-        if (epoch == 0 && n > 0 && n != documentsPerEpoch) {
-            gp->configureOwnershipAnnealing(regularizeWarmupEpochs,
-                regularizeRampEpochs, n, n);
-        }
         gp->printTopicAbundance();
-        const auto diagnostics = gp->optimizationDiagnostics();
-        notice("Gamma-Poisson MAP: objective %.6g, ownership entropy %.6g, "
-            "lambda %.6g, max row change %.3g, gradient steps %d accepted/%d "
-            "failed, L-BFGS %d steps/%d fallbacks",
-            diagnostics.objective, diagnostics.ownership_entropy,
-            diagnostics.effective_ownership_lambda,
-            diagnostics.maximum_row_change,
-            diagnostics.accepted_gradient_steps,
-            diagnostics.failed_gradient_steps, diagnostics.lbfgs_steps,
-            diagnostics.lbfgs_fallbacks);
         if (estimateDispersion && epoch + 1 == dispersionInitEpochs) {
             GammaPoissonDispersionOptions options;
             options.estimator = dispersionEstimator == "factorial"
@@ -372,38 +346,6 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
                 gp->getFeatureNames(), dispersion);
             notice("Estimated per-feature dispersion from %d documents; diagnostics written to %s",
                 dispersion.n_documents, outDispersion.c_str());
-        }
-    }
-    if (finalRefinePasses > 0) {
-        gp->setOwnershipAnnealing(1.0);
-        for (int32_t pass = 0; pass < finalRefinePasses; ++pass) {
-            gp->beginFullRefinement();
-            int32_t n = 0;
-            if (use_10x) {
-                n = gp->trainOnline10X(batchSize, maxUnits,
-                    seed + nEpochs + pass);
-            } else if (count_cache.resident_batches()) {
-                n = gp->trainOnline(
-                    *count_cache.resident_batches(), batchSize, maxUnits);
-            } else if (count_cache.source()) {
-                n = gp->trainOnline(*count_cache.source(), batchSize, maxUnits);
-            } else {
-                n = gp->trainOnline(
-                    inFile, batchSize, minCountTrain, maxUnits);
-            }
-            const bool converged = gp->finishFullRefinement(finalRefineTol);
-            const auto diagnostics = gp->optimizationDiagnostics();
-            notice("Final refinement pass %d/%d, processed %d documents%s",
-                pass + 1, finalRefinePasses, n,
-                converged ? ", converged" : "");
-            notice("Gamma-Poisson refinement MAP: objective %.6g, ownership "
-                "entropy %.6g, lambda %.6g, max row change %.3g, L-BFGS %d "
-                "steps/%d fallbacks",
-                diagnostics.objective, diagnostics.ownership_entropy,
-                diagnostics.effective_ownership_lambda,
-                diagnostics.maximum_row_change, diagnostics.lbfgs_steps,
-                diagnostics.lbfgs_fallbacks);
-            if (converged) break;
         }
     }
     if (sort_topics) {
@@ -468,3 +410,4 @@ int32_t cmdGammaPoisFitMap(int argc, char** argv) {
     }
     return 0;
 }
+

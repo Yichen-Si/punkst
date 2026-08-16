@@ -1,5 +1,4 @@
-#include "gamma_pois_topic.hpp"
-#include "lbfgs_history.hpp"
+#include "gamma_pois_topic_v1.hpp"
 
 #include <Eigen/Eigenvalues>
 #include <Eigen/QR>
@@ -7,7 +6,13 @@
 #include <unordered_map>
 #include <unordered_set>
 
+namespace gampois_v1 {
+
 namespace {
+
+double positive_or(double x, double fallback) {
+    return x > 0.0 && std::isfinite(x) ? x : fallback;
+}
 
 double doc_sum_const(const Document& doc) {
     if (doc.ct_tot >= 0.0) {
@@ -22,9 +27,9 @@ std::vector<std::string> split_ws(const std::string& line) {
     return out;
 }
 
-void require_gamma_pois_state_v5(std::ifstream& in, const std::string& state_file) {
+void require_gamma_pois_state_v4(std::ifstream& in, const std::string& state_file) {
     std::string version;
-    if (!std::getline(in, version) || version != "#punkst_gamma_pois_state_v5") {
+    if (!std::getline(in, version) || version != "#punkst_gamma_pois_state_v4") {
         error("Gamma-Poisson state %s uses an unsupported format; refit the model "
             "with this version of punkst", state_file.c_str());
     }
@@ -37,54 +42,77 @@ int GammaPoissonTopicBase::normalize_seed(int seed) {
 }
 
 GammaPoissonTopicBase::GammaPoissonTopicBase(int32_t n_topics, int32_t n_features,
-    int seed, int32_t nThreads, int32_t verbose,
+    int seed, int32_t nThreads, int32_t verbose, double beta_shape, double xi_shape,
+    double xi_mean, double theta_concentration, double nu_shape, double nu_rate,
     double learning_decay, double learning_offset, int32_t total_doc_count,
-    const std::vector<double>* feature_sums,
+    double size_factor, const std::vector<double>* feature_sums,
     double random_init_shape)
     : n_topics_(n_topics), n_features_(n_features), seed_(normalize_seed(seed)),
       nThreads_(nThreads), verbose_(verbose),
-      total_doc_count_(total_doc_count),
-      learning_decay_(learning_decay),
-      learning_offset_(learning_offset),
+      total_doc_count_(total_doc_count > 0 ? total_doc_count : 1000000),
+      a_(beta_shape),
+      a0_(positive_or(xi_shape, 0.3)),
+      b0_(xi_mean),
+      e0_(positive_or(nu_shape, 1.0)),
+      f0_(positive_or(nu_rate, 1.0)),
+      learning_decay_(positive_or(learning_decay, 0.7)),
+      learning_offset_(learning_offset >= 0.0 ? learning_offset : 10.0),
+      size_factor_(positive_or(size_factor, 1.0)),
       random_init_shape_(random_init_shape) {
-    if (total_doc_count_ <= 0) {
-        throw std::invalid_argument(
-            "Gamma-Poisson total document count must be positive");
+    if (!std::isfinite(a_) || a_ <= 0.0) {
+        a_ = std::max(1.0 / static_cast<double>(std::max(1, n_topics_)), 0.01);
     }
-    if (!std::isfinite(learning_decay_) || learning_decay_ <= 0.5
-        || learning_decay_ > 1.0 || !std::isfinite(learning_offset_)
-        || learning_offset_ <= 0.0) {
-        throw std::invalid_argument(
-            "Gamma-Poisson learning decay must be in (0.5,1] and offset positive");
+    if (!std::isfinite(b0_) || b0_ <= 0.0) {
+        b0_ = static_cast<double>(std::max(1, n_features_)) / size_factor_;
     }
     if (!std::isfinite(random_init_shape_) || random_init_shape_ <= 0.0) {
         throw std::invalid_argument(
             "Gamma-Poisson random initialization shape must be positive and finite");
     }
     random_engine_.seed(seed_);
+    if (nu_rate <= 0.0) {
+        f0_ = e0_ / positive_or(theta_concentration, 1.0);
+    }
     set_nthreads(nThreads_);
     init_from_feature_sums(feature_sums);
 }
 
 GammaPoissonTopicModel::GammaPoissonTopicModel(int32_t n_topics, int32_t n_features,
-    int seed, int32_t nThreads, int32_t verbose, double theta_concentration,
+    int seed, int32_t nThreads, int32_t verbose, double beta_shape, double xi_shape,
+    double xi_mean, double theta_concentration,
+    double nu_shape, double nu_rate,
     double learning_decay, double learning_offset, int32_t total_doc_count,
-    const std::vector<double>* feature_sums, double random_init_shape,
-    const GammaPoissonMapOptions& map_options)
+    double size_factor, bool symmetric_nu, double nu_max,
+    const std::vector<double>* feature_sums, double random_init_shape)
     : GammaPoissonTopicBase(n_topics, n_features, seed, nThreads, verbose,
-          learning_decay, learning_offset, total_doc_count, feature_sums,
-          random_init_shape),
-      theta_concentration_(theta_concentration),
-      dictionary_prior_mass_(map_options.dictionary_prior_mass),
-      ownership_strength_(map_options.ownership_strength) {
+          beta_shape, xi_shape, xi_mean, theta_concentration, nu_shape, nu_rate,
+          learning_decay, learning_offset, total_doc_count, size_factor,
+          feature_sums, random_init_shape),
+      symmetric_nu_(symmetric_nu), theta_concentration_(theta_concentration),
+      nu_max_(nu_max) {
     if (!std::isfinite(theta_concentration_) || theta_concentration_ <= 0.0) {
         throw std::invalid_argument(
             "Gamma-Poisson theta concentration must be positive and finite");
     }
-    if (!std::isfinite(dictionary_prior_mass_) || dictionary_prior_mass_ < 0.0
-        || !std::isfinite(ownership_strength_) || ownership_strength_ < 0.0) {
-        throw std::invalid_argument(
-            "Gamma-Poisson MAP prior mass and ownership strength must be non-negative and finite");
+    if (!symmetric_nu_ && nu_max_ <= 0.0) {
+        nu_max_ = 10.0 * theta_concentration_;
+    }
+    if (!symmetric_nu_ && !std::isfinite(nu_max_)) {
+        throw std::invalid_argument("Gamma-Poisson nu cap must be finite");
+    }
+    const double theta_shape = theta_concentration_ / static_cast<double>(n_topics_);
+    nu_shape_ = VectorXd::Constant(n_topics_, e0_ + total_doc_count_ * theta_shape);
+    nu_rate_ = VectorXd::Constant(n_topics_,
+        f0_ + static_cast<double>(total_doc_count_) / n_topics_);
+    apply_nu_cap();
+}
+
+void GammaPoissonTopicModel::apply_nu_cap() {
+    if (symmetric_nu_ || nu_max_ <= 0.0) {
+        return;
+    }
+    for (int32_t k = 0; k < n_topics_; ++k) {
+        nu_rate_(k) = std::max(nu_rate_(k), nu_shape_(k) / nu_max_);
     }
 }
 
@@ -101,13 +129,11 @@ void GammaPoissonTopicModel::set_feature_dispersion(const std::vector<double>& t
         tau_(w) = tau[w];
     }
     has_dispersion_ = true;
-    reset_running_statistics();
 }
 
 void GammaPoissonTopicModel::clear_feature_dispersion() {
     has_dispersion_ = false;
     tau_.resize(0);
-    reset_running_statistics();
 }
 
 void GammaPoissonTopicModel::set_training_calibration(
@@ -183,7 +209,10 @@ double GammaPoissonTopicModel::restrict_features(
 
     const int32_t old_features = n_features_;
     const int32_t new_features = static_cast<int32_t>(kept_features.size());
-    MatrixXd dictionary(n_topics_, new_features);
+    MatrixXd beta_shape(n_topics_, new_features);
+    MatrixXd beta_rate(n_topics_, new_features);
+    VectorXd xi_shape(new_features);
+    VectorXd xi_rate(new_features);
     VectorXd tau;
     if (has_dispersion_) tau.resize(new_features);
     std::vector<std::string> names;
@@ -193,7 +222,10 @@ double GammaPoissonTopicModel::restrict_features(
     names.reserve(new_features);
     for (int32_t j = 0; j < new_features; ++j) {
         const int32_t w = kept_features[j];
-        dictionary.col(j) = e_beta_.col(w);
+        beta_shape.col(j) = beta_shape_.col(w);
+        beta_rate.col(j) = beta_rate_.col(w);
+        xi_shape(j) = xi_shape_(w);
+        xi_rate(j) = xi_rate_(w);
         if (has_dispersion_) tau(j) = tau_(w);
         if (feature_names_.size() == static_cast<size_t>(old_features)) {
             names.push_back(feature_names_[w]);
@@ -201,21 +233,17 @@ double GammaPoissonTopicModel::restrict_features(
         counts[j] = training_count_[w];
         if (feature_weights_active_) weights[j] = feature_weight_[w];
     }
-    for (int32_t k = 0; k < n_topics_; ++k) {
-        const double row_sum = dictionary.row(k).sum();
-        if (!std::isfinite(row_sum) || row_sum <= 0.0) {
-            error("%s: selected feature panel has zero mass for topic %d", __func__, k);
-        }
-        dictionary.row(k) /= row_sum;
-    }
-    e_beta_ = std::move(dictionary);
+    beta_shape_ = std::move(beta_shape);
+    beta_rate_ = std::move(beta_rate);
+    xi_shape_ = std::move(xi_shape);
+    xi_rate_ = std::move(xi_rate);
     if (has_dispersion_) tau_ = std::move(tau);
     feature_names_ = std::move(names);
     training_count_ = std::move(counts);
     feature_weight_ = std::move(weights);
     n_features_ = new_features;
+    size_factor_ *= panel_fraction;
     worker_states_.reset();
-    reset_running_statistics();
     refresh_cache();
     return panel_fraction;
 }
@@ -274,10 +302,10 @@ void GammaPoissonTopicBase::init_from_feature_sums(const std::vector<double>* fe
         throw std::invalid_argument(
             "Gamma-Poisson feature sums do not match the feature dimension");
     }
-    e_beta_.resize(n_topics_, n_features_);
+    beta_shape_.resize(n_topics_, n_features_);
+    beta_rate_.resize(n_topics_, n_features_);
     topic_usage_ = VectorXd::Constant(n_topics_,
-        static_cast<double>(total_doc_count_)
-            / static_cast<double>(std::max(1, n_topics_)));
+        size_factor_ * static_cast<double>(total_doc_count_) / static_cast<double>(std::max(1, n_topics_)));
 
     VectorXd feature_mean(n_features_);
     double total = 0.0;
@@ -296,47 +324,49 @@ void GammaPoissonTopicBase::init_from_feature_sums(const std::vector<double>* fe
     for (int32_t w = 0; w < n_features_; ++w) {
         training_count_[w] = feature_sums && total > 0.0
             ? (*feature_sums)[w]
-            : 1.0 / static_cast<double>(n_features_);
+            : size_factor_ / static_cast<double>(n_features_);
     }
-    const double abundance_floor = 1e-12 / static_cast<double>(n_features_);
+    const double abundance_floor =
+        std::max(size_factor_, 1.0) * 1e-12 / static_cast<double>(n_features_);
     for (int32_t w = 0; w < n_features_; ++w) {
         const double abundance = feature_sums && total > 0.0
-            ? (*feature_sums)[w] / total
-            : 1.0 / static_cast<double>(n_features_);
+            ? (*feature_sums)[w] / total * size_factor_
+            : size_factor_ / static_cast<double>(n_features_);
         feature_mean(w) = std::max(abundance, abundance_floor);
     }
-    feature_mean /= feature_mean.sum();
+    feature_mean *= size_factor_ / feature_mean.sum();
 
+    // Use beta storage as the IPF work matrix, avoiding another K-by-V allocation.
     std::gamma_distribution<double> noise(
         random_init_shape_, 1.0 / random_init_shape_);
     for (int32_t k = 0; k < n_topics_; ++k) {
         for (int32_t w = 0; w < n_features_; ++w) {
-            e_beta_(k, w) = std::max(noise(random_engine_), 1e-300);
+            beta_rate_(k, w) = std::max(noise(random_engine_), 1e-300);
         }
     }
 
     VectorXd row_sums(n_topics_);
     bool converged = false;
     for (int32_t iter = 0; iter < 100; ++iter) {
-        row_sums = e_beta_.rowwise().sum();
+        row_sums = beta_rate_.rowwise().sum();
         for (int32_t k = 0; k < n_topics_; ++k) {
             if (!std::isfinite(row_sums(k)) || row_sums(k) <= 0.0) {
                 throw std::runtime_error("Non-finite Gamma-Poisson beta initialization");
             }
-            e_beta_.row(k) /= row_sums(k);
+            beta_rate_.row(k) *= size_factor_ / row_sums(k);
         }
         for (int32_t w = 0; w < n_features_; ++w) {
-            const double column_sum = e_beta_.col(w).sum();
+            const double column_sum = beta_rate_.col(w).sum();
             if (!std::isfinite(column_sum) || column_sum <= 0.0) {
                 throw std::runtime_error("Non-finite Gamma-Poisson beta initialization");
             }
-            e_beta_.col(w) *= n_topics_ * feature_mean(w) / column_sum;
+            beta_rate_.col(w) *= n_topics_ * feature_mean(w) / column_sum;
         }
-        row_sums = e_beta_.rowwise().sum();
+        row_sums = beta_rate_.rowwise().sum();
         double max_relative_error = 0.0;
         for (int32_t k = 0; k < n_topics_; ++k) {
             max_relative_error = std::max(max_relative_error,
-                std::abs(row_sums(k) - 1.0));
+                std::abs(row_sums(k) / size_factor_ - 1.0));
         }
         if (std::isfinite(max_relative_error) && max_relative_error <= 1e-8) {
             converged = true;
@@ -347,6 +377,18 @@ void GammaPoissonTopicBase::init_from_feature_sums(const std::vector<double>* fe
         throw std::runtime_error("Gamma-Poisson beta initialization did not converge");
     }
 
+    for (int32_t k = 0; k < n_topics_; ++k) {
+        for (int32_t w = 0; w < n_features_; ++w) {
+            const double beta_mean = beta_rate_(k, w);
+            beta_shape_(k, w) = a_;
+            beta_rate_(k, w) = a_ / beta_mean;
+        }
+    }
+    xi_shape_ = VectorXd::Constant(n_features_, a0_ + a_ * n_topics_);
+    xi_rate_.resize(n_features_);
+    for (int32_t w = 0; w < n_features_; ++w) {
+        xi_rate_(w) = a0_ / b0_ + a_ * feature_mean(w) * n_topics_;
+    }
     refresh_cache();
 }
 
@@ -383,33 +425,46 @@ void GammaPoissonTopicBase::initialize_topic_profiles(
         normalized.row(k) /= total;
     }
 
-    e_beta_ = normalized;
+    for (int32_t k = 0; k < n_topics_; ++k) {
+        for (int32_t w = 0; w < n_features_; ++w) {
+            const double mean = size_factor_ * normalized(k, w);
+            beta_shape_(k, w) = a_;
+            beta_rate_(k, w) = a_ / mean;
+        }
+    }
+    xi_shape_ = VectorXd::Constant(n_features_, a0_ + a_ * n_topics_);
+    for (int32_t w = 0; w < n_features_; ++w) {
+        double beta_sum = 0.0;
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            beta_sum += size_factor_ * normalized(k, w);
+        }
+        xi_rate_(w) = a0_ / b0_ + a_ * beta_sum;
+    }
     topic_usage_ = VectorXd::Constant(n_topics_,
-        static_cast<double>(total_doc_count_)
+        size_factor_ * static_cast<double>(total_doc_count_)
             / static_cast<double>(n_topics_));
     if (!topic_names.empty()) topic_names_ = topic_names;
     refresh_cache();
 }
 
 void GammaPoissonTopicBase::refresh_cache() {
+    e_beta_.resize(n_topics_, n_features_); // E[\beta_{kw}]
     beta_kernel_.resize(n_topics_, n_features_);
-    constexpr double kFloor = 1e-300;
-    for (int32_t k = 0; k < n_topics_; ++k) {
-        for (int32_t w = 0; w < n_features_; ++w) {
-            e_beta_(k, w) = std::max(e_beta_(k, w), kFloor);
-        }
-        e_beta_.row(k) /= e_beta_.row(k).sum();
-    }
     for (int32_t w = 0; w < n_features_; ++w) {
-        double max_value = 0.0;
+        double max_log = -std::numeric_limits<double>::infinity();
         for (int32_t k = 0; k < n_topics_; ++k) {
-            max_value = std::max(max_value, e_beta_(k, w));
+            beta_shape_(k, w) = std::max(beta_shape_(k, w), 1e-12);
+            beta_rate_(k, w) = std::max(beta_rate_(k, w), 1e-12);
+            e_beta_(k, w) = beta_shape_(k, w) / beta_rate_(k, w);
+            beta_kernel_(k, w) =
+                psi(beta_shape_(k, w)) - std::log(beta_rate_(k, w));
+            max_log = std::max(max_log, beta_kernel_(k, w));
         }
         for (int32_t k = 0; k < n_topics_; ++k) {
-            beta_kernel_(k, w) = e_beta_(k, w) / std::max(max_value, kFloor);
+            beta_kernel_(k, w) = std::exp(beta_kernel_(k, w) - max_log);
         }
     }
-    topic_capacity_ = VectorXd::Ones(n_topics_);
+    topic_capacity_ = e_beta_.rowwise().sum();
     model_cache_dirty_ = true;
     inference_cache_ready_ = true;
 }
@@ -425,6 +480,10 @@ void GammaPoissonTopicBase::refresh_model_cache() {
         return;
     }
     model_phi_ = e_beta_;
+    for (int32_t k = 0; k < n_topics_; ++k) {
+        const double denom = std::max(topic_capacity_(k), 1e-300);
+        model_phi_.row(k) /= denom;
+    }
     model_cache_dirty_ = false;
 }
 
@@ -433,7 +492,7 @@ double GammaPoissonTopicBase::doc_exposure(const Document& doc) const {
     if (len <= 0.0) {
         return 0.0;
     }
-    return len;
+    return len / size_factor_;
 }
 
 void GammaPoissonTopicModel::expected_observed_counts(const Document& doc,
@@ -467,7 +526,7 @@ void GammaPoissonTopicModel::WorkerState::reset(uint64_t current_generation,
     generation = current_generation;
     ss.setZero(n_topics, n_features);
     if (with_dispersion) {
-        dispersion_correction.setZero(n_topics, n_features);
+        beta_rate_correction.setZero(n_topics, n_features);
     }
     ctheta.setZero(n_topics);
     theta.setZero(n_topics);
@@ -586,7 +645,7 @@ int32_t GammaPoissonTopicModel::fit_one_document(VectorXd& theta_shape,
             double max_log = -std::numeric_limits<double>::infinity();
             for (int32_t k = 0; k < n_topics_; ++k) {
                 workspace.theta_kernel(k) = workspace.theta_log(k)
-                    + std::log(std::max(e_beta_(k, w), 1e-300));
+                    + psi(beta_shape_(k, w)) - std::log(beta_rate_(k, w));
                 max_log = std::max(max_log, workspace.theta_kernel(k));
             }
             double norm = 0.0;
@@ -682,7 +741,7 @@ void GammaPoissonTopicModel::accumulate_document(WorkerState& state,
             double max_log = -std::numeric_limits<double>::infinity();
             for (int32_t k = 0; k < n_topics_; ++k) {
                 state.workspace.assigned(k) = state.workspace.theta_log(k)
-                    + std::log(std::max(e_beta_(k, w), 1e-300));
+                    + psi(beta_shape_(k, w)) - std::log(beta_rate_(k, w));
                 max_log = std::max(max_log, state.workspace.assigned(k));
             }
             double norm = 0.0;
@@ -704,23 +763,15 @@ void GammaPoissonTopicModel::accumulate_document(WorkerState& state,
             const double epsilon = (tau + counts(j))
                 / std::max(tau + c * state.workspace.norm(j), 1e-12);
             const double correction = c * (epsilon - 1.0);
-            state.dispersion_correction.col(doc.ids[j]).noalias() +=
+            state.beta_rate_correction.col(doc.ids[j]).noalias() +=
                 correction * state.workspace.e_theta;
         }
     }
 }
 
 template <bool WithDispersion>
-void GammaPoissonTopicModel::collect_batch_statistics(
-    const std::vector<Document>& docs, MatrixXd& counts, MatrixXd& delta,
-    VectorXd& theta, int64_t& iteration_sum, int32_t& failed) {
+void GammaPoissonTopicModel::partial_fit_impl(const std::vector<Document>& docs) {
     const int32_t minibatch_size = static_cast<int32_t>(docs.size());
-    counts.setZero(n_topics_, n_features_);
-    if constexpr (WithDispersion) delta.setZero(n_topics_, n_features_);
-    else delta.resize(0, 0);
-    theta.setZero(n_topics_);
-    iteration_sum = 0;
-    failed = 0;
     if (minibatch_size == 0) {
         return;
     }
@@ -740,529 +791,118 @@ void GammaPoissonTopicModel::collect_batch_statistics(
             }
         });
 
+    std::vector<WorkerState*> active_workers;
+    VectorXd ctheta = VectorXd::Zero(n_topics_);
+    VectorXd theta = VectorXd::Zero(n_topics_);
+    int64_t iteration_sum = 0;
+    int32_t document_count = 0;
+    int32_t failed = 0;
     for (WorkerState& state : *worker_states_) {
         if (state.generation != worker_generation_) {
             continue;
         }
-        counts += state.ss;
-        if constexpr (WithDispersion) delta += state.dispersion_correction;
+        active_workers.push_back(&state);
+        ctheta += state.ctheta;
         theta += state.theta;
         iteration_sum += state.iteration_sum;
+        document_count += state.documents;
         failed += state.failed;
     }
-}
-
-void GammaPoissonTopicModel::dictionary_to_logits(
-    const MatrixXd& dictionary, MatrixXd& logits) {
-    logits.resizeLike(dictionary);
-    for (int32_t k = 0; k < dictionary.rows(); ++k) {
-        for (int32_t w = 0; w < dictionary.cols(); ++w) {
-            logits(k, w) = std::log(std::max(dictionary(k, w), 1e-300));
-        }
-        logits.row(k).array() -= logits.row(k).mean();
-    }
-}
-
-void GammaPoissonTopicModel::logits_to_dictionary(
-    const MatrixXd& logits, MatrixXd& dictionary) {
-    dictionary.resizeLike(logits);
-    constexpr double kFloor = 1e-300;
-    for (int32_t k = 0; k < logits.rows(); ++k) {
-        const double max_logit = logits.row(k).maxCoeff();
-        double total = 0.0;
-        for (int32_t w = 0; w < logits.cols(); ++w) {
-            dictionary(k, w) = std::max(std::exp(logits(k, w) - max_logit), kFloor);
-            total += dictionary(k, w);
-        }
-        dictionary.row(k) /= total;
-    }
-}
-
-double GammaPoissonTopicModel::objective_and_gradient(
-    const MatrixXd& counts, const MatrixXd& delta, double ownership_fraction,
-    const MatrixXd& logits, MatrixXd* gradient, MatrixXd* dictionary) const {
-    MatrixXd local_dictionary;
-    MatrixXd& beta = dictionary ? *dictionary : local_dictionary;
-    logits_to_dictionary(logits, beta);
-    const double prior = dictionary_prior_mass_ / static_cast<double>(n_features_);
-    const double lambda = ownership_strength_ * ownership_fraction
-        * counts.sum() / static_cast<double>(n_topics_);
-    VectorXd feature_mass = beta.colwise().sum().transpose();
-    double objective = 0.0;
-    if (gradient) gradient->resize(n_topics_, n_features_);
-    for (int32_t k = 0; k < n_topics_; ++k) {
-        double a_sum = 0.0;
-        double beta_delta = 0.0;
-        double beta_h = 0.0;
-        for (int32_t w = 0; w < n_features_; ++w) {
-            const double a = counts(k, w) + prior;
-            const double h = std::log(std::max(feature_mass(w), 1e-300)
-                / std::max(beta(k, w), 1e-300));
-            objective += a * std::log(std::max(beta(k, w), 1e-300));
-            if (delta.size() != 0) objective -= delta(k, w) * beta(k, w);
-            objective -= lambda * beta(k, w) * h;
-            a_sum += a;
-            if (delta.size() != 0) beta_delta += beta(k, w) * delta(k, w);
-            beta_h += beta(k, w) * h;
-        }
-        if (gradient) {
-            for (int32_t w = 0; w < n_features_; ++w) {
-                const double a = counts(k, w) + prior;
-                const double h = std::log(std::max(feature_mass(w), 1e-300)
-                    / std::max(beta(k, w), 1e-300));
-                double value = a - beta(k, w) * a_sum;
-                if (delta.size() != 0) {
-                    value -= beta(k, w) * (delta(k, w) - beta_delta);
-                }
-                value -= lambda * beta(k, w) * (h - beta_h);
-                (*gradient)(k, w) = value;
-            }
-        }
-    }
-    return objective;
-}
-
-bool GammaPoissonTopicModel::solve_unregularized_dictionary(
-    const MatrixXd& counts, const MatrixXd& delta, MatrixXd& dictionary) const {
-    const bool with_dispersion = delta.size() != 0;
-    if (counts.rows() != n_topics_ || counts.cols() != n_features_
-        || (with_dispersion
-            && (delta.rows() != n_topics_ || delta.cols() != n_features_))) {
-        throw std::invalid_argument(
-            "Gamma-Poisson unregularized M-step dimensions do not match the model");
-    }
-    if (!counts.allFinite() || counts.minCoeff() < 0.0
-        || (with_dispersion && !delta.allFinite())) {
-        throw std::runtime_error(
-            "Gamma-Poisson unregularized M-step received invalid statistics");
-    }
-
-    const double prior = dictionary_prior_mass_
-        / static_cast<double>(n_features_);
-    dictionary = e_beta_;
-    VectorXd mass(n_features_);
-    for (int32_t k = 0; k < n_topics_; ++k) {
-        mass = counts.row(k).transpose().array() + prior;
-        const double total_mass = mass.sum();
-        if (!(total_mass > 0.0) || !std::isfinite(total_mass)) {
-            continue;
-        }
-        if (!with_dispersion) {
-            dictionary.row(k) = (mass / total_mass).transpose();
-            continue;
-        }
-
-        // A zero pseudocount can put the optimum on the simplex boundary.
-        // Leave that uncommon case to the positive-logit optimizer.
-        if ((mass.array() <= 0.0).any()) return false;
-
-        const double boundary = -delta.row(k).minCoeff();
-        double lower = std::nextafter(
-            boundary, std::numeric_limits<double>::infinity());
-        double gap = total_mass;
-        double upper = boundary + gap;
-        while (!(upper > boundary) || !std::isfinite(upper)) {
-            gap *= 2.0;
-            upper = boundary + gap;
-            if (!std::isfinite(gap)) {
-                throw std::runtime_error(
-                    "Could not bracket Gamma-Poisson dispersion M-step");
-            }
-        }
-
-        auto evaluate_mass = [&](double multiplier, double* derivative) {
-            double value = 0.0;
-            double slope = 0.0;
-            for (int32_t w = 0; w < n_features_; ++w) {
-                const double denominator = delta(k, w) + multiplier;
-                if (!(denominator > 0.0)) {
-                    if (derivative) *derivative =
-                        -std::numeric_limits<double>::infinity();
-                    return std::numeric_limits<double>::infinity();
-                }
-                const double term = mass(w) / denominator;
-                value += term;
-                slope -= term / denominator;
-            }
-            if (derivative) *derivative = slope;
-            return value;
-        };
-
-        while (evaluate_mass(upper, nullptr) > 1.0) {
-            gap *= 2.0;
-            upper = boundary + gap;
-            if (!std::isfinite(upper)) {
-                throw std::runtime_error(
-                    "Could not bracket Gamma-Poisson dispersion M-step");
-            }
-        }
-
-        double multiplier = lower + 0.5 * (upper - lower);
-        for (int32_t iteration = 0; iteration < 64; ++iteration) {
-            double derivative = 0.0;
-            const double fitted_mass = evaluate_mass(multiplier, &derivative);
-            if (std::isfinite(fitted_mass)
-                && std::abs(fitted_mass - 1.0) <= 1e-12) {
-                break;
-            }
-            if (fitted_mass > 1.0) lower = multiplier;
-            else upper = multiplier;
-
-            double candidate = multiplier;
-            if (std::isfinite(fitted_mass) && std::isfinite(derivative)
-                && derivative < 0.0) {
-                candidate = multiplier - (fitted_mass - 1.0) / derivative;
-            }
-            if (!(candidate > lower && candidate < upper)
-                || !std::isfinite(candidate)) {
-                candidate = lower + 0.5 * (upper - lower);
-            }
-            multiplier = candidate;
-        }
-
-        for (int32_t w = 0; w < n_features_; ++w) {
-            dictionary(k, w) = mass(w) / (delta(k, w) + multiplier);
-        }
-        dictionary.row(k) /= dictionary.row(k).sum();
-    }
-    return true;
-}
-
-bool GammaPoissonTopicModel::optimize_dictionary(
-    const MatrixXd& counts, const MatrixXd& delta, double ownership_fraction,
-    int32_t max_steps, bool use_lbfgs, double movement_tolerance,
-    double* max_row_change) {
-    const MatrixXd initial_dictionary = e_beta_;
-    const double effective_ownership_lambda = ownership_strength_
-        * ownership_fraction * counts.sum() / static_cast<double>(n_topics_);
-    if (effective_ownership_lambda == 0.0) {
-        MatrixXd exact_dictionary;
-        if (solve_unregularized_dictionary(counts, delta, exact_dictionary)) {
-            e_beta_ = std::move(exact_dictionary);
-            refresh_cache();
-            last_maximum_row_change_ = 0.0;
-            for (int32_t k = 0; k < n_topics_; ++k) {
-                last_maximum_row_change_ = std::max(last_maximum_row_change_,
-                    (e_beta_.row(k) - initial_dictionary.row(k))
-                        .cwiseAbs().sum());
-            }
-            if (max_row_change) *max_row_change = last_maximum_row_change_;
-            return last_maximum_row_change_ > movement_tolerance;
-        }
-    }
-    MatrixXd logits, gradient, dictionary;
-    dictionary_to_logits(e_beta_, logits);
-    double value = objective_and_gradient(counts, delta, ownership_fraction,
-        logits, &gradient, &dictionary);
-    if (!std::isfinite(value) || !gradient.allFinite()) {
-        throw std::runtime_error("Non-finite Gamma-Poisson MAP objective");
-    }
-    constexpr int32_t kHistory = 5;
-    punkst::LbfgsHistory<MatrixXd> history(kHistory);
-    double largest_change = 0.0;
-    bool any_accepted = false;
-    for (int32_t iteration = 0; iteration < max_steps; ++iteration) {
-        const double gradient_tolerance = 1e-10 * std::max(1.0,
-            counts.sum() + dictionary_prior_mass_ * n_topics_);
-        if (gradient.cwiseAbs().maxCoeff() <= gradient_tolerance) break;
-        MatrixXd direction = gradient;
-        bool used_lbfgs = use_lbfgs && !history.empty();
-        if (used_lbfgs) {
-            direction = history.apply(gradient);
-        }
-        auto precondition_gradient = [&] {
-            direction = gradient;
-            VectorXd feature_mass = dictionary.colwise().sum().transpose();
-            const double lambda = ownership_strength_ * ownership_fraction
-                * counts.sum() / static_cast<double>(n_topics_);
-            for (int32_t k = 0; k < n_topics_; ++k) {
-                double scale = counts.row(k).sum() + dictionary_prior_mass_;
-                if (delta.size() != 0) {
-                    scale = std::max(scale,
-                        (dictionary.row(k).array() * delta.row(k).array().abs()).sum());
-                }
-                double weighted_h = 0.0;
-                for (int32_t w = 0; w < n_features_; ++w) {
-                    const double h = std::log(std::max(feature_mass(w), 1e-300)
-                        / std::max(dictionary(k, w), 1e-300));
-                    weighted_h += dictionary(k, w) * std::abs(h);
-                }
-                scale = std::max({1.0, scale, lambda * weighted_h});
-                direction.row(k) /= scale;
-            }
-        };
-        double directional = (gradient.array() * direction.array()).sum();
-        if (!direction.allFinite() || !(directional > 0.0)) {
-            if (used_lbfgs) ++lbfgs_fallbacks_;
-            history.clear();
-            precondition_gradient();
-            directional = (gradient.array() * direction.array()).sum();
-        } else if (!used_lbfgs) {
-            precondition_gradient();
-            directional = (gradient.array() * direction.array()).sum();
-        }
-        for (int32_t k = 0; k < n_topics_; ++k) {
-            const double max_abs = direction.row(k).cwiseAbs().maxCoeff();
-            if (max_abs > 1.0) direction.row(k) /= max_abs;
-        }
-        directional = (gradient.array() * direction.array()).sum();
-        if (!(directional > 0.0) || !std::isfinite(directional)) break;
-
-        bool accepted = false;
-        double step = 1.0;
-        MatrixXd candidate_logits, candidate_gradient, candidate_dictionary;
-        double candidate_value = value;
-        for (int32_t backtrack = 0; backtrack < 20; ++backtrack) {
-            candidate_logits = logits + step * direction;
-            for (int32_t k = 0; k < n_topics_; ++k) {
-                candidate_logits.row(k).array() -= candidate_logits.row(k).mean();
-            }
-            candidate_value = objective_and_gradient(counts, delta,
-                ownership_fraction, candidate_logits, &candidate_gradient,
-                &candidate_dictionary);
-            if (std::isfinite(candidate_value) && candidate_gradient.allFinite()
-                && candidate_value >= value + 1e-4 * step * directional) {
-                accepted = true;
-                break;
-            }
-            step *= 0.5;
-        }
-        if (!accepted) {
-            if (use_lbfgs && used_lbfgs) {
-                ++lbfgs_fallbacks_;
-                history.clear();
-                --iteration;
-                continue;
-            }
-            ++failed_gradient_steps_;
-            if (use_lbfgs) {
-                throw std::runtime_error("Gamma-Poisson MAP line search failed");
-            }
-            break;
-        }
-        any_accepted = true;
-        if (used_lbfgs) ++lbfgs_steps_;
-        else ++accepted_gradient_steps_;
-        largest_change = 0.0;
-        for (int32_t k = 0; k < n_topics_; ++k) {
-            largest_change = std::max(largest_change,
-                (candidate_dictionary.row(k) - dictionary.row(k)).cwiseAbs().sum());
-        }
-        if (use_lbfgs) {
-            MatrixXd s = candidate_logits - logits;
-            MatrixXd y = gradient - candidate_gradient;
-            history.update(std::move(s), std::move(y));
-        }
-        const double improvement = candidate_value - value;
-        logits = std::move(candidate_logits);
-        gradient = std::move(candidate_gradient);
-        dictionary = std::move(candidate_dictionary);
-        value = candidate_value;
-        if (largest_change <= movement_tolerance
-            || improvement <= 1e-10 * std::max(1.0, std::abs(value))) {
-            break;
-        }
-    }
-    if (any_accepted) {
-        e_beta_ = dictionary;
-        refresh_cache();
-    }
-    last_maximum_row_change_ = 0.0;
-    for (int32_t k = 0; k < n_topics_; ++k) {
-        last_maximum_row_change_ = std::max(last_maximum_row_change_,
-            (e_beta_.row(k) - initial_dictionary.row(k)).cwiseAbs().sum());
-    }
-    if (max_row_change) *max_row_change = last_maximum_row_change_;
-    return any_accepted;
-}
-
-template <bool WithDispersion>
-void GammaPoissonTopicModel::partial_fit_impl(const std::vector<Document>& docs) {
-    const int32_t minibatch_size = static_cast<int32_t>(docs.size());
-    if (minibatch_size == 0) return;
-    MatrixXd counts, delta;
-    VectorXd theta;
-    int64_t iteration_sum = 0;
-    int32_t failed = 0;
-    collect_batch_statistics<WithDispersion>(
-        docs, counts, delta, theta, iteration_sum, failed);
 
     ++update_count_;
     const double rho = std::pow(learning_offset_ + update_count_, -learning_decay_);
     const double scale = static_cast<double>(total_doc_count_) / static_cast<double>(minibatch_size);
-    counts *= scale;
-    if constexpr (WithDispersion) delta *= scale;
-    if (!running_stats_ready_) {
-        running_counts_ = counts;
-        running_delta_ = delta;
-        running_stats_ready_ = true;
-    } else {
-        running_counts_ = (1.0 - rho) * running_counts_ + rho * counts;
-        if constexpr (WithDispersion) {
-            if (running_delta_.size() == 0) running_delta_ = delta;
-            else running_delta_ = (1.0 - rho) * running_delta_ + rho * delta;
-        }
+    VectorXd xi_mean(n_features_);
+    for (int32_t w = 0; w < n_features_; ++w) {
+        xi_mean(w) = expected_xi(w);
     }
-    optimize_dictionary(running_counts_, running_delta_, ownership_fraction_,
-        1, false, 0.0);
-    VectorXd target_usage = scale * theta;
+    const VectorXd scaled_ctheta = scale * ctheta;
+    const double old_weight = 1.0 - rho;
+    auto update_features = [&](const tbb::blocked_range<int32_t>& range) {
+        VectorXd ss(n_topics_);
+        VectorXd rate_correction;
+        if constexpr (WithDispersion) {
+            rate_correction.resize(n_topics_);
+        }
+        for (int32_t w = range.begin(); w < range.end(); ++w) {
+            ss.setZero();
+            if constexpr (WithDispersion) {
+                rate_correction.setZero();
+            }
+            for (const WorkerState* state : active_workers) {
+                ss += state->ss.col(w);
+                if constexpr (WithDispersion) {
+                    rate_correction += state->beta_rate_correction.col(w);
+                }
+            }
+
+            double beta_sum = 0.0;
+            double max_log = -std::numeric_limits<double>::infinity();
+            for (int32_t k = 0; k < n_topics_; ++k) {
+                const double target_shape = a_ + scale * ss(k);
+                double target_rate = a_ * xi_mean(w) + scaled_ctheta(k);
+                if constexpr (WithDispersion) {
+                    target_rate += scale * rate_correction(k);
+                }
+                beta_shape_(k, w) =
+                    old_weight * beta_shape_(k, w) + rho * target_shape;
+                beta_rate_(k, w) = old_weight * beta_rate_(k, w)
+                    + rho * std::max(target_rate, 1e-12);
+                beta_shape_(k, w) = std::max(beta_shape_(k, w), 1e-12);
+                beta_rate_(k, w) = std::max(beta_rate_(k, w), 1e-12);
+                e_beta_(k, w) = beta_shape_(k, w) / beta_rate_(k, w);
+                beta_sum += e_beta_(k, w);
+                beta_kernel_(k, w) =
+                    psi(beta_shape_(k, w)) - std::log(beta_rate_(k, w));
+                max_log = std::max(max_log, beta_kernel_(k, w));
+            }
+            for (int32_t k = 0; k < n_topics_; ++k) {
+                beta_kernel_(k, w) =
+                    std::exp(beta_kernel_(k, w) - max_log);
+            }
+            xi_shape_(w) = a0_ + a_ * n_topics_;
+            xi_rate_(w) = a0_ / b0_ + a_ * beta_sum;
+        }
+    };
+    if (nThreads_ == 1 || n_features_ < 64) {
+        update_features(tbb::blocked_range<int32_t>(0, n_features_));
+    } else {
+        tbb::parallel_for(
+            tbb::blocked_range<int32_t>(0, n_features_), update_features);
+    }
+    topic_capacity_ = e_beta_.rowwise().sum();
+    model_cache_dirty_ = true;
+
+    if (!symmetric_nu_) {
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            nu_shape_(k) = e0_ + total_doc_count_
+                * theta_concentration_ / static_cast<double>(n_topics_);
+            const double target_rate = f0_ + scale * theta(k);
+            nu_rate_(k) = (1.0 - rho) * nu_rate_(k) + rho * std::max(target_rate, 1e-12);
+        }
+        apply_nu_cap();
+    }
+    VectorXd target_usage = scale * theta.array() * topic_capacity_.array();
     if (topic_usage_.size() != n_topics_ || topic_usage_.sum() <= 0.0) {
         topic_usage_ = target_usage;
     } else {
         topic_usage_ = (1.0 - rho) * topic_usage_ + rho * target_usage;
     }
 
-    if (verbose_ > 0) {
+    if (verbose_ > 0 && document_count > 0) {
         const double avg =
-            static_cast<double>(iteration_sum) / minibatch_size;
+            static_cast<double>(iteration_sum) / document_count;
         notice("Gamma-Poisson partial fit: %d documents. Average iterations per doc: %.2f, %d documents did not reach mean change %.1e in %d iterations.",
             minibatch_size, avg, failed, mean_change_tol_, max_doc_update_iter_);
     }
 }
 
 void GammaPoissonTopicModel::partial_fit(const std::vector<Document>& docs) {
-    if (ownership_schedule_active_) {
-        const int64_t next_documents = ownership_documents_seen_
-            + static_cast<int64_t>(docs.size());
-        const double warmup_documents = static_cast<double>(
-            ownership_warmup_epochs_) * ownership_documents_per_epoch_;
-        const double ramp_documents = static_cast<double>(
-            ownership_ramp_epochs_) * ownership_documents_per_epoch_;
-        ownership_fraction_ = ramp_documents > 0.0
-            ? std::clamp((next_documents - warmup_documents) / ramp_documents,
-                0.0, 1.0)
-            : (next_documents > warmup_documents ? 1.0 : 0.0);
-        ownership_documents_seen_ = next_documents;
-    }
     if (has_dispersion_) {
         partial_fit_impl<true>(docs);
     } else {
         partial_fit_impl<false>(docs);
     }
-}
-
-void GammaPoissonTopicModel::set_ownership_annealing(double fraction) {
-    if (!std::isfinite(fraction) || fraction < 0.0 || fraction > 1.0) {
-        throw std::invalid_argument("Gamma-Poisson ownership fraction must be in [0,1]");
-    }
-    ownership_fraction_ = fraction;
-    ownership_schedule_active_ = false;
-}
-
-void GammaPoissonTopicModel::configure_ownership_annealing(
-    int32_t warmup_epochs, int32_t ramp_epochs, int32_t documents_per_epoch,
-    int64_t documents_seen) {
-    if (warmup_epochs < 0 || ramp_epochs < 0 || documents_per_epoch <= 0
-        || documents_seen < 0) {
-        throw std::invalid_argument(
-            "Gamma-Poisson ownership schedule values are invalid");
-    }
-    ownership_warmup_epochs_ = warmup_epochs;
-    ownership_ramp_epochs_ = ramp_epochs;
-    ownership_documents_per_epoch_ = documents_per_epoch;
-    ownership_documents_seen_ = documents_seen;
-    const double warmup_documents = static_cast<double>(warmup_epochs)
-        * documents_per_epoch;
-    const double ramp_documents = static_cast<double>(ramp_epochs)
-        * documents_per_epoch;
-    ownership_fraction_ = ramp_documents > 0.0
-        ? std::clamp((documents_seen - warmup_documents) / ramp_documents,
-            0.0, 1.0)
-        : (documents_seen > warmup_documents ? 1.0 : 0.0);
-    ownership_schedule_active_ = true;
-}
-
-void GammaPoissonTopicModel::reset_running_statistics() {
-    running_stats_ready_ = false;
-    running_counts_.resize(0, 0);
-    running_delta_.resize(0, 0);
-}
-
-void GammaPoissonTopicModel::begin_full_refinement() {
-    refinement_counts_ = MatrixXd::Zero(n_topics_, n_features_);
-    if (has_dispersion_) refinement_delta_ = MatrixXd::Zero(n_topics_, n_features_);
-    else refinement_delta_.resize(0, 0);
-    refinement_active_ = true;
-}
-
-void GammaPoissonTopicModel::accumulate_full_refinement(
-    const std::vector<Document>& docs) {
-    if (!refinement_active_) {
-        throw std::logic_error("Gamma-Poisson refinement pass is not active");
-    }
-    MatrixXd counts, delta;
-    VectorXd theta;
-    int64_t iteration_sum = 0;
-    int32_t failed = 0;
-    if (has_dispersion_) {
-        collect_batch_statistics<true>(
-            docs, counts, delta, theta, iteration_sum, failed);
-        refinement_delta_ += delta;
-    } else {
-        collect_batch_statistics<false>(
-            docs, counts, delta, theta, iteration_sum, failed);
-    }
-    refinement_counts_ += counts;
-}
-
-bool GammaPoissonTopicModel::finish_full_refinement(double tolerance) {
-    if (!refinement_active_) {
-        throw std::logic_error("Gamma-Poisson refinement pass is not active");
-    }
-    if (!std::isfinite(tolerance) || tolerance <= 0.0) {
-        throw std::invalid_argument("Gamma-Poisson refinement tolerance must be positive");
-    }
-    running_counts_ = refinement_counts_;
-    running_delta_ = refinement_delta_;
-    running_stats_ready_ = true;
-    ownership_fraction_ = 1.0;
-    ownership_schedule_active_ = false;
-    double max_change = 0.0;
-    const bool accepted = optimize_dictionary(running_counts_, running_delta_,
-        1.0, 100, true, tolerance, &max_change);
-    refinement_active_ = false;
-    refinement_counts_.resize(0, 0);
-    refinement_delta_.resize(0, 0);
-    return !accepted || max_change <= tolerance;
-}
-
-double GammaPoissonTopicModel::ownership_entropy() const {
-    VectorXd feature_mass = e_beta_.colwise().sum().transpose();
-    double entropy = 0.0;
-    for (int32_t k = 0; k < n_topics_; ++k) {
-        for (int32_t w = 0; w < n_features_; ++w) {
-            entropy += e_beta_(k, w) * std::log(
-                std::max(feature_mass(w), 1e-300)
-                / std::max(e_beta_(k, w), 1e-300));
-        }
-    }
-    return entropy;
-}
-
-double GammaPoissonTopicModel::map_objective() const {
-    if (!running_stats_ready_) return std::numeric_limits<double>::quiet_NaN();
-    MatrixXd logits;
-    dictionary_to_logits(e_beta_, logits);
-    return objective_and_gradient(running_counts_, running_delta_,
-        ownership_fraction_, logits, nullptr, nullptr);
-}
-
-GammaPoissonOptimizationDiagnostics
-GammaPoissonTopicModel::optimization_diagnostics() const {
-    GammaPoissonOptimizationDiagnostics out;
-    out.objective = map_objective();
-    out.ownership_entropy = ownership_entropy();
-    if (running_stats_ready_) {
-        out.effective_ownership_lambda = ownership_strength_
-            * ownership_fraction_ * running_counts_.sum()
-            / static_cast<double>(n_topics_);
-    }
-    out.maximum_row_change = last_maximum_row_change_;
-    out.accepted_gradient_steps = accepted_gradient_steps_;
-    out.failed_gradient_steps = failed_gradient_steps_;
-    out.lbfgs_steps = lbfgs_steps_;
-    out.lbfgs_fallbacks = lbfgs_fallbacks_;
-    return out;
 }
 
 RowMajorMatrixXd GammaPoissonTopicModel::transform(DocumentView docs) {
@@ -1358,7 +998,8 @@ void GammaPoissonTopicBase::sort_topics() {
         }
         m = std::move(sorted);
     };
-    sort_rows(e_beta_);
+    sort_rows(beta_shape_);
+    sort_rows(beta_rate_);
     if (topic_usage_.size() == n_topics_) {
         VectorXd usage(n_topics_);
         for (int32_t k = 0; k < n_topics_; ++k) {
@@ -1389,9 +1030,17 @@ void GammaPoissonTopicModel::sort_topics() {
         }
         m = std::move(sorted);
     };
-    sort_rows(e_beta_);
-    if (running_counts_.rows() == n_topics_) sort_rows(running_counts_);
-    if (running_delta_.rows() == n_topics_) sort_rows(running_delta_);
+    sort_rows(beta_shape_);
+    sort_rows(beta_rate_);
+    if (!symmetric_nu_) {
+        VectorXd ns(n_topics_), nr(n_topics_);
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            ns(k) = nu_shape_(order[k]);
+            nr(k) = nu_rate_(order[k]);
+        }
+        nu_shape_ = std::move(ns);
+        nu_rate_ = std::move(nr);
+    }
     if (topic_usage_.size() == n_topics_) {
         VectorXd usage(n_topics_);
         for (int32_t k = 0; k < n_topics_; ++k) {
@@ -1448,26 +1097,36 @@ void GammaPoissonTopicModel::write_state(const std::string& outFile,
     }
     out << std::scientific
         << std::setprecision(std::numeric_limits<double>::max_digits10);
-    out << "#punkst_gamma_pois_state_v5\n";
+    out << "#punkst_gamma_pois_state_v4\n";
     out << "#n_topics\t" << n_topics_ << "\n";
     out << "#n_features\t" << n_features_ << "\n";
     out << "#total_doc_count\t" << total_doc_count_ << "\n";
+    out << "#size_factor\t" << size_factor_ << "\n";
     out << "#feature_weights_active\t"
         << (feature_weights_active_ ? 1 : 0) << "\n";
-    out << "#exposure_convention\tobserved_total\n";
-    out << "#theta_concentration\t" << theta_concentration_ << "\n";
-    out << "#dictionary_prior_mass\t" << dictionary_prior_mass_ << "\n";
-    out << "#ownership_strength\t" << ownership_strength_ << "\n";
-    out << "#ownership_fraction\t" << ownership_fraction_ << "\n";
-    out << "#ownership_warmup_epochs\t" << ownership_warmup_epochs_ << "\n";
-    out << "#ownership_ramp_epochs\t" << ownership_ramp_epochs_ << "\n";
-    out << "#random_init_shape\t" << random_init_shape_ << "\n";
+    out << "#beta_shape_prior\t" << a_ << "\n";
+    out << "#beta_parameterization\tcount_scale_conditional_rate_a_xi\n";
+    out << "#xi_shape_prior\t" << a0_ << "\n";
+    out << "#xi_mean_prior\t" << b0_ << "\n";
+    out << "#theta_prior_mode\t"
+        << (symmetric_nu_ ? "symmetric_concentration" : "eb_rate") << "\n";
+    out << "#theta_concentration_prior\t" << theta_concentration_ << "\n";
+    if (!symmetric_nu_) {
+        out << "#nu_shape_prior\t" << e0_ << "\n";
+        out << "#nu_rate_prior\t" << f0_ << "\n";
+    }
     out << "#learning_decay\t" << learning_decay_ << "\n";
     out << "#learning_offset\t" << learning_offset_ << "\n";
     out << "#update_count\t" << update_count_ << "\n";
-    out << "#topic_names";
-    for (const auto& name : get_topic_names()) out << "\t" << name;
-    out << "\n";
+    out << "#symmetric_nu\t" << (symmetric_nu_ ? 1 : 0) << "\n";
+    if (!symmetric_nu_) {
+        out << "#nu_mean_cap\t" << nu_max_ << "\n";
+        out << "#nu_shape";
+        for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << nu_shape_(k);
+        out << "\n#nu_rate";
+        for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << nu_rate_(k);
+        out << "\n";
+    }
     out << "#topic_usage";
     for (int32_t k = 0; k < n_topics_; ++k) out << "\t" << topic_usage_(k);
     if (has_dispersion_) {
@@ -1476,9 +1135,9 @@ void GammaPoissonTopicModel::write_state(const std::string& outFile,
     }
     out << "\nFeature";
     for (int32_t k = 0; k < n_topics_; ++k) {
-        out << "\tbeta_" << k;
+        out << "\tbeta_shape_" << k << "\tbeta_rate_" << k;
     }
-    out << "\ttraining_count";
+    out << "\txi_shape\txi_rate\ttraining_count";
     if (feature_weights_active_) out << "\tfeature_weight";
     out << "\n";
     for (int32_t w = 0; w < n_features_; ++w) {
@@ -1486,9 +1145,10 @@ void GammaPoissonTopicModel::write_state(const std::string& outFile,
             ? featureNames[w] : std::to_string(w);
         out << feature;
         for (int32_t k = 0; k < n_topics_; ++k) {
-            out << "\t" << e_beta_(k, w);
+            out << "\t" << beta_shape_(k, w) << "\t" << beta_rate_(k, w);
         }
-        out << "\t" << training_count_[w];
+        out << "\t" << xi_shape_(w) << "\t" << xi_rate_(w)
+            << "\t" << training_count_[w];
         if (feature_weights_active_) out << "\t" << feature_weight_[w];
         out << "\n";
     }
@@ -1500,10 +1160,9 @@ GammaPoissonStateFeatureInfo GammaPoissonTopicModel::read_state_feature_info(
     if (!in) {
         error("%s: Error opening state file: %s", __func__, stateFile.c_str());
     }
-    require_gamma_pois_state_v5(in, stateFile);
+    require_gamma_pois_state_v4(in, stateFile);
     GammaPoissonStateFeatureInfo info;
     int32_t n_topics = -1;
-    int32_t n_features = -1;
     bool saw_feature_weights_active = false;
     std::string line;
     bool saw_header = false;
@@ -1513,8 +1172,6 @@ GammaPoissonStateFeatureInfo GammaPoissonTopicModel::read_state_feature_info(
             const auto tok = split_ws(line.substr(1));
             if (tok.size() > 1 && tok[0] == "n_topics") {
                 n_topics = std::stoi(tok[1]);
-            } else if (tok.size() > 1 && tok[0] == "n_features") {
-                n_features = std::stoi(tok[1]);
             } else if (tok.size() > 1
                     && tok[0] == "feature_weights_active") {
                 const int32_t active = std::stoi(tok[1]);
@@ -1533,7 +1190,8 @@ GammaPoissonStateFeatureInfo GammaPoissonTopicModel::read_state_feature_info(
             saw_header = true;
             continue;
         }
-        const size_t expected = 2 + static_cast<size_t>(n_topics)
+        const size_t expected =
+            1 + static_cast<size_t>(2 * n_topics) + 3
             + (info.feature_weights_active ? 1 : 0);
         if (!saw_header || !saw_feature_weights_active
             || n_topics <= 0 || tok.size() != expected) {
@@ -1541,7 +1199,8 @@ GammaPoissonStateFeatureInfo GammaPoissonTopicModel::read_state_feature_info(
                 __func__, stateFile.c_str());
         }
         info.names.push_back(tok[0]);
-        info.training_count.push_back(std::stod(tok[1 + n_topics]));
+        info.training_count.push_back(std::stod(
+            tok[expected - (info.feature_weights_active ? 2 : 1)]));
         if (info.feature_weights_active) {
             info.feature_weight.push_back(std::stod(tok[expected - 1]));
         }
@@ -1549,18 +1208,6 @@ GammaPoissonStateFeatureInfo GammaPoissonTopicModel::read_state_feature_info(
     if (info.names.empty()) {
         error("%s: No feature rows found in Gamma-Poisson state file: %s",
             __func__, stateFile.c_str());
-    }
-    if (n_features <= 0
-        || static_cast<int32_t>(info.names.size()) != n_features) {
-        error("%s: State feature count does not match metadata in %s",
-            __func__, stateFile.c_str());
-    }
-    std::unordered_set<std::string> unique_names;
-    for (const auto& name : info.names) {
-        if (!unique_names.insert(name).second) {
-            error("%s: duplicate feature %s in %s", __func__, name.c_str(),
-                stateFile.c_str());
-        }
     }
     double effective_total = 0.0;
     for (size_t w = 0; w < info.names.size(); ++w) {
@@ -1591,31 +1238,36 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
     if (!in) {
         error("%s: Error opening state file: %s", __func__, stateFile.c_str());
     }
-    require_gamma_pois_state_v5(in, stateFile);
+    require_gamma_pois_state_v4(in, stateFile);
     std::string line;
-    std::vector<std::vector<double>> beta_rows;
+    std::vector<std::vector<double>> bshape_rows;
+    std::vector<std::vector<double>> brate_rows;
+    std::vector<double> xi_shape_vals, xi_rate_vals;
     std::vector<double> training_count_vals, feature_weight_vals;
+    std::vector<double> nu_shape_vals, nu_rate_vals;
     std::vector<double> topic_usage_vals;
     std::vector<double> tau_vals;
-    std::vector<std::string> topic_names;
-    std::string exposure_convention;
+    std::string beta_parameterization;
+    std::string theta_prior_mode;
     bool saw_theta_concentration = false;
-    bool saw_dictionary_prior_mass = false;
-    bool saw_ownership_strength = false;
-    bool saw_ownership_fraction = false;
-    bool saw_ownership_warmup = false;
-    bool saw_ownership_ramp = false;
+    bool saw_symmetric_nu = false;
+    bool saw_nu_shape_prior = false;
+    bool saw_nu_rate_prior = false;
+    bool saw_nu_mean_cap = false;
     bool saw_feature_weights_active = false;
     bool saw_header = false;
-    feature_names_.clear();
     while (std::getline(in, line)) {
-        if (line.empty()) continue;
+        if (line.empty()) {
+            continue;
+        }
         if (line[0] == '#') {
-            const auto tok = split_ws(line.substr(1));
+            std::string payload = line.substr(1);
+            auto tok = split_ws(payload);
             if (tok.empty()) continue;
             if (tok[0] == "n_topics" && tok.size() > 1) n_topics_ = std::stoi(tok[1]);
             else if (tok[0] == "n_features" && tok.size() > 1) n_features_ = std::stoi(tok[1]);
             else if (tok[0] == "total_doc_count" && tok.size() > 1) total_doc_count_ = std::stoi(tok[1]);
+            else if (tok[0] == "size_factor" && tok.size() > 1) size_factor_ = std::stod(tok[1]);
             else if (tok[0] == "feature_weights_active" && tok.size() > 1) {
                 const int32_t active = std::stoi(tok[1]);
                 if (active != 0 && active != 1) {
@@ -1625,43 +1277,42 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
                 feature_weights_active_ = active == 1;
                 saw_feature_weights_active = true;
             }
-            else if (tok[0] == "exposure_convention" && tok.size() > 1) {
-                exposure_convention = tok[1];
+            else if (tok[0] == "beta_shape_prior" && tok.size() > 1) a_ = std::stod(tok[1]);
+            else if (tok[0] == "beta_parameterization" && tok.size() > 1) {
+                beta_parameterization = tok[1];
             }
-            else if (tok[0] == "theta_concentration" && tok.size() > 1) {
+            else if (tok[0] == "xi_shape_prior" && tok.size() > 1) a0_ = std::stod(tok[1]);
+            else if (tok[0] == "xi_mean_prior" && tok.size() > 1) b0_ = std::stod(tok[1]);
+            else if (tok[0] == "theta_prior_mode" && tok.size() > 1) theta_prior_mode = tok[1];
+            else if (tok[0] == "theta_concentration_prior" && tok.size() > 1) {
                 theta_concentration_ = std::stod(tok[1]);
                 saw_theta_concentration = true;
             }
-            else if (tok[0] == "dictionary_prior_mass" && tok.size() > 1) {
-                dictionary_prior_mass_ = std::stod(tok[1]);
-                saw_dictionary_prior_mass = true;
-            }
-            else if (tok[0] == "ownership_strength" && tok.size() > 1) {
-                ownership_strength_ = std::stod(tok[1]);
-                saw_ownership_strength = true;
-            }
-            else if (tok[0] == "ownership_fraction" && tok.size() > 1) {
-                ownership_fraction_ = std::stod(tok[1]);
-                saw_ownership_fraction = true;
-            }
-            else if (tok[0] == "ownership_warmup_epochs" && tok.size() > 1) {
-                ownership_warmup_epochs_ = std::stoi(tok[1]);
-                saw_ownership_warmup = true;
-            }
-            else if (tok[0] == "ownership_ramp_epochs" && tok.size() > 1) {
-                ownership_ramp_epochs_ = std::stoi(tok[1]);
-                saw_ownership_ramp = true;
+            else if (tok[0] == "nu_shape_prior" && tok.size() > 1) {
+                e0_ = std::stod(tok[1]);
+                saw_nu_shape_prior = true;
+            } else if (tok[0] == "nu_rate_prior" && tok.size() > 1) {
+                f0_ = std::stod(tok[1]);
+                saw_nu_rate_prior = true;
             }
             else if (tok[0] == "learning_decay" && tok.size() > 1) learning_decay_ = std::stod(tok[1]);
             else if (tok[0] == "learning_offset" && tok.size() > 1) learning_offset_ = std::stod(tok[1]);
             else if (tok[0] == "update_count" && tok.size() > 1) update_count_ = std::stoi(tok[1]);
-            else if (tok[0] == "random_init_shape" && tok.size() > 1) {
-                random_init_shape_ = std::stod(tok[1]);
+            else if (tok[0] == "symmetric_nu" && tok.size() > 1) {
+                symmetric_nu_ = std::stoi(tok[1]) != 0;
+                saw_symmetric_nu = true;
             }
-            else if (tok[0] == "topic_names") {
-                topic_names.assign(tok.begin() + 1, tok.end());
+            else if (tok[0] == "nu_mean_cap" && tok.size() > 1) {
+                nu_max_ = std::stod(tok[1]);
+                saw_nu_mean_cap = true;
             }
-            else if (tok[0] == "topic_usage") {
+            else if (tok[0] == "nu_shape") {
+                nu_shape_vals.clear();
+                for (size_t i = 1; i < tok.size(); ++i) nu_shape_vals.push_back(std::stod(tok[i]));
+            } else if (tok[0] == "nu_rate") {
+                nu_rate_vals.clear();
+                for (size_t i = 1; i < tok.size(); ++i) nu_rate_vals.push_back(std::stod(tok[i]));
+            } else if (tok[0] == "topic_usage") {
                 topic_usage_vals.clear();
                 for (size_t i = 1; i < tok.size(); ++i) topic_usage_vals.push_back(std::stod(tok[i]));
             } else if (tok[0] == "dispersion_tau") {
@@ -1670,8 +1321,10 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
             }
             continue;
         }
-        const auto tok = split_ws(line);
-        if (tok.empty()) continue;
+        auto tok = split_ws(line);
+        if (tok.empty()) {
+            continue;
+        }
         if (tok[0] == "Feature") {
             saw_header = true;
             continue;
@@ -1679,92 +1332,91 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
         if (!saw_header || n_topics_ <= 0) {
             error("%s: Invalid Gamma-Poisson state file header in %s", __func__, stateFile.c_str());
         }
-        const size_t expected = 2 + static_cast<size_t>(n_topics_)
+        const size_t expected = 1 + static_cast<size_t>(2 * n_topics_) + 3
             + (feature_weights_active_ ? 1 : 0);
         if (tok.size() != expected) {
             error("%s: Invalid state row with %zu columns, expected %zu", __func__, tok.size(), expected);
         }
-        std::vector<double> beta(n_topics_);
+        std::vector<double> sh(n_topics_), rt(n_topics_);
         feature_names_.push_back(tok[0]);
         size_t pos = 1;
-        for (int32_t k = 0; k < n_topics_; ++k) beta[k] = std::stod(tok[pos++]);
-        beta_rows.push_back(std::move(beta));
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            sh[k] = std::stod(tok[pos++]);
+            rt[k] = std::stod(tok[pos++]);
+        }
+        bshape_rows.push_back(std::move(sh));
+        brate_rows.push_back(std::move(rt));
+        xi_shape_vals.push_back(std::stod(tok[pos++]));
+        xi_rate_vals.push_back(std::stod(tok[pos++]));
         training_count_vals.push_back(std::stod(tok[pos++]));
         if (feature_weights_active_) {
             feature_weight_vals.push_back(std::stod(tok[pos++]));
         }
     }
+    if (!saw_symmetric_nu) {
+        error("%s: Gamma-Poisson state is missing symmetric_nu in %s",
+            __func__, stateFile.c_str());
+    }
     if (!saw_feature_weights_active) {
         error("%s: Gamma-Poisson state is missing feature_weights_active in %s",
             __func__, stateFile.c_str());
     }
-    if (n_topics_ <= 0 || n_features_ <= 0 || total_doc_count_ <= 0) {
+    if (n_topics_ <= 0 || n_features_ <= 0 || total_doc_count_ <= 0
+        || !std::isfinite(size_factor_) || size_factor_ <= 0.0
+        || !std::isfinite(a_) || a_ <= 0.0
+        || !std::isfinite(a0_) || a0_ <= 0.0
+        || !std::isfinite(b0_) || b0_ <= 0.0) {
         error("%s: Gamma-Poisson state has invalid dimensions or hyperparameters: %s",
             __func__, stateFile.c_str());
     }
-    if (exposure_convention != "observed_total")
-        error("%s: Gamma-Poisson state must use observed-total exposure: %s",
+    const bool symmetric_mode = theta_prior_mode == "symmetric_concentration";
+    const bool eb_mode = theta_prior_mode == "eb_rate";
+    if ((!symmetric_mode && !eb_mode) || symmetric_mode != symmetric_nu_) {
+        error("%s: Invalid or inconsistent theta prior mode in Gamma-Poisson state: %s",
             __func__, stateFile.c_str());
+    }
+    if (beta_parameterization != "count_scale_conditional_rate_a_xi") {
+        error("%s: Gamma-Poisson state has an invalid beta parameterization: %s",
+            __func__, stateFile.c_str());
+    }
     if (!saw_theta_concentration || !std::isfinite(theta_concentration_)
         || theta_concentration_ <= 0.0) {
-        error("%s: Gamma-Poisson state requires positive theta concentration: %s",
+        error("%s: Gamma-Poisson state requires a positive finite theta concentration: %s",
             __func__, stateFile.c_str());
     }
-    if (!saw_dictionary_prior_mass
-        || !std::isfinite(dictionary_prior_mass_)
-        || dictionary_prior_mass_ < 0.0
-        || !saw_ownership_strength
-        || !std::isfinite(ownership_strength_)
-        || ownership_strength_ < 0.0
-        || !saw_ownership_fraction
-        || !std::isfinite(ownership_fraction_)
-        || ownership_fraction_ < 0.0 || ownership_fraction_ > 1.0
-        || !saw_ownership_warmup || ownership_warmup_epochs_ < 0
-        || !saw_ownership_ramp || ownership_ramp_epochs_ < 0
-        || !std::isfinite(random_init_shape_) || random_init_shape_ <= 0.0
-        || !std::isfinite(learning_decay_) || learning_decay_ <= 0.5
-        || learning_decay_ > 1.0
-        || !std::isfinite(learning_offset_) || learning_offset_ <= 0.0
-        || update_count_ < 0) {
-        error("%s: Gamma-Poisson state has invalid optimization metadata: %s",
+    if (eb_mode && (
+        !saw_nu_shape_prior || !std::isfinite(e0_) || e0_ <= 0.0
+        || !saw_nu_rate_prior || !std::isfinite(f0_) || f0_ <= 0.0
+        || !saw_nu_mean_cap || !std::isfinite(nu_max_) || nu_max_ <= 0.0
+        || static_cast<int32_t>(nu_shape_vals.size()) != n_topics_
+        || static_cast<int32_t>(nu_rate_vals.size()) != n_topics_)) {
+        error("%s: Empirical-Bayes Gamma-Poisson state has invalid theta or nu metadata: %s",
             __func__, stateFile.c_str());
     }
-    if (static_cast<int32_t>(beta_rows.size()) != n_features_) {
+    if (n_features_ <= 0) {
+        n_features_ = static_cast<int32_t>(bshape_rows.size());
+    }
+    if (static_cast<int32_t>(bshape_rows.size()) != n_features_) {
         error("%s: State file has %zu feature rows but metadata says %d",
-            __func__, beta_rows.size(), n_features_);
+            __func__, bshape_rows.size(), n_features_);
     }
-    {
-        std::unordered_set<std::string> unique_names;
-        for (const auto& name : feature_names_) {
-            if (!unique_names.insert(name).second) {
-                error("%s: Duplicate feature %s in state %s", __func__,
-                    name.c_str(), stateFile.c_str());
-            }
-        }
-    }
-    e_beta_.resize(n_topics_, n_features_);
+    beta_shape_.resize(n_topics_, n_features_);
+    beta_rate_.resize(n_topics_, n_features_);
     for (int32_t w = 0; w < n_features_; ++w) {
         for (int32_t k = 0; k < n_topics_; ++k) {
-            const double value = beta_rows[w][k];
-            if (!std::isfinite(value) || value <= 0.0) {
-                error("%s: Dictionary entries must be positive in state %s",
-                    __func__, stateFile.c_str());
-            }
-            e_beta_(k, w) = value;
+            beta_shape_(k, w) = bshape_rows[w][k];
+            beta_rate_(k, w) = brate_rows[w][k];
         }
     }
-    for (int32_t k = 0; k < n_topics_; ++k) {
-        const double row_sum = e_beta_.row(k).sum();
-        if (!std::isfinite(row_sum) || std::abs(row_sum - 1.0) > 1e-8) {
-            error("%s: Dictionary row %d is not normalized in state %s",
-                __func__, k, stateFile.c_str());
-        }
-    }
+    xi_shape_.resize(n_features_);
+    xi_rate_.resize(n_features_);
     training_count_.resize(n_features_);
     if (feature_weights_active_) feature_weight_.resize(n_features_);
     else feature_weight_.clear();
     double effective_training_total = 0.0;
     for (int32_t w = 0; w < n_features_; ++w) {
+        xi_shape_(w) = xi_shape_vals[w];
+        xi_rate_(w) = xi_rate_vals[w];
         training_count_[w] = training_count_vals[w];
         const double weight =
             feature_weights_active_ ? feature_weight_vals[w] : 1.0;
@@ -1782,8 +1434,27 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
         error("%s: Effective training feature total is invalid in state %s",
             __func__, stateFile.c_str());
     }
-    topic_usage_ = VectorXd::Constant(n_topics_,
-        static_cast<double>(total_doc_count_) / n_topics_);
+    const double theta_shape = theta_concentration_ / static_cast<double>(n_topics_);
+    nu_shape_ = VectorXd::Constant(n_topics_, e0_ + theta_shape * total_doc_count_);
+    nu_rate_ = VectorXd::Constant(n_topics_,
+        f0_ + static_cast<double>(total_doc_count_) / n_topics_);
+    if (static_cast<int32_t>(nu_shape_vals.size()) == n_topics_) {
+        for (int32_t k = 0; k < n_topics_; ++k) nu_shape_(k) = nu_shape_vals[k];
+    }
+    if (static_cast<int32_t>(nu_rate_vals.size()) == n_topics_) {
+        for (int32_t k = 0; k < n_topics_; ++k) nu_rate_(k) = nu_rate_vals[k];
+    }
+    if (!symmetric_nu_) {
+        for (int32_t k = 0; k < n_topics_; ++k) {
+            if (!std::isfinite(nu_shape_(k)) || nu_shape_(k) <= 0.0
+                || !std::isfinite(nu_rate_(k)) || nu_rate_(k) <= 0.0) {
+                error("%s: Invalid empirical-Bayes nu posterior in state %s",
+                    __func__, stateFile.c_str());
+            }
+        }
+        apply_nu_cap();
+    }
+    topic_usage_ = VectorXd::Constant(n_topics_, 1.0);
     if (static_cast<int32_t>(topic_usage_vals.size()) == n_topics_) {
         bool valid_usage = true;
         double usage_sum = 0.0;
@@ -1803,23 +1474,15 @@ void GammaPoissonTopicModel::read_state(const std::string& stateFile) {
         error("%s: State file has %zu dispersion values but expected %d",
             __func__, tau_vals.size(), n_features_);
     }
-    if (!topic_names.empty()) {
-        if (static_cast<int32_t>(topic_names.size()) != n_topics_)
-            error("%s: State has %zu topic names but expected %d",
-                __func__, topic_names.size(), n_topics_);
-        topic_names_ = std::move(topic_names);
-    }
-    running_stats_ready_ = false;
-    refinement_active_ = false;
-    ownership_schedule_active_ = false;
-    worker_states_.reset();
 }
 
 
 void GammaPoisson4Hex::initialize(int32_t nTopics, int32_t seed, int32_t nThreads,
-    int32_t verbose, double theta_concentration, double kappa, double tau0,
-    int32_t totalDocCount, int32_t maxIter, double mDelta,
-    double randomInitShape, const GammaPoissonMapOptions& mapOptions) {
+    int32_t verbose, double beta_shape, double xi_shape, double xi_mean,
+    double theta_concentration, double nu_shape, double nu_rate,
+    double kappa, double tau0,
+    int32_t totalDocCount, double sizeFactor, bool symmetricNu, double nuMax,
+    int32_t maxIter, double mDelta, double randomInitShape) {
     if (reader.features.size() != static_cast<size_t>(M_)) {
         featureNames.resize(M_);
         for (int32_t i = 0; i < M_; ++i) featureNames[i] = std::to_string(i);
@@ -1828,9 +1491,11 @@ void GammaPoisson4Hex::initialize(int32_t nTopics, int32_t seed, int32_t nThread
     }
     const std::vector<double>& sums = reader.getFeatureSums();
     model_ = std::make_unique<GammaPoissonTopicModel>(
-        nTopics, M_, seed, nThreads, verbose, theta_concentration,
-        kappa, tau0, totalDocCount,
-        reader.readFullSums ? &sums : nullptr, randomInitShape, mapOptions);
+        nTopics, M_, seed, nThreads, verbose, beta_shape, xi_shape, xi_mean,
+        theta_concentration, nu_shape, nu_rate, kappa, tau0,
+        totalDocCount, sizeFactor,
+        symmetricNu, nuMax, reader.readFullSums ? &sums : nullptr,
+        randomInitShape);
     if (!reader.readFullSums) {
         error("%s: full effective feature totals are required for Gamma-Poisson state calibration",
             __func__);
@@ -1898,7 +1563,6 @@ void GammaPoisson4Hex::setFeatureDispersion(const std::vector<double>& tau) {
         error("%s: GammaPoisson4Hex is not initialized", __func__);
     }
     model_->set_feature_dispersion(tau);
-    model_->reset_running_statistics();
 }
 
 void GammaPoisson4Hex::clearFeatureDispersion() {
@@ -1906,7 +1570,6 @@ void GammaPoisson4Hex::clearFeatureDispersion() {
         error("%s: GammaPoisson4Hex is not initialized", __func__);
     }
     model_->clear_feature_dispersion();
-    model_->reset_running_statistics();
 }
 
 GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
@@ -1930,7 +1593,6 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     }
     GammaPoissonDispersionResult result = estimator.finish();
     model_->set_feature_dispersion(result.tau);
-    model_->reset_running_statistics();
     return result;
 }
 
@@ -1957,7 +1619,6 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     }
     GammaPoissonDispersionResult result = estimator.finish();
     model_->set_feature_dispersion(result.tau);
-    model_->reset_running_statistics();
     return result;
 }
 
@@ -1982,7 +1643,6 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion(
     }
     GammaPoissonDispersionResult result = estimator.finish();
     model_->set_feature_dispersion(result.tau);
-    model_->reset_running_statistics();
     return result;
 }
 
@@ -2008,7 +1668,6 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion10X(
     }
     GammaPoissonDispersionResult result = estimator.finish();
     model_->set_feature_dispersion(result.tau);
-    model_->reset_running_statistics();
     return result;
 }
 
@@ -2039,7 +1698,6 @@ GammaPoissonDispersionResult GammaPoisson4Hex::estimateFeatureDispersion10X(
     dge.resetStream();
     GammaPoissonDispersionResult result = estimator.finish();
     model_->set_feature_dispersion(result.tau);
-    model_->reset_running_statistics();
     return result;
 }
 
@@ -2074,45 +1732,22 @@ void GammaPoisson4Hex::initialize_transform(
     initialized = true;
 }
 
-void GammaPoisson4Hex::setOwnershipAnnealing(double fraction) {
-    if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    model_->set_ownership_annealing(fraction);
-}
-
-void GammaPoisson4Hex::configureOwnershipAnnealing(int32_t warmupEpochs,
-    int32_t rampEpochs, int32_t documentsPerEpoch, int64_t documentsSeen) {
-    if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    model_->configure_ownership_annealing(
-        warmupEpochs, rampEpochs, documentsPerEpoch, documentsSeen);
-}
-
-void GammaPoisson4Hex::resetRunningStatistics() {
-    if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    model_->reset_running_statistics();
-}
-
-void GammaPoisson4Hex::beginFullRefinement() {
-    if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    model_->begin_full_refinement();
-    refining_ = true;
-}
-
-void GammaPoisson4Hex::accumulateFullRefinement(
-    const std::vector<Document>& batch) {
-    if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    model_->accumulate_full_refinement(batch);
-}
-
-bool GammaPoisson4Hex::finishFullRefinement(double tolerance) {
-    if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    refining_ = false;
-    return model_->finish_full_refinement(tolerance);
-}
-
-GammaPoissonOptimizationDiagnostics
-GammaPoisson4Hex::optimizationDiagnostics() const {
-    if (!initialized || !model_) error("%s: GammaPoisson4Hex is not initialized", __func__);
-    return model_->optimization_diagnostics();
+double GammaPoisson4Hex::resolveSizeFactor(double requested) const {
+    if (requested > 0.0 && std::isfinite(requested)) {
+        return requested;
+    }
+    if (!reader.readFullSums) {
+        error("--size-factor is required because full feature counts are unavailable");
+    }
+    if (reader.nUnits <= 0) {
+        error("--size-factor is required because total document count is unavailable");
+    }
+    const std::vector<double>& sums = reader.getFeatureSums();
+    const double total = std::accumulate(sums.begin(), sums.end(), 0.0);
+    if (total <= 0.0 || !std::isfinite(total)) {
+        error("--size-factor is required because total feature count is unavailable or zero");
+    }
+    return total / static_cast<double>(reader.nUnits);
 }
 
 void GammaPoisson4Hex::writeModelToFile(const std::string& outFile) {
@@ -2156,8 +1791,7 @@ const std::vector<std::string>& GammaPoisson4Hex::get_topic_names() {
 }
 
 void GammaPoisson4Hex::do_partial_fit(const std::vector<Document>& batch) {
-    if (refining_) model_->accumulate_full_refinement(batch);
-    else model_->partial_fit(batch);
+    model_->partial_fit(batch);
 }
 
 MatrixXd GammaPoisson4Hex::do_transform(DocumentView batch) {
@@ -2254,3 +1888,6 @@ void GammaPoisson4Hex::get_topic_abundance(std::vector<double>& topic_weights) {
     }
     model_->get_topic_abundance(topic_weights);
 }
+
+} // namespace gampois_v1
+

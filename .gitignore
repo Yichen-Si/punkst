@@ -41,6 +41,7 @@ autom4te.cache/*
 zz/
 test/
 examples/data/data/
+_notes/
 
 .idea
 cmake-build-debug/

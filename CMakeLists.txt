@@ -222,8 +222,11 @@ set(SOURCE_FILES
     src/lda_state.cpp
     src/lda_svb.cpp
     src/lda_scvb0.cpp
+    src/gamma_pois_common.hpp
     src/gamma_pois_topic.hpp
     src/gamma_pois_topic.cpp
+    src/gamma_pois_topic_v1.hpp
+    src/gamma_pois_topic_v1.cpp
     src/gamma_pois_dispersion.hpp
     src/gamma_pois_dispersion.cpp
     src/partition_classifier.hpp
@@ -248,6 +251,7 @@ set(SOURCE_FILES
     script/tiles2rois.cpp
     script/fit_lda.cpp
     script/fit_gampois.cpp
+    script/fit_gampois_v1.cpp
     script/transform_gampois.cpp
     script/cli_common.cpp
     script/linear_embedding_cli.hpp

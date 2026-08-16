@@ -1,5 +1,6 @@
 #include "partition_classifier.hpp"
 
+#include "lbfgs_history.hpp"
 #include "utils.h"
 
 #include <algorithm>
@@ -92,9 +93,7 @@ Eigen::VectorXd optimize_lbfgs(const Objective& objective,
         Eigen::VectorXd parameters, const FitOptions& options) {
     Eigen::VectorXd gradient;
     double value = objective(parameters, &gradient);
-    std::vector<Eigen::VectorXd> s_history;
-    std::vector<Eigen::VectorXd> y_history;
-    std::vector<double> rho_history;
+    punkst::LbfgsHistory<Eigen::VectorXd> history(options.lbfgs_history);
     for (int32_t iteration = 0; iteration < options.max_iterations;
             ++iteration) {
         if (!std::isfinite(value) || !gradient.allFinite()) {
@@ -103,37 +102,13 @@ Eigen::VectorXd optimize_lbfgs(const Objective& objective,
         if (gradient.lpNorm<Eigen::Infinity>()
                 <= options.gradient_tolerance) break;
 
-        Eigen::VectorXd direction = gradient;
-        std::vector<double> alpha(s_history.size());
-        for (size_t reverse = s_history.size(); reverse > 0; --reverse) {
-            const size_t index = reverse - 1;
-            alpha[index] = rho_history[index]
-                * s_history[index].dot(direction);
-            direction.noalias() -= alpha[index] * y_history[index];
-        }
-        if (!s_history.empty()) {
-            const Eigen::VectorXd& last_s = s_history.back();
-            const Eigen::VectorXd& last_y = y_history.back();
-            const double denominator = last_y.squaredNorm();
-            if (denominator > 0.0) {
-                direction *= last_s.dot(last_y) / denominator;
-            }
-        }
-        for (size_t index = 0; index < s_history.size(); ++index) {
-            const double beta = rho_history[index]
-                * y_history[index].dot(direction);
-            direction.noalias() += s_history[index]
-                * (alpha[index] - beta);
-        }
-        direction = -direction;
+        Eigen::VectorXd direction = -history.apply(gradient);
         double directional_derivative = gradient.dot(direction);
         if (!(directional_derivative < 0.0)
                 || !std::isfinite(directional_derivative)) {
             direction = -gradient;
             directional_derivative = -gradient.squaredNorm();
-            s_history.clear();
-            y_history.clear();
-            rho_history.clear();
+            history.clear();
         }
 
         double step = 1.0;
@@ -154,18 +129,7 @@ Eigen::VectorXd optimize_lbfgs(const Objective& objective,
         }
         Eigen::VectorXd s = candidate - parameters;
         Eigen::VectorXd y_delta = candidate_gradient - gradient;
-        const double curvature = s.dot(y_delta);
-        if (curvature > 1e-12 * s.norm() * y_delta.norm()) {
-            if (static_cast<int32_t>(s_history.size())
-                    == options.lbfgs_history) {
-                s_history.erase(s_history.begin());
-                y_history.erase(y_history.begin());
-                rho_history.erase(rho_history.begin());
-            }
-            s_history.push_back(std::move(s));
-            y_history.push_back(std::move(y_delta));
-            rho_history.push_back(1.0 / curvature);
-        }
+        history.update(std::move(s), std::move(y_delta));
         parameters = std::move(candidate);
         gradient = std::move(candidate_gradient);
         value = candidate_value;

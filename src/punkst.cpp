@@ -6,7 +6,8 @@ int32_t cmdPts2TilesBinary(int32_t argc, char** argv);
 int32_t cmdTiles2HexTxt(int32_t argc, char** argv);
 int32_t cmdTiles2Rois(int32_t argc, char** argv);
 int32_t cmdTopicModelSVI(int argc, char** argv);
-int32_t cmdGammaPoisFit(int argc, char** argv);
+int32_t cmdGammaPoisFitV1(int argc, char** argv);
+int32_t cmdGammaPoisFitMap(int argc, char** argv);
 int32_t cmdGammaPoisTransform(int argc, char** argv);
 int32_t cmdLeiden(int argc, char** argv);
 int32_t cmdLinearEmbed(int argc, char** argv);
@@ -58,7 +59,8 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("tiles2rois", "Aggregate tiled transcript counts into GeoJSON ROI polygons", cmdTiles2Rois)
         .add_command("lda4hex", "Train LDA model", cmdTopicModelSVI) // backward compatibility
         .add_command("topic-model", "Train LDA model", cmdTopicModelSVI)
-        .add_command("gamma-pois-fit", "Train Gamma-Poisson topic model", cmdGammaPoisFit)
+        .add_command("gamma-pois-fit", "Train hierarchical Gamma-Poisson topic model", cmdGammaPoisFitV1)
+        .add_command("gamma-pois-fit-map", "Train normalized MAP Gamma-Poisson topic model", cmdGammaPoisFitMap)
         .add_command("gamma-pois-transform", "Transform data using fitted Gamma-Poisson topic model state", cmdGammaPoisTransform)
         .add_command("leiden", "Cluster factor embeddings with Leiden", cmdLeiden)
         .add_command("linear-embed", "Embed topic proportions using hard cluster partitions", cmdLinearEmbed)

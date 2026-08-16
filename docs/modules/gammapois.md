@@ -1,22 +1,23 @@
 # Gamma-Poisson topic model
 
-`punkst` implements a hierarchical Gamma-Poisson topic model for generic count/non-negative data.
+`punkst` provides two Gamma-Poisson topic models for generic
+count/non-negative data.
 
-- `punkst gamma-pois-fit`: fit a degree-corrected Gamma-Poisson topic model
-- `punkst gamma-pois-transform`: project units with a fitted Gamma-Poisson model
+- `punkst gamma-pois-fit`: fit the hierarchical Gamma beta/xi model
+- `punkst gamma-pois-fit-map`: fit the normalized MAP model
+- `punkst gamma-pois-transform`: project units with either fitted state
 
-The command accepts either the custom sparse text (from `tiles2hex`) or the 10X MEX format as input, similar to `topic-model` / `lda-transform`.
-
-Dense `{prefix}.results.tsv` output can be clustered directly with
+The commands accept either custom sparse text (from `tiles2hex`) or 10X MEX
+input. Dense `{prefix}.results.tsv` output can be clustered directly with
 [`punkst leiden`](leiden.md).
 
 ## Example usage
 
 ```bash
-punkst gamma-pois-fit \
+punkst gamma-pois-fit-map \
   --in-data hex_12.txt --in-meta hex_12.json \
   --features features_with_totals.tsv \
-  --n-topics 12 --n-epochs 4 --size-factor 1000 \
+  --n-topics 12 --n-epochs 4 --regularization 0.1 \
   --estimate-dispersion --dispersion-init-epochs 1 \
   --out-prefix gp_h12_k12 --residuals \
   --transform --threads 4 --seed 1
@@ -34,108 +35,79 @@ punkst gamma-pois-transform \
 
 ## Model
 
-For each unit or document $d$, feature $w$, and topic $r$, the observed
-count is modeled as
+For unit $d$, feature $w$, and topic $r$,
 
 $$
-n_{dw} \sim \mathrm{Poisson}\left(c_d \epsilon_{dw} \sum_r \theta_{dr}\beta_{wr}\right),
-\qquad c_d = n_d / \bar n,
+n_{dw} \sim \mathrm{Poisson}\left(n_d\epsilon_{dw}
+\sum_r\theta_{dr}\beta_{rw}\right),
+\qquad \sum_w\beta_{rw}=1,
 $$
 
-where $n_d$ is the total count in unit $d$, and $\bar n$ is the corpus
-mean unit size. The exposure $c_d$ carries unit size, so the latent topic
-intensity $\theta_d$ is on a common corpus scale.
+where $n_d=\sum_w n_{dw}$ is the direct document exposure. Every topic
+dictionary row is a positive probability distribution, so topic capacity is
+one and there is no fitted corpus size factor.
 
-The topic loadings use a feature-specific degree correction:
-
-$$
-\xi_w \sim \mathrm{Gamma}(a_0, a_0 / b_0), \qquad
-\beta_{wr} \mid \xi_w \sim \mathrm{Gamma}(a, a\xi_w).
-$$
-
-Here $\xi_w$ is an inverse feature-activity rate. Frequent features tend to
-have smaller $\xi_w$, and $E[\beta_{wr}\mid\xi_w]=1/\xi_w$, which allows large baseline loadings without making those
-features define a content-specific topic by themselves.
-
-By default, document-topic intensities use a symmetric mean-one prior:
+Document-topic intensities have the symmetric prior
 
 $$
-\theta_{dr} \sim \mathrm{Gamma}(\alpha/K, \alpha),
+\theta_{dr}\sim\mathrm{Gamma}(\alpha/K,\alpha),
 \qquad \alpha=\texttt{--theta-concentration}.
 $$
 
-Thus $E[\sum_r\theta_{dr}]=1$, while $\alpha$ is the total concentration
-of the normalized Dirichlet topic mixture. Smaller values produce sparser
-document mixtures and larger values produce more even mixtures. The total mass
-has variance $1/\alpha$.
-
-For output, the fitted beta means are normalized to topic-word distributions:
+Transform output normalizes $E[\theta_{dr}]$ across topics. The global
+dictionary is a MAP estimate. With allocated full-data count $C_{rw}$, total
+prior mass $M_0$, and optional dispersion correction $\Delta_{rw}$, it
+maximizes
 
 $$
-b_r = \sum_w E[\beta_{wr}], \qquad
-\hat\beta_{wr} = E[\beta_{wr}] / b_r.
+\sum_{rw}(C_{rw}+M_0/V)\log\beta_{rw}
+-\sum_{rw}\Delta_{rw}\beta_{rw}-\lambda R(\beta),
 $$
 
-Per-unit transform output reports normalized token-unit topic intensities:
+where the ownership entropy is
 
 $$
-\hat\theta_{dr} \propto E[\theta_{dr}] b_r, \qquad \sum_r \hat\theta_{dr}=1.
+R(\beta)=-\sum_{rw}\beta_{rw}\log
+\frac{\beta_{rw}}{\sum_j\beta_{jw}}.
 $$
 
-Option per-feature dispersion is represented by a mean-one, unit-and-feature-specific
-rate multiplier:
+The ownership penalty discourages redundant feature ownership. Its CLI
+strength is dimensionless: $\lambda$ is scaled by effective token mass per
+topic. It is disabled by default.
+
+When the effective ownership penalty is zero, every global update exactly
+maximizes the current smoothed sufficient-statistic target. Without dispersion
+this is the normalized allocated-count closed form. With dispersion, each
+topic has the solution
 
 $$
-\epsilon_{dw}\mid\tau_w \sim \mathrm{Gamma}(\tau_w,\tau_w),
-\qquad E[\epsilon_{dw}]=1,\qquad
-\text{Var}(\epsilon_{dw})=1/\tau_w.
+\beta_{rw}=\frac{C_{rw}+M_0/V}{\Delta_{rw}+\mu_r},
 $$
 
-Writing
-$\mu_{dw}=c_d\sum_r\theta_{dr}\beta_{wr}$, integrating out
-$\epsilon_{dw}$ gives the NB2 mean-variance relationship
+where the scalar $\mu_r$ is solved so the row sums to one. The bounded logit
+optimizer is reserved for ownership-regularized targets and zero-prior
+dispersion boundary cases.
+
+Optional feature dispersion uses a mean-one positive-cell multiplier
 
 $$
-E[n_{dw}\mid\theta,\beta]=\mu_{dw},\qquad
-\text{Var}(n_{dw}\mid\theta,\beta)
-=\mu_{dw}+\mu_{dw}^2/\tau_w.
+\epsilon_{dw}\mid\tau_w\sim\mathrm{Gamma}(\tau_w,\tau_w).
 $$
 
-Thus $\epsilon_{dw}$ is a local random effect, while the positive
-feature-level parameter $\tau_w$ controls its dispersion. Smaller
-$\tau_w$ allows more residual variation for feature $w$;
-$\tau_w\to\infty$ fixes $\epsilon_{dw}=1$ and recovers the Poisson model.
-During variational inference, an observed cell has
+This yields the NB2 relationship
+$\operatorname{Var}(n_{dw})=\mu_{dw}+\mu_{dw}^2/\tau_w$. For an observed
+positive cell,
 
 $$
-q(\epsilon_{dw})=
-\mathrm{Gamma}\left(
-  \tau_w+n_{dw},
-  \tau_w+c_d\sum_r E[\theta_{dr}]E[\beta_{wr}]
-\right).
+q(\epsilon_{dw})=\mathrm{Gamma}\left(
+\tau_w+n_{dw},
+\tau_w+n_d\sum_rE[\theta_{dr}]\beta_{rw}\right).
 $$
 
-The implementation applies this correction only to nonzero observed cells and
-treats $\epsilon_{dw}=1$ for zero cells. This preserves sparse computation but
-is an observed-cell dispersion approximation rather than a fully dense
-negative-binomial likelihood. See
-[Per-feature dispersion](#per-feature-dispersion) for supplying or estimating
-$\tau_w$.
-
-Optional empirical-Bayes topic popularity replaces that prior when
-`--eb-shrinkage` is enabled:
-$$
-\nu_r \sim \mathrm{Gamma}(e_0, f_0), \qquad
-\theta_{dr} \mid \nu_r \sim \mathrm{Gamma}(\alpha/K, \nu_r).
-$$
-
-The global rate $\nu_r$ is an inverse topic-popularity parameter and is absent
-from the default symmetric model. Pass `--eb-shrinkage` to activate the
-empirical-Bayes behavior, in which
-$\nu_r$ is fitted from corpus-wide topic usage and shrinks each unit toward
-the corpus-mean topic intensity. For big $K$ and small $n_d$, this prior can
-suppress rare topics. The positive `--nu-max` cap bounds its influence and
-defaults to $10\alpha$.
+Zero cells retain $\epsilon_{dw}=1$, preserving sparse computation. The MAP
+model supports only the symmetric theta prior. The separate
+`gamma-pois-fit` command retains the beta/xi hierarchy and optional
+empirical-Bayes topic-rate mode.
 
 ## Input formats
 
@@ -157,10 +129,22 @@ For 10X input, the matrix is loaded into memory. If `--features` is not
 supplied during fitting, `{prefix}.features.tsv` is written with the final
 feature names and total counts.
 
-## `gamma-pois-fit`
+## `gamma-pois-fit` (hierarchical)
 
-Fits the Gamma-Poisson topic model with minibatch stochastic variational
-inference.
+Fits the original variational hierarchical model and writes v4 state. Its
+topic-feature loadings have Gamma priors coupled through a feature-specific
+Gamma rate. Topic capacities and the corpus size factor are fitted rather
+than fixed to one.
+
+The shared input, feature weighting, dispersion, SVI, transform, residual,
+and output options described below apply to this command. Its model-specific
+options are `--beta-shape`, `--xi-shape`, `--xi-mean`, `--size-factor`, and
+the optional `--eb-shrinkage`, `--nu-shape`, `--nu-rate`, and `--nu-max`.
+
+## `gamma-pois-fit-map`
+
+Fits local Gamma topic posteriors and a normalized global MAP dictionary with
+minibatch stochastic sufficient statistics.
 
 ### Required
 
@@ -169,13 +153,6 @@ Output prefix.
 
 `--n-topics`
 Number of topics.
-
-### Size factor
-
-`--size-factor`
-Corpus mean unit size $\bar n$. If omitted, the command uses
-`sum(effective feature totals) / number of units`. For weighted fitting, an
-effective total is the supplied raw total multiplied by its feature weight.
 
 ### Feature selection and weighting
 
@@ -269,7 +246,9 @@ Minimum total count per unit for training. Default: `20`.
 
 `--kappa`, `--tau0`
 Learning-rate schedule parameters. The step size is
-$(t + \tau_0)^{-\kappa}$. Defaults: `--kappa 0.7`, `--tau0 10`.
+$(t + \tau_0)^{-\kappa}$. It smooths the running sufficient statistics; the
+unregularized dictionary update maximizes the resulting target exactly.
+Defaults: `--kappa 0.7`, `--tau0 10`.
 
 `--max-iter`
 Maximum per-unit local variational iterations. Default: `100`.
@@ -285,55 +264,42 @@ Standard execution controls. `--debug` limits the number of units processed.
 
 ### Model hyperparameters
 
-`--beta-shape`
-Shape $a$ for $\beta_{wr}$. The default is
-$\max(1/K,0.01)$, which keeps the prior weak as the number of topics grows
-without allowing extremely small Gamma shapes. Smaller values encourage
-spikier topic-word profiles.
-
-`--xi-shape`
-Shape $a_0$ in the prior of $\xi_w$. Default: `0.3`.
-
-`--xi-mean`
-Mean $b_0$ in the prior of $\xi_w$. By default this is derived as
-$V/\bar n$, placing $\beta$ on the count scale.
-
 `--theta-concentration`
-Total concentration $\alpha$, used in both prior modes. The symmetric prior is
-$\mathrm{Gamma}(\alpha/K,\alpha)$; with `--eb-shrinkage`, the shape remains
-$\alpha/K$ and the fitted $\nu_r$ replaces the fixed rate. Default: `1`.
+Total concentration $\alpha$ in the symmetric
+$\mathrm{Gamma}(\alpha/K,\alpha)$ theta prior. Default: `1`.
 
-`--eb-shrinkage`
-Activate the asymmetric empirical-Bayes topic rate $\nu_r$. The default uses
-the symmetric concentration prior above with $\nu_r$ out of the hierarchy;
-this flag turns on
-the fitted asymmetric behavior described in the Model section.
+`--dictionary-prior-mass`
+Total anti-collapse pseudocount mass $M_0$ per topic. Each feature receives
+$M_0/V$. Default: `1`.
 
-`--nu-max`
-Cap on $E[\nu_r]$, effective only with `--eb-shrinkage`. Bounds the
-rare-topic suppression by projecting the fitted Gamma posterior rate so that
-its mean does not exceed the cap. Default: $10\alpha$; an explicitly supplied
-value must be positive and finite.
+`--regularization`
+Dimensionless ownership-entropy strength. Default: `0` (disabled).
 
-`--nu-shape`, `--nu-rate`
-Shape $e_0$ and rate $f_0$ for the global topic-rate prior, used only with
-`--eb-shrinkage`. If `--nu-rate` is omitted, it is set to
-$f_0=e_0/\alpha$.
+`--regularize-warmup-epochs`, `--regularize-ramp-epochs`
+Keep ownership regularization off for the warmup, then ramp it linearly by
+document progress. Both default to `1`. A positive strength requires enough
+epochs to complete the schedule. Estimated-dispersion warmup must be covered
+by the ownership warmup.
+
+`--final-refine-passes`, `--final-refine-tol`
+Optionally freeze the dictionary, reaccumulate full-data sparse sufficient
+statistics, and optimize the fixed target. Unregularized refinement uses the
+exact M-step; ownership-regularized refinement uses in-tree L-BFGS. Defaults:
+`0` passes and tolerance `1e-5`.
 
 ### Other fitting options
 
 `--random-init-shape`
 Shape of the mean-one Gamma noise used before proportional fitting initializes
-the topic profiles. Default: `0.5`, preserving the original high-variance
-initializer. Larger values reduce random contrast; `100` matches the relative
-noise scale of the LDA global initializer. This option has no effect when
+the topic profiles. Default: `2`. Larger values reduce random contrast. This
+option has no effect when
 `--model-init` is supplied.
 
 `--model-init`
 Topic-model TSV used only to initialize the Gamma-Poisson topic profiles. The
 file must contain the same number of topics and exactly the retained feature
 set; feature rows may be in a different order. Each topic is normalized and
-placed on the Gamma-Poisson count scale before training. It does not add
+stored directly as a probability row before training. It does not add
 pseudo-count strength or constrain subsequent updates.
 
 `--sort-topics`
@@ -367,13 +333,16 @@ Projects new units with a fitted Gamma-Poisson state.
 ### Required
 
 `--in-state`
-Input Gamma-Poisson state file written by `gamma-pois-fit`.
+Input Gamma-Poisson v4 or v5 state file written by either fit command. The
+state header selects the hierarchical or normalized MAP inference core.
 
 `--out-prefix`
 Output prefix.
 
 `gamma-pois-transform` requires the state file, not just `{prefix}.model.tsv`.
-The model TSV stores only normalized topic-word distributions for inspection. The state file contains the posterior parameters needed for exact projection.
+The model TSV stores only normalized topic-word distributions for inspection.
+The state also contains the theta prior, calibration, weights, and optional
+dispersion needed for projection.
 
 Without `--full-model`, transform compares input and model feature names as
 sets. If every model feature is present, it uses the complete model in model
@@ -381,9 +350,8 @@ feature order, regardless of input order or extra input features. Otherwise,
 the measured panel is the intersection of the fitted state, the declared input
 feature dictionary, and any transform feature filter. Features outside that
 panel are treated as unmeasured, not observed zeros. Transform slices the
-fitted beta posterior without renormalizing it, recomputes topic capacities on
-the measured panel, and scales the training size-factor reference by the
-panel's share of effective training counts. Consequently, normalized topic
+fitted dictionary and row-renormalizes it over the measured panel. Exposure
+remains the observed effective document total. Consequently, normalized topic
 output is panel-dependent.
 
 By default transform first infers topics under Poisson, estimates test-data
@@ -391,8 +359,8 @@ dispersion for the measured panel, and then repeats inference with those
 estimates. This adds one input pass and writes `{prefix}.dispersion.tsv`.
 Use `--use-stored-dispersion` for an in-sample projection or when the fitted
 dispersion should be preserved. If the state has no stored dispersion, that
-option preserves the Poisson model. `gamma-pois-fit --transform` enables it
-automatically.
+option preserves the Poisson model. Both fit commands enable it automatically
+when `--transform` is requested.
 
 `--factor-is-in-sample` is the concise in-sample declaration. It enables both
 `--use-stored-dispersion` and `--use-training-prevalence`; the two original
@@ -512,15 +480,15 @@ Use a separate prefix for `.classifications.tsv` and
 ## Outputs
 
 `{prefix}.model.tsv`
-Feature-by-topic matrix containing $\hat\beta_{wr}$, the normalized topic-word
-distributions.
+Feature-by-topic matrix containing the normalized MAP topic dictionaries.
 
 `{prefix}.state.tsv`
-Full Gamma-Poisson variational state. This file is required by
-`gamma-pois-transform`. State v4 stores the fitted size factor, raw
-per-feature training totals, and a feature-weight activation flag. The
-per-feature weight column is present only when weighting was active. Older
-state versions are rejected and must be refitted.
+Full Gamma-Poisson state required by `gamma-pois-transform`. State v5 stores
+the normalized dictionary directly, the observed-total exposure convention,
+theta/MAP/ownership settings, raw feature totals, optional feature weights,
+topic usage, and optional dispersion. State v4 stores the hierarchical model
+used by `gamma-pois-fit`; the shared transform command accepts both v4 and v5.
+Older state versions are rejected.
 
 `{prefix}.features.tsv`
 Written only when `--features` is not supplied and the input is in 10X MEX format.
@@ -553,7 +521,7 @@ columns are `total_count`, `residual`, and `entropy`.
 `sh_lcr`, and `sh_q`. For fitted marginal means
 
 $$
-\mu_{dw}=c_d\sum_r E[\theta_{dr}]E[\beta_{wr}],
+\mu_{dw}=n_d\sum_r E[\theta_{dr}]\beta_{rw},
 $$
 
 `residual` is $\sum_w|n_{dw}-\mu_{dw}|$. The optional `cosine_sim` compares
@@ -583,7 +551,8 @@ specialization, and computational behavior.
 
 Dispersion is estimated after fitting a warmup model without $\epsilon_{dw}$.
 
-Write $\bar\beta_{kw}=E[\beta_{kw}]$, $z_{dk}=c_dE[\theta_{dk}], \ v_{dk}=c_d^2\operatorname{Var}(\theta_{dk})$.
+Write $z_{dk}=n_dE[\theta_{dk}]$ and
+$v_{dk}=n_d^2\operatorname{Var}(\theta_{dk})$.
 
 Let $S=\sum_dz_d$, $C=\sum_dz_dz_d^T$, and $V_k=\sum_dv_{dk}$, compute
 
@@ -594,8 +563,9 @@ Q_w=Q_w^{\rm mean}+\sum_kV_k\bar\beta_{kw}^2.
 $$
 
 Thus $M_w=\sum_d\mu_{dw}$ and $Q_w$ corrects
-$\sum_d\mu_{dw}^2$ for theta-posterior uncertainty. Beta-posterior uncertainty
-is not included.
+$\sum_d\mu_{dw}^2$ for theta-posterior uncertainty. The MAP dictionary is held
+fixed during dispersion estimation, so global dictionary uncertainty is not
+included.
 
 When feature weights are active, warmup dispersion is estimated on the raw
 count scale. For a positive fitted weight $s_w$, the estimator uses

@@ -20,41 +20,30 @@
 
 #include "dataunits.hpp"
 #include "error.hpp"
-#include "gamma_pois_common.hpp"
 #include "gamma_pois_dispersion.hpp"
 #include "numerical_utils.hpp"
 #include "topic_svb.hpp"
+#include "gamma_pois_common.hpp"
 
-struct GammaPoissonMapOptions {
-    double dictionary_prior_mass = 1.0;
-    double ownership_strength = 0.0;
-};
+namespace gampois_v1 {
 
-struct GammaPoissonOptimizationDiagnostics {
-    double objective = std::numeric_limits<double>::quiet_NaN();
-    double ownership_entropy = std::numeric_limits<double>::quiet_NaN();
-    double effective_ownership_lambda = 0.0;
-    double maximum_row_change = 0.0;
-    int32_t accepted_gradient_steps = 0;
-    int32_t failed_gradient_steps = 0;
-    int32_t lbfgs_steps = 0;
-    int32_t lbfgs_fallbacks = 0;
-};
 
 class GammaPoissonTopicBase {
 public:
     GammaPoissonTopicBase() = default;
     GammaPoissonTopicBase(int32_t n_topics, int32_t n_features,
         int seed = std::random_device{}(), int32_t nThreads = 0, int32_t verbose = 0,
+        double beta_shape = -1.0, double xi_shape = 0.3, double xi_mean = -1.0,
+        double theta_concentration = 1.0, double nu_shape = 1.0, double nu_rate = -1.0,
         double learning_decay = 0.7, double learning_offset = 10.0,
-        int32_t total_doc_count = 1000000,
+        int32_t total_doc_count = 1000000, double size_factor = 1.0,
         const std::vector<double>* feature_sums = nullptr,
         double random_init_shape = 0.5);
     virtual ~GammaPoissonTopicBase() = default;
 
     int32_t get_n_topics() const { return n_topics_; }
     int32_t get_n_features() const { return n_features_; }
-    double get_size_factor() const { return 1.0; }
+    double get_size_factor() const { return size_factor_; }
     const std::vector<std::string>& get_topic_names();
     const std::vector<std::string>& get_feature_names() const { return feature_names_; }
     const std::vector<double>& get_training_count() const {
@@ -83,6 +72,7 @@ protected:
     void refresh_model_cache();
     RowVectorXd normalized_theta_hat(const VectorXd& theta_shape, const VectorXd& theta_rate) const;
     double doc_exposure(const Document& doc) const;
+    double expected_xi(int32_t w) const { return xi_shape_(w) / xi_rate_(w); }
 
     int32_t n_topics_ = -1;
     int32_t n_features_ = -1;
@@ -91,19 +81,29 @@ protected:
     int32_t verbose_ = 0;
     int32_t total_doc_count_ = 1000000;
     int32_t update_count_ = 0;
+    double a_ = -1.0;
+    double a0_ = 0.3;
+    double b0_ = -1.0;
+    double e0_ = 1.0;
+    double f0_ = 1.0;
     double learning_decay_ = 0.7;
     double learning_offset_ = 10.0;
+    double size_factor_ = 1.0;
     double random_init_shape_ = 0.5;
     double eps_ = std::numeric_limits<double>::epsilon();
     int32_t max_doc_update_iter_ = 100;
     double mean_change_tol_ = 1e-3;
 
-    MatrixXd e_beta_; // normalized MAP dictionary, K x V
-    MatrixXd beta_kernel_; // centered beta by feature
+    MatrixXd beta_shape_; // K x W, column-major for feature-wise updates
+    MatrixXd beta_rate_;
+    MatrixXd e_beta_;
+    MatrixXd beta_kernel_; // centered exp(E[log beta]) by feature
     RowMajorMatrixXd model_phi_;
     bool model_cache_dirty_ = true;
     bool inference_cache_ready_ = false;
-    VectorXd topic_capacity_; // fixed to one for normalized dictionary rows
+    VectorXd topic_capacity_; // K, \sum_w E[\beta_{kw}]
+    VectorXd xi_shape_; // W
+    VectorXd xi_rate_;
     VectorXd topic_usage_;
     std::vector<std::string> topic_names_;
     std::vector<std::string> feature_names_;
@@ -117,27 +117,21 @@ protected:
 class GammaPoissonTopicModel : public GammaPoissonTopicBase,
                                public GammaPoissonDispersionModel {
 public:
-    int32_t get_n_topics() const override {
-        return GammaPoissonTopicBase::get_n_topics();
-    }
-    int32_t get_n_features() const override {
-        return GammaPoissonTopicBase::get_n_features();
-    }
-    bool feature_weights_active() const override {
-        return GammaPoissonTopicBase::feature_weights_active();
-    }
-    const std::vector<double>& get_feature_weight() const override {
-        return GammaPoissonTopicBase::get_feature_weight();
-    }
+    int32_t get_n_topics() const override { return GammaPoissonTopicBase::get_n_topics(); }
+    int32_t get_n_features() const override { return GammaPoissonTopicBase::get_n_features(); }
+    bool feature_weights_active() const override { return GammaPoissonTopicBase::feature_weights_active(); }
+    const std::vector<double>& get_feature_weight() const override { return GammaPoissonTopicBase::get_feature_weight(); }
 
     GammaPoissonTopicModel(int32_t n_topics, int32_t n_features,
         int seed = std::random_device{}(), int32_t nThreads = 0, int32_t verbose = 0,
+        double beta_shape = -1.0, double xi_shape = 0.3, double xi_mean = -1.0,
         double theta_concentration = 1.0,
+        double nu_shape = 1.0, double nu_rate = -1.0,
         double learning_decay = 0.7, double learning_offset = 10.0,
-        int32_t total_doc_count = 1000000,
+        int32_t total_doc_count = 1000000, double size_factor = 1.0,
+        bool symmetric_nu = true, double nu_max = -1.0,
         const std::vector<double>* feature_sums = nullptr,
-        double random_init_shape = 0.5,
-        const GammaPoissonMapOptions& map_options = {});
+        double random_init_shape = 0.5);
 
     explicit GammaPoissonTopicModel(const std::string& stateFile,
         int seed = std::random_device{}(), int32_t nThreads = 0, int32_t verbose = 0);
@@ -146,14 +140,6 @@ public:
         int32_t nThreads = 0, int32_t verbose = 0);
 
     void partial_fit(const std::vector<Document>& docs);
-    void set_ownership_annealing(double fraction);
-    void configure_ownership_annealing(int32_t warmup_epochs,
-        int32_t ramp_epochs, int32_t documents_per_epoch,
-        int64_t documents_seen = 0);
-    void reset_running_statistics();
-    void begin_full_refinement();
-    void accumulate_full_refinement(const std::vector<Document>& docs);
-    bool finish_full_refinement(double tolerance);
     RowMajorMatrixXd transform(DocumentView docs);
     void transform_with_posteriors(DocumentView docs, RowMajorMatrixXd& topics,
         std::vector<GammaPoissonDocumentPosterior>& posteriors) const;
@@ -179,16 +165,12 @@ public:
         return out;
     }
     void expected_observed_counts(const Document& doc, std::vector<double>& means) const;
-    double ownership_entropy() const;
-    double map_objective() const;
-    GammaPoissonOptimizationDiagnostics optimization_diagnostics() const;
     void write_state(const std::string& outFile, const std::vector<std::string>& featureNames);
     static std::vector<std::string> read_state_feature_names(const std::string& stateFile);
     static GammaPoissonStateFeatureInfo read_state_feature_info(
         const std::string& stateFile);
 
 private:
-    friend struct GammaPoissonTestAccess;
     GammaPoissonTopicModel(const std::string& stateFile, int seed,
         int32_t nThreads, int32_t verbose, bool defer_cache);
 
@@ -207,7 +189,7 @@ private:
 
     struct WorkerState {
         MatrixXd ss;
-        MatrixXd dispersion_correction;
+        MatrixXd beta_rate_correction;
         VectorXd ctheta;
         VectorXd theta;
         VectorXd theta_shape;
@@ -231,47 +213,24 @@ private:
     void accumulate_document(WorkerState& state, const Document& doc) const;
     template <bool WithDispersion>
     void partial_fit_impl(const std::vector<Document>& docs);
-    template <bool WithDispersion>
-    void collect_batch_statistics(const std::vector<Document>& docs,
-        MatrixXd& counts, MatrixXd& delta, VectorXd& theta,
-        int64_t& iteration_sum, int32_t& failed);
-    bool optimize_dictionary(const MatrixXd& counts, const MatrixXd& delta,
-        double ownership_fraction, int32_t max_steps, bool use_lbfgs,
-        double movement_tolerance, double* max_row_change = nullptr);
-    bool solve_unregularized_dictionary(const MatrixXd& counts,
-        const MatrixXd& delta, MatrixXd& dictionary) const;
-    double objective_and_gradient(const MatrixXd& counts, const MatrixXd& delta,
-        double ownership_fraction, const MatrixXd& logits,
-        MatrixXd* gradient, MatrixXd* dictionary = nullptr) const;
-    static void logits_to_dictionary(const MatrixXd& logits, MatrixXd& dictionary);
-    static void dictionary_to_logits(const MatrixXd& dictionary, MatrixXd& logits);
     void read_state(const std::string& stateFile);
+    void apply_nu_cap();
     double theta_prior_shape() const {
         return theta_concentration_ / static_cast<double>(n_topics_);
     }
-    double theta_prior_rate(int32_t) const { return theta_concentration_; }
+    double theta_prior_rate(int32_t k) const {
+        return symmetric_nu_ ? theta_concentration_ : expected_nu(k);
+    }
+    double expected_nu(int32_t k) const {
+        return nu_shape_(k) / nu_rate_(k);
+    }
 
+    bool symmetric_nu_ = true;
     bool has_dispersion_ = false;
     double theta_concentration_ = 1.0;
-    double dictionary_prior_mass_ = 1.0;
-    double ownership_strength_ = 0.0;
-    double ownership_fraction_ = 0.0;
-    int32_t ownership_warmup_epochs_ = 1;
-    int32_t ownership_ramp_epochs_ = 1;
-    int32_t ownership_documents_per_epoch_ = 0;
-    int64_t ownership_documents_seen_ = 0;
-    bool ownership_schedule_active_ = false;
-    bool running_stats_ready_ = false;
-    MatrixXd running_counts_;
-    MatrixXd running_delta_;
-    MatrixXd refinement_counts_;
-    MatrixXd refinement_delta_;
-    bool refinement_active_ = false;
-    int32_t accepted_gradient_steps_ = 0;
-    int32_t failed_gradient_steps_ = 0;
-    int32_t lbfgs_steps_ = 0;
-    int32_t lbfgs_fallbacks_ = 0;
-    double last_maximum_row_change_ = 0.0;
+    double nu_max_ = -1.0;
+    VectorXd nu_shape_;
+    VectorXd nu_rate_;
     VectorXd tau_;
     std::unique_ptr<tbb::enumerable_thread_specific<WorkerState>> worker_states_;
     uint64_t worker_generation_ = 0;
@@ -284,10 +243,10 @@ public:
         : GammaPoisson4HexInterface(_reader, modal, verbose) {}
 
     void initialize(int32_t nTopics, int32_t seed, int32_t nThreads, int32_t verbose,
-        double theta_concentration, double kappa, double tau0,
-        int32_t totalDocCount, int32_t maxIter, double mDelta,
-        double randomInitShape = 0.5,
-        const GammaPoissonMapOptions& mapOptions = {});
+        double beta_shape, double xi_shape, double xi_mean, double theta_concentration,
+        double nu_shape, double nu_rate, double kappa, double tau0,
+        int32_t totalDocCount, double sizeFactor, bool symmetricNu, double nuMax,
+        int32_t maxIter, double mDelta, double randomInitShape = 0.5);
     void initializeFromModel(const std::string& modelFile);
     void setFeatureDispersion(const std::vector<double>& tau) override;
     void clearFeatureDispersion() override;
@@ -311,15 +270,7 @@ public:
     void initialize_transform(std::unique_ptr<GammaPoissonTopicModel> model,
         int32_t maxIter, double mDelta,
         const std::vector<int32_t>& keptFeatures = {});
-    void setOwnershipAnnealing(double fraction);
-    void configureOwnershipAnnealing(int32_t warmupEpochs,
-        int32_t rampEpochs, int32_t documentsPerEpoch,
-        int64_t documentsSeen = 0);
-    void resetRunningStatistics();
-    void beginFullRefinement();
-    void accumulateFullRefinement(const std::vector<Document>& batch);
-    bool finishFullRefinement(double tolerance);
-    GammaPoissonOptimizationDiagnostics optimizationDiagnostics() const;
+    double resolveSizeFactor(double requested) const;
     void writeModelToFile(const std::string& outFile);
     void writeStateToFile(const std::string& outFile);
     int32_t getNumTopics() const override { return model_ ? model_->get_n_topics() : 0; }
@@ -350,5 +301,6 @@ private:
     std::unique_ptr<GammaPoissonTopicModel> model_;
     mutable RowMajorMatrixXd empty_model_;
     std::vector<std::string> topicNames_;
-    bool refining_ = false;
 };
+
+} // namespace gampois_v1

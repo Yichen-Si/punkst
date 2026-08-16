@@ -147,7 +147,7 @@ void write_number_or_na(std::ostream& out, double value) {
 } // namespace
 
 GammaPoissonDispersionEstimator::GammaPoissonDispersionEstimator(
-    const GammaPoissonTopicModel& model,
+    const GammaPoissonDispersionModel& model,
     const GammaPoissonDispersionOptions& options)
     : model_(model), n_features_(model.get_n_features()),
       n_topics_(model.get_n_topics()), options_(options),
