@@ -61,6 +61,44 @@ void LatentDirichletAllocation::prune_topics(
     compute_global_mtx();
 }
 
+void LatentDirichletAllocation::begin_topic_usage_collection() {
+    if (algo_ != InferenceType::SVB
+            && algo_ != InferenceType::SVB_DN) {
+        throw std::logic_error(
+            "Topic usage collection requires variational Bayes LDA");
+    }
+    collect_topic_usage_ = true;
+    topic_usage_estimate_ = VectorXd::Zero(n_topics_);
+    topic_usage_documents_ = 0;
+    topic_usage_window_ = 0;
+}
+
+std::vector<double> LatentDirichletAllocation::finish_topic_usage_collection() {
+    if (!collect_topic_usage_) {
+        throw std::logic_error("Topic usage collection is not active");
+    }
+    collect_topic_usage_ = false;
+    return std::vector<double>(topic_usage_estimate_.data(),
+        topic_usage_estimate_.data() + topic_usage_estimate_.size());
+}
+
+void LatentDirichletAllocation::update_topic_usage_estimate(
+        const VectorXd& batch_sum, int64_t documents) {
+    if (!collect_topic_usage_ || documents <= 0) return;
+    topic_usage_window_ = std::max(topic_usage_window_, documents);
+    const int64_t retained = std::min(topic_usage_documents_,
+        std::max<int64_t>(0, topic_usage_window_ - documents));
+    const int64_t combined = retained + documents;
+    if (retained > 0) {
+        topic_usage_estimate_ =
+            (topic_usage_estimate_ * static_cast<double>(retained)
+                + batch_sum) / static_cast<double>(combined);
+    } else {
+        topic_usage_estimate_ = batch_sum / static_cast<double>(documents);
+    }
+    topic_usage_documents_ = combined;
+}
+
 void LatentDirichletAllocation::set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals) {
     if (lambdaVals.size() != n_topics_ || lambdaVals[0].size() != n_features_) {
         if (n_topics_ > 0 && n_features_ > 0)

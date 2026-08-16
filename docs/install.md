@@ -170,6 +170,8 @@ cmake .. -DCMAKE_PREFIX_PATH="$HOME/.local"
 
 ### Optional Features
 
+- **png output**
+
 Image output is enabled by default:
 
 ```bash
@@ -188,6 +190,8 @@ Disable image output to build without libpng:
 cmake .. -DENABLE_IMAGE_OUTPUT=OFF
 ```
 
+- **Remote I/O**
+
 Remote random-access readers for `http(s)` and `s3://` inputs are enabled by default:
 
 ```bash
@@ -200,6 +204,16 @@ Disable remote I/O to build without libcurl. Local-file input still works.
 cmake .. -DENABLE_REMOTE_IO=OFF
 ```
 
+- **Faiss ANN for k-NN**
+
+Faiss ANN is only used in `punkst leiden`, which is just a convenient implementation of the Leiden algorithm for k-NN graphs constructed based on inferred factor compositions. ANN is advantageous only for very large datasets (e.g. close to `10^6` cells) and Faiss ANN has a lot more dependencies, so it is completely optional. Currently prebuilt binaries do NOT include Faiss ANN.
+
+Faiss ANN support defaults to `AUTO`. CMake enables it when CMake 3.24 or newer,
+the pinned `ext/faiss` source, C++20 compiler support, OpenMP, BLAS, and LAPACK
+are all available. (Note: the main punkst sources remain C++17)
+
+Override the default with `-DPUNKST_ENABLE_FAISS_ANN=ON` (missing dependence leads to error) or `-DPUNKST_ENABLE_FAISS_ANN=OFF`.
+
 ### Performance And Portability
 
 The default build prioritizes local runtime performance:
@@ -207,6 +221,7 @@ The default build prioritizes local runtime performance:
 - `CMAKE_BUILD_TYPE=Release` when no build type is specified
 - `ENABLE_LTO=ON`
 - `ENABLE_NATIVE_ARCH=ON`
+- `PUNKST_ENABLE_FAISS_ANN=AUTO`
 
 Useful CMake options:
 
@@ -219,13 +234,8 @@ Useful CMake options:
 | Disable LTO | `cmake .. -DENABLE_LTO=OFF` | Useful for faster/debug builds or toolchains where LTO is unreliable |
 | No image output | `cmake .. -DENABLE_IMAGE_OUTPUT=OFF` | Builds without libpng |
 | No remote I/O | `cmake .. -DENABLE_REMOTE_IO=OFF` | Builds without libcurl |
-| Faiss ANN k-NN | `cmake .. -DPUNKST_ENABLE_FAISS_ANN=ON` | Adds explicit HNSW and NN-descent backends; requires CMake 3.24+, C++20 for the adapter/Faiss, OpenMP, BLAS, and LAPACK |
-
-Faiss ANN support is optional and disabled by default. Initialize the pinned
-`ext/faiss` submodule before enabling it. The main punkst sources remain C++17;
-only Faiss and its adapter compile as C++20. Release CPU tiers map to Faiss
-`generic`, `avx2`, and `avx512` targets for `x86_64`, `x86_64-v3`, and
-`x86_64-v4` respectively.
+| Require Faiss ANN k-NN | `cmake .. -DPUNKST_ENABLE_FAISS_ANN=ON` | Adds explicit HNSW and NN-descent backends, or stops configuration if their prerequisites are unavailable |
+| Disable Faiss ANN k-NN | `cmake .. -DPUNKST_ENABLE_FAISS_ANN=OFF` | Builds without Faiss even when its prerequisites are available |
 
 <!-- ## Maintainer Release Packaging
 

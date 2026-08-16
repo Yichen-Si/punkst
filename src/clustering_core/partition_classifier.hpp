@@ -120,8 +120,10 @@ public:
 FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
     const Eigen::Ref<const Eigen::VectorXi>& labels,
     const Eigen::Ref<const Eigen::VectorXd>& weights,
+    const std::vector<std::string>& identifiers,
     const std::vector<std::string>& topics,
     const std::vector<std::string>& classes,
+    uint64_t seed,
     const FitOptions& options = {});
 
 CrossfitResult fit_crossfit(

@@ -530,3 +530,6 @@ void compute_percentile(std::vector<T>& results, std::vector<T>& values, std::ve
         st = idx[i] + 1;
     }
 }
+
+uint32_t quantile_threshold_u32(std::vector<uint32_t>& values, double quantile);
+uint8_t linear_adjusted_intensity_u8(uint32_t raw, uint32_t threshold);

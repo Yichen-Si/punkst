@@ -100,7 +100,7 @@ Eigen::VectorXd optimize_lbfgs(const Objective& objective,
             throw std::runtime_error("Nonfinite classifier objective");
         }
         if (gradient.lpNorm<Eigen::Infinity>()
-                <= options.gradient_tolerance) break;
+                <= options.gradient_tolerance) return parameters;
 
         Eigen::VectorXd direction = -history.apply(gradient);
         double directional_derivative = gradient.dot(direction);
@@ -134,7 +134,13 @@ Eigen::VectorXd optimize_lbfgs(const Objective& objective,
         gradient = std::move(candidate_gradient);
         value = candidate_value;
     }
-    return parameters;
+    if (gradient.lpNorm<Eigen::Infinity>()
+            <= options.gradient_tolerance) return parameters;
+    std::ostringstream message;
+    message << "Classifier L-BFGS did not converge after "
+        << options.max_iterations << " iterations; final gradient infinity norm "
+        << gradient.lpNorm<Eigen::Infinity>();
+    throw std::runtime_error(message.str());
 }
 
 Eigen::VectorXd fit_parameters(const RowMajorMatrixXd& x,
@@ -872,15 +878,19 @@ double fit_temperature(const Eigen::Ref<const RowMajorMatrixXd>& logits,
 FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
         const Eigen::Ref<const Eigen::VectorXi>& labels,
         const Eigen::Ref<const Eigen::VectorXd>& weights,
+        const std::vector<std::string>& identifiers,
         const std::vector<std::string>& topics,
         const std::vector<std::string>& classes,
+        uint64_t seed,
         const FitOptions& options) {
     const int32_t rows = static_cast<int32_t>(compositions.rows());
     const int32_t topic_count = static_cast<int32_t>(compositions.cols());
     const int32_t class_count = static_cast<int32_t>(classes.size());
     if (rows < 4 || topic_count != static_cast<int32_t>(topics.size())
             || topic_count < 2 || class_count < 2 || labels.size() != rows
-            || weights.size() != rows || !compositions.allFinite()
+            || weights.size() != rows
+            || identifiers.size() != static_cast<size_t>(rows)
+            || !compositions.allFinite()
             || (compositions.array() < 0.0).any()
             || (compositions.rowwise().sum().array() <= 0.0).any()
             || !weights.allFinite() || (weights.array() <= 0.0).any()
@@ -889,6 +899,7 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
             || !(options.gradient_tolerance > 0.0)) {
         throw std::invalid_argument("Invalid classifier fit input");
     }
+    require_unique_nonempty(identifiers, "Classifier identifiers");
     require_unique_nonempty(topics, "Classifier topics");
     require_unique_nonempty(classes, "Classifier classes");
     RowMajorMatrixXd normalized = compositions;
@@ -898,27 +909,12 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
     const Eigen::MatrixXd topic_helmert = normalized_helmert(topic_count);
     const RowMajorMatrixXd x = normalized * topic_helmert.transpose();
 
-    std::vector<std::vector<int32_t>> by_class(class_count);
-    for (int32_t row = 0; row < rows; ++row) {
-        if (labels(row) < 0 || labels(row) >= class_count) {
-            throw std::invalid_argument("Classifier label is outside classes");
-        }
-        by_class[labels(row)].push_back(row);
-    }
-    int32_t folds = options.folds;
-    for (const auto& class_rows : by_class) {
-        if (class_rows.size() < 2) {
-            throw std::invalid_argument(
-                "Classifier requires at least two rows per class");
-        }
-        folds = std::min(folds, static_cast<int32_t>(class_rows.size()));
-    }
-    Eigen::VectorXi fold_by_row(rows);
-    for (int32_t component = 0; component < class_count; ++component) {
-        for (size_t index = 0; index < by_class[component].size(); ++index) {
-            fold_by_row(by_class[component][index]) = index % folds;
-        }
-    }
+    const std::vector<int32_t> complete = all_rows(rows);
+    const FoldAssignment assignment = make_stratified_folds(labels, complete,
+        identifiers, class_count, options.folds,
+        seed ^ 0x6f7264696e617279ULL);
+    const int32_t folds = assignment.folds;
+    const Eigen::VectorXi& fold_by_row = assignment.by_row;
 
     {
         std::ostringstream message;
@@ -930,8 +926,8 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
 
     FitResult result;
     result.cv.reserve(options.ridge_grid.size());
-    std::vector<RowMajorMatrixXd> ridge_logits;
-    ridge_logits.reserve(options.ridge_grid.size());
+    size_t selected = 0;
+    double best_loss = std::numeric_limits<double>::infinity();
     for (const double ridge : options.ridge_grid) {
         if (!(ridge >= 0.0) || !std::isfinite(ridge)) {
             throw std::invalid_argument("Ridge grid must be finite and nonnegative");
@@ -958,15 +954,13 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
         cv.metrics = evaluate(probabilities_from_logits(oof, 1.0),
             labels, weights);
         result.cv.push_back(cv);
-        ridge_logits.push_back(std::move(oof));
-    }
-    size_t selected = 0;
-    for (size_t candidate = 1; candidate < result.cv.size(); ++candidate) {
-        if (result.cv[candidate].metrics.log_loss
-                < result.cv[selected].metrics.log_loss) selected = candidate;
+        if (cv.metrics.log_loss < best_loss) {
+            best_loss = cv.metrics.log_loss;
+            selected = result.cv.size() - 1;
+            result.oof_logits = std::move(oof);
+        }
     }
     result.cv[selected].selected = true;
-    result.oof_logits = std::move(ridge_logits[selected]);
     {
         std::ostringstream message;
         message << "Partition classifier CV parameter selection finished: "
@@ -1058,7 +1052,6 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
         }
     }
 
-    const std::vector<int32_t> complete = all_rows(rows);
     {
         std::ostringstream message;
         message << "Partition classifier full model fitting started: "

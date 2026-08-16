@@ -12,7 +12,7 @@ punkst provides several command-line tools for analyzing high resolution spatial
 - [feature-eval](feature_eval.md): Visualize feature-level diagnostic statistics for topic models
 - [Leiden](leiden.md): Cluster factor embeddings on a cosine or Hellinger k-NN graph
 - [Linear embedding](linear-embed.md): Supervised linear projection of factor embeddings for interpretable visualization
-- [Probabilistic partition classifier](partition-classifier.md): Calibrated prediction and local uncertainty propagation for a fixed clustering
+- [Probabilistic partition classifier](classifier.md): Calibrated prediction and local uncertainty propagation for a fixed clustering
 - [pixel-decode](pixel-decode.md): Annotate each pixel with the top factors and their probabilities
 - [cooccurrence](coexp.md): Compute gene co-occurrence and/or extract marker genes from the co-occurrence matrix
 - [visualization](visualization.md): Visualize the pixel level analysis results

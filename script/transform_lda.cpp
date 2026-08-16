@@ -1,7 +1,7 @@
 #include "topic_svb.hpp"
 #include "transform_helper.hpp"
-#include "partition_classifier.hpp"
-#include "partition_classifier_lrvb.hpp"
+#include "clustering_core/partition_classifier.hpp"
+#include "clustering_core/partition_classifier_lrvb.hpp"
 #include "factor_result_stream.hpp"
 
 #include <fstream>

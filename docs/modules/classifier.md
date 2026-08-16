@@ -38,8 +38,10 @@ rows are L1-normalized without flooring. By default the theta identifier is
 column 0, the partition identifier is column 0, and the partition value is
 column 1. `--id-as-row-index` interprets partition identifiers as zero-based
 theta data-row indices. `--icol-factor-start` and `--icol-factor-end` select a
-custom consecutive factor range; otherwise trailing columns named `0..K-1`
-are used.
+custom consecutive factor range; otherwise trailing numeric topic columns are
+used. Numeric topic names may contain gaps or appear in a different order, as
+they can after adaptive LDA pruning; their exact names and order are preserved
+in the classifier model.
 
 The estimator is ridge multinomial logistic regression in normalized topic
 Helmert coordinates with class Helmert contrasts. The serialized topic-space
@@ -53,7 +55,11 @@ the full matched intersection. Every represented class needs two matched rows.
 Five stratified folds, reduced to the smallest class count, select among ridge
 values `1e-6,1e-5,...,1` by weighted out-of-fold log loss. A global softmax
 temperature is fitted to all out-of-fold logits for the stored model;
-calibration diagnostics use cross-fitted temperatures.
+calibration diagnostics use cross-fitted temperatures. Fold assignment is
+deterministic from the unit identifier and sampling seed, rather than input
+row order. A coefficient fit that reaches the L-BFGS iteration limit without
+meeting its gradient tolerance fails instead of silently storing an
+unconverged model.
 
 `--crossfit` additionally fits strict nested outer-fold models. For each outer
 fold, ridge selection and temperature calibration use only the outer training
@@ -75,6 +81,9 @@ Outputs are:
   coefficients, ridge, temperature, and sampling metadata.
 - `{prefix}.classifications.tsv`: plug-in full-model classifications for every
   theta row, written as `id C1 P1 C2 P2 ...` (or dense probabilities).
+- `{prefix}.discordant.tsv`: matched theta/partition rows for which the input
+  label differs from the full model's leading class. Columns are
+  `id C0 P0 C1 P1`, where `P0` is the probability of the input label.
 - `{prefix}.cv.tsv`: out-of-fold log loss, Brier score, and accuracy per ridge.
 - `{prefix}.calibration.tsv`: overall, one-vs-rest classwise, and 15-bin
   reliability diagnostics.
@@ -85,6 +94,9 @@ Outputs are:
   classifications for every theta row. Sampled training identifiers use the
   outer-fold model that excluded them; other rows use the full model, which
   was fitted only on the sampled training identifiers.
+- `{prefix}.crossfit.discordant.tsv`: the corresponding disagreements for all
+  matched rows, using the same held-out or full model routing as the crossfit
+  classifications.
 - `{prefix}.crossfit.diagnostics.tsv`: per-outer-fold training/held-out counts,
   selected ridge, calibrated temperature, and unpenalized held-out metrics,
   plus their aggregate.
@@ -169,6 +181,13 @@ states, observed-feature exposure curvature. Matrix-free diagonally
 preconditioned CG solves only the requested classifier contrasts. Numerical
 jitter is limited to `1e-6` times the median positive diagonal.
 
+For the current LDA-compatible Gamma-Poisson model, the factor transform and
+classifier refinement use the same stored topic prior, expected-log beta
+allocation, exposure/capacity convention, dispersion update, and stable
+log-space allocation fallback. Classifier propagation can iterate the local
+posterior to a tighter tolerance before calculating LRVB covariance, but it
+does not use a different local model.
+
 One or two classifier contrasts always use 15-point Gauss-Hermite quadrature.
 For higher dimensions, the second-order softmax delta method is used when its
 correction is valid and small; otherwise positive-weight spherical-radial
@@ -196,4 +215,6 @@ SVB components, alpha, eta, ordered topic/feature names, and feature weights.
 `lda-transform --in-state` restores them. Legacy `--in-model` remains
 supported; LRVB classification with it requires explicit positive `--alpha`.
 Background-enabled LDA is not represented by this state and is unsupported for
-LRVB classification.
+LRVB classification. Its dense transform results can still be used by the
+standalone classifier: the `Background` column is metadata and only the
+trailing foreground-topic composition is classified.

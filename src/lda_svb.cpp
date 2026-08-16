@@ -1,21 +1,47 @@
 #include "lda.hpp"
 
+namespace {
+
+struct DocumentFitDiagnostics {
+    int64_t iterations = 0;
+    int64_t failures = 0;
+    int64_t documents = 0;
+};
+
+DocumentFitDiagnostics combine_diagnostics(
+        const DocumentFitDiagnostics& left,
+        const DocumentFitDiagnostics& right) {
+    return {
+        left.iterations + right.iterations,
+        left.failures + right.failures,
+        left.documents + right.documents
+    };
+}
+
+} // namespace
+
 void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& docs) {
     int minibatch_size = docs.size();
-    MatrixXd gamma = MatrixXd::Zero(minibatch_size, n_topics_);
+    MatrixXd gamma;
+    if (verbose_ > 2) {
+        gamma = MatrixXd::Zero(minibatch_size, n_topics_);
+    }
 
     tbb::combinable<MatrixXd> ss_acc{
         [&]{ return MatrixXd::Zero(n_topics_, n_features_); }
     };
-    tbb::combinable<std::vector<int32_t>> niters_acc{
-        []{ return std::vector<int32_t>(); }
+    tbb::combinable<DocumentFitDiagnostics> diagnostics_acc;
+    tbb::combinable<VectorXd> usage_acc{
+        [&]{ return collect_topic_usage_
+            ? VectorXd::Zero(n_topics_) : VectorXd(); }
     };
 
     tbb::parallel_for(
         tbb::blocked_range<int>(0, minibatch_size),
         [&](const tbb::blocked_range<int>& range) {
         auto& local_ss   = ss_acc.local();
-        auto& local_nits = niters_acc.local();
+        auto& local_diagnostics = diagnostics_acc.local();
+        auto& local_usage = usage_acc.local();
         VectorXd phi_k(n_topics_);
         for (int d = range.begin(); d < range.end(); ++d) {
             const uint64_t rng_stream = deterministic_rng_
@@ -27,8 +53,20 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
             int n_ids = doc.ids.size();
             VectorXd gamma_d, exp_Elog_theta_d;
             int iter = svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc, rng_stream);
-            gamma.row(d) = gamma_d.transpose();
-            local_nits.push_back(iter);
+            if (verbose_ > 2) {
+                gamma.row(d) = gamma_d.transpose();
+            }
+            local_diagnostics.iterations += iter;
+            local_diagnostics.failures += iter >= max_doc_update_iter_;
+            ++local_diagnostics.documents;
+            if (collect_topic_usage_) {
+                const double total = gamma_d.sum();
+                if (total > eps_ && std::isfinite(total)) {
+                    local_usage.noalias() += gamma_d / total;
+                } else {
+                    local_usage.array() += 1.0 / n_topics_;
+                }
+            }
             // update sufficient statistics.
             for (int j = 0; j < n_ids; j++) {
                 int word_id = doc.ids[j];
@@ -45,23 +83,21 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
             return A + B;
         }
     );
-    std::vector<int32_t> niters = niters_acc.combine(
-        [](const std::vector<int32_t> &a,
-            const std::vector<int32_t> &b) {
-            std::vector<int32_t> out = a;
-            out.insert(out.end(), b.begin(), b.end());
-            return out;
-        }
-    );
+    const DocumentFitDiagnostics diagnostics = diagnostics_acc.combine(
+        combine_diagnostics);
+    if (collect_topic_usage_) {
+        const VectorXd batch_usage = usage_acc.combine(
+            [](const VectorXd& left, const VectorXd& right) {
+                return left + right;
+            });
+        update_topic_usage_estimate(batch_usage, diagnostics.documents);
+    }
 
     if (verbose_ > 0) {
-        int32_t fail_converge = 0;
-        for (int i = 0; i < niters.size(); i++) {
-            if (niters[i] >= max_doc_update_iter_) {
-                fail_converge++;
-            }
-        }
-        notice("Partial fit: %d documents. Average iterations per doc: %.2f, %d documents did not reach mean change %.1e in %d iterations.", minibatch_size, std::accumulate(niters.begin(), niters.end(), 0) / static_cast<double>(niters.size()), fail_converge, mean_change_tol_, max_doc_update_iter_);
+        const double average_iterations = diagnostics.documents > 0
+            ? static_cast<double>(diagnostics.iterations)
+                / diagnostics.documents : 0.0;
+        notice("Partial fit: %d documents. Average iterations per doc: %.2f, %lld documents did not reach mean change %.1e in %d iterations.", minibatch_size, average_iterations, static_cast<long long>(diagnostics.failures), mean_change_tol_, max_doc_update_iter_);
         if (verbose_ > 2) {
             std::vector<double> scores = approx_bound(docs, gamma, false);
             scores[0] /= minibatch_size;
@@ -81,10 +117,11 @@ void LatentDirichletAllocation::svb_partial_fit(const std::vector<Document>& doc
     // Update the global parameters using an online learning rate.
     update_count_++;
     double rho = std::pow(learning_offset_ + update_count_, -learning_decay_);
-    MatrixXd update_val =
-            MatrixXd::Constant(n_topics_, n_features_, eta_) +
-            (static_cast<double>(total_doc_count_) / minibatch_size) * ss;
-    components_ = (1 - rho) * components_ + rho * update_val;
+    const double scaled_rho = rho
+        * static_cast<double>(total_doc_count_) / minibatch_size;
+    components_ *= 1.0 - rho;
+    components_.array() += rho * eta_;
+    components_.noalias() += scaled_rho * ss;
     exp_Elog_beta_ = dirichlet_expectation_2d(components_);
 }
 
@@ -125,13 +162,17 @@ int32_t LatentDirichletAllocation::svb_fit_one_document(
     // Iterative update for the document.
     double diff = 1.;
     int iter = 0;
+    VectorXd last_gamma(n_topics_);
+    VectorXd norm_phi(n_ids);
+    VectorXd ratio(n_ids);
     while (iter < max_doc_update_iter_) {
-        VectorXd last_gamma = gamma;
+        last_gamma = gamma;
         // norm_phi: |ids| x 1
-        VectorXd norm_phi = exp_Elog_beta_local.transpose() * exp_Elog_theta;
+        norm_phi.noalias() = exp_Elog_beta_local.transpose() * exp_Elog_theta;
         norm_phi.array() += eps_;
-        VectorXd ratio = doc_counts.array() / norm_phi.array();
-        gamma = exp_Elog_theta.array() * (exp_Elog_beta_local * ratio).array();
+        ratio.array() = doc_counts.array() / norm_phi.array();
+        gamma.noalias() = exp_Elog_beta_local * ratio;
+        gamma.array() *= exp_Elog_theta.array();
         // Dirichlet expectation update:
         exp_Elog_theta = dirichlet_expectation_1d(gamma, alpha_);
         // Check convergence via mean absolute change.
@@ -167,7 +208,8 @@ void LatentDirichletAllocation::set_background_prior(const VectorXd& eta0, doubl
     algo_ = InferenceType::SVB_DN;
     fix_background_ = fixed;
 }
-void LatentDirichletAllocation::set_background_prior(const std::vector<double> eta0, double a0, double b0, bool fixed) {
+void LatentDirichletAllocation::set_background_prior(
+        const std::vector<double>& eta0, double a0, double b0, bool fixed) {
     assert(algo_ == InferenceType::SVB_DN || algo_ == InferenceType::SVB);
     assert(eta0.size() == static_cast<size_t>(n_features_));
     eta0_ = VectorXd::Zero(eta0.size());
@@ -320,7 +362,8 @@ double LatentDirichletAllocation::_perplexity_precomp_distr(const std::vector<Do
     return std::exp(-perword_bound);
 }
 
-int32_t LatentDirichletAllocation::svbdn_fit_one_document(
+LatentDirichletAllocation::SvbDnDocumentFit
+LatentDirichletAllocation::svbdn_fit_one_document(
     VectorXd& gamma, VectorXd& exp_Elog_theta, const Document &doc, ArrayXd& fg_counts, uint64_t rng_stream) {
     int n_ids = doc.ids.size();
     if (gamma.size() != n_topics_) {
@@ -345,15 +388,15 @@ int32_t LatentDirichletAllocation::svbdn_fit_one_document(
         exp_Elog_theta.resize(n_topics_);
         exp_Elog_theta.setConstant(1.0 / n_topics_);
         fg_counts.resize(0);
-        return 0;
+        return {};
     }
     exp_Elog_theta = dirichlet_expectation_1d(gamma, 0); // K x 1
     // Build a submatrix for the nonzero word indices in the document.
     MatrixXd exp_Elog_beta_local(n_topics_, n_ids);
-    ArrayXd Elog_beta0_local(n_ids);
+    ArrayXd exp_Elog_beta0_local(n_ids);
     for (int j = 0; j < n_ids; j++) {
         exp_Elog_beta_local.col(j) = exp_Elog_beta_.col(doc.ids[j]);
-        Elog_beta0_local[j] = std::log(exp_Elog_beta0_[doc.ids[j]]);
+        exp_Elog_beta0_local[j] = exp_Elog_beta0_[doc.ids[j]];
     }
     Eigen::Map<const ArrayXd> doc_counts(doc.cnts.data(), n_ids);
     fg_counts.resize(n_ids);
@@ -364,22 +407,41 @@ int32_t LatentDirichletAllocation::svbdn_fit_one_document(
     // Iterative update for the document.
     double diff = 1.;
     int iter = 0;
+    double phi0_sum = 0.0;
+    VectorXd last_gamma(n_topics_);
+    VectorXd norm_phi(n_ids);
+    VectorXd ratio(n_ids);
+    ArrayXd phi0(n_ids);
+    ArrayXd background_score(n_ids);
+    ArrayXd responsibility_denominator(n_ids);
     while (iter < max_doc_update_iter_) {
-        VectorXd last_gamma = gamma;
+        last_gamma = gamma;
         // norm_phi: |ids| x 1, \sum_k exp(E[log beta_km] + E[log theta_k] )
-        VectorXd norm_phi = exp_Elog_beta_local.transpose() * exp_Elog_theta;
+        norm_phi.noalias() = exp_Elog_beta_local.transpose() * exp_Elog_theta;
         norm_phi.array() += eps_;
         // Background level update
-        ArrayXd phi0 = Elog_beta0_local + Elogit_pi - norm_phi.array().log();
-        for (auto& v : phi0) {v = expit(v);}
-        double phi0_sum = (phi0 * doc_counts).sum();
+        if (Elogit_pi >= 0.0) {
+            const double inverse_odds = std::exp(-Elogit_pi);
+            background_score = exp_Elog_beta0_local;
+            responsibility_denominator = background_score
+                + norm_phi.array() * inverse_odds;
+        } else {
+            const double odds = std::exp(Elogit_pi);
+            background_score = exp_Elog_beta0_local * odds;
+            responsibility_denominator =
+                background_score + norm_phi.array();
+        }
+        phi0 = background_score
+            / responsibility_denominator.max(eps_);
+        phi0_sum = (phi0 * doc_counts).sum();
         aj = a0_ + phi0_sum;
         bj = b0_ + cnt_sum - phi0_sum;
         Elogit_pi = psi(aj) - psi(bj);
         fg_counts = doc_counts * (1. - phi0);
         // Topic assignment update
-        VectorXd ratio = fg_counts / norm_phi.array();
-        gamma = exp_Elog_theta.array() * (exp_Elog_beta_local * ratio).array();
+        ratio.array() = fg_counts / norm_phi.array();
+        gamma.noalias() = exp_Elog_beta_local * ratio;
+        gamma.array() *= exp_Elog_theta.array();
         exp_Elog_theta = dirichlet_expectation_1d(gamma, alpha_);
         // Check convergence via mean absolute change.
         diff = (last_gamma - gamma).cwiseAbs().sum() / n_topics_;
@@ -389,25 +451,28 @@ int32_t LatentDirichletAllocation::svbdn_fit_one_document(
         }
     }
     if (verbose_ > 1) {
-        double bg_frac = 1.0 - fg_counts.sum() / cnt_sum;
+        double bg_frac = cnt_sum > 0.0 ? phi0_sum / cnt_sum : 0.0;
         notice("%s: finished after %d iterations, mean change %.1e, background fraction %.3f", __FUNCTION__, iter, diff, bg_frac);
     }
-    return iter;
+    return {iter, phi0_sum, cnt_sum - phi0_sum};
 }
 
 
 void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& docs) {
     int minibatch_size = docs.size();
-    MatrixXd gamma = MatrixXd::Zero(minibatch_size, n_topics_);
 
     tbb::combinable<MatrixXd> ss_acc{
         [&]{ return MatrixXd::Zero(n_topics_, n_features_); }
     };
-    tbb::combinable<VectorXd> ss0_acc{
-        [&]{ return VectorXd::Zero(n_features_); }
-    };
-    tbb::combinable<std::vector<int32_t>> niters_acc{
-        []{ return std::vector<int32_t>(); }
+    std::unique_ptr<tbb::combinable<VectorXd>> ss0_acc;
+    if (!fix_background_) {
+        ss0_acc = std::make_unique<tbb::combinable<VectorXd>>(
+            [&]{ return VectorXd::Zero(n_features_); });
+    }
+    tbb::combinable<DocumentFitDiagnostics> diagnostics_acc;
+    tbb::combinable<VectorXd> usage_acc{
+        [&]{ return collect_topic_usage_
+            ? VectorXd::Zero(n_topics_) : VectorXd(); }
     };
     tbb::combinable<double> phi0_acc{[]{ return 0.0; }};
     tbb::combinable<double> phi1_acc{[]{ return 0.0; }};
@@ -416,8 +481,9 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
         tbb::blocked_range<int>(0, minibatch_size),
         [&](const tbb::blocked_range<int>& range) {
         auto& local_ss   = ss_acc.local();
-        auto& local_nits = niters_acc.local();
-        auto& local_ss0  = ss0_acc.local();
+        auto& local_diagnostics = diagnostics_acc.local();
+        auto& local_usage = usage_acc.local();
+        VectorXd* local_ss0 = ss0_acc ? &ss0_acc->local() : nullptr;
         auto& local_phi0 = phi0_acc.local();
         auto& local_phi1 = phi1_acc.local();
         VectorXd phi_k(n_topics_);
@@ -431,20 +497,31 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
             int n_ids = doc.ids.size();
             VectorXd gamma_d, exp_Elog_theta_d;
             ArrayXd fg_counts;
-            int iter = svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts, rng_stream);
-            gamma.row(d) = gamma_d.transpose();
-            local_nits.push_back(iter);
-            double c = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
-            double c1 = fg_counts.sum();
-            local_phi0 += c - c1;
-            local_phi1 += c1;
+            const SvbDnDocumentFit fit = svbdn_fit_one_document(
+                gamma_d, exp_Elog_theta_d, doc, fg_counts, rng_stream);
+            local_diagnostics.iterations += fit.iterations;
+            local_diagnostics.failures +=
+                fit.iterations >= max_doc_update_iter_;
+            ++local_diagnostics.documents;
+            local_phi0 += fit.background_count;
+            local_phi1 += fit.foreground_count;
+            if (collect_topic_usage_) {
+                const double total = gamma_d.sum();
+                if (total > eps_ && std::isfinite(total)) {
+                    local_usage.noalias() += gamma_d / total;
+                } else {
+                    local_usage.array() += 1.0 / n_topics_;
+                }
+            }
             // update sufficient statistics.
             for (int j = 0; j < n_ids; j++) {
                 int word_id = doc.ids[j];
                 phi_k = exp_Elog_theta_d.array() * exp_Elog_beta_.col(word_id).array();
                 phi_k /= (phi_k.sum() + eps_);
                 local_ss.col(word_id) += phi_k * fg_counts[j];
-                local_ss0[word_id] += doc.cnts[j] - fg_counts[j];
+                if (local_ss0) {
+                    (*local_ss0)[word_id] += doc.cnts[j] - fg_counts[j];
+                }
             }
         }
     });
@@ -453,16 +530,20 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
     MatrixXd ss = ss_acc.combine(
         [](const MatrixXd &A, const MatrixXd &B) {return A + B;}
     );
-    VectorXd ss0 = ss0_acc.combine(
-        [](const VectorXd &A, const VectorXd &B) {return A + B;}
-    );
-    std::vector<int32_t> niters = niters_acc.combine(
-        [](const std::vector<int32_t> &a, const std::vector<int32_t> &b) {
-            std::vector<int32_t> out = a;
-            out.insert(out.end(), b.begin(), b.end());
-            return out;
-        }
-    );
+    VectorXd ss0;
+    if (ss0_acc) {
+        ss0 = ss0_acc->combine(
+            [](const VectorXd &A, const VectorXd &B) {return A + B;});
+    }
+    const DocumentFitDiagnostics diagnostics = diagnostics_acc.combine(
+        combine_diagnostics);
+    if (collect_topic_usage_) {
+        const VectorXd batch_usage = usage_acc.combine(
+            [](const VectorXd& left, const VectorXd& right) {
+                return left + right;
+            });
+        update_topic_usage_estimate(batch_usage, diagnostics.documents);
+    }
     double phi0 = phi0_acc.combine(
         [](double a, double b) {return a + b;}
     );
@@ -473,26 +554,24 @@ void LatentDirichletAllocation::svbdn_partial_fit(const std::vector<Document>& d
     b_ += phi1;
 
     if (verbose_ > 0) {
-        int32_t fail_converge = 0;
-        for (int i = 0; i < niters.size(); i++) {
-            if (niters[i] >= max_doc_update_iter_) {
-                fail_converge++;
-            }
-        }
-        notice("Partial fit: %d documents. Average iterations per doc: %.2f, %d documents did not reach mean change %.1e in %d iterations. Average background fraction: %.3f", minibatch_size, std::accumulate(niters.begin(), niters.end(), 0) / static_cast<double>(niters.size()), fail_converge, mean_change_tol_, max_doc_update_iter_, phi0/(phi0 + phi1));
+        const double average_iterations = diagnostics.documents > 0
+            ? static_cast<double>(diagnostics.iterations)
+                / diagnostics.documents : 0.0;
+        notice("Partial fit: %d documents. Average iterations per doc: %.2f, %lld documents did not reach mean change %.1e in %d iterations. Average background fraction: %.3f", minibatch_size, average_iterations, static_cast<long long>(diagnostics.failures), mean_change_tol_, max_doc_update_iter_, phi0/(phi0 + phi1));
     }
 
     // Update the global parameters using an online learning rate.
     update_count_++;
     double rho = std::pow(learning_offset_ + update_count_, -learning_decay_);
     double scale = static_cast<double>(total_doc_count_) / minibatch_size;
-    MatrixXd update_val =
-            MatrixXd::Constant(n_topics_, n_features_, eta_) + scale * ss;
-    components_ = (1 - rho) * components_ + rho * update_val;
+    components_ *= 1.0 - rho;
+    components_.array() += rho * eta_;
+    components_.noalias() += (rho * scale) * ss;
     exp_Elog_beta_ = dirichlet_expectation_2d(components_);
-    VectorXd update_val0 = eta0_ + scale * ss0;
     if (!fix_background_) {
-        lambda0_ = (1 - rho) * lambda0_ + rho * update_val0;
+        lambda0_ *= 1.0 - rho;
+        lambda0_.noalias() += rho * eta0_;
+        lambda0_.noalias() += (rho * scale) * ss0;
         exp_Elog_beta0_ = dirichlet_expectation_1d(lambda0_, 0);
     }
 }

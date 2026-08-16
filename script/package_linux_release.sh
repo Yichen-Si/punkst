@@ -134,7 +134,8 @@ cmake -S "$repo_root" -B "$build_dir" \
   -DPUNKST_RUNTIME_OUTPUT_DIRECTORY="$build_dir/bin" \
   -DPUNKST_USE_ORIGIN_RPATH=ON \
   "${cpu_flags[@]}" \
-  ${cmake_extra[@]+"${cmake_extra[@]}"}
+  ${cmake_extra[@]+"${cmake_extra[@]}"} \
+  -DPUNKST_ENABLE_FAISS_ANN=OFF
 
 cmake --build "$build_dir" --parallel "$jobs"
 
@@ -178,10 +179,11 @@ source_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf unkno
 source_status=$(git -C "$repo_root" status --short 2>/dev/null | sed 's/"/\\"/g' || true)
 EOF
 
-faiss_enabled=$(sed -n 's/^PUNKST_ENABLE_FAISS_ANN:BOOL=//p' "$build_dir/CMakeCache.txt" | tail -n 1)
+faiss_available=$(sed -n 's/^PUNKST_HAVE_FAISS_ANN:INTERNAL=//p' "$build_dir/CMakeCache.txt" | tail -n 1)
 faiss_source=$(sed -n 's/^PUNKST_FAISS_SOURCE_DIR:PATH=//p' "$build_dir/CMakeCache.txt" | tail -n 1)
 faiss_opt=$(sed -n 's/^FAISS_OPT_LEVEL:STRING=//p' "$build_dir/CMakeCache.txt" | tail -n 1)
-if [ "$faiss_enabled" = "ON" ]; then
+if [ "$faiss_available" = "1" ]; then
+  faiss_enabled=ON
   if [ -z "$faiss_source" ] || [ ! -f "$faiss_source/LICENSE" ]; then
     printf 'ERROR: Faiss is enabled but its source/license cannot be found.\n' >&2
     exit 1
@@ -189,11 +191,12 @@ if [ "$faiss_enabled" = "ON" ]; then
   faiss_revision=$(git -C "$faiss_source" rev-parse HEAD 2>/dev/null || printf unknown)
   cp "$faiss_source/LICENSE" "$stage_dir/LICENSE.faiss"
 else
+  faiss_enabled=OFF
   faiss_revision=disabled
   faiss_opt=disabled
 fi
 cat >> "$stage_dir/BUILDINFO.txt" <<EOF
-faiss_enabled=${faiss_enabled:-OFF}
+faiss_enabled=$faiss_enabled
 faiss_revision=$faiss_revision
 faiss_opt_level=${faiss_opt:-unknown}
 EOF

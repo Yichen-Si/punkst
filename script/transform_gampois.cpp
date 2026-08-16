@@ -1,8 +1,8 @@
 #include "gamma_pois_topic.hpp"
 #include "gamma_pois_topic_v1.hpp"
 #include "transform_helper.hpp"
-#include "partition_classifier.hpp"
-#include "partition_classifier_lrvb.hpp"
+#include "clustering_core/partition_classifier.hpp"
+#include "clustering_core/partition_classifier_lrvb.hpp"
 #include "factor_result_stream.hpp"
 
 #include <algorithm>
@@ -38,10 +38,10 @@ GammaPoissonStateKind gamma_poisson_state_kind(const std::string& path) {
     if (header == "#punkst_gamma_pois_state_v4") {
         return GammaPoissonStateKind::HierarchicalV1;
     }
-    if (header == "#punkst_gamma_pois_state_v5") {
+    if (header == "#punkst_gamma_pois_state_v8") {
         return GammaPoissonStateKind::NormalizedMap;
     }
-    error("Gamma-Poisson state %s has unsupported header '%s'; expected v4 or v5",
+    error("Gamma-Poisson state %s has unsupported header '%s'; expected v4 or v8",
         path.c_str(), header.c_str());
     return GammaPoissonStateKind::NormalizedMap;
 }
@@ -229,8 +229,8 @@ VectorXd gammaPoissonTopicReference(GammaPoisson4HexInterface& gp) {
 }
 
 struct ResidualState : feature_diagnostics::FeatureResidualState {
+    GammaPoisson4HexInterface& model;
     const MatrixXd& expectedBeta;
-    const MatrixXd& betaAllocationKernel;
     const VectorXd& topicCapacity;
     const VectorXd& featureDispersion;
     bool hasFeatureDispersion;
@@ -258,8 +258,8 @@ struct ResidualState : feature_diagnostics::FeatureResidualState {
                       gp.getExpectedBeta(), gammaPoissonTopicReference(gp))
                   : feature_diagnostics::CofeatureModel{},
               cheapDiagnostics, useTrainingPrevalence, tempDir),
+          model(gp),
           expectedBeta(gp.getExpectedBeta()),
-          betaAllocationKernel(gp.getBetaAllocationKernel()),
           topicCapacity(gp.getTopicCapacity()),
           featureDispersion(gp.getFeatureDispersion()),
           hasFeatureDispersion(gp.hasFeatureDispersion()),
@@ -429,9 +429,6 @@ private:
             error("%s: classifier posterior batch dimensions do not match",
                 __func__);
         }
-        const VectorXd priorRate = gp.getThetaPriorRate();
-        const VectorXd* dispersion = gp.hasFeatureDispersion()
-            ? &gp.getFeatureDispersion() : nullptr;
         std::vector<punkst::partition_classifier::PropagatedPrediction>
             predictions(docs.size());
         std::vector<const punkst::partition_classifier::Model*>
@@ -447,9 +444,7 @@ private:
                     punkst::partition_classifier::propagate_gamma_poisson(
                     *classifierModels[static_cast<size_t>(document)],
                     posteriors[static_cast<size_t>(document)],
-                    docs[static_cast<size_t>(document)], gp.getTopicCapacity(),
-                    gp.getBetaAllocationKernel(), gp.getExpectedBeta(),
-                    gp.getThetaPriorShape(), priorRate, dispersion,
+                    docs[static_cast<size_t>(document)], gp,
                     classifierOutput->propagation);
             });
         for (size_t document = 0; document < docs.size(); ++document) {
@@ -468,9 +463,6 @@ private:
             error("%s: classifier warm-start batch dimensions do not match",
                 __func__);
         }
-        const VectorXd priorRate = gp.getThetaPriorRate();
-        const VectorXd* dispersion = gp.hasFeatureDispersion()
-            ? &gp.getFeatureDispersion() : nullptr;
         std::vector<punkst::partition_classifier::PropagatedPrediction>
             predictions(docs.size());
         std::vector<const punkst::partition_classifier::Model*>
@@ -487,10 +479,8 @@ private:
                         propagate_gamma_poisson_from_composition(
                     *classifierModels[static_cast<size_t>(document)],
                     compositions.row(document).transpose(),
-                    docs[static_cast<size_t>(document)], gp.getTopicCapacity(),
-                    gp.getBetaAllocationKernel(), gp.getExpectedBeta(),
-                    gp.getThetaPriorShape(), priorRate, gp.getSizeFactor(),
-                    dispersion, classifierOutput->propagation);
+                    docs[static_cast<size_t>(document)], gp,
+                    classifierOutput->propagation);
             });
         for (size_t document = 0; document < docs.size(); ++document) {
             classifierOutput->write(ids[document], predictions[document],
@@ -617,7 +607,7 @@ private:
                 feature_diagnostics::make_cofeature_batch_context(
                     docs, residualState->cofeatureModel, threadHint);
         }
-        RowMajorMatrixXd thetaKernel(nDocs, K);
+        RowMajorMatrixXd thetaLog(nDocs, K);
         VectorXd unitResidual = VectorXd::Zero(nDocs);
         VectorXd unitCosine;
         VectorXd unitEntropy = VectorXd::Zero(nDocs);
@@ -699,16 +689,10 @@ private:
                         }
                         unitEntropy(static_cast<int32_t>(i)) = entropy;
                     }
-                    double maxLog = -std::numeric_limits<double>::infinity();
                     for (int32_t k = 0; k < K; ++k) {
                         const double value = psi(posterior.shape(k))
                             - std::log(std::max(posterior.rate(k), 1e-12));
-                        thetaKernel(static_cast<int32_t>(i), k) = value;
-                        maxLog = std::max(maxLog, value);
-                    }
-                    for (int32_t k = 0; k < K; ++k) {
-                        thetaKernel(static_cast<int32_t>(i), k) = std::exp(
-                            thetaKernel(static_cast<int32_t>(i), k) - maxLog);
+                        thetaLog(static_cast<int32_t>(i), k) = value;
                     }
                     double residual =
                         exposureTheta.dot(residualState->topicCapacity);
@@ -828,17 +812,9 @@ private:
                                 cofeatureContext, d, w, cofeatureSums);
                         }
 
-                        allocation =
-                            thetaKernel.row(static_cast<int32_t>(d))
-                                .transpose().array()
-                            * residualState->betaAllocationKernel.col(w).array();
-                        const double allocationTotal = allocation.sum();
-                        if (!std::isfinite(allocationTotal)
-                                || allocationTotal <= 0.0) {
-                            error("%s: invalid topic allocation for feature %d",
-                                __func__, w);
-                        }
-                        allocation /= allocationTotal;
+                        residualState->model.normalizeTopicAllocation(
+                            thetaLog.row(static_cast<int32_t>(d)).transpose(),
+                            w, allocation);
                         assigned.noalias() += observed * allocation;
 
                         double epsilon = 1.0;

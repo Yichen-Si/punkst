@@ -90,22 +90,77 @@ else()
   message(STATUS "Using Eigen k-NN (developer CBLAS comparison disabled)")
 endif()
 
+option(ENABLE_PORTABLE_BUILD "Disable architecture-specific tuning flags for maximum CPU portability" OFF)
+option(ENABLE_X86_64_V3 "Enable -march=x86-64-v3 (requires compatible x86_64 CPU at runtime)" OFF)
+option(ENABLE_X86_64_V4 "Enable -march=x86-64-v4 (requires compatible AVX-512 x86_64 CPU at runtime)" OFF)
+if (ENABLE_X86_64_V3 AND ENABLE_X86_64_V4)
+  message(FATAL_ERROR "ENABLE_X86_64_V3 and ENABLE_X86_64_V4 are mutually exclusive.")
+endif()
+
 # Optional Faiss approximate-neighbor indexes. The pinned source checkout is
 # expected at ext/faiss for production builds; PUNKST_FAISS_SOURCE_DIR permits
-# an external checkout for development and packaging.
-option(PUNKST_ENABLE_FAISS_ANN "Build Faiss HNSW and NN-descent k-NN backends" OFF)
+# an external checkout for development and packaging. AUTO enables Faiss when
+# its source and build prerequisites are available, while explicit ON is strict.
+set(PUNKST_ENABLE_FAISS_ANN AUTO CACHE STRING
+  "Build Faiss HNSW and NN-descent k-NN backends: AUTO, ON, or OFF")
+set_property(CACHE PUNKST_ENABLE_FAISS_ANN PROPERTY STRINGS AUTO ON OFF)
 set(PUNKST_FAISS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ext/faiss"
   CACHE PATH "Pinned Faiss source checkout used by PUNKST_ENABLE_FAISS_ANN")
-set(PUNKST_HAVE_FAISS_ANN 0)
-if (PUNKST_ENABLE_FAISS_ANN)
+
+string(TOUPPER "${PUNKST_ENABLE_FAISS_ANN}" PUNKST_FAISS_ANN_MODE)
+if (NOT PUNKST_FAISS_ANN_MODE STREQUAL "AUTO"
+    AND NOT PUNKST_FAISS_ANN_MODE STREQUAL "ON"
+    AND NOT PUNKST_FAISS_ANN_MODE STREQUAL "OFF")
+  message(FATAL_ERROR
+    "PUNKST_ENABLE_FAISS_ANN must be AUTO, ON, or OFF; got '${PUNKST_ENABLE_FAISS_ANN}'")
+endif()
+
+set(PUNKST_HAVE_FAISS_ANN 0 CACHE INTERNAL
+  "Whether Faiss ANN support is available in this build" FORCE)
+set(PUNKST_FAISS_UNAVAILABLE_REASONS)
+if (NOT PUNKST_FAISS_ANN_MODE STREQUAL "OFF")
   if (CMAKE_VERSION VERSION_LESS 3.24)
-    message(FATAL_ERROR "PUNKST_ENABLE_FAISS_ANN requires CMake 3.24 or newer")
+    list(APPEND PUNKST_FAISS_UNAVAILABLE_REASONS "CMake 3.24 or newer is required")
   endif()
-  if (NOT EXISTS "${PUNKST_FAISS_SOURCE_DIR}/faiss/IndexHNSW.h"
+  if (NOT EXISTS "${PUNKST_FAISS_SOURCE_DIR}/CMakeLists.txt"
+      OR NOT EXISTS "${PUNKST_FAISS_SOURCE_DIR}/faiss/IndexHNSW.h"
       OR NOT EXISTS "${PUNKST_FAISS_SOURCE_DIR}/faiss/IndexNNDescent.h")
-    message(FATAL_ERROR
-      "Pinned Faiss source is missing at ${PUNKST_FAISS_SOURCE_DIR}; initialize ext/faiss or set PUNKST_FAISS_SOURCE_DIR")
+    list(APPEND PUNKST_FAISS_UNAVAILABLE_REASONS
+      "the pinned Faiss source is missing or incomplete at ${PUNKST_FAISS_SOURCE_DIR}")
   endif()
+  if (NOT "cxx_std_20" IN_LIST CMAKE_CXX_COMPILE_FEATURES)
+    list(APPEND PUNKST_FAISS_UNAVAILABLE_REASONS
+      "the C++ compiler does not advertise C++20 support")
+  endif()
+
+  find_package(OpenMP QUIET COMPONENTS CXX)
+  if (NOT OpenMP_CXX_FOUND)
+    list(APPEND PUNKST_FAISS_UNAVAILABLE_REASONS "OpenMP C++ was not found")
+  endif()
+  find_package(BLAS QUIET)
+  if (NOT BLAS_FOUND)
+    list(APPEND PUNKST_FAISS_UNAVAILABLE_REASONS "BLAS was not found")
+  endif()
+  find_package(LAPACK QUIET)
+  if (NOT LAPACK_FOUND)
+    list(APPEND PUNKST_FAISS_UNAVAILABLE_REASONS "LAPACK was not found")
+  endif()
+
+  if (PUNKST_FAISS_UNAVAILABLE_REASONS)
+    list(JOIN PUNKST_FAISS_UNAVAILABLE_REASONS "; " PUNKST_FAISS_UNAVAILABLE_MESSAGE)
+    if (PUNKST_FAISS_ANN_MODE STREQUAL "ON")
+      message(FATAL_ERROR
+        "PUNKST_ENABLE_FAISS_ANN=ON, but Faiss cannot be configured: ${PUNKST_FAISS_UNAVAILABLE_MESSAGE}")
+    endif()
+    message(STATUS
+      "Faiss ANN unavailable; building without it: ${PUNKST_FAISS_UNAVAILABLE_MESSAGE}")
+  else()
+    set(PUNKST_HAVE_FAISS_ANN 1 CACHE INTERNAL
+      "Whether Faiss ANN support is available in this build" FORCE)
+  endif()
+endif()
+
+if (PUNKST_HAVE_FAISS_ANN)
   set(FAISS_ENABLE_GPU OFF CACHE BOOL "" FORCE)
   set(FAISS_ENABLE_CUVS OFF CACHE BOOL "" FORCE)
   set(FAISS_ENABLE_ROCM OFF CACHE BOOL "" FORCE)
@@ -116,7 +171,10 @@ if (PUNKST_ENABLE_FAISS_ANN)
   set(FAISS_ENABLE_METAL OFF CACHE BOOL "" FORCE)
   set(FAISS_ENABLE_SVS OFF CACHE BOOL "" FORCE)
   set(FAISS_USE_LTO OFF CACHE BOOL "" FORCE)
-  if (ENABLE_X86_64_V4)
+  if (ENABLE_PORTABLE_BUILD)
+    set(FAISS_OPT_LEVEL generic CACHE STRING "" FORCE)
+    set(PUNKST_FAISS_TARGET faiss)
+  elseif (ENABLE_X86_64_V4)
     set(FAISS_OPT_LEVEL avx512 CACHE STRING "" FORCE)
     set(PUNKST_FAISS_TARGET faiss_avx512)
   elseif (ENABLE_X86_64_V3)
@@ -130,8 +188,12 @@ if (PUNKST_ENABLE_FAISS_ANN)
   set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
   add_subdirectory("${PUNKST_FAISS_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}/faiss" EXCLUDE_FROM_ALL)
-  set(PUNKST_HAVE_FAISS_ANN 1)
-  message(STATUS "Enabled Faiss HNSW and NN-descent k-NN backends")
+  message(STATUS
+    "Enabled Faiss HNSW and NN-descent k-NN backends (${PUNKST_FAISS_ANN_MODE})")
+else()
+  if (PUNKST_FAISS_ANN_MODE STREQUAL "OFF")
+    message(STATUS "Faiss HNSW and NN-descent k-NN backends are disabled (OFF)")
+  endif()
 endif()
 
 option(ENABLE_IMAGE_OUTPUT "Build PNG image output commands" ON)
@@ -171,11 +233,13 @@ set(CLUSTERING_CORE_SOURCE_FILES
     src/clustering_core/projection.cpp
     src/clustering_core/qda_projection.hpp
     src/clustering_core/qda_projection.cpp
-    src/linear_embedding.hpp
-    src/linear_embedding.cpp
+    src/clustering_core/partition_classifier.hpp
+    src/clustering_core/partition_classifier.cpp
+    src/clustering_core/partition_classifier_lrvb.hpp
+    src/clustering_core/partition_classifier_lrvb.cpp
 )
 
-if (PUNKST_ENABLE_FAISS_ANN)
+if (PUNKST_HAVE_FAISS_ANN)
   add_library(punkst_faiss_ann STATIC
     src/clustering_core/faiss_ann.hpp
     src/clustering_core/faiss_ann.cpp
@@ -229,11 +293,9 @@ set(SOURCE_FILES
     src/gamma_pois_topic_v1.cpp
     src/gamma_pois_dispersion.hpp
     src/gamma_pois_dispersion.cpp
-    src/partition_classifier.hpp
-    src/partition_classifier.cpp
-    src/partition_classifier_lrvb.hpp
-    src/partition_classifier_lrvb.cpp
     ${CLUSTERING_CORE_SOURCE_FILES}
+    src/linear_embedding.hpp
+    src/linear_embedding.cpp
     src/hdp.hpp
     src/hdp.cpp
     src/topic_svb.hpp
@@ -344,7 +406,8 @@ set(SOURCE_FILES
 if (ENABLE_IMAGE_OUTPUT)
   list(APPEND SOURCE_FILES
     src/image_utils.hpp
-    src/image_utils.cpp
+    src/png_utils.cpp
+    src/tiff_utils.cpp
     src/image_pmtiles.hpp
     src/image_pmtiles.cpp
     script/draw_pixel_factors.cpp
@@ -425,8 +488,6 @@ if (ENABLE_LTO)
   endif()
 endif()
 
-option(ENABLE_PORTABLE_BUILD "Disable architecture-specific tuning flags for maximum CPU portability" OFF)
-
 option(ENABLE_NATIVE_ARCH "Enable -march=native (not portable across different CPUs)" ON)
 if (ENABLE_PORTABLE_BUILD)
   message(STATUS "ENABLE_PORTABLE_BUILD=ON: skipping -march=native, -march=x86-64-v3, and -march=x86-64-v4.")
@@ -438,12 +499,6 @@ elseif (ENABLE_NATIVE_ARCH)
   else()
     message(WARNING "Compiler does not support -march=native; ignoring.")
   endif()
-endif()
-
-option(ENABLE_X86_64_V3 "Enable -march=x86-64-v3 (requires compatible x86_64 CPU at runtime)" OFF)
-option(ENABLE_X86_64_V4 "Enable -march=x86-64-v4 (requires compatible AVX-512 x86_64 CPU at runtime)" OFF)
-if (ENABLE_X86_64_V3 AND ENABLE_X86_64_V4)
-  message(FATAL_ERROR "ENABLE_X86_64_V3 and ENABLE_X86_64_V4 are mutually exclusive.")
 endif()
 
 if (ENABLE_PORTABLE_BUILD)
@@ -494,7 +549,7 @@ target_link_libraries(${APP_EXE} PRIVATE
     $<$<CXX_COMPILER_ID:IntelLLVM>:stdc++fs>
 )
 
-if (PUNKST_ENABLE_FAISS_ANN)
+if (PUNKST_HAVE_FAISS_ANN)
   target_link_libraries(${APP_EXE} PRIVATE
     punkst_faiss_ann ${PUNKST_FAISS_TARGET})
 endif()

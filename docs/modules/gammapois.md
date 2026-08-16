@@ -3,8 +3,8 @@
 `punkst` provides two Gamma-Poisson topic models for generic
 count/non-negative data.
 
-- `punkst gamma-pois-fit`: fit the hierarchical Gamma beta/xi model
 - `punkst gamma-pois-fit-map`: fit the normalized MAP model
+- `punkst gamma-pois-fit`: fit the hierarchical model with SVI
 - `punkst gamma-pois-transform`: project units with either fitted state
 
 The commands accept either custom sparse text (from `tiles2hex`) or 10X MEX
@@ -17,7 +17,7 @@ input. Dense `{prefix}.results.tsv` output can be clustered directly with
 punkst gamma-pois-fit-map \
   --in-data hex_12.txt --in-meta hex_12.json \
   --features features_with_totals.tsv \
-  --n-topics 12 --n-epochs 4 --regularization 0.1 \
+  --n-topics 12 --n-epochs 4 \
   --estimate-dispersion --dispersion-init-epochs 1 \
   --out-prefix gp_h12_k12 --residuals \
   --transform --threads 4 --seed 1
@@ -73,7 +73,34 @@ $$
 
 The ownership penalty discourages redundant feature ownership. Its CLI
 strength is dimensionless: $\lambda$ is scaled by effective token mass per
-topic. It is disabled by default.
+topic. `--regularization-mode prevalence` weights topic rows by allocated
+topic mass before computing feature ownership; `uniform` is the default. It is
+disabled by default.
+
+The normalized MAP fitter has two global allocation modes. The default
+`lda-compatible` mode is the LDA-matched formulation: it retains a Dirichlet
+concentration $s_r$ and allocates with
+
+$$
+\widetilde\beta_{rw}
+=\exp\{\psi(s_r\beta_{rw})-\psi(s_r)\}.
+$$
+
+Without dispersion or ownership regularization, setting
+$\alpha=K\alpha_{\rm LDA}$ and $M_0=V\eta_{\rm LDA}$ makes its local and global
+updates the Gamma-Poisson representation of standard LDA. After dispersion is
+installed, $s_r\beta_r$ is a moment-matched effective Dirichlet used only for
+the allocation kernel; the dictionary M-step remains the dispersion-aware MAP
+update below.
+
+Accordingly, the no-dispersion, no-ownership path is the exact LDA-compatible
+variational core. Dispersion and ownership are explicit hybrid extensions:
+they retain the effective expected-log allocation kernel but update a MAP
+dictionary, and are not claimed to optimize one standard LDA ELBO.
+
+The legacy `map-mean` mode allocates directly with the normalized dictionary
+mean. It remains available for reproducing earlier normalized Gamma-Poisson
+fits, but is not the default.
 
 When the effective ownership penalty is zero, every global update exactly
 maximizes the current smoothed sufficient-statistic target. Without dispersion
@@ -84,9 +111,10 @@ $$
 \beta_{rw}=\frac{C_{rw}+M_0/V}{\Delta_{rw}+\mu_r},
 $$
 
-where the scalar $\mu_r$ is solved so the row sums to one. The bounded logit
-optimizer is reserved for ownership-regularized targets and zero-prior
-dispersion boundary cases.
+where the scalar $\mu_r$ is solved so the row sums to one. An
+ownership-regularized update uses a monotone minorize-maximize solver with a
+scalar normalization solve per topic. The bounded logit optimizer is reserved
+for zero-prior boundary cases.
 
 Optional feature dispersion uses a mean-one positive-cell multiplier
 
@@ -104,8 +132,11 @@ q(\epsilon_{dw})=\mathrm{Gamma}\left(
 \tau_w+n_d\sum_rE[\theta_{dr}]\beta_{rw}\right).
 $$
 
-Zero cells retain $\epsilon_{dw}=1$, preserving sparse computation. The MAP
-model supports only the symmetric theta prior. The separate
+Zero cells retain $\epsilon_{dw}=1$, preserving sparse computation. In a
+three-seed real-data benchmark, a blockwise exact zero-aware update produced
+nearly identical well-used factors to this sparse treatment, so dense
+zero-aware dispersion is not part of the production path. The MAP model
+supports only the symmetric theta prior. The separate
 `gamma-pois-fit` command retains the beta/xi hierarchy and optional
 empirical-Bayes topic-rate mode.
 
@@ -264,16 +295,28 @@ Standard execution controls. `--debug` limits the number of units processed.
 
 ### Model hyperparameters
 
+`--inference-mode`
+Global allocation inference, either `lda-compatible` (the default) or
+`map-mean`. The default matches LDA initialization, its first and later SVI
+updates, and its $\exp(E[\log\beta])$ allocation kernel. The fitted mode is
+stored in the state and cannot be overridden during transform.
+
 `--theta-concentration`
 Total concentration $\alpha$ in the symmetric
 $\mathrm{Gamma}(\alpha/K,\alpha)$ theta prior. Default: `1`.
 
 `--dictionary-prior-mass`
 Total anti-collapse pseudocount mass $M_0$ per topic. Each feature receives
-$M_0/V$. Default: `1`.
+$M_0/V$. When omitted, the default is $V/K$ in `lda-compatible` mode and `1`
+in legacy `map-mean` mode.
 
 `--regularization`
 Dimensionless ownership-entropy strength. Default: `0` (disabled).
+
+`--regularization-mode`
+Ownership weighting, either `uniform` (default) or `prevalence`. Prevalence
+weighting scales each topic by its fraction of allocated token mass, normalized
+to mean one. The mode is stored in the fitted state.
 
 `--regularize-warmup-epochs`, `--regularize-ramp-epochs`
 Keep ownership regularization off for the warmup, then ramp it linearly by
@@ -284,26 +327,43 @@ by the ownership warmup.
 `--final-refine-passes`, `--final-refine-tol`
 Optionally freeze the dictionary, reaccumulate full-data sparse sufficient
 statistics, and optimize the fixed target. Unregularized refinement uses the
-exact M-step; ownership-regularized refinement uses in-tree L-BFGS. Defaults:
-`0` passes and tolerance `1e-5`.
+exact M-step; ownership-regularized refinement uses monotone MM iterations.
+Defaults:
+`0` passes and tolerance `1e-5`. A tolerance of zero disables early stopping
+and therefore runs exactly the requested number of passes.
 
 ### Other fitting options
 
+`--in-state`
+Start a new matched refinement segment from a normalized Gamma-Poisson state.
+The state supplies the feature panel, topics, priors, inference mode,
+dictionary, and effective topic concentrations. The current input must have
+the identical retained feature order, raw training totals, and feature
+weights. Online running statistics are deliberately cleared: this is not an
+exact continuation of the previous SVI history. With `--n-epochs 0`, at least
+one `--final-refine-passes` pass is required. `--in-state` is mutually
+exclusive with `--model-init`; dispersion may be supplied with
+`--icol-dispersion` before refinement.
+
 `--random-init-shape`
 Shape of the mean-one Gamma noise used before proportional fitting initializes
-the topic profiles. Default: `2`. Larger values reduce random contrast. This
-option has no effect when
-`--model-init` is supplied.
+the legacy `map-mean` topic profiles. Default: `2`. Larger values reduce random
+contrast. The default `lda-compatible` mode uses LDA's fixed
+`Gamma(100, 0.01)` initialization instead, so this option has no effect there.
 
 `--model-init`
 Topic-model TSV used only to initialize the Gamma-Poisson topic profiles. The
 file must contain the same number of topics and exactly the retained feature
 set; feature rows may be in a different order. Each topic is normalized and
 stored directly as a probability row before training. It does not add
-pseudo-count strength or constrain subsequent updates.
+pseudo-count strength or constrain subsequent updates. This option is limited
+to legacy `map-mean` inference because a normalized model file lacks the
+effective Dirichlet concentrations required by `lda-compatible`; use
+`--in-state` to continue a matched model.
 
 `--sort-topics`
-Sort topics by fitted corpus usage before writing outputs.
+Sort topics by fitted exposure-weighted corpus prevalence before writing
+outputs.
 
 `--transform`
 Transform the input units after fitting and write `{prefix}.results.tsv` and
@@ -333,8 +393,10 @@ Projects new units with a fitted Gamma-Poisson state.
 ### Required
 
 `--in-state`
-Input Gamma-Poisson v4 or v5 state file written by either fit command. The
+Input Gamma-Poisson v4 or v8 state file written by either fit command. The
 state header selects the hierarchical or normalized MAP inference core.
+Normalized v5-v7 states must be refitted because they lack exposure-weighted
+training prevalence.
 
 `--out-prefix`
 Output prefix.
@@ -470,7 +532,7 @@ Execution controls.
 `--classifier-model` and `--classifier-*`
 Write calibrated predictions of a fixed partition and optionally propagate the
 local Gamma-Poisson shape/rate posterior uncertainty. See the
-[probabilistic partition classifier](partition-classifier.md).
+[probabilistic partition classifier](classifier.md).
 
 `--out-prefix-classifier`
 Use a separate prefix for `.classifications.tsv` and
@@ -483,12 +545,13 @@ Use a separate prefix for `.classifications.tsv` and
 Feature-by-topic matrix containing the normalized MAP topic dictionaries.
 
 `{prefix}.state.tsv`
-Full Gamma-Poisson state required by `gamma-pois-transform`. State v5 stores
+Full Gamma-Poisson state required by `gamma-pois-transform`. State v8 stores
 the normalized dictionary directly, the observed-total exposure convention,
 theta/MAP/ownership settings, raw feature totals, optional feature weights,
-topic usage, and optional dispersion. State v4 stores the hierarchical model
-used by `gamma-pois-fit`; the shared transform command accepts both v4 and v5.
-Older state versions are rejected.
+exposure-weighted topic mass, inference mode, ownership weighting, effective
+topic concentrations, and optional dispersion. State v4 is the hierarchical
+model used by `gamma-pois-fit`; earlier normalized MAP state versions are
+rejected with a retraining message.
 
 `{prefix}.features.tsv`
 Written only when `--features` is not supplied and the input is in 10X MEX format.
@@ -535,6 +598,11 @@ When feature dispersion is enabled, the same marginal mean is used because
 $E[\epsilon_{dw}]=1$. Dispersion affects these statistics indirectly through
 the inferred theta posterior; the fitted mean is not multiplied by the
 observation-conditioned $E[\epsilon_{dw}\mid n_{dw}]$.
+
+These residual and deviance values are in-sample posterior plug-in summaries,
+not unbiased held-out estimates. The deviance columns use the Poisson mean
+above even when the fitted hierarchy includes feature dispersion; they are not
+the deviance of the augmented Gamma-Poisson likelihood.
 
 `{prefix}.feature_residuals.tsv`
 Written with the unit statistics. Rows cover model features only, including

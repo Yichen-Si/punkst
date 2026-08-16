@@ -1,7 +1,7 @@
-#include "partition_classifier.hpp"
 #include "punkst.h"
 #include "dataunits.hpp"
 #include "utils.h"
+#include "clustering_core/partition_classifier.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,6 +9,7 @@
 #include <functional>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <queue>
 #include <stdexcept>
@@ -34,8 +35,43 @@ public:
 
     const std::vector<std::string>& topics() const { return topics_; }
 
+    void validate_each(const std::function<void(uint64_t,
+            const std::string&)>& callback) const {
+        scan(true, [&](uint64_t row, const std::string& identifier,
+                const std::vector<std::string>& fields, uint64_t line_number) {
+            validate_composition(fields, line_number);
+            callback(row, identifier);
+        });
+    }
+
+    void for_each_selected(const std::function<bool(uint64_t,
+            const std::string&)>& selected,
+            const std::function<void(uint64_t, const std::string&,
+                const Eigen::VectorXd&)>& callback) const {
+        scan(false, [&](uint64_t row, const std::string& identifier,
+                const std::vector<std::string>& fields, uint64_t line_number) {
+            if (selected(row, identifier)) {
+                callback(row, identifier,
+                    parse_composition(fields, line_number));
+            }
+        });
+    }
+
     void for_each(const std::function<void(uint64_t, const std::string&,
-            const Eigen::VectorXd&)>& callback) const {
+            const Eigen::VectorXd&)>& callback,
+            bool validate_identifiers = true) const {
+        scan(validate_identifiers, [&](uint64_t row,
+                const std::string& identifier,
+                const std::vector<std::string>& fields,
+                uint64_t line_number) {
+            callback(row, identifier,
+                parse_composition(fields, line_number));
+        });
+    }
+
+private:
+    template<class Callback>
+    void scan(bool validate_identifiers, Callback&& callback) const {
         TextLineReader input(path_);
         std::string line;
         while (input.getline(line) && line.empty()) {}
@@ -51,28 +87,12 @@ public:
                     + std::to_string(line_number));
             }
             const std::string& identifier = fields[identifier_column_];
-            if (identifier.empty() || !identifiers.insert(identifier).second) {
+            if (identifier.empty() || (validate_identifiers
+                    && !identifiers.insert(identifier).second)) {
                 throw std::runtime_error("Empty or duplicate theta identifier at line "
                     + std::to_string(line_number));
             }
-            Eigen::VectorXd composition(factor_columns_.size());
-            double total = 0.0;
-            for (size_t topic = 0; topic < factor_columns_.size(); ++topic) {
-                double value = 0.0;
-                if (!str2double(fields[factor_columns_[topic]], value)
-                        || !(value >= 0.0) || !std::isfinite(value)) {
-                    throw std::runtime_error("Invalid theta value at line "
-                        + std::to_string(line_number));
-                }
-                composition(topic) = value;
-                total += value;
-            }
-            if (!(total > 0.0) || !std::isfinite(total)) {
-                throw std::runtime_error("Theta row has no positive mass at line "
-                    + std::to_string(line_number));
-            }
-            composition /= total;
-            callback(data_row, identifier, composition);
+            callback(data_row, identifier, fields, line_number);
             ++data_row;
         }
         if (data_row == 0) {
@@ -80,7 +100,39 @@ public:
         }
     }
 
-private:
+    double validate_composition(const std::vector<std::string>& fields,
+            uint64_t line_number, Eigen::VectorXd* composition = nullptr) const {
+        if (composition != nullptr) {
+            composition->resize(factor_columns_.size());
+        }
+        double total = 0.0;
+        for (size_t topic = 0; topic < factor_columns_.size(); ++topic) {
+            double value = 0.0;
+            if (!str2double(fields[factor_columns_[topic]], value)
+                    || !(value >= 0.0) || !std::isfinite(value)) {
+                throw std::runtime_error("Invalid theta value at line "
+                    + std::to_string(line_number));
+            }
+            if (composition != nullptr) (*composition)(topic) = value;
+            total += value;
+        }
+        if (!(total > 0.0) || !std::isfinite(total)) {
+            throw std::runtime_error("Theta row has no positive mass at line "
+                + std::to_string(line_number));
+        }
+        return total;
+    }
+
+    Eigen::VectorXd parse_composition(
+            const std::vector<std::string>& fields,
+            uint64_t line_number) const {
+        Eigen::VectorXd composition;
+        const double total = validate_composition(
+            fields, line_number, &composition);
+        composition /= total;
+        return composition;
+    }
+
     void read_header(const std::vector<std::string>* expected_topics) {
         if (identifier_column_ < 0 || factor_start_ < -1 || factor_end_ < -1) {
             throw std::invalid_argument("Theta column indices must be nonnegative");
@@ -143,21 +195,28 @@ private:
                     "Classifier topics must be the exact trailing theta block");
             }
         } else {
-            UnitFactorResultReadOptions options;
-            options.xColName.clear();
-            options.yColName.clear();
-            options.topKColName.clear();
-            options.topPColName.clear();
-            options.requireFactorValues = false;
-            const UnitFactorResultHeader parsed =
-                parse_unit_factor_result_header(header, options);
-            if (parsed.hasTopPairs() || parsed.factorCols.size() < 2) {
-                throw std::runtime_error(
-                    "Theta table requires dense trailing factors 0..K-1");
+            int32_t first_factor = static_cast<int32_t>(header.size());
+            while (first_factor > 0) {
+                int32_t factor = -1;
+                if (!str2int32(header[first_factor - 1], factor)
+                        || factor < 0) break;
+                --first_factor;
             }
-            for (const auto& factor : parsed.factorCols) {
-                factor_columns_.push_back(factor.second);
-                topics_.push_back(header[factor.second]);
+            if (static_cast<int32_t>(header.size()) - first_factor < 2) {
+                throw std::runtime_error(
+                    "Theta table requires at least two trailing numeric factors");
+            }
+            std::unordered_set<int32_t> factor_names;
+            for (int32_t column = first_factor;
+                    column < static_cast<int32_t>(header.size()); ++column) {
+                int32_t factor = -1;
+                if (!str2int32(header[column], factor)
+                        || factor < 0 || !factor_names.insert(factor).second) {
+                    throw std::runtime_error(
+                        "Theta table has duplicate numeric factor names");
+                }
+                factor_columns_.push_back(column);
+                topics_.push_back(header[column]);
             }
         }
         if (factor_columns_.size() < 2 || std::find(factor_columns_.begin(),
@@ -392,6 +451,47 @@ void write_prediction_header(std::ofstream& output, int32_t classes,
     output << '\n';
 }
 
+void write_prediction_row(std::ofstream& output, const std::string& identifier,
+        const Eigen::VectorXd& probability,
+        const std::vector<std::string>& classes, int32_t top_k, bool dense,
+        std::vector<int32_t>& order) {
+    output << identifier;
+    if (dense) {
+        for (const double value : probability) output << '\t' << value;
+    } else {
+        order.resize(static_cast<size_t>(probability.size()));
+        std::iota(order.begin(), order.end(), 0);
+        const int32_t take = std::min<int32_t>(top_k, order.size());
+        std::partial_sort(order.begin(), order.begin() + take, order.end(),
+            [&](int32_t left, int32_t right) {
+                return probability(left) == probability(right)
+                    ? left < right : probability(left) > probability(right);
+            });
+        for (int32_t rank = 0; rank < take; ++rank) {
+            output << '\t' << classes[order[rank]] << '\t'
+                << probability(order[rank]);
+        }
+    }
+    output << '\n';
+}
+
+void write_discordant_header(std::ofstream& output) {
+    output << "#id\tC0\tP0\tC1\tP1\n"
+        << std::scientific << std::setprecision(6);
+}
+
+void write_discordant_row(std::ofstream& output,
+        const std::string& identifier, int32_t input_class,
+        const Eigen::VectorXd& probability,
+        const std::vector<std::string>& classes) {
+    Eigen::Index predicted = 0;
+    const double predicted_probability = probability.maxCoeff(&predicted);
+    if (input_class < 0 || input_class == predicted) return;
+    output << identifier << '\t' << classes[input_class] << '\t'
+        << probability(input_class) << '\t' << classes[predicted] << '\t'
+        << predicted_probability << '\n';
+}
+
 void write_predictions(const DenseThetaStream& theta, const Model& model,
         const std::string& path, int32_t top_k, bool dense) {
     if (top_k <= 0) throw std::invalid_argument("--top-k must be positive");
@@ -399,64 +499,73 @@ void write_predictions(const DenseThetaStream& theta, const Model& model,
     if (!output) throw std::runtime_error("Cannot write predictions: " + path);
     write_prediction_header(output, model.classes.size(), top_k, dense);
     output << std::scientific << std::setprecision(6);
+    std::vector<int32_t> order;
     theta.for_each([&](uint64_t, const std::string& identifier,
             const Eigen::VectorXd& composition) {
         const Eigen::VectorXd probability = model.probabilities(composition);
-        output << identifier;
-        if (dense) {
-            for (Eigen::Index component = 0; component < probability.size();
-                    ++component) output << '\t' << probability(component);
-        } else {
-            std::vector<int32_t> order(probability.size());
-            std::iota(order.begin(), order.end(), 0);
-            std::stable_sort(order.begin(), order.end(),
-                [&](int32_t left, int32_t right) {
-                    return probability(left) > probability(right);
-                });
-            for (int32_t rank = 0;
-                    rank < std::min<int32_t>(top_k, order.size()); ++rank) {
-                output << '\t' << model.classes[order[rank]] << '\t'
-                    << probability(order[rank]);
-            }
-        }
-        output << '\n';
+        write_prediction_row(output, identifier, probability,
+            model.classes, top_k, dense, order);
     });
 }
 
-void write_crossfit_classifications(const DenseThetaStream& theta,
-        const punkst::partition_classifier::CrossfitBundle& bundle,
-        const std::string& path, int32_t top_k, bool dense) {
+void write_fit_predictions(const DenseThetaStream& theta,
+        const Model& full_model,
+        const punkst::partition_classifier::CrossfitBundle* bundle,
+        const PartitionLookup& partition, bool id_as_row_index,
+        const std::vector<int32_t>& class_remap,
+        const std::string& prefix, int32_t top_k, bool dense) {
     if (top_k <= 0) throw std::invalid_argument("--top-k must be positive");
-    std::ofstream output(path);
-    if (!output) {
-        throw std::runtime_error(
-            "Cannot write crossfit classifications: " + path);
+    std::ofstream full_output(prefix + ".classifications.tsv");
+    std::ofstream full_discordant(prefix + ".discordant.tsv");
+    if (!full_output || !full_discordant) {
+        throw std::runtime_error("Cannot write classifier predictions under: "
+            + prefix);
     }
-    write_prediction_header(output, bundle.full_model.classes.size(),
-        top_k, dense);
-    output << std::scientific << std::setprecision(6);
-    theta.for_each([&](uint64_t, const std::string& identifier,
-            const Eigen::VectorXd& composition) {
-        const Model& model = bundle.model_for(identifier, true);
-        const Eigen::VectorXd probability = model.probabilities(composition);
-        output << identifier;
-        if (dense) {
-            for (const double value : probability) output << '\t' << value;
-        } else {
-            std::vector<int32_t> order(probability.size());
-            std::iota(order.begin(), order.end(), 0);
-            std::stable_sort(order.begin(), order.end(),
-                [&](int32_t left, int32_t right) {
-                    return probability(left) > probability(right);
-                });
-            for (int32_t rank = 0;
-                    rank < std::min<int32_t>(top_k, order.size()); ++rank) {
-                output << '\t' << model.classes[order[rank]] << '\t'
-                    << probability(order[rank]);
-            }
+    write_prediction_header(full_output, full_model.classes.size(), top_k, dense);
+    write_discordant_header(full_discordant);
+    full_output << std::scientific << std::setprecision(6);
+
+    std::ofstream crossfit_output;
+    std::ofstream crossfit_discordant;
+    if (bundle != nullptr) {
+        crossfit_output.open(prefix + ".crossfit.classifications.tsv");
+        crossfit_discordant.open(prefix + ".crossfit.discordant.tsv");
+        if (!crossfit_output || !crossfit_discordant) {
+            throw std::runtime_error(
+                "Cannot write classifier crossfit predictions under: " + prefix);
         }
-        output << '\n';
-    });
+        write_prediction_header(crossfit_output,
+            bundle->full_model.classes.size(), top_k, dense);
+        write_discordant_header(crossfit_discordant);
+        crossfit_output << std::scientific << std::setprecision(6);
+    }
+
+    std::vector<int32_t> full_order;
+    std::vector<int32_t> crossfit_order;
+    theta.for_each([&](uint64_t row, const std::string& identifier,
+            const Eigen::VectorXd& composition) {
+        const int32_t original_class = lookup_class(partition,
+            id_as_row_index, row, identifier);
+        const int32_t input_class = original_class < 0
+            ? -1 : class_remap[static_cast<size_t>(original_class)];
+        const Eigen::VectorXd full_probability =
+            full_model.probabilities(composition);
+        write_prediction_row(full_output, identifier, full_probability,
+            full_model.classes, top_k, dense, full_order);
+        write_discordant_row(full_discordant, identifier, input_class,
+            full_probability, full_model.classes);
+
+        if (bundle != nullptr) {
+            const Model& crossfit_model = bundle->model_for(identifier, true);
+            const Eigen::VectorXd crossfit_probability =
+                crossfit_model.probabilities(composition);
+            write_prediction_row(crossfit_output, identifier,
+                crossfit_probability, crossfit_model.classes,
+                top_k, dense, crossfit_order);
+            write_discordant_row(crossfit_discordant, identifier, input_class,
+                crossfit_probability, crossfit_model.classes);
+        }
+    }, false);
 }
 
 } // namespace
@@ -525,8 +634,7 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
             partition_identifier_column, partition_column, id_as_row_index);
         std::vector<uint64_t> original_counts(partition.classes.size(), 0);
         uint64_t matched_rows = 0;
-        theta.for_each([&](uint64_t row, const std::string& identifier,
-                const Eigen::VectorXd&) {
+        theta.validate_each([&](uint64_t row, const std::string& identifier) {
             const int32_t label = lookup_class(partition, id_as_row_index,
                 row, identifier);
             if (label >= 0) {
@@ -554,18 +662,29 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
         const std::vector<uint64_t> quotas = allocate_quotas(counts,
             train_max_rows, minimum_per_class);
         std::vector<std::priority_queue<SampleRow>> heaps(classes.size());
-        theta.for_each([&](uint64_t row, const std::string& identifier,
-                const Eigen::VectorXd& composition) {
+        int32_t pending_label = -1;
+        uint64_t pending_hash = 0;
+        theta.for_each_selected([&](uint64_t row,
+                const std::string& identifier) {
             const int32_t original = lookup_class(partition, id_as_row_index,
                 row, identifier);
-            if (original < 0 || remap[original] < 0) return;
-            const int32_t label = remap[original];
-            SampleRow sample{hash_identifier(identifier,
-                static_cast<uint64_t>(seed)), row, identifier, composition, label};
-            auto& heap = heaps[label];
-            if (heap.size() < quotas[label]) {
+            if (original < 0 || remap[original] < 0) return false;
+            pending_label = remap[original];
+            pending_hash = hash_identifier(identifier,
+                static_cast<uint64_t>(seed));
+            const SampleRow candidate{
+                pending_hash, row, identifier, Eigen::VectorXd(), pending_label};
+            const auto& heap = heaps[pending_label];
+            return heap.size() < quotas[pending_label]
+                || candidate < heap.top();
+        }, [&](uint64_t row, const std::string& identifier,
+                const Eigen::VectorXd& composition) {
+            SampleRow sample{pending_hash, row, identifier,
+                composition, pending_label};
+            auto& heap = heaps[pending_label];
+            if (heap.size() < quotas[pending_label]) {
                 heap.push(std::move(sample));
-            } else if (sample < heap.top()) {
+            } else {
                 heap.pop();
                 heap.push(std::move(sample));
             }
@@ -605,7 +724,8 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
             notice("%s", message.c_str());
         };
         auto fitted = punkst::partition_classifier::fit(compositions, labels,
-            weights, theta.topics(), classes, options);
+            weights, sample_identifiers, theta.topics(), classes,
+            static_cast<uint64_t>(seed), options);
         fitted.model.matched_rows = matched_rows;
         fitted.model.sampled_rows = sample.size();
         fitted.model.minimum_per_class = minimum_per_class;
@@ -614,29 +734,28 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
         write_cv(output_prefix + ".cv.tsv", fitted.cv);
         write_calibration(output_prefix + ".calibration.tsv",
             fitted.calibration, fitted.model.classes);
-        write_predictions(theta, fitted.model,
-            output_prefix + ".classifications.tsv", top_k, dense);
+        std::unique_ptr<punkst::partition_classifier::CrossfitBundle> bundle;
         if (crossfit) {
             auto crossfitted = punkst::partition_classifier::fit_crossfit(
                 compositions, labels, weights, sample_identifiers,
                 theta.topics(), classes, static_cast<uint64_t>(seed), options);
-            punkst::partition_classifier::CrossfitBundle bundle;
-            bundle.full_model = fitted.model;
-            bundle.fold_models = crossfitted.fold_models;
+            bundle = std::make_unique<
+                punkst::partition_classifier::CrossfitBundle>();
+            bundle->full_model = fitted.model;
+            bundle->fold_models = crossfitted.fold_models;
             for (size_t index = 0; index < sample_identifiers.size(); ++index) {
-                bundle.heldout_fold_by_identifier.emplace(
+                bundle->heldout_fold_by_identifier.emplace(
                     sample_identifiers[index],
                     crossfitted.fold_by_row(static_cast<Eigen::Index>(index)));
             }
-            bundle.write(output_prefix + ".crossfit.classifier.tsv");
+            bundle->write(output_prefix + ".crossfit.classifier.tsv");
             write_crossfit_diagnostics(
                 output_prefix + ".crossfit.diagnostics.tsv", crossfitted);
-            write_crossfit_classifications(theta, bundle,
-                output_prefix + ".crossfit.classifications.tsv", top_k,
-                dense);
             notice("Nested crossfit bundle and diagnostics written under %s.crossfit",
                 output_prefix.c_str());
         }
+        write_fit_predictions(theta, fitted.model, bundle.get(), partition,
+            id_as_row_index, remap, output_prefix, top_k, dense);
         notice("Partition classifier fit %zu classes from %zu/%zu matched rows",
             classes.size(), sample.size(), matched_rows);
     } catch (const std::exception& exception) {

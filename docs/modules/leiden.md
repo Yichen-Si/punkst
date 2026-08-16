@@ -21,7 +21,7 @@ supplied, the graph is built once and reused for every Leiden run.
 
 The resulting fixed partition can be converted into calibrated probabilities
 for future topic-model transforms with the
-[probabilistic partition classifier](partition-classifier.md).
+[probabilistic partition classifier](classifier.md).
 
 ## Inputs
 

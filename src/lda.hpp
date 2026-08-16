@@ -165,10 +165,13 @@ public:
     void set_svb_parameters(int32_t max_iter = 100, double tol = -1.);
     void set_scvb0_parameters(double s_beta = 1, double s_theta = 1, double tau_theta = 10, double kappa_theta = 0.9, int32_t burnin = 10);
     void set_background_prior(const VectorXd& eta0, double a0, double b0, bool fixed = false);
-    void set_background_prior(const std::vector<double> eta0, double a0, double b0, bool fixed = false);
+    void set_background_prior(const std::vector<double>& eta0,
+        double a0, double b0, bool fixed = false);
     void set_background_state(const VectorXd& eta0, const VectorXd& lambda0,
         double a0, double b0, double background_count,
         double foreground_count, bool fixed);
+    void begin_topic_usage_collection();
+    std::vector<double> finish_topic_usage_collection();
     void prune_topics(const std::vector<int32_t>& keep,
         double alpha = -1.0, double eta = -1.0);
 
@@ -256,8 +259,8 @@ private:
                 case InferenceType::SVB_DN: {
                     VectorXd gamma_d, exp_Elog_theta_d;
                     ArrayXd fg_counts;
-                    (void)svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts, stream);
-                    double c = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
+                    const SvbDnDocumentFit fit = svbdn_fit_one_document(
+                        gamma_d, exp_Elog_theta_d, doc, fg_counts, stream);
                     const double gamma_sum = gamma_d.sum();
                     if (gamma_sum > eps_ && std::isfinite(gamma_sum)) {
                         gamma_d /= gamma_sum;
@@ -265,8 +268,10 @@ private:
                         gamma_d.setConstant(1.0 / n_topics_);
                     }
                     double bg = a0_ / (a0_ + b0_);
-                    if (c > 0.0 && std::isfinite(c)) {
-                        bg = 1. - fg_counts.sum() / c;
+                    const double total =
+                        fit.background_count + fit.foreground_count;
+                    if (total > 0.0 && std::isfinite(total)) {
+                        bg = fit.background_count / total;
                     }
                     bg = std::clamp(bg, 0.0, 1.0);
                     gamma(d, 0) = bg;
@@ -315,13 +320,13 @@ private:
             if (algo_ == InferenceType::SVB_DN) {
                 ArrayXd fg_counts;
                 const Document& doc = doc_of(docs[d]);
-                (void)svbdn_fit_one_document(gamma_d, exp_Elog_theta_d,
-                    doc, fg_counts, stream);
-                const double total = std::accumulate(
-                    doc.cnts.begin(), doc.cnts.end(), 0.0);
+                const SvbDnDocumentFit fit = svbdn_fit_one_document(
+                    gamma_d, exp_Elog_theta_d, doc, fg_counts, stream);
+                const double total =
+                    fit.background_count + fit.foreground_count;
                 double bg = a0_ / (a0_ + b0_);
                 if (total > 0.0 && std::isfinite(total)) {
-                    bg = 1.0 - fg_counts.sum() / total;
+                    bg = fit.background_count / total;
                 }
                 gamma(d, 0) = std::clamp(bg, 0.0, 1.0);
                 gamma.row(d).segment(1, n_topics_) = gamma_d.transpose();
@@ -367,6 +372,10 @@ private:
     double a_, b_;
     VectorXd eta0_; // prior for background distribution, M x 1
     VectorXd lambda0_, exp_Elog_beta0_; // background distribution, M x 1
+    bool collect_topic_usage_ = false;
+    VectorXd topic_usage_estimate_;
+    int64_t topic_usage_documents_ = 0;
+    int64_t topic_usage_window_ = 0;
 
     // SCVB0 specific parameters
     double s_beta_ = 1, s_theta_ = 1;
@@ -380,8 +389,16 @@ private:
     // Returns the updated document-topic vectors (K x 1).
     int32_t svb_fit_one_document(VectorXd& gamma, VectorXd& exp_Elog_theta,
         const Document &doc, uint64_t rng_stream = 0);
-    int32_t svbdn_fit_one_document(VectorXd& gamma, VectorXd& exp_Elog_theta,
+    struct SvbDnDocumentFit {
+        int32_t iterations = 0;
+        double background_count = 0.0;
+        double foreground_count = 0.0;
+    };
+    SvbDnDocumentFit svbdn_fit_one_document(
+        VectorXd& gamma, VectorXd& exp_Elog_theta,
         const Document &doc, ArrayXd& fg_counts, uint64_t rng_stream = 0);
+    void update_topic_usage_estimate(
+        const VectorXd& batch_sum, int64_t documents);
     void scvb0_fit_one_document(MatrixXd& hatNkw, const Document& doc, uint64_t rng_stream = 0);
     void scvb0_fit_one_document(VectorXd& hatNk, const Document& doc, uint64_t rng_stream = 0);
 

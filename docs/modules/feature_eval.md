@@ -4,6 +4,13 @@ This page defines the per-feature diagnostics written to
 `{prefix}.feature_residuals.tsv` when `--residuals` is enabled for LDA or the
 Gamma–Poisson topic model.
 
+These quantities are descriptive posterior plug-in diagnostics. When they are
+computed on the fitting data they are in-sample summaries, not unbiased
+held-out error estimates or leave-one-out scores. The columns named deviance
+use a Poisson mean comparison even when the fitted Gamma–Poisson hierarchy has
+feature dispersion; they are not likelihood deviances for the augmented
+hierarchical model.
+
 ## Interactive visualization
 
 The repository includes
@@ -421,7 +428,11 @@ b_kS_k, & \text{Gamma–Poisson},\\
 \end{cases}
 $$
 
-If the model is derived from the same data, use `--use-training-prevalence` to use the already-known fitted prevalence.
+If the model is derived from the same data, use `--use-training-prevalence` to
+use the stored fitted prevalence. For normalized Gamma–Poisson v8 states this
+is the normalized exposure-weighted posterior mass
+$S_k=\sum_dc_d\bar\theta_{dk}$ accumulated during fitting, rather than an
+unweighted average over units.
 
 Define the topic signature of feature $w$ under the evaluated prevalence and fixed topic profiles:
 

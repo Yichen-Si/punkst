@@ -49,7 +49,8 @@ public:
     int32_t trainOnline(
         const std::vector<std::vector<Document>>& residentBatches,
         int32_t _bsize, int32_t maxUnits = INT32_MAX);
-    void prepare10XCache(DGEReader10X& dge, int32_t _minCountTrain, bool force = false);
+    void prepare10XCache(DGEReader10X& dge, int32_t _minCountTrain,
+        bool force = false, bool collectDetectionPrevalence = false);
     int32_t trainOnline10X(int32_t _bsize, int32_t maxUnits, int32_t seed);
     void fitAndWriteToFile10X(DGEReader10X& dge, const std::string& outPrefix, int32_t _bsize);
     int32_t filterCurrentFeatures(int32_t minCount = 1,
@@ -122,6 +123,7 @@ protected:
     std::vector<double> feature_detection_fraction_;
     int32_t dge_minCountTrain_cache_ = -1;
     bool dge_cache_ready_ = false;
+    bool dge_detection_prevalence_ready_ = false;
 
     // --- Shared Helper Methods ---
     bool readMinibatch(std::ifstream& inFileStream);
@@ -286,61 +288,18 @@ public:
         return lda->get_background_model();
     }
 
-    std::vector<double> estimateTopicUsage10X(int32_t usageBatchSize = 1024,
-            int32_t maxUnits = INT32_MAX) {
-        if (!initialized || !lda || !dge_cache_ready_) {
-            error("%s: initialized LDA and 10X cache are required", __FUNCTION__);
-        }
-        VectorXd totals = VectorXd::Zero(K_);
-        int64_t documents = 0;
-        std::vector<Document> batch;
-        for (size_t cursor = 0; cursor < dge_train_idx_cache_.size()
-                && documents < maxUnits;) {
-            const size_t take = std::min<size_t>(usageBatchSize,
-                std::min<size_t>(dge_train_idx_cache_.size() - cursor,
-                    static_cast<size_t>(maxUnits - documents)));
-            batch.clear();
-            batch.reserve(take);
-            for (size_t i = 0; i < take; ++i) {
-                batch.push_back(dge_docs_cache_[dge_train_idx_cache_[cursor + i]]);
-            }
-            const MatrixXd inferred = lda->transform(DocumentView(batch));
-            totals += inferred.rightCols(K_).colwise().sum().transpose();
-            documents += static_cast<int64_t>(take);
-            cursor += take;
-        }
-        if (documents == 0) return std::vector<double>(K_, 0.0);
-        totals /= static_cast<double>(documents);
-        return std::vector<double>(totals.data(), totals.data() + totals.size());
-    }
-
-    std::vector<double> estimateTopicUsage(const std::string& inFile,
-            int32_t usageBatchSize, int32_t minimumCount,
-            int32_t maxUnits = INT32_MAX) {
+    void beginTopicUsageCollection() {
         if (!initialized || !lda) {
             error("%s: initialized LDA is required", __FUNCTION__);
         }
-        batchSize = usageBatchSize;
-        minCountTrain = minimumCount;
-        std::ifstream input(inFile);
-        if (!input) error("Error opening input file: %s", inFile.c_str());
-        VectorXd totals = VectorXd::Zero(K_);
-        int64_t documents = 0;
-        bool fileopen = true;
-        while (fileopen) {
-            fileopen = readMinibatch(input);
-            if (minibatch.empty()) break;
-            if (documents + static_cast<int64_t>(minibatch.size()) > maxUnits) {
-                minibatch.resize(static_cast<size_t>(maxUnits - documents));
-            }
-            const MatrixXd inferred = lda->transform(DocumentView(minibatch));
-            totals += inferred.rightCols(K_).colwise().sum().transpose();
-            documents += static_cast<int64_t>(minibatch.size());
-            if (documents >= maxUnits) break;
+        lda->begin_topic_usage_collection();
+    }
+
+    std::vector<double> finishTopicUsageCollection() {
+        if (!initialized || !lda) {
+            error("%s: initialized LDA is required", __FUNCTION__);
         }
-        if (documents == 0) return std::vector<double>(K_, 0.0);
-        totals /= static_cast<double>(documents);
-        return std::vector<double>(totals.data(), totals.data() + totals.size());
+        return lda->finish_topic_usage_collection();
     }
 
     std::vector<int32_t> pruneTopicsByUsage(
@@ -374,27 +333,29 @@ public:
         std::ofstream output(path);
         if (!output) error("Cannot write LDA topic specificity: %s", path.c_str());
         const RowMajorMatrixXd& components = lda->get_model();
-        RowMajorMatrixXd beta = components;
-        for (Eigen::Index topic = 0; topic < beta.rows(); ++topic) {
-            beta.row(topic) /= beta.row(topic).sum();
-        }
-        VectorXd background = lda->get_background_model();
-        background /= background.sum();
+        const VectorXd topic_totals = components.rowwise().sum();
+        const VectorXd& background = lda->get_background_model();
+        const double background_total = background.sum();
         output << "Feature\tBackground";
         const auto& names = const_cast<LDA4Hex*>(this)->get_topic_names();
         for (const auto& name : names) output << '\t' << name << "_Probability";
         for (const auto& name : names) output << '\t' << name << "_KLContribution";
         output << '\n' << std::scientific << std::setprecision(8);
         for (int32_t feature = 0; feature < M_; ++feature) {
-            output << featureNames[feature] << '\t' << background(feature);
+            const double background_probability =
+                background(feature) / background_total;
+            output << featureNames[feature] << '\t'
+                << background_probability;
             for (int32_t topic = 0; topic < K_; ++topic) {
-                output << '\t' << beta(topic, feature);
+                output << '\t'
+                    << components(topic, feature) / topic_totals(topic);
             }
             for (int32_t topic = 0; topic < K_; ++topic) {
-                const double probability = beta(topic, feature);
+                const double probability =
+                    components(topic, feature) / topic_totals(topic);
                 const double score = probability * std::log(
                     std::max(probability, 1e-300)
-                    / std::max(background(feature), 1e-300));
+                    / std::max(background_probability, 1e-300));
                 output << '\t' << score;
             }
             output << '\n';
@@ -464,8 +425,11 @@ public:
         if (!priorIn) {
             const std::vector<double>& eta0 = reader.getFeatureSums();
             std::vector<double> scaled_eta0(eta0.begin(), eta0.end());
-            if (prevalencePower > 0.0
-                    && feature_detection_fraction_.size() == eta0.size()) {
+            if (prevalencePower > 0.0) {
+                if (feature_detection_fraction_.size() != eta0.size()) {
+                    error("%s: feature detection prevalence is unavailable",
+                        __FUNCTION__);
+                }
                 const double original_total = std::accumulate(
                     scaled_eta0.begin(), scaled_eta0.end(), 0.0);
                 for (size_t i = 0; i < scaled_eta0.size(); ++i) {

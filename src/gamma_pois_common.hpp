@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cmath>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -46,6 +48,25 @@ public:
     virtual const VectorXd& getTopicCapacity() const = 0;
     virtual const MatrixXd& getExpectedBeta() const = 0;
     virtual const MatrixXd& getBetaAllocationKernel() const = 0;
+    virtual void normalizeTopicAllocation(
+        const Eigen::Ref<const VectorXd>& theta_log,
+        int32_t feature, VectorXd& allocation) const {
+        const MatrixXd& kernel = getBetaAllocationKernel();
+        if (theta_log.size() != kernel.rows()
+                || feature < 0 || feature >= kernel.cols()) {
+            throw std::invalid_argument(
+                "Gamma-Poisson topic allocation dimensions do not match");
+        }
+        const double max_log = theta_log.maxCoeff();
+        allocation = (theta_log.array() - max_log).exp()
+            * kernel.col(feature).array();
+        const double total = allocation.sum();
+        if (!std::isfinite(total) || total <= 0.0) {
+            throw std::runtime_error(
+                "Gamma-Poisson topic allocation is not positive and finite");
+        }
+        allocation /= total;
+    }
     virtual const VectorXd& getFeatureDispersion() const = 0;
     virtual double getSizeFactor() const = 0;
     virtual double getThetaPriorShape() const = 0;

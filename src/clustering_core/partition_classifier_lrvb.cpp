@@ -1,6 +1,6 @@
 #include "partition_classifier_lrvb.hpp"
 
-#include "gamma_pois_topic.hpp"
+#include "gamma_pois_common.hpp"
 #include "numerical_utils.hpp"
 
 #include <algorithm>
@@ -39,6 +39,7 @@ LdaLocalState refine_lda(const Eigen::Ref<const Eigen::VectorXd>& assigned,
         double alpha, double tolerance, int32_t maximum_iterations) {
     const int32_t topics = static_cast<int32_t>(beta.rows());
     if (assigned.size() != topics || beta.cols() <= 0
+            || document.ids.size() != document.cnts.size()
             || !(alpha > 0.0) || !(tolerance > 0.0)
             || maximum_iterations <= 0
             || !assigned.allFinite() || (assigned.array() < 0.0).any()) {
@@ -139,9 +140,30 @@ struct GammaPoisLocalState {
     bool converged = false;
 };
 
+void normalize_gamma_poisson_allocation(
+        const Eigen::Ref<const Eigen::VectorXd>& theta_log,
+        const Eigen::Ref<const Eigen::VectorXd>& theta_kernel,
+        uint32_t feature,
+        const Eigen::Ref<const Eigen::MatrixXd>& beta_kernel,
+        const GammaPoisson4HexInterface& model,
+        Eigen::Ref<Eigen::RowVectorXd> allocation) {
+    allocation = (theta_kernel.array()
+        * beta_kernel.col(feature).array()).matrix().transpose();
+    const double total = allocation.sum();
+    if (total > 0.0 && std::isfinite(total)) {
+        allocation /= total;
+        return;
+    }
+    Eigen::VectorXd stable;
+    model.normalizeTopicAllocation(theta_log,
+        static_cast<int32_t>(feature), stable);
+    allocation = stable.transpose();
+}
+
 GammaPoisLocalState refine_gamma_poisson(
         const GammaPoissonDocumentPosterior& posterior,
         const Document& document,
+        const GammaPoisson4HexInterface& model,
         const Eigen::Ref<const Eigen::VectorXd>& capacity,
         const Eigen::Ref<const Eigen::MatrixXd>& beta_kernel,
         const Eigen::Ref<const Eigen::MatrixXd>& beta_mean,
@@ -153,8 +175,19 @@ GammaPoisLocalState refine_gamma_poisson(
             || posterior.rate.size() != topics || prior_rate.size() != topics
             || beta_kernel.rows() != topics || beta_mean.rows() != topics
             || beta_kernel.cols() != beta_mean.cols()
+            || document.ids.size() != document.cnts.size()
             || !(prior_shape > 0.0) || !(tolerance > 0.0)
-            || maximum_iterations <= 0) {
+            || maximum_iterations <= 0
+            || !posterior.shape.allFinite()
+            || (posterior.shape.array() <= 0.0).any()
+            || !posterior.rate.allFinite()
+            || (posterior.rate.array() <= 0.0).any()
+            || !capacity.allFinite() || (capacity.array() <= 0.0).any()
+            || !prior_rate.allFinite() || (prior_rate.array() <= 0.0).any()
+            || !std::isfinite(posterior.exposure)
+            || posterior.exposure < 0.0
+            || (dispersion != nullptr
+                && dispersion->size() != beta_mean.cols())) {
         throw std::invalid_argument("Invalid local Gamma-Poisson posterior");
     }
     GammaPoisLocalState state;
@@ -176,6 +209,10 @@ GammaPoisLocalState refine_gamma_poisson(
                         "Gamma-Poisson document feature is out of range");
                 }
                 const double tau = (*dispersion)(word);
+                if (!(tau > 0.0) || !std::isfinite(tau)) {
+                    throw std::invalid_argument(
+                        "Invalid Gamma-Poisson feature dispersion");
+                }
                 const double intensity = beta_mean.col(word).dot(mean);
                 state.epsilon(feature) = (tau + document.cnts[feature])
                     / std::max(tau + posterior.exposure * intensity, 1e-12);
@@ -186,25 +223,26 @@ GammaPoisLocalState refine_gamma_poisson(
             state.rate = prior_rate + posterior.exposure * capacity;
         }
         state.rate = state.rate.array().max(1e-12);
-        Eigen::VectorXd theta_kernel(topics);
+        Eigen::VectorXd theta_log(topics);
         double maximum = -std::numeric_limits<double>::infinity();
         for (int32_t topic = 0; topic < topics; ++topic) {
-            theta_kernel(topic) = psi(state.shape(topic))
+            theta_log(topic) = psi(state.shape(topic))
                 - std::log(state.rate(topic));
-            maximum = std::max(maximum, theta_kernel(topic));
+            maximum = std::max(maximum, theta_log(topic));
         }
-        theta_kernel = (theta_kernel.array() - maximum).exp();
+        const Eigen::VectorXd theta_kernel =
+            (theta_log.array() - maximum).exp();
         Eigen::VectorXd assigned = Eigen::VectorXd::Zero(topics);
         for (size_t feature = 0; feature < document.ids.size(); ++feature) {
             const uint32_t word = document.ids[feature];
-            state.phi.row(feature) = (theta_kernel.array()
-                * beta_kernel.col(word).array()).matrix().transpose();
-            const double total = state.phi.row(feature).sum();
-            if (!(total > 0.0) || !std::isfinite(total)) {
-                throw std::runtime_error(
-                    "Nonfinite local Gamma-Poisson allocation");
+            if (word >= static_cast<uint32_t>(beta_mean.cols())
+                    || !(document.cnts[feature] >= 0.0)
+                    || !std::isfinite(document.cnts[feature])) {
+                throw std::invalid_argument(
+                    "Invalid local Gamma-Poisson document");
             }
-            state.phi.row(feature) /= total;
+            normalize_gamma_poisson_allocation(theta_log, theta_kernel, word,
+                beta_kernel, model, state.phi.row(feature));
             assigned.noalias() += document.cnts[feature]
                 * state.phi.row(feature).transpose();
         }
@@ -230,16 +268,17 @@ GammaPoisLocalState refine_gamma_poisson(
             }
             double final_maximum = -std::numeric_limits<double>::infinity();
             for (int32_t topic = 0; topic < topics; ++topic) {
-                theta_kernel(topic) = psi(state.shape(topic))
+                theta_log(topic) = psi(state.shape(topic))
                     - std::log(state.rate(topic));
-                final_maximum = std::max(final_maximum, theta_kernel(topic));
+                final_maximum = std::max(final_maximum, theta_log(topic));
             }
-            theta_kernel = (theta_kernel.array() - final_maximum).exp();
+            const Eigen::VectorXd final_theta_kernel =
+                (theta_log.array() - final_maximum).exp();
             for (size_t feature = 0; feature < document.ids.size(); ++feature) {
                 const uint32_t word = document.ids[feature];
-                state.phi.row(feature) = (theta_kernel.array()
-                    * beta_kernel.col(word).array()).matrix().transpose();
-                state.phi.row(feature) /= state.phi.row(feature).sum();
+                normalize_gamma_poisson_allocation(theta_log,
+                    final_theta_kernel, word, beta_kernel, model,
+                    state.phi.row(feature));
             }
             state.converged = true;
             break;
@@ -811,14 +850,17 @@ PropagatedPrediction propagate_lda(const Model& classifier,
 PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
         const GammaPoissonDocumentPosterior& posterior,
         const Document& document,
-        const Eigen::Ref<const Eigen::VectorXd>& topic_capacity,
-        const Eigen::MatrixXd& beta_allocation_kernel,
-        const Eigen::MatrixXd& expected_beta,
-        double prior_shape,
-        const Eigen::Ref<const Eigen::VectorXd>& prior_rate,
-        const Eigen::VectorXd* feature_dispersion,
+        const GammaPoisson4HexInterface& model,
         const PropagationOptions& options,
         const Eigen::VectorXd* initial_composition) {
+    const Eigen::VectorXd& topic_capacity = model.getTopicCapacity();
+    const Eigen::MatrixXd& beta_allocation_kernel =
+        model.getBetaAllocationKernel();
+    const Eigen::MatrixXd& expected_beta = model.getExpectedBeta();
+    const double prior_shape = model.getThetaPriorShape();
+    const Eigen::VectorXd prior_rate = model.getThetaPriorRate();
+    const Eigen::VectorXd* feature_dispersion = model.hasFeatureDispersion()
+        ? &model.getFeatureDispersion() : nullptr;
     classifier.validate();
     if (classifier.topics.size() != static_cast<size_t>(topic_capacity.size())) {
         throw std::invalid_argument(
@@ -855,8 +897,8 @@ PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
         }
         result.lrvb_attempted = true;
         const GammaPoisLocalState local = refine_gamma_poisson(posterior,
-            document, topic_capacity, beta_allocation_kernel, expected_beta,
-            prior_shape, prior_rate, feature_dispersion,
+            document, model, topic_capacity, beta_allocation_kernel,
+            expected_beta, prior_shape, prior_rate, feature_dispersion,
             options.fixed_point_tolerance,
             options.fixed_point_max_iterations);
         result.fixed_point_iterations = local.iterations;
@@ -1013,14 +1055,12 @@ PropagatedPrediction propagate_gamma_poisson_from_composition(
         const Model& classifier,
         const Eigen::Ref<const Eigen::VectorXd>& composition,
         const Document& document,
-        const Eigen::Ref<const Eigen::VectorXd>& topic_capacity,
-        const Eigen::MatrixXd& beta_allocation_kernel,
-        const Eigen::MatrixXd& expected_beta,
-        double prior_shape,
-        const Eigen::Ref<const Eigen::VectorXd>& prior_rate,
-        double size_factor,
-        const Eigen::VectorXd* feature_dispersion,
+        const GammaPoisson4HexInterface& model,
         const PropagationOptions& options) {
+    const Eigen::VectorXd& topic_capacity = model.getTopicCapacity();
+    const double prior_shape = model.getThetaPriorShape();
+    const Eigen::VectorXd prior_rate = model.getThetaPriorRate();
+    const double size_factor = model.getSizeFactor();
     const int32_t topics = static_cast<int32_t>(topic_capacity.size());
     if (composition.size() != topics || prior_rate.size() != topics
             || !composition.allFinite()
@@ -1054,9 +1094,8 @@ PropagatedPrediction propagate_gamma_poisson_from_composition(
     allocation /= allocation_total;
     posterior.shape = Eigen::VectorXd::Constant(topics, prior_shape)
         + total * allocation;
-    return propagate_gamma_poisson(classifier, posterior, document,
-        topic_capacity, beta_allocation_kernel, expected_beta, prior_shape,
-        prior_rate, feature_dispersion, options, &normalized);
+    return propagate_gamma_poisson(classifier, posterior, document, model,
+        options, &normalized);
 }
 
 } // namespace punkst::partition_classifier

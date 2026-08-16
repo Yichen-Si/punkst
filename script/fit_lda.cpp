@@ -168,8 +168,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     bool sort_topics = false;
     bool reproducible_init = false;
     bool adaptive_topics = false;
-    double min_topic_mean = 1e-4;
-    int32_t adaptive_refit_epochs = 2;
+    double min_topic_mean = 1e-5;
+    int32_t adaptive_refit_epochs = 1;
     TrainingCountCacheCliOptions count_cache_options;
 
     double kappa = 0.7, tau0 = 10.0;
@@ -304,6 +304,11 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     std::unique_ptr<DGEReader10X> dge_ptr;
     const bool use_10x = initHexOrDgeInput(reader, dge_ptr, inFile, metaFile,
         dge_dirs, in_bc, in_ft, in_mtx, dataset_ids);
+    const bool collect_background_prevalence = fitBackground
+        && bgPriorFile.empty() && backgroundPrevalencePower > 0.0;
+    if (collect_background_prevalence && !use_10x) {
+        error("--background-prevalence-power with an empirical background currently requires 10X input");
+    }
     if (use_10x) {
         nUnits = dge_ptr->nBarcodes;
     } else {
@@ -363,7 +368,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (n_overlap == 0) {
             error("No overlapping features found between 10X input and model");
         }
-        lda4hex->prepare10XCache(*dge_ptr, minCountTrain, true);
+        lda4hex->prepare10XCache(*dge_ptr, minCountTrain, true,
+            collect_background_prevalence);
 
         if (tenx_feature_mode == TenXFeatureMode::PostloadCounts) {
             const int32_t nFeaturesPrev = lda4hex->nFeatures();
@@ -376,7 +382,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
                 if (n_overlap == 0) {
                     error("No overlapping features found between 10X input and model");
                 }
-                lda4hex->prepare10XCache(*dge_ptr, minCountTrain, true);
+                lda4hex->prepare10XCache(*dge_ptr, minCountTrain, true,
+                    collect_background_prevalence);
             }
         }
         if (featureFile.empty()) {
@@ -444,9 +451,14 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
 
         notice("Starting model training....");
         const int32_t maxUnits = debug_ > 0 ? debug_ : INT32_MAX;
+        const int32_t planned_count_passes = nEpochs
+            + (adaptive_topics ? adaptive_refit_epochs : 0);
         TrainingCountCache count_cache(count_cache_options,
-            use_10x, nEpochs, lda4hex->nFeatures());
+            use_10x, planned_count_passes, lda4hex->nFeatures());
         for (int epoch = 0; epoch < nEpochs; ++epoch) {
+            if (adaptive_topics && epoch + 1 == nEpochs) {
+                lda4hex->beginTopicUsageCollection();
+            }
             int32_t n = 0;
             if (use_10x) {
                 n = lda4hex->trainOnline10X(batchSize, maxUnits, seed + epoch);
@@ -469,10 +481,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         if (adaptive_topics) {
             const std::vector<std::string> initial_topic_names =
                 lda4hex->get_topic_names();
-            const std::vector<double> initial_usage = use_10x
-                ? lda4hex->estimateTopicUsage10X(batchSize, maxUnits)
-                : lda4hex->estimateTopicUsage(
-                    inFile, batchSize, minCountTrain, maxUnits);
+            const std::vector<double> initial_usage =
+                lda4hex->finishTopicUsageCollection();
             const std::vector<int32_t> kept = lda4hex->pruneTopicsByUsage(
                 initial_usage, min_topic_mean);
             std::vector<bool> retained(initial_usage.size(), false);
