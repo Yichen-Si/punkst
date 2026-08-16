@@ -7,6 +7,12 @@
 #include "lda_state.hpp"
 #include <memory>
 #include <regex>
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <numeric>
+#include <stdexcept>
 
 /**
  * Base class for online training of topic models.
@@ -113,6 +119,7 @@ protected:
     std::vector<Document> dge_docs_cache_;
     std::vector<std::string> dge_unit_id_cache_;
     std::vector<int32_t> dge_train_idx_cache_;
+    std::vector<double> feature_detection_fraction_;
     int32_t dge_minCountTrain_cache_ = -1;
     bool dge_cache_ready_ = false;
 
@@ -216,15 +223,34 @@ public:
         K_ = static_cast<int32_t>(state.topics.size());
         topicNames = state.topics;
         lda = std::make_unique<LatentDirichletAllocation>(
-            components, seed, nThreads, verbose, InferenceType::SVB,
-            state.alpha);
+            K_, static_cast<int32_t>(kept_indices.size()), seed, nThreads,
+            verbose, state.has_background
+                ? InferenceType::SVB_DN : InferenceType::SVB,
+            state.alpha, state.eta, -1.0, -1.0, -1,
+            nullptr, components, -1.0);
+        if (state.has_background) {
+            VectorXd background_prior(kept_indices.size());
+            VectorXd background_components(kept_indices.size());
+            for (size_t feature = 0; feature < kept_indices.size(); ++feature) {
+                background_prior(feature) =
+                    state.background_prior(kept_indices[feature]);
+                background_components(feature) =
+                    state.background_components(kept_indices[feature]);
+            }
+            lda->set_background_state(background_prior, background_components,
+                state.background_prior_a, state.background_prior_b,
+                state.background_count, state.foreground_count,
+                state.background_fixed);
+        }
         lda->set_svb_parameters(maxIter, mDelta);
         initialized = true;
     }
 
     void writeStateToFile(const std::string& path) const {
-        if (!initialized || !lda || lda->get_algorithm() != InferenceType::SVB) {
-            error("%s: plain LDA SVB is required", __FUNCTION__);
+        if (!initialized || !lda
+                || (lda->get_algorithm() != InferenceType::SVB
+                    && lda->get_algorithm() != InferenceType::SVB_DN)) {
+            error("%s: LDA SVB is required", __FUNCTION__);
         }
         LdaState state;
         state.alpha = lda->get_doc_topic_prior();
@@ -236,7 +262,143 @@ public:
         if (state.feature_weights_active) {
             state.feature_weights = reader.getFeatureWeights();
         }
+        state.has_background = lda->has_background();
+        if (state.has_background) {
+            state.background_fixed = lda->background_is_fixed();
+            state.background_prior_a = lda->get_background_prior_a();
+            state.background_prior_b = lda->get_background_prior_b();
+            state.background_count = lda->get_background_count();
+            state.foreground_count = lda->get_forground_count();
+            state.background_prior = lda->get_background_prior();
+            state.background_components = lda->get_background_model();
+        }
         state.write(path);
+    }
+
+    bool has_background() const {
+        return lda && lda->has_background();
+    }
+
+    const VectorXd& get_background_model() const {
+        if (!has_background()) {
+            error("%s: LDA model has no background", __FUNCTION__);
+        }
+        return lda->get_background_model();
+    }
+
+    std::vector<double> estimateTopicUsage10X(int32_t usageBatchSize = 1024,
+            int32_t maxUnits = INT32_MAX) {
+        if (!initialized || !lda || !dge_cache_ready_) {
+            error("%s: initialized LDA and 10X cache are required", __FUNCTION__);
+        }
+        VectorXd totals = VectorXd::Zero(K_);
+        int64_t documents = 0;
+        std::vector<Document> batch;
+        for (size_t cursor = 0; cursor < dge_train_idx_cache_.size()
+                && documents < maxUnits;) {
+            const size_t take = std::min<size_t>(usageBatchSize,
+                std::min<size_t>(dge_train_idx_cache_.size() - cursor,
+                    static_cast<size_t>(maxUnits - documents)));
+            batch.clear();
+            batch.reserve(take);
+            for (size_t i = 0; i < take; ++i) {
+                batch.push_back(dge_docs_cache_[dge_train_idx_cache_[cursor + i]]);
+            }
+            const MatrixXd inferred = lda->transform(DocumentView(batch));
+            totals += inferred.rightCols(K_).colwise().sum().transpose();
+            documents += static_cast<int64_t>(take);
+            cursor += take;
+        }
+        if (documents == 0) return std::vector<double>(K_, 0.0);
+        totals /= static_cast<double>(documents);
+        return std::vector<double>(totals.data(), totals.data() + totals.size());
+    }
+
+    std::vector<double> estimateTopicUsage(const std::string& inFile,
+            int32_t usageBatchSize, int32_t minimumCount,
+            int32_t maxUnits = INT32_MAX) {
+        if (!initialized || !lda) {
+            error("%s: initialized LDA is required", __FUNCTION__);
+        }
+        batchSize = usageBatchSize;
+        minCountTrain = minimumCount;
+        std::ifstream input(inFile);
+        if (!input) error("Error opening input file: %s", inFile.c_str());
+        VectorXd totals = VectorXd::Zero(K_);
+        int64_t documents = 0;
+        bool fileopen = true;
+        while (fileopen) {
+            fileopen = readMinibatch(input);
+            if (minibatch.empty()) break;
+            if (documents + static_cast<int64_t>(minibatch.size()) > maxUnits) {
+                minibatch.resize(static_cast<size_t>(maxUnits - documents));
+            }
+            const MatrixXd inferred = lda->transform(DocumentView(minibatch));
+            totals += inferred.rightCols(K_).colwise().sum().transpose();
+            documents += static_cast<int64_t>(minibatch.size());
+            if (documents >= maxUnits) break;
+        }
+        if (documents == 0) return std::vector<double>(K_, 0.0);
+        totals /= static_cast<double>(documents);
+        return std::vector<double>(totals.data(), totals.data() + totals.size());
+    }
+
+    std::vector<int32_t> pruneTopicsByUsage(
+            const std::vector<double>& usage, double threshold) {
+        if (usage.size() != static_cast<size_t>(K_) || !(threshold >= 0.0)) {
+            throw std::invalid_argument("Invalid LDA adaptive-topic usage");
+        }
+        std::vector<int32_t> order(K_);
+        std::iota(order.begin(), order.end(), 0);
+        std::vector<int32_t> keep;
+        for (int32_t topic : order) {
+            if (std::isfinite(usage[topic]) && usage[topic] >= threshold) {
+                keep.push_back(topic);
+            }
+        }
+        if (keep.size() < 2) {
+            std::stable_sort(order.begin(), order.end(), [&](int32_t left,
+                    int32_t right) { return usage[left] > usage[right]; });
+            keep.assign(order.begin(), order.begin() + std::min<int32_t>(2, K_));
+            std::sort(keep.begin(), keep.end());
+        }
+        if (keep.size() == static_cast<size_t>(K_)) return keep;
+        lda->prune_topics(keep);
+        K_ = lda->get_n_topics();
+        topicNames = lda->get_topic_names();
+        return keep;
+    }
+
+    void writeTopicSpecificity(const std::string& path) const {
+        if (!has_background()) return;
+        std::ofstream output(path);
+        if (!output) error("Cannot write LDA topic specificity: %s", path.c_str());
+        const RowMajorMatrixXd& components = lda->get_model();
+        RowMajorMatrixXd beta = components;
+        for (Eigen::Index topic = 0; topic < beta.rows(); ++topic) {
+            beta.row(topic) /= beta.row(topic).sum();
+        }
+        VectorXd background = lda->get_background_model();
+        background /= background.sum();
+        output << "Feature\tBackground";
+        const auto& names = const_cast<LDA4Hex*>(this)->get_topic_names();
+        for (const auto& name : names) output << '\t' << name << "_Probability";
+        for (const auto& name : names) output << '\t' << name << "_KLContribution";
+        output << '\n' << std::scientific << std::setprecision(8);
+        for (int32_t feature = 0; feature < M_; ++feature) {
+            output << featureNames[feature] << '\t' << background(feature);
+            for (int32_t topic = 0; topic < K_; ++topic) {
+                output << '\t' << beta(topic, feature);
+            }
+            for (int32_t topic = 0; topic < K_; ++topic) {
+                const double probability = beta(topic, feature);
+                const double score = probability * std::log(
+                    std::max(probability, 1e-300)
+                    / std::max(background(feature), 1e-300));
+                output << '\t' << score;
+            }
+            output << '\n';
+        }
     }
 
     int32_t getNumTopics() const override {
@@ -295,19 +457,31 @@ public:
         outCols.insert(outCols.end(), topicNames.begin(), topicNames.end());
     }
 
-    void set_background_prior(std::string& bgPriorFile, double a0, double b0, double scale = 1., bool fixed = false) {
+    void set_background_prior(std::string& bgPriorFile, double a0, double b0,
+            double scale = 1., bool fixed = false,
+            double prevalencePower = 0.0) {
         std::ifstream priorIn(bgPriorFile, std::ios::in);
         if (!priorIn) {
             const std::vector<double>& eta0 = reader.getFeatureSums();
-            if (std::abs(scale - 1.) > 1e-12) {
-                std::vector<double> scaled_eta0(eta0.size());
-                for (size_t i = 0; i < eta0.size(); ++i) {
-                    scaled_eta0[i] = eta0[i] * scale;
+            std::vector<double> scaled_eta0(eta0.begin(), eta0.end());
+            if (prevalencePower > 0.0
+                    && feature_detection_fraction_.size() == eta0.size()) {
+                const double original_total = std::accumulate(
+                    scaled_eta0.begin(), scaled_eta0.end(), 0.0);
+                for (size_t i = 0; i < scaled_eta0.size(); ++i) {
+                    scaled_eta0[i] *= std::pow(std::max(
+                        feature_detection_fraction_[i], 1e-8),
+                        prevalencePower);
                 }
-                lda->set_background_prior(scaled_eta0, a0, b0, fixed);
-            } else {
-                lda->set_background_prior(eta0, a0, b0, fixed);
+                const double weighted_total = std::accumulate(
+                    scaled_eta0.begin(), scaled_eta0.end(), 0.0);
+                if (original_total > 0.0 && weighted_total > 0.0) {
+                    const double renormalize = original_total / weighted_total;
+                    for (double& value : scaled_eta0) value *= renormalize;
+                }
             }
+            for (double& value : scaled_eta0) value *= scale;
+            lda->set_background_prior(scaled_eta0, a0, b0, fixed);
         } else {
             std::unordered_map<std::string, uint32_t> featureDict;
             if (!reader.featureDict(featureDict)) {

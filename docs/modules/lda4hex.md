@@ -198,16 +198,28 @@ Use the prior model to transform the data without fitting. Implies `--transform`
 `--sort-topics`
 Sort learned topics by abundance before writing the model.
 
-<!-- ### Optional background model
+### Optional background model
 
 `--fit-background`
-Fit an additional background profile together with the LDA factors.
+Fit a shared background profile in addition to the foreground LDA factors.
+Each unit receives a separate `Background` fraction; foreground factor
+proportions remain normalized to one independently of that fraction. A warm
+start is important because an empirical corpus-average background can
+otherwise absorb the whole model before the foreground topics specialize.
 
 `--background-prior`
 Input prior for the background profile.
 
 `--background-init-scale`
 Scale used when initializing the background from feature totals.
+
+`--background-prevalence-power`
+Downweight genes detected in only a small fraction of training units when an
+empirical background is constructed. The default `0` constructs a background
+proportional only to aggregate counts. Positive powers multiply total
+expression by detection prevalence raised to the requested power, then
+preserve the original prior mass. They are experimental and can help prevent
+abundant cell-type-specific markers from becoming nuisance background.
 
 `--fix-background`
 Keep the background profile fixed during training.
@@ -216,7 +228,31 @@ Keep the background profile fixed during training.
 Beta prior parameters for the background fraction.
 
 `--warm-start-epochs`
-Warm-start the topic model before enabling the background. -->
+Warm-start the topic model before enabling the background. Default: `0.5`.
+
+The fixed-background mode is the recommended starting point. It anchors the
+background to aggregate training-set feature frequencies while allowing its
+fraction to vary between units. The learned-background mode is experimental.
+Background states support dense and top-k transforms and foreground
+pseudobulk output. Residual diagnostics and partition-classifier propagation
+currently reject background states because those likelihoods have not yet
+been extended with the nuisance component.
+
+### Adaptive topic capacity
+
+`--adaptive-topics`
+Treat `--n-topics` as an upper bound. After the requested training epochs,
+infer foreground compositions on the training units, remove topics below the
+mean-weight threshold, reset the symmetric LDA priors for the retained topic
+count, and refit.
+
+`--min-topic-mean`
+Minimum mean foreground topic weight retained by adaptive fitting. Default:
+`1e-4`. This intentionally removes only prior-only slots, not merely rare
+programs.
+
+`--adaptive-refit-epochs`
+Number of epochs after pruning. Default: `2`.
 
 
 ### Main outputs
@@ -225,16 +261,26 @@ Warm-start the topic model before enabling the background. -->
 Feature-by-topic model matrix.
 
 `{prefix}.state.tsv`
-Versioned plain-SVB state containing the unnormalized global components,
+Versioned SVB state containing the unnormalized global components,
 document/topic priors, ordered topic and feature names, and feature-weight
-metadata. This is the recommended input to `lda-transform`. It is not written
-for background-enabled fitting.
+metadata. Background-enabled states additionally contain the background prior,
+learned or fixed profile, fraction prior, and sufficient statistics. This is
+the recommended input to `lda-transform`.
 
 `{prefix}.features.tsv`
 Written for 10X fitting when `--features` is not supplied.
 
-<!-- `{prefix}.background.tsv`
-Written when `--fit-background` is used. -->
+`{prefix}.background.tsv`
+Background profile and aggregate fitted background fraction. Written when
+`--fit-background` is used.
+
+`{prefix}.topic_specificity.tsv`
+Foreground topic probabilities and per-gene KL contributions relative to the
+background profile. Written when `--fit-background` is used.
+
+`{prefix}.topic_usage.tsv`
+Pre-pruning mean foreground weights and retention decisions. Written when
+`--adaptive-topics` is used.
 
 Transform outputs are:
 

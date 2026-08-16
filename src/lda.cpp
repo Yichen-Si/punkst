@@ -34,6 +34,33 @@ void LatentDirichletAllocation::sort_topics() {
     }
 }
 
+void LatentDirichletAllocation::prune_topics(
+        const std::vector<int32_t>& keep, double alpha, double eta) {
+    if (keep.size() < 2 || keep.size() > static_cast<size_t>(n_topics_)) {
+        throw std::invalid_argument("LDA pruning must retain at least two topics");
+    }
+    std::vector<bool> seen(static_cast<size_t>(n_topics_), false);
+    RowMajorMatrixXd retained(keep.size(), n_features_);
+    std::vector<std::string> retained_names;
+    if (!topic_names_.empty()) retained_names.resize(keep.size());
+    for (size_t next = 0; next < keep.size(); ++next) {
+        const int32_t previous = keep[next];
+        if (previous < 0 || previous >= n_topics_
+                || seen[static_cast<size_t>(previous)]) {
+            throw std::invalid_argument("Invalid LDA topic pruning index");
+        }
+        seen[static_cast<size_t>(previous)] = true;
+        retained.row(static_cast<Eigen::Index>(next)) = components_.row(previous);
+        if (!topic_names_.empty()) retained_names[next] = topic_names_[previous];
+    }
+    components_ = std::move(retained);
+    topic_names_ = std::move(retained_names);
+    n_topics_ = static_cast<int32_t>(keep.size());
+    alpha_ = alpha > 0.0 ? alpha : 1.0 / n_topics_;
+    eta_ = eta > 0.0 ? eta : 1.0 / n_topics_;
+    compute_global_mtx();
+}
+
 void LatentDirichletAllocation::set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals) {
     if (lambdaVals.size() != n_topics_ || lambdaVals[0].size() != n_features_) {
         if (n_topics_ > 0 && n_features_ > 0)

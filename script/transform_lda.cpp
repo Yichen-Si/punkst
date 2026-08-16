@@ -212,6 +212,7 @@ void writeResultHeader(std::ostream& out, LDA4Hex& lda, int32_t topkOnly) {
         out << "\n";
         return;
     }
+    if (lda.has_background()) out << "Background\t";
     out << "K1";
     for (int32_t i = 1; i < topk; ++i) {
         out << "\tK" << (i + 1);
@@ -321,7 +322,8 @@ public:
           factorResults(factorResults_),
           threadHint(std::max<int32_t>(1, nThreads_)),
           M(lda_.nFeatures()),
-          K(lda_.getNumTopics()) {
+          K(lda_.getNumTopics()),
+          hasBackground(lda_.has_background()) {
         if (factorResults == nullptr && pseudobulkMode == Mode::Standard) {
             standardTls = std::make_unique<StandardTls>([this] {
                 return StandardLocalAgg(M, K);
@@ -350,9 +352,10 @@ public:
         }
 
         RowMajorMatrixXd gamma;
+        VectorXd background;
         RowMajorMatrixXd doc_topic =
-            inferTopics(DocumentView(batch.docs), gamma);
-        writeTopicRows(batch.ids, doc_topic);
+            inferTopics(DocumentView(batch.docs), gamma, background);
+        writeTopicRows(batch.ids, doc_topic, background);
         writeClassificationRows(batch.docs, batch.ids, gamma);
 
         const size_t grainSize = std::max<size_t>(
@@ -368,8 +371,11 @@ public:
                         const uint32_t m = doc.ids[j];
                         const double cnt = doc.cnts[j];
                         const double raw_count = lda.rawCountFor(m, cnt, doc.counts_weighted);
+                        const double foreground = hasBackground
+                            ? 1.0 - background(i) : 1.0;
                         for (int32_t k = 0; k < K; ++k) {
-                            local.pseudobulk(m, k) += raw_count * doc_topic(i, k);
+                            local.pseudobulk(m, k) += raw_count * foreground
+                                * doc_topic(i, k);
                         }
                     }
                 }
@@ -394,12 +400,20 @@ public:
         }
 
         RowMajorMatrixXd gamma;
+        VectorXd background;
         RowMajorMatrixXd doc_topic =
-            inferTopics(DocumentView(batch.modelDocs), gamma);
-        writeTopicRows(batch.ids, doc_topic);
+            inferTopics(DocumentView(batch.modelDocs), gamma, background);
+        writeTopicRows(batch.ids, doc_topic, background);
         writeClassificationRows(batch.modelDocs, batch.ids, gamma);
+        RowMajorMatrixXd weighted_topics = doc_topic;
+        if (hasBackground) {
+            for (int32_t document = 0; document < weighted_topics.rows();
+                    ++document) {
+                weighted_topics.row(document) *= 1.0 - background(document);
+            }
+        }
         transform_pseudobulk::accumulate(
-            specialPseudobulk, batch, doc_topic, pseudobulkMode);
+            specialPseudobulk, batch, weighted_topics, pseudobulkMode);
         processResiduals(batch.modelDocs, batch.ids, doc_topic, gamma,
             batch.rawModelCounts.empty() ? nullptr : &batch.rawModelCounts);
     }
@@ -431,12 +445,21 @@ private:
     using StandardTls = tbb::enumerable_thread_specific<StandardLocalAgg>;
     using ResidualTls = tbb::enumerable_thread_specific<ResidualLocalAgg>;
 
-    RowMajorMatrixXd inferTopics(
-            DocumentView docs, RowMajorMatrixXd& gamma) {
+    RowMajorMatrixXd inferTopics(DocumentView docs, RowMajorMatrixXd& gamma,
+            VectorXd& background) {
         if (residualState == nullptr && classifierOutput == nullptr) {
-            return lda.do_transform(docs);
+            RowMajorMatrixXd inferred = lda.do_transform(docs);
+            if (!hasBackground) return inferred;
+            background = inferred.col(0);
+            return inferred.rightCols(K);
         }
-        gamma = lda.do_transform_gamma(docs);
+        RowMajorMatrixXd inferred_gamma = lda.do_transform_gamma(docs);
+        if (hasBackground) {
+            background = inferred_gamma.col(0);
+            gamma = inferred_gamma.rightCols(K);
+        } else {
+            gamma = std::move(inferred_gamma);
+        }
         RowMajorMatrixXd topics = gamma;
         for (int32_t d = 0; d < topics.rows(); ++d) {
             const double total = topics.row(d).sum();
@@ -995,20 +1018,30 @@ private:
         }
     }
 
-    void writeTopicRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
+    void writeTopicRows(const std::vector<std::string>& ids,
+            const RowMajorMatrixXd& doc_topic, const VectorXd& background) {
         if (topkOnly > 0) {
-            writeTopKRows(ids, doc_topic);
+            writeTopKRows(ids, doc_topic, background);
             return;
         }
-        transform_helpers::writeTopicRows(resultsStream, ids, doc_topic);
+        if (!hasBackground) {
+            transform_helpers::writeTopicRows(resultsStream, ids, doc_topic);
+            return;
+        }
+        RowMajorMatrixXd combined(doc_topic.rows(), K + 1);
+        combined.col(0) = background;
+        combined.rightCols(K) = doc_topic;
+        transform_helpers::writeTopicRows(resultsStream, ids, combined);
     }
 
-    void writeTopKRows(const std::vector<std::string>& ids, const RowMajorMatrixXd& doc_topic) {
+    void writeTopKRows(const std::vector<std::string>& ids,
+            const RowMajorMatrixXd& doc_topic, const VectorXd& background) {
         const int32_t topk = std::min(topkOnly, K);
         for (size_t i = 0; i < ids.size(); ++i) {
             if (!ids[i].empty()) {
                 resultsStream << ids[i] << "\t";
             }
+            if (hasBackground) resultsStream << background(i) << "\t";
             std::vector<std::pair<double, int32_t>> ranked;
             ranked.reserve(K);
             for (int32_t k = 0; k < K; ++k) {
@@ -1047,6 +1080,7 @@ private:
     int32_t threadHint;
     int32_t M;
     int32_t K;
+    bool hasBackground;
     std::unique_ptr<StandardTls> standardTls;
     std::unique_ptr<ResidualTls> residualTls;
 };
@@ -1278,10 +1312,17 @@ int32_t cmdLDATransform(int argc, char** argv) {
     }
     lda.set_reproducible_init(true);
 
+    if (lda.has_background() && computeResiduals) {
+        error("Background-aware residual diagnostics are not yet supported");
+    }
+    if (lda.has_background() && !classifier_model.empty()) {
+        error("Partition-classifier propagation is not supported for background LDA");
+    }
+
     const int32_t M = lda.nFeatures();
     const int32_t K = lda.getNumTopics();
     const std::vector<std::string> modelFeatureNames = lda.getFeatureNames();
-    if (topk_only > 0 && topk_only > K-1) {
+    if (topk_only > 0 && topk_only >= K) {
         warning("--topk-only is >= the number of topics (%d); writing all topics", K);
         topk_only = -1;
     }

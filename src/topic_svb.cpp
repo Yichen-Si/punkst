@@ -185,6 +185,7 @@ void TopicModelWrapper::prepare10XCache(DGEReader10X& dge, int32_t _minCountTrai
     dge_docs_cache_.clear();
     dge_unit_id_cache_.clear();
     dge_train_idx_cache_.clear();
+    feature_detection_fraction_.clear();
     dge_minCountTrain_cache_ = _minCountTrain;
     int32_t nUnits = dge.readAll(dge_docs_cache_, dge_unit_id_cache_, 0);
     if (dge_docs_cache_.empty()) {
@@ -192,11 +193,24 @@ void TopicModelWrapper::prepare10XCache(DGEReader10X& dge, int32_t _minCountTrai
         return;
     }
     dge_train_idx_cache_.reserve(dge_docs_cache_.size());
+    feature_detection_fraction_.assign(M_, 0.0);
     for (size_t i = 0; i < dge_docs_cache_.size(); ++i) {
         Document& doc = dge_docs_cache_[i];
         applyWeights(doc);
+        for (size_t observation = 0; observation < doc.ids.size();
+                ++observation) {
+            if (doc.cnts[observation] > 0.0
+                    && doc.ids[observation] < feature_detection_fraction_.size()) {
+                feature_detection_fraction_[doc.ids[observation]] += 1.0;
+            }
+        }
         if (doc.get_raw_sum() >= _minCountTrain) {
             dge_train_idx_cache_.push_back(static_cast<int32_t>(i));
+        }
+    }
+    if (!dge_docs_cache_.empty()) {
+        for (double& value : feature_detection_fraction_) {
+            value /= static_cast<double>(dge_docs_cache_.size());
         }
     }
     int32_t nTrain = static_cast<int32_t>(dge_train_idx_cache_.size());
@@ -220,6 +234,7 @@ int32_t TopicModelWrapper::filterCurrentFeatures(int32_t minCount,
         dge_docs_cache_.clear();
         dge_unit_id_cache_.clear();
         dge_train_idx_cache_.clear();
+        feature_detection_fraction_.clear();
     }
     return nKept;
 }

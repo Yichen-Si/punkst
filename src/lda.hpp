@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <cstdlib>
@@ -102,6 +103,22 @@ public:
         assert(algo_ == InferenceType::SVB_DN);
         return lambda0_;
     }
+    const VectorXd& get_background_prior() const {
+        assert(algo_ == InferenceType::SVB_DN);
+        return eta0_;
+    }
+    bool has_background() const {
+        return algo_ == InferenceType::SVB_DN;
+    }
+    bool background_is_fixed() const {
+        return fix_background_;
+    }
+    double get_background_prior_a() const {
+        return a0_;
+    }
+    double get_background_prior_b() const {
+        return b0_;
+    }
     RowMajorMatrixXd copy_model() const {
         return components_;
     }
@@ -149,6 +166,11 @@ public:
     void set_scvb0_parameters(double s_beta = 1, double s_theta = 1, double tau_theta = 10, double kappa_theta = 0.9, int32_t burnin = 10);
     void set_background_prior(const VectorXd& eta0, double a0, double b0, bool fixed = false);
     void set_background_prior(const std::vector<double> eta0, double a0, double b0, bool fixed = false);
+    void set_background_state(const VectorXd& eta0, const VectorXd& lambda0,
+        double a0, double b0, double background_count,
+        double foreground_count, bool fixed);
+    void prune_topics(const std::vector<int32_t>& keep,
+        double alpha = -1.0, double eta = -1.0);
 
     // Set the model matrix
     void set_model_from_matrix(std::vector<std::vector<double>>& lambdaVals);
@@ -235,9 +257,18 @@ private:
                     VectorXd gamma_d, exp_Elog_theta_d;
                     ArrayXd fg_counts;
                     (void)svbdn_fit_one_document(gamma_d, exp_Elog_theta_d, doc, fg_counts, stream);
-                    gamma_d /= gamma_d.sum();
                     double c = std::accumulate(doc.cnts.begin(), doc.cnts.end(), 0.0);
-                    double bg = 1. - fg_counts.sum() / c;
+                    const double gamma_sum = gamma_d.sum();
+                    if (gamma_sum > eps_ && std::isfinite(gamma_sum)) {
+                        gamma_d /= gamma_sum;
+                    } else {
+                        gamma_d.setConstant(1.0 / n_topics_);
+                    }
+                    double bg = a0_ / (a0_ + b0_);
+                    if (c > 0.0 && std::isfinite(c)) {
+                        bg = 1. - fg_counts.sum() / c;
+                    }
+                    bg = std::clamp(bg, 0.0, 1.0);
                     gamma(d, 0) = bg;
                     for (int32_t k = 0; k < n_topics_; ++k) {
                         gamma(d, k + 1) = gamma_d(k);
@@ -266,11 +297,14 @@ private:
 
     template <typename Docs, typename DocAccessor>
     RowMajorMatrixXd transform_gamma_common(const Docs& docs, DocAccessor&& doc_of) {
-        if (algo_ != InferenceType::SVB) {
-            error("%s: raw gamma transform is only supported for SVB", __func__);
+        if (algo_ != InferenceType::SVB
+                && algo_ != InferenceType::SVB_DN) {
+            error("%s: raw gamma transform requires SVB", __func__);
         }
         const int n_docs = static_cast<int>(docs.size());
-        RowMajorMatrixXd gamma(n_docs, n_topics_);
+        const int ncol = algo_ == InferenceType::SVB_DN
+            ? n_topics_ + 1 : n_topics_;
+        RowMajorMatrixXd gamma(n_docs, ncol);
 
         auto process_doc = [&](int d) {
             const uint64_t stream = deterministic_rng_
@@ -278,8 +312,24 @@ private:
                     0x41f2c7d3ULL ^ static_cast<uint64_t>(update_count_))
                 : 0;
             VectorXd gamma_d, exp_Elog_theta_d;
-            (void)svb_fit_one_document(gamma_d, exp_Elog_theta_d, doc_of(docs[d]), stream);
-            gamma.row(d) = gamma_d.transpose();
+            if (algo_ == InferenceType::SVB_DN) {
+                ArrayXd fg_counts;
+                const Document& doc = doc_of(docs[d]);
+                (void)svbdn_fit_one_document(gamma_d, exp_Elog_theta_d,
+                    doc, fg_counts, stream);
+                const double total = std::accumulate(
+                    doc.cnts.begin(), doc.cnts.end(), 0.0);
+                double bg = a0_ / (a0_ + b0_);
+                if (total > 0.0 && std::isfinite(total)) {
+                    bg = 1.0 - fg_counts.sum() / total;
+                }
+                gamma(d, 0) = std::clamp(bg, 0.0, 1.0);
+                gamma.row(d).segment(1, n_topics_) = gamma_d.transpose();
+            } else {
+                (void)svb_fit_one_document(gamma_d, exp_Elog_theta_d,
+                    doc_of(docs[d]), stream);
+                gamma.row(d) = gamma_d.transpose();
+            }
         };
 
         if (nThreads_ == 1) {

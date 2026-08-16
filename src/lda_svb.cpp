@@ -182,6 +182,28 @@ void LatentDirichletAllocation::set_background_prior(const std::vector<double> e
     fix_background_ = fixed;
 }
 
+void LatentDirichletAllocation::set_background_state(const VectorXd& eta0,
+        const VectorXd& lambda0, double a0, double b0,
+        double background_count, double foreground_count, bool fixed) {
+    if (eta0.size() != n_features_ || lambda0.size() != n_features_
+            || !(a0 > 0.0) || !(b0 > 0.0)
+            || !(background_count >= 0.0) || !(foreground_count >= 0.0)
+            || !eta0.allFinite() || !lambda0.allFinite()
+            || (eta0.array() <= 0.0).any()
+            || (lambda0.array() <= 0.0).any()) {
+        throw std::invalid_argument("Invalid LDA background state");
+    }
+    eta0_ = eta0;
+    lambda0_ = lambda0;
+    a0_ = a0;
+    b0_ = b0;
+    a_ = background_count;
+    b_ = foreground_count;
+    fix_background_ = fixed;
+    exp_Elog_beta0_ = dirichlet_expectation_1d(lambda0_, 0);
+    algo_ = InferenceType::SVB_DN;
+}
+
 std::vector<double> LatentDirichletAllocation::approx_bound(
     const std::vector<Document>& docs, const MatrixXd& doc_topic_distr, bool sub_sampling) {
     const int n_docs     = static_cast<int>(docs.size());
@@ -322,6 +344,7 @@ int32_t LatentDirichletAllocation::svbdn_fit_one_document(
     if (n_ids == 0) {
         exp_Elog_theta.resize(n_topics_);
         exp_Elog_theta.setConstant(1.0 / n_topics_);
+        fg_counts.resize(0);
         return 0;
     }
     exp_Elog_theta = dirichlet_expectation_1d(gamma, 0); // K x 1
@@ -366,7 +389,7 @@ int32_t LatentDirichletAllocation::svbdn_fit_one_document(
         }
     }
     if (verbose_ > 1) {
-        double bg_frac = fg_counts.sum() / cnt_sum;
+        double bg_frac = 1.0 - fg_counts.sum() / cnt_sum;
         notice("%s: finished after %d iterations, mean change %.1e, background fraction %.3f", __FUNCTION__, iter, diff, bg_frac);
     }
     return iter;

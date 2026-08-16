@@ -8,7 +8,6 @@
 #include "utils.h"
 #include "hexgrid.h"
 #include "nanoflann.hpp"
-#include "nanoflann_utils.h"
 
 #include <tbb/parallel_for.h>
 #include <tbb/global_control.h>

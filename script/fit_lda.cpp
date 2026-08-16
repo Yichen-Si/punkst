@@ -2,6 +2,8 @@
 #include "count_cache_options.hpp"
 
 #include <filesystem>
+#include <cmath>
+#include <iomanip>
 #include <sstream>
 #include <vector>
 
@@ -165,6 +167,9 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     bool pseudobulk_all_features = false;
     bool sort_topics = false;
     bool reproducible_init = false;
+    bool adaptive_topics = false;
+    double min_topic_mean = 1e-4;
+    int32_t adaptive_refit_epochs = 2;
     TrainingCountCacheCliOptions count_cache_options;
 
     double kappa = 0.7, tau0 = 10.0;
@@ -182,6 +187,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
     double a0 = 2, b0 = 8;
     double warmInitEpoch = 0.5;
     double bgInitScale = 0.5;
+    double backgroundPrevalencePower = 0.0;
     int32_t warmInitUnits = -1;
 
     ParamList pl;
@@ -196,6 +202,9 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("unit-diagnostics-similarity", "Add cosine and similarity-adjusted entropy unit diagnostics", unitSimilarityDiagnostics)
       .add_option("pseudobulk-all-features", "Include all retained input features in pseudobulk output", pseudobulk_all_features)
       .add_option("topk-only", "Write only top-k factor indices/probabilities to results.tsv", topk_only);
+    pl.add_option("adaptive-topics", "Treat --n-topics as an upper bound, prune unused topics, and refit", adaptive_topics)
+      .add_option("min-topic-mean", "Minimum mean foreground topic weight retained by --adaptive-topics", min_topic_mean)
+      .add_option("adaptive-refit-epochs", "Refit epochs after adaptive topic pruning", adaptive_refit_epochs);
 
     pl.add_option("in-dge-dir", "Input directory for 10X DGE files", dge_dirs)
       .add_option("in-barcodes", "Input barcodes.tsv.gz", in_bc)
@@ -236,6 +245,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
       .add_option("fit-background", "Fit a background noise in addition to topics", fitBackground)
       .add_option("background-prior", "File with background prior vector", bgPriorFile)
       .add_option("background-init-scale", "Scaling factor for constructing background prior from total feature counts", bgInitScale)
+      .add_option("background-prevalence-power", "Weight empirical background frequencies by feature detection prevalence raised to this power", backgroundPrevalencePower)
       .add_option("fix-background", "Fix the background model during training", fixBackground)
       .add_option("bg-fraction-prior-a0", "Background fraction hyper-parameter a0 in pi~beta(a0, b0)", a0)
       .add_option("bg-fraction-prior-b0", "Background fraction hyper-parameter b0 in pi~beta(a0, b0)", b0)
@@ -261,6 +271,19 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         count_cache_options.mode, count_cache_options.memory_budget);
     if (topk_only == 0) {
         error("--topk-only must be a positive integer");
+    }
+    if (!(min_topic_mean >= 0.0) || !std::isfinite(min_topic_mean)) {
+        error("--min-topic-mean must be finite and nonnegative");
+    }
+    if (adaptive_refit_epochs < 0) {
+        error("--adaptive-refit-epochs must be nonnegative");
+    }
+    if (!(backgroundPrevalencePower >= 0.0)
+            || !std::isfinite(backgroundPrevalencePower)) {
+        error("--background-prevalence-power must be finite and nonnegative");
+    }
+    if (adaptive_topics && projection_only) {
+        error("--adaptive-topics cannot be used with --projection-only");
     }
     if (cheapFeatureDiagnostics && !computeResiduals) {
         error("--feature-diagnostics-cheap requires --residuals");
@@ -387,6 +410,7 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
         } else {
             warmInitEpoch = static_cast<double>(warmInitUnits) / nUnits;
         }
+        if (debug_ > 0) warmInitUnits = std::min(warmInitUnits, debug_);
         if (warmInitUnits > 0) {
             notice("Warm-start using %d units before introducing background", warmInitUnits);
             int32_t nWarm = 0;
@@ -399,7 +423,8 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             lda4hex->printTopicAbundance();
         }
         const double bgScale = lda4hex->hasFullFeatureSums() ? bgInitScale : 1.0;
-        lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale, fixBackground);
+        lda4hex->set_background_prior(bgPriorFile, a0, b0, bgScale,
+            fixBackground, backgroundPrevalencePower);
     }
 
     std::string outModel = outPrefix + ".model.tsv";
@@ -441,6 +466,54 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             notice("Epoch %d/%d, processed %d documents", epoch + 1, nEpochs, n);
             lda4hex->printTopicAbundance();
         }
+        if (adaptive_topics) {
+            const std::vector<std::string> initial_topic_names =
+                lda4hex->get_topic_names();
+            const std::vector<double> initial_usage = use_10x
+                ? lda4hex->estimateTopicUsage10X(batchSize, maxUnits)
+                : lda4hex->estimateTopicUsage(
+                    inFile, batchSize, minCountTrain, maxUnits);
+            const std::vector<int32_t> kept = lda4hex->pruneTopicsByUsage(
+                initial_usage, min_topic_mean);
+            std::vector<bool> retained(initial_usage.size(), false);
+            for (int32_t topic : kept) retained[topic] = true;
+            const std::string usage_path = outPrefix + ".topic_usage.tsv";
+            std::ofstream usage_output(usage_path);
+            if (!usage_output) {
+                error("Cannot write topic usage file: %s", usage_path.c_str());
+            }
+            usage_output << "Topic\tMeanForegroundWeight\tRetained\n"
+                << std::scientific << std::setprecision(8);
+            for (size_t topic = 0; topic < initial_usage.size(); ++topic) {
+                usage_output << initial_topic_names[topic] << '\t'
+                    << initial_usage[topic] << '\t'
+                    << (retained[topic] ? 1 : 0) << '\n';
+            }
+            usage_output.close();
+            notice("Adaptive topic selection retained %d/%d topics (threshold %.3g)",
+                lda4hex->getNumTopics(), static_cast<int32_t>(initial_usage.size()),
+                min_topic_mean);
+            if (kept.size() < initial_usage.size()) {
+                for (int epoch = 0; epoch < adaptive_refit_epochs; ++epoch) {
+                    int32_t n = 0;
+                    if (use_10x) {
+                        n = lda4hex->trainOnline10X(
+                            batchSize, maxUnits, seed + nEpochs + epoch);
+                    } else if (count_cache.resident_batches()) {
+                        n = lda4hex->trainOnline(
+                            *count_cache.resident_batches(), batchSize, maxUnits);
+                    } else if (count_cache.source()) {
+                        n = lda4hex->trainOnline(
+                            *count_cache.source(), batchSize, maxUnits);
+                    } else {
+                        n = lda4hex->trainOnline(
+                            inFile, batchSize, minCountTrain, maxUnits);
+                    }
+                    notice("Adaptive refit epoch %d/%d, processed %d documents",
+                        epoch + 1, adaptive_refit_epochs, n);
+                }
+            }
+        }
         if (sort_topics) {
             lda4hex->sortTopicsByWeight();
         }
@@ -448,42 +521,31 @@ int32_t cmdTopicModelSVI(int argc, char** argv) {
             std::string bgFile = outPrefix + ".background.tsv";
             lda4hex->writeBackgroundModel(bgFile);
             notice("Background profile written to %s", bgFile.c_str());
+            const std::string specificityFile =
+                outPrefix + ".topic_specificity.tsv";
+            lda4hex->writeTopicSpecificity(specificityFile);
+            notice("Topic specificity written to %s", specificityFile.c_str());
         }
 
         lda4hex->writeModelToFile(outModel);
         notice("Model written to %s", outModel.c_str());
-        if (!fitBackground) {
-            const std::string outState = outPrefix + ".state.tsv";
-            lda4hex->writeStateToFile(outState);
-            notice("LDA state written to %s", outState.c_str());
-        }
+        const std::string outState = outPrefix + ".state.tsv";
+        lda4hex->writeStateToFile(outState);
+        notice("LDA state written to %s", outState.c_str());
     }
 
     if (transform) {
         const std::string transformModel = projection_only
             ? priorFile : outPrefix + ".state.tsv";
-        if (!fitBackground) {
-            return runDelegatedTransform(transformModel, !projection_only,
-                outPrefix, inFile, metaFile,
-                dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
-                include_ftr_regex, exclude_ftr_regex, defaultWeight, icolWeight,
-                maxIter, mDelta, nThreads, modal, debug_,
-                count_cache_options.temp_dir, computeResiduals,
-                cheapFeatureDiagnostics, !projection_only,
-                unitSimilarityDiagnostics,
-                pseudobulk_all_features, topk_only);
-        }
-        if (pseudobulk_all_features) {
-            error("--pseudobulk-all-features is not supported by the background-enabled legacy transform");
-        }
-        if (computeResiduals || topk_only > 0) {
-            warning("Keeping legacy transform output because background-enabled LDA does not yet support delegated residual/top-k transform");
-        }
-        if (use_10x) {
-            lda4hex->fitAndWriteToFile10X(*dge_ptr, outPrefix, batchSize);
-        } else {
-            lda4hex->fitAndWriteToFile(inFile, outPrefix, batchSize);
-        }
+        return runDelegatedTransform(transformModel, !projection_only,
+            outPrefix, inFile, metaFile,
+            dge_dirs, in_bc, in_ft, in_mtx, dataset_ids, featureFile, minCountFeature,
+            include_ftr_regex, exclude_ftr_regex, defaultWeight, icolWeight,
+            maxIter, mDelta, nThreads, modal, debug_,
+            count_cache_options.temp_dir, computeResiduals,
+            cheapFeatureDiagnostics, !projection_only,
+            unitSimilarityDiagnostics,
+            pseudobulk_all_features, topk_only);
     }
 
     return 0;
