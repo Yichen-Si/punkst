@@ -1096,19 +1096,20 @@ inline TileOperator::MergedAnnotate2DCounts TileOperator::annotateMergedTile2DSh
             const int32_t auxX = floorDivInt32(ix, plan.ratioXY);
             const int32_t auxY = floorDivInt32(iy, plan.ratioXY);
             const TopProbs* rec = nullptr;
-            if (!(plan.op->hasFeatureIndex() && !featureKnown)) {
+            const bool canMatch = !plan.op->hasFeatureIndex() || featureKnown;
+            if (canMatch) {
                 ensure_loaded(srcIdx);
-            }
-            if (!missing[srcIdx]) {
-                if (plan.op->hasFeatureIndex()) {
-                    auto recIt = sourceFeature2D[srcIdx].find(std::make_tuple(auxX, auxY, featureIdx));
-                    if (recIt != sourceFeature2D[srcIdx].end()) {
-                        rec = &recIt->second;
-                    }
-                } else {
-                    auto recIt = sourcePlain2D[srcIdx].find({auxX, auxY});
-                    if (recIt != sourcePlain2D[srcIdx].end()) {
-                        rec = &recIt->second;
+                if (!missing[srcIdx]) {
+                    if (plan.op->hasFeatureIndex()) {
+                        auto recIt = sourceFeature2D[srcIdx].find(std::make_tuple(auxX, auxY, featureIdx));
+                        if (recIt != sourceFeature2D[srcIdx].end()) {
+                            rec = &recIt->second;
+                        }
+                    } else {
+                        auto recIt = sourcePlain2D[srcIdx].find({auxX, auxY});
+                        if (recIt != sourcePlain2D[srcIdx].end()) {
+                            rec = &recIt->second;
+                        }
                     }
                 }
             }
@@ -1233,33 +1234,34 @@ inline TileOperator::MergedAnnotate2DCounts TileOperator::annotateMergedTile3DSh
             const int32_t auxX = floorDivInt32(ix, plan.ratioXY);
             const int32_t auxY = floorDivInt32(iy, plan.ratioXY);
             const TopProbs* rec = nullptr;
-            if (!(plan.op->hasFeatureIndex() && !featureKnown)) {
+            const bool canMatch = !plan.op->hasFeatureIndex() || featureKnown;
+            if (canMatch) {
                 ensure_loaded(srcIdx);
-            }
-            if (!missing[srcIdx]) {
-                if (plan.op->hasFeatureIndex()) {
-                    if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
-                        auto recIt = sourceFeature2D[srcIdx].find(std::make_tuple(auxX, auxY, featureIdx));
-                        if (recIt != sourceFeature2D[srcIdx].end()) {
+                if (!missing[srcIdx]) {
+                    if (plan.op->hasFeatureIndex()) {
+                        if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
+                            auto recIt = sourceFeature2D[srcIdx].find(std::make_tuple(auxX, auxY, featureIdx));
+                            if (recIt != sourceFeature2D[srcIdx].end()) {
+                                rec = &recIt->second;
+                            }
+                        } else {
+                            const int32_t auxZ = floorDivInt32(iz, plan.ratioZ);
+                            auto recIt = sourceFeature3D[srcIdx].find(std::make_tuple(auxX, auxY, auxZ, featureIdx));
+                            if (recIt != sourceFeature3D[srcIdx].end()) {
+                                rec = &recIt->second;
+                            }
+                        }
+                    } else if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
+                        auto recIt = sourcePlain2D[srcIdx].find({auxX, auxY});
+                        if (recIt != sourcePlain2D[srcIdx].end()) {
                             rec = &recIt->second;
                         }
                     } else {
                         const int32_t auxZ = floorDivInt32(iz, plan.ratioZ);
-                        auto recIt = sourceFeature3D[srcIdx].find(std::make_tuple(auxX, auxY, auxZ, featureIdx));
-                        if (recIt != sourceFeature3D[srcIdx].end()) {
+                        auto recIt = sourcePlain3D[srcIdx].find(std::make_tuple(auxX, auxY, auxZ));
+                        if (recIt != sourcePlain3D[srcIdx].end()) {
                             rec = &recIt->second;
                         }
-                    }
-                } else if (plan.relation == MergeSourceRelation::Broadcast2DTo3D) {
-                    auto recIt = sourcePlain2D[srcIdx].find({auxX, auxY});
-                    if (recIt != sourcePlain2D[srcIdx].end()) {
-                        rec = &recIt->second;
-                    }
-                } else {
-                    const int32_t auxZ = floorDivInt32(iz, plan.ratioZ);
-                    auto recIt = sourcePlain3D[srcIdx].find(std::make_tuple(auxX, auxY, auxZ));
-                    if (recIt != sourcePlain3D[srcIdx].end()) {
-                        rec = &recIt->second;
                     }
                 }
             }
