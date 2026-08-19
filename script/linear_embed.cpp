@@ -183,6 +183,62 @@ void write_cluster_labels(const std::string& path,
     }
 }
 
+void filter_factors_by_relative_weight(
+        punkst_cli::TopicCenterTable& theta, double threshold) {
+    if (!(threshold > 0.0)) return;
+    if (!std::isfinite(threshold)) {
+        throw std::invalid_argument(
+            "--factor-weight-threshold must be finite");
+    }
+    if (theta.values.rows() == 0 || theta.values.cols() == 0) {
+        throw std::invalid_argument("Theta table has no factor values");
+    }
+
+    Eigen::VectorXd normalized_sums = Eigen::VectorXd::Zero(
+        theta.values.cols());
+    for (Eigen::Index row = 0; row < theta.values.rows(); ++row) {
+        const double total = theta.values.row(row).sum();
+        if (!(total > 0.0) || !std::isfinite(total)) {
+            throw std::runtime_error(
+                "Cannot L1-normalize theta row for factor-weight filtering");
+        }
+        normalized_sums += theta.values.row(row).transpose() / total;
+    }
+    const double minimum_weight = threshold
+        * static_cast<double>(theta.values.rows());
+    std::vector<Eigen::Index> retained;
+    retained.reserve(static_cast<size_t>(theta.values.cols()));
+    for (Eigen::Index factor = 0; factor < theta.values.cols(); ++factor) {
+        if (normalized_sums(factor) > minimum_weight) {
+            retained.push_back(factor);
+        }
+    }
+    if (retained.size() < 3) {
+        throw std::runtime_error(
+            "Factor-weight filter retained "
+            + std::to_string(retained.size()) + " of "
+            + std::to_string(theta.values.cols())
+            + " factors; at least three are required"
+            + " (--factor-weight-threshold "
+            + std::to_string(threshold) + ")");
+    }
+    if (retained.size() == static_cast<size_t>(theta.values.cols())) return;
+
+    RowMajorMatrixXd filtered(theta.values.rows(), retained.size());
+    std::vector<std::string> topics;
+    topics.reserve(retained.size());
+    for (size_t target = 0; target < retained.size(); ++target) {
+        const Eigen::Index source = retained[target];
+        filtered.col(static_cast<Eigen::Index>(target)) =
+            theta.values.col(source);
+        topics.push_back(theta.topics[static_cast<size_t>(source)]);
+    }
+    notice("Factor-weight filter retained %zu of %zu factors (threshold %.10g)",
+        retained.size(), static_cast<size_t>(theta.values.cols()), threshold);
+    theta.values = std::move(filtered);
+    theta.topics = std::move(topics);
+}
+
 } // namespace
 
 int32_t cmdLinearEmbed(int argc, char** argv) {
@@ -195,6 +251,7 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
     int32_t factor_column_start = -1, factor_column_end = -1;
     int32_t dim = -1, visual_dim = -1;
     int32_t threads = embedding_cli.values.threads;
+    double factor_weight_threshold = 1e-5;
     bool id_as_row_index = false;
 
     ParamList parameters;
@@ -213,6 +270,9 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
       .add_option("icol-factor-end",
           "0-based last theta factor column (inclusive)",
           factor_column_end)
+      .add_option("factor-weight-threshold",
+          "Keep theta factors with L1-normalized weight above this fraction of input units; zero or negative disables",
+          factor_weight_threshold)
       .add_option("icol-id",
           "0-based partition column used as unit identifier",
           partition_identifier_column)
@@ -271,6 +331,10 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
         if (threads <= 0) {
             throw std::invalid_argument("--threads must be positive");
         }
+        if (!std::isfinite(factor_weight_threshold)) {
+            throw std::invalid_argument(
+                "--factor-weight-threshold must be finite");
+        }
         if (embedding_cli.values.eigen_projection
             && (!(embedding_cli.values.covariance_floor > 0.0)
                 || !std::isfinite(
@@ -309,6 +373,7 @@ int32_t cmdLinearEmbed(int argc, char** argv) {
             theta_identifier_column, nullptr,
             "--theta-icol-id", false, factor_column_start,
             factor_column_end);
+        filter_factors_by_relative_weight(theta, factor_weight_threshold);
         const PartitionTable partitions = read_partitions(
             partition_path, partition_identifier_column, partition_columns);
         const std::vector<int32_t> matched_rows = match_partition_rows(

@@ -19,6 +19,7 @@ struct FitOptions {
     int32_t folds = 5;
     int32_t max_iterations = 300;
     int32_t lbfgs_history = 10;
+    int32_t threads = 1;
     double gradient_tolerance = 1e-7;
     std::function<void(const std::string&)> progress_callback;
 };
@@ -150,6 +151,7 @@ RowMajorMatrixXd probabilities_from_logits(
 namespace testing {
 
 void run_classifier_gradient_test();
+void run_classifier_iteration_cap_test();
 
 } // namespace testing
 

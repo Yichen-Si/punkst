@@ -8,10 +8,14 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
+
+#include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
 
 namespace punkst::partition_classifier {
 namespace {
@@ -94,13 +98,13 @@ Eigen::VectorXd optimize_lbfgs(const Objective& objective,
     Eigen::VectorXd gradient;
     double value = objective(parameters, &gradient);
     punkst::LbfgsHistory<Eigen::VectorXd> history(options.lbfgs_history);
-    for (int32_t iteration = 0; iteration < options.max_iterations;
-            ++iteration) {
+    int32_t iterations = 0;
+    for (; iterations < options.max_iterations; ++iterations) {
         if (!std::isfinite(value) || !gradient.allFinite()) {
             throw std::runtime_error("Nonfinite classifier objective");
         }
         if (gradient.lpNorm<Eigen::Infinity>()
-                <= options.gradient_tolerance) return parameters;
+                <= options.gradient_tolerance) break;
 
         Eigen::VectorXd direction = -history.apply(gradient);
         double directional_derivative = gradient.dot(direction);
@@ -134,13 +138,38 @@ Eigen::VectorXd optimize_lbfgs(const Objective& objective,
         gradient = std::move(candidate_gradient);
         value = candidate_value;
     }
-    if (gradient.lpNorm<Eigen::Infinity>()
-            <= options.gradient_tolerance) return parameters;
+    if (!std::isfinite(value) || !gradient.allFinite()) {
+        throw std::runtime_error("Nonfinite classifier objective");
+    }
+    const double gradient_norm = gradient.lpNorm<Eigen::Infinity>();
     std::ostringstream message;
-    message << "Classifier L-BFGS did not converge after "
-        << options.max_iterations << " iterations; final gradient infinity norm "
-        << gradient.lpNorm<Eigen::Infinity>();
-    throw std::runtime_error(message.str());
+    message << "Classifier L-BFGS fit finished after " << iterations
+        << (iterations == 1 ? " iteration (ridge " : " iterations (ridge ")
+        << objective.ridge << ", "
+        << objective.rows.size()
+        << " training rows); final gradient infinity norm " << gradient_norm;
+    if (gradient_norm > options.gradient_tolerance) {
+        message << " (iteration limit reached)";
+    }
+    report_progress(options, message.str());
+    return parameters;
+}
+
+template <typename Function>
+void parallel_for_index(int32_t count, const FitOptions& options,
+        const Function& function) {
+    if (options.threads == 1 || count == 1) {
+        for (int32_t index = 0; index < count; ++index) function(index);
+        return;
+    }
+    tbb::parallel_for(int32_t{0}, count, function);
+}
+
+std::unique_ptr<tbb::global_control> make_thread_limit(int32_t threads) {
+    if (threads == 0) return nullptr;
+    return std::make_unique<tbb::global_control>(
+        tbb::global_control::max_allowed_parallelism,
+        static_cast<size_t>(threads));
 }
 
 Eigen::VectorXd fit_parameters(const RowMajorMatrixXd& x,
@@ -320,7 +349,7 @@ NestedModelFit fit_nested_model(const RowMajorMatrixXd& x,
                 "Ridge grid must be finite and nonnegative");
         }
         RowMajorMatrixXd oof(rows.size(), class_count);
-        for (int32_t fold = 0; fold < assignment.folds; ++fold) {
+        parallel_for_index(assignment.folds, options, [&](int32_t fold) {
             std::vector<int32_t> training;
             std::vector<int32_t> validation;
             for (const int32_t row : rows) {
@@ -337,7 +366,7 @@ NestedModelFit fit_nested_model(const RowMajorMatrixXd& x,
                     oof.row(index) = logits.row(output_index++);
                 }
             }
-        }
+        });
         const double loss = evaluate(probabilities_from_logits(oof, 1.0),
             compact_labels, compact_weights).log_loss;
         if (loss < best_loss) {
@@ -408,6 +437,40 @@ void run_classifier_gradient_test() {
     if ((analytic - numerical).cwiseAbs().maxCoeff() > 1e-6 * scale) {
         throw std::runtime_error(
             "Classifier analytic gradient failed finite-difference test");
+    }
+}
+
+void run_classifier_iteration_cap_test() {
+    RowMajorMatrixXd x(5, 3);
+    x << 0.2, -0.4, 0.7,
+         -0.1, 0.5, 0.3,
+         0.8, 0.1, -0.2,
+         -0.5, 0.6, 0.4,
+         0.3, -0.2, 0.9;
+    Eigen::VectorXi labels(5);
+    labels << 0, 1, 2, 1, 0;
+    Eigen::VectorXd weights = Eigen::VectorXd::Ones(5);
+    const std::vector<int32_t> rows{0, 1, 2, 3, 4};
+    const Eigen::MatrixXd helmert = normalized_helmert(3);
+    const Objective objective{x, labels, weights, rows, helmert, 3, 3, 0.07};
+    FitOptions options;
+    options.max_iterations = 1;
+    options.gradient_tolerance = 1e-30;
+    int32_t notice_count = 0;
+    std::string notice_message;
+    options.progress_callback = [&](const std::string& message) {
+        ++notice_count;
+        notice_message = message;
+    };
+    const Eigen::VectorXd parameters = optimize_lbfgs(
+        objective, Eigen::VectorXd::Zero(8), options);
+    if (!parameters.allFinite() || notice_count != 1
+            || notice_message.find("finished after 1 iteration")
+                == std::string::npos
+            || notice_message.find("final gradient infinity norm")
+                == std::string::npos) {
+        throw std::runtime_error(
+            "Classifier iteration-cap continuation test failed");
     }
 }
 
@@ -896,12 +959,14 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
             || !weights.allFinite() || (weights.array() <= 0.0).any()
             || options.ridge_grid.empty() || options.folds < 2
             || options.max_iterations <= 0 || options.lbfgs_history <= 0
+            || options.threads < 0
             || !(options.gradient_tolerance > 0.0)) {
         throw std::invalid_argument("Invalid classifier fit input");
     }
     require_unique_nonempty(identifiers, "Classifier identifiers");
     require_unique_nonempty(topics, "Classifier topics");
     require_unique_nonempty(classes, "Classifier classes");
+    const auto thread_limit = make_thread_limit(options.threads);
     RowMajorMatrixXd normalized = compositions;
     for (Eigen::Index row = 0; row < normalized.rows(); ++row) {
         normalized.row(row) /= normalized.row(row).sum();
@@ -933,7 +998,7 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
             throw std::invalid_argument("Ridge grid must be finite and nonnegative");
         }
         RowMajorMatrixXd oof(rows, class_count);
-        for (int32_t fold = 0; fold < folds; ++fold) {
+        parallel_for_index(folds, options, [&](int32_t fold) {
             std::vector<int32_t> training;
             std::vector<int32_t> validation;
             training.reserve(rows);
@@ -948,7 +1013,7 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
             for (size_t index = 0; index < validation.size(); ++index) {
                 oof.row(validation[index]) = logits.row(index);
             }
-        }
+        });
         CvResult cv;
         cv.ridge = ridge;
         cv.metrics = evaluate(probabilities_from_logits(oof, 1.0),
@@ -1088,12 +1153,16 @@ CrossfitResult fit_crossfit(
             || (compositions.array() < 0.0).any()
             || (compositions.rowwise().sum().array() <= 0.0).any()
             || !weights.allFinite() || (weights.array() <= 0.0).any()
-            || options.ridge_grid.empty() || options.folds < 2) {
+            || options.ridge_grid.empty() || options.folds < 2
+            || options.max_iterations <= 0 || options.lbfgs_history <= 0
+            || options.threads < 0
+            || !(options.gradient_tolerance > 0.0)) {
         throw std::invalid_argument("Invalid classifier crossfit input");
     }
     require_unique_nonempty(identifiers, "Crossfit identifiers");
     require_unique_nonempty(topics, "Classifier topics");
     require_unique_nonempty(classes, "Classifier classes");
+    const auto thread_limit = make_thread_limit(options.threads);
     RowMajorMatrixXd normalized = compositions;
     for (Eigen::Index row = 0; row < normalized.rows(); ++row) {
         normalized.row(row) /= normalized.row(row).sum();
@@ -1124,9 +1193,9 @@ CrossfitResult fit_crossfit(
     CrossfitResult result;
     result.fold_by_row = outer.by_row;
     result.probabilities.resize(rows, class_count);
-    result.fold_models.reserve(outer.folds);
-    result.diagnostics.reserve(outer.folds);
-    for (int32_t fold = 0; fold < outer.folds; ++fold) {
+    result.fold_models.resize(outer.folds);
+    result.diagnostics.resize(outer.folds);
+    parallel_for_index(outer.folds, options, [&](int32_t fold) {
         std::vector<int32_t> training;
         std::vector<int32_t> heldout;
         for (int32_t row = 0; row < rows; ++row) {
@@ -1145,7 +1214,7 @@ CrossfitResult fit_crossfit(
             seed ^ (static_cast<uint64_t>(fold) << 32)
                 ^ 0x696e6e6572ULL,
             options);
-        result.fold_models.push_back(fitted.model);
+        result.fold_models[static_cast<size_t>(fold)] = fitted.model;
         {
             std::ostringstream message;
             message << "Partition classifier crossfit fold " << (fold + 1)
@@ -1176,8 +1245,8 @@ CrossfitResult fit_crossfit(
         diagnostic.temperature = fitted.model.temperature;
         diagnostic.metrics = evaluate(
             fold_probabilities, fold_labels, fold_weights);
-        result.diagnostics.push_back(diagnostic);
-    }
+        result.diagnostics[static_cast<size_t>(fold)] = diagnostic;
+    });
     result.overall = evaluate(result.probabilities, labels, weights);
     {
         std::ostringstream message;

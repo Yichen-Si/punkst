@@ -10,8 +10,10 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -19,9 +21,26 @@
 #include <utility>
 #include <vector>
 
+#include <tbb/parallel_pipeline.h>
+#include <tbb/task_arena.h>
+
 namespace {
 
 using punkst::partition_classifier::Model;
+
+struct ThetaRow {
+    std::string identifier;
+    Eigen::VectorXd composition;
+};
+
+struct RawThetaRow {
+    uint64_t line_number = 0;
+    std::string line;
+};
+
+struct RawThetaBatch {
+    std::vector<RawThetaRow> rows;
+};
 
 class DenseThetaStream {
 public:
@@ -67,6 +86,78 @@ public:
             callback(row, identifier,
                 parse_composition(fields, line_number));
         });
+    }
+
+    template<class Transform, class Sink>
+    void process_batches_unordered(int32_t threads, size_t rows_per_batch,
+            Transform&& transform, Sink&& sink) const {
+        if (threads < 0 || rows_per_batch == 0) {
+            throw std::invalid_argument("Invalid theta batch options");
+        }
+        TextLineReader input(path_);
+        std::string line;
+        while (input.getline(line) && line.empty()) {}
+        uint64_t line_number = 1;
+        uint64_t data_rows = 0;
+        const int arena_concurrency = threads > 0
+            ? threads : tbb::task_arena::automatic;
+        tbb::task_arena arena(arena_concurrency);
+        arena.execute([&] {
+            const int concurrency = std::max(
+                1, tbb::this_task_arena::max_concurrency());
+            const size_t tokens = static_cast<size_t>(std::clamp(
+                concurrency * 2, 2, 32));
+            tbb::parallel_pipeline(tokens,
+                tbb::make_filter<void, RawThetaBatch>(
+                    tbb::filter_mode::serial_in_order,
+                    [&](tbb::flow_control& control) {
+                        RawThetaBatch batch;
+                        batch.rows.reserve(rows_per_batch);
+                        while (batch.rows.size() < rows_per_batch
+                                && input.getline(line)) {
+                            ++line_number;
+                            if (line.empty() || is_comment_line(line)) continue;
+                            batch.rows.push_back(
+                                RawThetaRow{line_number, std::move(line)});
+                            ++data_rows;
+                        }
+                        if (batch.rows.empty()) control.stop();
+                        return batch;
+                    })
+              & tbb::make_filter<RawThetaBatch, std::string>(
+                    tbb::filter_mode::parallel,
+                    [&](RawThetaBatch batch) {
+                        std::vector<ThetaRow> rows;
+                        rows.reserve(batch.rows.size());
+                        for (const RawThetaRow& raw : batch.rows) {
+                            const std::vector<std::string> fields =
+                                split_delimited(raw.line, '\t');
+                            if (fields.size() != header_size_) {
+                                throw std::runtime_error(
+                                    "Theta row has wrong column count at line "
+                                    + std::to_string(raw.line_number));
+                            }
+                            const std::string& identifier =
+                                fields[identifier_column_];
+                            if (identifier.empty()) {
+                                throw std::runtime_error(
+                                    "Empty theta identifier at line "
+                                    + std::to_string(raw.line_number));
+                            }
+                            rows.push_back(ThetaRow{identifier,
+                                parse_composition(fields, raw.line_number)});
+                        }
+                        return transform(rows);
+                    })
+              & tbb::make_filter<std::string, void>(
+                    tbb::filter_mode::serial_out_of_order,
+                    [&](std::string formatted) {
+                        sink(formatted);
+                    }));
+        });
+        if (data_rows == 0) {
+            throw std::runtime_error("Theta table has no data rows: " + path_);
+        }
     }
 
 private:
@@ -436,7 +527,7 @@ void write_crossfit_diagnostics(const std::string& path,
         << '\t' << result.overall.accuracy << '\n';
 }
 
-void write_prediction_header(std::ofstream& output, int32_t classes,
+void write_prediction_header(std::ostream& output, int32_t classes,
         int32_t top_k, bool dense) {
     output << "#id";
     if (dense) {
@@ -451,7 +542,7 @@ void write_prediction_header(std::ofstream& output, int32_t classes,
     output << '\n';
 }
 
-void write_prediction_row(std::ofstream& output, const std::string& identifier,
+void write_prediction_row(std::ostream& output, const std::string& identifier,
         const Eigen::VectorXd& probability,
         const std::vector<std::string>& classes, int32_t top_k, bool dense,
         std::vector<int32_t>& order) {
@@ -493,19 +584,43 @@ void write_discordant_row(std::ofstream& output,
 }
 
 void write_predictions(const DenseThetaStream& theta, const Model& model,
-        const std::string& path, int32_t top_k, bool dense) {
+        const std::string& path, int32_t top_k, bool dense, int32_t threads) {
     if (top_k <= 0) throw std::invalid_argument("--top-k must be positive");
+    if (threads < 0) throw std::invalid_argument("--threads must be nonnegative");
     std::ofstream output(path);
     if (!output) throw std::runtime_error("Cannot write predictions: " + path);
     write_prediction_header(output, model.classes.size(), top_k, dense);
     output << std::scientific << std::setprecision(6);
-    std::vector<int32_t> order;
-    theta.for_each([&](uint64_t, const std::string& identifier,
-            const Eigen::VectorXd& composition) {
-        const Eigen::VectorXd probability = model.probabilities(composition);
-        write_prediction_row(output, identifier, probability,
-            model.classes, top_k, dense, order);
-    });
+    if (threads == 1) {
+        std::vector<int32_t> order;
+        theta.for_each([&](uint64_t, const std::string& identifier,
+                const Eigen::VectorXd& composition) {
+            const Eigen::VectorXd probability = model.probabilities(composition);
+            write_prediction_row(output, identifier, probability,
+                model.classes, top_k, dense, order);
+        }, false);
+    } else {
+        constexpr size_t ROWS_PER_BATCH = 1024;
+        theta.process_batches_unordered(threads, ROWS_PER_BATCH,
+            [&](const std::vector<ThetaRow>& rows) {
+                std::ostringstream formatted;
+                formatted << std::scientific << std::setprecision(6);
+                std::vector<int32_t> order;
+                for (const ThetaRow& row : rows) {
+                    const Eigen::VectorXd probability =
+                        model.probabilities(row.composition);
+                    write_prediction_row(formatted, row.identifier, probability,
+                        model.classes, top_k, dense, order);
+                }
+                return formatted.str();
+            }, [&](const std::string& formatted) {
+                output << formatted;
+                if (!output) {
+                    throw std::runtime_error("Cannot write predictions: " + path);
+                }
+            });
+    }
+    if (!output) throw std::runtime_error("Cannot write predictions: " + path);
 }
 
 void write_fit_predictions(const DenseThetaStream& theta,
@@ -582,6 +697,7 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
     int32_t top_k = 3;
     int32_t max_iterations = 300;
     int32_t lbfgs_history = 10;
+    int32_t threads = 1;
     int32_t seed = 1;
     double gradient_tolerance = 1e-7;
     std::vector<double> ridge_grid;
@@ -614,6 +730,8 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
       .add_option("ridge-grid", "Ridge candidates", ridge_grid)
       .add_option("max-iterations", "Maximum L-BFGS iterations", max_iterations)
       .add_option("lbfgs-history", "L-BFGS correction history", lbfgs_history)
+      .add_option("threads",
+          "Number of parallel classifier fits (0 uses TBB default)", threads)
       .add_option("gradient-tolerance", "L-BFGS infinity-norm tolerance",
           gradient_tolerance)
       .add_option("sampling-seed", "Deterministic sampling seed", seed)
@@ -625,8 +743,9 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
     try {
         parameters.readArgs(argc, argv);
         if (train_max_rows < 0 || minimum_per_class < 2 || folds < 2
-                || seed < 0) {
-            throw std::invalid_argument("Invalid classifier sampling or fold option");
+                || seed < 0 || threads < 0) {
+            throw std::invalid_argument(
+                "Invalid classifier sampling, fold, or thread option");
         }
         DenseThetaStream theta(theta_path, theta_identifier_column,
             factor_start, factor_end);
@@ -719,8 +838,11 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
         options.folds = folds;
         options.max_iterations = max_iterations;
         options.lbfgs_history = lbfgs_history;
+        options.threads = threads;
         options.gradient_tolerance = gradient_tolerance;
-        options.progress_callback = [](const std::string& message) {
+        std::mutex progress_mutex;
+        options.progress_callback = [&](const std::string& message) {
+            const std::lock_guard<std::mutex> lock(progress_mutex);
             notice("%s", message.c_str());
         };
         auto fitted = punkst::partition_classifier::fit(compositions, labels,
@@ -770,6 +892,7 @@ int32_t cmdPartitionClassifierPredict(int argc, char** argv) {
     std::string theta_path, model_path, output_prefix;
     int32_t theta_identifier_column = 0;
     int32_t top_k = 3;
+    int32_t threads = 1;
     bool dense = false;
     ParamList parameters;
     parameters
@@ -780,14 +903,20 @@ int32_t cmdPartitionClassifierPredict(int argc, char** argv) {
       .add_option("theta-icol-id", "0-based theta identifier column",
           theta_identifier_column)
       .add_option("top-k", "Number of prediction class/probability pairs", top_k)
-      .add_option("dense-probabilities", "Write P0..P(C-1)", dense);
+      .add_option("dense-probabilities", "Write P0..P(C-1)", dense)
+      .add_option("threads",
+          "Number of parallel prediction workers (0 uses TBB default)",
+          threads);
     try {
         parameters.readArgs(argc, argv);
+        if (threads < 0) {
+            throw std::invalid_argument("--threads must be nonnegative");
+        }
         const Model model = Model::read(model_path);
         DenseThetaStream theta(theta_path, theta_identifier_column,
             -1, -1, &model.topics);
         write_predictions(theta, model, output_prefix + ".results.tsv",
-            top_k, dense);
+            top_k, dense, threads);
         notice("Partition classifier predictions written to %s.results.tsv",
             output_prefix.c_str());
     } catch (const std::exception& exception) {

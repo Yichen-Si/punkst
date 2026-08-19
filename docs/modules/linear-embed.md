@@ -26,6 +26,13 @@ supplied together, and the selected header names are retained as factor names.
 
 `--theta-icol-id` selects the theta identifier column index and defaults to `0`.
 
+`--factor-weight-threshold P`
+: Before matching partitions, retain only factors whose total weight across the
+  L1-normalized theta rows is strictly greater than `P` times the number of
+  theta rows (default `1e-5`). Thus, `P` is the minimum average per-unit
+  factor weight. Set `P=0` or a negative value to disable this input-level
+  filter. At least three factors must remain.
+
 In the TSV file that contains partitions, `--icol-id` selects the identifier column and defaults to `0`; `--icol-partition` accepts one or more partition columns and defaults to `1`. Partition values may be arbitrary nonempty strings (as cluster labels).
 
 With `--id-as-row-index`, partition identifiers are interpreted as zero-based
