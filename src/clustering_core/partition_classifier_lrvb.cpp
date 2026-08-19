@@ -764,12 +764,8 @@ PropagatedPrediction propagate_lda(const Model& classifier,
         Eigen::VectorXd contrast_mean(dimension);
         const Eigen::VectorXd all_logits = classifier.logits(mean);
         for (int32_t contrast = 0; contrast < dimension; ++contrast) {
-            const Eigen::RowVectorXd coefficient =
-                (classifier.coefficients.row(candidates[contrast])
-                    - classifier.coefficients.row(baseline))
-                / classifier.temperature;
-            d.row(contrast) = (coefficient.array()
-                - coefficient.dot(mean)).matrix() / local.a.sum();
+            d.row(contrast) = classifier.logit_contrast_gradient(
+                local.a, candidates[contrast], baseline).transpose();
             contrast_mean(contrast) = all_logits(candidates[contrast])
                 - all_logits(baseline);
         }
@@ -930,21 +926,17 @@ PropagatedPrediction propagate_gamma_poisson(const Model& classifier,
         Eigen::MatrixXd d(dimension, 2 * topics);
         Eigen::VectorXd contrast_mean(dimension);
         const Eigen::VectorXd all_logits = classifier.logits(mean);
-        const double abundance_total = abundance.sum();
         for (int32_t contrast = 0; contrast < dimension; ++contrast) {
-            const Eigen::RowVectorXd coefficient =
-                (classifier.coefficients.row(candidates[contrast])
-                    - classifier.coefficients.row(baseline))
-                / classifier.temperature;
-            const Eigen::VectorXd centered =
-                coefficient.transpose().array() - coefficient.dot(mean);
+            const Eigen::VectorXd abundance_gradient =
+                classifier.logit_contrast_gradient(
+                    abundance, candidates[contrast], baseline);
             d.row(contrast).head(topics) =
-                (centered.array() * topic_capacity.array()
-                    / local.rate.array() / abundance_total).matrix();
+                (abundance_gradient.array() * topic_capacity.array()
+                    / local.rate.array()).matrix();
             d.row(contrast).tail(topics) =
-                (-centered.array() * topic_capacity.array()
-                    * local.shape.array() / local.rate.array().square()
-                    / abundance_total).matrix();
+                (-abundance_gradient.array() * topic_capacity.array()
+                    * local.shape.array()
+                    / local.rate.array().square()).matrix();
             contrast_mean(contrast) = all_logits(candidates[contrast])
                 - all_logits(baseline);
         }

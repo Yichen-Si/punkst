@@ -55,10 +55,19 @@ public:
     const std::vector<std::string>& topics() const { return topics_; }
 
     void validate_each(const std::function<void(uint64_t,
-            const std::string&)>& callback) const {
+            const std::string&)>& callback,
+            Eigen::VectorXd* normalized_factor_sums = nullptr) const {
+        if (normalized_factor_sums != nullptr) {
+            *normalized_factor_sums = Eigen::VectorXd::Zero(topics_.size());
+        }
         scan(true, [&](uint64_t row, const std::string& identifier,
                 const std::vector<std::string>& fields, uint64_t line_number) {
-            validate_composition(fields, line_number);
+            if (normalized_factor_sums == nullptr) {
+                validate_composition(fields, line_number);
+            } else {
+                *normalized_factor_sums +=
+                    parse_composition(fields, line_number);
+            }
             callback(row, identifier);
         });
     }
@@ -331,6 +340,34 @@ struct PartitionLookup {
     std::unordered_map<uint64_t, int32_t> by_row;
     std::vector<std::string> classes;
 };
+
+std::vector<int32_t> select_active_factors(
+        const Eigen::Ref<const Eigen::VectorXd>& normalized_sums,
+        uint64_t rows, double threshold) {
+    if (rows == 0 || normalized_sums.size() < 2
+            || !normalized_sums.allFinite()
+            || (normalized_sums.array() < 0.0).any()
+            || !std::isfinite(threshold)) {
+        throw std::invalid_argument("Invalid classifier factor weights");
+    }
+    std::vector<int32_t> active;
+    active.reserve(static_cast<size_t>(normalized_sums.size()));
+    const double minimum = threshold * static_cast<double>(rows);
+    for (int32_t factor = 0; factor < normalized_sums.size(); ++factor) {
+        if (threshold <= 0.0 || normalized_sums(factor) > minimum) {
+            active.push_back(factor);
+        }
+    }
+    if (active.size() < 2) {
+        throw std::runtime_error(
+            "Factor-weight filter retained " + std::to_string(active.size())
+            + " of " + std::to_string(normalized_sums.size())
+            + " factors; at least two are required"
+            + " (--factor-weight-threshold "
+            + std::to_string(threshold) + ")");
+    }
+    return active;
+}
 
 PartitionLookup read_partition(const std::string& path,
         int32_t identifier_column, int32_t partition_column,
@@ -698,8 +735,10 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
     int32_t max_iterations = 300;
     int32_t lbfgs_history = 10;
     int32_t threads = 1;
+    int32_t quadratic_rank = 8;
     int32_t seed = 1;
     double gradient_tolerance = 1e-7;
+    double factor_weight_threshold = 1e-5;
     std::vector<double> ridge_grid;
     bool id_as_row_index = false;
     bool dense = false;
@@ -716,6 +755,9 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
       .add_option("icol-factor-start", "0-based first factor column",
           factor_start)
       .add_option("icol-factor-end", "0-based last factor column", factor_end)
+      .add_option("factor-weight-threshold",
+          "Keep factors with average L1-normalized weight above this fraction; zero or negative disables",
+          factor_weight_threshold)
       .add_option("icol-id", "0-based partition identifier column",
           partition_identifier_column)
       .add_option("icol-partition", "0-based partition value column",
@@ -730,6 +772,9 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
       .add_option("ridge-grid", "Ridge candidates", ridge_grid)
       .add_option("max-iterations", "Maximum L-BFGS iterations", max_iterations)
       .add_option("lbfgs-history", "L-BFGS correction history", lbfgs_history)
+      .add_option("quadratic-rank",
+          "SVD rank for quadratic features (0 uses a linear classifier)",
+          quadratic_rank)
       .add_option("threads",
           "Number of parallel classifier fits (0 uses TBB default)", threads)
       .add_option("gradient-tolerance", "L-BFGS infinity-norm tolerance",
@@ -743,9 +788,10 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
     try {
         parameters.readArgs(argc, argv);
         if (train_max_rows < 0 || minimum_per_class < 2 || folds < 2
-                || seed < 0 || threads < 0) {
+                || seed < 0 || threads < 0 || quadratic_rank < 0
+                || !std::isfinite(factor_weight_threshold)) {
             throw std::invalid_argument(
-                "Invalid classifier sampling, fold, or thread option");
+                "Invalid classifier sampling, fold, rank, or thread option");
         }
         DenseThetaStream theta(theta_path, theta_identifier_column,
             factor_start, factor_end);
@@ -753,14 +799,23 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
             partition_identifier_column, partition_column, id_as_row_index);
         std::vector<uint64_t> original_counts(partition.classes.size(), 0);
         uint64_t matched_rows = 0;
+        uint64_t theta_rows = 0;
+        Eigen::VectorXd normalized_factor_sums;
         theta.validate_each([&](uint64_t row, const std::string& identifier) {
+            theta_rows = row + 1;
             const int32_t label = lookup_class(partition, id_as_row_index,
                 row, identifier);
             if (label >= 0) {
                 ++original_counts[label];
                 ++matched_rows;
             }
-        });
+        }, &normalized_factor_sums);
+        const std::vector<int32_t> active_topic_indices =
+            select_active_factors(normalized_factor_sums, theta_rows,
+                factor_weight_threshold);
+        notice("Classifier factor-weight filter retained %zu of %zu factors (threshold %.10g)",
+            active_topic_indices.size(), theta.topics().size(),
+            factor_weight_threshold);
         std::vector<int32_t> remap(partition.classes.size(), -1);
         std::vector<std::string> classes;
         std::vector<uint64_t> counts;
@@ -839,7 +894,10 @@ int32_t cmdPartitionClassifierFit(int argc, char** argv) {
         options.max_iterations = max_iterations;
         options.lbfgs_history = lbfgs_history;
         options.threads = threads;
+        options.quadratic_rank = quadratic_rank;
         options.gradient_tolerance = gradient_tolerance;
+        options.factor_weight_threshold = factor_weight_threshold;
+        options.active_topic_indices = active_topic_indices;
         std::mutex progress_mutex;
         options.progress_callback = [&](const std::string& message) {
             const std::lock_guard<std::mutex> lock(progress_mutex);

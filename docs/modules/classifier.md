@@ -30,6 +30,9 @@ Gamma-Poisson workflow.
 
 The fit command matches rows in a factor-composition table to labels in a
 partition table. It needs at least two matched units in every retained class.
+By default, it combines an ordinary linear classifier with a small quadratic
+component. This can represent curved boundaries between partition labels while
+keeping the additional model small.
 It writes a reusable model at `{prefix}.classifier.tsv`, predictions for the
 input rows at `{prefix}.classifications.tsv`, and validation and calibration
 summaries at `{prefix}.cv.tsv` and `{prefix}.calibration.tsv`.
@@ -54,6 +57,11 @@ summaries at `{prefix}.cv.tsv` and `{prefix}.calibration.tsv`.
 - `--icol-factor-start N` and `--icol-factor-end N`: select the inclusive,
   zero-based range of factor columns. Supply both options together. By default,
   the command uses the table's trailing numeric factor columns.
+- `--factor-weight-threshold X` (default: `1e-5`): keep factors whose average
+  weight across all L1-normalized theta rows is strictly greater than `X`.
+  Filtering happens before row matching and applies to both parts of the
+  classifier. Set `X` to zero or a negative value to keep every factor. At
+  least two factors must remain.
 
 ### Control fitting
 
@@ -65,6 +73,10 @@ summaries at `{prefix}.cv.tsv` and `{prefix}.calibration.tsv`.
   be at least `2`.
 - `--ridge-grid V1 V2 ...`: ridge values to consider, supplied as one or more
   space-separated values. If omitted, the built-in grid is used.
+- `--quadratic-rank N` (default: `8`): size of the reduced factor space used
+  by the quadratic component. It is capped by the numbers of retained factors
+  and classes. The linear component continues to use every retained factor.
+  Set `N=0` to fit the original linear-only classifier.
 - `--max-iterations N` (default: `300`): maximum optimizer iterations per fit.
 - `--lbfgs-history N` (default: `10`): optimizer history size.
 - `--gradient-tolerance X` (default: `1e-7`): optimizer convergence tolerance.
@@ -73,7 +85,9 @@ summaries at `{prefix}.cv.tsv` and `{prefix}.calibration.tsv`.
 - `--sampling-seed N` (default: `1`): non-negative seed for reproducible
   sampling and fold assignment.
 - `--crossfit`: also create a crossfit bundle. This is useful when predictions
-  may include units used to train the classifier, but takes longer to fit.
+  may include units used to train the classifier, but takes longer to fit. Each
+  validation model learns its reduced quadratic space only from its training
+  rows.
 
 ### Choose prediction output
 

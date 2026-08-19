@@ -10,8 +10,8 @@
 
 namespace punkst::partition_classifier {
 
-constexpr int32_t MODEL_SCHEMA_VERSION = 1;
-constexpr int32_t CROSSFIT_SCHEMA_VERSION = 1;
+constexpr int32_t MODEL_SCHEMA_VERSION = 2;
+constexpr int32_t CROSSFIT_SCHEMA_VERSION = 2;
 
 struct FitOptions {
     std::vector<double> ridge_grid{
@@ -20,7 +20,10 @@ struct FitOptions {
     int32_t max_iterations = 300;
     int32_t lbfgs_history = 10;
     int32_t threads = 1;
+    int32_t quadratic_rank = 8;
     double gradient_tolerance = 1e-7;
+    double factor_weight_threshold = 0.0;
+    std::vector<int32_t> active_topic_indices;
     std::function<void(const std::string&)> progress_callback;
 };
 
@@ -61,8 +64,12 @@ public:
     std::vector<std::string> classes;
     Eigen::VectorXd intercepts;
     RowMajorMatrixXd coefficients;
+    std::vector<int32_t> active_topic_indices;
+    RowMajorMatrixXd quadratic_projection;
+    RowMajorMatrixXd quadratic_coefficients;
     double ridge = 0.0;
     double temperature = 1.0;
+    double factor_weight_threshold = 0.0;
     uint64_t matched_rows = 0;
     uint64_t sampled_rows = 0;
     int32_t folds = 0;
@@ -73,6 +80,9 @@ public:
         const Eigen::Ref<const Eigen::VectorXd>& composition) const;
     Eigen::VectorXd probabilities(
         const Eigen::Ref<const Eigen::VectorXd>& composition) const;
+    Eigen::VectorXd logit_contrast_gradient(
+        const Eigen::Ref<const Eigen::VectorXd>& composition,
+        int32_t component, int32_t baseline) const;
     void validate(double tolerance = 1e-8) const;
     void write(const std::string& path) const;
     static Model read(const std::string& path);

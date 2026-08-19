@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include <Eigen/SVD>
 #include <tbb/global_control.h>
 #include <tbb/parallel_for.h>
 
@@ -175,61 +176,193 @@ std::unique_ptr<tbb::global_control> make_thread_limit(int32_t threads) {
 Eigen::VectorXd fit_parameters(const RowMajorMatrixXd& x,
         const Eigen::VectorXi& labels, const Eigen::VectorXd& weights,
         const std::vector<int32_t>& rows, int32_t classes, double ridge,
-        const FitOptions& options) {
+        const FitOptions& options,
+        const Eigen::VectorXd* initial_parameters = nullptr) {
     const Eigen::MatrixXd class_helmert = normalized_helmert(classes);
     Objective objective{x, labels, weights, rows, class_helmert, classes,
         static_cast<int32_t>(x.cols()), ridge};
-    Eigen::VectorXd parameters = Eigen::VectorXd::Zero(
-        (classes - 1) * (x.cols() + 1));
-    Eigen::VectorXd class_weight = Eigen::VectorXd::Zero(classes);
-    for (const int32_t row : rows) class_weight(labels(row)) += weights(row);
-    class_weight = (class_weight.array() + 0.5)
-        / (class_weight.sum() + 0.5 * classes);
-    parameters.head(classes - 1) = class_helmert
-        * class_weight.array().log().matrix();
+    const Eigen::Index parameter_count =
+        (classes - 1) * (x.cols() + 1);
+    Eigen::VectorXd parameters;
+    if (initial_parameters != nullptr) {
+        if (initial_parameters->size() != parameter_count
+                || !initial_parameters->allFinite()) {
+            throw std::invalid_argument(
+                "Invalid initial classifier parameters");
+        }
+        parameters = *initial_parameters;
+    } else {
+        parameters = Eigen::VectorXd::Zero(parameter_count);
+        Eigen::VectorXd class_weight = Eigen::VectorXd::Zero(classes);
+        for (const int32_t row : rows) {
+            class_weight(labels(row)) += weights(row);
+        }
+        class_weight = (class_weight.array() + 0.5)
+            / (class_weight.sum() + 0.5 * classes);
+        parameters.head(classes - 1) = class_helmert
+            * class_weight.array().log().matrix();
+    }
     return optimize_lbfgs(objective, std::move(parameters), options);
 }
 
-RowMajorMatrixXd parameter_logits(const RowMajorMatrixXd& x,
-        const std::vector<int32_t>& rows, const Eigen::VectorXd& parameters,
-        int32_t classes) {
-    const int32_t class_coordinates = classes - 1;
-    const Eigen::Map<const Eigen::VectorXd> intercept(
-        parameters.data(), class_coordinates);
-    const Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic,
-        Eigen::Dynamic, Eigen::RowMajor>> coefficients(
-            parameters.data() + class_coordinates,
-            class_coordinates, x.cols());
-    const Eigen::MatrixXd class_helmert = normalized_helmert(classes);
-    RowMajorMatrixXd output(rows.size(), classes);
-    for (size_t index = 0; index < rows.size(); ++index) {
-        output.row(index) = (class_helmert.transpose()
-            * (intercept + coefficients
-                * x.row(rows[index]).transpose())).transpose();
+int32_t quadratic_feature_count(int32_t rank) {
+    return rank * (rank + 1) / 2;
+}
+
+Eigen::VectorXd quadratic_features(
+        const Eigen::Ref<const Eigen::VectorXd>& projected) {
+    const int32_t rank = static_cast<int32_t>(projected.size());
+    Eigen::VectorXd output(quadratic_feature_count(rank));
+    int32_t feature = 0;
+    for (int32_t first = 0; first < rank; ++first) {
+        output(feature++) = 0.5 * projected(first) * projected(first);
+        for (int32_t second = first + 1; second < rank; ++second) {
+            output(feature++) = projected(first) * projected(second)
+                / std::sqrt(2.0);
+        }
     }
     return output;
 }
 
-Model make_model(const Eigen::VectorXd& parameters,
+RowMajorMatrixXd make_hybrid_features(const RowMajorMatrixXd& linear,
+        const Eigen::MatrixXd& projection) {
+    const int32_t rank = static_cast<int32_t>(projection.cols());
+    const int32_t quadratic = quadratic_feature_count(rank);
+    RowMajorMatrixXd output(linear.rows(), linear.cols() + quadratic);
+    output.leftCols(linear.cols()) = linear;
+    if (rank == 0) return output;
+    const RowMajorMatrixXd projected = linear * projection;
+    for (Eigen::Index row = 0; row < output.rows(); ++row) {
+        output.row(row).tail(quadratic) = quadratic_features(
+            projected.row(row).transpose()).transpose();
+    }
+    return output;
+}
+
+struct HybridParameterFit {
+    Eigen::VectorXd parameters;
+    Eigen::MatrixXd projection;
+    int32_t linear_predictors = 0;
+};
+
+HybridParameterFit fit_hybrid_parameters(const RowMajorMatrixXd& linear,
+        const Eigen::VectorXi& labels, const Eigen::VectorXd& weights,
+        const std::vector<int32_t>& rows, int32_t classes, double ridge,
+        const FitOptions& options) {
+    HybridParameterFit output;
+    output.linear_predictors = static_cast<int32_t>(linear.cols());
+    const int32_t rank = std::min({options.quadratic_rank,
+        output.linear_predictors, classes - 1});
+    if (rank == 0) {
+        output.projection.resize(output.linear_predictors, 0);
+        output.parameters = fit_parameters(linear, labels, weights, rows,
+            classes, ridge, options);
+        return output;
+    }
+
+    const Eigen::VectorXd pilot = fit_parameters(linear, labels, weights,
+        rows, classes, ridge, options);
+    const int32_t class_coordinates = classes - 1;
+    const Eigen::Map<const RowMajorMatrixXd> pilot_coefficients(
+        pilot.data() + class_coordinates, class_coordinates,
+        output.linear_predictors);
+    const Eigen::JacobiSVD<Eigen::MatrixXd> svd(
+        Eigen::MatrixXd(pilot_coefficients), Eigen::ComputeThinV);
+    if (svd.info() != Eigen::Success || svd.matrixV().cols() < rank) {
+        throw std::runtime_error("Classifier pilot SVD failed");
+    }
+    output.projection = svd.matrixV().leftCols(rank);
+    const RowMajorMatrixXd hybrid = make_hybrid_features(
+        linear, output.projection);
+    Eigen::VectorXd initial = Eigen::VectorXd::Zero(
+        class_coordinates * (hybrid.cols() + 1));
+    initial.head(class_coordinates) = pilot.head(class_coordinates);
+    Eigen::Map<RowMajorMatrixXd> initial_coefficients(
+        initial.data() + class_coordinates, class_coordinates, hybrid.cols());
+    initial_coefficients.leftCols(output.linear_predictors) =
+        pilot_coefficients;
+    output.parameters = fit_parameters(hybrid, labels, weights, rows,
+        classes, ridge, options, &initial);
+    return output;
+}
+
+RowMajorMatrixXd hybrid_parameter_logits(const RowMajorMatrixXd& linear,
+        const std::vector<int32_t>& rows,
+        const HybridParameterFit& fitted, int32_t classes) {
+    const int32_t class_coordinates = classes - 1;
+    const int32_t rank = static_cast<int32_t>(fitted.projection.cols());
+    const int32_t predictors = fitted.linear_predictors
+        + quadratic_feature_count(rank);
+    const Eigen::Map<const Eigen::VectorXd> intercept(
+        fitted.parameters.data(), class_coordinates);
+    const Eigen::Map<const RowMajorMatrixXd> coefficients(
+        fitted.parameters.data() + class_coordinates,
+        class_coordinates, predictors);
+    const Eigen::MatrixXd class_helmert = normalized_helmert(classes);
+    RowMajorMatrixXd output(rows.size(), classes);
+    Eigen::VectorXd features(predictors);
+    for (size_t index = 0; index < rows.size(); ++index) {
+        features.head(fitted.linear_predictors) =
+            linear.row(rows[index]).transpose();
+        if (rank > 0) {
+            const Eigen::VectorXd projected = fitted.projection.transpose()
+                * features.head(fitted.linear_predictors);
+            features.tail(quadratic_feature_count(rank)) =
+                quadratic_features(projected);
+        }
+        output.row(index) = (class_helmert.transpose()
+            * (intercept + coefficients * features)).transpose();
+    }
+    return output;
+}
+
+Model make_model(const HybridParameterFit& fitted,
         const std::vector<std::string>& topics,
-        const std::vector<std::string>& classes, double ridge) {
+        const std::vector<int32_t>& active_topic_indices,
+        const std::vector<std::string>& classes, double ridge,
+        double factor_weight_threshold) {
     const int32_t class_count = static_cast<int32_t>(classes.size());
-    const int32_t topic_count = static_cast<int32_t>(topics.size());
-    const Eigen::MatrixXd topic_helmert = normalized_helmert(topic_count);
+    const int32_t active_count =
+        static_cast<int32_t>(active_topic_indices.size());
+    const int32_t rank = static_cast<int32_t>(fitted.projection.cols());
+    const int32_t quadratic = quadratic_feature_count(rank);
+    const Eigen::MatrixXd topic_helmert = normalized_helmert(active_count);
     const Eigen::MatrixXd class_helmert = normalized_helmert(class_count);
     const Eigen::Map<const Eigen::VectorXd> contrast_intercept(
-        parameters.data(), class_count - 1);
+        fitted.parameters.data(), class_count - 1);
     const Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic,
         Eigen::Dynamic, Eigen::RowMajor>> contrast_coefficients(
-            parameters.data() + class_count - 1,
-            class_count - 1, topic_count - 1);
+            fitted.parameters.data() + class_count - 1,
+            class_count - 1, fitted.linear_predictors + quadratic);
     Model model;
     model.topics = topics;
     model.classes = classes;
+    model.active_topic_indices = active_topic_indices;
     model.intercepts = class_helmert.transpose() * contrast_intercept;
-    model.coefficients = class_helmert.transpose()
-        * contrast_coefficients * topic_helmert;
+    model.coefficients = RowMajorMatrixXd::Zero(
+        class_count, topics.size());
+    const Eigen::MatrixXd active_coefficients = class_helmert.transpose()
+        * contrast_coefficients.leftCols(fitted.linear_predictors)
+        * topic_helmert;
+    for (int32_t active = 0; active < active_count; ++active) {
+        model.coefficients.col(active_topic_indices[active]) =
+            active_coefficients.col(active);
+    }
+    model.quadratic_projection = RowMajorMatrixXd::Zero(topics.size(), rank);
+    if (rank > 0) {
+        const Eigen::MatrixXd active_projection = topic_helmert.transpose()
+            * fitted.projection;
+        for (int32_t active = 0; active < active_count; ++active) {
+            model.quadratic_projection.row(active_topic_indices[active]) =
+                active_projection.row(active);
+        }
+        model.quadratic_coefficients = class_helmert.transpose()
+            * contrast_coefficients.rightCols(quadratic);
+    } else {
+        model.quadratic_coefficients.resize(class_count, 0);
+    }
     model.ridge = ridge;
+    model.factor_weight_threshold = factor_weight_threshold;
     return model;
 }
 
@@ -256,6 +389,46 @@ std::vector<int32_t> all_rows(int32_t count) {
     std::vector<int32_t> out(static_cast<size_t>(count));
     std::iota(out.begin(), out.end(), 0);
     return out;
+}
+
+std::vector<int32_t> resolve_active_topic_indices(
+        int32_t topics, const FitOptions& options) {
+    std::vector<int32_t> active = options.active_topic_indices;
+    if (active.empty()) active = all_rows(topics);
+    if (active.size() < 2) {
+        throw std::invalid_argument(
+            "Classifier requires at least two active topics");
+    }
+    int32_t previous = -1;
+    for (const int32_t topic : active) {
+        if (topic <= previous || topic < 0 || topic >= topics) {
+            throw std::invalid_argument(
+                "Classifier active topic indices must be ordered and unique");
+        }
+        previous = topic;
+    }
+    return active;
+}
+
+RowMajorMatrixXd prepare_linear_predictors(
+        const Eigen::Ref<const RowMajorMatrixXd>& compositions,
+        const std::vector<int32_t>& active) {
+    RowMajorMatrixXd normalized(compositions.rows(), active.size());
+    for (Eigen::Index row = 0; row < compositions.rows(); ++row) {
+        double total = 0.0;
+        for (size_t index = 0; index < active.size(); ++index) {
+            const double value = compositions(row, active[index]);
+            normalized(row, static_cast<Eigen::Index>(index)) = value;
+            total += value;
+        }
+        if (!(total > 0.0) || !std::isfinite(total)) {
+            throw std::invalid_argument(
+                "Classifier row has no positive active-topic mass");
+        }
+        normalized.row(row) /= total;
+    }
+    return normalized * normalized_helmert(
+        static_cast<int32_t>(active.size())).transpose();
 }
 
 uint64_t identifier_hash(const std::string& identifier, uint64_t seed) {
@@ -329,6 +502,7 @@ NestedModelFit fit_nested_model(const RowMajorMatrixXd& x,
         const std::vector<int32_t>& rows,
         const std::vector<std::string>& identifiers,
         const std::vector<std::string>& topics,
+        const std::vector<int32_t>& active_topic_indices,
         const std::vector<std::string>& classes, uint64_t seed,
         const FitOptions& options) {
     const int32_t class_count = static_cast<int32_t>(classes.size());
@@ -356,10 +530,10 @@ NestedModelFit fit_nested_model(const RowMajorMatrixXd& x,
                 (assignment.by_row(row) == fold ? validation : training)
                     .push_back(row);
             }
-            const Eigen::VectorXd parameters = fit_parameters(
+            const HybridParameterFit fitted = fit_hybrid_parameters(
                 x, labels, weights, training, class_count, ridge, options);
-            const RowMajorMatrixXd logits = parameter_logits(
-                x, validation, parameters, class_count);
+            const RowMajorMatrixXd logits = hybrid_parameter_logits(
+                x, validation, fitted, class_count);
             size_t output_index = 0;
             for (size_t index = 0; index < rows.size(); ++index) {
                 if (assignment.by_row(rows[index]) == fold) {
@@ -377,10 +551,11 @@ NestedModelFit fit_nested_model(const RowMajorMatrixXd& x,
     }
     const double temperature = fit_temperature(
         selected_oof, compact_labels, compact_weights);
-    const Eigen::VectorXd parameters = fit_parameters(x, labels, weights,
-        rows, class_count, selected_ridge, options);
+    const HybridParameterFit parameters = fit_hybrid_parameters(
+        x, labels, weights, rows, class_count, selected_ridge, options);
     NestedModelFit output;
-    output.model = make_model(parameters, topics, classes, selected_ridge);
+    output.model = make_model(parameters, topics, active_topic_indices,
+        classes, selected_ridge, options.factor_weight_threshold);
     output.model.temperature = temperature;
     output.model.folds = assignment.folds;
     output.inner_folds = assignment.folds;
@@ -397,6 +572,30 @@ void require_unique_nonempty(const std::vector<std::string>& values,
                 + " must be nonempty and unique");
         }
     }
+}
+
+Eigen::VectorXd normalized_active_composition(const Model& model,
+        const Eigen::Ref<const Eigen::VectorXd>& composition,
+        double* active_total = nullptr) {
+    if (composition.size() != static_cast<Eigen::Index>(model.topics.size())
+            || !composition.allFinite()
+            || (composition.array() < 0.0).any()) {
+        throw std::invalid_argument("Invalid classifier composition");
+    }
+    Eigen::VectorXd output = Eigen::VectorXd::Zero(composition.size());
+    double total = 0.0;
+    for (const int32_t topic : model.active_topic_indices) {
+        total += composition(topic);
+    }
+    if (!(total > 0.0) || !std::isfinite(total)) {
+        throw std::invalid_argument(
+            "Classifier composition has no positive active-topic mass");
+    }
+    for (const int32_t topic : model.active_topic_indices) {
+        output(topic) = composition(topic) / total;
+    }
+    if (active_total != nullptr) *active_total = total;
+    return output;
 }
 
 } // namespace
@@ -438,6 +637,51 @@ void run_classifier_gradient_test() {
         throw std::runtime_error(
             "Classifier analytic gradient failed finite-difference test");
     }
+
+    Model model;
+    model.topics = {"0", "1", "2", "3"};
+    model.classes = {"a", "b", "c"};
+    model.active_topic_indices = {0, 1, 2};
+    model.intercepts.resize(3);
+    model.intercepts << 0.2, -0.1, -0.1;
+    model.coefficients = RowMajorMatrixXd::Zero(3, 4);
+    Eigen::MatrixXd contrast_linear(2, 2);
+    contrast_linear << 0.4, -0.2, 0.1, 0.3;
+    model.coefficients.leftCols(3) = helmert.transpose()
+        * contrast_linear * helmert;
+    model.quadratic_projection = RowMajorMatrixXd::Zero(4, 2);
+    model.quadratic_projection.topRows(3) = helmert.transpose();
+    model.quadratic_coefficients.resize(3, 3);
+    model.quadratic_coefficients <<
+        0.3, -0.1, 0.2,
+        -0.2, 0.4, -0.1,
+        -0.1, -0.3, -0.1;
+    model.temperature = 1.4;
+    model.validate();
+    Eigen::VectorXd composition(4);
+    composition << 0.3, 0.25, 0.35, 0.1;
+    const Eigen::VectorXd model_analytic =
+        model.logit_contrast_gradient(composition, 0, 2);
+    Eigen::VectorXd model_numerical(composition.size());
+    for (Eigen::Index coordinate = 0;
+            coordinate < composition.size(); ++coordinate) {
+        Eigen::VectorXd plus = composition;
+        Eigen::VectorXd minus = composition;
+        plus(coordinate) += step;
+        minus(coordinate) -= step;
+        const Eigen::VectorXd plus_logits = model.logits(plus);
+        const Eigen::VectorXd minus_logits = model.logits(minus);
+        model_numerical(coordinate) =
+            ((plus_logits(0) - plus_logits(2))
+                - (minus_logits(0) - minus_logits(2))) / (2.0 * step);
+    }
+    const double model_scale = std::max(
+        1.0, model_numerical.cwiseAbs().maxCoeff());
+    if ((model_analytic - model_numerical).cwiseAbs().maxCoeff()
+            > 1e-6 * model_scale) {
+        throw std::runtime_error(
+            "Quadratic classifier contrast gradient failed finite-difference test");
+    }
 }
 
 void run_classifier_iteration_cap_test() {
@@ -478,14 +722,18 @@ void run_classifier_iteration_cap_test() {
 
 Eigen::VectorXd Model::logits(
         const Eigen::Ref<const Eigen::VectorXd>& composition) const {
-    if (composition.size() != coefficients.cols()
-            || !composition.allFinite()
-            || (composition.array() < 0.0).any()
-            || !(composition.sum() > 0.0)) {
-        throw std::invalid_argument("Invalid classifier composition");
+    const Eigen::VectorXd normalized = normalized_active_composition(
+        *this, composition);
+    Eigen::VectorXd output = intercepts + coefficients * normalized;
+    const int32_t rank = static_cast<int32_t>(
+        quadratic_projection.cols());
+    if (rank > 0) {
+        const Eigen::VectorXd projected =
+            quadratic_projection.transpose() * normalized;
+        output.noalias() += quadratic_coefficients
+            * quadratic_features(projected);
     }
-    return (intercepts + coefficients
-        * (composition / composition.sum())) / temperature;
+    return output / temperature;
 }
 
 Eigen::VectorXd Model::probabilities(
@@ -495,29 +743,126 @@ Eigen::VectorXd Model::probabilities(
     return output;
 }
 
+Eigen::VectorXd Model::logit_contrast_gradient(
+        const Eigen::Ref<const Eigen::VectorXd>& composition,
+        int32_t component, int32_t baseline) const {
+    if (component < 0 || component >= static_cast<int32_t>(classes.size())
+            || baseline < 0
+            || baseline >= static_cast<int32_t>(classes.size())) {
+        throw std::invalid_argument("Invalid classifier logit contrast");
+    }
+    double active_total = 0.0;
+    const Eigen::VectorXd normalized = normalized_active_composition(
+        *this, composition, &active_total);
+    Eigen::VectorXd normalized_gradient =
+        (coefficients.row(component) - coefficients.row(baseline))
+            .transpose();
+    const int32_t rank = static_cast<int32_t>(
+        quadratic_projection.cols());
+    if (rank > 0) {
+        const Eigen::VectorXd projected =
+            quadratic_projection.transpose() * normalized;
+        const Eigen::RowVectorXd packed =
+            quadratic_coefficients.row(component)
+            - quadratic_coefficients.row(baseline);
+        Eigen::VectorXd projected_gradient = Eigen::VectorXd::Zero(rank);
+        int32_t feature = 0;
+        for (int32_t first = 0; first < rank; ++first) {
+            projected_gradient(first) += packed(feature++) * projected(first);
+            for (int32_t second = first + 1; second < rank; ++second) {
+                const double coefficient = packed(feature++) / std::sqrt(2.0);
+                projected_gradient(first) += coefficient * projected(second);
+                projected_gradient(second) += coefficient * projected(first);
+            }
+        }
+        normalized_gradient.noalias() +=
+            quadratic_projection * projected_gradient;
+    }
+    normalized_gradient /= temperature;
+    const double centered = normalized_gradient.dot(normalized);
+    Eigen::VectorXd output = Eigen::VectorXd::Zero(composition.size());
+    for (const int32_t topic : active_topic_indices) {
+        output(topic) = (normalized_gradient(topic) - centered) / active_total;
+    }
+    return output;
+}
+
 void Model::validate(double tolerance) const {
     require_unique_nonempty(topics, "Classifier topics");
     require_unique_nonempty(classes, "Classifier classes");
+    const int32_t rank = static_cast<int32_t>(
+        quadratic_projection.cols());
+    const int32_t quadratic = quadratic_feature_count(rank);
     if (topics.size() < 2 || classes.size() < 2
             || intercepts.size() != static_cast<Eigen::Index>(classes.size())
             || coefficients.rows()
                 != static_cast<Eigen::Index>(classes.size())
             || coefficients.cols()
                 != static_cast<Eigen::Index>(topics.size())
+            || active_topic_indices.size() < 2
+            || rank > static_cast<int32_t>(active_topic_indices.size()) - 1
+            || rank > static_cast<int32_t>(classes.size()) - 1
+            || quadratic_projection.rows()
+                != static_cast<Eigen::Index>(topics.size())
+            || quadratic_coefficients.rows()
+                != static_cast<Eigen::Index>(classes.size())
+            || quadratic_coefficients.cols() != quadratic
             || !intercepts.allFinite() || !coefficients.allFinite()
+            || !quadratic_projection.allFinite()
+            || !quadratic_coefficients.allFinite()
             || !(temperature > 0.0) || !std::isfinite(temperature)
-            || !(ridge >= 0.0) || !std::isfinite(ridge)) {
+            || !(ridge >= 0.0) || !std::isfinite(ridge)
+            || !std::isfinite(factor_weight_threshold)) {
         throw std::invalid_argument("Invalid partition classifier model");
     }
+    std::vector<bool> active(topics.size(), false);
+    int32_t previous = -1;
+    for (const int32_t topic : active_topic_indices) {
+        if (topic <= previous || topic < 0
+                || topic >= static_cast<int32_t>(topics.size())) {
+            throw std::invalid_argument(
+                "Invalid partition classifier active topics");
+        }
+        active[static_cast<size_t>(topic)] = true;
+        previous = topic;
+    }
     const double scale = std::max({1.0, intercepts.cwiseAbs().maxCoeff(),
-        coefficients.cwiseAbs().maxCoeff()});
+        coefficients.cwiseAbs().maxCoeff(),
+        rank > 0 ? quadratic_projection.cwiseAbs().maxCoeff() : 0.0,
+        quadratic > 0 ? quadratic_coefficients.cwiseAbs().maxCoeff() : 0.0});
     if (std::abs(intercepts.sum()) > tolerance * scale
             || coefficients.rowwise().sum().cwiseAbs().maxCoeff()
                 > tolerance * scale
             || coefficients.colwise().sum().cwiseAbs().maxCoeff()
-                > tolerance * scale) {
+                > tolerance * scale
+            || (quadratic > 0
+                && quadratic_coefficients.colwise().sum().cwiseAbs()
+                    .maxCoeff() > tolerance * scale)) {
         throw std::invalid_argument(
             "Partition classifier coefficients are not centered");
+    }
+    for (size_t topic = 0; topic < topics.size(); ++topic) {
+        if (!active[topic]
+                && (coefficients.col(static_cast<Eigen::Index>(topic))
+                        .cwiseAbs().maxCoeff() > tolerance * scale
+                    || (rank > 0
+                        && quadratic_projection.row(
+                            static_cast<Eigen::Index>(topic))
+                            .cwiseAbs().maxCoeff() > tolerance * scale))) {
+            throw std::invalid_argument(
+                "Inactive classifier topic has nonzero coefficients");
+        }
+    }
+    if (rank > 0) {
+        const Eigen::MatrixXd gram = quadratic_projection.transpose()
+            * quadratic_projection;
+        if ((gram - Eigen::MatrixXd::Identity(rank, rank)).cwiseAbs()
+                    .maxCoeff() > 10.0 * tolerance
+                || quadratic_projection.colwise().sum().cwiseAbs()
+                    .maxCoeff() > 10.0 * tolerance) {
+            throw std::invalid_argument(
+                "Invalid classifier quadratic projection");
+        }
     }
 }
 
@@ -534,9 +879,25 @@ void Model::write(const std::string& path) const {
         << "#sampled_rows\t" << sampled_rows << '\n'
         << "#folds\t" << folds << '\n'
         << "#minimum_per_class\t" << minimum_per_class << '\n'
-        << "#sampling_seed\t" << sampling_seed << '\n';
+        << "#sampling_seed\t" << sampling_seed << '\n'
+        << "#factor_weight_threshold\t" << factor_weight_threshold << '\n'
+        << "#quadratic_rank\t" << quadratic_projection.cols() << '\n';
+    std::vector<bool> active(topics.size(), false);
+    for (const int32_t topic : active_topic_indices) {
+        active[static_cast<size_t>(topic)] = true;
+    }
     for (size_t topic = 0; topic < topics.size(); ++topic) {
-        output << "topic\t" << topic << '\t' << topics[topic] << '\n';
+        output << "topic\t" << topic << '\t' << topics[topic] << '\t'
+            << (active[topic] ? 1 : 0) << '\n';
+    }
+    for (Eigen::Index topic = 0; topic < quadratic_projection.rows(); ++topic) {
+        if (quadratic_projection.cols() == 0) break;
+        output << "projection\t" << topic;
+        for (Eigen::Index coordinate = 0;
+                coordinate < quadratic_projection.cols(); ++coordinate) {
+            output << '\t' << quadratic_projection(topic, coordinate);
+        }
+        output << '\n';
     }
     for (Eigen::Index component = 0; component < coefficients.rows();
             ++component) {
@@ -547,6 +908,14 @@ void Model::write(const std::string& path) const {
             output << '\t' << coefficients(component, topic);
         }
         output << '\n';
+        if (quadratic_coefficients.cols() > 0) {
+            output << "quadratic\t" << component;
+            for (Eigen::Index feature = 0;
+                    feature < quadratic_coefficients.cols(); ++feature) {
+                output << '\t' << quadratic_coefficients(component, feature);
+            }
+            output << '\n';
+        }
     }
 }
 
@@ -555,14 +924,17 @@ Model Model::read(const std::string& path) {
     std::string line;
     Model model;
     bool version_seen = false;
+    int32_t version = 0;
+    int32_t quadratic_rank = 0;
     std::vector<std::vector<std::string>> class_rows;
+    std::vector<std::vector<std::string>> projection_rows;
+    std::vector<std::vector<std::string>> quadratic_rows;
     while (input.getline(line)) {
         if (line.empty()) continue;
         const std::vector<std::string> fields = split_delimited(line, '\t');
         if (fields[0] == "#partition_classifier") {
-            int32_t version = 0;
             if (fields.size() != 2 || !str2int32(fields[1], version)
-                    || version != MODEL_SCHEMA_VERSION) {
+                    || (version != 1 && version != MODEL_SCHEMA_VERSION)) {
                 throw std::runtime_error("Unsupported classifier schema");
             }
             version_seen = true;
@@ -587,15 +959,38 @@ Model Model::read(const std::string& path) {
         } else if (fields[0] == "#sampling_seed" && fields.size() == 2) {
             if (!str2uint64(fields[1], model.sampling_seed))
                 throw std::runtime_error("Invalid classifier seed");
+        } else if (fields[0] == "#factor_weight_threshold"
+                && fields.size() == 2) {
+            if (!str2double(fields[1], model.factor_weight_threshold)) {
+                throw std::runtime_error(
+                    "Invalid classifier factor-weight threshold");
+            }
+        } else if (fields[0] == "#quadratic_rank" && fields.size() == 2) {
+            if (!str2int32(fields[1], quadratic_rank)
+                    || quadratic_rank < 0) {
+                throw std::runtime_error("Invalid classifier quadratic rank");
+            }
         } else if (fields[0] == "topic") {
             int32_t index = -1;
-            if (fields.size() != 3 || !str2int32(fields[1], index)
+            int32_t active = 1;
+            if ((fields.size() != 3 && fields.size() != 4)
+                    || !str2int32(fields[1], index)
                     || index != static_cast<int32_t>(model.topics.size())) {
                 throw std::runtime_error("Invalid classifier topic row");
             }
+            if (fields.size() == 4
+                    && (!str2int32(fields[3], active)
+                        || (active != 0 && active != 1))) {
+                throw std::runtime_error("Invalid classifier active topic");
+            }
             model.topics.push_back(fields[2]);
+            if (active != 0) model.active_topic_indices.push_back(index);
+        } else if (fields[0] == "projection") {
+            projection_rows.push_back(fields);
         } else if (fields[0] == "class") {
             class_rows.push_back(fields);
+        } else if (fields[0] == "quadratic") {
+            quadratic_rows.push_back(fields);
         } else if (fields[0][0] != '#') {
             throw std::runtime_error("Unknown classifier row: " + fields[0]);
         }
@@ -603,8 +998,16 @@ Model Model::read(const std::string& path) {
     if (!version_seen || model.topics.empty() || class_rows.empty()) {
         throw std::runtime_error("Incomplete classifier model: " + path);
     }
+    if (quadratic_rank > static_cast<int32_t>(model.topics.size()) - 1
+            || quadratic_rank > static_cast<int32_t>(class_rows.size()) - 1) {
+        throw std::runtime_error("Invalid classifier quadratic rank");
+    }
     model.intercepts.resize(class_rows.size());
     model.coefficients.resize(class_rows.size(), model.topics.size());
+    model.quadratic_projection = RowMajorMatrixXd::Zero(
+        model.topics.size(), quadratic_rank);
+    model.quadratic_coefficients = RowMajorMatrixXd::Zero(
+        class_rows.size(), quadratic_feature_count(quadratic_rank));
     for (size_t component = 0; component < class_rows.size(); ++component) {
         const std::vector<std::string>& fields = class_rows[component];
         int32_t index = -1;
@@ -622,6 +1025,57 @@ Model Model::read(const std::string& path) {
             }
         }
     }
+    if (version == 1) {
+        model.active_topic_indices = all_rows(
+            static_cast<int32_t>(model.topics.size()));
+    } else {
+        if (quadratic_rank > 0
+                && projection_rows.size() != model.topics.size()) {
+            throw std::runtime_error(
+                "Incomplete classifier quadratic projection");
+        }
+        for (size_t row = 0; row < projection_rows.size(); ++row) {
+            const auto& fields = projection_rows[row];
+            int32_t topic = -1;
+            if (fields.size() != static_cast<size_t>(quadratic_rank + 2)
+                    || !str2int32(fields[1], topic)
+                    || topic != static_cast<int32_t>(row)) {
+                throw std::runtime_error(
+                    "Invalid classifier projection row");
+            }
+            for (int32_t coordinate = 0; coordinate < quadratic_rank;
+                    ++coordinate) {
+                if (!str2double(fields[coordinate + 2],
+                        model.quadratic_projection(topic, coordinate))) {
+                    throw std::runtime_error(
+                        "Invalid classifier projection value");
+                }
+            }
+        }
+        const int32_t quadratic = quadratic_feature_count(quadratic_rank);
+        if (quadratic > 0
+                && quadratic_rows.size() != class_rows.size()) {
+            throw std::runtime_error(
+                "Incomplete classifier quadratic coefficients");
+        }
+        for (size_t row = 0; row < quadratic_rows.size(); ++row) {
+            const auto& fields = quadratic_rows[row];
+            int32_t component = -1;
+            if (fields.size() != static_cast<size_t>(quadratic + 2)
+                    || !str2int32(fields[1], component)
+                    || component != static_cast<int32_t>(row)) {
+                throw std::runtime_error(
+                    "Invalid classifier quadratic row");
+            }
+            for (int32_t feature = 0; feature < quadratic; ++feature) {
+                if (!str2double(fields[feature + 2],
+                        model.quadratic_coefficients(component, feature))) {
+                    throw std::runtime_error(
+                        "Invalid classifier quadratic coefficient");
+                }
+            }
+        }
+    }
     model.validate(1e-7);
     return model;
 }
@@ -635,9 +1089,15 @@ void CrossfitBundle::validate(double tolerance) const {
     for (const Model& model : fold_models) {
         model.validate(tolerance);
         if (model.topics != full_model.topics
-                || model.classes != full_model.classes) {
+                || model.classes != full_model.classes
+                || model.active_topic_indices
+                    != full_model.active_topic_indices
+                || model.quadratic_projection.cols()
+                    != full_model.quadratic_projection.cols()
+                || std::abs(model.factor_weight_threshold
+                    - full_model.factor_weight_threshold) > tolerance) {
             throw std::invalid_argument(
-                "Crossfit fold model topics or classes differ");
+                "Crossfit fold model structure differs");
         }
     }
     for (const auto& route : heldout_fold_by_identifier) {
@@ -675,10 +1135,16 @@ void CrossfitBundle::write(const std::string& path) const {
         << '\n' << "#minimum_per_class\t" << full_model.minimum_per_class
         << '\n' << "#sampling_seed\t" << full_model.sampling_seed << '\n'
         << std::scientific
-        << std::setprecision(std::numeric_limits<double>::max_digits10);
+        << std::setprecision(std::numeric_limits<double>::max_digits10)
+        << "#factor_weight_threshold\t"
+        << full_model.factor_weight_threshold << '\n';
+    std::vector<bool> active(full_model.topics.size(), false);
+    for (const int32_t topic : full_model.active_topic_indices) {
+        active[static_cast<size_t>(topic)] = true;
+    }
     for (size_t topic = 0; topic < full_model.topics.size(); ++topic) {
         output << "topic\t" << topic << '\t' << full_model.topics[topic]
-            << '\n';
+            << '\t' << (active[topic] ? 1 : 0) << '\n';
     }
     for (size_t component = 0; component < full_model.classes.size();
             ++component) {
@@ -687,7 +1153,8 @@ void CrossfitBundle::write(const std::string& path) const {
     }
     auto write_model = [&](const char* name, const Model& model) {
         output << "model\t" << name << '\t' << model.ridge << '\t'
-            << model.temperature << '\t' << model.folds << '\n';
+            << model.temperature << '\t' << model.folds << '\t'
+            << model.quadratic_projection.cols() << '\n';
         for (Eigen::Index component = 0;
                 component < model.intercepts.size(); ++component) {
             output << "intercept\t" << name << '\t' << component << '\t'
@@ -697,6 +1164,23 @@ void CrossfitBundle::write(const std::string& path) const {
                 output << "coefficient\t" << name << '\t' << component
                     << '\t' << topic << '\t'
                     << model.coefficients(component, topic) << '\n';
+            }
+            for (Eigen::Index feature = 0;
+                    feature < model.quadratic_coefficients.cols(); ++feature) {
+                output << "quadratic\t" << name << '\t' << component
+                    << '\t' << feature << '\t'
+                    << model.quadratic_coefficients(component, feature)
+                    << '\n';
+            }
+        }
+        for (Eigen::Index topic = 0;
+                topic < model.quadratic_projection.rows(); ++topic) {
+            for (Eigen::Index coordinate = 0;
+                    coordinate < model.quadratic_projection.cols();
+                    ++coordinate) {
+                output << "projection\t" << name << '\t' << topic
+                    << '\t' << coordinate << '\t'
+                    << model.quadratic_projection(topic, coordinate) << '\n';
             }
         }
     };
@@ -720,8 +1204,11 @@ CrossfitBundle CrossfitBundle::read(const std::string& path) {
     std::string line;
     CrossfitBundle bundle;
     bool version_seen = false;
+    int32_t version = 0;
     int32_t outer_folds = -1;
+    double factor_weight_threshold = 0.0;
     std::vector<std::string> topics;
+    std::vector<int32_t> active_topic_indices;
     std::vector<std::string> classes;
     auto resolve_model = [&](const std::string& name) -> Model& {
         if (name == "full") return bundle.full_model;
@@ -735,9 +1222,8 @@ CrossfitBundle CrossfitBundle::read(const std::string& path) {
         if (line.empty()) continue;
         const std::vector<std::string> fields = split_delimited(line, '\t');
         if (fields[0] == "#partition_classifier_crossfit") {
-            int32_t version = 0;
             if (fields.size() != 2 || !str2int32(fields[1], version)
-                    || version != CROSSFIT_SCHEMA_VERSION) {
+                    || (version != 1 && version != CROSSFIT_SCHEMA_VERSION)) {
                 throw std::runtime_error("Unsupported classifier crossfit schema");
             }
             version_seen = true;
@@ -760,13 +1246,27 @@ CrossfitBundle CrossfitBundle::read(const std::string& path) {
         } else if (fields[0] == "#sampling_seed" && fields.size() == 2) {
             if (!str2uint64(fields[1], bundle.full_model.sampling_seed))
                 throw std::runtime_error("Invalid crossfit seed");
+        } else if (fields[0] == "#factor_weight_threshold"
+                && fields.size() == 2) {
+            if (!str2double(fields[1], factor_weight_threshold)) {
+                throw std::runtime_error(
+                    "Invalid crossfit factor-weight threshold");
+            }
         } else if (fields[0] == "topic") {
             int32_t index = -1;
-            if (fields.size() != 3 || !str2int32(fields[1], index)
+            int32_t active = 1;
+            if ((fields.size() != 3 && fields.size() != 4)
+                    || !str2int32(fields[1], index)
                     || index != static_cast<int32_t>(topics.size())) {
                 throw std::runtime_error("Invalid crossfit topic row");
             }
+            if (fields.size() == 4
+                    && (!str2int32(fields[3], active)
+                        || (active != 0 && active != 1))) {
+                throw std::runtime_error("Invalid crossfit active topic");
+            }
             topics.push_back(fields[2]);
+            if (active != 0) active_topic_indices.push_back(index);
         } else if (fields[0] == "class_name") {
             int32_t index = -1;
             if (fields.size() != 3 || !str2int32(fields[1], index)
@@ -775,21 +1275,39 @@ CrossfitBundle CrossfitBundle::read(const std::string& path) {
             }
             classes.push_back(fields[2]);
         } else if (fields[0] == "model") {
-            if (fields.size() != 5 || topics.empty() || classes.empty()
+            const size_t expected_fields = version == 1 ? 5 : 6;
+            if (fields.size() != expected_fields
+                    || topics.empty() || classes.empty()
                     || outer_folds < 2) {
                 throw std::runtime_error("Invalid crossfit model row");
             }
             Model& model = resolve_model(fields[1]);
             model.topics = topics;
             model.classes = classes;
+            model.active_topic_indices = active_topic_indices;
+            model.factor_weight_threshold = factor_weight_threshold;
             model.intercepts = Eigen::VectorXd::Zero(classes.size());
             model.coefficients = RowMajorMatrixXd::Zero(
                 classes.size(), topics.size());
+            int32_t quadratic_rank = 0;
             if (!str2double(fields[2], model.ridge)
                     || !str2double(fields[3], model.temperature)
-                    || !str2int32(fields[4], model.folds)) {
+                    || !str2int32(fields[4], model.folds)
+                    || (version != 1
+                        && (!str2int32(fields[5], quadratic_rank)
+                            || quadratic_rank < 0))) {
                 throw std::runtime_error("Invalid crossfit model metadata");
             }
+            if (quadratic_rank > static_cast<int32_t>(topics.size()) - 1
+                    || quadratic_rank
+                        > static_cast<int32_t>(classes.size()) - 1) {
+                throw std::runtime_error(
+                    "Invalid crossfit model quadratic rank");
+            }
+            model.quadratic_projection = RowMajorMatrixXd::Zero(
+                topics.size(), quadratic_rank);
+            model.quadratic_coefficients = RowMajorMatrixXd::Zero(
+                classes.size(), quadratic_feature_count(quadratic_rank));
         } else if (fields[0] == "intercept") {
             int32_t component = -1;
             double value = 0.0;
@@ -818,6 +1336,38 @@ CrossfitBundle CrossfitBundle::read(const std::string& path) {
                 throw std::runtime_error("Invalid crossfit coefficient row");
             }
             model.coefficients(component, topic) = value;
+        } else if (fields[0] == "quadratic") {
+            int32_t component = -1, feature = -1;
+            double value = 0.0;
+            if (fields.size() != 5) {
+                throw std::runtime_error("Invalid crossfit quadratic row");
+            }
+            Model& model = resolve_model(fields[1]);
+            if (!str2int32(fields[2], component)
+                    || !str2int32(fields[3], feature) || component < 0
+                    || component >= model.quadratic_coefficients.rows()
+                    || feature < 0
+                    || feature >= model.quadratic_coefficients.cols()
+                    || !str2double(fields[4], value)) {
+                throw std::runtime_error("Invalid crossfit quadratic row");
+            }
+            model.quadratic_coefficients(component, feature) = value;
+        } else if (fields[0] == "projection") {
+            int32_t topic = -1, coordinate = -1;
+            double value = 0.0;
+            if (fields.size() != 5) {
+                throw std::runtime_error("Invalid crossfit projection row");
+            }
+            Model& model = resolve_model(fields[1]);
+            if (!str2int32(fields[2], topic)
+                    || !str2int32(fields[3], coordinate) || topic < 0
+                    || topic >= model.quadratic_projection.rows()
+                    || coordinate < 0
+                    || coordinate >= model.quadratic_projection.cols()
+                    || !str2double(fields[4], value)) {
+                throw std::runtime_error("Invalid crossfit projection row");
+            }
+            model.quadratic_projection(topic, coordinate) = value;
         } else if (fields[0] == "route") {
             int32_t fold = -1;
             if (fields.size() != 3 || fields[1].empty()
@@ -834,6 +1384,17 @@ CrossfitBundle CrossfitBundle::read(const std::string& path) {
     if (!version_seen || outer_folds < 2) {
         throw std::runtime_error("Incomplete classifier crossfit bundle: "
             + path);
+    }
+    if (version == 1) {
+        active_topic_indices = all_rows(static_cast<int32_t>(topics.size()));
+        bundle.full_model.active_topic_indices = active_topic_indices;
+        bundle.full_model.quadratic_projection.resize(topics.size(), 0);
+        bundle.full_model.quadratic_coefficients.resize(classes.size(), 0);
+        for (Model& model : bundle.fold_models) {
+            model.active_topic_indices = active_topic_indices;
+            model.quadratic_projection.resize(topics.size(), 0);
+            model.quadratic_coefficients.resize(classes.size(), 0);
+        }
     }
     bundle.full_model.folds = outer_folds;
     for (Model& model : bundle.fold_models) {
@@ -959,7 +1520,8 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
             || !weights.allFinite() || (weights.array() <= 0.0).any()
             || options.ridge_grid.empty() || options.folds < 2
             || options.max_iterations <= 0 || options.lbfgs_history <= 0
-            || options.threads < 0
+            || options.threads < 0 || options.quadratic_rank < 0
+            || !std::isfinite(options.factor_weight_threshold)
             || !(options.gradient_tolerance > 0.0)) {
         throw std::invalid_argument("Invalid classifier fit input");
     }
@@ -967,12 +1529,10 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
     require_unique_nonempty(topics, "Classifier topics");
     require_unique_nonempty(classes, "Classifier classes");
     const auto thread_limit = make_thread_limit(options.threads);
-    RowMajorMatrixXd normalized = compositions;
-    for (Eigen::Index row = 0; row < normalized.rows(); ++row) {
-        normalized.row(row) /= normalized.row(row).sum();
-    }
-    const Eigen::MatrixXd topic_helmert = normalized_helmert(topic_count);
-    const RowMajorMatrixXd x = normalized * topic_helmert.transpose();
+    const std::vector<int32_t> active_topic_indices =
+        resolve_active_topic_indices(topic_count, options);
+    const RowMajorMatrixXd x = prepare_linear_predictors(
+        compositions, active_topic_indices);
 
     const std::vector<int32_t> complete = all_rows(rows);
     const FoldAssignment assignment = make_stratified_folds(labels, complete,
@@ -1006,10 +1566,10 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
             for (int32_t row = 0; row < rows; ++row) {
                 (fold_by_row(row) == fold ? validation : training).push_back(row);
             }
-            const Eigen::VectorXd parameters = fit_parameters(x, labels,
-                weights, training, class_count, ridge, options);
-            const RowMajorMatrixXd logits = parameter_logits(
-                x, validation, parameters, class_count);
+            const HybridParameterFit fitted = fit_hybrid_parameters(
+                x, labels, weights, training, class_count, ridge, options);
+            const RowMajorMatrixXd logits = hybrid_parameter_logits(
+                x, validation, fitted, class_count);
             for (size_t index = 0; index < validation.size(); ++index) {
                 oof.row(validation[index]) = logits.row(index);
             }
@@ -1123,10 +1683,12 @@ FitResult fit(const Eigen::Ref<const RowMajorMatrixXd>& compositions,
             << rows << " rows, ridge " << result.cv[selected].ridge;
         report_progress(options, message.str());
     }
-    const Eigen::VectorXd parameters = fit_parameters(x, labels, weights,
-        complete, class_count, result.cv[selected].ridge, options);
-    result.model = make_model(parameters, topics, classes,
-        result.cv[selected].ridge);
+    const HybridParameterFit parameters = fit_hybrid_parameters(
+        x, labels, weights, complete, class_count,
+        result.cv[selected].ridge, options);
+    result.model = make_model(parameters, topics, active_topic_indices,
+        classes, result.cv[selected].ridge,
+        options.factor_weight_threshold);
     result.model.temperature = result.calibration.stored_temperature;
     result.model.folds = folds;
     result.model.validate();
@@ -1155,7 +1717,8 @@ CrossfitResult fit_crossfit(
             || !weights.allFinite() || (weights.array() <= 0.0).any()
             || options.ridge_grid.empty() || options.folds < 2
             || options.max_iterations <= 0 || options.lbfgs_history <= 0
-            || options.threads < 0
+            || options.threads < 0 || options.quadratic_rank < 0
+            || !std::isfinite(options.factor_weight_threshold)
             || !(options.gradient_tolerance > 0.0)) {
         throw std::invalid_argument("Invalid classifier crossfit input");
     }
@@ -1163,12 +1726,11 @@ CrossfitResult fit_crossfit(
     require_unique_nonempty(topics, "Classifier topics");
     require_unique_nonempty(classes, "Classifier classes");
     const auto thread_limit = make_thread_limit(options.threads);
-    RowMajorMatrixXd normalized = compositions;
-    for (Eigen::Index row = 0; row < normalized.rows(); ++row) {
-        normalized.row(row) /= normalized.row(row).sum();
-    }
-    const RowMajorMatrixXd x = normalized
-        * normalized_helmert(static_cast<int32_t>(topics.size())).transpose();
+    const std::vector<int32_t> active_topic_indices =
+        resolve_active_topic_indices(
+            static_cast<int32_t>(topics.size()), options);
+    const RowMajorMatrixXd x = prepare_linear_predictors(
+        compositions, active_topic_indices);
     const std::vector<int32_t> complete = all_rows(rows);
     const FoldAssignment outer = make_stratified_folds(labels, complete,
         identifiers, class_count, options.folds, seed ^ 0x6f75746572ULL);
@@ -1210,7 +1772,7 @@ CrossfitResult fit_crossfit(
             report_progress(options, message.str());
         }
         const NestedModelFit fitted = fit_nested_model(x, labels, weights,
-            training, identifiers, topics, classes,
+            training, identifiers, topics, active_topic_indices, classes,
             seed ^ (static_cast<uint64_t>(fold) << 32)
                 ^ 0x696e6e6572ULL,
             options);
@@ -1231,7 +1793,7 @@ CrossfitResult fit_crossfit(
         for (size_t index = 0; index < heldout.size(); ++index) {
             const int32_t row = heldout[index];
             fold_probabilities.row(index) = fitted.model.probabilities(
-                normalized.row(row).transpose()).transpose();
+                compositions.row(row).transpose()).transpose();
             result.probabilities.row(row) = fold_probabilities.row(index);
             fold_labels(index) = labels(row);
             fold_weights(index) = weights(row);
