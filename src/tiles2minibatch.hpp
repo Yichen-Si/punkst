@@ -371,7 +371,8 @@ public:
         double zMax = std::numeric_limits<double>::quiet_NaN(),
         float zRes = -1.0f, bool enforceZrange = false,
         float standard3DBccGridDist = -1.0f,
-        const std::vector<float>& thin3DZLevels = {});
+        const std::vector<float>& thin3DZLevelFractions = {},
+        bool thin3DFixedZ = false, double thin3DZRangeMass = 0.95);
     virtual int32_t getFactorCount() const = 0;
 
 protected:
@@ -520,8 +521,10 @@ protected:
     bool useThin3DAnchors_ = false;
     double zMin_ = std::numeric_limits<double>::quiet_NaN();
     double zMax_ = std::numeric_limits<double>::quiet_NaN();
-    std::vector<float> thin3DZLevels_;
+    std::vector<float> thin3DZLevelFractions_;
     int32_t nZLevels_ = 0;
+    bool thin3DFixedZ_ = false;
+    double thin3DZRangeMass_ = 0.95;
     uint64_t thin3DHashSeed_ = 0x8f3f73b5cf1c9d4bull;
     float standard3DBccSize_ = -1.0f;
     float standard3DBccGridDist_ = -1.0f;
@@ -766,10 +769,12 @@ protected:
         std::vector<AnchorPoint>& anchors, Minibatch& minibatch,
         const BCCGrid* bccGrid, double supportRadius, double distNu);
     int32_t thin3DAnchorZIndexForKey(const AnchorKey2D& key) const;
+    std::vector<float> thin3DZLevelsForTile(const TileData<T>& tileData) const;
     void thin3DAnchorKeyToFineAxial(int32_t& u, int32_t& v, const AnchorKey2D& key, int32_t nMoves_) const;
     AnchorKey2D thin3DFineAxialToAnchorKey(int32_t u, int32_t v, int32_t nMoves_) const;
     void forEachThin3DAnchorWithinRadius(float x, float y, float z,
-        const HexGrid& hexGrid_, int32_t nMoves_, float supportRadius,
+        const HexGrid& hexGrid_, int32_t nMoves_, const std::vector<float>& zLevels,
+        float supportRadius,
         const std::function<void(const AnchorKey2D&, float, float, float, float)>& emit) const;
     // Choose a set of neighboring anchors for each point
     void forEachAnchorCandidate2D(const TileData<T>& tileData,
@@ -779,13 +784,15 @@ protected:
     void forEachAnchorCandidate3D(const TileData<T>& tileData,
         const BCCGrid& bccGrid, const std::function<void(uint32_t, float, const AnchorKey3D&)>& emit) const;
     void forEachAnchorCandidateThin3D(const TileData<T>& tileData,
-        const HexGrid& hexGrid_, int32_t nMoves_, double supportRadius, double distNu,
+        const HexGrid& hexGrid_, int32_t nMoves_, const std::vector<float>& zLevels,
+        double supportRadius, double distNu,
         const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const;
     // Anchor key helper
     void anchorKeyToCoord2D(float& x, float& y, const AnchorKey2D& key, const HexGrid& hexGrid_, int32_t nMoves_) const;
     void anchorKeyToCoord3D(float& x, float& y, float& z, const AnchorKey3D& key) const;
     void anchorKeyToCoord3D(float& x, float& y, float& z, const AnchorKey3D& key, const BCCGrid& bccGrid) const;
-    void anchorKeyToCoordThin3D(float& x, float& y, float& z, const AnchorKey2D& key, const HexGrid& hexGrid_, int32_t nMoves_) const;
+    void anchorKeyToCoordThin3D(float& x, float& y, float& z, const AnchorKey2D& key,
+        const HexGrid& hexGrid_, int32_t nMoves_, const std::vector<float>& zLevels) const;
     // Build anchor and aggregate counts
     int32_t buildAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, const HexGrid& hexGrid_, int32_t nMoves_, double minCount = 0);
     int32_t buildAnchors3D(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, std::vector<SparseObs>& documents, double minCount = 0);
@@ -850,3 +857,100 @@ protected:
     ResultBuf formatPixelResultBinary3D(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr);
 
 };
+
+namespace thin3d_geometry {
+
+struct ZRange {
+    float min = 0.0f;
+    float max = 0.0f;
+    double mass = 0.0;
+    bool valid = false;
+};
+
+inline ZRange shortest_weighted_z_range(std::vector<std::pair<float, double>> points,
+    double massFraction) {
+    points.erase(std::remove_if(points.begin(), points.end(), [](const auto& point) {
+        return !std::isfinite(point.first) || !std::isfinite(point.second) || !(point.second > 0.0f);
+    }), points.end());
+    if (points.empty() || !(massFraction > 0.0) || !(massFraction <= 1.0)) {
+        return {};
+    }
+
+    std::sort(points.begin(), points.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.first < rhs.first;
+    });
+    std::vector<std::pair<float, double>> bins;
+    bins.reserve(points.size());
+    double totalMass = 0.0;
+    for (const auto& point : points) {
+        if (!bins.empty() && bins.back().first == point.first) {
+            bins.back().second += point.second;
+        } else {
+            bins.emplace_back(point.first, point.second);
+        }
+        totalMass += point.second;
+    }
+
+    const double targetMass = massFraction * totalMass;
+    const double massTolerance = 32.0 * std::numeric_limits<double>::epsilon()
+        * std::max(1.0, totalMass);
+    size_t left = 0;
+    double windowMass = 0.0;
+    double bestWidth = std::numeric_limits<double>::infinity();
+    ZRange best;
+    for (size_t right = 0; right < bins.size(); ++right) {
+        windowMass += bins[right].second;
+        while (left < right
+            && windowMass - bins[left].second + massTolerance >= targetMass) {
+            windowMass -= bins[left].second;
+            ++left;
+        }
+        if (windowMass + massTolerance < targetMass) {
+            continue;
+        }
+        const double width = static_cast<double>(bins[right].first) - static_cast<double>(bins[left].first);
+        const bool betterWidth = width < bestWidth;
+        const bool sameWidth = width == bestWidth;
+        const bool betterMass = sameWidth && windowMass > best.mass + massTolerance;
+        const bool sameMass = std::abs(windowMass - best.mass) <= massTolerance;
+        const bool betterStart = sameWidth && sameMass
+            && (!best.valid || bins[left].first < best.min);
+        if (!best.valid || betterWidth || betterMass || betterStart) {
+            best.min = bins[left].first;
+            best.max = bins[right].first;
+            best.mass = windowMass;
+            best.valid = true;
+            bestWidth = width;
+        }
+    }
+    return best;
+}
+
+inline std::vector<float> map_level_fractions(const std::vector<float>& fractions,
+    float zMin, float zMax) {
+    std::vector<float> levels;
+    levels.reserve(fractions.size());
+    const float width = zMax - zMin;
+    for (float fraction : fractions) {
+        levels.push_back(zMin + fraction * width);
+    }
+    return levels;
+}
+
+inline int32_t anchor_z_index(int32_t hx, int32_t hy, int32_t ic, int32_t ir,
+    int32_t nLevels, uint64_t seed) {
+    if (nLevels <= 0) {
+        return -1;
+    }
+    uint64_t mixed = splitmix64(seed);
+    auto combine = [&](int32_t value, uint64_t salt) {
+        mixed = splitmix64(mixed ^ (static_cast<uint64_t>(static_cast<uint32_t>(value)) + salt));
+    };
+    combine(hx, 0x243f6a8885a308d3ULL);
+    combine(hy, 0x13198a2e03707344ULL);
+    combine(ic, 0xa4093822299f31d0ULL);
+    combine(ir, 0x082efa98ec4e6c89ULL);
+    return static_cast<int32_t>(mixed % static_cast<uint64_t>(nLevels));
+}
+
+} // namespace thin3d_geometry

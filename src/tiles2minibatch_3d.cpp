@@ -52,14 +52,20 @@ float fine_axial_distance_sq(float uf, float vf, int32_t u, int32_t v, const Hex
 } // namespace
 
 template<typename T>
-void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zMax, float zRes, bool enforceZrange, float standard3DBccGridDist, const std::vector<float>& thin3DZLevels) {
+void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zMax, float zRes,
+    bool enforceZrange, float standard3DBccGridDist,
+    const std::vector<float>& thin3DZLevelFractions, bool thin3DFixedZ,
+    double thin3DZRangeMass) {
     const bool hasZMin = std::isfinite(zMin);
     const bool hasZMax = std::isfinite(zMax);
     if (hasZMin != hasZMax) {
         error("3D z range must provide both zmin and zmax together");
     }
-    if (isThin && !hasZMin) {
-        error("Thin 3D anchor range requires both zmin and zmax");
+    if (isThin && thin3DFixedZ && !hasZMin) {
+        error("Fixed-z thin 3D mode requires both zmin and zmax");
+    }
+    if (enforceZrange && !hasZMin) {
+        error("Enforcing a 3D z range requires both zmin and zmax");
     }
     if (hasZMin && zMax <= zMin) {
         error("3D anchor range must satisfy zmax > zmin");
@@ -72,24 +78,29 @@ void Tiles2MinibatchBase<T>::set3Dparameters(bool isThin, double zMin, double zM
     ignoreOutsideZrange_ = enforceZrange;
     standard3DBccGridDist_ = standard3DBccGridDist;
     if (useThin3DAnchors_) {
-        if (thin3DZLevels.size() <= 1) {
-            error("Thin 3D anchor mode requires at least two z levels");
+        if (thin3DZLevelFractions.size() <= 1) {
+            error("Thin 3D anchor mode requires at least two z-level fractions");
         }
-        thin3DZLevels_ = thin3DZLevels;
-        std::sort(thin3DZLevels_.begin(), thin3DZLevels_.end());
-        for (size_t i = 1; i < thin3DZLevels_.size(); ++i) {
-            if (!(thin3DZLevels_[i] > thin3DZLevels_[i - 1])) {
-                error("z levels must be unique");
+        if (!(thin3DZRangeMass > 0.0) || !(thin3DZRangeMass <= 1.0)) {
+            error("Thin 3D z-range mass must be in (0, 1]");
+        }
+        thin3DZLevelFractions_ = thin3DZLevelFractions;
+        std::sort(thin3DZLevelFractions_.begin(), thin3DZLevelFractions_.end());
+        for (size_t i = 1; i < thin3DZLevelFractions_.size(); ++i) {
+            if (!(thin3DZLevelFractions_[i] > thin3DZLevelFractions_[i - 1])) {
+                error("Thin 3D z-level fractions must be unique");
             }
         }
-        for (const auto& z : thin3DZLevels_) {
-            if (!std::isfinite(z) || (hasZMin && (z < zMin_ || z > zMax_))) {
-                error("Thin 3D z levels must be finite and within the specified z range");
+        for (const auto& fraction : thin3DZLevelFractions_) {
+            if (!std::isfinite(fraction) || fraction < 0.0f || fraction > 1.0f) {
+                error("Thin 3D z-level fractions must be finite and in [0, 1]");
             }
         }
-        nZLevels_ = static_cast<int32_t>(thin3DZLevels_.size());
+        nZLevels_ = static_cast<int32_t>(thin3DZLevelFractions_.size());
+        thin3DFixedZ_ = thin3DFixedZ;
+        thin3DZRangeMass_ = thin3DZRangeMass;
     } else {
-        thin3DZLevels_.clear();
+        thin3DZLevelFractions_.clear();
         if (standard3DBccGridDist_ <= 0) {
             error("Standard 3D mode requires a positive BCC lattice distance");
         }
@@ -204,7 +215,8 @@ int32_t Tiles2MinibatchBase<T>::buildAnchors3D(TileData<T>& tileData, std::vecto
 
 template<typename T>
 void Tiles2MinibatchBase<T>::forEachThin3DAnchorWithinRadius(float x, float y, float z,
-    const HexGrid& hexGrid_, int32_t nMoves_, float supportRadius,
+    const HexGrid& hexGrid_, int32_t nMoves_, const std::vector<float>& zLevels,
+    float supportRadius,
     const std::function<void(const AnchorKey2D&, float, float, float, float)>& emit) const {
     if (nMoves_ <= 0) {
         error("%s: invalid thin 3D x-y refinement factor %d", __func__, nMoves_);
@@ -229,7 +241,7 @@ void Tiles2MinibatchBase<T>::forEachThin3DAnchorWithinRadius(float x, float y, f
             float ax, ay;
             fineGrid.axial_to_cart(ax, ay, u, v);
             const int32_t zIndex = thin3DAnchorZIndexForKey(key);
-            const float az = thin3DZLevels_[static_cast<size_t>(zIndex)];
+            const float az = zLevels[static_cast<size_t>(zIndex)];
             const float dx = ax - x;
             const float dy = ay - y;
             const float dz = az - z;
@@ -250,7 +262,8 @@ void Tiles2MinibatchBase<T>::forEachThin3DAnchorWithinRadius(float x, float y, f
 
 template<typename T>
 void Tiles2MinibatchBase<T>::forEachAnchorCandidateThin3D(const TileData<T>& tileData, const HexGrid& hexGrid_, int32_t nMoves_,
-    double supportRadius, double distNu, const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const {
+    const std::vector<float>& zLevels, double supportRadius, double distNu,
+    const std::function<void(uint32_t, float, const AnchorKey2D&)>& emit) const {
     auto assign_pt = [&](float x, float y, float z, uint32_t idx, float ct) {
         if (ignoreOutsideZrange_ && (z < zMin_ || z > zMax_)) {
             return;
@@ -260,9 +273,9 @@ void Tiles2MinibatchBase<T>::forEachAnchorCandidateThin3D(const TileData<T>& til
                 const float weightedCt = ct *
                     anchor_distance_weight(dist, static_cast<float>(supportRadius), static_cast<float>(distNu));
                 emit(idx, weightedCt, key);
-            };
+        };
         forEachThin3DAnchorWithinRadius(x, y, z,
-            hexGrid_, nMoves_, static_cast<float>(supportRadius), emitCandidate);
+            hexGrid_, nMoves_, zLevels, static_cast<float>(supportRadius), emitCandidate);
     };
     if (useExtended_) {
         for (const auto& pt : tileData.extended3D().extPts3d) {
@@ -284,10 +297,12 @@ void Tiles2MinibatchBase<T>::forEachAnchorCandidateThin3D(const TileData<T>& til
 }
 
 template<typename T>
-void Tiles2MinibatchBase<T>::anchorKeyToCoordThin3D(float& x, float& y, float& z, const AnchorKey2D& key, const HexGrid& hexGrid_, int32_t nMoves_) const {
+void Tiles2MinibatchBase<T>::anchorKeyToCoordThin3D(float& x, float& y, float& z,
+    const AnchorKey2D& key, const HexGrid& hexGrid_, int32_t nMoves_,
+    const std::vector<float>& zLevels) const {
     anchorKeyToCoord2D(x, y, key, hexGrid_, nMoves_);
     const int32_t zIndex = thin3DAnchorZIndexForKey(key);
-    z = thin3DZLevels_[static_cast<size_t>(zIndex)];
+    z = zLevels[static_cast<size_t>(zIndex)];
 }
 
 template<typename T>
@@ -314,15 +329,48 @@ int32_t Tiles2MinibatchBase<T>::thin3DAnchorZIndexForKey(const AnchorKey2D& key)
     if (nZLevels_ <= 0) {
         error("%s: thin 3D z levels are not initialized", __func__);
     }
-    uint64_t mixed = splitmix64(thin3DHashSeed_);
-    auto combine = [&](int32_t value, uint64_t salt) {
-        mixed = splitmix64(mixed ^ (static_cast<uint64_t>(static_cast<uint32_t>(value)) + salt));
-    };
-    combine(std::get<0>(key), 0x243f6a8885a308d3ULL);
-    combine(std::get<1>(key), 0x13198a2e03707344ULL);
-    combine(std::get<2>(key), 0xa4093822299f31d0ULL);
-    combine(std::get<3>(key), 0x082efa98ec4e6c89ULL);
-    return static_cast<int32_t>(mixed % static_cast<uint64_t>(nZLevels_));
+    return thin3d_geometry::anchor_z_index(
+        std::get<0>(key), std::get<1>(key), std::get<2>(key), std::get<3>(key),
+        nZLevels_, thin3DHashSeed_);
+}
+
+template<typename T>
+std::vector<float> Tiles2MinibatchBase<T>::thin3DZLevelsForTile(const TileData<T>& tileData) const {
+    if (thin3DFixedZ_) {
+        return thin3d_geometry::map_level_fractions(thin3DZLevelFractions_,
+            static_cast<float>(zMin_), static_cast<float>(zMax_));
+    }
+
+    std::vector<std::pair<float, double>> zWeights;
+    if (useExtended_) {
+        const auto& points = tileData.extended3D().extPts3d;
+        zWeights.reserve(points.size());
+        for (const auto& point : points) {
+            zWeights.emplace_back(static_cast<float>(point.recBase.z),
+                static_cast<double>(point.recBase.ct));
+        }
+    } else if (isSingleMoleculeMode()) {
+        const auto& input = tileData.singleMolecule3D();
+        zWeights.reserve(input.coords3dFloat.size());
+        for (size_t i = 0; i < input.coords3dFloat.size(); ++i) {
+            zWeights.emplace_back(input.coords3dFloat[i].z,
+                static_cast<double>(input.obsWeight[i]));
+        }
+    } else {
+        const auto& points = tileData.standard3D().pts3d;
+        zWeights.reserve(points.size());
+        for (const auto& point : points) {
+            zWeights.emplace_back(static_cast<float>(point.z), static_cast<double>(point.ct));
+        }
+    }
+
+    const auto range = thin3d_geometry::shortest_weighted_z_range(
+        std::move(zWeights), thin3DZRangeMass_);
+    if (!range.valid) {
+        return {};
+    }
+    return thin3d_geometry::map_level_fractions(
+        thin3DZLevelFractions_, range.min, range.max);
 }
 
 template<typename T>
@@ -334,17 +382,19 @@ int32_t Tiles2MinibatchBase<T>::buildAnchorsThin3D(TileData<T>& tileData, std::v
     if (nMoves_ <= 1) {
         error("%s: thin 3D anchors require nMoves > 1", __func__);
     }
-    if (!(zMax_ > zMin_)) {
-        error("%s: invalid thin 3D anchor z range", __func__);
-    }
     if (!(supportRadius > 0.0)) {
         error("%s: thin 3D anchors require a positive support radius", __func__);
     }
 
     anchors.clear();
     documents.clear();
+    const std::vector<float> zLevels = thin3DZLevelsForTile(tileData);
+    if (zLevels.empty()) {
+        return 0;
+    }
     std::map<AnchorKey2D, std::unordered_map<uint32_t, float>> hexAggregation;
-    forEachAnchorCandidateThin3D(tileData, hexGrid_, nMoves_, supportRadius, distNu, [&](uint32_t idx, float ct, const AnchorKey2D& key) {
+    forEachAnchorCandidateThin3D(tileData, hexGrid_, nMoves_, zLevels,
+        supportRadius, distNu, [&](uint32_t idx, float ct, const AnchorKey2D& key) {
         hexAggregation[key][idx] += ct;
     });
 
@@ -370,7 +420,7 @@ int32_t Tiles2MinibatchBase<T>::buildAnchorsThin3D(TileData<T>& tileData, std::v
 
         const auto& key = entry.first;
         float x, y, z;
-        anchorKeyToCoordThin3D(x, y, z, key, hexGrid_, nMoves_);
+        anchorKeyToCoordThin3D(x, y, z, key, hexGrid_, nMoves_, zLevels);
         anchors.emplace_back(x, y, z);
     }
     return documents.size();

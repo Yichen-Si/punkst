@@ -154,10 +154,10 @@ only in 3D mode. Default: 1.
 
 `--radius` - Support radius used in pixel-to-anchor weighting. In 2D and thin
 3D it also controls the anchor search neighborhood. Default: `anchor-dist *
-1.2` in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
-the nearest thin-3D z-level spacing.
-stencil, but it does control the weight decay scale and contributes to the
-x-y padding.
+1.2` in 2D. Adaptive thin 3D requires an explicit radius. Fixed-z thin 3D can
+derive a default from the x-y anchor spacing and fixed z-level spacing. In
+standard 3D, it does not change the fixed BCC stencil, but it controls the
+weight decay scale and contributes to x-y padding.
 
 `--half-life-dist` - Ratio `h` in `(0, 1)` such that an anchor at distance
 `h * radius` receives weight `0.5`. Default: `0.7`. The implemented weighting
@@ -166,14 +166,21 @@ rule is `w(d) = clamp(1 - (d / radius)^nu, 0.05, 0.95)` with
 
 `--min-init-count` - Minimum accumulated anchor support required for an anchor to be retained during initialization. In thin 3D this support is radius-based and distance-weighted. Default: 10.
 
-`--zmin`, `--zmax` - z range for 3D mode. Thin 3D requires both values.
-Standard 3D accepts them, but only uses them when
-`--ignore-outside-zrange` is set.
+`--zmin`, `--zmax` - Optional z filtering range in adaptive thin 3D and
+standard 3D. Fixed-z thin 3D requires both values and uses them as its global
+anchor bounds.
 
-`--thin-3d-z-levels` - Explicit z coordinates for thin-3D anchor levels.
+`--thin-3d-z-levels` - Relative thin-3D anchor positions within the selected z
+range. Values must be unique fractions in `[0,1]`.
 
 `--thin-3d-n-z-levels` - Number of evenly spaced thin-3D anchor levels to
-generate between `zmin` and `zmax`.
+generate within the selected z range.
+
+`--thin-3d-fixed-z` - Use the global `zmin`/`zmax` range instead of estimating
+the z range separately for every tile or boundary minibatch.
+
+`--thin-3d-z-range-mass` - Fraction of positive raw count mass covered by the
+shortest z interval used in adaptive thin 3D. Default: `0.95`.
 
 `--ignore-outside-zrange` - Drop observations outside `[zmin, zmax]` in 3D mode.
 
@@ -252,19 +259,27 @@ punkst pixel-decode --model ${path}/bcc.model.tsv \
 
 ### Thin 3D
 
-Thin 3D keeps anchor lattice in x-y and adds a small set of z levels across `[zmin, zmax]` to distribute these anchors. This is an experimental mode designed for thin tissue slices from imaging-based platforms where the range on the z axis is typically only 5-10μm.
+Thin 3D keeps the anchor lattice in x-y and distributes its anchors through a
+small local z range. It is designed for thin tissue slices whose z position can
+shift slowly across the imaging region.
 
-- `--zmin` and `--zmax` are required.
 - One of `--thin-3d-z-levels` or `--thin-3d-n-z-levels` must be provided.
 - If both are provided, `--thin-3d-z-levels` takes precedence and
   `--thin-3d-n-z-levels` is ignored with a warning.
-- When `--thin-3d-n-z-levels` is used, the z levels are placed evenly between
-  `zmin` and `zmax`.
+- `--thin-3d-z-levels` contains relative fractions in `[0,1]`. When
+  `--thin-3d-n-z-levels` is used, centered fractions are generated evenly.
+- By default, each tile or boundary minibatch finds the shortest z interval
+  containing `--thin-3d-z-range-mass` of its positive raw count mass, then maps
+  the relative levels into that interval.
+- If one plane alone contains the requested mass, all local levels collapse to
+  that plane.
+- `--thin-3d-fixed-z` disables adaptation, requires `--zmin/--zmax`, and maps
+  the same relative levels into that global range.
 - The z coordinate of each anchor is assigned deterministically but
   pseudorandomly from its x-y anchor key, so z levels are mixed across x-y
   without the old periodic stripe pattern.
-- `--radius` controls both thin-3D anchor initialization and the final
-  pixel-to-anchor graph.
+- Adaptive mode requires `--radius`; it controls both thin-3D anchor
+  initialization and the final pixel-to-anchor graph.
 - During initialization, each point contributes to every implicit thin-3D
   anchor within the 3D support radius, using the same distance-decay rule that
   is later used during iterative updates.
@@ -280,11 +295,13 @@ punkst pixel-decode --model ${path}/thin3d.model.tsv \
 --temp-dir ${tmpdir} --out-pref ${out_prefix} --output-binary \
 --icol-x 0 --icol-y 1 --icol-z 2 --icol-feature 3 --icol-val 4 \
 --thin-3D --hex-grid-dist 18 --n-moves 3 \
---thin-3d-z-levels 0 1.5 3 4.5 6 7.5 9 \
---zmin 0 --zmax 20 --radius 7.5 \
+--thin-3d-z-levels 0.15 0.5 0.85 \
+--thin-3d-z-range-mass 0.95 --radius 7.5 \
 --pixel-res 0.5 --pixel-res-z 1 \
 --threads ${threads} --seed 1
 ```
+
+If you know the data has a fixed z range (perfectly flat), add `--thin-3d-fixed-z` and use `--zmin 0 --zmax 10` to specify the range.
 
 ## Process multiple samples
 

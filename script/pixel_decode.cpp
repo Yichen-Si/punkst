@@ -6,16 +6,31 @@
 
 namespace {
 
-std::vector<float> build_evenly_spaced_thin3d_zlevels(double zMin, double zMax, int32_t nLevels) {
-    if (!(zMax > zMin) || nLevels <= 1) {
+std::vector<float> build_evenly_spaced_thin3d_zlevel_fractions(int32_t nLevels) {
+    if (nLevels <= 1) {
         error("%s: invalid thin 3D z-level configuration", __func__);
     }
-    std::vector<float> zLevels(static_cast<size_t>(nLevels));
-    const double zStep = (zMax - zMin) / static_cast<double>(nLevels);
+    std::vector<float> fractions(static_cast<size_t>(nLevels));
     for (int32_t i = 0; i < nLevels; ++i) {
-        zLevels[static_cast<size_t>(i)] = static_cast<float>(zMin + (static_cast<double>(i) + 0.5) * zStep);
+        fractions[static_cast<size_t>(i)] = static_cast<float>(
+            (static_cast<double>(i) + 0.5) / static_cast<double>(nLevels));
     }
-    return zLevels;
+    return fractions;
+}
+
+void validate_thin3d_zlevel_fractions(std::vector<float>& fractions) {
+    if (fractions.size() <= 1) {
+        error("Thin 3D requires at least two z-level fractions");
+    }
+    std::sort(fractions.begin(), fractions.end());
+    for (size_t i = 0; i < fractions.size(); ++i) {
+        if (!std::isfinite(fractions[i]) || fractions[i] < 0.0f || fractions[i] > 1.0f) {
+            error("--thin-3d-z-levels values must be finite fractions in [0, 1]");
+        }
+        if (i > 0 && !(fractions[i] > fractions[i - 1])) {
+            error("--thin-3d-z-levels values must be unique");
+        }
+    }
 }
 
 double nth_nearest_zlevel_distance(const std::vector<float>& zLevels, double z, int32_t nPick) {
@@ -65,11 +80,13 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     double decoderRadius = -1, halfLifeDist = 0.7;
     double zMin = std::numeric_limits<double>::quiet_NaN();
     double zMax = std::numeric_limits<double>::quiet_NaN();
-    std::vector<float> thin3DZLevels;
+    std::vector<float> thin3DZLevelFractions;
     int32_t thin3DNZLevels = -1;
+    double thin3DZRangeMass = 0.95;
     int32_t icolWeight = 1;
     bool ignoreOutsideZrange = false;
     bool thin3D = false;
+    bool thin3DFixedZ = false;
     bool standard3D = false;
     int32_t nMoves = -1, topK = 3;
     double minInitCount = 10;
@@ -133,8 +150,10 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("standard-3D", "Activate the standard 3D path", standard3D)
       .add_option("zmin", "Minimum z coordinate", zMin)
       .add_option("zmax", "Maximum z coordinate", zMax)
-      .add_option("thin-3d-z-levels", "Explicit z coordinates for thin 3D anchor levels", thin3DZLevels)
-      .add_option("thin-3d-n-z-levels", "Number of evenly spaced z levels for thin 3D anchors", thin3DNZLevels)
+      .add_option("thin-3d-z-levels", "Relative z-level fractions in [0,1] for thin 3D anchors", thin3DZLevelFractions)
+      .add_option("thin-3d-n-z-levels", "Number of evenly spaced relative z levels for thin 3D anchors", thin3DNZLevels)
+      .add_option("thin-3d-fixed-z", "Use global --zmin/--zmax instead of adapting the thin 3D z range per tile", thin3DFixedZ)
+      .add_option("thin-3d-z-range-mass", "Count-mass fraction used to estimate each adaptive thin 3D z range (default: 0.95)", thin3DZRangeMass)
       .add_option("ignore-outside-zrange", "Ignore observations with z coordinates outside the specified [zmin, zmax] range", ignoreOutsideZrange)
       .add_option("max-iter", "Maximum number of iterations (default: 100)", maxIter)
       .add_option("mean-change-tol", "Mean change of document-topic probability tolerance for convergence (default: 1e-3)", mDelta)
@@ -276,8 +295,6 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("Both --zmin and --zmax must be provided together");
         if (hasZRange && !(zMax > zMin))
             error("--zmax must be greater than --zmin");
-        if (thin3D && !hasZRange)
-            error("Thin 3D requires both --zmin and --zmax");
         if (ignoreOutsideZrange && !hasZRange)
             error("--ignore-outside-zrange requires both --zmin and --zmax");
     } else { // 2D checks
@@ -285,11 +302,12 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
             error("--icol-z requires either --thin-3D or --standard-3D");
         if (hasZRange)
             error("--zmin/--zmax require 3D input");
-        if (!thin3DZLevels.empty() || thin3DNZLevels > 0)
-            error("--thin-3d-z-levels/--thin-3d-n-z-levels require --thin-3D");
+        if (!thin3DZLevelFractions.empty() || thin3DNZLevels > 0 || thin3DFixedZ
+            || pl.was_provided("thin-3d-z-range-mass"))
+            error("Thin 3D z options require --thin-3D");
     }
     if (thin3D) {
-        const bool hasExplicitThin3DZLevels = !thin3DZLevels.empty();
+        const bool hasExplicitThin3DZLevels = !thin3DZLevelFractions.empty();
         const bool hasThin3DNZLevels = thin3DNZLevels > 0;
         if (!hasExplicitThin3DZLevels && !hasThin3DNZLevels) {
             error("Thin 3D requires one of --thin-3d-z-levels or --thin-3d-n-z-levels");
@@ -301,8 +319,30 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         } else {
             if (thin3DNZLevels <= 1)
                 error("--thin-3d-n-z-levels must be greater than 1");
-            thin3DZLevels = build_evenly_spaced_thin3d_zlevels(zMin, zMax, thin3DNZLevels);
+            thin3DZLevelFractions = build_evenly_spaced_thin3d_zlevel_fractions(thin3DNZLevels);
         }
+        validate_thin3d_zlevel_fractions(thin3DZLevelFractions);
+        if (!(thin3DZRangeMass > 0.0) || !(thin3DZRangeMass <= 1.0)) {
+            error("--thin-3d-z-range-mass must be in (0, 1]");
+        }
+        if (thin3DFixedZ) {
+            if (!hasZRange) {
+                error("--thin-3d-fixed-z requires both --zmin and --zmax");
+            }
+            if (pl.was_provided("thin-3d-z-range-mass")) {
+                error("--thin-3d-z-range-mass cannot be used with --thin-3d-fixed-z");
+            }
+        } else {
+            if (decoderRadius <= 0) {
+                error("Adaptive thin 3D requires an explicit positive --radius");
+            }
+            if (hasZRange && !ignoreOutsideZrange) {
+                notice("Adaptive thin 3D: --zmin/--zmax do not control anchor placement and are ignored without --ignore-outside-zrange");
+            }
+        }
+    } else if (standard3D && (!thin3DZLevelFractions.empty() || thin3DNZLevels > 0
+        || thin3DFixedZ || pl.was_provided("thin-3d-z-range-mass"))) {
+        error("Thin 3D z options cannot be used with --standard-3D");
     }
     if (standard3D) {
         if (anchorDist <= 0)
@@ -333,7 +373,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         if (decoderRadius <= 0) {
             if (thin3D) {
-                const double zDist = thin3d_default_zreach(thin3DZLevels, zMin, zMax, -1);
+                const std::vector<float> fixedZLevels = thin3d_geometry::map_level_fractions(
+                    thin3DZLevelFractions, static_cast<float>(zMin), static_cast<float>(zMax));
+                const double zDist = thin3d_default_zreach(fixedZLevels, zMin, zMax, -1);
                 decoderRadius = std::sqrt(anchorDist * anchorDist + zDist * zDist) * 1.2;
             } else {
                 decoderRadius = anchorDist * 1.2;
@@ -423,7 +465,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         decoder.setOutputCoordDigits(floatCoordDigits);
         decoder.setOutputProbDigits(probDigits);
         if (use3D) {
-            decoder.set3Dparameters(thin3D, zMin, zMax, pixelResolutionZ, ignoreOutsideZrange, anchorDist, thin3DZLevels);
+            decoder.set3Dparameters(thin3D, zMin, zMax, pixelResolutionZ,
+                ignoreOutsideZrange, anchorDist, thin3DZLevelFractions,
+                thin3DFixedZ, thin3DZRangeMass);
         }
         decoder.setFeatureNames(featureNames);
         if (!anchorFile.empty()) {
