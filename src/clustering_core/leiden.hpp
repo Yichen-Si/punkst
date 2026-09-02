@@ -39,6 +39,21 @@ struct LeidenResult {
 LeidenResult leiden_cluster(const Eigen::Ref<const LeidenSparseMatrix>& adjacency,
                             const LeidenOptions& options);
 
+// Generalized RB objective with an explicit positive mass for every node:
+//
+//   Q = (1 / 2m) sum_c [Sigma_in,c - gamma * S_c^2 / Z],
+//
+// where S_c is the total node mass in community c and Z is the total node
+// mass. Passing graph strengths as node_masses is exactly equivalent to the
+// configuration objective used by the overload above. An optional initial
+// membership may use arbitrary non-negative labels; labels are canonicalized
+// before optimization.
+LeidenResult leiden_cluster(
+    const Eigen::Ref<const LeidenSparseMatrix>& adjacency,
+    const std::vector<double>& node_masses,
+    const std::vector<int32_t>& initial_membership,
+    const LeidenOptions& options);
+
 // Cluster a weighted, undirected graph given as an edge list. Each undirected
 // edge should be listed once; parallel edges are canonically summed. Endpoints
 // must lie in [0, n_nodes); self-edges (u == v) are treated as self-loops.
@@ -46,3 +61,33 @@ LeidenResult leiden_cluster(int32_t n_nodes,
                             const std::vector<std::pair<int32_t, int32_t>>& edges,
                             const std::vector<double>& weights,
                             const LeidenOptions& options);
+
+LeidenResult leiden_cluster(
+    int32_t n_nodes,
+    const std::vector<std::pair<int32_t, int32_t>>& edges,
+    const std::vector<double>& weights,
+    const std::vector<double>& node_masses,
+    const std::vector<int32_t>& initial_membership,
+    const LeidenOptions& options);
+
+// Run independent seeds against one shared immutable edge-list graph. At most
+// n_threads restarts execute concurrently; results preserve seed order. This
+// is the production parallelism used for stability scans because an individual
+// Leiden trajectory remains sequential and reproducible.
+std::vector<LeidenResult> leiden_cluster_restarts(
+    int32_t n_nodes,
+    const std::vector<std::pair<int32_t, int32_t>>& edges,
+    const std::vector<double>& weights,
+    const LeidenOptions& options,
+    const std::vector<int32_t>& seeds,
+    int32_t n_threads);
+
+std::vector<LeidenResult> leiden_cluster_restarts(
+    int32_t n_nodes,
+    const std::vector<std::pair<int32_t, int32_t>>& edges,
+    const std::vector<double>& weights,
+    const std::vector<double>& node_masses,
+    const std::vector<int32_t>& initial_membership,
+    const LeidenOptions& options,
+    const std::vector<int32_t>& seeds,
+    int32_t n_threads);

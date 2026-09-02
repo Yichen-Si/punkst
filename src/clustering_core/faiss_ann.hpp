@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <vector>
 
+using FaissRowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic,
+    Eigen::Dynamic, Eigen::RowMajor>;
+
 struct FaissAnnAuditTrial {
     int32_t parameter = 0;
     double mean_recall = 0.0;
@@ -34,7 +37,7 @@ struct FaissHnswOptions {
     int32_t max_ef_search = 512;
     int32_t candidates = 0;
     int32_t audit_queries = 256;
-    double recall = 0.98;
+    double recall = 0.90;
     bool force = false;
     int32_t n_threads = 1;
 };
@@ -44,7 +47,7 @@ struct FaissNnDescentOptions {
     int32_t graph_size = 0;
     int32_t sample_candidates = 10;
     int32_t audit_queries = 256;
-    double recall = 0.98;
+    double recall = 0.90;
     int32_t seed = 1;
     int32_t n_threads = 1;
 };
@@ -56,6 +59,14 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
     const Eigen::Ref<const RowMajorMatrixXd>& normalized,
     int32_t neighbors, const FaissHnswOptions& options);
 
+FaissAnnCandidateResult faiss_hnsw_candidates(
+    const Eigen::Ref<const FaissRowMajorMatrixXf>& normalized,
+    int32_t neighbors, const FaissHnswOptions& options);
+
 FaissAnnCandidateResult faiss_nndescent_candidates(
     const Eigen::Ref<const RowMajorMatrixXd>& normalized,
+    int32_t neighbors, const FaissNnDescentOptions& options);
+
+FaissAnnCandidateResult faiss_nndescent_candidates(
+    const Eigen::Ref<const FaissRowMajorMatrixXf>& normalized,
     int32_t neighbors, const FaissNnDescentOptions& options);

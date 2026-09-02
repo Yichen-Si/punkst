@@ -8,21 +8,27 @@
 #include <numeric>
 #include <random>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
+#include "tbb/blocked_range.h"
+#include "tbb/global_control.h"
+#include "tbb/parallel_for.h"
+
 // -----------------------------------------------------------------------------
-// Clean-room Leiden (Traag, Waltman & van Eck, Sci. Rep. 2019) for the
-// RBConfiguration objective on a weighted, undirected graph.
+// Clean-room Leiden (Traag, Waltman & van Eck, Sci. Rep. 2019) for a
+// generalized RBConfiguration objective on a weighted, undirected graph.
 //
-// Objective (undirected; m2 = 2m = sum of node strengths):
-//     Q = (1/m2) * sum_c [ Sigma_in_c - gamma * K_c^2 / m2 ]
+// Objective (undirected; m2 = 2m = sum of node strengths, Z = sum of node
+// masses):
+//     Q = (1/m2) * sum_c [ Sigma_in_c - gamma * S_c^2 / Z ]
 // where Sigma_in_c = sum_{i,j in c} A_ij (self-loop contributes A_ii = 2*self_w)
-// and K_c is the total strength of community c. At gamma = 1 this equals the
-// standard modularity.
+// and S_c is the total node mass of community c. The default node mass is the
+// graph strength, so Z=m2 and gamma=1 gives standard modularity.
 //
 // Local-move gain for moving node v to community c (both terms use exclusive
-// community strength, i.e. the strength of the community without v):
-//     score(c) = e(v, c) - gamma * k_v * K_c(excl v) / m2
+// community mass, i.e. the mass of the community without v):
+//     score(c) = e(v, c) - gamma * s_v * S_c(excl v) / Z
 // The best community is argmax of score; the move is applied when it strictly
 // beats staying.
 //
@@ -51,7 +57,9 @@ struct Graph {
     std::vector<double>  wt;       // size 2E, aligned with nbr
     std::vector<double>  self_w;   // size n, self-loop weight per node
     std::vector<double>  strength; // size n, k_i = 2*self_w[i] + sum incident weights
+    std::vector<double>  node_mass; // size n, independent null-model mass s_i
     double m2 = 0.0;               // sum of strengths == 2m
+    double total_mass = 0.0;       // sum of node_mass == Z
 };
 
 void finalize_strength(Graph& g) {
@@ -68,6 +76,27 @@ void finalize_strength(Graph& g) {
         m2 += s;
     }
     g.m2 = m2;
+}
+
+void set_node_masses(Graph& g, const std::vector<double>* node_masses) {
+    if (node_masses && node_masses->size() != static_cast<size_t>(g.n)) {
+        throw std::invalid_argument(
+            "leiden_cluster: node masses must match the node count");
+    }
+    g.node_mass.resize(g.n);
+    double total = 0.0;
+    for (int32_t i = 0; i < g.n; ++i) {
+        const double mass = node_masses
+            ? (*node_masses)[static_cast<size_t>(i)] : g.strength[i];
+        if (!(mass > 0.0) || !std::isfinite(mass)
+                || !std::isfinite(total + mass)) {
+            throw std::invalid_argument(
+                "leiden_cluster: node masses must be positive and finite");
+        }
+        g.node_mass[i] = mass;
+        total += mass;
+    }
+    g.total_mass = total;
 }
 
 // Canonicalize each row and physically sum parallel edges.
@@ -111,8 +140,8 @@ void sort_and_sum_adjacency(Graph& g) {
 
 double compute_quality(const Graph& g, const std::vector<int32_t>& memb, double gamma) {
     const int32_t n = g.n;
-    std::vector<double> sin(n, 0.0), K(n, 0.0);
-    for (int32_t i = 0; i < n; ++i) K[memb[i]] += g.strength[i];
+    std::vector<double> sin(n, 0.0), mass(n, 0.0);
+    for (int32_t i = 0; i < n; ++i) mass[memb[i]] += g.node_mass[i];
     for (int32_t i = 0; i < n; ++i) {
         const int32_t ci = memb[i];
         sin[ci] += 2.0 * g.self_w[i];
@@ -120,7 +149,9 @@ double compute_quality(const Graph& g, const std::vector<int32_t>& memb, double 
             if (memb[g.nbr[e]] == ci) sin[ci] += g.wt[e];
     }
     double q = 0.0;
-    for (int32_t c = 0; c < n; ++c) q += sin[c] - gamma * K[c] * K[c] / g.m2;
+    for (int32_t c = 0; c < n; ++c) {
+        q += sin[c] - gamma * mass[c] * mass[c] / g.total_mass;
+    }
     return q / g.m2;
 }
 
@@ -129,13 +160,13 @@ double compute_quality(const Graph& g, const std::vector<int32_t>& memb, double 
 // node moved. Community ids are in [0, n).
 bool local_move(const Graph& g, std::vector<int32_t>& memb, double gamma, std::mt19937& rng) {
     const int32_t n = g.n;
-    const double inv_m2 = 1.0 / g.m2;
+    const double inv_total_mass = 1.0 / g.total_mass;
     const double move_eps = kMoveQualityEps * g.m2;
 
-    std::vector<double> comm_strength(n, 0.0);
+    std::vector<double> comm_mass(n, 0.0);
     std::vector<int32_t> comm_size(n, 0);
     for (int32_t i = 0; i < n; ++i) {
-        comm_strength[memb[i]] += g.strength[i];
+        comm_mass[memb[i]] += g.node_mass[i];
         comm_size[memb[i]] += 1;
     }
     std::vector<int32_t> empty_comms;
@@ -157,7 +188,7 @@ bool local_move(const Graph& g, std::vector<int32_t>& memb, double gamma, std::m
         queue.pop_front();
         in_queue[v] = 0;
         const int32_t old = memb[v];
-        const double kv = g.strength[v];
+        const double vertex_mass = g.node_mass[v];
 
         touched.clear();
         for (int64_t e = g.indptr[v]; e < g.indptr[v + 1]; ++e) {
@@ -166,12 +197,14 @@ bool local_move(const Graph& g, std::vector<int32_t>& memb, double gamma, std::m
             ewt[c] += g.wt[e];
         }
 
-        double best_score = ewt[old] - gamma * kv * (comm_strength[old] - kv) * inv_m2;
+        double best_score = ewt[old] - gamma * vertex_mass
+            * (comm_mass[old] - vertex_mass) * inv_total_mass;
         int32_t best_c = old;
         bool best_empty = false;
         for (int32_t c : touched) {
             if (c == old) continue;
-            const double score = ewt[c] - gamma * kv * comm_strength[c] * inv_m2;
+            const double score = ewt[c] - gamma * vertex_mass
+                * comm_mass[c] * inv_total_mass;
             if (score > best_score + move_eps) { best_score = score; best_c = c; best_empty = false; }
         }
         // Consider isolating v into a fresh community (score 0) when it is not
@@ -185,10 +218,10 @@ bool local_move(const Graph& g, std::vector<int32_t>& memb, double gamma, std::m
         int32_t target = best_c;
         if (best_empty) { target = empty_comms.back(); empty_comms.pop_back(); }
         if (target != old) {
-            comm_strength[old] -= kv;
+            comm_mass[old] -= vertex_mass;
             comm_size[old] -= 1;
             if (comm_size[old] == 0) empty_comms.push_back(old);
-            comm_strength[target] += kv;
+            comm_mass[target] += vertex_mass;
             comm_size[target] += 1;
             memb[v] = target;
             any_moved = true;
@@ -207,11 +240,13 @@ bool local_move(const Graph& g, std::vector<int32_t>& memb, double gamma, std::m
 std::vector<int32_t> refine(const Graph& g, const std::vector<int32_t>& memb,
                             double gamma, std::mt19937& rng, int32_t& n_refined_out) {
     const int32_t n = g.n;
-    const double inv_m2 = 1.0 / g.m2;
+    const double inv_total_mass = 1.0 / g.total_mass;
     const double move_eps = kMoveQualityEps * g.m2;
 
-    std::vector<double> Kcomm(n, 0.0);
-    for (int32_t i = 0; i < n; ++i) Kcomm[memb[i]] += g.strength[i];
+    std::vector<double> parent_mass(n, 0.0);
+    for (int32_t i = 0; i < n; ++i) {
+        parent_mass[memb[i]] += g.node_mass[i];
+    }
 
     // e_in_P[i] = weight from i to other nodes in the same community.
     std::vector<double> e_in_P(n, 0.0);
@@ -235,11 +270,11 @@ std::vector<int32_t> refine(const Graph& g, const std::vector<int32_t>& memb,
     // Refined partition: singletons keyed by node id.
     std::vector<int32_t> refined(n);
     std::iota(refined.begin(), refined.end(), 0);
-    std::vector<double> sub_strength(n);
+    std::vector<double> sub_mass(n);
     std::vector<double> sub_ext(n);      // E(C, R\C): weight from sub-community to rest of its community
     std::vector<int32_t> sub_size(n, 1);
     for (int32_t i = 0; i < n; ++i) {
-        sub_strength[i] = g.strength[i];
+        sub_mass[i] = g.node_mass[i];
         sub_ext[i] = e_in_P[i];
     }
 
@@ -249,15 +284,19 @@ std::vector<int32_t> refine(const Graph& g, const std::vector<int32_t>& memb,
     for (int32_t c = 0; c < n; ++c) {
         const int32_t b = start[c], en = start[c + 1];
         if (en - b <= 1) continue;   // nothing to refine
-        const double K_R = Kcomm[c];
+        const double parent_total_mass = parent_mass[c];
 
         std::vector<int32_t> order(nodes_by_comm.begin() + b, nodes_by_comm.begin() + en);
         std::shuffle(order.begin(), order.end(), rng);
         for (int32_t v : order) {
             if (sub_size[refined[v]] != 1) continue;   // only singletons move
-            const double kv = g.strength[v];
+            const double vertex_mass = g.node_mass[v];
             // v must be well-connected to the rest of its community.
-            if (e_in_P[v] < gamma * kv * (K_R - kv) * inv_m2 - move_eps) continue;
+            if (e_in_P[v] < gamma * vertex_mass
+                    * (parent_total_mass - vertex_mass)
+                    * inv_total_mass - move_eps) {
+                continue;
+            }
 
             touched.clear();
             for (int64_t e = g.indptr[v]; e < g.indptr[v + 1]; ++e) {
@@ -273,14 +312,19 @@ std::vector<int32_t> refine(const Graph& g, const std::vector<int32_t>& memb,
             for (int32_t C : touched) {
                 if (C == refined[v]) continue;
                 // C must itself be well-connected to the rest of its community.
-                if (sub_ext[C] < gamma * sub_strength[C] * (K_R - sub_strength[C]) * inv_m2 - move_eps) continue;
-                const double score = ewt[C] - gamma * kv * sub_strength[C] * inv_m2;
+                if (sub_ext[C] < gamma * sub_mass[C]
+                        * (parent_total_mass - sub_mass[C])
+                        * inv_total_mass - move_eps) {
+                    continue;
+                }
+                const double score = ewt[C] - gamma * vertex_mass
+                    * sub_mass[C] * inv_total_mass;
                 if (score > best_score) { best_score = score; best_c = C; }
             }
             if (best_c >= 0) {
                 const double eC = ewt[best_c];
                 sub_ext[best_c] += e_in_P[v] - 2.0 * eC;
-                sub_strength[best_c] += kv;
+                sub_mass[best_c] += vertex_mass;
                 sub_size[best_c] += 1;
                 sub_size[refined[v]] -= 1;
                 refined[v] = best_c;
@@ -305,6 +349,7 @@ Graph aggregate(const Graph& g, const std::vector<int32_t>& refined, int32_t nre
     Graph gn;
     gn.n = nref;
     gn.self_w.assign(nref, 0.0);
+    gn.node_mass.assign(nref, 0.0);
     gn.indptr.assign(nref + 1, 0);
 
     std::vector<int32_t> start(nref + 1, 0);
@@ -326,6 +371,7 @@ Graph aggregate(const Graph& g, const std::vector<int32_t>& refined, int32_t nre
         for (int32_t idx = start[a]; idx < start[a + 1]; ++idx) {
             const int32_t i = members[idx];
             gn.self_w[a] += g.self_w[i];
+            gn.node_mass[a] += g.node_mass[i];
             for (int64_t e = g.indptr[i]; e < g.indptr[i + 1]; ++e) {
                 const int32_t j = g.nbr[e];
                 const int32_t bb = refined[j];
@@ -367,7 +413,10 @@ Graph aggregate(const Graph& g, const std::vector<int32_t>& refined, int32_t nre
     }
 
     finalize_strength(gn);
+    set_node_masses(gn, &gn.node_mass);
     assert(std::abs(gn.m2 - g.m2) <= 1e-6 * g.m2 + 1e-9);   // total weight is invariant
+    assert(std::abs(gn.total_mass - g.total_mass)
+        <= 1e-12 * g.total_mass + 1e-12); // total node mass is invariant
     return gn;
 }
 
@@ -415,7 +464,35 @@ std::vector<int32_t> one_pass(const Graph& g0, const std::vector<int32_t>& init_
     return out;
 }
 
-LeidenResult run_leiden(const Graph& g0, const LeidenOptions& options) {
+std::vector<int32_t> canonical_initial_membership(
+        int32_t n, const std::vector<int32_t>* initial_membership) {
+    std::vector<int32_t> membership(n);
+    if (!initial_membership || initial_membership->empty()) {
+        std::iota(membership.begin(), membership.end(), 0);
+        return membership;
+    }
+    if (initial_membership->size() != static_cast<size_t>(n)) {
+        throw std::invalid_argument(
+            "leiden_cluster: initial membership must match the node count");
+    }
+    std::unordered_map<int32_t, int32_t> remap;
+    remap.reserve(static_cast<size_t>(n));
+    int32_t next = 0;
+    for (int32_t i = 0; i < n; ++i) {
+        const int32_t label = (*initial_membership)[static_cast<size_t>(i)];
+        if (label < 0) {
+            throw std::invalid_argument(
+                "leiden_cluster: initial membership labels must be non-negative");
+        }
+        const auto inserted = remap.emplace(label, next);
+        if (inserted.second) ++next;
+        membership[i] = inserted.first->second;
+    }
+    return membership;
+}
+
+LeidenResult run_leiden(const Graph& g0, const LeidenOptions& options,
+                        const std::vector<int32_t>* initial_membership) {
     if (!std::isfinite(options.resolution) || options.resolution <= 0.0
         || options.max_iterations == 0) {
         throw std::invalid_argument(
@@ -425,8 +502,8 @@ LeidenResult run_leiden(const Graph& g0, const LeidenOptions& options) {
     const double gamma = options.resolution;
     std::mt19937 rng(static_cast<uint32_t>(options.seed));
 
-    std::vector<int32_t> memb(n);
-    std::iota(memb.begin(), memb.end(), 0);   // start from singletons
+    std::vector<int32_t> memb = canonical_initial_membership(
+        n, initial_membership);
     double q_prev = compute_quality(g0, memb, gamma);
 
     const int32_t cap = options.max_iterations < 0 ? kUnboundedCap : options.max_iterations;
@@ -464,7 +541,32 @@ LeidenResult run_leiden(const Graph& g0, const LeidenOptions& options) {
     return res;
 }
 
-Graph build_from_sparse(const Eigen::Ref<const LeidenSparseMatrix>& A) {
+std::vector<LeidenResult> run_leiden_restarts(
+        const Graph& graph, const LeidenOptions& options,
+        const std::vector<int32_t>& seeds, int32_t n_threads,
+        const std::vector<int32_t>* initial_membership) {
+    if (seeds.empty() || n_threads <= 0) {
+        throw std::invalid_argument(
+            "leiden_cluster_restarts: seeds and threads must be positive");
+    }
+    std::vector<LeidenResult> results(seeds.size());
+    tbb::global_control parallelism(
+        tbb::global_control::max_allowed_parallelism,
+        static_cast<size_t>(n_threads));
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, seeds.size(), 1),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t index = range.begin(); index < range.end(); ++index) {
+                LeidenOptions current = options;
+                current.seed = seeds[index];
+                results[index] = run_leiden(
+                    graph, current, initial_membership);
+            }
+        });
+    return results;
+}
+
+Graph build_from_sparse(const Eigen::Ref<const LeidenSparseMatrix>& A,
+                        const std::vector<double>* node_masses) {
     if (A.rows() != A.cols())
         throw std::invalid_argument("leiden_cluster: adjacency matrix must be square");
     const int32_t n = static_cast<int32_t>(A.rows());
@@ -509,11 +611,13 @@ Graph build_from_sparse(const Eigen::Ref<const LeidenSparseMatrix>& A) {
     finalize_strength(g);
     if (g.m2 <= 0.0)
         throw std::invalid_argument("leiden_cluster: graph has no positive-weight edges");
+    set_node_masses(g, node_masses);
     return g;
 }
 
 Graph build_from_edges(int32_t n, const std::vector<std::pair<int32_t, int32_t>>& edges,
-                       const std::vector<double>& weights) {
+                       const std::vector<double>& weights,
+                       const std::vector<double>* node_masses) {
     if (n <= 0)
         throw std::invalid_argument("leiden_cluster: n_nodes must be positive");
     if (edges.size() != weights.size())
@@ -556,6 +660,7 @@ Graph build_from_edges(int32_t n, const std::vector<std::pair<int32_t, int32_t>>
     finalize_strength(g);
     if (g.m2 <= 0.0)
         throw std::invalid_argument("leiden_cluster: graph has no positive-weight edges");
+    set_node_masses(g, node_masses);
     return g;
 }
 
@@ -563,12 +668,60 @@ Graph build_from_edges(int32_t n, const std::vector<std::pair<int32_t, int32_t>>
 
 LeidenResult leiden_cluster(const Eigen::Ref<const LeidenSparseMatrix>& adjacency,
                             const LeidenOptions& options) {
-    return run_leiden(build_from_sparse(adjacency), options);
+    return run_leiden(build_from_sparse(adjacency, nullptr), options, nullptr);
+}
+
+LeidenResult leiden_cluster(
+        const Eigen::Ref<const LeidenSparseMatrix>& adjacency,
+        const std::vector<double>& node_masses,
+        const std::vector<int32_t>& initial_membership,
+        const LeidenOptions& options) {
+    return run_leiden(build_from_sparse(adjacency, &node_masses), options,
+        &initial_membership);
 }
 
 LeidenResult leiden_cluster(int32_t n_nodes,
                             const std::vector<std::pair<int32_t, int32_t>>& edges,
                             const std::vector<double>& weights,
                             const LeidenOptions& options) {
-    return run_leiden(build_from_edges(n_nodes, edges, weights), options);
+    return run_leiden(
+        build_from_edges(n_nodes, edges, weights, nullptr), options, nullptr);
+}
+
+LeidenResult leiden_cluster(
+        int32_t n_nodes,
+        const std::vector<std::pair<int32_t, int32_t>>& edges,
+        const std::vector<double>& weights,
+        const std::vector<double>& node_masses,
+        const std::vector<int32_t>& initial_membership,
+        const LeidenOptions& options) {
+    return run_leiden(
+        build_from_edges(n_nodes, edges, weights, &node_masses), options,
+        &initial_membership);
+}
+
+std::vector<LeidenResult> leiden_cluster_restarts(
+        int32_t n_nodes,
+        const std::vector<std::pair<int32_t, int32_t>>& edges,
+        const std::vector<double>& weights,
+        const LeidenOptions& options,
+        const std::vector<int32_t>& seeds,
+        int32_t n_threads) {
+    return run_leiden_restarts(
+        build_from_edges(n_nodes, edges, weights, nullptr),
+        options, seeds, n_threads, nullptr);
+}
+
+std::vector<LeidenResult> leiden_cluster_restarts(
+        int32_t n_nodes,
+        const std::vector<std::pair<int32_t, int32_t>>& edges,
+        const std::vector<double>& weights,
+        const std::vector<double>& node_masses,
+        const std::vector<int32_t>& initial_membership,
+        const LeidenOptions& options,
+        const std::vector<int32_t>& seeds,
+        int32_t n_threads) {
+    return run_leiden_restarts(
+        build_from_edges(n_nodes, edges, weights, &node_masses),
+        options, seeds, n_threads, &initial_membership);
 }

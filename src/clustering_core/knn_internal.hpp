@@ -7,10 +7,7 @@
 
 namespace knn_detail {
 
-struct DirectedNeighbor {
-    int32_t index = -1;
-    double similarity = 0.0;
-};
+using DirectedNeighbor = DirectedKnnNeighbor;
 
 // Shared implementation used by raw inner-product and normalized-cosine flat
 // search. clamp_unit_scores preserves cosine's [-1,1] roundoff contract.

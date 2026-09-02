@@ -56,6 +56,8 @@ dist/
 site/
 
 venv
+__pycache__/
+*.py[cod]
 
 claude_log/
 .claude/

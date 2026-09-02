@@ -100,10 +100,15 @@ CosineKnnBackend resolve_backend(
     return CosineKnnBackend::Flat;
 }
 
+template<class MatrixType, class ExactMatrixType = RowMajorMatrixXd>
 std::vector<DirectedNeighbor> ann_candidate_neighbors(
-        const RowMajorMatrixXd& normalized,
+        const MatrixType& normalized,
         const std::vector<int32_t>& candidates, int32_t candidates_per_row,
-        int32_t neighbors, CosineKnnTimings& timings) {
+        int32_t neighbors, CosineKnnTimings& timings,
+        const ExactMatrixType* exact_observations = nullptr,
+        SimplexMetric metric = SimplexMetric::Cosine,
+        const std::vector<double>* row_scales = nullptr,
+        const std::vector<double>* row_normalizers = nullptr) {
     const int32_t rows = static_cast<int32_t>(normalized.rows());
     if (candidates_per_row < neighbors
             || candidates.size() != static_cast<size_t>(rows)
@@ -130,8 +135,34 @@ std::vector<DirectedNeighbor> ann_candidate_neighbors(
                             || std::find(unique.begin(), unique.end(), index)
                                 != unique.end()) continue;
                     unique.push_back(index);
-                    ranked.push_back({index,
-                        -normalized.row(row).dot(normalized.row(index))});
+                    double similarity = 0.0;
+                    if (exact_observations == nullptr) {
+                        similarity = normalized.row(row).dot(
+                            normalized.row(index));
+                    } else {
+                        const double first_scale = (*row_scales)[
+                            static_cast<size_t>(row)];
+                        const double second_scale = (*row_scales)[
+                            static_cast<size_t>(index)];
+                        const double first_normalizer = (*row_normalizers)[
+                            static_cast<size_t>(row)];
+                        const double second_normalizer = (*row_normalizers)[
+                            static_cast<size_t>(index)];
+                        for (Eigen::Index column = 0;
+                             column < exact_observations->cols(); ++column) {
+                            double first_value = (*exact_observations)(row, column)
+                                / first_scale / first_normalizer;
+                            double second_value = (*exact_observations)(index, column)
+                                / second_scale / second_normalizer;
+                            if (metric == SimplexMetric::Hellinger) {
+                                first_value = std::sqrt(first_value);
+                                second_value = std::sqrt(second_value);
+                            }
+                            similarity += first_value * second_value;
+                        }
+                        similarity = std::clamp(similarity, -1.0, 1.0);
+                    }
+                    ranked.push_back({index, -similarity});
                 }
                 std::sort(ranked.begin(), ranked.end(), neighbor_less);
                 if (static_cast<int32_t>(ranked.size()) < neighbors) {
@@ -148,6 +179,128 @@ std::vector<DirectedNeighbor> ann_candidate_neighbors(
     timings.topk_seconds = elapsed_seconds(topk_begin);
     return directed;
 }
+
+#if PUNKST_HAVE_FAISS_ANN
+struct FaissSimplexWorkspace {
+    FaissRowMajorMatrixXf coordinates;
+    std::vector<double> row_scales;
+    std::vector<double> row_normalizers;
+};
+
+FaissSimplexWorkspace simplex_metric_coordinates_float(
+        const Eigen::Ref<const RowMajorMatrixXd>& observations,
+        SimplexMetric metric) {
+    if (observations.rows() == 0 || observations.cols() == 0) {
+        throw std::invalid_argument(
+            "Simplex clustering requires a non-empty finite matrix");
+    }
+    FaissSimplexWorkspace out;
+    out.coordinates.resize(observations.rows(), observations.cols());
+    out.row_scales.resize(static_cast<size_t>(observations.rows()));
+    out.row_normalizers.resize(static_cast<size_t>(observations.rows()));
+    for (Eigen::Index row = 0; row < observations.rows(); ++row) {
+        if (!observations.row(row).allFinite()) {
+            throw std::invalid_argument(
+                "Simplex clustering requires finite observation rows");
+        }
+        if (metric == SimplexMetric::Cosine) {
+            const double scale = observations.row(row).cwiseAbs().maxCoeff();
+            if (!(scale > 0.0)) {
+                throw std::invalid_argument(
+                    "Cosine clustering requires nonzero observation rows");
+            }
+            const double norm = (observations.row(row) / scale).norm();
+            if (!(norm > 0.0) || !std::isfinite(norm)) {
+                throw std::invalid_argument(
+                    "Cosine clustering requires nonzero observation rows");
+            }
+            out.row_scales[static_cast<size_t>(row)] = scale;
+            out.row_normalizers[static_cast<size_t>(row)] = norm;
+            for (Eigen::Index column = 0; column < observations.cols();
+                 ++column) {
+                out.coordinates(row, column) = static_cast<float>(
+                    observations(row, column) / scale / norm);
+            }
+        } else if (metric == SimplexMetric::Hellinger) {
+            if ((observations.row(row).array() < 0.0).any()) {
+                throw std::invalid_argument(
+                    "Hellinger clustering requires finite nonnegative rows");
+            }
+            const double scale = observations.row(row).maxCoeff();
+            if (!(scale > 0.0)) {
+                throw std::invalid_argument(
+                    "Hellinger clustering requires positive row sums");
+            }
+            const double total = (observations.row(row) / scale).sum();
+            if (!(total > 0.0) || !std::isfinite(total)) {
+                throw std::invalid_argument(
+                    "Hellinger clustering requires positive row sums");
+            }
+            out.row_scales[static_cast<size_t>(row)] = scale;
+            out.row_normalizers[static_cast<size_t>(row)] = total;
+            for (Eigen::Index column = 0; column < observations.cols();
+                 ++column) {
+                out.coordinates(row, column) = static_cast<float>(std::sqrt(
+                    observations(row, column) / scale / total));
+            }
+        } else {
+            throw std::invalid_argument("Unknown simplex metric");
+        }
+    }
+    return out;
+}
+
+template<class MatrixType>
+std::vector<DirectedNeighbor> faiss_neighbors(
+        const MatrixType& normalized, int32_t neighbors,
+        const CosineKnnOptions& options, CosineKnnDiagnostics& diagnostics,
+        const Eigen::Ref<const RowMajorMatrixXd>& exact_observations,
+        SimplexMetric metric,
+        const std::vector<double>& row_scales,
+        const std::vector<double>& row_normalizers) {
+    FaissAnnCandidateResult ann;
+    if (diagnostics.resolved_backend == CosineKnnBackend::Hnsw) {
+        FaissHnswOptions faiss_options;
+        faiss_options.m = options.hnsw_m;
+        faiss_options.ef_construction = options.hnsw_ef_construction;
+        faiss_options.ef_search = options.hnsw_ef_search;
+        faiss_options.max_ef_search = options.hnsw_max_ef_search;
+        faiss_options.candidates = options.hnsw_candidates;
+        faiss_options.audit_queries = options.hnsw_audit_queries;
+        faiss_options.recall = options.hnsw_recall;
+        faiss_options.force = options.hnsw_force;
+        faiss_options.n_threads = options.n_threads;
+        ann = faiss_hnsw_candidates(normalized, neighbors, faiss_options);
+    } else {
+        FaissNnDescentOptions faiss_options;
+        faiss_options.iterations = options.nndescent_iterations;
+        faiss_options.graph_size = options.nndescent_graph_size;
+        faiss_options.sample_candidates = options.nndescent_sample_candidates;
+        faiss_options.audit_queries = options.nndescent_audit_queries;
+        faiss_options.recall = options.nndescent_recall;
+        faiss_options.seed = options.ann_seed;
+        faiss_options.n_threads = options.n_threads;
+        ann = faiss_nndescent_candidates(normalized, neighbors, faiss_options);
+    }
+    diagnostics.requested_ann_parameter = ann.requested_parameter;
+    diagnostics.resolved_ann_parameter = ann.resolved_parameter;
+    diagnostics.resolved_ann_candidates = ann.resolved_candidate_count;
+    diagnostics.audit_mean_recall = ann.audit_mean_recall;
+    diagnostics.audit_recall_lcb = ann.audit_recall_lcb;
+    diagnostics.audit_passed = ann.audit_passed;
+    diagnostics.forced = ann.forced;
+    for (const FaissAnnAuditTrial& trial : ann.audit_trials) {
+        diagnostics.audit_trials.push_back({trial.parameter,
+            trial.mean_recall, trial.recall_lcb});
+    }
+    diagnostics.timings.index_build_seconds = ann.index_build_seconds;
+    diagnostics.timings.query_seconds = ann.query_seconds;
+    diagnostics.timings.audit_seconds = ann.audit_seconds;
+    return ann_candidate_neighbors(normalized, ann.candidates,
+        ann.candidates_per_row, neighbors, diagnostics.timings,
+        &exact_observations, metric, &row_scales, &row_normalizers);
+}
+#endif
 
 CosineFlatKernel resolve_flat_kernel(CosineFlatKernel requested) {
     if (requested == CosineFlatKernel::Auto) {
@@ -504,14 +657,14 @@ bool cosine_knn_faiss_available() {
 #endif
 }
 
-CosineKnnResult simplex_knn(
+CosineDirectedKnnResult simplex_directed_knn(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     SimplexMetric metric, const CosineKnnOptions& options) {
     validate_knn_options(observations, options);
     tbb::global_control parallelism(
         tbb::global_control::max_allowed_parallelism,
         static_cast<size_t>(options.n_threads));
-    CosineKnnResult out;
+    CosineDirectedKnnResult out;
     out.diagnostics.requested_backend = options.backend;
     out.diagnostics.sample_size = observations.rows();
     out.diagnostics.resolved_backend = resolve_backend(
@@ -521,12 +674,7 @@ CosineKnnResult simplex_knn(
             options.flat_kernel);
     }
 
-    const auto normalization_begin = Clock::now();
-    const RowMajorMatrixXd normalized = simplex_metric_coordinates(
-        observations, metric);
-    out.diagnostics.timings.normalization_seconds =
-        elapsed_seconds(normalization_begin);
-    const int32_t n = static_cast<int32_t>(normalized.rows());
+    const int32_t n = static_cast<int32_t>(observations.rows());
     const int32_t neighbors = std::min(options.n_neighbors, n - 1);
     if (static_cast<size_t>(n) > std::numeric_limits<size_t>::max()
             / static_cast<size_t>(neighbors)) {
@@ -534,93 +682,76 @@ CosineKnnResult simplex_knn(
             "Simplex k-NN neighbor storage exceeds addressable memory");
     }
     std::vector<DirectedNeighbor> directed;
-    switch (out.diagnostics.resolved_backend) {
-        case CosineKnnBackend::Auto:
-            throw std::logic_error("Unresolved automatic cosine k-NN backend");
-        case CosineKnnBackend::KdTree:
-            directed = kd_tree_neighbors(normalized, neighbors,
-                options.knn_search_epsilon, out.diagnostics.timings);
-            break;
-        case CosineKnnBackend::Flat:
-            {
-                InnerProductKnnTimings flat_timings;
-                directed = knn_detail::flat_inner_product_neighbors(
-                    normalized, neighbors,
-                    out.diagnostics.resolved_flat_kernel, options.n_threads,
-                    true, flat_timings);
-                out.diagnostics.timings.query_seconds =
-                    flat_timings.query_seconds;
-                out.diagnostics.timings.topk_seconds =
-                    flat_timings.topk_seconds;
-            }
-            break;
-        case CosineKnnBackend::Hnsw:
-        case CosineKnnBackend::NnDescent:
-            {
+    if (out.diagnostics.resolved_backend == CosineKnnBackend::Hnsw
+            || out.diagnostics.resolved_backend
+                == CosineKnnBackend::NnDescent) {
 #if PUNKST_HAVE_FAISS_ANN
-                FaissAnnCandidateResult ann;
-                if (out.diagnostics.resolved_backend
-                        == CosineKnnBackend::Hnsw) {
-                    FaissHnswOptions faiss_options;
-                    faiss_options.m = options.hnsw_m;
-                    faiss_options.ef_construction =
-                        options.hnsw_ef_construction;
-                    faiss_options.ef_search = options.hnsw_ef_search;
-                    faiss_options.max_ef_search =
-                        options.hnsw_max_ef_search;
-                    faiss_options.candidates = options.hnsw_candidates;
-                    faiss_options.audit_queries = options.hnsw_audit_queries;
-                    faiss_options.recall = options.hnsw_recall;
-                    faiss_options.force = options.hnsw_force;
-                    faiss_options.n_threads = options.n_threads;
-                    ann = faiss_hnsw_candidates(
-                        normalized, neighbors, faiss_options);
-                } else {
-                    FaissNnDescentOptions faiss_options;
-                    faiss_options.iterations =
-                        options.nndescent_iterations;
-                    faiss_options.graph_size =
-                        options.nndescent_graph_size;
-                    faiss_options.sample_candidates =
-                        options.nndescent_sample_candidates;
-                    faiss_options.audit_queries =
-                        options.nndescent_audit_queries;
-                    faiss_options.recall = options.nndescent_recall;
-                    faiss_options.seed = options.ann_seed;
-                    faiss_options.n_threads = options.n_threads;
-                    ann = faiss_nndescent_candidates(
-                        normalized, neighbors, faiss_options);
-                }
-                out.diagnostics.requested_ann_parameter =
-                    ann.requested_parameter;
-                out.diagnostics.resolved_ann_parameter =
-                    ann.resolved_parameter;
-                out.diagnostics.resolved_ann_candidates =
-                    ann.resolved_candidate_count;
-                out.diagnostics.audit_mean_recall = ann.audit_mean_recall;
-                out.diagnostics.audit_recall_lcb = ann.audit_recall_lcb;
-                out.diagnostics.audit_passed = ann.audit_passed;
-                out.diagnostics.forced = ann.forced;
-                for (const FaissAnnAuditTrial& trial : ann.audit_trials) {
-                    out.diagnostics.audit_trials.push_back({trial.parameter,
-                        trial.mean_recall, trial.recall_lcb});
-                }
-                out.diagnostics.timings.index_build_seconds =
-                    ann.index_build_seconds;
-                out.diagnostics.timings.query_seconds = ann.query_seconds;
-                out.diagnostics.timings.audit_seconds = ann.audit_seconds;
-                directed = ann_candidate_neighbors(normalized,
-                    ann.candidates, ann.candidates_per_row, neighbors,
-                    out.diagnostics.timings);
+        const auto normalization_begin = Clock::now();
+        const FaissSimplexWorkspace normalized =
+            simplex_metric_coordinates_float(observations, metric);
+        out.diagnostics.timings.normalization_seconds =
+            elapsed_seconds(normalization_begin);
+        directed = faiss_neighbors(normalized.coordinates, neighbors, options,
+            out.diagnostics, observations, metric, normalized.row_scales,
+            normalized.row_normalizers);
 #else
-                throw std::logic_error("Faiss ANN backend was not compiled");
+        throw std::logic_error("Faiss ANN backend was not compiled");
 #endif
-            }
-            break;
+    } else {
+        const auto normalization_begin = Clock::now();
+        const RowMajorMatrixXd normalized = simplex_metric_coordinates(
+            observations, metric);
+        out.diagnostics.timings.normalization_seconds =
+            elapsed_seconds(normalization_begin);
+        switch (out.diagnostics.resolved_backend) {
+            case CosineKnnBackend::Auto:
+                throw std::logic_error(
+                    "Unresolved automatic cosine k-NN backend");
+            case CosineKnnBackend::KdTree:
+                directed = kd_tree_neighbors(normalized, neighbors,
+                    options.knn_search_epsilon, out.diagnostics.timings);
+                break;
+            case CosineKnnBackend::Flat:
+                {
+                    InnerProductKnnTimings flat_timings;
+                    directed = knn_detail::flat_inner_product_neighbors(
+                        normalized, neighbors,
+                        out.diagnostics.resolved_flat_kernel,
+                        options.n_threads, true, flat_timings);
+                    out.diagnostics.timings.query_seconds =
+                        flat_timings.query_seconds;
+                    out.diagnostics.timings.topk_seconds =
+                        flat_timings.topk_seconds;
+                }
+                break;
+            case CosineKnnBackend::Hnsw:
+            case CosineKnnBackend::NnDescent:
+                throw std::logic_error("Unexpected Faiss ANN dispatch");
+        }
     }
+    out.graph.n_nodes = n;
+    out.graph.n_neighbors = neighbors;
+    out.graph.neighbors = std::move(directed);
+    return out;
+}
+
+CosineDirectedKnnResult cosine_directed_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const CosineKnnOptions& options) {
+    return simplex_directed_knn(
+        observations, SimplexMetric::Cosine, options);
+}
+
+CosineKnnResult simplex_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const CosineKnnOptions& options) {
+    CosineDirectedKnnResult directed = simplex_directed_knn(
+        observations, metric, options);
+    CosineKnnResult out;
+    out.diagnostics = std::move(directed.diagnostics);
     const auto reduction_begin = Clock::now();
     out.graph = filter_positive_similarity_graph(
-        knn_detail::union_max_knn_graph(directed, n, neighbors));
+        union_max_knn_graph(directed.graph));
     out.diagnostics.timings.graph_reduction_seconds =
         elapsed_seconds(reduction_begin);
     return out;

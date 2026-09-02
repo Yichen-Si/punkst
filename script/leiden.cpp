@@ -465,7 +465,7 @@ int32_t cmdLeiden(int argc, char** argv) {
     int32_t hnsw_candidates = 0, hnsw_audit_queries = 256;
     int32_t nndescent_iterations = 0, nndescent_graph_size = 0;
     int32_t nndescent_s = 10, nndescent_audit_queries = 256;
-    double hnsw_recall = 0.98, nndescent_recall = 0.98;
+    double hnsw_recall = 0.90, nndescent_recall = 0.90;
     punkst_cli::LinearEmbeddingCliOptions embedding_cli;
     bool allow_topk = false, hnsw_force = false;
     bool skip_projection = false;

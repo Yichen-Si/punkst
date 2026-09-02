@@ -237,6 +237,26 @@ set(CLUSTERING_CORE_SOURCE_FILES
     src/clustering_core/partition_classifier.cpp
     src/clustering_core/partition_classifier_lrvb.hpp
     src/clustering_core/partition_classifier_lrvb.cpp
+    src/multires_core/diffusion_graph.hpp
+    src/multires_core/diffusion_graph.cpp
+    src/multires_core/artifacts.hpp
+    src/multires_core/artifacts.cpp
+    src/multires_core/graph_artifact_io.hpp
+    src/multires_core/graph_artifact_io.cpp
+    src/multires_core/metric_graph.hpp
+    src/multires_core/metric_graph.cpp
+    src/multires_core/graph_coarsening.hpp
+    src/multires_core/graph_coarsening.cpp
+    src/multires_core/raw_affinity_graph.hpp
+    src/multires_core/raw_affinity_graph.cpp
+    src/multires_core/resolution_selection.hpp
+    src/multires_core/resolution_selection.cpp
+    src/multires_core/selection_artifact.hpp
+    src/multires_core/selection_artifact.cpp
+    src/multires_core/scene_construction.hpp
+    src/multires_core/scene_construction.cpp
+    src/multires_core/scene_artifact.hpp
+    src/multires_core/scene_artifact.cpp
 )
 
 if (PUNKST_HAVE_FAISS_ANN)
@@ -320,6 +340,9 @@ set(SOURCE_FILES
     script/leiden.cpp
     script/linear_embed.cpp
     script/partition_classifier.cpp
+    script/multires.cpp
+    script/multires_selection.cpp
+    script/multires_scenes.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp

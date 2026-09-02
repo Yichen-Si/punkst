@@ -14,6 +14,7 @@
 #include <queue>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -92,11 +93,13 @@ std::vector<int32_t> audit_rows(int32_t rows, int32_t requested) {
     return selected;
 }
 
+template<class MatrixType>
 std::vector<int32_t> exact_audit_neighbors(
-        const Eigen::Ref<const RowMajorMatrixXd>& normalized,
+        const MatrixType& normalized,
         const std::vector<int32_t>& queries, int32_t neighbors) {
     const int32_t dimensions = static_cast<int32_t>(normalized.cols());
-    RowMajorMatrixXd query_matrix(
+    Eigen::Matrix<typename MatrixType::Scalar, Eigen::Dynamic, Eigen::Dynamic,
+        Eigen::RowMajor> query_matrix(
         static_cast<Eigen::Index>(queries.size()), dimensions);
     for (size_t i = 0; i < queries.size(); ++i) {
         query_matrix.row(static_cast<Eigen::Index>(i)) =
@@ -107,8 +110,8 @@ std::vector<int32_t> exact_audit_neighbors(
     for (int32_t begin = 0; begin < normalized.rows(); begin += block_size) {
         const int32_t count = std::min<int32_t>(
             block_size, static_cast<int32_t>(normalized.rows()) - begin);
-        const Eigen::MatrixXd scores = query_matrix
-            * normalized.middleRows(begin, count).transpose();
+        const auto scores = (query_matrix
+            * normalized.middleRows(begin, count).transpose()).eval();
         for (size_t query = 0; query < queries.size(); ++query) {
             for (int32_t offset = 0; offset < count; ++offset) {
                 const int32_t index = begin + offset;
@@ -136,20 +139,26 @@ std::vector<int32_t> exact_audit_neighbors(
     return result;
 }
 
-std::vector<float> float_coordinates(
-        const Eigen::Ref<const RowMajorMatrixXd>& normalized) {
-    std::vector<float> result(static_cast<size_t>(normalized.size()));
-    for (Eigen::Index row = 0; row < normalized.rows(); ++row) {
-        for (Eigen::Index column = 0; column < normalized.cols(); ++column) {
-            result[static_cast<size_t>(row * normalized.cols() + column)] =
-                static_cast<float>(normalized(row, column));
+template<class MatrixType>
+const float* float_coordinate_data(
+        const MatrixType& normalized, std::vector<float>& storage) {
+    if constexpr (std::is_same_v<typename MatrixType::Scalar, float>) {
+        return normalized.data();
+    } else {
+        storage.resize(static_cast<size_t>(normalized.size()));
+        for (Eigen::Index row = 0; row < normalized.rows(); ++row) {
+            for (Eigen::Index column = 0; column < normalized.cols(); ++column) {
+                storage[static_cast<size_t>(row * normalized.cols() + column)] =
+                    static_cast<float>(normalized(row, column));
+            }
         }
+        return storage.data();
     }
-    return result;
 }
 
+template<class MatrixType>
 std::vector<int32_t> reranked_query_neighbors(
-        const Eigen::Ref<const RowMajorMatrixXd>& normalized,
+        const MatrixType& normalized,
         const std::vector<int32_t>& queries,
         const std::vector<faiss::idx_t>& labels, int32_t labels_per_query,
         int32_t neighbors) {
@@ -237,7 +246,7 @@ void set_final_audit(FaissAnnCandidateResult& result,
         const FaissAnnAuditTrial& trial, double target) {
     result.audit_mean_recall = trial.mean_recall;
     result.audit_recall_lcb = trial.recall_lcb;
-    result.audit_passed = trial.recall_lcb >= target;
+    result.audit_passed = trial.recall_lcb > target;
 }
 
 } // namespace
@@ -258,8 +267,9 @@ int32_t automatic_hnsw_ef_search(int64_t sample_size) {
         std::log2(static_cast<double>(sample_size)) * 6.0);
 }
 
-FaissAnnCandidateResult faiss_hnsw_candidates(
-        const Eigen::Ref<const RowMajorMatrixXd>& normalized,
+template<class MatrixType>
+FaissAnnCandidateResult faiss_hnsw_candidates_impl(
+        const MatrixType& normalized,
         int32_t neighbors, const FaissHnswOptions& options) {
     const int32_t rows = static_cast<int32_t>(normalized.rows());
     validate_common(rows, neighbors, options.audit_queries,
@@ -282,7 +292,9 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
 
     ScopedOpenMpThreads omp_threads(options.n_threads);
     const Clock::time_point build_begin = Clock::now();
-    const std::vector<float> coordinates = float_coordinates(normalized);
+    std::vector<float> coordinate_storage;
+    const float* coordinates = float_coordinate_data(
+        normalized, coordinate_storage);
     faiss::hnsw_deterministic_build = true;
     faiss::IndexHNSWFlat index(
         normalized.cols(), options.m, faiss::METRIC_INNER_PRODUCT);
@@ -290,7 +302,7 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
     FaissAnnCandidateResult result;
     result.requested_parameter = options.ef_search;
     result.resolved_candidate_count = candidate_count;
-    index.add(rows, coordinates.data());
+    index.add(rows, coordinates);
     result.index_build_seconds = elapsed_seconds(build_begin);
 
     const Clock::time_point audit_begin = Clock::now();
@@ -300,7 +312,7 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
     std::vector<float> audit_coordinates(
         queries.size() * static_cast<size_t>(normalized.cols()));
     for (size_t query = 0; query < queries.size(); ++query) {
-        std::copy_n(coordinates.data()
+        std::copy_n(coordinates
                 + static_cast<size_t>(queries[query]) * normalized.cols(),
             normalized.cols(), audit_coordinates.data()
                 + query * static_cast<size_t>(normalized.cols()));
@@ -331,12 +343,12 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
         const FaissAnnAuditTrial* current_trial = &audit(current);
         int32_t failed = -1;
         int32_t passed = -1;
-        if (current_trial->recall_lcb >= options.recall) {
+        if (current_trial->recall_lcb > options.recall) {
             passed = current;
             while (current > candidate_count) {
                 const int32_t next = std::max(candidate_count, current / 2);
                 const FaissAnnAuditTrial& trial = audit(next);
-                if (trial.recall_lcb >= options.recall) {
+                if (trial.recall_lcb > options.recall) {
                     passed = next;
                     current = next;
                     if (next == candidate_count) break;
@@ -352,7 +364,7 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
                     options.max_ef_search, current * 2);
                 const FaissAnnAuditTrial& trial = audit(next);
                 current = next;
-                if (trial.recall_lcb >= options.recall) {
+                if (trial.recall_lcb > options.recall) {
                     passed = next;
                     break;
                 }
@@ -366,7 +378,7 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
             while (high - low > 8) {
                 const int32_t middle = low + (high - low) / 2;
                 const FaissAnnAuditTrial& trial = audit(middle);
-                if (trial.recall_lcb >= options.recall) high = middle;
+                if (trial.recall_lcb > options.recall) high = middle;
                 else low = middle;
             }
             passed = high;
@@ -394,7 +406,7 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
     std::vector<float> distances(full_candidate_size);
     std::vector<faiss::idx_t> labels(full_candidate_size);
     const Clock::time_point query_begin = Clock::now();
-    index.search(rows, coordinates.data(), searched,
+    index.search(rows, coordinates, searched,
         distances.data(), labels.data());
     result.query_seconds = elapsed_seconds(query_begin);
     std::vector<float>().swap(distances);
@@ -407,8 +419,21 @@ FaissAnnCandidateResult faiss_hnsw_candidates(
     return result;
 }
 
-FaissAnnCandidateResult faiss_nndescent_candidates(
+FaissAnnCandidateResult faiss_hnsw_candidates(
         const Eigen::Ref<const RowMajorMatrixXd>& normalized,
+        int32_t neighbors, const FaissHnswOptions& options) {
+    return faiss_hnsw_candidates_impl(normalized, neighbors, options);
+}
+
+FaissAnnCandidateResult faiss_hnsw_candidates(
+        const Eigen::Ref<const FaissRowMajorMatrixXf>& normalized,
+        int32_t neighbors, const FaissHnswOptions& options) {
+    return faiss_hnsw_candidates_impl(normalized, neighbors, options);
+}
+
+template<class MatrixType>
+FaissAnnCandidateResult faiss_nndescent_candidates_impl(
+        const MatrixType& normalized,
         int32_t neighbors, const FaissNnDescentOptions& options) {
     const int32_t rows = static_cast<int32_t>(normalized.rows());
     validate_common(rows, neighbors, options.audit_queries,
@@ -427,7 +452,9 @@ FaissAnnCandidateResult faiss_nndescent_candidates(
         ? options.iterations : automatic_nndescent_iterations(rows);
     ScopedOpenMpThreads omp_threads(options.n_threads);
     const Clock::time_point build_begin = Clock::now();
-    const std::vector<float> coordinates = float_coordinates(normalized);
+    std::vector<float> coordinate_storage;
+    const float* coordinates = float_coordinate_data(
+        normalized, coordinate_storage);
     faiss::IndexNNDescentFlat index(
         normalized.cols(), graph_size, faiss::METRIC_INNER_PRODUCT);
     index.nndescent.random_seed = options.seed;
@@ -438,7 +465,7 @@ FaissAnnCandidateResult faiss_nndescent_candidates(
     result.requested_parameter = options.iterations;
     result.resolved_parameter = iterations;
     result.resolved_candidate_count = graph_size;
-    index.add(rows, coordinates.data());
+    index.add(rows, coordinates);
     result.index_build_seconds = elapsed_seconds(build_begin);
     const std::vector<faiss::IndexNNDescent::storage_idx_t>& graph =
         index.nndescent.final_graph;
@@ -476,4 +503,16 @@ FaissAnnCandidateResult faiss_nndescent_candidates(
             "NN-descent sampled recall lower bound did not reach the requested target; increase --nndescent-iterations");
     }
     return result;
+}
+
+FaissAnnCandidateResult faiss_nndescent_candidates(
+        const Eigen::Ref<const RowMajorMatrixXd>& normalized,
+        int32_t neighbors, const FaissNnDescentOptions& options) {
+    return faiss_nndescent_candidates_impl(normalized, neighbors, options);
+}
+
+FaissAnnCandidateResult faiss_nndescent_candidates(
+        const Eigen::Ref<const FaissRowMajorMatrixXf>& normalized,
+        int32_t neighbors, const FaissNnDescentOptions& options) {
+    return faiss_nndescent_candidates_impl(normalized, neighbors, options);
 }

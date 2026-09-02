@@ -24,6 +24,21 @@ struct KnnGraph {
     std::vector<double> weights;
 };
 
+// Row-major directed k-nearest-neighbor table. Each row is ordered by
+// decreasing similarity, with index used to resolve exact score ties. Keeping
+// this table available avoids reconstructing directed neighborhoods from the
+// union graph in downstream graph-building pipelines.
+struct DirectedKnnNeighbor {
+    int32_t index = -1;
+    double similarity = 0.0;
+};
+
+struct DirectedKnnGraph {
+    int32_t n_nodes = 0;
+    int32_t n_neighbors = 0;
+    std::vector<DirectedKnnNeighbor> neighbors;
+};
+
 struct InnerProductKnnOptions {
     int32_t n_neighbors = 15;
     KnnFlatKernel flat_kernel = KnnFlatKernel::Auto;
@@ -46,9 +61,22 @@ struct InnerProductKnnResult {
     InnerProductKnnDiagnostics diagnostics;
 };
 
+struct InnerProductDirectedKnnResult {
+    DirectedKnnGraph graph;
+    InnerProductKnnDiagnostics diagnostics;
+};
+
 const char* knn_flat_kernel_name(KnnFlatKernel kernel);
 KnnFlatKernel parse_knn_flat_kernel(const std::string& value);
 bool knn_cblas_available();
+
+// Union-symmetrize a directed neighbor table, retaining the maximum score for
+// reciprocal entries.
+KnnGraph union_max_knn_graph(const DirectedKnnGraph& directed);
+
+InnerProductDirectedKnnResult inner_product_directed_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const InnerProductKnnOptions& options);
 
 // Exact all-points maximum-inner-product k-NN. Rows are not normalized or
 // otherwise transformed. Self matches are excluded, score ties are resolved

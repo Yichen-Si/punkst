@@ -39,7 +39,7 @@ struct CosineKnnOptions {
     // Zero selects max(64, 4 * n_neighbors).
     int32_t hnsw_candidates = 0;
     int32_t hnsw_audit_queries = 256;
-    double hnsw_recall = 0.98;
+    double hnsw_recall = 0.90;
     bool hnsw_force = false;
     // Zero selects max(10, round(log2(n_rows))).
     int32_t nndescent_iterations = 0;
@@ -47,7 +47,7 @@ struct CosineKnnOptions {
     int32_t nndescent_graph_size = 0;
     int32_t nndescent_sample_candidates = 10;
     int32_t nndescent_audit_queries = 256;
-    double nndescent_recall = 0.98;
+    double nndescent_recall = 0.90;
     int32_t ann_seed = 1;
 };
 
@@ -102,6 +102,11 @@ struct CosineKnnResult {
     CosineKnnDiagnostics diagnostics;
 };
 
+struct CosineDirectedKnnResult {
+    DirectedKnnGraph graph;
+    CosineKnnDiagnostics diagnostics;
+};
+
 const char* cosine_knn_backend_name(CosineKnnBackend backend);
 const char* cosine_flat_kernel_name(CosineFlatKernel kernel);
 CosineKnnBackend parse_cosine_knn_backend(const std::string& value);
@@ -138,6 +143,14 @@ CosineKnnGraph cosine_knn_graph(
 CosineKnnResult cosine_knn(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const CosineKnnOptions& options);
+
+CosineDirectedKnnResult cosine_directed_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const CosineKnnOptions& options);
+
+CosineDirectedKnnResult simplex_directed_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    SimplexMetric metric, const CosineKnnOptions& options);
 
 CosineKnnResult simplex_knn(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,

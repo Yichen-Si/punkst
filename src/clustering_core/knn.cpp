@@ -299,7 +299,12 @@ bool knn_cblas_available() {
 #endif
 }
 
-InnerProductKnnResult inner_product_knn(
+KnnGraph union_max_knn_graph(const DirectedKnnGraph& directed) {
+    return knn_detail::union_max_knn_graph(directed.neighbors,
+        directed.n_nodes, directed.n_neighbors);
+}
+
+InnerProductDirectedKnnResult inner_product_directed_knn(
     const Eigen::Ref<const RowMajorMatrixXd>& observations,
     const InnerProductKnnOptions& options) {
     validate_inner_product_options(observations, options);
@@ -307,7 +312,7 @@ InnerProductKnnResult inner_product_knn(
         tbb::global_control::max_allowed_parallelism,
         static_cast<size_t>(options.n_threads));
 
-    InnerProductKnnResult out;
+    InnerProductDirectedKnnResult out;
     out.diagnostics.resolved_flat_kernel = resolve_flat_kernel(
         options.flat_kernel);
     const int32_t n = static_cast<int32_t>(observations.rows());
@@ -317,12 +322,23 @@ InnerProductKnnResult inner_product_knn(
         throw std::invalid_argument(
             "Inner-product k-NN neighbor storage exceeds addressable memory");
     }
-    std::vector<knn_detail::DirectedNeighbor> directed =
-        knn_detail::flat_inner_product_neighbors(observations, neighbors,
-            out.diagnostics.resolved_flat_kernel, options.n_threads, false,
-            out.diagnostics.timings);
+    out.graph.n_nodes = n;
+    out.graph.n_neighbors = neighbors;
+    out.graph.neighbors = knn_detail::flat_inner_product_neighbors(
+        observations, neighbors, out.diagnostics.resolved_flat_kernel,
+        options.n_threads, false, out.diagnostics.timings);
+    return out;
+}
+
+InnerProductKnnResult inner_product_knn(
+    const Eigen::Ref<const RowMajorMatrixXd>& observations,
+    const InnerProductKnnOptions& options) {
+    InnerProductDirectedKnnResult directed = inner_product_directed_knn(
+        observations, options);
+    InnerProductKnnResult out;
+    out.diagnostics = directed.diagnostics;
     const auto reduction_begin = Clock::now();
-    out.graph = knn_detail::union_max_knn_graph(directed, n, neighbors);
+    out.graph = union_max_knn_graph(directed.graph);
     out.diagnostics.timings.graph_reduction_seconds =
         elapsed_seconds(reduction_begin);
     return out;
